@@ -56,6 +56,11 @@ function NotesPage() {
   const [replyText, setReplyText] = useState('')
   const [sendingReply, setSendingReply] = useState(false)
   const [recentCalls, setRecentCalls] = useState<CallRecord[]>([])
+  // NewNoteForm renders a plain call-id input when there are no recent calls and a
+  // select when there are. Opening the form before the history settles let that
+  // control swap under the user mid-typing (their input discarded), so the form
+  // stays closed until the call-id control is decided.
+  const [recentCallsLoaded, setRecentCallsLoaded] = useState(false)
   const [searchInput, setSearchInput] = useState(search)
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -64,8 +69,14 @@ function NotesPage() {
   useEffect(() => {
     getCustomFields().then(r => setCustomFields(r.fields)).catch(() => toast(t('common.error'), 'error'))
     if (isAdmin) {
-      getCallHistory({ limit: 100 }).then(r => setRecentCalls(r.calls)).catch(() => toast(t('common.error'), 'error'))
+      setRecentCallsLoaded(false)
+      getCallHistory({ limit: 100 })
+        .then(r => setRecentCalls(r.calls))
+        .catch(() => toast(t('common.error'), 'error'))
+        .finally(() => setRecentCallsLoaded(true))
       listUsers().then(r => setUsers(r.users)).catch(() => toast(t('common.error'), 'error'))
+    } else {
+      setRecentCallsLoaded(true)
     }
   }, [isAdmin, t, toast])
 
@@ -304,7 +315,7 @@ function NotesPage() {
               {t('notes.export')}
             </Button>
           )}
-          <Button data-testid="note-new-btn" onClick={() => setShowNewNote(!showNewNote)}>
+          <Button data-testid="note-new-btn" disabled={!recentCallsLoaded} onClick={() => setShowNewNote(!showNewNote)}>
             <Plus className="h-4 w-4" />
             {t('notes.newNote')}
           </Button>

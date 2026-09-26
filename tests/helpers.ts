@@ -504,27 +504,24 @@ export function uniquePhone(): string {
 
 /**
  * Fill in the call ID field in the new note form.
- * Handles both modes: Input (when no recent calls) and Select (when recent calls exist).
- * In Select mode, selects the "Enter manually" option then fills the manual input.
+ *
+ * The form renders a plain input when the admin has no recent calls and a select
+ * (with an "Enter manually" option) when they do. The notes page keeps the form closed
+ * until call history has settled, so the mode is fixed once the form exists; it is read
+ * from the form's `data-call-id-mode` attribute (an auto-waiting read of app state)
+ * rather than guessed from a non-waiting visibility probe.
  */
 export async function fillCallId(page: Page, callId: string): Promise<void> {
-  const callIdInput = page.getByTestId('note-call-id')
-  const callIdSelect = page.getByTestId('call-id-select')
-  const isInput = await callIdInput.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isInput) {
-    await callIdInput.fill(callId)
-    return
+  const form = page.getByTestId(TestIds.NOTE_FORM)
+  const callIdInput = form.getByTestId(TestIds.NOTE_CALL_ID)
+  const mode = await form.getAttribute('data-call-id-mode')
+  if (mode === 'select') {
+    await form.getByTestId(TestIds.CALL_ID_SELECT).click()
+    await page.getByTestId(TestIds.CALL_ID_MANUAL_OPTION).click()
+  } else if (mode !== 'input') {
+    throw new Error(`note-form has unexpected data-call-id-mode: ${String(mode)}`)
   }
-  // Select mode: choose "Enter manually" then fill
-  const isSelect = await callIdSelect.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isSelect) {
-    await callIdSelect.click()
-    await page.getByRole('option', { name: /enter manually/i }).click()
-    await callIdInput.fill(callId)
-    return
-  }
-  // Last resort: try the input by id
-  await page.locator('#call-id').fill(callId)
+  await callIdInput.fill(callId)
 }
 
 const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
