@@ -61,14 +61,23 @@ export function diffHash(diff: string): string {
  * in the Actions UI artifact list, far more collision resistance than a
  * per-repo review cache will ever need.
  */
-export function cacheArtifactName(pr: string, hash: string): string {
-  return `fleet-review-pass-pr${pr}-${hash.slice(0, 24)}`
+export function cacheArtifactName(pr: string, hash: string, reviewer?: string): string {
+  // `reviewer` (a specialist agent name, already validated against the agent
+  // registry by `resolveSpecialistLabel` in specialist.ts — lowercase
+  // `[a-z0-9-]` only) namespaces the specialist's PASSes away from the
+  // generalist's. Without it, a specialist lookup would find the GENERALIST's
+  // PASS for the identical diff and re-publish it as a crypto review that
+  // never happened. The generalist's own name is unchanged (no `reviewer`),
+  // so every artifact it already recorded stays a hit.
+  const scope = reviewer === undefined ? '' : `${reviewer}-`
+  return `fleet-review-${scope}pass-pr${pr}-${hash.slice(0, 24)}`
 }
 
 interface ArtifactListResponse { artifacts: { id: number; expired: boolean }[] }
 
 /**
- * The real, CI-only cache. Lookup is a single `GET .../actions/artifacts
+ * The real, CI-only cache. `reviewer` selects a specialist's own namespace
+ * (see `cacheArtifactName`); omitted, it is the generalist `fleet/review`'s. Lookup is a single `GET .../actions/artifacts
  * ?name=...` — read-only, so it costs the review job only `actions: read`,
  * never the `: write` the rest of this job is built to never need (see the
  * "no write permission" rail in guards.test.ts). Record does not call the
@@ -82,10 +91,14 @@ interface ArtifactListResponse { artifacts: { id: number; expired: boolean }[] }
  * fail-safe mechanism `lookup` relies on: a broken lookup and a genuine miss
  * are literally the same return value, and both mean "run the engine".
  */
-export function artifactReviewCache(outputDir: string | undefined, log: (msg: string) => void): ReviewCache {
+export function artifactReviewCache(
+  outputDir: string | undefined,
+  log: (msg: string) => void,
+  reviewer?: string,
+): ReviewCache {
   return {
     async lookup(key) {
-      const name = cacheArtifactName(key.pr, key.diffHash)
+      const name = cacheArtifactName(key.pr, key.diffHash, reviewer)
       const data = await ghJson<ArtifactListResponse>(
         ['api', `repos/${REPO}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=1`],
         30_000,
@@ -105,7 +118,7 @@ export function artifactReviewCache(outputDir: string | undefined, log: (msg: st
       // record — a missing cache write is never fatal to the review that
       // just passed; it only costs the NEXT identical diff its cache hit.
       if (outputDir === undefined) return
-      const name = cacheArtifactName(key.pr, key.diffHash)
+      const name = cacheArtifactName(key.pr, key.diffHash, reviewer)
       await mkdir(outputDir, { recursive: true })
       await writeFile(
         join(outputDir, `${name}.json`),

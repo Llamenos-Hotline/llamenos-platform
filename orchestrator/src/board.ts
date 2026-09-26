@@ -3,6 +3,7 @@ import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
 import { REVIEW_JOB } from './ci.js'
+import { specialistMergeBlockers, describeSpecialistBlockers } from './specialist.js'
 
 /**
  * `llamenos-fleet board` — the deterministic gate decision table.
@@ -538,6 +539,23 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
       reason: `required check(s) still in flight or not yet posted on this head: ${cheapPendingOrMissing.map((c) => c.name).join(', ')}`,
       failingContexts: [],
     }
+  }
+
+  // #1092: label-driven specialists (`fleet/review/<agent>`) are NOT in the
+  // ruleset — a conditionally-posted check cannot be required — so they
+  // bind HERE, at the merge decision, ahead of `fleet/review` itself: any
+  // FAIL fails (a specialist FAIL outranks a generalist PASS), one still in
+  // flight waits, and one requested by label with no check on this head
+  // (a push since the label) needs the label re-applied.
+  const specialists = specialistMergeBlockers(onHead, pr.labels)
+  if (specialists.failing.length > 0) {
+    return { action: 'NEEDS_FIX', reason: describeSpecialistBlockers(specialists), failingContexts: specialists.failing }
+  }
+  if (specialists.pending.length > 0) {
+    return { action: 'WAITING', reason: describeSpecialistBlockers(specialists), failingContexts: [] }
+  }
+  if (specialists.missing.length > 0) {
+    return { action: 'STALE_LABEL', reason: describeSpecialistBlockers(specialists), failingContexts: [] }
   }
 
   // Every cheap context is pass-or-skip on the current head. `fleet/review`
