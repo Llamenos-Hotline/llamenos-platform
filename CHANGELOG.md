@@ -404,6 +404,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.19.18 (2026-09-26)
+
+### Features
+
+- label-driven specialist reviewers (#1092) (#1098)
+
+### Fixes
+
+- try the fallback group when every on-shift volunteer is unavailable (#1056)
+- use generated HKDF_CONTEXT_* constants in platform.ts (#1057)
+- overnight shifts active after midnight on the correct day (#1059)
+- scope spam and call settings to the hub being edited (#1061)
+- key note custom-field values by field name, not id (#1062)
+- 409 instead of 500 when an existing user redeems an invite (#1063)
+- receive, poll and answer calls on every member hub (#1067)
+- log hub activity to the hub's audit chain; audit in-app call answer (#1065)
+- serialise hash-chain appends and verify chains periodically (#1068)
+- chain helpers accept a null hubId (platform-level chain) (#1074)
+- ring only hub members; drop dead duplicate fallback; assert real ring outcome (#1078)
+- run the webhook replay check once, after signature validation (#1075)
+- publish call:ring and record events to the owning hub, not 'global' (#1081)
+- publish call:ring to the owning hub and remove the 'global' pseudo-hub (#1080)
+- keep the volunteer call token valid for the whole leg (#1073)
+- relay uses the server-advertised /ws endpoint and every member hub (#1084)
+- create the call record before ringing so unrouted calls and voicemails are not lost (#1069)
+- assign scripts/ to the infra lane (#1087)
+
 ## 0.19.17 (2026-09-26)
 
 ### Features
