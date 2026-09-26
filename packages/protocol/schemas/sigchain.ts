@@ -115,7 +115,7 @@ export const appendSigchainLinkBodySchema = z.object({
 })
 export type AppendSigchainLinkBody = z.infer<typeof appendSigchainLinkBodySchema>
 
-export const sigchainLinkSchema = z.object({
+export const sigchainLinkRecordSchema = z.object({
   id: z.string(),
   userPubkey: z.string(),
   seqNo: z.number().int(),
@@ -131,10 +131,10 @@ export const sigchainLinkSchema = z.object({
   timestamp: z.string(),
   createdAt: z.string(),
 })
-export type SigchainLinkRecord = z.infer<typeof sigchainLinkSchema>
+export type SigchainLinkRecord = z.infer<typeof sigchainLinkRecordSchema>
 
 export const sigchainResponseSchema = z.object({
-  links: z.array(sigchainLinkSchema),
+  links: z.array(sigchainLinkRecordSchema),
   /**
    * Set when the chain's prevHash linkage is broken (a fork, a seqNo gap, or
    * tampering) rather than silently returning the forked chain as if it were
