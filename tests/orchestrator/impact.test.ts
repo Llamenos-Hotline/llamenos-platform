@@ -100,6 +100,26 @@ describe('classifyImpact', () => {
     ['scripts/generate-update-manifest.ts'],
     ['scripts/inject-cert-pins.ts'],
     ['scripts/extract-cert-pins.sh'],
+    // The gate scripts under `scripts/` (#1087): whatever's exit status is a
+    // check's verdict. Weakening any of these lets a defect through a check.
+    ['scripts/check-ipc-allowlist.sh'],
+    ['scripts/check-ecies-active.sh'],
+    ['scripts/check-label-count.sh'],
+    ['scripts/check-migration-drift.ts'],
+    ['scripts/check-migration-drift.sh'],
+    ['scripts/typecheck-tests-gate.ts'],
+    ['scripts/eslint-rules/no-inline-api-shape.js'],
+    ['scripts/regenerate-snapshot.ts'],
+    ['scripts/image-smoke.sh'],
+    ['scripts/verify-runtime.ts'],
+    ['scripts/run-migrations.ts'],
+    ['scripts/test-orchestrator.sh'],
+    ['scripts/test-fleet.sh'],
+    ['scripts/test-backend-bdd.sh'],
+    ['scripts/test-integration-full.sh'],
+    ['scripts/android-parallel-e2e.sh'],
+    ['scripts/lib/platform-detect.sh'],
+    ['scripts/lib/test-reporter.sh'],
   ])('treats %s as high impact', (f) => {
     expect(classifyImpact([f], 5).impact).toBe('high')
   })
@@ -107,12 +127,14 @@ describe('classifyImpact', () => {
   // Boundary-exact: ONLY `apps/desktop/src/crypto.rs` is restored above, not
   // the whole `apps/desktop/src/` directory — an ordinary desktop source file
   // stays low impact.
-  // Boundary-exact for scripts/ too: only the listed subset is high impact.
-  // The rest of scripts/ is ordinary infra-lane work and merges on green.
+  // Boundary-exact for scripts/ too: only the listed subsets are high impact.
+  // Dev, setup and build helpers — which enforce no check — are ordinary
+  // infra-lane work and merge on green.
   it.each([
-    ['scripts/test-integration-full.sh'],
     ['scripts/dev-setup.sh'],
-    ['scripts/lib/platform-detect.sh'],
+    ['scripts/dev-bun.sh'],
+    ['scripts/setup-android-sdk.sh'],
+    ['scripts/update-image-digests.sh'],
   ])('does not escalate ordinary scripts/ file %s', (f) => {
     expect(classifyImpact([f], 5).impact).toBe('low')
   })
