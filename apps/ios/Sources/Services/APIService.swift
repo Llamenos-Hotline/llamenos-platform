@@ -48,11 +48,16 @@ enum VersionStatus: Equatable {
 
 // MARK: - App Config Response
 
-/// Response from `GET /api/config` — only the fields needed for version checking.
+/// Response from `GET /api/config` — only the fields the client reads before login:
+/// version compatibility and the relay endpoint.
 struct AppConfig: Decodable {
     let hotlineName: String
     let apiVersion: Int
     let minApiVersion: Int
+    /// WebSocket relay endpoint advertised by the server (currently the path `/ws`).
+    /// May be a path relative to the hub URL or an absolute URL. `nil` when the server
+    /// has no relay configured.
+    let wsRelayUrl: String?
 }
 
 // MARK: - Recovery Group Response Types
@@ -152,10 +157,16 @@ final class APIService: @unchecked Sendable {
     /// Certificate pinning delegate (H14). Retained by the URLSession.
     private let pinningDelegate = CertificatePinningDelegate()
 
-    init(cryptoService: CryptoService, hubContext: HubContext) {
+    /// - Parameter sessionConfiguration: base configuration for the pinned URLSession.
+    ///   Tests pass one carrying a stub `URLProtocol`; production uses `.default`.
+    init(
+        cryptoService: CryptoService,
+        hubContext: HubContext,
+        sessionConfiguration: URLSessionConfiguration = .default
+    ) {
         self.cryptoService = cryptoService
         self.hubContext = hubContext
-        let config = URLSessionConfiguration.default
+        let config = sessionConfiguration
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
@@ -208,10 +219,25 @@ final class APIService: @unchecked Sendable {
         self.baseURL = url
     }
 
-    /// Returns path prefixed with /hubs/{activeHubId}. Falls back to bare path if no hub selected.
+    /// Scope an `/api/...` path to the active hub (`/api/hubs/{activeHubId}/...`).
+    /// Falls back to the bare path if no hub is selected.
+    ///
+    /// Use this only for browsing the active hub. Anything that belongs to a specific
+    /// hub — a call ringing on hub B while hub A is active — must use
+    /// `hubPath(_:_:)` with that hub's ID (multi-hub routing axiom).
     func hp(_ path: String) -> String {
         guard let hubId = hubContext.activeHubId else { return path }
-        return "/hubs/\(hubId)\(path)"
+        return Self.hubPath(hubId, path)
+    }
+
+    /// Scope an `/api/...` path to the given hub.
+    ///
+    /// The server mounts hub-scoped routes at `/api/hubs/:hubId/...`, so
+    /// `/api/calls/active` becomes `/api/hubs/{hubId}/calls/active`.
+    static func hubPath(_ hubId: String, _ path: String) -> String {
+        let apiPrefix = "/api"
+        let rest = path.hasPrefix(apiPrefix + "/") ? String(path.dropFirst(apiPrefix.count)) : path
+        return "\(apiPrefix)/hubs/\(hubId)\(rest)"
     }
 
     /// Test whether the hub URL is reachable. Returns true if the server responds.
@@ -440,23 +466,8 @@ final class APIService: @unchecked Sendable {
     /// Returns `.unknown` on network failure — the app should not be blocked if offline.
     /// Uses a plain JSONDecoder because the server sends camelCase keys natively.
     func checkVersionCompatibility() async -> VersionStatus {
-        guard let baseURL else { return .unknown }
-
-        let configURL = baseURL.appendingPathComponent("/api/config")
-        var request = URLRequest(url: configURL, timeoutInterval: 10)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
         do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                return .unknown
-            }
-            // Use a plain decoder — the /api/config endpoint returns camelCase keys
-            // (apiVersion, minApiVersion), not snake_case.
-            let plainDecoder = JSONDecoder()
-            let config = try plainDecoder.decode(AppConfig.self, from: data)
+            let config = try await fetchAppConfig()
 
             if Self.apiVersion < config.minApiVersion {
                 return .forceUpdate(minVersion: config.minApiVersion)
@@ -468,6 +479,27 @@ final class APIService: @unchecked Sendable {
         } catch {
             return .unknown
         }
+    }
+
+    /// Fetch the public `GET /api/config` document (unauthenticated).
+    /// Uses a plain JSONDecoder because the endpoint returns camelCase keys
+    /// (`apiVersion`, `minApiVersion`, `wsRelayUrl`), not snake_case.
+    func fetchAppConfig() async throws -> AppConfig {
+        guard let baseURL else { throw APIError.noBaseURL }
+
+        let configURL = baseURL.appendingPathComponent("/api/config")
+        var request = URLRequest(url: configURL, timeoutInterval: 10)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.requestFailed(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        return try JSONDecoder().decode(AppConfig.self, from: data)
     }
 
     // MARK: - Raw Authenticated Request (for OfflineQueue replay)

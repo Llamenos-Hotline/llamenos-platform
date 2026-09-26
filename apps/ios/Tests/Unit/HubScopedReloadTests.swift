@@ -19,7 +19,7 @@ struct HubScopedReloadTests {
         await vm.loadNotes()
 
         #expect(mockAPI.lastRequestPath?.contains("hub-uuid-001") == true)
-        #expect(mockAPI.lastRequestPath?.hasPrefix("/hubs/") == true)
+        #expect(mockAPI.lastRequestPath?.hasPrefix("/api/hubs/hub-uuid-001/") == true)
         UserDefaults.standard.removeObject(forKey: "activeHubId")
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - AuthStatus
 
@@ -88,6 +89,9 @@ final class AppState {
 
     /// Background task that listens for WebSocket events.
     private var eventListenerTask: Task<Void, Never>?
+    /// Resolves the relay endpoint from `/api/config` and connects.
+    private var relayConnectTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "org.llamenos.hotline", category: "Relay")
 
     // MARK: - Initialization
 
@@ -397,6 +401,8 @@ final class AppState {
         wipeService.logout()
         eventListenerTask?.cancel()
         eventListenerTask = nil
+        relayConnectTask?.cancel()
+        relayConnectTask = nil
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated
@@ -505,38 +511,20 @@ final class AppState {
         }
     }
 
+    /// Relay event kinds subscribed on every member hub: call ring/update/voicemail,
+    /// new message, conversation assigned, presence. Mirrors the desktop client.
+    static let relayEventKinds = [1000, 1001, 1002, 1010, 1011, 20000]
+
     /// Connect WebSocket to the relay if a hub URL is configured.
+    ///
+    /// The relay endpoint is the one the server advertises in `GET /api/config`
+    /// (`wsRelayUrl`), never a hard-coded suffix. Every hub the user is a member of is
+    /// subscribed — not only the active hub — so a ring on any hub reaches the app
+    /// (multi-hub routing axiom).
     private func connectWebSocketIfConfigured() {
-        guard let hubURL = authService.hubURL else { return }
+        guard authService.hubURL != nil, let hubBaseURL = apiService.baseURL else { return }
 
-        // Derive relay URL from hub URL. Only wss:// and https:// (converted to wss://)
-        // are allowed — http:// and ws:// are rejected to prevent MITM attacks.
-        var relayURL = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if relayURL.hasPrefix("https://") {
-            relayURL = relayURL.replacingOccurrences(of: "https://", with: "wss://")
-        } else if relayURL.hasPrefix("wss://") {
-            // Already the correct secure scheme — no transformation needed
-        } else if !relayURL.contains("://") {
-            // No scheme — assume secure relay
-            relayURL = "wss://\(relayURL)"
-        } else {
-            // http://, ws://, or any other non-HTTPS/WSS scheme — reject
-            return
-        }
-        if !relayURL.hasSuffix("/relay") {
-            relayURL += "/relay"
-        }
-
-        Task {
-            await webSocketService.connect(to: relayURL)
-        }
-
-        // Subscribe to the active hub (and any additional hubs from hubContext).
-        // Subscriptions are buffered in WebSocketService until the auth handshake completes.
-        let allHubKinds = [1000, 1001, 1002, 1010, 1011, 20000]
-        if let activeHubId = hubContext.activeHubId {
-            webSocketService.subscribe(hubId: activeHubId, kinds: allHubKinds)
-        }
+        webSocketService.subscribeToMemberHubs(kinds: Self.relayEventKinds)
 
         // Start (or restart) the attributed-event consumer that drives per-hub activity state.
         eventListenerTask?.cancel()
@@ -546,6 +534,37 @@ final class AppState {
                 hubActivityService.handle(attributed)
             }
         }
+
+        relayConnectTask?.cancel()
+        relayConnectTask = Task { [weak self] in
+            guard let self else { return }
+            guard let relayURL = await resolveRelayURL(hubBaseURL: hubBaseURL) else { return }
+            await webSocketService.connect(to: relayURL)
+        }
+    }
+
+    /// Fetch the server-advertised relay endpoint, retrying with backoff while the
+    /// server is unreachable. Returns nil if the server advertises no relay, advertises
+    /// one that fails the transport rule, or stays unreachable.
+    private func resolveRelayURL(hubBaseURL: URL) async -> URL? {
+        let maxAttempts = 5
+        for attempt in 0..<maxAttempts {
+            do {
+                let config = try await apiService.fetchAppConfig()
+                guard let url = WebSocketService.relayURL(hubBaseURL: hubBaseURL, advertised: config.wsRelayUrl) else {
+                    logger.error("Relay unavailable: server advertised wsRelayUrl=\(config.wsRelayUrl ?? "nil", privacy: .public)")
+                    return nil
+                }
+                return url
+            } catch {
+                if Task.isCancelled { return nil }
+                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription, privacy: .public)")
+                if attempt + 1 < maxAttempts {
+                    try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt))))
+                }
+            }
+        }
+        return nil
     }
 }
 
