@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import org.llamenos.hotline.api.relay.RelayCrypto
 import org.llamenos.hotline.model.NotePayload
 import org.llamenos.protocol.CryptoLabels
 import org.llamenos.protocol.HubKeyEnvelopeResponse
@@ -188,7 +189,7 @@ class CryptoException(message: String, cause: Throwable? = null) : Exception(mes
  * blocking the main thread (Android ANR after 5s on main thread).
  */
 @Singleton
-class CryptoService @Inject constructor() {
+class CryptoService @Inject constructor() : RelayCrypto {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -695,13 +696,15 @@ class CryptoService @Inject constructor() {
     }
 
     /**
-     * Decrypt a server event using Rust-stored server event keys (current + previous epoch).
+     * Decrypt a relay event payload the server encrypted for [epoch], using the Rust-stored
+     * server event keys (current + previous epoch). Matches the server's format: AAD
+     * `LABEL_HUB_EVENT_EPOCH:{epoch}` and power-of-two padding (`apps/worker/lib/ws-events.ts`).
      * Returns null if no keys are set or decryption fails with both keys.
      */
-    fun decryptServerEventWithStoredKeys(encryptedHex: String): String? {
-        if (!nativeLibLoaded) return null
+    override fun decryptServerEventForEpoch(payloadHex: String, epoch: Long): String? {
+        if (!nativeLibLoaded || epoch < 0) return null
         return try {
-            org.llamenos.core.mobileDecryptServerEvent(encryptedHex)
+            org.llamenos.core.mobileDecryptServerEventWithEpoch(payloadHex, epoch.toULong())
         } catch (_: Exception) {
             null
         }
@@ -712,14 +715,48 @@ class CryptoService @Inject constructor() {
      * Keys are held exclusively in Rust — never in JVM memory.
      *
      * @param currentHex Current epoch key (32 bytes, hex-encoded)
-     * @param previousHex Previous epoch key (empty string if none)
+     * @param previousHex Previous epoch key, or null if none. Rust rejects anything that
+     *   is not exactly 32 bytes, so "no previous key" must be null, never an empty string.
      */
-    fun setServerEventKeys(currentHex: String, previousHex: String = "") {
+    fun setServerEventKeys(currentHex: String, previousHex: String? = null) {
         check(nativeLibLoaded) { "Native crypto library not loaded." }
         try {
-            org.llamenos.core.mobileSetServerEventKeys(currentHex, previousHex)
+            org.llamenos.core.mobileSetServerEventKeys(currentHex, previousHex?.takeIf { it.isNotEmpty() })
         } catch (e: org.llamenos.core.CryptoException) {
             throw CryptoException("Failed to set server event keys: ${e.message}", e)
+        }
+    }
+
+    // ---- WebSocket relay (RelayCrypto) ----
+
+    override val relayDevicePubkeyHex: String?
+        get() = signingPubkeyHex
+
+    /**
+     * Sign a relay auth challenge with the device Ed25519 key held in Rust.
+     * @throws IllegalStateException if the native library is missing or the key store is locked
+     */
+    override fun signRelayChallenge(messageHex: String): String {
+        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        check(isUnlocked) { "Key store is locked." }
+        return try {
+            org.llamenos.core.mobileSign(messageHex)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw IllegalStateException("Failed to sign relay challenge: ${e.message}", e)
+        }
+    }
+
+    /** Verify a server Ed25519 signature (stateless). Returns false on any failure. */
+    override fun verifyServerEventSignature(
+        messageHex: String,
+        signatureHex: String,
+        serverPubkeyHex: String,
+    ): Boolean {
+        if (!nativeLibLoaded) return false
+        return try {
+            org.llamenos.core.mobileEd25519Verify(messageHex, signatureHex, serverPubkeyHex)
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -844,21 +881,6 @@ class CryptoService @Inject constructor() {
         if (!nativeLibLoaded) return null
         return try {
             org.llamenos.core.mobileDecryptHubEvent(encryptedHex, hubId)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Trial-decrypt an event against all cached hub keys in Rust.
-     * Returns Pair(hubId, plaintext) for the first key that succeeds, or null.
-     * Hub keys never leave Rust memory during this operation.
-     */
-    fun decryptHubEventTrial(encryptedHex: String): Pair<String, String>? {
-        if (!nativeLibLoaded) return null
-        return try {
-            val result = org.llamenos.core.mobileDecryptHubEventTrial(encryptedHex)
-            Pair(result[0], result[1])
         } catch (_: Exception) {
             null
         }

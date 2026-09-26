@@ -24,6 +24,10 @@ export const meResponseSchema = z.object({
   webauthnRegistered: z.boolean(),
   adminDecryptionPubkey: z.string().optional(),
   hubEventKeys: z.record(z.string(), z.string()).optional(),
+  serverEventKeyHex: z.string().optional(),
+  serverEventKeyPrevHex: z.string().optional(),
+  eventKeyEpoch: z.number().optional(),
+  eventKeyEpochDuration: z.number().optional(),
 })
 
 // --- Input schemas ---

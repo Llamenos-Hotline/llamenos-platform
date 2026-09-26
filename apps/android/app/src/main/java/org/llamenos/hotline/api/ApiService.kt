@@ -317,12 +317,40 @@ class ApiService @Inject constructor(
     fun hp(path: String): String {
         require(path.startsWith("/")) { "hp() path must start with '/': $path" }
         val hubId = activeHubState.activeHubId.value ?: return path
+        return hubPath(hubId, path)
+    }
+
+    /**
+     * Returns the path prefixed with /hubs/{hubId} for an explicit hub — use this when
+     * acting on something that belongs to a specific hub (e.g. a call that rang on a hub
+     * other than the active one) rather than on the active browsing context.
+     */
+    fun hubPath(hubId: String, path: String): String {
+        require(path.startsWith("/")) { "hubPath() path must start with '/': $path" }
         return if (path.startsWith("/api/")) {
             "/api/hubs/$hubId${path.removePrefix("/api")}"
         } else {
             "/hubs/$hubId$path"
         }
     }
+
+    /**
+     * Base URL of the configured hub server, e.g. `https://hub.example.org`.
+     * @throws IllegalStateException if no hub URL is configured
+     */
+    fun hubBaseUrl(): String = getBaseUrl()
+
+    /**
+     * HTTP client for the WebSocket relay. Shares the certificate pinner and connect
+     * timeout of the API client, but has no read timeout (the socket is long-lived), a
+     * 30s keepalive ping, and none of the per-request interceptors (the relay
+     * authenticates in-band with an Ed25519 challenge, not with request headers).
+     */
+    fun relayHttpClient(): OkHttpClient = client.newBuilder()
+        .apply { interceptors().clear() }
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
 
     // ---- Device registration API ----
 
