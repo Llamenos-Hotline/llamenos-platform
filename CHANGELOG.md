@@ -406,10 +406,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.19.18 (2026-09-26)
 
-### Features
-
-- label-driven specialist reviewers (#1092) (#1098)
-
 ### Fixes
 
 - try the fallback group when every on-shift volunteer is unavailable (#1056)
