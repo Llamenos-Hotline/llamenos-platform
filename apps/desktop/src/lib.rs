@@ -1,6 +1,7 @@
 mod api_config;
 mod cert_pin;
 mod crypto;
+mod hub_keys;
 mod net;
 
 use tauri::{Emitter, Manager};
@@ -199,7 +200,10 @@ pub fn run() {
             crypto::sframe_derive_key,
             // Hub key management (key stays in Rust CryptoState)
             crypto::hpke_unwrap_and_set_hub_key,
-            crypto::generate_hub_key_in_state,
+            crypto::forget_hub_key,
+            crypto::generate_pending_hub_key,
+            crypto::commit_pending_hub_key,
+            crypto::discard_pending_hub_key,
             crypto::wrap_hub_key_for_member,
             crypto::set_server_event_keys,
             crypto::decrypt_hub_event,

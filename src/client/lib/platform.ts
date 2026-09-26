@@ -11,7 +11,7 @@
  * Import from here instead of directly from @tauri-apps/*.
  */
 
-import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META } from '@shared/crypto-labels'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -61,7 +61,10 @@ export type TauriIpcCommand =
   | 'sigchain_verify_link'
   | 'sframe_derive_key'
   | 'hpke_unwrap_and_set_hub_key'
-  | 'generate_hub_key_in_state'
+  | 'forget_hub_key'
+  | 'generate_pending_hub_key'
+  | 'commit_pending_hub_key'
+  | 'discard_pending_hub_key'
   | 'wrap_hub_key_for_member'
   | 'set_server_event_keys'
   | 'decrypt_hub_event'
@@ -489,44 +492,88 @@ export async function sigchainVerifyLink(
 // ── Hub event decryption (H2 hardening) ────────────────────────────
 
 /**
- * Unwrap an HPKE envelope containing a hub key and store it in Rust CryptoState.
- * The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
+ * Names the hub key a hub-key IPC call must use (HubKeyRef in
+ * apps/desktop/src/hub_keys.rs). Rust holds one key per hub and has no
+ * "current hub key": every seal and encrypt says which hub's key it means,
+ * and Rust refuses unless exactly that key is held.
+ */
+export type CommittedHubKeyRef = { state: 'committed'; hubId: string; generation: number }
+/** A key generated for a hub that the server has not accepted yet. */
+export type PendingHubKeyRef = { state: 'pending'; hubId: string; pendingId: string }
+export type HubKeyRef = CommittedHubKeyRef | PendingHubKeyRef
+
+/**
+ * Unwrap an HPKE envelope containing `hubId`'s key at `generation` and hold it
+ * in Rust CryptoState, bound to that hub. The hub key NEVER enters JavaScript.
+ * Returns the generation Rust now holds for the hub (a newer one is kept).
  */
 export async function hpkeUnwrapAndSetHubKey(
+  hubId: string,
+  generation: number,
   envelope: HpkeEnvelope,
   expectedLabel: string,
   aadHex: string,
-): Promise<void> {
+): Promise<number> {
   if (useTauri) {
-    await tauriInvoke<void>('hpke_unwrap_and_set_hub_key', { envelope, expectedLabel, aadHex })
-    return
+    return tauriInvoke<number>('hpke_unwrap_and_set_hub_key', { hubId, generation, envelope, expectedLabel, aadHex })
   }
   throw new Error('WASM hpke_unwrap_and_set_hub_key not yet implemented')
 }
 
-/**
- * Generate a random 32-byte hub key and store it in Rust CryptoState.
- * The key NEVER enters JavaScript — only wrapped envelopes leave Rust.
- */
-export async function generateHubKeyInState(): Promise<void> {
+/** Drop `hubId`'s key from Rust CryptoState. */
+export async function forgetHubKey(hubId: string): Promise<void> {
   if (useTauri) {
-    await tauriInvoke<void>('generate_hub_key_in_state')
+    await tauriInvoke<void>('forget_hub_key', { hubId })
     return
   }
-  throw new Error('WASM generate_hub_key_in_state not yet implemented')
+  throw new Error('WASM forget_hub_key not yet implemented')
 }
 
 /**
- * HPKE-seal the hub key stored in CryptoState for a recipient.
- * The hub key NEVER enters JavaScript — it goes from state directly to HPKE encryption.
+ * Generate a random 32-byte key for `hubId` in Rust CryptoState, held as
+ * PENDING until the server accepts it. The key NEVER enters JavaScript —
+ * only wrapped envelopes leave Rust.
+ */
+export async function generatePendingHubKey(hubId: string): Promise<PendingHubKeyRef> {
+  if (useTauri) {
+    const pendingId = await tauriInvoke<string>('generate_pending_hub_key', { hubId })
+    return { state: 'pending', hubId, pendingId }
+  }
+  throw new Error('WASM generate_pending_hub_key not yet implemented')
+}
+
+/**
+ * The server accepted `key` as its hub's key at `generation`: Rust holds it as
+ * the hub's committed key. Returns the generation Rust now holds for the hub.
+ */
+export async function commitPendingHubKey(key: PendingHubKeyRef, generation: number): Promise<number> {
+  if (useTauri) {
+    return tauriInvoke<number>('commit_pending_hub_key', { hubId: key.hubId, pendingId: key.pendingId, generation })
+  }
+  throw new Error('WASM commit_pending_hub_key not yet implemented')
+}
+
+/** Drop a pending hub key the server did not accept. */
+export async function discardPendingHubKey(key: PendingHubKeyRef): Promise<void> {
+  if (useTauri) {
+    await tauriInvoke<void>('discard_pending_hub_key', { pendingId: key.pendingId })
+    return
+  }
+  throw new Error('WASM discard_pending_hub_key not yet implemented')
+}
+
+/**
+ * HPKE-seal the hub key `key` names for a recipient. Rust refuses unless
+ * exactly that key is held. The hub key NEVER enters JavaScript.
  */
 export async function wrapHubKeyForMember(
+  key: HubKeyRef,
   recipientPubkeyHex: string,
   label: string,
   aadHex: string,
 ): Promise<HpkeEnvelope> {
   if (useTauri) {
-    return tauriInvoke<HpkeEnvelope>('wrap_hub_key_for_member', { recipientPubkeyHex, label, aadHex })
+    return tauriInvoke<HpkeEnvelope>('wrap_hub_key_for_member', { keyRef: key, recipientPubkeyHex, label, aadHex })
   }
   throw new Error('WASM wrap_hub_key_for_member not yet implemented')
 }
@@ -544,13 +591,13 @@ export async function setServerEventKeys(keys: Array<[number, string]>): Promise
 }
 
 /**
- * Decrypt hub event content using the hub key stored in Rust CryptoState.
+ * Decrypt hub event content with `hubId`'s key held in Rust CryptoState.
  * The hub key NEVER enters JavaScript — decryption happens entirely in Rust.
  */
-export async function decryptHubEvent(ciphertextHex: string): Promise<string | null> {
+export async function decryptHubEvent(hubId: string, ciphertextHex: string): Promise<string | null> {
   if (useTauri) {
     try {
-      return await tauriInvoke<string>('decrypt_hub_event', { ciphertextHex })
+      return await tauriInvoke<string>('decrypt_hub_event', { hubId, ciphertextHex })
     } catch {
       return null
     }
@@ -559,26 +606,27 @@ export async function decryptHubEvent(ciphertextHex: string): Promise<string | n
 }
 
 /**
- * Encrypt a plaintext string with the hub key using label as AAD (domain separation).
+ * Encrypt a plaintext string with the hub key `key` names, using label as AAD
+ * (domain separation). Rust refuses unless exactly that key is held.
  * Returns hex-encoded nonce(12) + ciphertext (AES-256-GCM).
  * Used for encrypting team/tag fields before sending to server.
  */
-export async function encryptHubField(plaintext: string, label: string): Promise<string> {
+export async function encryptHubField(key: HubKeyRef, plaintext: string, label: string): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('encrypt_hub_field', { plaintext, label })
+    return tauriInvoke<string>('encrypt_hub_field', { keyRef: key, plaintext, label })
   }
   throw new Error('WASM encrypt_hub_field not yet implemented')
 }
 
 /**
- * Decrypt a hub-encrypted field using label as AAD.
+ * Decrypt a hub-encrypted field with `hubId`'s key, using label as AAD.
  * Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
  * Returns null on failure (hub key not loaded, wrong label, or corrupted data).
  */
-export async function decryptHubField(ciphertextHex: string, label: string): Promise<string | null> {
+export async function decryptHubField(hubId: string, ciphertextHex: string, label: string): Promise<string | null> {
   if (useTauri) {
     try {
-      return await tauriInvoke<string>('decrypt_hub_field', { ciphertextHex, label })
+      return await tauriInvoke<string>('decrypt_hub_field', { hubId, ciphertextHex, label })
     } catch {
       return null
     }
@@ -1100,28 +1148,6 @@ export async function decryptTranscription(
   return decryptMessage(encryptedContent, adminEnvelopes)
 }
 
-/**
- * Encrypt draft data using the hub key with HKDF_CONTEXT_DRAFTS domain separation.
- * Drafts are local-only (localStorage), encrypted with the hub key held in Rust CryptoState.
- */
-export async function encryptDraft(plaintext: string): Promise<string> {
-  return encryptHubField(plaintext, HKDF_CONTEXT_DRAFTS)
-}
-
-/**
- * Decrypt draft data encrypted with encryptDraft.
- */
-export async function decryptDraft(ciphertextHex: string): Promise<string | null> {
-  return decryptHubField(ciphertextHex, HKDF_CONTEXT_DRAFTS)
-}
-
-/**
- * Encrypt an export payload using the hub key with HKDF_CONTEXT_EXPORT domain separation.
- * Returns hex-encoded ciphertext suitable for binary download.
- */
-export async function encryptExport(jsonString: string): Promise<string> {
-  return encryptHubField(jsonString, HKDF_CONTEXT_EXPORT)
-}
 
 
 

@@ -271,7 +271,7 @@ export class OfflineQueue {
   async decryptIfNeeded(): Promise<void> {
     if (!this._encryptedRaw) return
     try {
-      const { decryptDraft } = await import('./platform')
+      const { decryptDraft } = await import('./hub-key-manager')
       const decrypted = await decryptDraft(this._encryptedRaw)
       if (decrypted) {
         this.queue = JSON.parse(decrypted) as QueuedOperation[]
@@ -286,7 +286,7 @@ export class OfflineQueue {
   private async save(): Promise<void> {
     const json = JSON.stringify(this.queue)
     try {
-      const { encryptDraft } = await import('./platform')
+      const { encryptDraft } = await import('./hub-key-manager')
       const encrypted = await encryptDraft(json)
       if (encrypted) {
         localStorage.setItem(STORAGE_KEY, encrypted)

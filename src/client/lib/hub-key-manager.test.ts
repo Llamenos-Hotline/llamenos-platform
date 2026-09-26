@@ -1,9 +1,10 @@
 /**
  * Hub-key lifecycle, end to end across several member clients.
  *
- * Each member gets its OWN hub-key-manager module instance (its own slot
- * tracking) bound to its OWN fake device (X25519 keypair + hub-key slot), the
- * way separate desktop installs behave. Crypto is real: envelopes are sealed
+ * Each member gets its OWN hub-key-manager module instance (its own held-key
+ * tracking) bound to its OWN fake device (X25519 keypair + per-hub key store
+ * mirroring apps/desktop/src/hub_keys.rs), the way separate desktop installs
+ * behave. Crypto is real: envelopes are sealed
  * with the shared HPKE primitive the Playwright IPC mock uses
  * (tests/mocks/hpke-mock.ts — X25519 + HKDF-SHA256 + AES-256-GCM, label-bound)
  * and hub fields with AES-256-GCM under the hub key with the label as AAD, as
@@ -20,15 +21,22 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { randomBytes, bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 import { LABEL_HUB_KEY_WRAP, LABEL_TAG_ENCRYPT, LABEL_TEAM_ENCRYPT } from '@shared/crypto-labels'
 import type { TagResponse, TeamResponse } from '@protocol/schemas'
-import { hpkeSealMock, hpkeOpenMock } from '../../../tests/mocks/hpke-mock'
+import { hpkeSealMock, hpkeOpenMock, labelToId } from '../../../tests/mocks/hpke-mock'
 
 interface FakeDevice {
   userPubkey: string
   deviceId: string
   secret: Uint8Array
   encryptionPubkeyHex: string
-  hubKey: Uint8Array | null
+  /** Committed hub keys by hub id (HubKeyStore.committed). */
+  hubKeys: Map<string, { generation: number; key: Uint8Array }>
+  /** Generated keys the server has not accepted, by pending id (HubKeyStore.pending). */
+  pendingHubKeys: Map<string, { hubId: string; key: Uint8Array }>
 }
+
+type KeyRef =
+  | { state: 'committed'; hubId: string; generation: number }
+  | { state: 'pending'; hubId: string; pendingId: string }
 
 interface Envelope { v: number; labelId: number; enc: string; ct: string }
 
@@ -54,7 +62,10 @@ const h = vi.hoisted(() => {
 
 vi.mock('./platform', () => ({
   getDevicePubkeys: (...a: never[]) => h.platform.getDevicePubkeys(...a),
-  generateHubKeyInState: (...a: never[]) => h.platform.generateHubKeyInState(...a),
+  forgetHubKey: (...a: never[]) => h.platform.forgetHubKey(...a),
+  generatePendingHubKey: (...a: never[]) => h.platform.generatePendingHubKey(...a),
+  commitPendingHubKey: (...a: never[]) => h.platform.commitPendingHubKey(...a),
+  discardPendingHubKey: (...a: never[]) => h.platform.discardPendingHubKey(...a),
   wrapHubKeyForMember: (...a: never[]) => h.platform.wrapHubKeyForMember(...a),
   hpkeUnwrapAndSetHubKey: (...a: never[]) => h.platform.hpkeUnwrapAndSetHubKey(...a),
   encryptHubField: (...a: never[]) => h.platform.encryptHubField(...a),
@@ -92,30 +103,62 @@ function hubFieldDecrypt(key: Uint8Array, packedHex: string, label: string): str
   return new TextDecoder().decode(gcm(key, data.slice(0, 12), utf8ToBytes(label)).decrypt(data.slice(12)))
 }
 
+/** HubKeyStore::install — a newer generation is never replaced by an older one. */
+function installHubKey(hubId: string, generation: number, key: Uint8Array): number {
+  const held = device().hubKeys.get(hubId)
+  if (held && held.generation > generation) return held.generation
+  device().hubKeys.set(hubId, { generation, key })
+  return generation
+}
+
+/** HubKeyStore::resolve — exactly the named key, or refused. */
+function resolveHubKey(ref: KeyRef): Uint8Array {
+  if (ref.state === 'committed') {
+    const held = device().hubKeys.get(ref.hubId)
+    if (!held || held.generation !== ref.generation) throw new Error(`Hub key generation ${ref.generation} of hub ${ref.hubId} is not loaded`)
+    return held.key
+  }
+  const pending = device().pendingHubKeys.get(ref.pendingId)
+  if (!pending || pending.hubId !== ref.hubId) throw new Error(`No pending hub key ${ref.pendingId} for hub ${ref.hubId}`)
+  return pending.key
+}
+
+/** The committed key `client` holds for `hubId` (null when none). */
+function heldKey(client: { device: FakeDevice }, hubId: string): Uint8Array | null {
+  return client.device.hubKeys.get(hubId)?.key ?? null
+}
+
 h.platform = {
   getDevicePubkeys: async () => ({
     deviceId: device().deviceId,
     signingPubkeyHex: device().userPubkey,
     encryptionPubkeyHex: device().encryptionPubkeyHex,
   }),
-  generateHubKeyInState: async () => { device().hubKey = randomBytes(32) },
-  wrapHubKeyForMember: async (recipientPubkeyHex: string, label: string, aadHex: string) => {
-    const key = device().hubKey
-    if (!key) throw new Error('Hub key not loaded')
-    return hpkeSealMock(key, recipientPubkeyHex, label, hexToBytes(aadHex))
+  hpkeUnwrapAndSetHubKey: async (hubId: string, generation: number, envelope: Envelope, expectedLabel: string, aadHex: string) => {
+    const key = hpkeOpenMock(envelope, bytesToHex(device().secret), expectedLabel, hexToBytes(aadHex))
+    return installHubKey(hubId, generation, key)
   },
-  hpkeUnwrapAndSetHubKey: async (envelope: Envelope, expectedLabel: string, aadHex: string) => {
-    device().hubKey = hpkeOpenMock(envelope, bytesToHex(device().secret), expectedLabel, hexToBytes(aadHex))
+  forgetHubKey: async (hubId: string) => { device().hubKeys.delete(hubId) },
+  generatePendingHubKey: async (hubId: string) => {
+    const pendingId = bytesToHex(randomBytes(16))
+    device().pendingHubKeys.set(pendingId, { hubId, key: randomBytes(32) })
+    return { state: 'pending', hubId, pendingId }
   },
-  encryptHubField: async (plaintext: string, label: string) => {
-    const key = device().hubKey
-    if (!key) throw new Error('Hub key not loaded')
-    return hubFieldEncrypt(key, plaintext, label)
+  commitPendingHubKey: async (ref: KeyRef & { state: 'pending' }, generation: number) => {
+    const pending = device().pendingHubKeys.get(ref.pendingId)
+    if (!pending || pending.hubId !== ref.hubId) throw new Error(`No pending hub key ${ref.pendingId} for hub ${ref.hubId}`)
+    device().pendingHubKeys.delete(ref.pendingId)
+    return installHubKey(ref.hubId, generation, pending.key)
   },
-  decryptHubField: async (packedHex: string, label: string) => {
-    const key = device().hubKey
-    if (!key) return null
-    try { return hubFieldDecrypt(key, packedHex, label) } catch { return null }
+  discardPendingHubKey: async (ref: KeyRef & { state: 'pending' }) => { device().pendingHubKeys.delete(ref.pendingId) },
+  wrapHubKeyForMember: async (ref: KeyRef, recipientPubkeyHex: string, label: string, aadHex: string) =>
+    hpkeSealMock(resolveHubKey(ref), recipientPubkeyHex, label, hexToBytes(aadHex)),
+  encryptHubField: async (ref: KeyRef, plaintext: string, label: string) =>
+    hubFieldEncrypt(resolveHubKey(ref), plaintext, label),
+  decryptHubField: async (hubId: string, packedHex: string, label: string) => {
+    const held = device().hubKeys.get(hubId)
+    if (!held) return null
+    try { return hubFieldDecrypt(held.key, packedHex, label) } catch { return null }
   },
 } as unknown as typeof h.platform
 
@@ -148,7 +191,16 @@ interface ServerRequest { method: string; path: string; caller: string }
 const hooks: {
   beforeApply: ((req: ServerRequest) => Promise<void> | void) | null
   afterApply: ((req: ServerRequest) => Promise<void> | void) | null
-} = { beforeApply: null, afterApply: null }
+  /** Runs before every platform (Rust IPC) call — each one is an await the UI can interleave with. */
+  beforeIpc: ((name: string) => Promise<void> | void) | null
+} = { beforeApply: null, afterApply: null, beforeIpc: null }
+
+for (const [name, fn] of Object.entries(h.platform)) {
+  h.platform[name] = (async (...a: never[]) => {
+    await hooks.beforeIpc?.(name)
+    return fn(...a)
+  }) as (typeof h.platform)[string]
+}
 
 function json<T>(init: RequestInit | undefined): T {
   return JSON.parse(String(init?.body)) as T
@@ -273,7 +325,8 @@ async function newClient(): Promise<Client> {
     deviceId: crypto.randomUUID(),
     secret,
     encryptionPubkeyHex: bytesToHex(x25519.getPublicKey(secret)),
-    hubKey: null,
+    hubKeys: new Map(),
+    pendingHubKeys: new Map(),
   }
   vi.resetModules()
   const hkm = await import('./hub-key-manager')
@@ -361,6 +414,7 @@ beforeEach(() => {
   h.current = null
   hooks.beforeApply = null
   hooks.afterApply = null
+  hooks.beforeIpc = null
 })
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -389,7 +443,7 @@ describe('hub key lifecycle across members', () => {
       expect(await member.run(hkm => hkm.decryptFromHub(tag.encryptedLabel, LABEL_TAG_ENCRYPT)))
         .toBe('Eviction defense')
     }
-    const daveOldKey = dave.device.hubKey
+    const daveOldKey = heldKey(dave, HUB)
     const daveOldEnvelope = hub.envelopes.get(dave.device.userPubkey)
     if (!daveOldKey || !daveOldEnvelope) throw new Error('Dave holds no key before departure')
 
@@ -403,7 +457,7 @@ describe('hub key lifecycle across members', () => {
     expect(rotation.generation).toBe(2)
     expect(hub.generation).toBe(2)
     // A genuinely new key, and existing hub data was re-sealed under it.
-    expect(bytesToHex(admin.device.hubKey ?? new Uint8Array())).not.toBe(bytesToHex(daveOldKey))
+    expect(bytesToHex(heldKey(admin, HUB) ?? new Uint8Array())).not.toBe(bytesToHex(daveOldKey))
     expect(hub.tags[0].encryptedLabel).not.toBe(tagCiphertextBefore)
 
     // New content written after the departure.
@@ -554,7 +608,7 @@ describe('interrupted rotation', () => {
         await createTag(admin, hub, 'Night shift roster')
         await createTeam(admin, 'Legal observers', 'On-call rota')
         await dave.run(hkm => hkm.loadHubKey(HUB))
-        const daveOldKey = dave.device.hubKey
+        const daveOldKey = heldKey(dave, HUB)
         if (!daveOldKey) throw new Error('Dave holds no key before departure')
 
         // The rotation's failAt-th write never lands (request lost) or lands
@@ -605,7 +659,7 @@ describe('stale distribution', () => {
     // Admin B unlocks and loads the (current) key; Dave still holds it too.
     expect(await adminB.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
     expect(await dave.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
-    const daveOldKey = dave.device.hubKey
+    const daveOldKey = heldKey(dave, HUB)
     if (!daveOldKey) throw new Error('Dave holds no key before departure')
 
     // Dave departs. B's once-per-session distribute is in flight, and its
@@ -679,8 +733,8 @@ describe('ensureHubKey', () => {
   })
 })
 
-describe('slot binding', () => {
-  it('refuses to encrypt for the active hub while another hub key is loaded', async () => {
+describe('key binding', () => {
+  it('refuses to encrypt for the active hub when only another hub\'s key is held', async () => {
     const admin = await newClient()
     createHub(HUB, admin, [])
     createHub('hub-b', admin, [])
@@ -691,7 +745,7 @@ describe('slot binding', () => {
     expect(await admin.run(hkm => hkm.decryptFromHub('00'.repeat(40), LABEL_TAG_ENCRYPT))).toBeNull()
   })
 
-  it('provisioning a non-active hub restores the active hub key afterwards', async () => {
+  it('provisioning a non-active hub leaves the active hub\'s key in place', async () => {
     const admin = await newClient()
     const hub = createHub(HUB, admin, [])
     createHub('hub-b', admin, [])
@@ -700,7 +754,172 @@ describe('slot binding', () => {
 
     await admin.run(hkm => hkm.provisionHubKey('hub-b'))
 
-    await expect(admin.run(hkm => Promise.resolve(hkm.getLoadedHubKeyHubId()))).resolves.toBe(HUB)
+    expect(admin.hkm.committedHubKey(HUB)).toEqual({ state: 'committed', hubId: HUB, generation: 1 })
+    expect(admin.hkm.committedHubKey('hub-b')).toEqual({ state: 'committed', hubId: 'hub-b', generation: 1 })
     expect(await admin.run(hkm => hkm.decryptFromHub(tag.encryptedLabel, LABEL_TAG_ENCRYPT))).toBe('Before')
+    const after = await createTag(admin, hub, 'After')
+    expect(await admin.run(hkm => hkm.decryptFromHub(after.encryptedLabel, LABEL_TAG_ENCRYPT))).toBe('After')
+  })
+
+  it('Rust refuses to seal a key the operation did not name, whatever else is loaded', async () => {
+    const admin = await newClient()
+    createHub(HUB, admin, [])
+    createHub('hub-b', admin, [])
+    await admin.run(hkm => hkm.provisionHubKey(HUB))
+    await admin.run(hkm => hkm.provisionHubKey('hub-b'))
+    const member = { pubkey: admin.device.userPubkey, encryptionPubkey: admin.device.encryptionPubkeyHex }
+    // A stale generation of the right hub, and a hub whose key is not held.
+    await expect(admin.run(hkm => hkm.wrapHubKeyForMember({ state: 'committed', hubId: HUB, generation: 2 }, member)))
+      .rejects.toThrow(/not loaded/)
+    await expect(admin.run(hkm => hkm.wrapHubKeyForMember({ state: 'committed', hubId: 'hub-c', generation: 1 }, member)))
+      .rejects.toThrow(/not loaded/)
+  })
+})
+
+// ── Hub switch during an in-flight key operation (#1085 review, finding 1) ──
+//
+// The lifecycle effect loads the newly active hub's key whenever the user
+// switches hub. A distribute, rotation or provisioning already in flight for
+// the previous hub must keep sealing THAT hub's key: the envelopes written for
+// hub A must wrap A's key, never B's. The server cannot catch this — its
+// generation guard validates which generation a write names, not which key the
+// envelopes wrap — so these assertions read what was actually stored.
+
+/** The hub key `member`'s stored envelope for `hub` opens to (hex), or null without one. */
+function storedKeyOf(member: Client, hub: HubState): string | null {
+  const env = hub.envelopes.get(member.device.userPubkey)
+  if (!env) return null
+  const envelope = { v: 3, labelId: labelToId(LABEL_HUB_KEY_WRAP), enc: env.enc, ct: env.ct }
+  return bytesToHex(hpkeOpenMock(envelope, bytesToHex(member.device.secret), LABEL_HUB_KEY_WRAP, new Uint8Array()))
+}
+
+/** The user switches to `hubId`: what useHubKeyLifecycle does when the active hub changes. */
+async function switchHub(client: Client, hubId: string): Promise<void> {
+  h.activeHub = hubId
+  await client.hkm.loadHubKey(hubId)
+}
+
+describe('hub switch during an in-flight key operation', () => {
+  async function twoHubs() {
+    const admin = await newClient()
+    const bob = await newClient()   // member of hub A only
+    const carol = await newClient() // member of hub B only
+    const hubA = createHub('hub-a', admin, [bob])
+    const hubB = createHub('hub-b', admin, [carol])
+    h.activeHub = 'hub-b'
+    await admin.run(hkm => hkm.provisionHubKey('hub-b'))
+    h.activeHub = 'hub-a'
+    await admin.run(hkm => hkm.provisionHubKey('hub-a'))
+    const kA = storedKeyOf(admin, hubA)
+    const kB = storedKeyOf(admin, hubB)
+    if (!kA || !kB) throw new Error('both hubs must hold a key')
+    expect(kA).not.toBe(kB)
+    return { admin, bob, carol, hubA, hubB, kA, kB }
+  }
+
+  it('a distribute for hub A still wraps A\'s key when the user switches to hub B while it fetches the member list', async () => {
+    const { admin, bob, hubA, kA } = await twoHubs()
+    await createTag(admin, hubA, 'Eviction defense')
+
+    let switched = false
+    hooks.beforeApply = async req => {
+      if (!switched && req.path.startsWith('/admin/devices/overview')) {
+        switched = true
+        await switchHub(admin, 'hub-b')
+      }
+    }
+    await admin.run(hkm => hkm.distributeHubKey('hub-a')).catch(() => {})
+    hooks.beforeApply = null
+    expect(switched).toBe(true)
+
+    expect(storedKeyOf(bob, hubA)).toBe(kA)
+    expect(storedKeyOf(admin, hubA)).toBe(kA)
+    h.activeHub = 'hub-a'
+    await bob.run(hkm => hkm.loadHubKey('hub-a'))
+    expect(await readAll(bob, hubA)).toEqual(['Eviction defense'])
+  })
+
+  it('a distribute for hub A still wraps A\'s key when the switch lands inside the wrap IPC', async () => {
+    const { admin, bob, hubA, kA } = await twoHubs()
+
+    let switched = false
+    hooks.beforeIpc = async name => {
+      if (!switched && name === 'wrapHubKeyForMember') {
+        switched = true
+        await switchHub(admin, 'hub-b')
+      }
+    }
+    await admin.run(hkm => hkm.distributeHubKey('hub-a')).catch(() => {})
+    hooks.beforeIpc = null
+    expect(switched).toBe(true)
+
+    expect(storedKeyOf(bob, hubA)).toBe(kA)
+    expect(storedKeyOf(admin, hubA)).toBe(kA)
+  })
+
+  it('a rotation of hub A seals one fresh key for A — never B\'s — when the user switches to hub B mid-rotation', async () => {
+    const { admin, bob, hubA, kA, kB } = await twoHubs()
+    const dave = await newClient()
+    hubA.members.set(dave.device.userPubkey, dave.device.encryptionPubkeyHex)
+    await admin.run(hkm => hkm.distributeHubKey('hub-a'))
+    await createTag(admin, hubA, 'Tag one')
+    await createTag(admin, hubA, 'Tag two')
+    depart(hubA, dave)
+
+    let switched = false
+    hooks.beforeIpc = async name => {
+      if (!switched && name === 'wrapHubKeyForMember') {
+        switched = true
+        await switchHub(admin, 'hub-b')
+      }
+    }
+    // The rotation was started in hub A's context; the switch lands mid-flight.
+    await admin.run(hkm => hkm.rotateHubKey('hub-a', [dave.device.userPubkey])).catch(() => {})
+    hooks.beforeIpc = null
+    expect(switched).toBe(true)
+
+    // Whatever the outcome, every stored envelope of A wraps the SAME key,
+    // it is neither B's key nor (once committed) the departed member's, and
+    // every record decrypts under it.
+    const bobKey = storedKeyOf(bob, hubA)
+    expect(bobKey).not.toBeNull()
+    expect(bobKey).not.toBe(kB)
+    expect(storedKeyOf(admin, hubA)).toBe(bobKey)
+    if (hubA.generation > 1) {
+      expect(bobKey).not.toBe(kA)
+      expect(storedKeyOf(dave, hubA)).toBeNull()
+    }
+    h.activeHub = 'hub-a'
+    await bob.run(hkm => hkm.loadHubKey('hub-a'))
+    expect(await readAll(bob, hubA)).toEqual(['Tag one', 'Tag two'])
+    expect(keyOpensAny(hexToBytes(kB), hubA)).toBe(false)
+  })
+
+  it('provisioning hub A seals one key for all of A\'s members when the user switches to hub B mid-provision', async () => {
+    const admin = await newClient()
+    const bob = await newClient()
+    const carol = await newClient()
+    const hubA = createHub('hub-a', admin, [bob])
+    const hubB = createHub('hub-b', admin, [carol])
+    h.activeHub = 'hub-b'
+    await admin.run(hkm => hkm.provisionHubKey('hub-b'))
+    const kB = storedKeyOf(admin, hubB)
+
+    h.activeHub = 'hub-a'
+    let switched = false
+    hooks.beforeIpc = async name => {
+      if (!switched && name === 'wrapHubKeyForMember') {
+        switched = true
+        await switchHub(admin, 'hub-b')
+      }
+    }
+    await admin.run(hkm => hkm.provisionHubKey('hub-a')).catch(() => {})
+    hooks.beforeIpc = null
+    expect(switched).toBe(true)
+
+    const bobKey = storedKeyOf(bob, hubA)
+    expect(bobKey).not.toBeNull()
+    expect(bobKey).not.toBe(kB)
+    expect(storedKeyOf(admin, hubA)).toBe(bobKey)
   })
 })

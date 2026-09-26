@@ -16,10 +16,13 @@ import { offlineQueue } from './offline-queue'
 
 vi.mock('./platform', () => ({
   createAuthToken: vi.fn(async () => JSON.stringify({ timestamp: Date.now(), token: 'mock-token' })),
-  encryptDraft: vi.fn(async (text: string) => text),
-  decryptDraft: vi.fn(async (text: string) => text),
   lockCrypto: vi.fn(async () => {}),
   decryptWithPin: vi.fn(async () => null),
+}))
+
+vi.mock('./hub-key-manager', () => ({
+  encryptDraft: vi.fn(async (text: string) => text),
+  decryptDraft: vi.fn(async (text: string) => text),
 }))
 
 describe('ApiError', () => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { encryptDraft, decryptDraft } from './platform'
+import { encryptDraft, decryptDraft } from './hub-key-manager'
 import * as keyManager from './key-manager'
 
 type FieldValues = Record<string, string | number | boolean>

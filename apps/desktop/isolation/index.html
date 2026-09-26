@@ -56,7 +56,10 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'sigchain_verify_link',
     // Hub key management (stateful — key never enters JS)
     'hpke_unwrap_and_set_hub_key',
-    'generate_hub_key_in_state',
+    'forget_hub_key',
+    'generate_pending_hub_key',
+    'commit_pending_hub_key',
+    'discard_pending_hub_key',
     'wrap_hub_key_for_member',
     // Hub-key field encryption (team/tag names — key stays in Rust)
     'encrypt_hub_field',

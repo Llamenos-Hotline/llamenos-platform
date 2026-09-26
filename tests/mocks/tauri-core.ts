@@ -47,8 +47,47 @@ let mockEncryptedKeys: unknown = null
 // ── Provisioning ephemeral key mock state ────────────────────────────
 let mockProvisioningEphemeral: Uint8Array | null = null
 
-// ── Hub key mock state ───────────────────────────────────────────────
-let mockHubKey: Uint8Array | null = null
+// ── Hub key mock state (mirrors apps/desktop/src/hub_keys.rs HubKeyStore) ──
+// One committed key per hub plus pending keys the server has not accepted.
+// There is no "current hub key": every command names the key it uses.
+type MockHubKeyRef =
+  | { state: 'committed'; hubId: string; generation: number }
+  | { state: 'pending'; hubId: string; pendingId: string }
+const mockHubKeys = new Map<string, { generation: number; key: Uint8Array }>()
+const mockPendingHubKeys = new Map<string, { hubId: string; key: Uint8Array }>()
+
+/** HubKeyStore::install — a newer generation is never replaced by an older one. */
+function installMockHubKey(hubId: string, generation: number, key: Uint8Array): number {
+  const held = mockHubKeys.get(hubId)
+  if (held && held.generation > generation) return held.generation
+  mockHubKeys.set(hubId, { generation, key })
+  return generation
+}
+
+/** HubKeyStore::resolve — exactly the named key, or refused. */
+function resolveMockHubKey(ref: MockHubKeyRef): Uint8Array {
+  if (ref.state === 'committed') {
+    const held = mockHubKeys.get(ref.hubId)
+    if (!held) throw new Error(`Hub key for hub ${ref.hubId} is not loaded`)
+    if (held.generation !== ref.generation) {
+      throw new Error(`Hub key generation ${ref.generation} of hub ${ref.hubId} is not loaded (held: ${held.generation})`)
+    }
+    return held.key
+  }
+  const pending = mockPendingHubKeys.get(ref.pendingId)
+  if (!pending) throw new Error(`No pending hub key ${ref.pendingId}`)
+  if (pending.hubId !== ref.hubId) {
+    throw new Error(`Pending hub key ${ref.pendingId} belongs to hub ${pending.hubId}, not ${ref.hubId}`)
+  }
+  return pending.key
+}
+
+/** HubKeyStore::committed — the hub's committed key, any generation (decryption only). */
+function committedMockHubKey(hubId: string): Uint8Array {
+  const held = mockHubKeys.get(hubId)
+  if (!held) throw new Error(`Hub key for hub ${hubId} is not loaded`)
+  return held.key
+}
 
 // ── Server event key(s) mock state (epoch-scoped relay event decryption) ──
 // Matches Rust `hub-event` (hub-key-encrypted) vs `hub-event-epoch` (relay
@@ -1034,7 +1073,8 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockSecrets = null
     mockDeviceState = null
     mockEncryptedKeys = null
-    mockHubKey = null
+    mockHubKeys.clear()
+    mockPendingHubKeys.clear()
     mockServerEventKeys = []
     mockPukSeed = null
     mockRecoveryGroupKey = null
@@ -1271,28 +1311,46 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const secretHex = bytesToHex(secrets.encryptionSeed)
     const key = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
     if (key.length !== 32) throw new Error('Hub key must be 32 bytes')
-    mockHubKey = key
+    return installMockHubKey(a.hubId as string, a.generation as number, key)
   },
 
-  generate_hub_key_in_state: () => {
-    mockHubKey = randomBytes(32)
+  forget_hub_key: (a) => {
+    mockHubKeys.delete(a.hubId as string)
+  },
+
+  generate_pending_hub_key: (a) => {
+    const pendingId = bytesToHex(randomBytes(16))
+    mockPendingHubKeys.set(pendingId, { hubId: a.hubId as string, key: randomBytes(32) })
+    return pendingId
+  },
+
+  commit_pending_hub_key: (a) => {
+    const hubId = a.hubId as string
+    const pendingId = a.pendingId as string
+    const key = resolveMockHubKey({ state: 'pending', hubId, pendingId })
+    mockPendingHubKeys.delete(pendingId)
+    return installMockHubKey(hubId, a.generation as number, key)
+  },
+
+  discard_pending_hub_key: (a) => {
+    mockPendingHubKeys.delete(a.pendingId as string)
   },
 
   wrap_hub_key_for_member: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const key = resolveMockHubKey(a.keyRef as MockHubKeyRef)
     const recipientPubkeyHex = a.recipientPubkeyHex as string
     const label = a.label as string
     const aad = hexToBytes(a.aadHex as string)
-    return hpkeSealMock(mockHubKey, recipientPubkeyHex, label, aad)
+    return hpkeSealMock(key, recipientPubkeyHex, label, aad)
   },
 
   encrypt_hub_field: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const key = resolveMockHubKey(a.keyRef as MockHubKeyRef)
     const plaintext = a.plaintext as string
     const label = a.label as string
     const nonce = randomBytes(12)
     const aad = utf8ToBytes(label)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(key, nonce, aad)
     const ciphertext = cipher.encrypt(utf8ToBytes(plaintext))
     const packed = new Uint8Array(12 + ciphertext.length)
     packed.set(nonce)
@@ -1301,7 +1359,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   decrypt_hub_field: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const key = committedMockHubKey(a.hubId as string)
     const ciphertextHex = a.ciphertextHex as string
     const label = a.label as string
     const data = hexToBytes(ciphertextHex)
@@ -1309,25 +1367,25 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
     const aad = utf8ToBytes(label)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(key, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
     return new TextDecoder().decode(plaintext)
   },
 
   // --- Hub event decryption (hub-key-encrypted broadcasts) ---
   // Mirrors apps/desktop/src/crypto.rs decrypt_hub_event: AES-256-GCM with
-  // the hub key from CryptoState, AAD = LABEL_HUB_EVENT (not validated
+  // the named hub's key from CryptoState, AAD = LABEL_HUB_EVENT (not validated
   // against LABEL_REGISTRY — this is a fixed AAD, not a wrappable label).
 
   decrypt_hub_event: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const key = committedMockHubKey(a.hubId as string)
     const ciphertextHex = a.ciphertextHex as string
     const data = hexToBytes(ciphertextHex)
     if (data.length < 28) throw new Error('Ciphertext too short (need at least 12-byte nonce + 16-byte tag)')
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
     const aad = utf8ToBytes(LABEL_HUB_EVENT)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(key, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
     return new TextDecoder().decode(plaintext)
   },

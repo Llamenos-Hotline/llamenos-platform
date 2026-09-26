@@ -20,6 +20,8 @@ use llamenos_core::{
 };
 use tauri::Manager;
 
+use crate::hub_keys::{HubKeyRef, HubKeyStore};
+
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
@@ -51,9 +53,10 @@ pub struct CryptoState {
     pin_failed_attempts: Mutex<u32>,
     /// PIN lockout expiry — epoch millis. Zero means no lockout.
     pin_lockout_until: Mutex<u64>,
-    /// Hub symmetric key — 32 bytes for AES-256-GCM hub event decryption.
-    /// Stored in Rust to prevent webview JS from accessing it (H2 hardening).
-    hub_key: Mutex<Option<Vec<u8>>>,
+    /// Hub symmetric keys, each bound to its hub (and generation). Stored in
+    /// Rust so webview JS never sees them (H2 hardening). Every command names
+    /// the key it uses — there is no ambient "current hub key" (see hub_keys.rs).
+    hub_keys: Mutex<HubKeyStore>,
     /// Server event key(s) — epoch-scoped symmetric keys for relay event decryption.
     /// Current + previous epoch for rolling window (H5 hardening).
     server_event_keys: Mutex<Vec<(u64, Vec<u8>)>>,
@@ -75,7 +78,7 @@ impl CryptoState {
             device_state: Mutex::new(None),
             pin_failed_attempts: Mutex::new(0),
             pin_lockout_until: Mutex::new(0),
-            hub_key: Mutex::new(None),
+            hub_keys: Mutex::new(HubKeyStore::new()),
             server_event_keys: Mutex::new(Vec::new()),
             recovery_group_key: Mutex::new(None),
             provisioning_ephemeral: Mutex::new(None),
@@ -90,7 +93,7 @@ impl CryptoState {
         // DeviceSecrets implements Zeroize on drop
         *self.secrets.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.device_state.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.hub_key.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.hub_keys.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.server_event_keys
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -523,53 +526,82 @@ pub fn derive_sas(
 
 // ── Hub event decryption (H2 hardening — symmetric key stays in Rust) ──
 
-/// Unwrap an HPKE envelope containing a hub key and store it directly in CryptoState.
-/// The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
+/// Unwrap an HPKE envelope containing `hub_id`'s key at `generation` and hold
+/// it in CryptoState, bound to that hub. The hub key NEVER enters JavaScript.
+/// Returns the generation now held for the hub (a newer one already held is kept).
 #[tauri::command]
 pub fn hpke_unwrap_and_set_hub_key(
     state: tauri::State<'_, CryptoState>,
+    hub_id: String,
+    generation: u64,
     envelope: hpke_envelope::HpkeEnvelope,
     expected_label: String,
     aad_hex: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let aad = hex::decode(&aad_hex).map_err(err_str)?;
     let secret_hex = state.encryption_secret_hex()?;
     let key =
         hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad).map_err(err_str)?;
-    *lock_mutex(&state.hub_key)? = Some(key.to_vec());
+    Ok(lock_mutex(&state.hub_keys)?.install(&hub_id, generation, key))
+}
+
+/// Drop `hub_id`'s key (the server holds no envelope for this user any more).
+#[tauri::command]
+pub fn forget_hub_key(state: tauri::State<'_, CryptoState>, hub_id: String) -> Result<(), String> {
+    lock_mutex(&state.hub_keys)?.forget(&hub_id);
     Ok(())
 }
 
-/// Generate a random 32-byte hub key and store it in CryptoState.
+/// Generate a random 32-byte key for `hub_id` and hold it as PENDING (not yet
+/// accepted by the server). Returns its id for a `{ state: "pending" }` key ref.
 /// The key NEVER enters JavaScript — only wrapped envelopes leave Rust.
 #[tauri::command]
-pub fn generate_hub_key_in_state(state: tauri::State<'_, CryptoState>) -> Result<(), String> {
-    let mut key = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
-    *lock_mutex(&state.hub_key)? = Some(key.to_vec());
+pub fn generate_pending_hub_key(
+    state: tauri::State<'_, CryptoState>,
+    hub_id: String,
+) -> Result<String, String> {
+    Ok(lock_mutex(&state.hub_keys)?.generate_pending(&hub_id))
+}
+
+/// The server accepted pending key `pending_id` as `hub_id`'s key at
+/// `generation`: hold it as the hub's committed key. Returns the generation
+/// now held for the hub.
+#[tauri::command]
+pub fn commit_pending_hub_key(
+    state: tauri::State<'_, CryptoState>,
+    hub_id: String,
+    pending_id: String,
+    generation: u64,
+) -> Result<u64, String> {
+    lock_mutex(&state.hub_keys)?.commit_pending(&hub_id, &pending_id, generation)
+}
+
+/// Drop a pending key the server did not accept.
+#[tauri::command]
+pub fn discard_pending_hub_key(
+    state: tauri::State<'_, CryptoState>,
+    pending_id: String,
+) -> Result<(), String> {
+    lock_mutex(&state.hub_keys)?.discard_pending(&pending_id);
     Ok(())
 }
 
-/// HPKE-seal the hub key stored in CryptoState for a recipient.
+/// HPKE-seal the hub key `key_ref` names for a recipient. Refused unless
+/// exactly that key (hub + generation, or hub + pending id) is held.
 /// The key NEVER enters JavaScript — it goes from state directly to HPKE encryption.
 #[tauri::command]
 pub fn wrap_hub_key_for_member(
     state: tauri::State<'_, CryptoState>,
+    key_ref: HubKeyRef,
     recipient_pubkey_hex: String,
     label: String,
     aad_hex: String,
 ) -> Result<serde_json::Value, String> {
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
-    if key.len() != 32 {
-        return Err("Hub key must be 32 bytes".into());
-    }
-    let mut key_arr = [0u8; 32];
-    key_arr.copy_from_slice(key);
     let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let envelope =
-        hpke_envelope::hpke_seal_key(&key_arr, &recipient_pubkey_hex, &label, &aad)
-            .map_err(err_str)?;
+    let hub_keys = lock_mutex(&state.hub_keys)?;
+    let key = hub_keys.resolve(&key_ref)?;
+    let envelope = hpke_envelope::hpke_seal_key(key, &recipient_pubkey_hex, &label, &aad)
+        .map_err(err_str)?;
     serde_json::to_value(&envelope).map_err(err_str)
 }
 
@@ -595,17 +627,18 @@ pub fn set_server_event_keys(
     Ok(())
 }
 
-/// Decrypt hub event content using the hub key stored in CryptoState.
+/// Decrypt hub event content with `hub_id`'s committed key.
 /// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
 /// AAD: LABEL_HUB_EVENT bytes for domain separation.
 /// Returns the decrypted plaintext string.
 #[tauri::command]
 pub fn decrypt_hub_event(
     state: tauri::State<'_, CryptoState>,
+    hub_id: String,
     ciphertext_hex: String,
 ) -> Result<String, String> {
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
+    let hub_keys = lock_mutex(&state.hub_keys)?;
+    let key = hub_keys.committed(&hub_id)?;
 
     let data = hex::decode(&ciphertext_hex).map_err(err_str)?;
     if data.len() < 28 {
@@ -613,7 +646,7 @@ pub fn decrypt_hub_event(
     }
 
     let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("Invalid hub key: {e}"))?;
     let plaintext = cipher
         .decrypt(
             nonce,
@@ -627,13 +660,15 @@ pub fn decrypt_hub_event(
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
 }
 
-/// Encrypt a plaintext string with the hub key using an arbitrary label as AAD.
-/// Input: plaintext string, AAD label string.
+/// Encrypt a plaintext string with the hub key `key_ref` names, using an
+/// arbitrary label as AAD. Refused unless exactly that key is held.
+/// Input: key ref, plaintext string, AAD label string.
 /// Output: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
 /// Used for team/tag field encryption with domain-separated labels.
 #[tauri::command]
 pub fn encrypt_hub_field(
     state: tauri::State<'_, CryptoState>,
+    key_ref: HubKeyRef,
     plaintext: String,
     label: String,
 ) -> Result<String, String> {
@@ -642,14 +677,14 @@ pub fn encrypt_hub_field(
         return Err("Unknown crypto label: not in LABEL_REGISTRY".into());
     }
 
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
+    let hub_keys = lock_mutex(&state.hub_keys)?;
+    let key = hub_keys.resolve(&key_ref)?;
 
     let mut nonce_bytes = [0u8; 12];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("Invalid hub key: {e}"))?;
     let ciphertext = cipher
         .encrypt(
             nonce,
@@ -666,12 +701,14 @@ pub fn encrypt_hub_field(
     Ok(hex::encode(packed))
 }
 
-/// Decrypt a hub-encrypted field using an arbitrary label as AAD.
-/// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM), AAD label string.
+/// Decrypt a hub-encrypted field with `hub_id`'s committed key, using an
+/// arbitrary label as AAD.
+/// Input: hub id, hex-encoded nonce(12) + ciphertext (AES-256-GCM), AAD label string.
 /// Used for team/tag field decryption with domain-separated labels.
 #[tauri::command]
 pub fn decrypt_hub_field(
     state: tauri::State<'_, CryptoState>,
+    hub_id: String,
     ciphertext_hex: String,
     label: String,
 ) -> Result<String, String> {
@@ -680,8 +717,8 @@ pub fn decrypt_hub_field(
         return Err("Unknown crypto label: not in LABEL_REGISTRY".into());
     }
 
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
+    let hub_keys = lock_mutex(&state.hub_keys)?;
+    let key = hub_keys.committed(&hub_id)?;
 
     let data = hex::decode(&ciphertext_hex).map_err(err_str)?;
     if data.len() < 28 {
@@ -689,7 +726,7 @@ pub fn decrypt_hub_field(
     }
 
     let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("Invalid hub key: {e}"))?;
     let plaintext = cipher
         .decrypt(
             nonce,

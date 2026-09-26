@@ -36,10 +36,17 @@
  *                           under the old key; after it, under the new key.
  *                           Never neither.
  *
- * Desktop CryptoState holds ONE hub key slot. `slot` records which hub's key
- * (and which generation) is in it, and encryption for a hub is refused unless
- * that hub's committed key is the one loaded — hub data must never be sealed
- * under another hub's key, nor under a key the server has not accepted.
+ * KEY BINDING. Desktop CryptoState holds one key PER HUB (plus pending keys
+ * the server has not accepted yet), and there is no "current hub key". Every
+ * operation names the key it uses with a HubKeyRef bound to a hub id, and Rust
+ * refuses unless exactly that key is held. An operation captures its ref when
+ * it starts and uses it throughout, so a hub switch in the UI — which loads
+ * the new hub's key — can never change the key an in-flight distribute,
+ * rotation or provisioning seals into another hub's envelopes (#1085 review,
+ * finding 1). Every write additionally asserts that the key it seals belongs
+ * to the hub it writes to. The server cannot catch a wrong-key seal (its
+ * generation guard sees which generation a write names, not which key the
+ * envelopes wrap), so this binding is enforced here, on the client.
  */
 
 import type { z } from 'zod'
@@ -50,24 +57,27 @@ import type {
   rotateHubKeyResponseSchema,
 } from '@protocol/schemas/hubs'
 import type { adminDeviceOverviewResponseSchema } from '@protocol/schemas/devices'
-import type { RecipientEnvelope } from '@protocol/schemas'
+import type { RecipientEnvelope, TagResponse, TeamResponse } from '@protocol/schemas'
 import {
+  HKDF_CONTEXT_DRAFTS,
+  HKDF_CONTEXT_EXPORT,
   LABEL_HUB_KEY_WRAP,
   LABEL_TAG_ENCRYPT,
   LABEL_TEAM_ENCRYPT,
 } from '@shared/crypto-labels'
 import {
   hpkeUnwrapAndSetHubKey,
-  generateHubKeyInState,
+  forgetHubKey,
+  generatePendingHubKey,
+  commitPendingHubKey,
+  discardPendingHubKey,
   wrapHubKeyForMember as platformWrapHubKeyForMember,
   encryptHubField,
   decryptHubField,
   getDevicePubkeys,
 } from './platform'
-import type { HpkeEnvelope } from './platform'
+import type { CommittedHubKeyRef, HpkeEnvelope, HubKeyRef, PendingHubKeyRef } from './platform'
 import { ApiError, request, getActiveHub } from './api/client'
-import { listTags } from './api/tags'
-import { listTeams } from './api/teams'
 import * as keyManager from './key-manager'
 
 type HubKeyEnvelopeResponse = z.infer<typeof hubKeyEnvelopeResponseSchema>
@@ -115,6 +125,17 @@ export class HubKeyUnavailableError extends Error {
 }
 
 /**
+ * A key operation for one hub was handed another hub's key. Nothing was
+ * written: sealing it would put that hub's key in this hub's envelopes.
+ */
+export class HubKeyMismatchError extends Error {
+  constructor(public hubId: string, public keyHubId: string) {
+    super(`Refusing to seal hub ${keyHubId}'s key into a write for hub ${hubId}`)
+    this.name = 'HubKeyMismatchError'
+  }
+}
+
+/**
  * The server refused a key write because the hub's key generation moved on
  * (another admin rotated or provisioned first). Nothing was written.
  */
@@ -140,56 +161,79 @@ export class HubKeyRotationError extends Error {
   }
 }
 
-// ── Slot tracking ───────────────────────────────────────────────────
+// ── Held keys ───────────────────────────────────────────────────────
 
 /**
- * The COMMITTED hub key currently in the Rust CryptoState hub-key slot.
- * Null while the slot is empty, belongs to no known hub, or holds a freshly
- * generated key the server has not accepted yet.
+ * Generation of the COMMITTED key Rust holds for each hub (mirrors the Rust
+ * store; Rust is the authority and reports the generation it holds).
  */
-let slot: { hubId: string; generation: number } | null = null
+const held = new Map<string, number>()
 
-// Rust zeroizes the hub key on lock, so the slot is empty afterwards.
-keyManager.onLock(() => { slot = null })
+// Rust drops every hub key on lock.
+keyManager.onLock(() => { held.clear() })
 
-/** The hub whose key is loaded in Rust, or null. */
-export function getLoadedHubKeyHubId(): string | null {
-  return slot?.hubId ?? null
+/** A reference to the committed key Rust holds for `hubId`, or null. */
+export function committedHubKey(hubId: string): CommittedHubKeyRef | null {
+  const generation = held.get(hubId)
+  return generation === undefined ? null : { state: 'committed', hubId, generation }
+}
+
+/** The key must belong to the hub being written to — never seal another hub's key. */
+function assertKeyForHub(key: HubKeyRef, hubId: string): void {
+  if (key.hubId !== hubId) throw new HubKeyMismatchError(hubId, key.hubId)
 }
 
 // ── Wrapping / unwrapping ───────────────────────────────────────────
 
 /**
- * Wrap the hub key held in CryptoState for one member (Rust HPKE under
+ * Wrap the hub key `key` names for one member (Rust HPKE under
  * LABEL_HUB_KEY_WRAP). The envelope is addressed by the member's user pubkey
  * and sealed to their X25519 key; enc/ct stay in the HPKE envelope's native
  * base64url form, which is what every platform's unwrap consumes.
  */
-export async function wrapHubKeyForMember(member: HubMemberKey): Promise<RecipientEnvelope> {
-  const envelope = await platformWrapHubKeyForMember(member.encryptionPubkey, LABEL_HUB_KEY_WRAP, '')
+export async function wrapHubKeyForMember(key: HubKeyRef, member: HubMemberKey): Promise<RecipientEnvelope> {
+  const envelope = await platformWrapHubKeyForMember(key, member.encryptionPubkey, LABEL_HUB_KEY_WRAP, '')
   return { pubkey: member.pubkey, enc: envelope.enc, ct: envelope.ct }
 }
 
-/** Wrap the hub key held in CryptoState for every member. */
-export async function wrapHubKeyForMembers(members: HubMemberKey[]): Promise<RecipientEnvelope[]> {
-  return Promise.all(members.map(wrapHubKeyForMember))
+/** Wrap the hub key `key` names for every member. */
+export async function wrapHubKeyForMembers(key: HubKeyRef, members: HubMemberKey[]): Promise<RecipientEnvelope[]> {
+  return Promise.all(members.map(member => wrapHubKeyForMember(key, member)))
 }
 
-/** Unwrap a stored hub-key envelope of `generation` into CryptoState for `hubId`. */
+/**
+ * Unwrap a stored hub-key envelope of `generation` into CryptoState, bound to
+ * `hubId`. Returns a reference to the key Rust now holds for the hub — a newer
+ * generation already held is kept, never rolled back.
+ */
 export async function unwrapHubKey(
   hubId: string,
   generation: number,
   stored: Pick<RecipientEnvelope, 'enc' | 'ct'>,
-): Promise<void> {
+): Promise<CommittedHubKeyRef> {
   const envelope: HpkeEnvelope = {
     v: 3,
     labelId: HUB_KEY_WRAP_LABEL_ID,
     enc: stored.enc,
     ct: stored.ct,
   }
-  slot = null
-  await hpkeUnwrapAndSetHubKey(envelope, LABEL_HUB_KEY_WRAP, '')
-  slot = { hubId, generation }
+  const heldGeneration = await hpkeUnwrapAndSetHubKey(hubId, generation, envelope, LABEL_HUB_KEY_WRAP, '')
+  held.set(hubId, heldGeneration)
+  return { state: 'committed', hubId, generation: heldGeneration }
+}
+
+/** The server accepted `key`: Rust holds it as its hub's committed key. */
+async function commitPendingKey(key: PendingHubKeyRef, generation: number): Promise<number> {
+  const heldGeneration = await commitPendingHubKey(key, generation)
+  held.set(key.hubId, heldGeneration)
+  return heldGeneration
+}
+
+/** Drop a pending key the server did not accept (logged, not thrown). */
+async function discardPendingKey(key: PendingHubKeyRef): Promise<void> {
+  await discardPendingHubKey(key).catch((err: unknown) => {
+    console.error(`[hub-key] Failed to discard a pending key for hub ${key.hubId}:`, err)
+  })
 }
 
 // ── Server I/O ──────────────────────────────────────────────────────
@@ -198,9 +242,19 @@ function isConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409
 }
 
-/** PUT envelopes; the server refuses (409) unless `expectedGeneration` is still current. */
-async function putHubKeyEnvelopes(hubId: string, expectedGeneration: number, envelopes: RecipientEnvelope[]): Promise<void> {
-  const body: HubKeyEnvelopesBody = { expectedGeneration, envelopes }
+/**
+ * Seal `key` for `members` and PUT the envelopes as `hubId`'s key set; the
+ * server refuses (409) unless `expectedGeneration` is still current. Refused
+ * before anything is sealed if `key` is not `hubId`'s.
+ */
+async function writeHubKeyEnvelopes(
+  hubId: string,
+  key: HubKeyRef,
+  expectedGeneration: number,
+  members: HubMemberKey[],
+): Promise<void> {
+  assertKeyForHub(key, hubId)
+  const body: HubKeyEnvelopesBody = { expectedGeneration, envelopes: await wrapHubKeyForMembers(key, members) }
   await request<{ ok: true }>(`/hubs/${hubId}/key`, {
     method: 'PUT',
     body: JSON.stringify(body),
@@ -208,35 +262,51 @@ async function putHubKeyEnvelopes(hubId: string, expectedGeneration: number, env
 }
 
 /**
- * Fetch this user's envelope for `hubId` and unwrap it into CryptoState.
- * Returns false when the server holds no envelope for this user (404) — the
- * slot is then left empty for this hub, so nothing gets encrypted for it.
+ * Fetch this user's envelope for `hubId`, unwrap it into CryptoState bound to
+ * that hub, and return a reference to it. Returns null when the server holds
+ * no envelope for this user (404) — any key held for the hub is dropped, so
+ * nothing gets encrypted for it.
  */
-export async function loadHubKey(hubId: string): Promise<boolean> {
+async function fetchHubKey(hubId: string): Promise<CommittedHubKeyRef | null> {
   let res: HubKeyEnvelopeResponse
   try {
     res = await request<HubKeyEnvelopeResponse>(`/hubs/${hubId}/key`)
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      if (slot?.hubId === hubId) slot = null
-      return false
+      held.delete(hubId)
+      await forgetHubKey(hubId)
+      return null
     }
     throw err
   }
-  await unwrapHubKey(hubId, res.generation, res.envelope)
-  return true
+  return unwrapHubKey(hubId, res.generation, res.envelope)
+}
+
+/** Load `hubId`'s key into CryptoState. False when this user holds no envelope for it. */
+export async function loadHubKey(hubId: string): Promise<boolean> {
+  return (await fetchHubKey(hubId)) !== null
 }
 
 /**
- * After a key write failed, the slot may hold a key the server never
- * accepted. Put back whatever the server holds for `hubId` (logged, not
- * thrown — the caller is already propagating the original failure).
+ * After a key write failed, the server may have committed it anyway (the
+ * response was lost). Pick up whatever the server now holds for `hubId`
+ * (logged, not thrown — the caller is already propagating the original
+ * failure). Keys Rust holds are always server-accepted, so a failed reload
+ * leaves at worst an older committed key, never an unaccepted one.
  */
 async function restoreCommittedKey(hubId: string): Promise<void> {
-  slot = null
   await loadHubKey(hubId).catch((err: unknown) => {
     console.error(`[hub-key] Failed to reload the committed key for hub ${hubId}:`, err)
   })
+}
+
+/** Every tag and team of `hubId` — addressed by hub id, never by the active hub. */
+async function listHubRecords(hubId: string): Promise<{ tags: TagResponse[]; teams: TeamResponse[] }> {
+  const [{ tags }, { teams }] = await Promise.all([
+    request<{ tags: TagResponse[] }>(`/hubs/${hubId}/tags`),
+    request<{ teams: TeamResponse[] }>(`/hubs/${hubId}/teams`),
+  ])
+  return { tags, teams }
 }
 
 /** Pick the device whose X25519 key a member's single hub-key envelope is sealed to. */
@@ -283,24 +353,6 @@ export async function fetchHubMemberKeys(hubId: string): Promise<HubMemberKeySet
   return { members, unreachable }
 }
 
-/**
- * Run `op` with `hubId`'s key in the slot, then put the active hub's key back
- * so the browsing context keeps working. Encryption for the active hub is
- * refused (slot mismatch) for the duration.
- */
-async function withRestoredActiveHubKey<T>(hubId: string, op: () => Promise<T>): Promise<T> {
-  try {
-    return await op()
-  } finally {
-    const active = getActiveHub()
-    if (active && active !== hubId) {
-      await loadHubKey(active).catch((err: unknown) => {
-        console.error(`[hub-key] Failed to restore key for active hub ${active}:`, err)
-      })
-    }
-  }
-}
-
 // ── Lifecycle operations ────────────────────────────────────────────
 
 export interface HubKeyDistribution {
@@ -326,20 +378,20 @@ function warnUnreachable(hubId: string, unreachable: string[]): void {
  * already in use.
  */
 export async function provisionHubKey(hubId: string): Promise<HubKeyDistribution> {
-  return withRestoredActiveHubKey(hubId, async () => {
-    const { members, unreachable } = await fetchHubMemberKeys(hubId)
-    slot = null
-    try {
-      await generateHubKeyInState()
-      await putHubKeyEnvelopes(hubId, NO_KEY_GENERATION, await wrapHubKeyForMembers(members))
-    } catch (err) {
-      await restoreCommittedKey(hubId)
-      throw isConflict(err) ? new HubKeyStaleError(hubId, NO_KEY_GENERATION) : err
-    }
-    slot = { hubId, generation: FIRST_KEY_GENERATION }
-    warnUnreachable(hubId, unreachable)
-    return { recipients: members.map(m => m.pubkey), unreachable, generation: FIRST_KEY_GENERATION }
-  })
+  const { members, unreachable } = await fetchHubMemberKeys(hubId)
+  // A pending key bound to this hub: nothing else encrypts under it, and it
+  // becomes this hub's committed key only once the server accepts it.
+  const key = await generatePendingHubKey(hubId)
+  try {
+    await writeHubKeyEnvelopes(hubId, key, NO_KEY_GENERATION, members)
+  } catch (err) {
+    await discardPendingKey(key)
+    await restoreCommittedKey(hubId)
+    throw isConflict(err) ? new HubKeyStaleError(hubId, NO_KEY_GENERATION) : err
+  }
+  await commitPendingKey(key, FIRST_KEY_GENERATION)
+  warnUnreachable(hubId, unreachable)
+  return { recipients: members.map(m => m.pubkey), unreachable, generation: FIRST_KEY_GENERATION }
 }
 
 /**
@@ -347,25 +399,27 @@ export async function provisionHubKey(hubId: string): Promise<HubKeyDistribution
  * added since the last distribution receive an envelope. The key and its
  * generation are re-read from the server first, and the write is accepted
  * only for that generation: if a rotation commits in between, the write is
- * refused (HubKeyStaleError) and the slot is moved to the new key. Never
+ * refused (HubKeyStaleError) and the new key is loaded instead. Never
  * generates a key.
  */
 export async function distributeHubKey(hubId: string): Promise<HubKeyDistribution> {
-  return withRestoredActiveHubKey(hubId, async () => {
-    if (!(await loadHubKey(hubId)) || !slot) throw new HubKeyUnavailableError(hubId)
-    const { generation } = slot
-    const { members, unreachable } = await fetchHubMemberKeys(hubId)
-    const envelopes = await wrapHubKeyForMembers(members)
-    try {
-      await putHubKeyEnvelopes(hubId, generation, envelopes)
-    } catch (err) {
-      if (!isConflict(err)) throw err
-      await restoreCommittedKey(hubId)
-      throw new HubKeyStaleError(hubId, generation)
-    }
-    warnUnreachable(hubId, unreachable)
-    return { recipients: members.map(m => m.pubkey), unreachable, generation }
-  })
+  // The reference is captured once: whatever the UI loads meanwhile, this
+  // distribute seals exactly this hub's key at exactly this generation.
+  const key = await fetchHubKey(hubId)
+  if (!key) throw new HubKeyUnavailableError(hubId)
+  const { generation } = key
+  const { members, unreachable } = await fetchHubMemberKeys(hubId)
+  try {
+    await writeHubKeyEnvelopes(hubId, key, generation, members)
+  } catch (err) {
+    // Refused by the server, or by Rust because a newer generation of this
+    // hub's key was loaded meanwhile: either way the key moved on.
+    if (!isConflict(err) && held.get(hubId) === generation) throw err
+    await restoreCommittedKey(hubId)
+    throw new HubKeyStaleError(hubId, generation)
+  }
+  warnUnreachable(hubId, unreachable)
+  return { recipients: members.map(m => m.pubkey), unreachable, generation }
 }
 
 interface HubFieldPlaintexts {
@@ -374,24 +428,24 @@ interface HubFieldPlaintexts {
 }
 
 /**
- * Decrypt every hub-scoped record of the active hub with the loaded key.
+ * Decrypt every hub-scoped record of `hubId` with that hub's committed key.
  * Throws HubKeyRotationError if any record does not decrypt: a rotation must
  * carry every record re-encrypted, and the server enforces that it does.
  */
 async function decryptHubScopedData(hubId: string): Promise<HubFieldPlaintexts> {
-  const [{ tags }, { teams }] = await Promise.all([listTags(), listTeams()])
+  const { tags, teams } = await listHubRecords(hubId)
   const unreadableTags: string[] = []
   const unreadableTeams: string[] = []
   const out: HubFieldPlaintexts = { tags: [], teams: [] }
   for (const tag of tags) {
-    const label = await decryptHubField(tag.encryptedLabel, LABEL_TAG_ENCRYPT)
-    const category = tag.encryptedCategory ? await decryptHubField(tag.encryptedCategory, LABEL_TAG_ENCRYPT) : null
+    const label = await decryptHubField(hubId, tag.encryptedLabel, LABEL_TAG_ENCRYPT)
+    const category = tag.encryptedCategory ? await decryptHubField(hubId, tag.encryptedCategory, LABEL_TAG_ENCRYPT) : null
     if (label === null || (tag.encryptedCategory && category === null)) unreadableTags.push(tag.id)
     else out.tags.push({ id: tag.id, label, category })
   }
   for (const team of teams) {
-    const name = await decryptHubField(team.encryptedName, LABEL_TEAM_ENCRYPT)
-    const description = team.encryptedDescription ? await decryptHubField(team.encryptedDescription, LABEL_TEAM_ENCRYPT) : null
+    const name = await decryptHubField(hubId, team.encryptedName, LABEL_TEAM_ENCRYPT)
+    const description = team.encryptedDescription ? await decryptHubField(hubId, team.encryptedDescription, LABEL_TEAM_ENCRYPT) : null
     if (name === null || (team.encryptedDescription && description === null)) unreadableTeams.push(team.id)
     else out.teams.push({ id: team.id, name, description })
   }
@@ -401,18 +455,18 @@ async function decryptHubScopedData(hubId: string): Promise<HubFieldPlaintexts> 
   return out
 }
 
-/** Re-encrypt every record under the key now in the slot, in the rotate-body shape. */
-async function encryptHubScopedData(data: HubFieldPlaintexts): Promise<Pick<RotateHubKeyBody, 'tags' | 'teams'>> {
+/** Re-encrypt every record under the key `key` names, in the rotate-body shape. */
+async function encryptHubScopedData(key: HubKeyRef, data: HubFieldPlaintexts): Promise<Pick<RotateHubKeyBody, 'tags' | 'teams'>> {
   return {
     tags: await Promise.all(data.tags.map(async tag => ({
       id: tag.id,
-      encryptedLabel: await encryptHubField(tag.label, LABEL_TAG_ENCRYPT),
-      encryptedCategory: tag.category === null ? null : await encryptHubField(tag.category, LABEL_TAG_ENCRYPT),
+      encryptedLabel: await encryptHubField(key, tag.label, LABEL_TAG_ENCRYPT),
+      encryptedCategory: tag.category === null ? null : await encryptHubField(key, tag.category, LABEL_TAG_ENCRYPT),
     }))),
     teams: await Promise.all(data.teams.map(async team => ({
       id: team.id,
-      encryptedName: await encryptHubField(team.name, LABEL_TEAM_ENCRYPT),
-      encryptedDescription: team.description === null ? null : await encryptHubField(team.description, LABEL_TEAM_ENCRYPT),
+      encryptedName: await encryptHubField(key, team.name, LABEL_TEAM_ENCRYPT),
+      encryptedDescription: team.description === null ? null : await encryptHubField(key, team.description, LABEL_TEAM_ENCRYPT),
     }))),
   }
 }
@@ -423,52 +477,55 @@ async function encryptHubScopedData(data: HubFieldPlaintexts): Promise<Pick<Rota
  *  1. Reload the current key (and its generation) from the server and decrypt
  *     every hub-scoped record (tags, teams). Any unreadable record refuses the
  *     rotation here, before anything is generated or written.
- *  2. Generate a fresh key in Rust; re-encrypt every record under it and wrap
- *     it for the remaining members only (the departed are excluded even if the
- *     server still lists them).
+ *  2. Generate a fresh PENDING key for this hub in Rust; re-encrypt every
+ *     record under it and wrap it for the remaining members only (the
+ *     departed are excluded even if the server still lists them). The
+ *     pending key is bound to this hub, so a hub switch mid-rotation cannot
+ *     put any other key into the commit.
  *  3. Commit all of it in ONE `POST /hubs/:id/key/rotate`. The server applies
  *     records, envelopes and the generation bump in a single transaction, and
  *     only if the generation is still the one read in step 1 and the records
  *     are exactly the hub's current ones.
  *
- * On any failure the slot is reloaded from the server, which then holds
- * either the old key (nothing committed) or the new one (committed, response
- * lost) — every record decrypts under whichever it is.
+ * On any failure the pending key is discarded and the hub's key is reloaded
+ * from the server, which then holds either the old key (nothing committed)
+ * or the new one (committed, response lost) — every record decrypts under
+ * whichever it is.
  */
 export async function rotateHubKey(hubId: string, departedPubkeys: string[]): Promise<HubKeyDistribution> {
   if (getActiveHub() !== hubId) {
     throw new Error(`Hub key rotation must run in the active hub context (active: ${getActiveHub()}, requested: ${hubId})`)
   }
-  if (!(await loadHubKey(hubId)) || !slot) {
-    throw new HubKeyUnavailableError(hubId)
-  }
-  const fromGeneration = slot.generation
+  const current = await fetchHubKey(hubId)
+  if (!current) throw new HubKeyUnavailableError(hubId)
+  const fromGeneration = current.generation
   const plaintexts = await decryptHubScopedData(hubId)
 
   const excluded = new Set(departedPubkeys)
   const { members, unreachable } = await fetchHubMemberKeys(hubId)
   const recipients = members.filter(m => !excluded.has(m.pubkey))
 
-  // From here until the commit the slot holds a key the server has not
-  // accepted: nothing may be encrypted under it for regular writes.
-  slot = null
+  // Pending until the commit: bound to this hub, and never used for regular
+  // writes, which keep encrypting under the committed key.
+  const key = await generatePendingHubKey(hubId)
   let generation: number
   try {
-    await generateHubKeyInState()
+    assertKeyForHub(key, hubId)
     const body: RotateHubKeyBody = {
       fromGeneration,
-      envelopes: await wrapHubKeyForMembers(recipients),
-      ...(await encryptHubScopedData(plaintexts)),
+      envelopes: await wrapHubKeyForMembers(key, recipients),
+      ...(await encryptHubScopedData(key, plaintexts)),
     }
     ;({ generation } = await request<RotateHubKeyResponse>(`/hubs/${hubId}/key/rotate`, {
       method: 'POST',
       body: JSON.stringify(body),
     }))
   } catch (err) {
+    await discardPendingKey(key)
     await restoreCommittedKey(hubId)
     throw isConflict(err) ? new HubKeyStaleError(hubId, fromGeneration) : err
   }
-  slot = { hubId, generation }
+  await commitPendingKey(key, generation)
 
   const stillUnreachable = unreachable.filter(pk => !excluded.has(pk))
   warnUnreachable(hubId, stillUnreachable)
@@ -490,7 +547,7 @@ export async function ensureHubKey(hubId: string, opts: {
 }): Promise<'loaded' | 'provisioned' | 'unavailable'> {
   if (await loadHubKey(hubId)) return 'loaded'
   if (!opts.canManageKeys || opts.hubCreatedBy !== opts.selfPubkey) return 'unavailable'
-  const [{ tags }, { teams }] = await Promise.all([listTags(), listTeams()])
+  const { tags, teams } = await listHubRecords(hubId)
   if (tags.length > 0 || teams.length > 0) return 'unavailable'
   try {
     await provisionHubKey(hubId)
@@ -505,13 +562,14 @@ export async function ensureHubKey(hubId: string, opts: {
 // ── Hub-scoped field encryption ─────────────────────────────────────
 
 /**
- * Encrypt a hub-scoped field under the ACTIVE hub's key.
- * Throws HubKeyUnavailableError unless that hub's committed key is the one loaded.
+ * Encrypt a hub-scoped field under the ACTIVE hub's committed key.
+ * Throws HubKeyUnavailableError unless that hub's key is loaded.
  */
 export async function encryptForHub(plaintext: string, label: string): Promise<string> {
   const active = getActiveHub()
-  if (!active || slot?.hubId !== active) throw new HubKeyUnavailableError(active)
-  return encryptHubField(plaintext, label)
+  const key = active ? committedHubKey(active) : null
+  if (!key) throw new HubKeyUnavailableError(active)
+  return encryptHubField(key, plaintext, label)
 }
 
 /**
@@ -520,6 +578,27 @@ export async function encryptForHub(plaintext: string, label: string): Promise<s
  */
 export async function decryptFromHub(packed: string, label: string): Promise<string | null> {
   const active = getActiveHub()
-  if (!active || slot?.hubId !== active) return null
-  return decryptHubField(packed, label)
+  if (!active || !held.has(active)) return null
+  return decryptHubField(active, packed, label)
+}
+
+/**
+ * Encrypt draft data under the active hub's key with HKDF_CONTEXT_DRAFTS
+ * domain separation. Drafts are local-only (localStorage).
+ */
+export async function encryptDraft(plaintext: string): Promise<string> {
+  return encryptForHub(plaintext, HKDF_CONTEXT_DRAFTS)
+}
+
+/** Decrypt draft data encrypted with encryptDraft (null when it does not decrypt). */
+export async function decryptDraft(ciphertextHex: string): Promise<string | null> {
+  return decryptFromHub(ciphertextHex, HKDF_CONTEXT_DRAFTS)
+}
+
+/**
+ * Encrypt an export payload under the active hub's key with
+ * HKDF_CONTEXT_EXPORT domain separation. Returns hex-encoded ciphertext.
+ */
+export async function encryptExport(jsonString: string): Promise<string> {
+  return encryptForHub(jsonString, HKDF_CONTEXT_EXPORT)
 }

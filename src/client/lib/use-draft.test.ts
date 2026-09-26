@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useDraft } from './use-draft'
 
-vi.mock('./platform', () => ({
+vi.mock('./hub-key-manager', () => ({
   encryptDraft: vi.fn(async (plaintext: string) => `enc:${plaintext}`),
   decryptDraft: vi.fn(async (packed: string) => {
     if (packed.startsWith('enc:')) return packed.slice(4)
