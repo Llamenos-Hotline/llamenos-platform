@@ -87,6 +87,11 @@ describe('resolveSpecialistLabel against a hostile registry', () => {
     writeFileSync(join(dir, 'secret.txt'), 'SECRET')
     symlinkSync(join(dir, 'secret.txt'), join(dir, 'link-reviewer.md'))
     mkdirSync(join(dir, 'dir-reviewer.md'))
+    // Well-formed definitions under names the GRAMMAR must refuse on its own —
+    // the registry exact-match alone would accept them.
+    writeFileSync(join(dir, 'Upper-Reviewer.md'), '---\nname: Upper-Reviewer\n---\n\nx\n')
+    writeFileSync(join(dir, 'dot.name-reviewer.md'), '---\nname: dot.name-reviewer\n---\n\nx\n')
+    writeFileSync(join(dir, '$(id)-reviewer.md'), '---\nname: $(id)-reviewer\n---\n\nx\n')
   })
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -110,6 +115,13 @@ describe('resolveSpecialistLabel against a hostile registry', () => {
   it('refuses a file with no frontmatter, and one with an empty body', async () => {
     expect((await resolveSpecialistLabel('bare-reviewer', dir)).ok).toBe(false)
     expect((await resolveSpecialistLabel('empty-reviewer', dir)).ok).toBe(false)
+  })
+  it('refuses an ill-formed name even when the registry holds a matching, well-formed definition', async () => {
+    for (const label of ['Upper-Reviewer', 'dot.name-reviewer', '$(id)-reviewer']) {
+      const r = await resolveSpecialistLabel(label, dir)
+      expect(r.ok, label).toBe(false)
+      expect(!r.ok && r.reason, label).toMatch(/not a well-formed specialist name/)
+    }
   })
   it('refuses when the registry itself cannot be read', async () => {
     const r = await resolveSpecialistLabel('good-reviewer', join(dir, 'does-not-exist'))
