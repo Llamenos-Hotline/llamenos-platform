@@ -96,6 +96,37 @@ describe('rail: the fleet cannot merge its own changes', () => {
     }
   })
 
+  // #1087: `scripts/` is the infra lane's to write, so every script that
+  // ENFORCES a check must still reach a human — a lane that can weaken the
+  // gate judging it can widen its own authority. CODEOWNERS owns the
+  // `check-*` and `test-*.sh` families as globs so a new one is owned from its
+  // first commit; this pins that each such file is also described as high
+  // impact, and that the named gates stay owned by name.
+  it('every scripts/ gate — check-*, test-*.sh and the named gates — is code-owned and high impact', () => {
+    const files = trackedFiles()
+    const family = files.filter((f) => /^scripts\/(check-[^/]+|test-[^/]+\.sh)$/.test(f))
+    expect(family).toContain('scripts/check-ipc-allowlist.sh')
+    expect(family).toContain('scripts/test-orchestrator.sh')
+    const named = [
+      'scripts/typecheck-tests-gate.ts',
+      'scripts/run-migrations.ts',
+      'scripts/eslint-rules/no-inline-api-shape.js',
+      'scripts/regenerate-snapshot.ts',
+      'scripts/image-smoke.sh',
+      'scripts/verify-runtime.ts',
+      'scripts/lib/test-reporter.sh',
+    ]
+    const owner = codeownersMatcher()
+    for (const f of [...family, ...named]) {
+      expect(files, `${f} is not a tracked file`).toContain(f)
+      expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
+      expect(classifyImpact([f], 1).impact, `${f} is not high impact`).toBe('high')
+    }
+    for (const f of family) {
+      expect(HIGH_IMPACT_PATHS, `${f} is missing from HIGH_IMPACT_PATHS`).toContain(f)
+    }
+  })
+
   it('has no catch-all `*` rule — one would gate every PR and stop the fleet merging anything', () => {
     expect(codeownersPatterns()).not.toContain('*')
   })
