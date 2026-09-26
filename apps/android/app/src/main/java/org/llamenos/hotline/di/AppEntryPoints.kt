@@ -3,7 +3,9 @@ package org.llamenos.hotline.di
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.UserIdentityService
 import org.llamenos.hotline.hub.ActiveHubState
 
 /**
@@ -27,4 +29,11 @@ interface ActiveHubEntryPoint {
 @InstallIn(SingletonComponent::class)
 interface CryptoEntryPoint {
     fun cryptoService(): CryptoService
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface UserIdentityEntryPoint {
+    fun userIdentityService(): UserIdentityService
+    fun apiService(): ApiService
 }
