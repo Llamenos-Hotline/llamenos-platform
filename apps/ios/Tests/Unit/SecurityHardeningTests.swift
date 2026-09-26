@@ -312,7 +312,7 @@ final class SecurityHardeningTests: XCTestCase {
 
     func testWebSocketServiceRejectsHTTPScheme() async {
         let ws = WebSocketService(cryptoService: CryptoService())
-        await ws.connect(to: "http://evil.example.com/relay")
+        await ws.connect(to: URL(string: "http://evil.example.com/ws")!)
         XCTAssertEqual(
             ws.connectionState, .disconnected,
             "WebSocketService must reject http:// URLs — state must stay disconnected"
@@ -321,7 +321,7 @@ final class SecurityHardeningTests: XCTestCase {
 
     func testWebSocketServiceRejectsWSScheme() async {
         let ws = WebSocketService(cryptoService: CryptoService())
-        await ws.connect(to: "ws://evil.example.com/relay")
+        await ws.connect(to: URL(string: "ws://evil.example.com/ws")!)
         XCTAssertEqual(
             ws.connectionState, .disconnected,
             "WebSocketService must reject ws:// URLs — state must stay disconnected"
@@ -330,7 +330,7 @@ final class SecurityHardeningTests: XCTestCase {
 
     func testWebSocketServiceAcceptsWSSScheme() async {
         let ws = WebSocketService(cryptoService: CryptoService())
-        await ws.connect(to: "wss://app.llamenos.org/relay")
+        await ws.connect(to: URL(string: "wss://app.llamenos.org/ws")!)
         // State transitions to .connecting (or later) once the URL passes validation
         XCTAssertNotEqual(
             ws.connectionState, .disconnected,
@@ -343,11 +343,28 @@ final class SecurityHardeningTests: XCTestCase {
         // https:// is a valid scheme — used when the hub URL is https:// and the caller
         // passes it directly to WebSocketService (URLSession upgrades the WS handshake).
         let ws = WebSocketService(cryptoService: CryptoService())
-        await ws.connect(to: "https://app.llamenos.org/relay")
+        await ws.connect(to: URL(string: "https://app.llamenos.org/ws")!)
         XCTAssertNotEqual(
             ws.connectionState, .disconnected,
             "WebSocketService must accept https:// URLs"
         )
+        ws.disconnect()
+    }
+
+    func testWebSocketServiceRejectsWSSchemeOnLookalikeLoopbackHost() async {
+        // Loopback exemption is an exact host match — a hostname merely containing
+        // "localhost" is a remote host and must stay wss-only.
+        let ws = WebSocketService(cryptoService: CryptoService())
+        await ws.connect(to: URL(string: "ws://localhost.evil.example.com/ws")!)
+        XCTAssertEqual(ws.connectionState, .disconnected)
+    }
+
+    func testWebSocketServiceAcceptsWSSchemeOnLoopback() async {
+        // Mirrors APIService's http://localhost exemption: a loopback socket never
+        // crosses the network, and local dev/test backends serve plain HTTP.
+        let ws = WebSocketService(cryptoService: CryptoService())
+        await ws.connect(to: URL(string: "ws://localhost:3000/ws")!)
+        XCTAssertNotEqual(ws.connectionState, .disconnected)
         ws.disconnect()
     }
 

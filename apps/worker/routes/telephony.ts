@@ -281,18 +281,20 @@ telephony.post('/user-answer',
   const url = new URL(c.req.url)
   const services = c.get('services')
 
-  // CRIT-W2: Resolve volunteer pubkey from opaque call token (delete-on-read for single-use guarantee)
+  // CRIT-W2: Resolve volunteer pubkey from the opaque call token and claim the
+  // answer. Single-use is enforced by the atomic ringing → in-progress
+  // transition on the call row, NOT by deleting the token: the provider also
+  // sends this token to /call-status, and the answered leg's later status
+  // callbacks (completed) still need it to find their call.
   // CRIT-W1: Hub resolved from DB call record via token, not from URL param
   const callToken = url.searchParams.get('callToken') || ''
-  const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
+  const tokenData = callToken ? await services.calls.answerCallWithToken(callToken) : null
   if (!tokenData) {
-    logger.warn('user-answer: invalid or expired call token', { callToken: callToken.slice(0, 8) })
+    logger.warn('user-answer: invalid, expired or already-used call token', { callToken: callToken.slice(0, 8) })
     return c.json({ error: 'Forbidden' }, 403)
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId || undefined))!
-
-  await services.calls.answerCall(hubId ?? '', parentCallSid, pubkey)
 
   // Publish call answered event + presence update
   publishEvent(c.env, KIND_CALL_UPDATE, {
@@ -336,7 +338,10 @@ telephony.post('/call-status',
   const url = new URL(c.req.url)
   const services = c.get('services')
 
-  // CRIT-W2: Resolve volunteer pubkey from opaque call token (may already be consumed by /user-answer)
+  // CRIT-W2: Resolve volunteer pubkey from opaque call token. Read-only — the
+  // provider sends pre-answer status events (initiated/ringing) to this route
+  // with the same token /user-answer needs, so a status callback must never
+  // consume it. The token lives until the call ends.
   // CRIT-W1: Hub resolved from DB call record, not from URL param
   const callToken = url.searchParams.get('callToken') || ''
   const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
@@ -353,6 +358,14 @@ telephony.post('/call-status',
       const preCalls = await services.calls.getActiveCalls(hubId ?? '')
       const preCall = preCalls.find(call => call.callId === parentCallSid)
       logger.debug('Ending call', { parentCallSid, foundInActive: !!preCall })
+
+      // A leg's `completed` only ends the call when that leg is the one that
+      // answered it. Other volunteers' legs (cancelled once someone picked up)
+      // carry the same call SID but must not end the bridged call.
+      if (tokenData && preCall && preCall.answeredBy !== pubkey) {
+        logger.debug('Ignoring completed status from a leg that did not answer the call', { parentCallSid })
+        return telephonyResponse(adapter.emptyResponse())
+      }
 
       try {
         await services.calls.endCall(hubId ?? '', parentCallSid)

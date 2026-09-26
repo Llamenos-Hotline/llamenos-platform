@@ -36,7 +36,7 @@ final class MockHubAPIService: HubAPIServiceProtocol {
 
     func hp(_ path: String) -> String {
         guard let hubId = activeHubId else { return path }
-        return "/hubs/\(hubId)\(path)"
+        return APIService.hubPath(hubId, path)
     }
 
     func request<T: Decodable>(method: String, path: String, body: (any Encodable)?) async throws -> T {

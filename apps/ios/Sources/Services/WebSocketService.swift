@@ -87,11 +87,18 @@ private struct WsIncomingEvent: Decodable, Sendable {
 /// Native WebSocket client for the Llamenos relay. Uses challenge-response Ed25519 auth,
 /// per-hub subscriptions, and epoch-aware AES-256-GCM event decryption.
 ///
+/// Multi-hub routing axiom: the client receives events from EVERY hub the user is a
+/// member of, whichever hub is active in the UI. `subscribeToMemberHubs(kinds:)`
+/// subscribes to each hub the server lists in its `authenticated` reply — the
+/// server-authoritative membership — on every (re)connect.
+///
 /// Usage:
 /// ```swift
 /// let ws = WebSocketService(cryptoService: cryptoService)
-/// await ws.connect(to: "wss://hub.example.org/relay")
-/// ws.subscribe(hubId: hubId, kinds: [1000, 1001, 20000])
+/// let config = try await apiService.fetchAppConfig()
+/// guard let url = WebSocketService.relayURL(hubBaseURL: base, advertised: config.wsRelayUrl) else { return }
+/// ws.subscribeToMemberHubs(kinds: [1000, 1001, 20000])
+/// await ws.connect(to: url)
 /// for await event in ws.attributedEvents {
 ///     handleEvent(event)
 /// }
@@ -106,6 +113,10 @@ final class WebSocketService: @unchecked Sendable {
 
     /// Count of events received since last connect (for diagnostics).
     private(set) var eventCount: Int = 0
+
+    /// Hubs the server says this user is a member of, from the last `authenticated`
+    /// reply. Excludes the server's `global` pseudo-hub. Empty until authenticated.
+    private(set) var memberHubIds: [String] = []
 
     // MARK: - Dependencies
 
@@ -143,6 +154,9 @@ final class WebSocketService: @unchecked Sendable {
     private var subscribedHubs: [String: [Int]] = [:]
     /// Subscriptions buffered before auth completes; flushed in handleAuthenticated().
     private var pendingSubscriptions: [(hubId: String, kinds: [Int])] = []
+    /// Kinds to subscribe on every member hub after each authentication, or nil when
+    /// `subscribeToMemberHubs(kinds:)` has not been called.
+    private var memberHubKinds: [Int]?
 
     private var typedContinuations: [UUID: AsyncStream<AttributedHubEvent>.Continuation] = [:]
     private let typedContinuationsLock = NSLock()
@@ -163,18 +177,77 @@ final class WebSocketService: @unchecked Sendable {
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
     }
 
+    // MARK: - Relay URL
+
+    /// The server's `global` pseudo-hub. It is not a hub the user belongs to, so it is
+    /// never subscribed: hub events must be published to their own hub (#1013).
+    static let globalPseudoHubId = "global"
+
+    /// Resolve the relay endpoint advertised by `GET /api/config` (`wsRelayUrl`, e.g.
+    /// `/ws`) against the hub's base URL.
+    ///
+    /// Only `wss://` is returned for remote hosts (`https` maps to `wss`). Cleartext
+    /// `ws://` is allowed only for a loopback host — the same rule `APIService` applies
+    /// to `http://` — because a loopback socket never crosses the network. Any other
+    /// scheme, or a cleartext non-loopback endpoint, returns nil so a MITM-able relay
+    /// is never used.
+    static func relayURL(hubBaseURL: URL, advertised: String?) -> URL? {
+        guard let advertised = advertised?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !advertised.isEmpty,
+              let resolved = URL(string: advertised, relativeTo: hubBaseURL)?.absoluteURL,
+              var components = URLComponents(url: resolved, resolvingAgainstBaseURL: false)
+        else { return nil }
+
+        switch components.scheme?.lowercased() {
+        case "https", "wss":
+            components.scheme = "wss"
+        case "http", "ws":
+            guard isLoopbackHost(components.host) else { return nil }
+            components.scheme = "ws"
+        default:
+            return nil
+        }
+        return components.url
+    }
+
+    /// Whether the relay URL is acceptable to connect to (see `relayURL(hubBaseURL:advertised:)`).
+    static func isAllowedRelayURL(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "wss", "https": return true
+        case "ws": return isLoopbackHost(url.host)
+        default: return false
+        }
+    }
+
+    private static func isLoopbackHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
     // MARK: - Connect
 
     /// Connect to the relay at the given URL.
-    /// Only `wss://` and `https://` schemes are accepted; all others are rejected
-    /// to prevent cleartext relay connections that would expose auth tokens.
-    func connect(to urlString: String) async {
-        guard let url = URL(string: urlString) else { return }
-        guard url.scheme == "wss" || url.scheme == "https" else { return }
+    /// Only `wss://`/`https://` (and `ws://` on a loopback host) are accepted; all
+    /// others are rejected to prevent cleartext relay connections that would expose
+    /// auth tokens.
+    func connect(to url: URL) async {
+        guard Self.isAllowedRelayURL(url) else { return }
         relayURL = url
         isIntentionalDisconnect = false
         reconnectAttempt = 0
         await performConnect()
+    }
+
+    /// Subscribe to `kinds` on every hub the user is a member of — the hubs the server
+    /// lists in its `authenticated` reply — now (if already authenticated) and after
+    /// every reconnect. Membership changes are picked up on the next authentication.
+    func subscribeToMemberHubs(kinds: [Int]) {
+        memberHubKinds = kinds
+        if authenticated {
+            for hubId in memberHubIds {
+                subscribe(hubId: hubId, kinds: kinds)
+            }
+        }
     }
 
     /// Subscribe to events for a hub. Safe to call before or after authentication —
@@ -202,7 +275,7 @@ final class WebSocketService: @unchecked Sendable {
             : .connecting
 
         // URLSessionWebSocketTask requires ws:// or wss:// schemes. Convert https:// → wss://.
-        // connect(to:) already guards against http://, so the http→ws path is unreachable and omitted.
+        // connect(to:) already rejects http:// and non-loopback ws://.
         let wsURL: URL
         if url.scheme == "https", var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             components.scheme = "wss"
@@ -272,7 +345,7 @@ final class WebSocketService: @unchecked Sendable {
             handleChallenge(nonce: nonce)
 
         case "authenticated":
-            handleAuthenticated()
+            handleAuthenticated(serverHubs: obj["hubs"] as? [String] ?? [])
 
         case "event":
             guard
@@ -332,11 +405,23 @@ final class WebSocketService: @unchecked Sendable {
         }
     }
 
-    private func handleAuthenticated() {
+    private func handleAuthenticated(serverHubs: [String]) {
         authenticated = true
         reconnectAttempt = 0
         eventCount = 0
         connectionState = .connected
+        memberHubIds = serverHubs.filter { $0 != Self.globalPseudoHubId }
+
+        if let kinds = memberHubKinds {
+            // The server rejects subscriptions to hubs the user is not a member of, so
+            // drop any left over from a membership that has since ended.
+            let members = Set(memberHubIds)
+            subscribedHubs = subscribedHubs.filter { members.contains($0.key) }
+            pendingSubscriptions.removeAll { !members.contains($0.hubId) }
+            for hubId in memberHubIds where subscribedHubs[hubId] == nil {
+                subscribedHubs[hubId] = kinds
+            }
+        }
         flushPendingSubscriptions()
     }
 
@@ -358,12 +443,18 @@ final class WebSocketService: @unchecked Sendable {
     }
 
     private func sendSubscription(hubId: String, kinds: [Int]) {
-        guard let task = webSocketTask else { return }
-        let msg: [String: Any] = ["type": "subscribe", "hubId": hubId, "kinds": kinds]
+        send(["type": "subscribe", "hubId": hubId, "kinds": kinds])
+    }
+
+    private func send(_ message: [String: Any]) {
         guard
-            let data = try? JSONSerialization.data(withJSONObject: msg),
+            let data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]),
             let text = String(data: data, encoding: .utf8)
         else { return }
+        #if DEBUG
+        outboundMessageObserver?(text)
+        #endif
+        guard let task = webSocketTask else { return }
         Task { try? await task.send(.string(text)) }
     }
 
@@ -457,6 +548,14 @@ final class WebSocketService: @unchecked Sendable {
     /// Inject a typed event directly into the attributed stream for unit testing.
     internal func emitAttributedEvent(hubId: String, eventType: HubEventType) {
         emit(AttributedHubEvent(hubId: hubId, event: eventType))
+    }
+
+    /// Observes every client→server message as it is sent, for unit testing.
+    var outboundMessageObserver: ((String) -> Void)?
+
+    /// Feed a raw server message through the real dispatch path, for unit testing.
+    internal func receiveServerMessageForTesting(_ text: String) {
+        handleServerMessage(text)
     }
     #endif
 }
