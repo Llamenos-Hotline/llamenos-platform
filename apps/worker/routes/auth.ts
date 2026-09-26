@@ -73,7 +73,8 @@ auth.post('/login',
         return c.json({ ok: true, roles: ['role-super-admin'] })
       }
 
-      return c.json({ ok: true, roles: volunteer.roles })
+      // Account-wide, like /auth/me — never used to authorise.
+      return c.json({ ok: true, roles: resolveAllRoleIds(volunteer.roles, volunteer.hubRoles ?? []) })
     } catch {
       return c.json({ error: 'Authentication failed' }, 401)
     }
@@ -189,7 +190,10 @@ auth.get('/me',
 
     return c.json({
       pubkey: user.pubkey,
-      roles: user.roles,
+      // Same account-wide set as `permissions` and `primaryRole`: a member
+      // whose only roles are hub-scoped must not look role-less — clients
+      // treat an empty role list as "no account" and sign the user out.
+      roles: accountRoleIds,
       permissions,
       primaryRole: primaryRole ? { id: primaryRole.id, name: primaryRole.name, slug: primaryRole.slug } : null,
       name: user.name,
