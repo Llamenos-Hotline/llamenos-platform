@@ -11,6 +11,7 @@ import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
 import {
   addHubMemberViaApi,
+  apiGet,
   apiPatch,
   apiPost,
   apiPut,
@@ -174,4 +175,11 @@ Then('the audit log should record the simulated call', async ({ request, world }
   const entry = entries.find(e => e.action === 'demoCallSimulated')
   expect(entry, 'expected a demoCallSimulated audit entry').toBeDefined()
   expect(entry!.details.callId).toBe(state.callId)
+})
+
+Then('the hub call history should contain {int} unanswered call', async ({ request, world }, count: number) => {
+  const { hubId } = getScenarioState(world)
+  const res = await apiGet<{ total: number; calls: Array<{ status: string }> }>(request, `/hubs/${hubId}/calls/history?limit=100`)
+  expect(res.status).toBe(200)
+  expect(res.data.calls.filter(c => c.status === 'unanswered')).toHaveLength(count)
 })

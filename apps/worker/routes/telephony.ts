@@ -9,6 +9,7 @@ import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
 import { hashPhone } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
+import { ServiceError } from '../services/settings'
 import { startParallelRinging } from '../services/ringing'
 import { maybeTranscribe, transcribeVoicemail } from '../services/transcription'
 import { publishEvent } from '../lib/ws-events'
@@ -423,7 +424,16 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
 
   if (queueResult === 'hangup') {
     // Caller hung up while in queue — end the call as unanswered
-    try { await services.calls.endCall(hubId ?? '', callSid) } catch { /* already ended */ }
+    try {
+      await services.calls.endCall(hubId ?? '', callSid)
+    } catch (err) {
+      // 404 = already ended. Anything else is a real failure and must not be swallowed.
+      if (err instanceof ServiceError && err.status === 404) {
+        logger.warn('Queue hangup for a call with no active record', { callSid, hubId: hubId || 'global' })
+      } else {
+        throw err
+      }
+    }
     await audit(services.audit, 'callMissed', 'system', { callSid }, undefined, hubId ?? null)
     return telephonyResponse(adapter.emptyResponse())
   }
@@ -509,7 +519,17 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
   const callSid = url.searchParams.get('callSid') || ''
 
   if (recordingStatus === 'completed') {
+    // Throws 404 if there is no call record at all — that would mean a message was left
+    // for a call the hotline never recorded, which must be loud, not silent (#1043).
     await services.calls.markVoicemail(hubId ?? '', callSid)
+
+    // The caller has left a message and is done: close the call so it lands in history as
+    // `unanswered` with hasVoicemail=true. (No-op if the caller's leg already ended it.)
+    try {
+      await services.calls.endCall(hubId ?? '', callSid)
+    } catch (err) {
+      if (!(err instanceof ServiceError && err.status === 404)) throw err
+    }
 
     // Publish voicemail event
     publishEvent(c.env, KIND_CALL_VOICEMAIL, {
