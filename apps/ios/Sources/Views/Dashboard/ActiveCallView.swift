@@ -5,6 +5,9 @@ import SwiftUI
 /// Represents a call currently in progress for this volunteer.
 struct ActiveCall: Identifiable, Sendable {
     let id: String
+    /// The hub the call belongs to. Call actions (hang up, spam, ban) target this hub,
+    /// which need not be the active hub (multi-hub routing axiom).
+    let hubId: String
     let callerNumber: String?
     let startedAt: Date
     let status: String
