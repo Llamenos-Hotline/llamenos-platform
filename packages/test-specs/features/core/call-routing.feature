@@ -53,12 +53,8 @@ Feature: Call Routing & History
     When a call needs to be routed
     Then only 2 volunteers should be in the ring group
 
-  @backend
-  Scenario: Fallback group used when no shift is active
-    Given no shift is currently active
-    And a fallback ring group is configured
-    When a call needs to be routed
-    Then the fallback group should be used
+  # The fallback group's ring behaviour (which volunteers are actually rung when no shift is
+  # active) is asserted against the real ringing service in demo-mock-telephony.feature (#1017).
 
   @backend
   Scenario: Overlapping shifts merge volunteer pools

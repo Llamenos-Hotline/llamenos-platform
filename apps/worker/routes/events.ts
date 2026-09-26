@@ -153,13 +153,13 @@ events.post('/',
       caseNumber,
     })
 
-    // Publish Nostr event (events use the same kinds as records)
+    // Publish to the event's hub (events use the same kinds as records)
     publishEvent(c.env, KIND_RECORD_CREATED, {
       type: 'event:created',
       eventId: event.id,
       entityTypeId: event.entityTypeId,
       caseNumber: event.caseNumber,
-    })
+    }, event.hubId ?? '')
 
     await audit(services.audit, 'eventCreated', pubkey, {
       eventId: event.id,
@@ -202,7 +202,7 @@ events.patch('/:id',
     publishEvent(c.env, KIND_RECORD_UPDATED, {
       type: 'event:updated',
       eventId: id,
-    })
+    }, updated.hubId ?? '')
 
     await audit(services.audit, 'eventUpdated', pubkey, { eventId: id }, undefined, c.get('hubId') ?? null)
 

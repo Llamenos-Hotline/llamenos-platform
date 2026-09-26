@@ -38,7 +38,6 @@ interface CallSimState {
   adapterInstance?: string
   shiftVolunteers: Array<{ pubkey: string; deviceKey: string; busy?: boolean }>
   ringGroup: string[]
-  fallbackConfigured: boolean
 }
 
 const CALL_SIMULATION_KEY = 'call_simulation'
@@ -52,7 +51,6 @@ Before({ tags: '@backend' }, async ({ world }) => {
   const sim = {
     shiftVolunteers: [],
     ringGroup: [],
-    fallbackConfigured: false,
   }
   setState(world, CALL_SIMULATION_KEY, sim)
 })
@@ -206,20 +204,6 @@ Given('a shift with {int} volunteers and {int} is on a call', async ({ request, 
   }
 })
 
-Given('no shift is currently active', async ({ world: _world }) => {
-  // No shift created — no active shifts
-})
-
-Given('a fallback ring group is configured', async ({ request, world }) => {
-  getCallSimState(world).fallbackConfigured = true
-  // Create a volunteer for the fallback group
-  if (getCallSimState(world).shiftVolunteers.length === 0) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName('Fallback Vol') })
-    getCallSimState(world).shiftVolunteers.push({ pubkey: vol.pubkey, deviceKey: vol.deviceKey })
-    getScenarioState(world).volunteers.push({ ...vol, onShift: true })
-  }
-})
-
 Given('no shift is active and no fallback is configured', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
   // Clear fallback group
@@ -235,7 +219,6 @@ Given('no shift is active and no fallback is configured', async ({ request, worl
   for (const shift of existingShifts) {
     await deleteShiftViaApi(request, shift.id).catch(() => {})
   }
-  getCallSimState(world).fallbackConfigured = false
 })
 
 Given('two overlapping shifts with different volunteers', async ({ request, world }) => {
@@ -318,10 +301,6 @@ Then('only {int} volunteers should be in the ring group', async ({ world }, coun
   expect(getCallSimState(world).callStatus).toBe('ringing')
   const availableCount = getCallSimState(world).shiftVolunteers.filter(v => !v.busy).length
   expect(availableCount).toBe(count)
-})
-
-Then('the fallback group should be used', async ({ world }) => {
-  expect(getCallSimState(world).fallbackConfigured).toBe(true)
 })
 
 Then('volunteers from both shifts should be in the ring group', async ({ world }) => {

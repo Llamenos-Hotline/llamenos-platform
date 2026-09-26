@@ -140,7 +140,7 @@ messaging.post('/:channel/webhook',
               messageId: result.messageId,
               status: statusUpdate.status,
               timestamp: statusUpdate.timestamp,
-            }, hubId)
+            }, hubId ?? '')
           }
 
           // Also correlate with blast deliveries (non-blocking)
@@ -172,7 +172,7 @@ messaging.post('/:channel/webhook',
           isTyping: typing.isTyping,
           channelType: 'signal',
           timestamp: typing.timestamp,
-        }, hubId)
+        }, hubId ?? '')
         return c.json({ ok: true })
       }
 
@@ -187,7 +187,7 @@ messaging.post('/:channel/webhook',
           isRemove: reaction.isRemove ?? false,
           sender: signalPayload.envelope.sourceUuid ?? signalPayload.envelope.source,
           channelType: 'signal',
-        }, hubId)
+        }, hubId ?? '')
         return c.json({ ok: true })
       }
 
@@ -262,7 +262,7 @@ messaging.post('/:channel/webhook',
     type: 'message:new',
     conversationId: convResult.conversationId,
     channelType: channel,
-  }, hubId)
+  }, hubId ?? '')
 
   // Auto-assignment for new conversations
   if (convResult.isNew && convResult.status === 'waiting') {
@@ -379,7 +379,7 @@ async function tryAutoAssign(
       conversationId,
       assignedTo: bestCandidate,
       autoAssigned: true,
-    }, hubId)
+    }, hubId ?? '')
 
     logger.info('Auto-assigned conversation', { conversationId, assignedTo: bestCandidate.slice(0, 8) })
   } catch (err) {

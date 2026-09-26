@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
@@ -17,6 +17,7 @@ vi.mock('@worker/db', () => ({
   getDb: vi.fn().mockReturnValue({}),
 }))
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
+import { checkWebhookReplay } from '@worker/services/webhook-replay'
 
 // Mock webhook replay protection — unit tests have no database
 vi.mock('@worker/services/webhook-replay', () => ({
@@ -75,6 +76,7 @@ function makeServices(): Services {
     },
     calls: {
       resolveCallToken: vi.fn().mockResolvedValue(null),
+      answerCallWithToken: vi.fn().mockResolvedValue(null),
       answerCall: vi.fn().mockResolvedValue(undefined),
       getActiveCalls: vi.fn().mockResolvedValue([]),
       endCall: vi.fn().mockResolvedValue(undefined),
@@ -186,6 +188,71 @@ describe('Telephony routes', () => {
         body: 'CallSid=CA123',
       })
       expect(res.status).toBe(403)
+    })
+
+    describe('replay protection (#1036)', () => {
+      // The real nonce table is unique on sha256(provider + body). Model it with a
+      // Set so a second insert of the same key reports "not first" exactly like
+      // Postgres does — the always-true default mock hid the double-insert bug.
+      function useStatefulReplayStore() {
+        const seen = new Set<string>()
+        vi.mocked(checkWebhookReplay).mockImplementation(async (_db, provider, body) => {
+          const key = `${provider}:${body}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+      }
+
+      afterEach(() => {
+        vi.mocked(checkWebhookReplay).mockReset()
+        vi.mocked(checkWebhookReplay).mockResolvedValue(true)
+      })
+
+      it('lets the FIRST delivery of a signed webhook reach the handler', async () => {
+        useStatefulReplayStore()
+        const app = await createTestApp(adapter, services)
+        const res = await app.request('/api/telephony/incoming', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallSid=CA-first&From=%2B15551111111&To=%2B15551234567',
+        })
+        expect(res.status).toBe(200)
+        expect(res.headers.get('Content-Type')).toContain('xml')
+        expect(await res.text()).toContain('<Gather')
+        expect(adapter.handleLanguageMenu).toHaveBeenCalledTimes(1)
+        // Exactly one replay check per delivery — two would swallow every webhook.
+        expect(checkWebhookReplay).toHaveBeenCalledTimes(1)
+      })
+
+      it('swallows an identical redelivery with an idempotent 200 before the handler', async () => {
+        useStatefulReplayStore()
+        const app = await createTestApp(adapter, services)
+        const init = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallSid=CA-dup&From=%2B15551111111&To=%2B15551234567',
+        }
+        const first = await app.request('/api/telephony/incoming', init)
+        expect(first.headers.get('Content-Type')).toContain('xml')
+        const second = await app.request('/api/telephony/incoming', init)
+        expect(second.status).toBe(200)
+        expect(await second.text()).toBe('OK')
+        expect(adapter.handleLanguageMenu).toHaveBeenCalledTimes(1)
+      })
+
+      it('does not consume a nonce for a request with an invalid signature', async () => {
+        useStatefulReplayStore()
+        adapter.validateWebhook = vi.fn().mockResolvedValue(false)
+        const app = await createTestApp(adapter, services)
+        const res = await app.request('/api/telephony/incoming', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallSid=CA-unsigned',
+        })
+        expect(res.status).toBe(403)
+        expect(checkWebhookReplay).not.toHaveBeenCalled()
+      })
     })
 
     it('returns 404 when no telephony adapter is configured', async () => {
@@ -438,7 +505,7 @@ describe('Telephony routes', () => {
 
   describe('POST /user-answer', () => {
     it('returns 403 for invalid call token', async () => {
-      services.calls.resolveCallToken = vi.fn().mockResolvedValue(null)
+      services.calls.answerCallWithToken = vi.fn().mockResolvedValue(null)
       const app = await createTestApp(adapter, services)
       const res = await app.request('/api/telephony/user-answer?callToken=bad-token', {
         method: 'POST',
@@ -450,7 +517,7 @@ describe('Telephony routes', () => {
     })
 
     it('bridges call and publishes events on valid token', async () => {
-      services.calls.resolveCallToken = vi.fn().mockResolvedValue({
+      services.calls.answerCallWithToken = vi.fn().mockResolvedValue({
         callSid: 'CA-parent',
         volunteerPubkey: 'pk-vol-1',
         hubId: 'hub-1',
@@ -467,7 +534,8 @@ describe('Telephony routes', () => {
       expect(res.status).toBe(200)
       expect(res.headers.get('Content-Type')).toContain('xml')
       expect(await res.text()).toContain('<Dial')
-      expect(services.calls.answerCall).toHaveBeenCalledWith('hub-1', 'CA-parent', 'pk-vol-1')
+      expect(services.calls.answerCallWithToken).toHaveBeenCalledWith('valid-token')
+      expect(services.calls.resolveCallToken).not.toHaveBeenCalled()
       expect(adapter.handleCallAnswered).toHaveBeenCalledWith(
         expect.objectContaining({
           parentCallSid: 'CA-parent',
@@ -486,7 +554,7 @@ describe('Telephony routes', () => {
         hubId: 'hub-1',
       })
       services.calls.getActiveCalls = vi.fn().mockResolvedValue([
-        { callId: 'CA-parent', callerLast4: '1111', startedAt: new Date(Date.now() - 60000).toISOString() },
+        { callId: 'CA-parent', callerLast4: '1111', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
       ])
       adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'completed' })
 
@@ -499,6 +567,47 @@ describe('Telephony routes', () => {
       expect(res.status).toBe(200)
       expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-parent')
       expect(adapter.emptyResponse).toHaveBeenCalled()
+    })
+
+    it('does not end the call when a leg that never answered reports completed', async () => {
+      services.calls.resolveCallToken = vi.fn().mockResolvedValue({
+        callSid: 'CA-parent',
+        volunteerPubkey: 'pk-vol-2',
+        hubId: 'hub-1',
+      })
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([
+        { callId: 'CA-parent', callerLast4: '1111', answeredBy: 'pk-vol-1', startedAt: new Date(Date.now() - 60000).toISOString() },
+      ])
+      adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'completed' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/call-status?callToken=token-other-leg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallStatus=completed',
+      })
+      expect(res.status).toBe(200)
+      expect(services.calls.endCall).not.toHaveBeenCalled()
+    })
+
+    it('resolves the token read-only — a pre-answer status callback never consumes it', async () => {
+      services.calls.resolveCallToken = vi.fn().mockResolvedValue({
+        callSid: 'CA-parent',
+        volunteerPubkey: 'pk-vol-1',
+        hubId: 'hub-1',
+      })
+      adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'initiated' })
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/call-status?callToken=token-abc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallStatus=initiated',
+      })
+      expect(res.status).toBe(200)
+      expect(services.calls.resolveCallToken).toHaveBeenCalledWith('token-abc')
+      expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
+      expect(services.calls.endCall).not.toHaveBeenCalled()
     })
 
     it('does not end call on ringing status', async () => {

@@ -6,10 +6,20 @@
  * Requires a server started with DEMO_MODE=true + DEMO_MODE_CONFIRM (project backend-bdd-demo-mode).
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then } from './fixtures'
+import { Given, When, Then, After } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
-import { apiPatch, apiPost, apiPut, createVolunteerViaApi, listAuditLogViaApi, setFallbackGroupViaApi } from '../../api-helpers'
+import {
+  addHubMemberViaApi,
+  apiPatch,
+  apiPost,
+  apiPut,
+  createHubViaApi,
+  createVolunteerViaApi,
+  deleteHubViaApi,
+  listAuditLogViaApi,
+  setFallbackGroupViaApi,
+} from '../../api-helpers'
 
 interface SimulatedCallResponse {
   ok?: boolean
@@ -48,6 +58,41 @@ Given('a volunteer who is not on shift is in the hub fallback group', async ({ r
   const fallback = await createVolunteerViaApi(request, { name: `BDD Fallback ${Date.now()}` })
   await setFallbackGroupViaApi(request, [fallback.pubkey], state.hubId)
   state.volunteers.push(fallback)
+})
+
+// The instance-wide fallback row is server-wide state, so the scenario that writes it must put
+// it back — this project runs serially, and a leftover group would poison every later scenario.
+let instanceFallbackDirty = false
+const extraHubIds: string[] = []
+
+After({ tags: '@demo-mode' }, async ({ request }) => {
+  if (instanceFallbackDirty) {
+    instanceFallbackDirty = false
+    await setFallbackGroupViaApi(request, [])
+  }
+  for (const hubId of extraHubIds.splice(0)) await deleteHubViaApi(request, hubId).catch(() => {})
+})
+
+Given('a volunteer is in the instance-wide fallback group', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const vol = await createVolunteerViaApi(request, { name: `BDD Instance Fallback ${Date.now()}` })
+  instanceFallbackDirty = true
+  // No hubId: the un-hubbed route edits the instance-level group, not this hub's.
+  await setFallbackGroupViaApi(request, [vol.pubkey])
+  state.volunteers.push(vol)
+})
+
+Given('a volunteer who belongs only to another hub is also in the hub fallback group', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const otherHubId = await createHubViaApi(request, `BDD Other Hub ${Date.now()}`)
+  extraHubIds.push(otherHubId)
+  const outsider = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
+  await addHubMemberViaApi(request, otherHubId, outsider.pubkey)
+  // Drop the instance-wide role so the only access this user has is the other hub's.
+  const res = await apiPatch(request, `/users/${outsider.pubkey}`, { roles: [] })
+  expect(res.status, `stripping the global role failed: ${JSON.stringify(res.data)}`).toBe(200)
+  const inGroup = state.volunteers.map(v => v.pubkey)
+  await setFallbackGroupViaApi(request, [...inGroup, outsider.pubkey], state.hubId)
 })
 
 Given('the fallback volunteer is on break', async ({ request, world }) => {

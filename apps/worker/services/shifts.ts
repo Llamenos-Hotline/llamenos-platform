@@ -55,10 +55,7 @@ type ShiftInsert = Omit<typeof shifts.$inferInsert, 'id' | 'createdAt' | 'hubId'
 type CallerContext = { callerPubkey: string; permissions: string[] }
 
 export class ShiftsService {
-  constructor(
-    protected db: Database,
-    private settingsService?: { getFallbackGroup(hubId?: string): Promise<{ userPubkeys: string[] }> },
-  ) {}
+  constructor(protected db: Database) {}
 
   // =========================================================================
   // CRUD
@@ -226,8 +223,12 @@ export class ShiftsService {
   }
 
   /**
-   * List pubkeys of all currently on-shift volunteers.
-   * Falls back to the fallback group from SettingsService if no shifts are defined or active.
+   * List pubkeys of all currently on-shift volunteers in the hub.
+   *
+   * Strictly the shift roster — the hub's fallback group is a ringing policy owned by
+   * `startParallelRinging` (services/ringing.ts), which applies it together with the
+   * availability and hub-membership rules. Other callers (records, messaging, push)
+   * want the on-shift set only.
    */
   async getCurrentVolunteers(hubId: string): Promise<string[]> {
     const { shifts: allShifts } = await this.list(hubId)
@@ -243,12 +244,6 @@ export class ShiftsService {
           activeVolunteers.add(pubkey)
         }
       }
-    }
-
-    // Fallback to settings group if no active volunteers and a settings service is available
-    if (activeVolunteers.size === 0 && this.settingsService) {
-      const fallback = await this.settingsService.getFallbackGroup(hubId)
-      return fallback.userPubkeys
     }
 
     return Array.from(activeVolunteers)

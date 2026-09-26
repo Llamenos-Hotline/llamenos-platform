@@ -33,7 +33,7 @@ const POLL_INTERVAL_MS = 10_000
 const BATCH_SIZE = 50
 
 /** Callback for real-time progress events */
-export type BlastProgressCallback = (blastId: string, stats: {
+export type BlastProgressCallback = (blastId: string, hubId: string, stats: {
   totalRecipients: number
   sent: number
   delivered: number
@@ -42,7 +42,7 @@ export type BlastProgressCallback = (blastId: string, stats: {
 }) => void
 
 /** Callback for blast status changes */
-export type BlastStatusCallback = (blastId: string, status: string) => void
+export type BlastStatusCallback = (blastId: string, hubId: string, status: string) => void
 
 /** Function to resolve a messaging adapter for a given channel */
 export type AdapterResolver = (channel: MessagingChannelType, hubId?: string) => Promise<MessagingAdapter | null>
@@ -160,7 +160,7 @@ async function processBlastBatch(blastId: string, hubId: string): Promise<void> 
     if (completed) {
       logger.info(`Blast ${blastId} completed`)
       if (hubId) {
-        deps.onStatusChange?.(blastId, 'sent')
+        deps.onStatusChange?.(blastId, hubId, 'sent')
       }
     }
     return
@@ -255,13 +255,13 @@ async function processBlastBatch(blastId: string, hubId: string): Promise<void> 
   const { stats, completed } = await deps.blastsService.syncBlastStats(blastId)
 
   if (hubId) {
-    deps.onProgress?.(blastId, stats)
+    deps.onProgress?.(blastId, hubId, stats)
   }
 
   if (completed) {
     logger.info(`Blast ${blastId} completed — ${stats.sent + stats.delivered} sent, ${stats.failed} failed`)
     if (hubId) {
-      deps.onStatusChange?.(blastId, 'sent')
+      deps.onStatusChange?.(blastId, hubId, 'sent')
     }
   }
 }

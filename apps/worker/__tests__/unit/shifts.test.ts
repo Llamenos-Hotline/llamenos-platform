@@ -4,12 +4,9 @@ import { ServiceError } from '@worker/services/settings'
 import { createMockDb } from './mock-db'
 
 describe('ShiftsService', () => {
-  function setup(opts: { fallbackPubkeys?: string[] } = {}) {
+  function setup() {
     const { db } = createMockDb(['shifts', 'pushRemindersSent'])
-    const settingsService = opts.fallbackPubkeys
-      ? { getFallbackGroup: async () => ({ userPubkeys: opts.fallbackPubkeys as string[] }) }
-      : undefined
-    const service = new ShiftsService(db as any, settingsService)
+    const service = new ShiftsService(db as any)
     return { db, service }
   }
 
@@ -171,15 +168,8 @@ describe('ShiftsService', () => {
       expect(result).toContain('pk2')
     })
 
-    it('falls back to settings group when no active shifts', async () => {
-      const { db, service } = setup({ fallbackPubkeys: ['fallback1'] })
-      db.$setSelectResult([])
-
-      const result = await service.getCurrentVolunteers('hub-1')
-      expect(result).toEqual(['fallback1'])
-    })
-
-    it('returns empty array when no active shifts and no fallback', async () => {
+    // The fallback group is a ringing policy (services/ringing.ts), not part of the roster.
+    it('returns an empty array when no shift is active', async () => {
       const { db, service } = setup()
       db.$setSelectResult([])
 

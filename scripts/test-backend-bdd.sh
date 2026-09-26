@@ -127,6 +127,21 @@ if [[ "${BDD_DEMO_MODE:-false}" == "true" ]]; then
   fi
 fi
 
+# Step 8: Run @signed-webhooks scenarios (#1036) — opt-in. They need a server started with the
+# env-var Twilio provider (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER) and the
+# same values exported to this process so the test can sign webhooks like Twilio does. They fail
+# loudly (never skip) if that environment is missing.
+if [[ "${BDD_SIGNED_WEBHOOKS:-false}" == "true" ]]; then
+  if reporter_run_step "backend-bdd-signed-webhooks" bunx playwright test --project=backend-bdd-signed-webhooks --no-deps; then
+    parse_playwright_results "$REPORTER_LOG_FILE"
+    reporter_record_suite "backend-bdd-signed-webhooks" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
+  else
+    overall_result="fail"
+    parse_playwright_results "$REPORTER_LOG_FILE"
+    reporter_record_suite "backend-bdd-signed-webhooks" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
+  fi
+fi
+
 reporter_summary "$overall_result"
 
 if [[ "$overall_result" == "fail" ]]; then

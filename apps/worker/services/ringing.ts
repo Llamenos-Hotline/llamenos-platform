@@ -9,6 +9,7 @@ import { withRetry, isRetryableError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { incCounter } from '../routes/metrics'
 import { hashPhone } from '../lib/crypto'
+import { resolveHubPermissions } from '@shared/permissions'
 
 const logger = createLogger('ringing')
 
@@ -51,9 +52,18 @@ export async function startParallelRinging(
     // Get user details (including call preference)
     const { users: allUsers } = await services.identity.getUsers()
 
-    // Availability rules: a volunteer must be active and not on break.
+    // Hub access: only ring people who could actually answer this hub's call.
+    // Same rule `hubContext` applies to the answer route — any effective permission in
+    // the hub (global role or hub-scoped role). Without this a stale shift entry or a
+    // fallback group naming a user from another hub would push "a caller is waiting"
+    // to someone with no business in this hub. Global-scope calls (hubId '') have no hub.
+    const { roles: allRoles } = hubId !== '' ? await services.settings.getRoles() : { roles: [] }
+    const hasHubAccess = (v: (typeof allUsers)[number]) =>
+      hubId === '' || resolveHubPermissions(v.roles ?? [], v.hubRoles ?? [], allRoles, hubId).length > 0
+
+    // Availability rules: a volunteer must be active, on break-free, and a member of the hub.
     const pickAvailable = (pubkeys: string[]) =>
-      allUsers.filter(v => pubkeys.includes(v.pubkey) && v.active && !v.onBreak)
+      allUsers.filter(v => pubkeys.includes(v.pubkey) && v.active && !v.onBreak && hasHubAccess(v))
 
     // All available on-shift users (for Nostr relay notification)
     let available = pickAvailable(onShiftPubkeys)
@@ -102,16 +112,14 @@ export async function startParallelRinging(
       status: 'ringing',
     })
 
-    // Publish call ring event to Nostr relay
-    publishEvent(env, KIND_CALL_RING, {
-      type: 'call:ring',
-      callId: callSid,
-    })
-
-    // Dispatch VoIP push notifications to mobile volunteers with registered VoIP tokens.
-    // Skip VoIP push for global-scope (hubId='') calls — mobile clients require a real hub ID to route the call.
     const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
+      // Publish the ring to the hub that owns the call. Every member of that hub
+      // whose relay socket subscribes to it rings — including members whose
+      // active hub in the UI is a different one (multi-hub routing axiom).
+      publishEvent(env, KIND_CALL_RING, { type: 'call:ring', callId: callSid }, hubId)
+
+      // Dispatch VoIP push notifications to mobile volunteers with registered VoIP tokens.
       dispatchVoipPushFromService(
         browserVoip.map(v => v.pubkey),
         callSid,
@@ -123,6 +131,11 @@ export async function startParallelRinging(
         // VoIP push is best-effort — Nostr relay is the primary notification path
         logger.error('VoIP push dispatch failed', err)
       })
+    } else {
+      // A call whose dialled number maps to no hub has no member set to ring over
+      // the relay or VoIP push. Never fall back to an instance-wide channel: that
+      // would expose the ring to every user of every hub.
+      logger.error('Call resolved to no hub — relay and VoIP clients cannot be rung', { callSid })
     }
 
     // Ring phone volunteers via telephony adapter (skip if no one needs phone ringing)

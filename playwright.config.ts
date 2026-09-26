@@ -86,7 +86,7 @@ export default defineConfig({
         features: "packages/test-specs/features/**/*.feature",
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
-        tags: "@backend and not @wip and not @fixme and not @global-setting and not @demo-mode",
+        tags: "@backend and not @wip and not @fixme and not @global-setting and not @demo-mode and not @signed-webhooks",
         // Desktop/mobile-only scenarios have steps not defined in backend — skip them
         missingSteps: "skip-scenario",
       }),
@@ -140,6 +140,28 @@ export default defineConfig({
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @demo-mode and not @wip and not @fixme",
+        missingSteps: "skip-scenario",
+      }),
+      use: {
+        baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
+      },
+      fullyParallel: false,
+      workers: 1,
+      dependencies: ["bootstrap"],
+    },
+    {
+      // Opt-in project for @signed-webhooks scenarios (#1036). They post REAL provider-signed
+      // webhooks to /api/telephony/*, which needs the server's env-var Twilio provider
+      // (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER) with the same values
+      // exported to the test process. That is instance-wide config, so they are excluded from
+      // backend-bdd above and run here via `BDD_SIGNED_WEBHOOKS=true bun run test:backend:bdd`.
+      // The steps fail loudly (never skip) when that environment is missing.
+      ...defineBddProject({
+        name: "backend-bdd-signed-webhooks",
+        features: "packages/test-specs/features/**/*.feature",
+        steps: "tests/steps/backend/**/*.ts",
+        featuresRoot: "packages/test-specs/features",
+        tags: "@backend and @signed-webhooks and not @wip and not @fixme",
         missingSteps: "skip-scenario",
       }),
       use: {

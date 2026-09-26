@@ -525,7 +525,7 @@ blasts.post('/:id/deliveries/:deliveryId/retry',
     // Emit progress event so UI updates in real-time
     backgroundTask(c,
       services.blasts.computeBlastStats(blastId).then((stats) => {
-        publishEvent(c.env, KIND_BLAST_PROGRESS, { type: 'blast:progress', hubId, blastId, stats, batch: [] }, hubId)
+        publishEvent(c.env, KIND_BLAST_PROGRESS, { type: 'blast:progress', hubId, blastId, stats, batch: [] }, hubId ?? '')
       }).catch((err) => {
         logger.warn('Failed to emit blast progress after retryDelivery', err)
       })
@@ -559,7 +559,7 @@ blasts.post('/:id/retry-failed',
     // Emit progress event so UI updates in real-time
     backgroundTask(c,
       services.blasts.computeBlastStats(blastId).then((stats) => {
-        publishEvent(c.env, KIND_BLAST_PROGRESS, { type: 'blast:progress', hubId, blastId, stats, batch: [] }, hubId)
+        publishEvent(c.env, KIND_BLAST_PROGRESS, { type: 'blast:progress', hubId, blastId, stats, batch: [] }, hubId ?? '')
       }).catch((err) => {
         logger.warn('Failed to emit blast progress after retryFailedDeliveries', err)
       })
