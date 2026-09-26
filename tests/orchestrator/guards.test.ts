@@ -1535,6 +1535,10 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   }
 
   const diff = 'diff --git a/x b/x\n+hello\n'
+  // No `-reviewer` label on the PR — every branch below is exactly what it
+  // was before #1092 added `specialist-unmet` ahead of them (tested in
+  // specialist.test.ts).
+  const noSpecialists = async (): Promise<string[]> => []
   // A Tier 2 (default — not docs, not an instructions/tooling path) file, so
   // every pre-existing test below reaches the SAME cache-hit/not-requested/
   // run-engine branch it always has — the tier check must never change their
@@ -1554,7 +1558,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1564,7 +1568,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1574,7 +1578,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1588,12 +1592,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -1607,7 +1611,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1623,7 +1627,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: false, log: () => {},
+      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') {
@@ -1636,7 +1640,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
-      cache, requested: false, log: () => {},
+      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') expect(outcome.tier).toBe(1)
@@ -1656,7 +1660,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
-      cache, requested: true, log: () => {},
+      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1673,7 +1677,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
-      cache, requested: false, log: () => {},
+      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1690,7 +1694,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => [f],
-      cache, requested: true, log: () => {},
+      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1702,7 +1706,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: true, log: () => {},
+      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
   })
@@ -1717,7 +1721,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     })
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: false, log: () => {},
+      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1730,7 +1734,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
-      cache, requested: true, log: () => {},
+      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })

@@ -238,7 +238,7 @@ async function resolveLane(deps: CiDeps): Promise<Lane | undefined> {
  * with both jobs still green. Refusing here makes that edit fail loudly on
  * its own PR.
  */
-function headDirRefusal(deps: CiDeps): CiVerdict | undefined {
+export function headDirRefusal(deps: Pick<CiDeps, 'ctx' | 'pathExists'>): CiVerdict | undefined {
   if (!deps.pathExists(join(deps.ctx.headDir, '.git'))) return undefined
   return {
     ok: false,
@@ -403,6 +403,12 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  * is what a step INSIDE it calls, before installing the review engine, to
  * decide which of the three branches applies:
  *
+ *  - `specialist-unmet` — checked before everything else (#1092): the PR
+ *    carries a `-reviewer` label whose specialist has no PASS for this exact
+ *    diff (or the label does not resolve). Fails the job. This is what makes
+ *    a specialist binding on the REQUIRED check without the specialist's own
+ *    `fleet/review/<agent>` context ever being required — see
+ *    `fleet-specialist-review.yml`'s header.
  *  - `cache-hit`  — a prior PASS exists for this exact diff. Concludes the
  *    job successfully with no engine call, regardless of which label fired
  *    this run — this is what makes an unrelated label event (say,
@@ -435,6 +441,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  * never a correctness risk: both reads hit the same cache with the same key.
  */
 export type ReviewGateOutcome =
+  | { kind: 'specialist-unmet'; cacheKey: ReviewCacheKey; unmet: string[] }
   | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'not-requested'; cacheKey: ReviewCacheKey }
@@ -454,12 +461,33 @@ export interface ReviewGateDeps {
    *  re-derived here, so this function has exactly one job: cache first,
    *  tier second, request third. */
   requested: boolean
+  /**
+   * Every specialist requested on this PR (a `-reviewer` label) that has NOT
+   * passed on this exact diff, as reasons — `specialistRequirement`
+   * (specialist.ts), injected rather than imported so this module does not
+   * import one that imports it. Required, not optional: an unwired check
+   * here would be a specialist FAIL the required gate silently ignores.
+   */
+  unmetSpecialists(cacheKey: ReviewCacheKey): Promise<string[]>
   log(msg: string): void
 }
 
 export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGateOutcome> {
   const diff = await deps.prDiff()
   const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
+
+  // FIRST, ahead of the cache, the tier and the request (#1092): a requested
+  // specialist that has not passed on this diff fails the REQUIRED check, so
+  // GitHub itself — not only this fleet — refuses the merge. Ahead of the
+  // cache because a generalist PASS must never outrank a specialist's missing
+  // or failed one (any FAIL fails); ahead of the tier because a label is an
+  // explicit request, which a docs-only diff does not get to ignore; ahead of
+  // `run-engine` so an unmet specialist never spends a generalist review.
+  const unmet = await deps.unmetSpecialists(cacheKey)
+  if (unmet.length > 0) {
+    deps.log(`specialist review(s) unmet for pr=${cacheKey.pr}:\n${unmet.map((u) => `  - ${u}`).join('\n')}`)
+    return { kind: 'specialist-unmet', cacheKey, unmet }
+  }
 
   // Identical fail-safe direction as `runReviewCi`: a lookup failure and a
   // genuine miss are indistinguishable on purpose, because both mean "this
