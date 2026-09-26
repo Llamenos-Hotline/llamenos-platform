@@ -13,13 +13,20 @@ if (!import.meta.env.PLAYWRIGHT_TEST) {
 }
 
 import { Store } from './tauri-store'
-import { hpkeSealMock, hpkeOpenMock } from './hpke-mock'
+import { hpkeSealMock, hpkeOpenMock, type MockHpkeEnvelope } from './hpke-mock'
+import {
+  createInitialPukMock,
+  createSigchainLinkMock,
+  rotatePukMock,
+  verifySigchainLinkMock,
+  verifySigchainMock,
+  type MockSigchainLink,
+} from './sigchain-mock'
 import type { TauriIpcCommand } from '@/lib/platform'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { hmac } from '@noble/hashes/hmac.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { randomBytes } from '@noble/hashes/utils.js'
 import { argon2id } from '@noble/hashes/argon2.js'
@@ -657,210 +664,65 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   // --- PUK (Per-User Key) ---
+  // Mirrors apps/desktop/src/crypto.rs puk_* commands over packages/crypto
+  // puk.rs, via the Rust-mirroring primitives in ./sigchain-mock.
 
   puk_create_from_state: () => {
     const ds = requireDeviceState()
-
-    // Generate random seed
-    const seed = randomBytes(32)
-
-    // Store PUK seed in mock state — never return to JS
+    const { state, seed, envelope } = createInitialPukMock(ds.encryptionPubkeyHex, ds.deviceId)
+    // Store PUK seed in mock state — never return it to JS
     mockPukSeed = seed
-
-    // Derive PUK subkeys (labels match crypto-labels.json)
-    const signSubkey = hmac(sha256, seed, utf8ToBytes('llamenos:puk:sign:v1\x00\x00\x00\x01'))
-    const dhSubkey = hmac(sha256, seed, utf8ToBytes('llamenos:puk:dh:v1\x00\x00\x00\x01'))
-
-    const pukState = {
-      generation: 1,
-      signPubkeyHex: bytesToHex(deriveEd25519Pubkey(signSubkey)),
-      dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
-    }
-
-    // HPKE seal the seed to the device's encryption pubkey
-    const envelope = hpkeSealMock(
-      seed,
-      ds.encryptionPubkeyHex,
-      'llamenos:puk:wrap:device:v1',
-      new Uint8Array(0),
-    )
-
-    return {
-      pukState,
-      envelope,
-    }
+    return { pukState: state, envelope }
   },
 
   puk_rotate_from_state: (a) => {
     if (!mockPukSeed) throw new Error('No PUK seed loaded. Unwrap or create PUK first.')
-    const oldSeedBytes = mockPukSeed
-    const oldGen = a.oldGen as number
     const remainingDevices = JSON.parse(a.remainingDevicesJson as string) as Array<[string, string]>
-    const newGen = oldGen + 1
-
-    // Generate new seed
-    const newSeed = randomBytes(32)
-
-    // Derive new PUK subkeys
-    const genBuf = new Uint8Array(4)
-    new DataView(genBuf.buffer).setUint32(0, newGen, false) // big-endian
-
-    const signLabel = new Uint8Array([...utf8ToBytes('llamenos:puk:sign:v1'), ...genBuf])
-    const dhLabel = new Uint8Array([...utf8ToBytes('llamenos:puk:dh:v1'), ...genBuf])
-
-    const signSubkey = hmac(sha256, newSeed, signLabel)
-    const dhSubkey = hmac(sha256, newSeed, dhLabel)
-
-    const state = {
-      generation: newGen,
-      signPubkeyHex: bytesToHex(deriveEd25519Pubkey(signSubkey)),
-      dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
-    }
-
-    // HPKE seal new seed to each remaining device
-    const deviceEnvelopes = remainingDevices.map(([deviceId, encPubkeyHex]) => ({
-      deviceId,
-      envelope: hpkeSealMock(
-        newSeed,
-        encPubkeyHex,
-        'llamenos:puk:wrap:device:v1',
-        new Uint8Array(0),
-      ),
-    }))
-
-    // CLKR: encrypt old seed under new generation's secretbox key
-    const sbLabel = new Uint8Array([...utf8ToBytes('llamenos:puk:secretbox:v1'), ...genBuf])
-    const secretboxKey = hmac(sha256, newSeed, sbLabel)
-    const clkrNonce = randomBytes(12)
-    const clkrCipher = gcm(secretboxKey, clkrNonce)
-    const clkrCt = clkrCipher.encrypt(oldSeedBytes)
-
-    const clkrChainLinkHex = bytesToHex(new Uint8Array([...clkrNonce, ...clkrCt]))
-
-    // Clear old PUK seed — caller must unwrap new seed from their envelope
+    const result = rotatePukMock(mockPukSeed, a.oldGen as number, remainingDevices)
+    // Rust clears the seed: the caller must unwrap its own new envelope.
     mockPukSeed = null
-
-    return { state, deviceEnvelopes, clkrChainLinkHex }
+    return result
   },
 
   puk_unwrap_seed_from_state: (a) => {
     const secrets = requireSecrets()
-    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
-    const expectedLabel = a.expectedLabel as string
-    const aad = hexToBytes(a.aadHex as string)
-    const secretHex = bytesToHex(secrets.encryptionSeed)
-    const seed = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
-    if (seed.length !== 32) throw new Error('PUK seed must be 32 bytes')
-    // Store PUK seed in mock state — never return to JS
+    const envelope = a.envelope as MockHpkeEnvelope
+    const seed = hpkeOpenMock(
+      envelope,
+      bytesToHex(secrets.encryptionSeed),
+      a.expectedLabel as string,
+      hexToBytes(a.aadHex as string),
+    )
+    if (seed.length !== 32) throw new Error('Unwrapped key must be 32 bytes')
+    // Store PUK seed in mock state — never return it to JS
     mockPukSeed = seed
   },
 
   // --- Sigchain ---
+  // Mirrors apps/desktop/src/crypto.rs sigchain_* commands over packages/crypto sigchain.rs.
 
   sigchain_create_link_from_state: (a) => {
     const secrets = requireSecrets()
     const ds = requireDeviceState()
-    const id = a.id as string
-    const seq = a.seq as number
-    const prevHash = a.prevHash as string | null
-    const timestamp = a.timestamp as string
-    const payloadJson = a.payloadJson as string
-
-    // Canonical hash: JSON with sorted keys
-    const canonical: Record<string, unknown> = {
-      payload: payloadJson,
-      prevHash: prevHash ?? null,
-      seq,
-      signerDeviceId: ds.deviceId,
-      signerPubkey: ds.signingPubkeyHex,
-      timestamp,
-    }
-    const canonicalJson = JSON.stringify(canonical, Object.keys(canonical).sort())
-    const entryHash = bytesToHex(sha256(utf8ToBytes(canonicalJson)))
-
-    // Ed25519 sign the entry hash
-    const sig = ed25519.sign(hexToBytes(entryHash), secrets.signingSeed)
-
-    return {
-      id,
-      seq,
-      prevHash: prevHash ?? null,
-      entryHash,
-      signerDeviceId: ds.deviceId,
-      signerPubkey: ds.signingPubkeyHex,
-      signature: bytesToHex(sig),
-      timestamp,
-      payloadJson,
-    }
+    return createSigchainLinkMock(
+      secrets.signingSeed,
+      a.id as string,
+      ds.deviceId,
+      a.seq as number,
+      (a.prevHash as string | null | undefined) ?? null,
+      a.timestamp as string,
+      a.payloadJson as string,
+    )
   },
 
   sigchain_verify: (a) => {
-    const links = JSON.parse(a.linksJson as string) as Array<{
-      seq: number
-      prevHash: string | null
-      entryHash: string
-      signerDeviceId: string
-      signerPubkey: string
-      signature: string
-      timestamp: string
-      payloadJson: string
-    }>
-
-    if (links.length === 0) throw new Error('Empty sigchain')
-
-    const activeDevicePubkeys = new Set<string>()
-
-    for (let i = 0; i < links.length; i++) {
-      const link = links[i]
-      if (link.seq !== i + 1) throw new Error(`Sequence mismatch at index ${i}`)
-
-      if (i === 0 && link.prevHash !== null) throw new Error('First link must have null prevHash')
-      if (i > 0 && link.prevHash !== links[i - 1].entryHash) {
-        throw new Error(`prevHash mismatch at seq ${link.seq}`)
-      }
-
-      // Verify Ed25519 signature
-      const valid = ed25519.verify(
-        hexToBytes(link.signature),
-        hexToBytes(link.entryHash),
-        hexToBytes(link.signerPubkey),
-      )
-      if (!valid) throw new Error(`Invalid signature at seq ${link.seq}`)
-
-      // Process payload for device set
-      try {
-        const payload = JSON.parse(link.payloadJson)
-        if (payload.type === 'user_init' || payload.type === 'device_add') {
-          activeDevicePubkeys.add(payload.devicePubkey ?? link.signerPubkey)
-        } else if (payload.type === 'device_remove') {
-          activeDevicePubkeys.delete(payload.devicePubkey)
-        }
-      } catch { /* non-device payloads */ }
-    }
-
-    const last = links[links.length - 1]
-    return {
-      verifiedCount: links.length,
-      headSeq: last.seq,
-      headHash: last.entryHash,
-      activeDevicePubkeys: Array.from(activeDevicePubkeys),
-    }
+    const links = JSON.parse(a.linksJson as string) as MockSigchainLink[]
+    return verifySigchainMock(links)
   },
 
   sigchain_verify_link: (a) => {
-    try {
-      const link = JSON.parse(a.linkJson as string) as {
-        entryHash: string; signature: string
-      }
-      const expectedPubkey = a.expectedSignerPubkey as string
-      return ed25519.verify(
-        hexToBytes(link.signature),
-        hexToBytes(link.entryHash),
-        hexToBytes(expectedPubkey),
-      )
-    } catch {
-      return false
-    }
+    const link = JSON.parse(a.linkJson as string) as MockSigchainLink
+    return verifySigchainLinkMock(link, a.expectedSignerPubkey as string)
   },
 
   // --- SFrame key derivation ---

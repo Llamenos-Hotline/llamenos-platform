@@ -2757,6 +2757,7 @@
     "errorTitle": "Lỗi Lời Mời",
     "expired": "Lời mời này đã hết hạn",
     "generatingKeys": "Đang tạo khóa của bạn...",
+    "identityInitFailed": "Không thể thiết lập khóa mã hóa của bạn. Vui lòng thử lại.",
     "getStarted": "Bắt đầu",
     "goToLogin": "Đến trang Đăng nhập",
     "invalidCode": "Mã mời không hợp lệ",

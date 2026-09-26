@@ -6,53 +6,17 @@
  */
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
-import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { checkPermission } from '../middleware/permission-guard'
 import { authErrors } from '../openapi/helpers'
 import { CryptoKeyError } from '../services/crypto-keys'
+import {
+  appendSigchainLinkBodySchema,
+  sigchainLinkSchema,
+  sigchainResponseSchema,
+} from '@protocol/schemas/sigchain'
 
 const sigchainRoutes = new Hono<AppEnv>()
-
-// ---------------------------------------------------------------------------
-// Zod schemas (inline — small surface, not worth a separate protocol file yet)
-// ---------------------------------------------------------------------------
-
-const sigchainLinkSchema = z.object({
-  id: z.string(),
-  userPubkey: z.string(),
-  seqNo: z.number().int().nonnegative(),
-  linkType: z.string(),
-  payload: z.unknown(),
-  signature: z.string(),
-  prevHash: z.string(),
-  hash: z.string(),
-  signerDeviceId: z.string(),
-  signerPubkey: z.string(),
-  createdAt: z.string(),
-})
-
-const sigchainResponseSchema = z.object({
-  links: z.array(sigchainLinkSchema),
-})
-
-const appendLinkBodySchema = z.object({
-  seqNo: z.number().int().nonnegative(),
-  linkType: z.enum(['genesis', 'device_add', 'device_remove', 'key_rotate', 'puk_epoch']),
-  payload: z.record(z.string(), z.unknown()),
-  /** Ed25519 signature over entry hash, hex. */
-  signature: z.string().regex(/^[0-9a-f]{128}$/i, 'Must be 64-byte Ed25519 signature in hex'),
-  /** SHA-256 hash of the previous link (hex). Empty string for genesis. */
-  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex or empty string'),
-  /** SHA-256 hash of this link's canonical form (hex). Server recomputes and verifies. */
-  hash: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be SHA-256 hex'),
-  /** Device ID of the signing device. */
-  signerDeviceId: z.string().min(1),
-  /** Ed25519 pubkey of the signing device (hex). */
-  signerPubkey: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be 32-byte Ed25519 pubkey in hex'),
-  /** ISO-8601 timestamp of link creation. */
-  timestamp: z.string().min(1),
-})
 
 // ---------------------------------------------------------------------------
 // GET /api/users/:targetPubkey/sigchain
@@ -105,7 +69,7 @@ sigchainRoutes.post('/',
   describeRoute({
     tags: ['Sigchain'],
     summary: 'Append a signed sigchain link',
-    description: 'Users may only append to their own sigchain. The server validates hash-chain continuity (seqNo, prevHash) and Ed25519 signature integrity before persisting.',
+    description: 'Users may only append to their own sigchain. The server validates link semantics (genesis only at seq 1, payload.type matches linkType), hash-chain continuity (seqNo, prevHash), the recomputed entry hash and the Ed25519 signature before persisting.',
     responses: {
       201: {
         description: 'Link appended',
@@ -115,11 +79,12 @@ sigchainRoutes.post('/',
           },
         },
       },
-      409: { description: 'Hash-chain continuity violation (seqNo or prevHash mismatch)' },
       ...authErrors,
+      400: { ...authErrors[400], description: 'Validation error: invalid link semantics, payload shape or entry hash' },
+      409: { description: 'Hash-chain continuity violation (seqNo or prevHash mismatch)' },
     },
   }),
-  validator('json', appendLinkBodySchema),
+  validator('json', appendSigchainLinkBodySchema),
   async (c) => {
     const callerPubkey = c.get('pubkey')
     const targetPubkey = c.req.param('targetPubkey') ?? ''

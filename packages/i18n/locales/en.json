@@ -2693,6 +2693,7 @@
     "errorTitle": "Invite Error",
     "expired": "This invite has expired",
     "generatingKeys": "Generating your keys...",
+    "identityInitFailed": "Could not set up your encryption keys. Please try again.",
     "getStarted": "Get Started",
     "goToLogin": "Go to Login",
     "invalidCode": "Invalid invite code",

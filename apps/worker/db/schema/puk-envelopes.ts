@@ -1,10 +1,10 @@
 /**
- * PUK (Pre-User Key) envelope table.
+ * PUK (Per-User Key) envelope table.
  *
- * After each PUK epoch rotation the server stores one HPKE-encrypted envelope
- * per registered device. The device fetches its envelope and decrypts the PUK
- * seed using its X25519 private key.  Old envelopes are superseded when a new
- * generation is written for the same (userId, deviceId) pair.
+ * On identity initialisation and after each PUK rotation the client stores one
+ * HPKE envelope of the PUK seed per device its sigchain authorises. The device
+ * fetches its envelope and opens it with its X25519 private key. Old envelopes
+ * are superseded when a newer generation is written for the same device.
  */
 import { relations } from 'drizzle-orm'
 import {
@@ -15,7 +15,9 @@ import {
   timestamp,
   unique,
 } from 'drizzle-orm/pg-core'
-import { users, devices } from './users'
+import type { PukHpkeEnvelope } from '@protocol/schemas/sigchain'
+import { jsonb } from '../bun-jsonb'
+import { users } from './users'
 
 // ---------------------------------------------------------------------------
 // puk_envelopes
@@ -31,21 +33,22 @@ export const pukEnvelopes = pgTable(
     userPubkey: text('user_pubkey')
       .notNull()
       .references(() => users.pubkey, { onDelete: 'cascade' }),
-    /** Device the envelope is sealed for (references devices.id). */
-    deviceId: text('device_id')
-      .notNull()
-      .references(() => devices.id, { onDelete: 'cascade' }),
+    /**
+     * Sigchain device ID the envelope is sealed for (the genesis / device_add
+     * payload `deviceId`). NOT devices.id: the push-registry row ID is
+     * server-assigned and unrelated to the ID the envelope's HPKE AAD binds.
+     */
+    deviceId: text('device_id').notNull(),
     /**
      * Monotonically increasing PUK generation counter.  Clients should
      * discard older generations once a newer one is fetched.
      */
     generation: integer('generation').notNull(),
     /**
-     * HPKE-encrypted PUK seed envelope.
-     * Encoding: base64url(kem_output || ciphertext)
-     * The recipient's X25519 public key is used as the HPKE recipient key.
+     * HPKE v3 envelope of the PUK seed (packages/crypto HpkeEnvelope), sealed
+     * to the device's X25519 key under LABEL_PUK_WRAP_TO_DEVICE.
      */
-    envelope: text('envelope').notNull(),
+    envelope: jsonb('envelope').$type<PukHpkeEnvelope>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -53,8 +56,9 @@ export const pukEnvelopes = pgTable(
   (table) => [
     index('puk_envelopes_user_pubkey_idx').on(table.userPubkey),
     index('puk_envelopes_device_id_idx').on(table.deviceId),
-    // Only one envelope per (device, generation) pair
-    unique('puk_envelopes_device_gen_uniq').on(table.deviceId, table.generation),
+    // One envelope per (user, device, generation). userPubkey is part of the
+    // key so an upsert by one user can never touch another user's envelope.
+    unique('puk_envelopes_user_device_gen_uniq').on(table.userPubkey, table.deviceId, table.generation),
   ],
 )
 
@@ -66,9 +70,5 @@ export const pukEnvelopesRelations = relations(pukEnvelopes, ({ one }) => ({
   user: one(users, {
     fields: [pukEnvelopes.userPubkey],
     references: [users.pubkey],
-  }),
-  device: one(devices, {
-    fields: [pukEnvelopes.deviceId],
-    references: [devices.id],
   }),
 }))

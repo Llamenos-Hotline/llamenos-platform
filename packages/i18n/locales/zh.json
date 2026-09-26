@@ -2757,6 +2757,7 @@
     "errorTitle": "邀请错误",
     "expired": "此邀请已过期",
     "generatingKeys": "正在生成您的密钥...",
+    "identityInitFailed": "无法设置您的加密密钥。请重试。",
     "getStarted": "开始",
     "goToLogin": "前往登录",
     "invalidCode": "邀请码无效",

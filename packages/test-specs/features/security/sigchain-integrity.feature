@@ -36,8 +36,20 @@ Feature: Sigchain Integrity
   @backend
   Scenario: Reject duplicate seqNo
     Given the user has a genesis sigchain link
-    When the user appends a link with duplicate seqNo 0
+    When the user appends a link with duplicate seqNo 1
     Then the response status is 409
+
+  @backend
+  Scenario: Reject a first link that is not a genesis link
+    When the user appends a device_add link as the first link of their sigchain
+    Then the response status is 400
+    And the error message contains "must be a genesis link"
+
+  @backend
+  Scenario: Reject a link signed by a key other than the user's identity key
+    When the user appends a genesis link signed by a key other than their identity key
+    Then the response status is 400
+    And the error message contains "identity key"
 
   @backend
   Scenario: Only the owner can append to their sigchain
@@ -75,3 +87,12 @@ Feature: Sigchain Integrity
     When the user appends a sigchain link with a hash that does not match the canonical content
     Then the response status is 400
     And the error message contains "hash mismatch"
+
+  # ── Identity initialisation (#1050, PROTOCOL.md §2.11) ──────────────────
+
+  @backend
+  Scenario: A user created from nothing gets a verifying genesis link and PUK
+    When the user initialises their identity
+    Then the sigchain link types are "1:genesis,2:puk_epoch"
+    And the stored sigchain verifies and authorises only the user's device
+    And the user's device opens its PUK envelope to the seed the puk_epoch link binds

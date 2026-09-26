@@ -885,6 +885,7 @@
     "errorTitle": "የግብዣ ስህተት",
     "expired": "ይህ ግብዣ አልቋል",
     "generatingKeys": "ቁልፎችዎን በመፍጠር ላይ...",
+    "identityInitFailed": "የምስጠራ ቁልፎችዎን ማዋቀር አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
     "getStarted": "ጀምር",
     "goToLogin": "ወደ መግቢያ ሂድ",
     "invalidCode": "ልክ ያልሆነ የግብዣ ኮድ",

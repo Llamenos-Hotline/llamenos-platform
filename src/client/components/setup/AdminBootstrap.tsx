@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import { generateKeypairAndLoad, generateBackupFromState, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
-import { isValidPin } from '@/lib/key-manager'
+import { isValidPin, markUnlocked } from '@/lib/key-manager'
+import { initializeUserIdentity } from '@/lib/user-identity'
 import { bootstrapAdmin } from '@/lib/api'
 import { generateRecoveryKey, downloadBackupFile } from '@/lib/backup'
 import { setLanguage } from '@/lib/i18n'
@@ -168,15 +169,29 @@ export function AdminBootstrap({ onComplete }: AdminBootstrapProps) {
   async function handleComplete() {
     if (!genResult) return
     try {
+      // Sigchain genesis + first PUK for this device, created BEFORE the session
+      // is committed (loginAfterKeyLoaded re-renders the app into its logged-in
+      // state), so a logged-in admin always already has an identity. The device
+      // key is already in CryptoState — markUnlocked only syncs the key manager
+      // so API requests are signed with it. Idempotent, so pressing Continue
+      // again after a failure resumes where it stopped.
+      markUnlocked(genResult.publicKey)
+      await initializeUserIdentity(genResult.publicKey)
+    } catch {
+      toast(t('onboarding.identityInitFailed'), 'error')
+      return
+    }
+    try {
       // Key is already in CryptoState (loaded by generateKeypairAndLoad).
       // Use loginAfterKeyLoaded — do NOT call signIn() which would double-import the key.
       sessionStorage.setItem('bootstrapComplete', '1')
       await loginAfterKeyLoaded(genResult.publicKey)
-      setStep('complete')
-      setTimeout(onComplete, 1000)
     } catch {
       toast(t('common.error'), 'error')
+      return
     }
+    setStep('complete')
+    setTimeout(onComplete, 1000)
   }
 
   return (

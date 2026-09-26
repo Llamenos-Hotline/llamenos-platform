@@ -2757,6 +2757,7 @@
     "errorTitle": "Erreur d'invitation",
     "expired": "Cette invitation a expiré",
     "generatingKeys": "Génération de vos clés...",
+    "identityInitFailed": "Impossible de configurer vos clés de chiffrement. Veuillez réessayer.",
     "getStarted": "Commencer",
     "goToLogin": "Aller à la connexion",
     "invalidCode": "Code d'invitation invalide",

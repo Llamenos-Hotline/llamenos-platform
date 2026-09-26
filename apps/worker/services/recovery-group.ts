@@ -13,6 +13,7 @@ import {
 import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
 import { computeEntryHash } from './crypto-keys'
+import { SIGCHAIN_GENESIS_SEQ } from '@protocol/schemas/sigchain'
 
 const logger = createLogger('service.recovery-group')
 
@@ -833,7 +834,7 @@ export class RecoveryGroupService {
         .orderBy(desc(sigchainLinks.seqNo))
         .limit(1)
 
-      const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
+      const expectedSeqNo = currentHead === undefined ? SIGCHAIN_GENESIS_SEQ : currentHead.seqNo + 1
       const expectedPrevHash = currentHead?.hash ?? ''
 
       if (sigchainSeqNo !== expectedSeqNo) {

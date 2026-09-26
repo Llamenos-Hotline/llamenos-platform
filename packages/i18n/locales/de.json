@@ -2757,6 +2757,7 @@
     "errorTitle": "Einladungsfehler",
     "expired": "Diese Einladung ist abgelaufen",
     "generatingKeys": "Ihre Schlüssel werden generiert...",
+    "identityInitFailed": "Deine Verschlüsselungsschlüssel konnten nicht eingerichtet werden. Bitte versuche es erneut.",
     "getStarted": "Loslegen",
     "goToLogin": "Zur Anmeldung",
     "invalidCode": "Ungültiger Einladungscode",

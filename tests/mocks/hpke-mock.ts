@@ -64,12 +64,20 @@ export function labelToId(label: string): number {
 
 // ── HPKE mock (X25519 + HKDF-SHA256 + AES-256-GCM) ─────────────────
 
+/** Wire shape of packages/crypto `HpkeEnvelope` (serde camelCase). */
+export interface MockHpkeEnvelope {
+  v: number
+  labelId: number
+  enc: string
+  ct: string
+}
+
 export function hpkeSealMock(
   plaintext: Uint8Array,
   recipientPubkeyHex: string,
   label: string,
   aad: Uint8Array,
-): { v: number; labelId: number; enc: string; ct: string } {
+): MockHpkeEnvelope {
   const labelId = labelToId(label)
 
   // Generate ephemeral X25519 keypair
@@ -100,7 +108,7 @@ export function hpkeSealMock(
 }
 
 export function hpkeOpenMock(
-  envelope: { v: number; labelId: number; enc: string; ct: string },
+  envelope: MockHpkeEnvelope,
   recipientSecretHex: string,
   expectedLabel: string,
   aad: Uint8Array,

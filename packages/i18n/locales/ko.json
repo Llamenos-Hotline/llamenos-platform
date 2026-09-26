@@ -2757,6 +2757,7 @@
     "errorTitle": "초대 오류",
     "expired": "이 초대는 만료되었습니다",
     "generatingKeys": "키를 생성하고 있습니다...",
+    "identityInitFailed": "암호화 키를 설정할 수 없습니다. 다시 시도해 주세요.",
     "getStarted": "시작하기",
     "goToLogin": "로그인으로 이동",
     "invalidCode": "유효하지 않은 초대 코드",

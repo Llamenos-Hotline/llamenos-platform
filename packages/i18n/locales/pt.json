@@ -2757,6 +2757,7 @@
     "errorTitle": "Erro no Convite",
     "expired": "Este convite expirou",
     "generatingKeys": "Gerando suas chaves...",
+    "identityInitFailed": "Não foi possível configurar suas chaves de criptografia. Tente novamente.",
     "getStarted": "Começar",
     "goToLogin": "Ir para Login",
     "invalidCode": "Código de convite inválido",

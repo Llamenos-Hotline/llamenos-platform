@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { ADMIN_SEED, enterPin, resetTestState, TEST_PIN, Timeouts, completeProfileSetup } from './helpers'
 import { TestIds } from './test-ids'
+import { expectInitialisedIdentity } from './identity-helpers'
 
 const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
 const resetHeaders = { 'X-Test-Secret': TEST_RESET_SECRET }
@@ -321,6 +322,9 @@ async function createRoleAccount(
     // Wait for authenticated state — sidebar visible
     await userPage.getByTestId(TestIds.NAV_SIDEBAR).waitFor({ state: 'visible', timeout: 30000 })
 
+    // Invite onboarding created a verifying sigchain genesis + PUK for this device (#1050)
+    await expectInitialisedIdentity(userPage)
+
     // Save storage state
     await userContext.storageState({ path: opts.storageFile })
     console.log(`[SETUP] ${opts.name}: storage state saved to ${opts.storageFile}`)
@@ -372,6 +376,9 @@ test.describe('Global Setup: Provision Test Accounts', () => {
 
     // Run real bootstrap flow through the UI
     await bootstrapAdmin(page)
+
+    // The bootstrap device created a verifying sigchain genesis + PUK (#1050)
+    await expectInitialisedIdentity(page)
 
     // Save admin storage state
     await page.context().storageState({ path: `${STORAGE_DIR}/admin.json` })

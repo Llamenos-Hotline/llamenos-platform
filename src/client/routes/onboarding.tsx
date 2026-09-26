@@ -5,7 +5,8 @@ import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { validateInvite, redeemInvite } from '@/lib/api'
 import { generateKeypairAndLoad, generateBackupFromState, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
-import { isValidPin } from '@/lib/key-manager'
+import { isValidPin, markUnlocked } from '@/lib/key-manager'
+import { initializeUserIdentity } from '@/lib/user-identity'
 import { generateRecoveryKey, downloadBackupFile } from '@/lib/backup'
 import { useToast } from '@/lib/toast'
 import { setLanguage } from '@/lib/i18n'
@@ -164,13 +165,27 @@ function OnboardingPage() {
   async function handleComplete() {
     if (!genResult) return
     try {
+      // Sigchain genesis + first PUK for this device, created BEFORE the session
+      // is committed: loginAfterKeyLoaded flips the app into its logged-in
+      // routes (unmounting this page), so a logged-in user always already has
+      // an identity. The device key is already in CryptoState — markUnlocked
+      // only syncs the key manager so API requests are signed with it.
+      // Idempotent, so pressing Continue again after a failure resumes.
+      markUnlocked(genResult.publicKey)
+      await initializeUserIdentity(genResult.publicKey)
+    } catch {
+      toast(t('onboarding.identityInitFailed'), 'error')
+      return
+    }
+    try {
       // Key is already in CryptoState (loaded by generateKeypairAndLoad).
       // Use loginAfterKeyLoaded — do NOT call signIn() which would double-import the key.
       await loginAfterKeyLoaded(genResult.publicKey)
-      navigate({ to: '/profile-setup' })
     } catch {
       toast(t('common.error'), 'error')
+      return
     }
+    navigate({ to: '/profile-setup' })
   }
 
   if (step === 'loading') {

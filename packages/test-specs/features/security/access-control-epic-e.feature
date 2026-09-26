@@ -182,10 +182,10 @@ Feature: Backend access control and input validation (Epic E)
 
   @backend
   Scenario: PUK envelope retrieval returns the latest generation
-    Given device "dev-1" has PUK envelopes for generations 0, 1, and 2
+    Given device "dev-1" has PUK envelopes for generations 1, 2, and 3
     When I call GET /api/puk/envelopes/dev-1
     Then the response status is 200
-    And the returned generation is 2
+    And the returned generation is 3
 
   # ── HIGH-W2: Dev endpoint checkResetSecret only accepts X-Test-Secret ────
 

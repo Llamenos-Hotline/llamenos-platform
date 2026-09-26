@@ -12,33 +12,22 @@ import { sigchainLinks, pukEnvelopes, mlsPendingMessages } from '../db/schema'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { sha256 } from '@noble/hashes/sha2.js'
+import {
+  SIGCHAIN_GENESIS_SEQ,
+  SIGCHAIN_PAYLOAD_TYPE_FOR_LINK,
+  sigchainDeviceAddPayloadSchema,
+  sigchainDeviceRemovePayloadSchema,
+  sigchainGenesisPayloadSchema,
+  sigchainPukEpochPayloadSchema,
+  type AppendSigchainLinkBody,
+  type PukEnvelopeItem,
+  type PukEnvelopeResponse,
+  type SigchainLinkRecord,
+} from '@protocol/schemas/sigchain'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface SigchainLinkRecord {
-  id: string
-  userPubkey: string
-  seqNo: number
-  linkType: string
-  payload: unknown
-  signature: string
-  prevHash: string
-  hash: string
-  signerDeviceId: string
-  signerPubkey: string
-  createdAt: string
-}
-
-export interface PukEnvelopeRecord {
-  id: string
-  userPubkey: string
-  deviceId: string
-  generation: number
-  envelope: string
-  createdAt: string
-}
 
 export interface MlsMessageRecord {
   id: string
@@ -117,6 +106,133 @@ export function computeEntryHash(
 }
 
 // ---------------------------------------------------------------------------
+// Link semantics
+// ---------------------------------------------------------------------------
+
+type SigchainRow = typeof sigchainLinks.$inferSelect
+
+function toLinkRecord(r: SigchainRow): SigchainLinkRecord {
+  return {
+    id: r.id,
+    userPubkey: r.userPubkey,
+    seqNo: r.seqNo,
+    linkType: r.linkType,
+    payload: r.payload,
+    signature: r.signature,
+    prevHash: r.prevHash,
+    hash: r.hash,
+    // Verifiers need signerPubkey to check self-authorizing link types like
+    // recovery-device-add, whose signature is NOT verifiable against
+    // userPubkey the way every other link type's is.
+    signerDeviceId: r.signerDeviceId,
+    signerPubkey: r.signerPubkey,
+    // Part of the hashed canonical form — without it no client can
+    // recompute (and so verify) the entry hash.
+    timestamp: r.linkTimestamp,
+    createdAt: r.createdAt.toISOString(),
+  }
+}
+
+function toPukEnvelopeRecord(r: typeof pukEnvelopes.$inferSelect): PukEnvelopeResponse {
+  return {
+    id: r.id,
+    userPubkey: r.userPubkey,
+    deviceId: r.deviceId,
+    generation: r.generation,
+    envelope: r.envelope,
+    createdAt: r.createdAt.toISOString(),
+  }
+}
+
+/**
+ * Validate a link's payload against its declared link type and position.
+ *
+ * - The genesis link is the only link at `SIGCHAIN_GENESIS_SEQ`, and only there.
+ * - `payload.type` must match the link type (the Rust verifier keys device-set
+ *   semantics off `payload.type`; a divergent `linkType` column would let the
+ *   server's view of the chain disagree with every client's).
+ * - Genesis is self-signed by the user's first device: its payload names that
+ *   device, and the signer is the user's identity key.
+ */
+function validateLinkSemantics(userPubkey: string, link: AppendSigchainLinkBody): void {
+  const isGenesisPosition = link.seqNo === SIGCHAIN_GENESIS_SEQ
+  if (isGenesisPosition !== (link.linkType === 'genesis')) {
+    throw new CryptoKeyError(
+      isGenesisPosition
+        ? `the first sigchain link (seq ${SIGCHAIN_GENESIS_SEQ}) must be a genesis link`
+        : 'a genesis link is only valid as the first sigchain link',
+      400,
+    )
+  }
+
+  if (link.payload.type !== SIGCHAIN_PAYLOAD_TYPE_FOR_LINK[link.linkType]) {
+    throw new CryptoKeyError(
+      `sigchain payload.type must be "${SIGCHAIN_PAYLOAD_TYPE_FOR_LINK[link.linkType]}" for a ${link.linkType} link`,
+      400,
+    )
+  }
+
+  // Every generic link is verified against the user's identity key below, so
+  // a signerPubkey naming any other key would record a link the Rust verifier
+  // (which checks against signerPubkey) could never accept.
+  if (link.signerPubkey.toLowerCase() !== userPubkey.toLowerCase()) {
+    throw new CryptoKeyError('sigchain signerPubkey must be the user\'s identity key', 400)
+  }
+
+  const payloadSchema = {
+    genesis: sigchainGenesisPayloadSchema,
+    device_add: sigchainDeviceAddPayloadSchema,
+    device_remove: sigchainDeviceRemovePayloadSchema,
+    puk_epoch: sigchainPukEpochPayloadSchema,
+    key_rotate: null,
+  }[link.linkType]
+  if (payloadSchema) {
+    const parsed = payloadSchema.safeParse(link.payload)
+    if (!parsed.success) {
+      throw new CryptoKeyError(`invalid ${link.linkType} payload: ${parsed.error.issues[0]?.message ?? 'malformed'}`, 400)
+    }
+  }
+
+  if (link.linkType === 'genesis') {
+    const payload = sigchainGenesisPayloadSchema.parse(link.payload)
+    if (payload.deviceId !== link.signerDeviceId || payload.devicePubkey !== link.signerPubkey.toLowerCase()) {
+      throw new CryptoKeyError('genesis payload must name the signing device', 400)
+    }
+  }
+}
+
+/**
+ * Device IDs the user's sigchain currently authorises — the only valid
+ * addresses for a PUK envelope. Mirrors the device-set walk in
+ * packages/crypto `verify_sigchain` (genesis / device_add add, device_remove
+ * removes), keyed by device ID because that is what the PUK envelope's HPKE
+ * AAD binds (`<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>`).
+ */
+function authorizedDeviceIds(links: SigchainRow[]): Set<string> {
+  const ids = new Set<string>()
+  for (const link of links) {
+    const payload = link.payload as { type?: unknown; deviceId?: unknown }
+    if (typeof payload?.deviceId !== 'string') continue
+    if (link.linkType === 'genesis' || link.linkType === 'device_add' || link.linkType === 'recovery-device-add') {
+      ids.add(payload.deviceId)
+    } else if (link.linkType === 'device_remove') {
+      ids.delete(payload.deviceId)
+    }
+  }
+  return ids
+}
+
+/** Postgres unique_violation — a concurrent append won the race for this seqNo. */
+function isUniqueViolation(err: unknown): boolean {
+  let cur: unknown = err
+  for (let depth = 0; depth < 4 && cur && typeof cur === 'object'; depth++) {
+    if ((cur as { code?: unknown }).code === '23505') return true
+    cur = (cur as { cause?: unknown }).cause
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -137,48 +253,25 @@ export class CryptoKeysService {
       .where(eq(sigchainLinks.userPubkey, userPubkey))
       .orderBy(asc(sigchainLinks.seqNo))
 
-    return rows.map(r => ({
-      id: r.id,
-      userPubkey: r.userPubkey,
-      seqNo: r.seqNo,
-      linkType: r.linkType,
-      payload: r.payload,
-      signature: r.signature,
-      prevHash: r.prevHash,
-      hash: r.hash,
-      // GET /users/:pubkey/sigchain previously omitted these two fields even
-      // though appendSigchainLink's own POST response includes them (and the
-      // DB column defaults to '', so every pre-existing row still round-trips
-      // fine). Verifiers need signerPubkey to check self-authorizing link
-      // types like recovery-device-add, whose signature is NOT verifiable
-      // against userPubkey the way every other link type's is.
-      signerDeviceId: r.signerDeviceId,
-      signerPubkey: r.signerPubkey,
-      createdAt: r.createdAt.toISOString(),
-    }))
+    return rows.map(toLinkRecord)
   }
 
   /**
    * Append a new sigchain link, validating hash-chain continuity and signature.
    *
    * The server verifies:
-   *   1. seqNo === expected (last seqNo + 1, or 0 for genesis)
-   *   2. prevHash matches the hash of the current chain head
-   *   3. Ed25519 signature over the entry hash is valid for userPubkey
+   *   1. link semantics (genesis only at seq 1, payload.type matches linkType,
+   *      payload shape, signer is the user's identity key)
+   *   2. seqNo === expected (last seqNo + 1, or SIGCHAIN_GENESIS_SEQ for genesis)
+   *   3. prevHash matches the hash of the current chain head
+   *   4. the entry hash recomputes from the canonical form
+   *   5. Ed25519 signature over the entry hash is valid for userPubkey
    *
    * Returns the persisted link on success.
    */
-  async appendSigchainLink(userPubkey: string, link: {
-    seqNo: number
-    linkType: string
-    payload: unknown
-    signature: string
-    prevHash: string
-    hash: string
-    signerDeviceId: string
-    signerPubkey: string
-    timestamp: string
-  }): Promise<SigchainLinkRecord> {
+  async appendSigchainLink(userPubkey: string, link: AppendSigchainLinkBody): Promise<SigchainLinkRecord> {
+    validateLinkSemantics(userPubkey, link)
+
     // Fetch the chain tail (highest seqNo) in one query
     const [currentHead] = await this.db
       .select({
@@ -189,7 +282,7 @@ export class CryptoKeysService {
       .where(eq(sigchainLinks.userPubkey, userPubkey))
       .orderBy(desc(sigchainLinks.seqNo))
       .limit(1)
-    const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
+    const expectedSeqNo = currentHead === undefined ? SIGCHAIN_GENESIS_SEQ : currentHead.seqNo + 1
     const expectedPrevHash = currentHead?.hash ?? ''
 
     if (link.seqNo !== expectedSeqNo) {
@@ -247,34 +340,30 @@ export class CryptoKeysService {
       )
     }
 
-    const [inserted] = await this.db
-      .insert(sigchainLinks)
-      .values({
-        userPubkey,
-        seqNo: link.seqNo,
-        linkType: link.linkType,
-        payload: link.payload,
-        signature: link.signature,
-        prevHash: link.prevHash,
-        hash: link.hash,
-        signerDeviceId: link.signerDeviceId,
-        signerPubkey: link.signerPubkey,
-        linkTimestamp: link.timestamp,
-      })
-      .returning()
-
-    return {
-      id: inserted.id,
-      userPubkey: inserted.userPubkey,
-      seqNo: inserted.seqNo,
-      linkType: inserted.linkType,
-      payload: inserted.payload,
-      signature: inserted.signature,
-      prevHash: inserted.prevHash,
-      hash: inserted.hash,
-      signerDeviceId: inserted.signerDeviceId,
-      signerPubkey: inserted.signerPubkey,
-      createdAt: inserted.createdAt.toISOString(),
+    try {
+      const [inserted] = await this.db
+        .insert(sigchainLinks)
+        .values({
+          userPubkey,
+          seqNo: link.seqNo,
+          linkType: link.linkType,
+          payload: link.payload,
+          signature: link.signature,
+          prevHash: link.prevHash,
+          hash: link.hash,
+          signerDeviceId: link.signerDeviceId,
+          signerPubkey: link.signerPubkey,
+          linkTimestamp: link.timestamp,
+        })
+        .returning()
+      return toLinkRecord(inserted)
+    } catch (err) {
+      // (user_pubkey, seq_no) is unique: a concurrent append took this slot,
+      // so this link no longer extends the chain head — same as a seq mismatch.
+      if (isUniqueViolation(err)) {
+        throw new CryptoKeyError('sigchain sequence mismatch: a concurrent link took this seqNo', 409)
+      }
+      throw err
     }
   }
 
@@ -283,20 +372,35 @@ export class CryptoKeysService {
   // -------------------------------------------------------------------------
 
   /**
-   * Store PUK seed envelopes for one or more devices after a rotation.
-   * Existing envelopes for the same (deviceId, generation) are not duplicated
-   * due to the unique constraint — callers should increment generation.
+   * Store PUK seed envelopes for devices the user's sigchain authorises.
+   *
+   * Envelopes are addressed by sigchain device ID — the ID the envelope's HPKE
+   * AAD binds — and every address must be a device the caller's own sigchain
+   * currently authorises; anything else is rejected before any write.
    */
   async distributePukEnvelopes(
     userPubkey: string,
-    envelopes: Array<{ deviceId: string; generation: number; envelope: string }>,
-  ): Promise<PukEnvelopeRecord[]> {
+    envelopes: PukEnvelopeItem[],
+  ): Promise<PukEnvelopeResponse[]> {
     if (envelopes.length === 0) return []
 
-    // H09: use upsert to prevent race conditions when two clients rotate PUK
-    // simultaneously. If (deviceId, generation) already exists, update the
-    // envelope in-place — idempotent and safe because the envelope for a given
-    // generation is deterministic (same PUK seed encrypted to the same device key).
+    const chain = await this.db
+      .select()
+      .from(sigchainLinks)
+      .where(eq(sigchainLinks.userPubkey, userPubkey))
+      .orderBy(asc(sigchainLinks.seqNo))
+    const authorized = authorizedDeviceIds(chain)
+    const unknown = envelopes.filter(e => !authorized.has(e.deviceId))
+    if (unknown.length > 0) {
+      throw new CryptoKeyError(
+        `PUK envelope addressed to a device the user's sigchain does not authorise: ${unknown.map(e => e.deviceId).join(', ')}`,
+        400,
+      )
+    }
+
+    // H09: upsert so two clients retrying the same (device, generation) are
+    // idempotent. The conflict target includes userPubkey, so one user can
+    // never overwrite another user's envelope.
     const inserted = await this.db
       .insert(pukEnvelopes)
       .values(envelopes.map(e => ({
@@ -306,7 +410,7 @@ export class CryptoKeysService {
         envelope: e.envelope,
       })))
       .onConflictDoUpdate({
-        target: [pukEnvelopes.deviceId, pukEnvelopes.generation],
+        target: [pukEnvelopes.userPubkey, pukEnvelopes.deviceId, pukEnvelopes.generation],
         set: {
           envelope: sql`excluded.envelope`,
           createdAt: sql`excluded.created_at`,
@@ -314,14 +418,7 @@ export class CryptoKeysService {
       })
       .returning()
 
-    return inserted.map(r => ({
-      id: r.id,
-      userPubkey: r.userPubkey,
-      deviceId: r.deviceId,
-      generation: r.generation,
-      envelope: r.envelope,
-      createdAt: r.createdAt.toISOString(),
-    }))
+    return inserted.map(toPukEnvelopeRecord)
   }
 
   /**
@@ -331,7 +428,7 @@ export class CryptoKeysService {
   async getPukEnvelopeForDevice(
     userPubkey: string,
     deviceId: string,
-  ): Promise<PukEnvelopeRecord | null> {
+  ): Promise<PukEnvelopeResponse | null> {
     // RACE-07: Single query — ORDER BY generation DESC LIMIT 1 replaces the
     // two-query MAX(generation) + SELECT pattern. A PUK rotation between the
     // old two queries could return stale data; this is immune.
@@ -347,18 +444,8 @@ export class CryptoKeysService {
       .orderBy(desc(pukEnvelopes.generation))
       .limit(1)
 
-    if (!row) return null
-
-    return {
-      id: row.id,
-      userPubkey: row.userPubkey,
-      deviceId: row.deviceId,
-      generation: row.generation,
-      envelope: row.envelope,
-      createdAt: row.createdAt.toISOString(),
-    }
+    return row ? toPukEnvelopeRecord(row) : null
   }
-
   // -------------------------------------------------------------------------
   // MLS Messages
   // -------------------------------------------------------------------------

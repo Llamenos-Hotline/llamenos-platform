@@ -2757,6 +2757,7 @@
     "errorTitle": "Error sa Imbitasyon",
     "expired": "Nag-expire na ang imbitasyong ito",
     "generatingKeys": "Gumagawa ng iyong mga susi...",
+    "identityInitFailed": "Hindi ma-set up ang iyong mga encryption key. Pakisubukan muli.",
     "getStarted": "Magsimula",
     "goToLogin": "Pumunta sa Login",
     "invalidCode": "Hindi valid ang invite code",

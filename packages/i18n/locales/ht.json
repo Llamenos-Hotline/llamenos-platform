@@ -2757,6 +2757,7 @@
     "errorTitle": "Erè Envitasyon",
     "expired": "Envitasyon sa a ekspire",
     "generatingKeys": "Ap kreye kle ou yo...",
+    "identityInitFailed": "Nou pa t kapab mete kle chifreman ou yo an plas. Tanpri eseye ankò.",
     "getStarted": "Kòmanse",
     "goToLogin": "Ale nan Koneksyon",
     "invalidCode": "Kòd envitasyon envalid",

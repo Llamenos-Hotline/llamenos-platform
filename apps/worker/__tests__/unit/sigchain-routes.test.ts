@@ -71,7 +71,7 @@ describe('sigchain routes', () => {
   describe('GET /users/:targetPubkey/sigchain', () => {
     it('returns own sigchain', async () => {
       const { app, services } = createApp('user1')
-      const links = [{ id: '1', userPubkey: 'user1', seqNo: 0 }]
+      const links = [{ id: '1', userPubkey: 'user1', seqNo: 1 }]
       services.cryptoKeys.getSigchain.mockResolvedValue(links)
 
       const res = await app.request('/users/user1/sigchain', {}, defaultEnv)
@@ -100,9 +100,9 @@ describe('sigchain routes', () => {
 
   describe('POST /users/:targetPubkey/sigchain', () => {
     const validLink = {
-      seqNo: 0,
+      seqNo: 1,
       linkType: 'genesis',
-      payload: { key: 'value' },
+      payload: { type: 'user_init', deviceId: 'dev-1', devicePubkey: 'cc'.repeat(32), deviceEncryptionPubkey: 'dd'.repeat(32) },
       signature: 'a'.repeat(128),
       prevHash: '',
       hash: 'b'.repeat(64),

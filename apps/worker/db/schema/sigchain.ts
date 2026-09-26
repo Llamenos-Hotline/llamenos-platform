@@ -12,6 +12,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { users } from './users'
@@ -30,7 +31,7 @@ export const sigchainLinks = pgTable(
     userPubkey: text('user_pubkey')
       .notNull()
       .references(() => users.pubkey, { onDelete: 'cascade' }),
-    /** Monotonically increasing sequence number (0-indexed, per user). */
+    /** Monotonically increasing sequence number per user; genesis is 1 (SIGCHAIN_GENESIS_SEQ). */
     seqNo: integer('seq_no').notNull(),
     /**
      * Link type — describes the key management event:
@@ -60,7 +61,8 @@ export const sigchainLinks = pgTable(
   },
   (table) => [
     index('sigchain_links_user_pubkey_idx').on(table.userPubkey),
-    index('sigchain_links_user_seq_idx').on(table.userPubkey, table.seqNo),
+    // Unique: two concurrent appends for the same slot must not fork the chain.
+    unique('sigchain_links_user_seq_uniq').on(table.userPubkey, table.seqNo),
     index('sigchain_links_hash_idx').on(table.hash),
   ],
 )

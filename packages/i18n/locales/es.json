@@ -2757,6 +2757,7 @@
     "errorTitle": "Error de Invitación",
     "expired": "Esta invitación ha expirado",
     "generatingKeys": "Generando tus claves...",
+    "identityInitFailed": "No se pudieron configurar tus claves de cifrado. Inténtalo de nuevo.",
     "getStarted": "Comenzar",
     "goToLogin": "Ir a Iniciar Sesión",
     "invalidCode": "Código de invitación inválido",

@@ -106,11 +106,16 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
   if (webauthnRequired) {
     const { credentials } = await services.identity.getWebAuthnCredentials(authResult.pubkey)
     if (credentials.length === 0) {
-      // Allow access to: GET /auth/me, WebAuthn routes, logout
+      // Allow access to: GET /auth/me, WebAuthn routes, logout, and the caller's
+      // own identity initialisation (sigchain genesis + PUK envelope), which
+      // onboarding performs before the user can register a passkey (#1050).
+      // The identity routes are self-only, and a session without a passkey
+      // may already register one, so this grants nothing the gate withholds.
       // Block everything else so the user can register a passkey
       const path = new URL(c.req.url).pathname
-      const allowedPaths = ['/api/auth/me', '/api/auth/me/logout', '/api/webauthn']
+      const allowedPaths = ['/api/auth/me', '/api/auth/me/logout', '/api/webauthn', '/api/puk/']
       const isAllowed = allowedPaths.some(p => path.startsWith(p))
+        || path === `/api/users/${authResult.pubkey}/sigchain`
       if (!isAllowed) {
         return c.json({ error: 'WebAuthn registration required', code: 'WEBAUTHN_REQUIRED' }, 403)
       }

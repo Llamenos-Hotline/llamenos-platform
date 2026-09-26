@@ -885,6 +885,7 @@
     "errorTitle": "Khaladka Martiqaadda",
     "expired": "Martiqaaddaan waa dhammaatay",
     "generatingKeys": "Waa la sameynayaa furayaashaada...",
+    "identityInitFailed": "Waa lagu guul dareeystay dejinta furayaashaada sirta. Fadlan mar kale isku day.",
     "getStarted": "Bilow",
     "goToLogin": "Aad Soo Galitaanka",
     "invalidCode": "Koodka martiqaaddu waa khalad",

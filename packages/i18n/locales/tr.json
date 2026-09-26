@@ -885,6 +885,7 @@
     "errorTitle": "Davet Hatası",
     "expired": "Bu davetin süresi dolmuş",
     "generatingKeys": "Anahtarlarınız oluşturuluyor...",
+    "identityInitFailed": "Şifreleme anahtarlarınız ayarlanamadı. Lütfen tekrar deneyin.",
     "getStarted": "Başlayın",
     "goToLogin": "Giriş Sayfasına Git",
     "invalidCode": "Geçersiz davet kodu",
