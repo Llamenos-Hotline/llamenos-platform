@@ -8,6 +8,7 @@ import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { incCounter } from '../../routes/metrics'
 import { publishEvent } from '../../lib/ws-events'
+import { dispatchVoipPushFromService } from '../../lib/voip-push'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
@@ -474,16 +475,26 @@ describe('startParallelRinging — hub isolation', () => {
   })
 
   it('does not ring a member of a different hub, nor a non-super-admin global role holder', async () => {
-    const other = makeUser({ pubkey: 'pk-other-hub', hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }] })
-    const globalOnly = { ...makeUser({ pubkey: 'pk-global', hubRoles: [] }), roles: ['role-volunteer'] }
+    // callPreference 'both' so a leak would show on every ring path: phone, relay, VoIP push
+    const other = makeUser({ pubkey: 'pk-other-hub', callPreference: 'both', hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }] })
+    const globalOnly = makeUser({ pubkey: 'pk-global', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })
     const services = makeServices({
       onShiftPubkeys: ['pk-other-hub', 'pk-global'],
       allUsers: [other, globalOnly],
     })
 
-    await startParallelRinging('CA-iso2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    const result = await startParallelRinging('CA-iso2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
-    expect(services.calls.addCall).not.toHaveBeenCalled()
+    // Neither is eligible in hub-1, so the call is unroutable ...
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
+    // ... and nobody is told a caller is waiting, on any channel.
     expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(services.calls.createCallToken).not.toHaveBeenCalled()
+    expect(publishEvent).not.toHaveBeenCalled()
+    expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
+    // The call record is still created, in hub-1 only, so the caller can reach
+    // voicemail (#1069 registers the call before any volunteer lookup).
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+    expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', expect.objectContaining({ callId: 'CA-iso2' }))
   })
 })
