@@ -437,6 +437,8 @@ fun LlamenosNavigation(
         // Match on the event itself: AttributedHubEvent's type argument is erased at
         // runtime, so filterIsInstance<AttributedHubEvent<DeviceWipe>>() would pass every
         // event through and the DeviceWipe cast would throw on the first call:ring.
+        // RelayEventParser never produces DeviceWipe from a relay `event`, so this does not
+        // fire today; the verified top-level wipe frame that will feed it is #1093.
         webSocketService.typedEvents
             .mapNotNull { it.event as? LlamenosEvent.DeviceWipe }
             .collect { wipeEvent ->

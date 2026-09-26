@@ -235,7 +235,8 @@ class RelaySession(
 /**
  * Parses decrypted relay event content (`{"type": "...", ...}`) into a [LlamenosEvent].
  * Unrecognized types become [LlamenosEvent.Unknown] for forward compatibility; content
- * missing a required field yields null.
+ * missing a required field yields null. `device:wipe` is always [LlamenosEvent.Unknown]:
+ * the relay event path cannot trigger a wipe (see #1093).
  */
 object RelayEventParser {
     private val json = Json { ignoreUnknownKeys = true }
@@ -265,11 +266,11 @@ object RelayEventParser {
                 str("assignedTo"),
             )
             "conversation:closed" -> LlamenosEvent.ConversationClosed(str("conversationId") ?: return null)
-            "device:wipe" -> LlamenosEvent.DeviceWipe(
-                targetDevicePubkey = str("targetDevicePubkey") ?: "",
-                reason = str("reason") ?: "",
-                serverSignature = str("serverSignature") ?: "",
-            )
+            // "device:wipe" deliberately has no case here and falls through to Unknown. A
+            // relay `event` is attested only by the bootstrap-trusted (unpinned) server key,
+            // so it must never be able to wipe the device. The server's real wipe is a
+            // top-level `device:wipe` frame; verifying it (pinned key, freshness, target
+            // device) is #1093. Do not re-add a DeviceWipe mapping on this path.
             else -> LlamenosEvent.Unknown(type)
         }
     }
