@@ -280,9 +280,10 @@ Then('I should see the full notes list', async ({ page }) => {
   // After clearing search, the note list or empty state should be visible
   const noteList = page.getByTestId(TestIds.NOTE_LIST)
   const emptyState = page.getByTestId(TestIds.EMPTY_STATE)
-  const isList = await noteList.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isList) return
-  await expect(emptyState).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // One waiting assertion over both outcomes: isVisible() never waits, so probing
+  // the list while the post-search refetch shows its skeleton read `false` and then
+  // waited for an empty state that never came.
+  await expect(noteList.or(emptyState)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 // --- Save and verify note creation via API ---
