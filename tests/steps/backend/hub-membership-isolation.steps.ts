@@ -37,6 +37,8 @@ interface HubIsolationState {
   /** Invitee name → invite code */
   invites: Record<string, string>
   lastUsers?: Array<{ pubkey: string; phone?: string; hubRoles?: Array<{ hubId: string }> }>
+  /** Who produced `lastUsers` — a member of the listed hub */
+  lastLister?: string
   lastInvites?: Array<{ code: string; name: string }>
   /** Isolated rate-limit bucket for invite redemption */
   ip: string
@@ -139,9 +141,14 @@ When('{string} lists the members of hub {string}', async ({ request, world }, na
   const res = await apiGet<{ users: HubIsolationState['lastUsers'] }>(request, `/hubs/${hub(world, hubLabel)}/users`, actor(world, name).seedHex)
   setLastResponse(world, res)
   getS(world).lastUsers = res.data?.users
+  getS(world).lastLister = name
 })
 
 When('{string} fetches {string} through hub {string}', async ({ request, world }, viewer: string, target: string, hubLabel: string) => {
+  // Control: the same route returns a member of the hub — the viewer — so the
+  // 404 asserted for the target is isolation, not a route that 404s everyone.
+  const self = await apiGet(request, `/hubs/${hub(world, hubLabel)}/users/${actor(world, viewer).pubkey}`, actor(world, viewer).seedHex)
+  expect(self.status, `${viewer} fetching themself through hub ${hubLabel}`).toBe(200)
   setLastResponse(world, await apiGet(
     request,
     `/hubs/${hub(world, hubLabel)}/users/${actor(world, target).pubkey}`,
@@ -165,6 +172,9 @@ When('the admin creates a volunteer invite without a hub', async ({ request, wor
 Then('the user list does not include {string}', async ({ world }, name: string) => {
   const users = getS(world).lastUsers
   expect(users, 'a user list').toBeDefined()
+  // Control: the list is the hub's members — it contains whoever listed it —
+  // so "does not include" cannot pass on an empty list.
+  expect(users!.map(u => u.pubkey), 'the lister, a member of the listed hub').toContain(actor(world, getS(world).lastLister!).pubkey)
   const target = actor(world, name)
   expect(users!.map(u => u.pubkey)).not.toContain(target.pubkey)
   // Nor their phone number, anywhere in the response
