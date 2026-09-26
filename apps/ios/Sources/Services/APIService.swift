@@ -304,7 +304,7 @@ final class APIService: @unchecked Sendable {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
             // On network error for write operations, enqueue for offline replay
-            if OfflineQueue.isQueueableMethod(method) {
+            if OfflineQueue.isQueueable(method: method, path: path) {
                 let bodyString: String?
                 if let httpBody = urlRequest.httpBody {
                     bodyString = String(data: httpBody, encoding: .utf8)
@@ -385,7 +385,7 @@ final class APIService: @unchecked Sendable {
             (data, response) = try await session.data(for: urlRequest)
         } catch {
             // On network error for write operations, enqueue for offline replay
-            if OfflineQueue.isQueueableMethod(method) {
+            if OfflineQueue.isQueueable(method: method, path: path) {
                 let bodyString = String(data: rawBody, encoding: .utf8)
                 offlineQueue?.enqueue(path: path, method: method.uppercased(), body: bodyString)
             }

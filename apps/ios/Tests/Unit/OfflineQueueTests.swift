@@ -84,6 +84,28 @@ final class OfflineQueueTests: XCTestCase {
         XCTAssertFalse(OfflineQueue.isQueueableMethod("get"))
     }
 
+    // MARK: - isQueueable (identity writes are never replayed)
+
+    func testOrdinaryWritesAreQueueable() {
+        XCTAssertTrue(OfflineQueue.isQueueable(method: "POST", path: "/api/notes"))
+        XCTAssertTrue(OfflineQueue.isQueueable(method: "patch", path: "/api/notes/abc"))
+        XCTAssertFalse(OfflineQueue.isQueueable(method: "GET", path: "/api/notes"))
+    }
+
+    func testSigchainAppendIsNotQueueable() {
+        let path = "/api/users/\(String(repeating: "a", count: 64))/sigchain"
+        XCTAssertTrue(OfflineQueue.isIdentityWrite(path: path))
+        XCTAssertFalse(OfflineQueue.isQueueable(method: "POST", path: path))
+    }
+
+    func testPukEnvelopeWriteIsNotQueueable() {
+        XCTAssertFalse(OfflineQueue.isQueueable(method: "POST", path: "/api/puk/envelopes"))
+    }
+
+    func testOtherUserRoutesStayQueueable() {
+        XCTAssertTrue(OfflineQueue.isQueueable(method: "PATCH", path: "/api/users/\(String(repeating: "a", count: 64))"))
+    }
+
     // MARK: - enqueue / pendingCount
 
     func testEnqueueIncreasesPendingCount() {

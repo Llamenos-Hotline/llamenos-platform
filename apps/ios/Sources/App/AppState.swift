@@ -35,6 +35,7 @@ final class AppState {
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
+    let userIdentityService: UserIdentityService
 
     // MARK: - Auth State
 
@@ -122,6 +123,7 @@ final class AppState {
         self.hubActivityService = hubActivity
         self.linphoneService = linphone
         self.permissionService = permission
+        self.userIdentityService = UserIdentityService(cryptoService: crypto, api: api)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,
@@ -344,6 +346,8 @@ final class AppState {
         authStatus = .unlocked
         connectWebSocketIfConfigured()
         fetchUserRole()
+        // Create or resume the user's sigchain genesis + first PUK (idempotent).
+        userIdentityService.ensureInitializedInBackground()
         offlineQueue.startMonitoring()
         // Replay any queued operations now that we're authenticated
         Task { await offlineQueue.replay() }
@@ -385,6 +389,9 @@ final class AppState {
 
         connectWebSocketIfConfigured()
         fetchUserRole()
+        // Sigchain genesis + first PUK. Runs once the server knows this user,
+        // so it is also retried after every unlock.
+        userIdentityService.ensureInitializedInBackground()
         offlineQueue.startMonitoring()
         Task { await SecurityEventService.shared.flush() }
     }

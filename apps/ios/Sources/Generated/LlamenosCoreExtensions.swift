@@ -149,3 +149,39 @@ extension EncryptedDeviceKeys: Codable {
         try container.encode(state, forKey: .state)
     }
 }
+
+/// JSON shape packages/crypto `SigchainLink` (serde camelCase) — the input of
+/// `mobile_sigchain_verify`. `prevHash` is encoded as `null` for the genesis link.
+extension SigchainLink: Codable {
+    enum CodingKeys: String, CodingKey {
+        case id, seq, prevHash, entryHash, signerDeviceId, signerPubkey, signature, timestamp, payloadJson
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            seq: try container.decode(UInt64.self, forKey: .seq),
+            prevHash: try container.decodeIfPresent(String.self, forKey: .prevHash),
+            entryHash: try container.decode(String.self, forKey: .entryHash),
+            signerDeviceId: try container.decode(String.self, forKey: .signerDeviceId),
+            signerPubkey: try container.decode(String.self, forKey: .signerPubkey),
+            signature: try container.decode(String.self, forKey: .signature),
+            timestamp: try container.decode(String.self, forKey: .timestamp),
+            payloadJson: try container.decode(String.self, forKey: .payloadJson)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(seq, forKey: .seq)
+        try container.encode(prevHash, forKey: .prevHash)
+        try container.encode(entryHash, forKey: .entryHash)
+        try container.encode(signerDeviceId, forKey: .signerDeviceId)
+        try container.encode(signerPubkey, forKey: .signerPubkey)
+        try container.encode(signature, forKey: .signature)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(payloadJson, forKey: .payloadJson)
+    }
+}

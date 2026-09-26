@@ -75,6 +75,14 @@ private func ffiMobileSigchainVerifyLink(linkJson: String, expectedSignerPubkey:
     try mobileSigchainVerifyLink(linkJson: linkJson, expectedSignerPubkey: expectedSignerPubkey)
 }
 
+private func ffiMobileSigchainVerify(linksJson: String) throws -> SigchainVerifiedState {
+    try mobileSigchainVerify(linksJson: linksJson)
+}
+
+private func ffiMobilePukDeriveState(seedHex: String, generation: UInt32) throws -> PukState {
+    try mobilePukDeriveState(seedHex: seedHex, generation: generation)
+}
+
 private func ffiMobileEd25519Verify(messageHex: String, signatureHex: String, pubkeyHex: String) throws -> Bool {
     try mobileEd25519Verify(messageHex: messageHex, signatureHex: signatureHex, pubkeyHex: pubkeyHex)
 }
@@ -171,6 +179,29 @@ private func ffiMobileDecryptServerEventWithEpoch(encryptedHex: String, epoch: U
 
 private func ffiMobileDecryptEventWithAttribution(ciphertextHex: String) throws -> [String] {
     try mobileDecryptEventWithAttribution(ciphertextHex: ciphertextHex)
+}
+
+// MARK: - PUK creation result
+
+/// The first Per-User Key of a new user: its public keys (bound into the sigchain by
+/// the `puk_epoch` link) and the seed's HPKE envelope sealed to this device.
+struct InitialPuk: Sendable {
+    let generation: Int
+    let signPubkeyHex: String
+    let dhPubkeyHex: String
+    let envelope: SharedDistributePukEnvelopesBodyEnvelope
+}
+
+/// JSON returned by packages/crypto `mobile_puk_create` (`seedHex` is deliberately not decoded).
+private struct FfiPukCreateResult: Decodable {
+    struct State: Decodable {
+        let generation: Int
+        let signPubkeyHex: String
+        let dhPubkeyHex: String
+    }
+
+    let pukState: State
+    let envelope: SharedDistributePukEnvelopesBodyEnvelope
 }
 
 // MARK: - CryptoService
@@ -350,15 +381,49 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - PUK Operations
 
-    func createInitialPuk() throws -> String {
+    /// Create the initial Per-User Key (generation 1), HPKE-sealed to this device.
+    ///
+    /// The envelope is sealed under `LABEL_PUK_WRAP_TO_DEVICE` with AAD
+    /// `"<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>"` (packages/crypto `puk::create_initial_puk`).
+    /// The FFI also returns the raw seed; it is dropped here — the device recovers the
+    /// seed from its envelope, so it never needs to live in Swift memory.
+    func createInitialPuk() throws -> InitialPuk {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        return try ffiMobilePukCreate()
+        let resultJson = try ffiMobilePukCreate()
+        let result = try JSONDecoder().decode(FfiPukCreateResult.self, from: Data(resultJson.utf8))
+        return InitialPuk(
+            generation: result.pukState.generation,
+            signPubkeyHex: result.pukState.signPubkeyHex,
+            dhPubkeyHex: result.pukState.dhPubkeyHex,
+            envelope: result.envelope
+        )
     }
 
-    func unwrapPukSeed(envelope: HpkeEnvelope, aad: String) throws -> String {
-        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let aadHex = aad.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
-        return try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: CryptoLabels.LABEL_PUK_WRAP_TO_DEVICE, aadHex: aadHex)
+    /// Open this device's PUK envelope and return the seed (hex).
+    ///
+    /// The AAD is bound to THIS device's ID (`"<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>"`),
+    /// never to an ID supplied by the server, so an envelope addressed to another
+    /// device cannot be opened here.
+    func unwrapPukSeed(envelope: SharedDistributePukEnvelopesBodyEnvelope) throws -> String {
+        guard isUnlocked, let deviceId else { throw CryptoServiceError.noKeyLoaded }
+        guard let v = UInt8(exactly: envelope.v), let labelId = UInt8(exactly: envelope.labelID) else {
+            throw CryptoServiceError.decryptionFailed("Malformed PUK envelope header")
+        }
+        let aad = "\(CryptoLabels.LABEL_PUK_WRAP_TO_DEVICE):\(deviceId)"
+        let aadHex = Data(aad.utf8).map { String(format: "%02x", $0) }.joined()
+        return try ffiMobileHpkeOpenKey(
+            envelope: HpkeEnvelope(v: v, labelId: labelId, enc: envelope.enc, ct: envelope.ct),
+            expectedLabel: CryptoLabels.LABEL_PUK_WRAP_TO_DEVICE,
+            aadHex: aadHex
+        )
+    }
+
+    /// Derive a PUK generation's public keys from its seed (stateless).
+    func derivePukState(seedHex: String, generation: Int) throws -> PukState {
+        guard let gen = UInt32(exactly: generation) else {
+            throw CryptoServiceError.decryptionFailed("Invalid PUK generation \(generation)")
+        }
+        return try ffiMobilePukDeriveState(seedHex: seedHex, generation: gen)
     }
 
     // MARK: - Sigchain Operations
@@ -372,6 +437,13 @@ final class CryptoService: @unchecked Sendable {
     /// Stateless — no device key needed.
     func verifySigchainLink(linkJson: String, expectedSignerPubkey: String) throws -> Bool {
         try ffiMobileSigchainVerifyLink(linkJson: linkJson, expectedSignerPubkey: expectedSignerPubkey)
+    }
+
+    /// Verify a complete sigchain with packages/crypto `verify_sigchain` (stateless):
+    /// hash continuity, entry hashes, signatures, and the authorised device set.
+    func verifySigchain(links: [SigchainLink]) throws -> SigchainVerifiedState {
+        let linksJson = try JSONEncoder().encode(links)
+        return try ffiMobileSigchainVerify(linksJson: String(decoding: linksJson, as: UTF8.self))
     }
 
     /// Verify an Ed25519 signature (stateless — no device key needed).

@@ -248,6 +248,21 @@ final class OfflineQueue: @unchecked Sendable {
         return upper == "POST" || upper == "PUT" || upper == "PATCH" || upper == "DELETE"
     }
 
+    /// Identity writes — sigchain links and PUK envelopes — are never queued.
+    /// A link is signed over its sequence number and the chain head, and a PUK
+    /// envelope upsert replaces the stored envelope for its generation, so a
+    /// replayed stale write could overwrite the envelope of the PUK the chain
+    /// actually names. Identity initialisation retries from the server's current
+    /// chain instead (see UserIdentityService).
+    static func isIdentityWrite(path: String) -> Bool {
+        path.hasPrefix("/api/puk/") || (path.hasPrefix("/api/users/") && path.hasSuffix("/sigchain"))
+    }
+
+    /// Whether a failed request should be queued for offline replay.
+    static func isQueueable(method: String, path: String) -> Bool {
+        isQueueableMethod(method) && !isIdentityWrite(path: path)
+    }
+
     // MARK: - Persistence
 
     private var queueFileURL: URL {
