@@ -1064,6 +1064,42 @@ function reorderKotlinConstructorParams(output: string): string {
 }
 
 /**
+ * UniFFI Swift bindings for packages/crypto. The iOS target compiles these into the SAME
+ * module as the generated protocol Types.swift, so a protocol type that shares a name with
+ * a UniFFI type is an "invalid redeclaration" / "ambiguous for type lookup" build error
+ * (PR #1088: protocol `SigchainLink` vs UniFFI `SigchainLink`). Kotlin is unaffected: the
+ * UniFFI Kotlin bindings live in `org.llamenos.core`, protocol types in `org.llamenos.protocol`.
+ */
+const UNIFFI_SWIFT_BINDINGS = resolve(__dirname, '../../crypto/bindings/swift/LlamenosCore.swift')
+
+/** Top-level nominal type names declared in a Swift source file. */
+function swiftTopLevelTypeNames(source: string): Set<string> {
+  const names = new Set<string>()
+  const decl = /^(?:public |internal |fileprivate |private )?(?:final )?(?:struct|enum|class|protocol|typealias|actor) ([A-Za-z_][A-Za-z0-9_]*)/gm
+  for (const match of source.matchAll(decl)) names.add(match[1])
+  return names
+}
+
+/**
+ * Fail codegen when a generated Swift protocol type collides with a UniFFI type. Fix a
+ * collision at the schema (rename the export so every platform gets the same distinct name),
+ * not with a Swift-only rename.
+ */
+function assertNoUniffiSwiftCollisions(swiftContent: string): void {
+  if (!existsSync(UNIFFI_SWIFT_BINDINGS)) {
+    console.error(`UniFFI Swift bindings not found at ${UNIFFI_SWIFT_BINDINGS} — cannot check for type collisions.`)
+    process.exit(1)
+  }
+  const uniffiNames = swiftTopLevelTypeNames(readFileSync(UNIFFI_SWIFT_BINDINGS, 'utf-8'))
+  const collisions = [...swiftTopLevelTypeNames(swiftContent)].filter((name) => uniffiNames.has(name)).sort()
+  if (collisions.length > 0) {
+    console.error(`SWIFT TYPE COLLISION: generated protocol types share a name with UniFFI types in LlamenosCore.swift: ${collisions.join(', ')}`)
+    console.error('Both compile into the iOS module, so the iOS build fails. Rename the Zod schema export in packages/protocol/schemas/.')
+    process.exit(1)
+  }
+}
+
+/**
  * In normal mode: write content to outputPath.
  * In --check mode: compare content to existing file; exit 1 if different.
  */
@@ -1134,6 +1170,7 @@ async function main() {
   let swiftOutput = stripSwiftConvenienceExtensions(swiftLines)
   swiftOutput = fixSwiftIntegerTypes(swiftOutput, integerPerType, integerAlwaysInt)
   const swiftContent = header + swiftOutput + '\n'
+  assertNoUniffiSwiftCollisions(swiftContent)
 
   // Post-process Kotlin: inject defaults, fix integer types.
   // Package name is now handled by quicktype's package renderer option.

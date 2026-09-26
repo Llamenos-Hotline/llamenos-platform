@@ -2717,12 +2717,12 @@ Per-device key authorization sigchain (Phase 6).
 ```
 GET  /api/users/:targetPubkey/sigchain
 Auth: Required (self or admin)
-Response: { "links": SigchainLink[] }
+Response: { "links": SigchainLinkRecord[] }
 
 POST /api/users/:targetPubkey/sigchain
 Auth: Required (self only)
 Body: { "seqNo": number (≥ 1), "linkType": "genesis"|"device_add"|"device_remove"|"key_rotate"|"puk_epoch", "payload": object, "signature": hex128, "prevHash": hex64|"", "hash": hex64, "signerDeviceId": string, "signerPubkey": hex64, "timestamp": ISO8601 }
-Response: SigchainLink (201) — includes "timestamp" (part of the hashed form)
+Response: SigchainLinkRecord (201) — includes "timestamp" (part of the hashed form)
 Error: 400 on invalid link semantics (genesis only at seq 1, payload.type must match linkType,
        payload shape per §2.11, signerPubkey must be the user's identity key, genesis must name
        its signing device) or entry-hash mismatch
