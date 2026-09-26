@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
+import { trackedFiles } from './codeowners.js'
 
 const IOS: LaneScope = { owned: ['apps/ios/', '.github/workflows/ios*.yml'], notOwned: [] }
 const NEVER = ['.env', 'deploy/', '.github/workflows/']
@@ -765,5 +766,73 @@ describe('checkScope', () => {
     expect(checkScope(['.github/workflows/android.yml'], IOS, []).strayed).toEqual([
       '.github/workflows/android.yml',
     ])
+  })
+})
+
+/**
+ * #1066: no lane owned `scripts/`, so fleet/review rejected every PR touching
+ * it as out-of-scope — which made #1040 (bootstrap-admin prints the secret
+ * seed labelled as the public key) unfixable by any worker (#1060).
+ *
+ * These assert against REAL tracked files with the same `matchesPath` the
+ * gate uses, never string-against-string: a scope rule that reads right but
+ * matches no file is exactly how CODEOWNERS once guarded a file named `auth`
+ * that did not exist.
+ */
+describe('scripts/ ownership (#1066): infra owns it, backend keeps its own gate script', () => {
+  let scopes: Record<string, LaneScope>
+  let infra: LaneScope
+  let backend: LaneScope
+  let files: string[]
+
+  beforeAll(async () => {
+    scopes = await loadLaneScopes(process.cwd())
+    const inf = scopes['infra']
+    const b = scopes['backend']
+    if (!inf || !b) throw new Error('expected infra and backend lane fragments to exist')
+    infra = inf
+    backend = b
+    files = trackedFiles()
+  })
+
+  it.each([
+    'scripts/bootstrap-admin.ts',
+    'scripts/lib/bootstrap-admin-keys.ts',
+    'scripts/verify-build.sh',
+    'scripts/build-iso.sh',
+    'scripts/iso-builder/preseed.cfg.template',
+    'scripts/release/promote-release.sh',
+    'scripts/test-integration-full.sh',
+  ])('infra may write %s', (file) => {
+    expect(checkScope([file], infra, []).strayed).toEqual([])
+  })
+
+  it('the exact #1060 scripts/ diff is in scope for infra', () => {
+    expect(checkScope(['scripts/bootstrap-admin.ts', 'scripts/lib/bootstrap-admin-keys.ts'], infra, []).strayed)
+      .toEqual([])
+  })
+
+  it('scripts/test-backend-bdd.sh stays backend\'s: infra carves it out, backend may still write it', () => {
+    expect(checkScope(['scripts/test-backend-bdd.sh'], infra, []).strayed).toEqual(['scripts/test-backend-bdd.sh'])
+    expect(checkScope(['scripts/test-backend-bdd.sh'], backend, []).strayed).toEqual([])
+  })
+
+  it('every tracked file under scripts/ is owned by at least one lane', () => {
+    const scriptFiles = files.filter((f) => f.startsWith('scripts/'))
+    expect(scriptFiles).toContain('scripts/bootstrap-admin.ts')
+    const unowned = scriptFiles.filter(
+      (f) => !Object.values(scopes).some((s) => checkScope([f], s, []).strayed.length === 0 && s.owned.length > 0),
+    )
+    expect(unowned, `scripts/ files no lane may write:\n${unowned.join('\n')}`).toEqual([])
+  })
+
+  it('every owned and notOwned rule of every lane matches at least one tracked file', () => {
+    const dead: string[] = []
+    for (const [lane, s] of Object.entries(scopes)) {
+      for (const p of [...s.owned, ...s.notOwned]) {
+        if (!files.some((f) => matchesPath(f, p))) dead.push(`${lane}: ${p}`)
+      }
+    }
+    expect(dead, `lane scope rules matching no tracked file:\n${dead.join('\n')}`).toEqual([])
   })
 })
