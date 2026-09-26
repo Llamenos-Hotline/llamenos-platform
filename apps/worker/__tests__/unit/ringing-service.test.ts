@@ -6,6 +6,7 @@ import type { Services } from '../../services'
 import * as serviceFactories from '../../lib/service-factories'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
+import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
 
@@ -340,6 +341,36 @@ describe('startParallelRinging', () => {
 
     const addCallArgs = (services.calls.addCall as ReturnType<typeof vi.fn>).mock.calls[0][1]
     expect(addCallArgs.callerLast4).toBe('1234')
+  })
+
+  it('publishes call:ring to the hub that owns the call (#1013)', async () => {
+    const { publishEvent } = await import('../../lib/ws-events')
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'browser' })],
+    })
+
+    await startParallelRinging('CA-ring', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+    expect(publishEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      KIND_CALL_RING,
+      { type: 'call:ring', callId: 'CA-ring' },
+      'hub-1',
+    )
+  })
+
+  it('does not publish call:ring when the call resolved to no hub (#1013)', async () => {
+    const { publishEvent } = await import('../../lib/ws-events')
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1'],
+      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'browser' })],
+    })
+
+    await startParallelRinging('CA-nohub', '+15551234567', 'http://localhost', makeEnv(), services, '')
+
+    expect(publishEvent).not.toHaveBeenCalled()
   })
 
   it('skips VoIP push for global-scope calls (empty hubId)', async () => {

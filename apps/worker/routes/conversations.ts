@@ -459,7 +459,7 @@ conversations.post('/:id/messages',
       type: 'message:new',
       conversationId: id,
       channelType: 'outbound',
-    }, conv.hubId ?? undefined)
+    }, conv.hubId ?? '')
 
     audit(c.get('services').audit, 'messageSent', pubkey, {
       conversationId: id,
@@ -513,7 +513,7 @@ conversations.patch('/:id',
       type: convEventType,
       conversationId: id,
       assignedTo: body.assignedTo,
-    }, conv.hubId ?? undefined)
+    }, conv.hubId ?? '')
 
     audit(c.get('services').audit, body.status === 'closed' ? 'conversationClosed' : 'conversationUpdated', pubkey, {
       conversationId: id,
@@ -590,7 +590,7 @@ conversations.post('/:id/claim',
       type: 'conversation:assigned',
       conversationId: id,
       assignedTo: pubkey,
-    }, conv.hubId ?? undefined)
+    }, conv.hubId ?? '')
 
     // Push notification to assigned user (Epic 86)
     dispatchPushToUser(c.env, services, pubkey, {

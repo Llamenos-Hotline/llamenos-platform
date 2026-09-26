@@ -86,6 +86,7 @@ export class CallsService {
           await tx
             .delete(activeCalls)
             .where(eq(activeCalls.callId, call.callId))
+          await tx.delete(callTokens).where(eq(callTokens.callSid, call.callId))
         }
       })
     }
@@ -262,6 +263,9 @@ export class CallsService {
           adminEnvelopes: data?.adminEnvelopes ?? [],
         })
         .returning()
+
+      // The call is over: its volunteer-leg tokens have nothing left to resolve.
+      await tx.delete(callTokens).where(eq(callTokens.callSid, call.callId))
 
       return row
     })
@@ -505,8 +509,17 @@ export class CallsService {
   // =========================================================================
 
   /**
-   * Create a single-use call token mapping to a volunteer pubkey + hub.
-   * The token is embedded in Twilio callback URLs instead of the raw pubkey.
+   * Create an opaque call token mapping to a volunteer pubkey + hub.
+   * The token is embedded in provider callback URLs instead of the raw pubkey.
+   *
+   * Providers send the SAME token to two routes: the answer URL (`/user-answer`)
+   * and the status URL (`/call-status`) — and the status callbacks start
+   * (initiated/ringing) BEFORE the volunteer answers and continue until the
+   * leg completes. So the token must stay valid for the whole life of the leg:
+   *   - `answerCallWithToken` is the ONLY single-use consumer (answering is
+   *     claimed atomically on the call row, see below);
+   *   - `resolveCallToken` is a read-only lookup used by status callbacks;
+   *   - tokens are deleted when the call ends (`endCall` / stale expiry).
    */
   async createCallToken(params: { callSid: string; volunteerPubkey: string; hubId: string }): Promise<string> {
     const token = crypto.randomUUID()
@@ -520,23 +533,65 @@ export class CallsService {
   }
 
   /**
-   * Resolve and consume a call token atomically (DELETE...RETURNING).
-   * Returns null if the token is unknown or expired (> 5 minutes old).
+   * Read-only token lookup for status callbacks (never consumes the token).
+   * Valid for as long as the call is live; returns null once the call has
+   * ended and its tokens have been removed.
    */
   async resolveCallToken(token: string): Promise<{ callSid: string; volunteerPubkey: string; hubId: string } | null> {
-    const TOKEN_TTL_MS = 5 * 60 * 1000
     const rows = await this.db
-      .delete(callTokens)
+      .select()
+      .from(callTokens)
+      .where(eq(callTokens.token, token))
+      .limit(1)
+    if (rows.length === 0) return null
+    const row = rows[0]
+    return { callSid: row.callSid, volunteerPubkey: row.volunteerPubkey, hubId: row.hubId }
+  }
+
+  /**
+   * Answer a call via a volunteer-leg token — the single-use path.
+   *
+   * The token must exist and be younger than 5 minutes, and the call must
+   * still be `ringing`. The `ringing` → `in-progress` transition is a single
+   * conditional UPDATE, so exactly one caller can win it: a replayed answer
+   * (same token) or a second volunteer racing for the same call gets null.
+   * The token itself is NOT deleted — the answered leg's later status
+   * callbacks (notably `completed`) still need it to find their call.
+   */
+  async answerCallWithToken(
+    token: string,
+  ): Promise<{ callSid: string; volunteerPubkey: string; hubId: string } | null> {
+    const TOKEN_TTL_MS = 5 * 60 * 1000
+    const [tokenRow] = await this.db
+      .select()
+      .from(callTokens)
       .where(
         and(
           eq(callTokens.token, token),
           gte(callTokens.createdAt, new Date(Date.now() - TOKEN_TTL_MS)),
         ),
       )
+      .limit(1)
+    if (!tokenRow) return null
+
+    const claimed = await this.db
+      .update(activeCalls)
+      .set({
+        answeredBy: tokenRow.volunteerPubkey,
+        status: 'in-progress',
+        answeredAt: new Date(),
+      })
+      .where(
+        and(
+          eq(activeCalls.callId, tokenRow.callSid),
+          eq(activeCalls.hubId, tokenRow.hubId),
+          eq(activeCalls.status, 'ringing'),
+        ),
+      )
       .returning()
-    if (rows.length === 0) return null
-    const row = rows[0]
-    return { callSid: row.callSid, volunteerPubkey: row.volunteerPubkey, hubId: row.hubId }
+    if (claimed.length === 0) return null
+
+    return { callSid: tokenRow.callSid, volunteerPubkey: tokenRow.volunteerPubkey, hubId: tokenRow.hubId }
   }
 
   /**

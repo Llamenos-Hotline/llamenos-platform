@@ -174,19 +174,19 @@ services.scheduler.start({
   },
   resolveIdentifier: (subscriberId: string) =>
     services.blasts.resolveSubscriberIdentifier(subscriberId),
-  onBlastProgress: (blastId, stats) => {
+  onBlastProgress: (blastId, hubId, stats) => {
     publishEvent(env as unknown as Env, KIND_BLAST_PROGRESS, {
       type: 'blast:progress',
       blastId,
       ...stats,
-    })
+    }, hubId)
   },
-  onBlastStatusChange: (blastId, status) => {
+  onBlastStatusChange: (blastId, hubId, status) => {
     publishEvent(env as unknown as Env, KIND_BLAST_STATUS, {
       type: 'blast:status',
       blastId,
       status,
-    })
+    }, hubId)
   },
 })
 
@@ -243,9 +243,10 @@ async function lookupUserHubs(pubkey: string): Promise<{ hubs: string[] } | null
   const activeHubIds = hubs
     .filter(h => h.status === 'active' && memberHubIds.includes(h.id))
     .map(h => h.id)
-  // Always include 'global' — messaging events (1010, 1011) and other
-  // hub-agnostic events are published to the 'global' pseudo-hub.
-  return { hubs: [...activeHubIds, 'global'] }
+  // Membership is the isolation boundary for relay subscriptions: every event
+  // is published to the hub that owns it, so a user may subscribe only to hubs
+  // they belong to. There is no catch-all pseudo-hub.
+  return { hubs: activeHubIds }
 }
 
 export default {

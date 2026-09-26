@@ -9,6 +9,20 @@ Feature: Demo mock telephony
   # The production refusal is covered by apps/worker/__tests__/unit/mock-telephony.test.ts,
   # because a live server cannot be flipped into ENVIRONMENT=production.
 
+  # Unlike relay-event-delivery.feature (which uses the /test-simulate shortcut), this drives the
+  # production ringing path — startParallelRinging — so a ring published without its hub fails here.
+  @backend @demo-mode @calls @relay
+  Scenario: A simulated call rings on the hub it arrived on and on no other hub
+    Given 1 volunteers are on shift
+    And the hub uses the mock telephony provider
+    And the test relay is connected and capturing events
+    And a volunteer who is a member of a different hub only
+    When the admin simulates an incoming call
+    Then the relay should receive a kind 1000 event within 5 seconds
+    And the decrypted event content type should be "call:ring"
+    And the event hubId should be the scenario hub
+    And that volunteer's relay subscription to the scenario hub should be refused
+
   @backend @demo-mode @calls
   Scenario: Simulated call rings, is answered, noted and ended
     Given 2 volunteers are on shift
