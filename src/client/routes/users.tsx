@@ -17,6 +17,7 @@ import {
 } from '@/lib/api'
 import { generateEphemeralKeypair } from '@/lib/platform'
 import { useToast } from '@/lib/toast'
+import { useHubKeyRotation } from '@/lib/use-hub-key'
 import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PinChallengeDialog } from '@/components/pin-challenge-dialog'
@@ -452,6 +453,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showPhone, setShowPhone] = useState(false)
   const pinChallenge = usePinChallenge()
+  const rotateHubKeyAfterDeparture = useHubKeyRotation()
 
   const primaryRoleId = user.roles[0] || 'role-volunteer'
   const primaryRole = roles.find(r => r.id === primaryRoleId)
@@ -471,6 +473,9 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
     try {
       const updated = await updateUser(user.pubkey, { active: !user.active })
       onUpdate(updated)
+      // A deactivated member has left the hub: rotate so they cannot read
+      // anything encrypted under the hub key from now on.
+      if (!updated.active) await rotateHubKeyAfterDeparture(user.pubkey)
     } catch {
       toast(t('common.error'), 'error')
     }
@@ -480,6 +485,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
     try {
       await deleteUser(user.pubkey)
       onDelete()
+      await rotateHubKeyAfterDeparture(user.pubkey)
     } catch {
       toast(t('common.error'), 'error')
     }

@@ -12,7 +12,7 @@ import {
   unassignTeamContact,
 } from '@/lib/api'
 import type { TeamResponse, TeamMemberResponse, ContactTeamAssignmentResponse } from '@protocol/schemas'
-import { encryptHubField, decryptHubField } from '@/lib/platform'
+import { encryptForHub, decryptFromHub } from '@/lib/hub-key-manager'
 import { LABEL_TEAM_ENCRYPT } from '@shared/crypto-labels'
 
 export const teamKeys = {
@@ -36,9 +36,9 @@ export interface DecryptedTeam extends Omit<TeamResponse, 'encryptedName' | 'enc
 
 async function decryptTeam(team: TeamResponse): Promise<DecryptedTeam> {
   const [name, description] = await Promise.all([
-    decryptHubField(team.encryptedName, LABEL_TEAM_ENCRYPT),
+    decryptFromHub(team.encryptedName, LABEL_TEAM_ENCRYPT),
     team.encryptedDescription
-      ? decryptHubField(team.encryptedDescription, LABEL_TEAM_ENCRYPT)
+      ? decryptFromHub(team.encryptedDescription, LABEL_TEAM_ENCRYPT)
       : Promise.resolve(null),
   ])
   return {
@@ -95,9 +95,9 @@ export function useCreateTeam() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ name, description }: { name: string; description?: string }) => {
-      const encryptedName = await encryptHubField(name, LABEL_TEAM_ENCRYPT)
+      const encryptedName = await encryptForHub(name, LABEL_TEAM_ENCRYPT)
       const encryptedDescription = description
-        ? await encryptHubField(description, LABEL_TEAM_ENCRYPT)
+        ? await encryptForHub(description, LABEL_TEAM_ENCRYPT)
         : undefined
       return createTeam({
         id: crypto.randomUUID(),
@@ -124,13 +124,13 @@ export function useUpdateTeam() {
       description?: string | null
     }) => {
       const encryptedName = name !== undefined
-        ? await encryptHubField(name, LABEL_TEAM_ENCRYPT)
+        ? await encryptForHub(name, LABEL_TEAM_ENCRYPT)
         : undefined
       const encryptedDescription =
         description === null
           ? null
           : description !== undefined
-            ? await encryptHubField(description, LABEL_TEAM_ENCRYPT)
+            ? await encryptForHub(description, LABEL_TEAM_ENCRYPT)
             : undefined
       return updateTeam(id, { encryptedName, encryptedDescription })
     },

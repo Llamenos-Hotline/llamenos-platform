@@ -7,6 +7,7 @@ import { useConfig, useHasMessaging } from '@/lib/config'
 import { useTheme } from '@/lib/theme'
 import { useEffect, useState, type ReactNode } from 'react'
 import { setServerEventKeys } from '@/lib/platform'
+import { useHubKeyLifecycle } from '@/lib/use-hub-key'
 import { needsServerAddress } from '@/lib/api-config'
 import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
@@ -211,6 +212,9 @@ const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
 function RelayWrappedLayout() {
   const { serverPubkey, wsRelayUrl } = useConfig()
   const { publicKey, serverEventKeyHex, serverEventKeyPrevHex, eventKeyEpoch } = useAuth()
+
+  // Load (or, for its creator, create) the active hub's key into Rust.
+  useHubKeyLifecycle()
 
   // Push epoch-scoped server event keys to Rust CryptoState (H2 hardening —
   // keys never stay in JS memory longer than needed for the IPC call)

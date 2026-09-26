@@ -10,6 +10,7 @@ import {
   type Hub,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
+import { provisionHubKey } from '@/lib/hub-key-manager'
 import { Building2, Plus, Pencil, Phone, Trash2 } from 'lucide-react'
 import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -232,6 +233,11 @@ function CreateHubDialog({
       })
       onCreated(res.hub)
       resetForm()
+      // Every hub gets its own random key, wrapped for its members (the
+      // creator included) before anyone writes hub-encrypted data into it.
+      // If this fails the hub stays keyless and the creator's client
+      // provisions it on first visit (ensureHubKey).
+      await provisionHubKey(res.hub.id)
       toast(t('hubs.hubCreated'), 'success')
     } catch {
       toast(t('common.error'), 'error')
