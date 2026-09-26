@@ -11,9 +11,9 @@
  *
  * Every key has a GENERATION (1 for the first key, +1 per rotation). The
  * server stores the current generation and is the only authority on it:
- * every envelope write names the generation it expects to be current, and the
- * server refuses (409) the write if it no longer is. Client session timing never
- * decides which key set wins.
+ * every envelope write names the generation it expects to be current, and
+ * the server refuses (409) the write if it no longer is. Client session
+ * timing never decides which key set wins.
  *
  * Lifecycle (all driven from here):
  *   1. provisionHubKey    — new hub: generate → wrap for every member → PUT
@@ -22,8 +22,8 @@
  *   2. loadHubKey         — any member: GET own envelope + generation →
  *                           unwrap into Rust.
  *   3. distributeHubKey   — admin: reload the CURRENT key from the server,
- *                           re-wrap it for the current member set → PUT for
- *                           that generation. A distribute that lands after a
+ *                           re-wrap it for the current member set → PUT
+ *                           expecting that generation. A distribute that lands after a
  *                           rotation is refused, so it can never re-install a
  *                           retired key a departed member still holds.
  *   4. rotateHubKey       — member departure: decrypt every hub-scoped
