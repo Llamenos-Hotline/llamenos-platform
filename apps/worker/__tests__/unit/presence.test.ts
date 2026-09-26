@@ -46,8 +46,10 @@ function makeUser(overrides: {
     onBreak: overrides.onBreak ?? false,
     callPreference: 'phone',
     phone: '+15551234567',
-    roles: overrides.roles ?? ['role-volunteer'],
-    hubRoles: overrides.hubRoles ?? [],
+    roles: overrides.roles ?? ([] as string[]),
+    // Members of the hub under test unless a test says otherwise — global
+    // roles other than super-admin carry no authority inside a hub (#1044).
+    hubRoles: overrides.hubRoles ?? [{ hubId: HUB, roleIds: ['role-volunteer'] }],
   }
 }
 

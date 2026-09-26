@@ -4,7 +4,8 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { requirePermission, requireAnyPermission, checkPermission } from '../middleware/permission-guard'
+import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
+import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -12,6 +13,8 @@ import type { Hub } from '@shared/types'
 import { ServiceError } from '../services/settings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
+import { hubContext } from '../middleware/hub'
+import { checkRoleGrant } from '../lib/hub-scope'
 import type { StorageManager } from '../lib/storage-manager'
 
 const routes = new Hono<AppEnv>()
@@ -39,22 +42,21 @@ routes.get('/',
       ...authErrors,
     },
   }),
-  requirePermission('hubs:read'),
+  // No global permission gate: hub membership is per hub (#1037), so a member
+  // whose roles are all hub-scoped must still be able to list their hubs.
+  // Each hub is shown only if the caller holds hubs:read IN that hub —
+  // resolveHubPermissions grants a super-admin every hub.
   async (c) => {
     const services = c.get('services')
     const user = c.get('user')
-    const permissions = c.get('permissions')
+    const allRoles = c.get('allRoles')
 
     const { hubs } = await services.settings.getHubs()
-
-    // Super admin sees all
-    if (checkPermission(permissions, '*')) {
-      return c.json({ hubs: hubs.filter(h => h.status === 'active') })
-    }
-
-    // Others see only their hubs
-    const userHubIds = new Set((user.hubRoles || []).map(hr => hr.hubId))
-    return c.json({ hubs: hubs.filter(h => h.status === 'active' && userHubIds.has(h.id)) })
+    const visible = hubs.filter(h =>
+      h.status === 'active' &&
+      permissionGranted(resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, h.id), 'hubs:read'),
+    )
+    return c.json({ hubs: visible })
   },
 )
 
@@ -163,27 +165,15 @@ routes.get('/:hubId',
       ...notFoundError,
     },
   }),
+  // hubContext: 404 for an unknown hub, 403 unless the caller holds a role in
+  // this hub (or is super-admin); `permissions` becomes the hub-resolved set.
+  hubContext,
   requirePermission('hubs:read'),
   async (c) => {
     const hubId = c.req.param('hubId')
     const services = c.get('services')
-    const user = c.get('user')
-    const permissions = c.get('permissions')
-
-    try {
-      const { hub } = await services.settings.getHub(hubId)
-
-      // Check access
-      const isSuperAdmin = checkPermission(permissions, '*')
-      const hasHubAccess = (user.hubRoles || []).some(hr => hr.hubId === hubId)
-      if (!isSuperAdmin && !hasHubAccess) {
-        return c.json({ error: 'Access denied' }, 403)
-      }
-
-      return c.json({ hub })
-    } catch {
-      return c.json({ error: 'Hub not found' }, 404)
-    }
+    const { hub } = await services.settings.getHub(hubId)
+    return c.json({ hub })
   },
 )
 
@@ -238,12 +228,20 @@ routes.post('/:hubId/members',
       ...authErrors,
     },
   }),
+  // Member management is authorised by the caller's role IN THIS HUB (#1037):
+  // a hub's own admin can manage it, and no global role other than
+  // super-admin reaches into a hub the caller does not belong to.
+  hubContext,
   requirePermission('hubs:manage-members'),
   validator('json', addHubMemberBodySchema),
   async (c) => {
     const hubId = c.req.param('hubId')
     const services = c.get('services')
     const body = c.req.valid('json')
+
+    // A hub admin must not mint a role broader than their own (e.g. super-admin)
+    const denied = checkRoleGrant(c, body.roleIds)
+    if (denied) return c.json({ error: denied.error }, denied.status)
 
     const pubkey = c.get('pubkey')
     try {
@@ -277,6 +275,7 @@ routes.delete('/:hubId/members/:pubkey',
       ...authErrors,
     },
   }),
+  hubContext,
   requirePermission('hubs:manage-members'),
   async (c) => {
     const hubId = c.req.param('hubId')
@@ -357,20 +356,13 @@ routes.get('/:hubId/key',
       ...notFoundError,
     },
   }),
+  // CRIT-H1: hubContext admits only members of this hub (or super-admin)
+  hubContext,
   requirePermission('hubs:read'),
   async (c) => {
     const hubId = c.req.param('hubId')
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const user = c.get('user')
-    const permissions = c.get('permissions')
-
-    // CRIT-H1: Verify caller is a member of this specific hub (or is super-admin)
-    const isSuperAdmin = checkPermission(permissions, '*')
-    const hasHubAccess = (user.hubRoles || []).some((hr: { hubId: string }) => hr.hubId === hubId)
-    if (!isSuperAdmin && !hasHubAccess) {
-      return c.json({ error: 'Access denied' }, 403)
-    }
 
     try {
       const { envelopes } = await services.settings.getHubKeyEnvelopes(hubId)
@@ -404,6 +396,7 @@ routes.put('/:hubId/key',
       ...notFoundError,
     },
   }),
+  hubContext,
   requirePermission('hubs:manage-keys'),
   validator('json', hubKeyEnvelopesBodySchema),
   async (c) => {

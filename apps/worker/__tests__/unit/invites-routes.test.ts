@@ -74,7 +74,7 @@ const allRoles = [
 function createApp(
   permissions: string[] = ['invites:read', 'invites:create', 'invites:revoke'],
   user: { pubkey: string; roles: string[]; hubRoles?: Array<{ hubId: string; roleIds: string[] }> } =
-    { pubkey: 'creator-pk', roles: ['role-hub-admin'] },
+    { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-hub-admin'] }] },
 ) {
   const app = new Hono<AppEnv>()
   const services = {
@@ -298,7 +298,10 @@ describe('invites routes', () => {
     })
 
     it('honours an explicitly named hub when the server has several', async () => {
-      const { app, services } = createApp(['*'])
+      const { app, services } = createApp(
+        ['*'],
+        { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-hub-admin'] }] },
+      )
       services.settings.getHubs.mockResolvedValue({
         hubs: [{ id: 'hub-a', status: 'active' }, { id: 'hub-b', status: 'active' }],
       })

@@ -1777,24 +1777,15 @@ export class SettingsService {
       throw new ServiceError(404, 'User not found')
     }
 
-    const { resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
+    const { resolveAllRoleIds, resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
     const allRoles = await this.getRoles()
     const hubRoles = Array.isArray(user.hubRoles) ? user.hubRoles as Array<{ hubId: string; roleIds: string[] }> : []
 
-    let permissions: string[]
-    if (hubId) {
-      // Resolve for a specific hub (global + that hub's roles)
-      permissions = resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
-    } else {
-      // Union global permissions with all hub-scoped permissions
-      const allPerms = new Set<string>(resolvePermissions(user.roles ?? [], allRoles.roles))
-      for (const assignment of hubRoles) {
-        for (const p of resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, assignment.hubId)) {
-          allPerms.add(p)
-        }
-      }
-      permissions = Array.from(allPerms)
-    }
+    const permissions = hubId
+      // Resolve for a specific hub (that hub's roles; super-admin globals)
+      ? resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
+      // Union of global permissions and every hub's permissions
+      : resolvePermissions(resolveAllRoleIds(user.roles ?? [], hubRoles), allRoles.roles)
     return { userId, permissions }
   }
 
