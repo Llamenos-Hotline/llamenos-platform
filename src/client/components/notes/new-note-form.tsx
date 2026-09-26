@@ -41,7 +41,7 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
   }
 
   return (
-    <Card data-testid="note-form">
+    <Card data-testid="note-form" data-call-id-mode={recentCalls.length > 0 ? 'select' : 'input'}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <StickyNote className="h-4 w-4 text-muted-foreground" />
