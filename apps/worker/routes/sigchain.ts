@@ -12,7 +12,7 @@ import { authErrors } from '../openapi/helpers'
 import { CryptoKeyError } from '../services/crypto-keys'
 import {
   appendSigchainLinkBodySchema,
-  sigchainLinkSchema,
+  sigchainLinkRecordSchema,
   sigchainResponseSchema,
 } from '@protocol/schemas/sigchain'
 
@@ -75,7 +75,7 @@ sigchainRoutes.post('/',
         description: 'Link appended',
         content: {
           'application/json': {
-            schema: resolver(sigchainLinkSchema),
+            schema: resolver(sigchainLinkRecordSchema),
           },
         },
       },
