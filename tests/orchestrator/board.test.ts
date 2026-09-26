@@ -767,7 +767,11 @@ describe('classifyPr: a specialist review binds at the merge decision (any FAIL 
     expect(classify(green([ctx(SPECIALIST, 'PASS')], ['crypto-security-reviewer'])).action).toBe('MERGE')
   })
 
-  it('the skipped "not requested" job of an unrelated label never blocks', () => {
-    expect(classify(green([ctx('fleet-specialist/not-requested', 'PASS')], ['agent-dispatchable'])).action).toBe('MERGE')
+  // GitHub does not evaluate a SKIPPED job's `name:` expression — the check
+  // carries the raw expression text (observed on run 36272104112, label
+  // `lane:infra`). It must stay outside the `fleet/review/` prefix.
+  it('the skipped specialist job of an unrelated label never blocks, under the name GitHub really gives it', () => {
+    const skippedName = "endsWith(github.event.label.name, '-reviewer') && format('fleet/review/{0}', github.event.label.name) || 'fleet-specialist/not-requested'"
+    expect(classify(green([ctx(skippedName, 'PASS'), ctx('fleet-specialist/disarm-auto-merge', 'PASS')], ['lane:infra'])).action).toBe('MERGE')
   })
 })

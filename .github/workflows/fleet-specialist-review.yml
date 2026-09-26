@@ -166,8 +166,14 @@ jobs:
     # The check name. Built from the RAW label so an unknown or malformed
     # `-reviewer` label's FAIL is posted where the merge-decision code
     # (`specialistMergeBlockers`) looks for it. When the label is not a
-    # specialist request this job is skipped, under a name outside the
-    # `fleet/review/` prefix so the skip reads as nothing at all.
+    # specialist request this job is SKIPPED, and GitHub does not evaluate a
+    # skipped job's `name:` expression: the check shows the raw expression text
+    # (`endsWith(github.event.label.name, ...) && format(...) || ...` —
+    # observed on run 36272104112 for label `lane:infra`). That text is outside
+    # the `fleet/review/` prefix, so the merge binding never reads a skipped
+    # run as a specialist verdict. Keep the expression starting with
+    # `endsWith(` — a name template starting `fleet/review/` would put the
+    # skipped runs inside the prefix.
     name: ${{ endsWith(github.event.label.name, '-reviewer') && format('fleet/review/{0}', github.event.label.name) || 'fleet-specialist/not-requested' }}
     if: endsWith(github.event.label.name, '-reviewer')
     # The same dedicated self-hosted runner `fleet/review` uses — see

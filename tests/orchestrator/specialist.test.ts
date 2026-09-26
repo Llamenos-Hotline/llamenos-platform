@@ -411,6 +411,12 @@ describe('rail: fleet-specialist-review.yml', () => {
     expect(specialist().name).not.toBe(REVIEW_JOB)
   })
 
+  it('a SKIPPED run\'s name (GitHub shows the raw expression) stays outside the fleet/review/ prefix', () => {
+    const raw = specialist().name.replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '')
+    expect(raw.startsWith(SPECIALIST_CHECK_PREFIX)).toBe(false)
+    expect(specialistMergeBlockers([{ name: raw, state: 'PASS' }], ['lane:infra'])).toEqual({ failing: [], pending: [], missing: [] })
+  })
+
   it('never interpolates the raw label (or any other event text) into a shell script — env only', () => {
     for (const [key, j] of Object.entries(wf.jobs)) {
       for (const step of j.steps) {
