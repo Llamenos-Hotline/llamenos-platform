@@ -236,6 +236,13 @@ describe('PlivoAdapter', () => {
     })
   })
 
+  describe('hangupCall failures', () => {
+    it('rejects when Plivo refuses the hang-up', async () => {
+      fetchMock.mockResolvedValue(new Response('{}', { status: 500 }))
+      await expect(adapter.hangupCall('CA123')).rejects.toThrow(/hangup failed: 500/)
+    })
+  })
+
   describe('ringVolunteers', () => {
     it('initiates parallel calls and returns request UUIDs', async () => {
       fetchMock.mockResolvedValue({

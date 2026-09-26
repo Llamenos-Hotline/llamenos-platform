@@ -84,6 +84,11 @@ export interface TelephonyAdapter {
 
   /**
    * End/hangup a call by its SID.
+   *
+   * Resolves once the provider confirms the leg is disconnected (or no longer
+   * exists). MUST reject when the provider refuses or is unreachable — callers
+   * report the outcome to the volunteer and must not claim a disconnect that
+   * did not happen.
    */
   hangupCall(callSid: string): Promise<void>
 
@@ -224,3 +229,15 @@ export interface TelephonyResponse {
 
 /** Map of "promptType:language" -> audio URL for custom recordings */
 export type AudioUrlMap = Record<string, string>
+
+/**
+ * Shared post-condition for `TelephonyAdapter.hangupCall` REST implementations:
+ * a 2xx means the provider ended the leg, a 404 means the leg is already gone
+ * (the caller hung up first) — both are a disconnected call. Anything else is a
+ * failure the caller must see.
+ */
+export async function assertHangupResponse(res: Response, provider: string): Promise<void> {
+  if (res.ok || res.status === 404) return
+  const detail = await res.text().catch(() => '')
+  throw new Error(`${provider} hangup failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
+}

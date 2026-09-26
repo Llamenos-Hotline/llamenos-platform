@@ -332,6 +332,20 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /language-selected', () => {
+    it('rejects a caller banned after the language menu was played, without ringing anyone', async () => {
+      services.records.checkBan = vi.fn().mockResolvedValue(true)
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/language-selected?hub=hub-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=CA123&From=%2B15551111111&Digits=1',
+      })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('<Reject')
+      expect(adapter.handleIncomingCall).not.toHaveBeenCalled()
+      expect(services.calls.addCall).not.toHaveBeenCalled()
+    })
+
     it('returns enqueue response for normal call', async () => {
       // parseLanguageWebhook is mocked — override to return digit '2' matching the body.
       // With hub languages ['en', 'es'], digit '2' (index 1) resolves to 'es'.
@@ -455,6 +469,20 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /captcha', () => {
+    it('rejects a caller banned while solving the CAPTCHA, without enqueueing', async () => {
+      services.records.checkBan = vi.fn().mockResolvedValue(true)
+      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'Digits=1234&From=%2B15551111111',
+      })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('<Reject')
+      expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
+    })
+
     it('returns enqueue on correct CAPTCHA digits', async () => {
       services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
       const app = await createTestApp(adapter, services)
