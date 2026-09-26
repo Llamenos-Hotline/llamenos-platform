@@ -29,7 +29,8 @@ final class MockHubAPIService: HubAPIServiceProtocol {
                     ct: "ddeeff",
                     enc: "112233",
                     pubkey: "aabbcc"
-                )
+                ),
+                generation: 1
             )
         }
     }

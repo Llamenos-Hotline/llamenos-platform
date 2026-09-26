@@ -25,7 +25,8 @@ class HubRepositoryTest {
                 enc = enc,
                 pubkey = "pub",
                 ct = ct,
-            )
+            ),
+            generation = 1,
         )
 
     @Test

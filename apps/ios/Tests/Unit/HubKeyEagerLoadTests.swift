@@ -22,7 +22,8 @@ final class TrackingHubAPIService: HubAPIServiceProtocol, @unchecked Sendable {
                 ct: "112233",
                 enc: "aabbcc",
                 pubkey: "ddeeff"
-            )
+            ),
+            generation: 1
         )
     }
 

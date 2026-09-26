@@ -13,6 +13,7 @@ import {
   createVolunteerViaApi,
 } from '../../api-helpers'
 import { generateContentKey, wrapKeyForRecipient, x25519PubkeyFromSeed } from '../../crypto-helpers'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -40,6 +41,10 @@ interface HubKeyState {
   fetchResults: Map<string, { status: number; envelope?: string }>
   /** Number of entries in the latest PUT */
   lastEnvelopeCount?: number
+  /** Hub key generation reported by the server after the latest write */
+  generation?: number
+  /** Status of the latest hub key write */
+  lastWriteStatus?: number
 }
 
 const HUB_KEY_LIFECYCLE_KEY = 'hub_key_lifecycle'
@@ -124,9 +129,10 @@ When(
     const res = await apiPut(
       request,
       `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
+      { expectedGeneration: 0, envelopes },
     )
     expect(res.status).toBe(200)
+    getHubKeyState(world).generation = 1
   },
 )
 
@@ -144,9 +150,10 @@ Given('hub key envelopes are set for all {int} members', async ({ request, world
   const res = await apiPut(
     request,
     `/hubs/${getHubKeyState(world).hubId}/key`,
-    { envelopes },
+    { expectedGeneration: 0, envelopes },
   )
   expect(res.status).toBe(200)
+  getHubKeyState(world).generation = 1
 })
 
 // ── Then: Fetch individual envelopes ──────────────────────────────
@@ -158,7 +165,7 @@ Then(
     const member = getHubKeyState(world).members.get(name)
     expect(member).toBeTruthy()
 
-    const res = await apiGet<{ envelope: { pubkey: string; ct: string; enc: string } }>(
+    const res = await apiGet<{ envelope: { pubkey: string; ct: string; enc: string }; generation: number }>(
       request,
       `/hubs/${getHubKeyState(world).hubId}/key`,
       member!.seedHex,
@@ -166,6 +173,7 @@ Then(
     expect(res.status).toBe(200)
     expect(res.data.envelope).toBeTruthy()
     expect(res.data.envelope.ct).toBeTruthy()
+    expect(res.data.generation).toBe(getHubKeyState(world).generation)
     getHubKeyState(world).fetchResults.set(name, { status: res.status, envelope: res.data.envelope.ct })
   },
 )
@@ -209,7 +217,7 @@ When(
     const res = await apiPut(
       request,
       `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
+      { expectedGeneration: getHubKeyState(world).generation, envelopes },
     )
     expect(res.status).toBe(200)
     getHubKeyState(world).lastEnvelopeCount = envelopes.length
@@ -240,27 +248,66 @@ Then(
 When(
   'a new hub key is generated and wrapped for remaining members only',
   async ({ request, world }) => {
-    expect(getHubKeyState(world).hubId).toBeTruthy()
+    const state = getHubKeyState(world)
+    expect(state.hubId).toBeTruthy()
 
     const envelopes: EnvelopeEntry[] = []
-    for (const [name, member] of getHubKeyState(world).members) {
+    for (const [name, member] of state.members) {
       // Only wrap for members still tracked in currentEnvelopes (non-removed)
-      if (getHubKeyState(world).currentEnvelopes.has(name)) {
+      if (state.currentEnvelopes.has(name)) {
         const entry = await generateRealEnvelopeEntry(member.pubkey, member.seedHex)
         envelopes.push(entry)
-        getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
+        state.currentEnvelopes.set(name, entry.ct)
       }
     }
 
-    const res = await apiPut(
+    // A rotation must carry every hub-key-encrypted record re-sealed under the
+    // new key; the server refuses one that does not cover them all.
+    const tags = await apiGet<{ tags: Array<{ id: string; encryptedCategory: string | null }> }>(request, `/hubs/${state.hubId}/tags`)
+    const teams = await apiGet<{ teams: Array<{ id: string; encryptedDescription: string | null }> }>(request, `/hubs/${state.hubId}/teams`)
+    expect(tags.status).toBe(200)
+    expect(teams.status).toBe(200)
+    const resealed = () => bytesToHex(generateContentKey())
+
+    const res = await apiPost<{ generation: number }>(
       request,
-      `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
+      `/hubs/${state.hubId}/key/rotate`,
+      {
+        fromGeneration: state.generation,
+        envelopes,
+        tags: tags.data.tags.map(t => ({ id: t.id, encryptedLabel: resealed(), encryptedCategory: t.encryptedCategory ? resealed() : null })),
+        teams: teams.data.teams.map(t => ({ id: t.id, encryptedName: resealed(), encryptedDescription: t.encryptedDescription ? resealed() : null })),
+      },
     )
     expect(res.status).toBe(200)
-    getHubKeyState(world).lastEnvelopeCount = envelopes.length
+    expect(res.data.generation).toBe((state.generation ?? 0) + 1)
+    state.generation = res.data.generation
+    state.lastEnvelopeCount = envelopes.length
   },
 )
+
+When(
+  'a stale distribute re-sends the previous generation\'s envelopes for all {int} members',
+  async ({ request, world }, _count: number) => {
+    const state = getHubKeyState(world)
+    expect(state.hubId).toBeTruthy()
+
+    const envelopes: EnvelopeEntry[] = []
+    for (const member of state.members.values()) {
+      envelopes.push(await generateRealEnvelopeEntry(member.pubkey, member.seedHex))
+    }
+    const res = await apiPut(
+      request,
+      `/hubs/${state.hubId}/key`,
+      { expectedGeneration: (state.generation ?? 1) - 1, envelopes },
+    )
+    state.lastWriteStatus = res.status
+  },
+)
+
+Then('the hub key write should be rejected with {int}', async ({ world }, status: number) => {
+  expect(getHubKeyState(world).lastWriteStatus).toBe(status)
+})
 
 Then(
   "{string}'s new envelope should differ from the original",
@@ -327,8 +374,9 @@ Given('hub key envelopes are set for {string}', async ({ request, world }, name:
   expect(member).toBeTruthy()
 
   const entry = await generateRealEnvelopeEntry(member!.pubkey, member!.seedHex)
-  const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry] })
+  const res = await apiPut(request, `/hubs/${hubId}/key`, { expectedGeneration: 0, envelopes: [entry] })
   expect(res.status).toBe(200)
+  getHubKeyState(world).generation = 1
   getHubKeyState(world).originalEnvelopes.set(name, entry.ct)
   getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
 })

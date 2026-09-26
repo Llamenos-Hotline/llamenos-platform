@@ -8,8 +8,11 @@
  * (tests/mocks/hpke-mock.ts — X25519 + HKDF-SHA256 + AES-256-GCM, label-bound)
  * and hub fields with AES-256-GCM under the hub key with the label as AAD, as
  * apps/desktop/src/crypto.rs does. The server is an in-memory stand-in for the
- * hub-key, device-overview, tag and team routes with the real replace
- * semantics of `PUT /hubs/:id/key`.
+ * hub-key, device-overview, tag and team routes with the real semantics of
+ * apps/worker/services/settings.ts: `PUT /hubs/:id/key` is accepted only when
+ * its expected generation is still current (0 = the hub has no key yet), and `POST /hubs/:id/key/rotate`
+ * applies envelopes + re-encrypted records + generation bump atomically, only
+ * from the current generation and only when it covers every tag and team.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { x25519 } from '@noble/curves/ed25519.js'
@@ -123,6 +126,8 @@ interface HubState {
   /** Current members (hubRoles) → the X25519 key of their device. */
   members: Map<string, string>
   admins: Set<string>
+  /** Generation of the key the stored envelopes wrap (0 = no key yet). */
+  generation: number
   /** Stored hub-key envelopes, by recipient user pubkey. */
   envelopes: Map<string, { enc: string; ct: string }>
   tags: TagResponse[]
@@ -131,11 +136,33 @@ interface HubState {
 
 let hubs: Map<string, HubState>
 
+/** A request as the server sees it: who sent it, and what it is. */
+interface ServerRequest { method: string; path: string; caller: string }
+
+/**
+ * Fault / interleaving hooks. `beforeApply` runs before the server touches any
+ * state (throwing there = the request was lost on the way in); `afterApply`
+ * runs once the server has applied it (throwing there = the response was lost
+ * on the way back, the write itself stands).
+ */
+const hooks: {
+  beforeApply: ((req: ServerRequest) => Promise<void> | void) | null
+  afterApply: ((req: ServerRequest) => Promise<void> | void) | null
+} = { beforeApply: null, afterApply: null }
+
 function json<T>(init: RequestInit | undefined): T {
   return JSON.parse(String(init?.body)) as T
 }
 
 h.request = async (path, init) => {
+  const req: ServerRequest = { method: (init?.method ?? 'GET').toUpperCase(), path, caller: device().userPubkey }
+  await hooks.beforeApply?.(req)
+  const result = await serve(path, init)
+  await hooks.afterApply?.(req)
+  return result
+}
+
+async function serve(path: string, init: RequestInit | undefined): Promise<unknown> {
   const method = (init?.method ?? 'GET').toUpperCase()
   const me = device().userPubkey
   const url = new URL(path, 'http://server')
@@ -171,16 +198,40 @@ h.request = async (path, init) => {
   if (!hub.members.has(me)) throw new h.ApiError(403, 'Access denied')
 
   if (resource === 'key') {
-    if (method === 'GET') {
+    if (method === 'GET' && id === undefined) {
       const env = hub.envelopes.get(me)
       if (!env) throw new h.ApiError(404, 'No key envelope for this user')
-      return { envelope: { pubkey: me, ...env } }
+      return { envelope: { pubkey: me, ...env }, generation: hub.generation }
     }
     if (!hub.admins.has(me)) throw new h.ApiError(403, 'Forbidden')
-    const { envelopes } = json<{ envelopes: Array<{ pubkey: string; enc: string; ct: string }> }>(init)
-    if (envelopes.length === 0) throw new h.ApiError(400, 'At least one envelope required')
-    hub.envelopes = new Map(envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
-    return { ok: true }
+    if (method === 'PUT' && id === undefined) {
+      const { expectedGeneration, envelopes } = json<{ expectedGeneration: number; envelopes: Array<{ pubkey: string; enc: string; ct: string }> }>(init)
+      if (envelopes.length === 0) throw new h.ApiError(400, 'At least one envelope required')
+      if (expectedGeneration !== hub.generation) throw new h.ApiError(409, 'Stale hub key generation')
+      hub.envelopes = new Map(envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
+      hub.generation = hub.generation === 0 ? 1 : hub.generation
+      return { ok: true }
+    }
+    if (method === 'POST' && id === 'rotate') {
+      const body = json<{
+        fromGeneration: number
+        envelopes: Array<{ pubkey: string; enc: string; ct: string }>
+        tags: Array<{ id: string; encryptedLabel: string; encryptedCategory: string | null }>
+        teams: Array<{ id: string; encryptedName: string; encryptedDescription: string | null }>
+      }>(init)
+      if (hub.generation === 0 || body.fromGeneration !== hub.generation) throw new h.ApiError(409, 'Stale hub key generation')
+      const same = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join() === [...b].sort().join()
+      if (!same(hub.tags.map(t => t.id), body.tags.map(t => t.id)) || !same(hub.teams.map(t => t.id), body.teams.map(t => t.id))) {
+        throw new h.ApiError(409, 'Rotation does not cover the hub records')
+      }
+      // Applied as one unit — the real server runs this in a single transaction.
+      for (const t of body.tags) Object.assign(hub.tags.find(r => r.id === t.id) ?? {}, t)
+      for (const t of body.teams) Object.assign(hub.teams.find(r => r.id === t.id) ?? {}, t)
+      hub.envelopes = new Map(body.envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
+      hub.generation += 1
+      return { generation: hub.generation }
+    }
+    throw new h.ApiError(405, `${method} ${path}`)
   }
 
   const list = resource === 'tags' ? hub.tags : hub.teams
@@ -230,8 +281,9 @@ async function newClient(): Promise<Client> {
     device: dev,
     hkm,
     run: async fn => {
+      const previous = h.current
       h.current = dev
-      try { return await fn(hkm) } finally { h.current = null }
+      try { return await fn(hkm) } finally { h.current = previous }
     },
   }
 }
@@ -241,6 +293,7 @@ function createHub(id: string, admin: Client, members: Client[]): HubState {
     createdBy: admin.device.userPubkey,
     members: new Map([admin, ...members].map(c => [c.device.userPubkey, c.device.encryptionPubkeyHex])),
     admins: new Set([admin.device.userPubkey]),
+    generation: 0,
     envelopes: new Map(),
     tags: [],
     teams: [],
@@ -264,10 +317,50 @@ async function createTag(client: Client, hub: HubState, label: string): Promise<
 
 const HUB = 'hub-a'
 
+async function createTeam(client: Client, name: string, description: string | null): Promise<TeamResponse> {
+  const encryptedName = await client.run(hkm => hkm.encryptForHub(name, LABEL_TEAM_ENCRYPT))
+  const encryptedDescription = description === null
+    ? null
+    : await client.run(hkm => hkm.encryptForHub(description, LABEL_TEAM_ENCRYPT))
+  return client.run(() => h.request(`/hubs/${h.activeHub}/teams`, {
+    method: 'POST',
+    body: JSON.stringify({ id: crypto.randomUUID(), encryptedName, encryptedDescription }),
+  })) as Promise<TeamResponse>
+}
+
+/** Every hub-scoped plaintext as `member` reads it right now (null = unreadable). */
+async function readAll(member: Client, hub: HubState): Promise<string[]> {
+  return member.run(async hkm => {
+    const out: Array<string | null> = []
+    for (const tag of hub.tags) {
+      out.push(await hkm.decryptFromHub(tag.encryptedLabel, LABEL_TAG_ENCRYPT))
+      if (tag.encryptedCategory) out.push(await hkm.decryptFromHub(tag.encryptedCategory, LABEL_TAG_ENCRYPT))
+    }
+    for (const team of hub.teams) {
+      out.push(await hkm.decryptFromHub(team.encryptedName, LABEL_TEAM_ENCRYPT))
+      if (team.encryptedDescription) out.push(await hkm.decryptFromHub(team.encryptedDescription, LABEL_TEAM_ENCRYPT))
+    }
+    return out.map(v => v ?? '<unreadable>')
+  })
+}
+
+/** Whether `key` opens any hub-scoped ciphertext currently stored. */
+function keyOpensAny(key: Uint8Array, hub: HubState): boolean {
+  const attempts: Array<[string, string]> = [
+    ...hub.tags.flatMap(t => [[t.encryptedLabel, LABEL_TAG_ENCRYPT], ...(t.encryptedCategory ? [[t.encryptedCategory, LABEL_TAG_ENCRYPT]] : [])] as Array<[string, string]>),
+    ...hub.teams.flatMap(t => [[t.encryptedName, LABEL_TEAM_ENCRYPT], ...(t.encryptedDescription ? [[t.encryptedDescription, LABEL_TEAM_ENCRYPT]] : [])] as Array<[string, string]>),
+  ]
+  return attempts.some(([ct, label]) => {
+    try { hubFieldDecrypt(key, ct, label); return true } catch { return false }
+  })
+}
+
 beforeEach(() => {
   hubs = new Map()
   h.activeHub = HUB
   h.current = null
+  hooks.beforeApply = null
+  hooks.afterApply = null
 })
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -307,7 +400,8 @@ describe('hub key lifecycle across members', () => {
     // The departed member's envelope is gone; only the remaining members hold one.
     expect(new Set(hub.envelopes.keys())).toEqual(new Set([admin.device.userPubkey, bob.device.userPubkey]))
     expect(new Set(rotation.recipients)).toEqual(new Set([admin.device.userPubkey, bob.device.userPubkey]))
-    expect(rotation.unreadableRecords).toBe(0)
+    expect(rotation.generation).toBe(2)
+    expect(hub.generation).toBe(2)
     // A genuinely new key, and existing hub data was re-sealed under it.
     expect(bytesToHex(admin.device.hubKey ?? new Uint8Array())).not.toBe(bytesToHex(daveOldKey))
     expect(hub.tags[0].encryptedLabel).not.toBe(tagCiphertextBefore)
@@ -396,12 +490,154 @@ describe('hub key lifecycle across members', () => {
     expect(hub.envelopes.size).toBe(0)
   })
 
+  it('refuses to rotate — writing nothing — when a record does not decrypt under the current key', async () => {
+    const admin = await newClient()
+    const bob = await newClient()
+    const hub = createHub(HUB, admin, [bob])
+    await admin.run(hkm => hkm.provisionHubKey(HUB))
+    await createTag(admin, hub, 'Readable')
+    hub.tags.push({
+      id: 'foreign', hubId: HUB, name: 'foreign', encryptedLabel: 'aa'.repeat(40), color: '#000',
+      encryptedCategory: null, createdBy: admin.device.userPubkey, createdAt: '',
+    })
+    const envelopesBefore = new Map(hub.envelopes)
+    const labelsBefore = hub.tags.map(t => t.encryptedLabel)
+
+    const err = await admin.run(hkm => hkm.rotateHubKey(HUB, [bob.device.userPubkey])).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(admin.hkm.HubKeyRotationError)
+    expect((err as InstanceType<Manager['HubKeyRotationError']>).unreadableTagIds).toEqual(['foreign'])
+    expect(hub.generation).toBe(1)
+    expect(hub.envelopes).toEqual(envelopesBefore)
+    expect(hub.tags.map(t => t.encryptedLabel)).toEqual(labelsBefore)
+    expect(await admin.run(hkm => hkm.decryptFromHub(hub.tags[0].encryptedLabel, LABEL_TAG_ENCRYPT))).toBe('Readable')
+  })
+
+  it('refuses a second first key: provisioning a hub that already has one changes nothing', async () => {
+    const admin = await newClient()
+    const other = await newClient()
+    const hub = createHub(HUB, admin, [other])
+    hub.admins.add(other.device.userPubkey)
+    await admin.run(hkm => hkm.provisionHubKey(HUB))
+    const tag = await createTag(admin, hub, 'Intake')
+    const envelopesBefore = new Map(hub.envelopes)
+
+    await expect(other.run(hkm => hkm.provisionHubKey(HUB))).rejects.toBeInstanceOf(other.hkm.HubKeyStaleError)
+    expect(hub.generation).toBe(1)
+    expect(hub.envelopes).toEqual(envelopesBefore)
+    // The refused client did not keep its uncommitted key: it holds the hub's real one.
+    expect(await other.run(hkm => hkm.decryptFromHub(tag.encryptedLabel, LABEL_TAG_ENCRYPT))).toBe('Intake')
+  })
+
   it('refuses to rotate a hub other than the active one', async () => {
     const admin = await newClient()
     createHub(HUB, admin, [])
     await admin.run(hkm => hkm.provisionHubKey(HUB))
     h.activeHub = 'hub-b'
     await expect(admin.run(hkm => hkm.rotateHubKey(HUB, []))).rejects.toThrow(/active hub/)
+  })
+})
+
+describe('interrupted rotation', () => {
+  const PLAINTEXTS = ['Eviction defense', 'Housing', 'Night shift roster', 'Legal observers', 'On-call rota']
+
+  for (const mode of ['request lost', 'response lost'] as const) {
+    for (let failAt = 1; failAt <= 4; failAt++) {
+      it(`keeps every record readable when write #${failAt} of the rotation fails (${mode}), and a retry completes it`, async () => {
+        const admin = await newClient()
+        const bob = await newClient()
+        const dave = await newClient()
+        const hub = createHub(HUB, admin, [bob, dave])
+        await admin.run(hkm => hkm.provisionHubKey(HUB))
+
+        const tag = await createTag(admin, hub, 'Eviction defense')
+        tag.encryptedCategory = await admin.run(hkm => hkm.encryptForHub('Housing', LABEL_TAG_ENCRYPT))
+        await createTag(admin, hub, 'Night shift roster')
+        await createTeam(admin, 'Legal observers', 'On-call rota')
+        await dave.run(hkm => hkm.loadHubKey(HUB))
+        const daveOldKey = dave.device.hubKey
+        if (!daveOldKey) throw new Error('Dave holds no key before departure')
+
+        // The rotation's failAt-th write never lands (request lost) or lands
+        // but the client never learns it did (response lost).
+        let writes = 0
+        const failing = (req: ServerRequest) => {
+          if (req.caller !== admin.device.userPubkey || req.method === 'GET') return
+          if (++writes === failAt) throw new TypeError('network connection lost')
+        }
+        if (mode === 'request lost') hooks.beforeApply = failing
+        else hooks.afterApply = failing
+
+        depart(hub, dave)
+        await admin.run(hkm => hkm.rotateHubKey(HUB, [dave.device.userPubkey])).catch(() => undefined)
+        hooks.beforeApply = null
+        hooks.afterApply = null
+
+        // Whatever point it died at, the remaining member reads EVERYTHING
+        // with the envelope the server now hands them.
+        expect(await bob.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+        expect(await readAll(bob, hub)).toEqual(PLAINTEXTS)
+        // ...and so does the rotating admin, from the server's state.
+        expect(await admin.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+        expect(await readAll(admin, hub)).toEqual(PLAINTEXTS)
+
+        // Recoverable: re-running the rotation completes the revocation.
+        await admin.run(hkm => hkm.rotateHubKey(HUB, [dave.device.userPubkey]))
+        expect(hub.envelopes.has(dave.device.userPubkey)).toBe(false)
+        expect(await bob.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+        expect(await readAll(bob, hub)).toEqual(PLAINTEXTS)
+        expect(keyOpensAny(daveOldKey, hub)).toBe(false)
+      })
+    }
+  }
+})
+
+describe('stale distribution', () => {
+  it('a distribute that lands after a rotation cannot restore the departed member\'s access', async () => {
+    const adminA = await newClient()
+    const adminB = await newClient()
+    const bob = await newClient()
+    const dave = await newClient()
+    const hub = createHub(HUB, adminA, [adminB, bob, dave])
+    hub.admins.add(adminB.device.userPubkey)
+    await adminA.run(hkm => hkm.provisionHubKey(HUB))
+    await createTag(adminA, hub, 'Eviction defense')
+
+    // Admin B unlocks and loads the (current) key; Dave still holds it too.
+    expect(await adminB.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+    expect(await dave.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+    const daveOldKey = dave.device.hubKey
+    if (!daveOldKey) throw new Error('Dave holds no key before departure')
+
+    // Dave departs. B's once-per-session distribute is in flight, and its
+    // envelope write reaches the server only AFTER admin A's rotation has
+    // committed — the late/stale distribute.
+    depart(hub, dave)
+    hooks.beforeApply = async req => {
+      if (req.caller === adminB.device.userPubkey && req.method === 'PUT' && req.path === `/hubs/${HUB}/key`) {
+        hooks.beforeApply = null
+        await adminA.run(hkm => hkm.rotateHubKey(HUB, [dave.device.userPubkey]))
+      }
+    }
+    const staleDistribute = await adminB.run(hkm => hkm.distributeHubKey(HUB)).then(() => null, (err: unknown) => err)
+
+    // The departed member has no envelope, and nothing a remaining member
+    // writes from now on opens under the key Dave still holds.
+    expect(hub.envelopes.has(dave.device.userPubkey)).toBe(false)
+    expect(await bob.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+    await createTag(bob, hub, 'Safe house rota')
+    expect(await readAll(bob, hub)).toEqual(['Eviction defense', 'Safe house rota'])
+    expect(keyOpensAny(daveOldKey, hub)).toBe(false)
+    await expect(dave.run(hkm => hkm.loadHubKey(HUB))).rejects.toMatchObject({ status: 403 })
+
+    // The stale write was refused, not silently applied.
+    expect(staleDistribute).toBeInstanceOf(adminB.hkm.HubKeyStaleError)
+
+    // B's next distribute works from the CURRENT key and still excludes Dave.
+    await adminB.run(hkm => hkm.distributeHubKey(HUB))
+    expect(hub.envelopes.has(dave.device.userPubkey)).toBe(false)
+    expect(await readAll(adminB, hub)).toEqual(['Eviction defense', 'Safe house rota'])
+    expect(await bob.run(hkm => hkm.loadHubKey(HUB))).toBe(true)
+    expect(await readAll(bob, hub)).toEqual(['Eviction defense', 'Safe house rota'])
   })
 })
 

@@ -36,6 +36,16 @@ Feature: Hub Key Lifecycle
     And "Bob"'s new envelope should differ from the original
     And the new envelopes should contain exactly 2 entries
 
+  Scenario: A stale distribute cannot undo a rotation
+    Given a hub with 3 members: "Alice", "Bob", and "Carol"
+    And hub key envelopes are set for all 3 members
+    When "Carol" is removed from the hub
+    And a new hub key is generated and wrapped for remaining members only
+    And a stale distribute re-sends the previous generation's envelopes for all 3 members
+    Then the hub key write should be rejected with 409
+    And "Carol" should receive 404 when fetching their hub key envelope
+    And "Alice" should be able to fetch their hub key envelope
+
   # ── Auth Guards ───────────────────────────────────────────────────
 
   Scenario: Unauthenticated request to hub key endpoint returns 401

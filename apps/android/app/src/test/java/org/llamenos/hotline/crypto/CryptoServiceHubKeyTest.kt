@@ -100,7 +100,8 @@ class CryptoServiceHubKeyTest {
                 enc = "02" + "ab".repeat(32),
                 pubkey = "cd".repeat(32),
                 ct = "AAEC".repeat(16), // base64 placeholder
-            )
+            ),
+            generation = 1,
         )
         cryptoService.loadHubKey("hub-test", envelope)
     }

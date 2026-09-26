@@ -208,6 +208,7 @@ describe('hubs route validation', () => {
     it('rejects empty envelopes array', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
+        expectedGeneration: 1,
         envelopes: [],
       }, 'PUT')
       expect(res.status).toBe(400)
@@ -216,6 +217,7 @@ describe('hubs route validation', () => {
     it('rejects envelope with invalid pubkey', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
+        expectedGeneration: 1,
         envelopes: [{
           pubkey: 'bad',
           enc: VALID_PUBKEY,
@@ -228,6 +230,7 @@ describe('hubs route validation', () => {
     it('rejects envelope with empty ct', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
+        expectedGeneration: 1,
         envelopes: [{
           pubkey: VALID_PUBKEY,
           enc: VALID_PUBKEY,
@@ -237,15 +240,77 @@ describe('hubs route validation', () => {
       expect(res.status).toBe(400)
     })
 
+    it('rejects envelopes without an expected generation', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, '/hubs/hub-1/key', {
+        envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: 'deadbeef' }],
+      }, 'PUT')
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a negative or fractional expected generation', async () => {
+      const app = createApp()
+      for (const expectedGeneration of [-1, 1.5]) {
+        const res = await sendJSON(app, '/hubs/hub-1/key', {
+          expectedGeneration,
+          envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: 'deadbeef' }],
+        }, 'PUT')
+        expect(res.status).toBe(400)
+      }
+    })
+
     it('accepts valid hub key envelopes', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
+        expectedGeneration: 0,
         envelopes: [{
           pubkey: VALID_PUBKEY,
           enc: VALID_PUBKEY_2,
           ct: 'deadbeef',
         }],
       }, 'PUT')
+      expect(res.status).not.toBe(400)
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // POST /hubs/:hubId/key/rotate (atomic hub key rotation)
+  // -----------------------------------------------------------------------
+  describe('POST /hubs/:hubId/key/rotate', () => {
+    const valid = {
+      fromGeneration: 1,
+      envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: 'deadbeef' }],
+      tags: [{ id: 'tag-1', encryptedLabel: 'aa', encryptedCategory: null }],
+      teams: [{ id: 'team-1', encryptedName: 'bb', encryptedDescription: null }],
+    }
+
+    it('rejects a rotation from generation 0 (a hub with no key)', async () => {
+      const res = await sendJSON(createApp(), '/hubs/hub-1/key/rotate', { ...valid, fromGeneration: 0 })
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a rotation without the record lists', async () => {
+      const { tags: _tags, ...withoutTags } = valid
+      const { teams: _teams, ...withoutTeams } = valid
+      expect((await sendJSON(createApp(), '/hubs/hub-1/key/rotate', withoutTags)).status).toBe(400)
+      expect((await sendJSON(createApp(), '/hubs/hub-1/key/rotate', withoutTeams)).status).toBe(400)
+    })
+
+    it('rejects a rotation with no envelopes', async () => {
+      const res = await sendJSON(createApp(), '/hubs/hub-1/key/rotate', { ...valid, envelopes: [] })
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a re-encrypted record with an empty ciphertext', async () => {
+      const res = await sendJSON(createApp(), '/hubs/hub-1/key/rotate', {
+        ...valid,
+        tags: [{ id: 'tag-1', encryptedLabel: '', encryptedCategory: null }],
+      })
+      expect(res.status).toBe(400)
+    })
+
+    it('accepts a valid rotation', async () => {
+      const res = await sendJSON(createApp(), '/hubs/hub-1/key/rotate', valid)
       expect(res.status).not.toBe(400)
     })
   })

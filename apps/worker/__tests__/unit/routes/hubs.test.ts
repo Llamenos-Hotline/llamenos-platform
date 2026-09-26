@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import hubRoutes from '@worker/routes/hubs'
+import { ServiceError } from '@worker/services/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -462,6 +463,7 @@ describe('hubs routes', () => {
   describe('GET /hubs/:hubId/key', () => {
     it('returns envelope for current user', async () => {
       const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({
+        generation: 3,
         envelopes: [
           { pubkey: 'a'.repeat(64), enc: 'd'.repeat(64), ct: 'wrapped' },
           { pubkey: 'c'.repeat(64), enc: 'e'.repeat(64), ct: 'wrapped2' },
@@ -477,10 +479,12 @@ describe('hubs routes', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.envelope.pubkey).toBe('a'.repeat(64))
+      expect(json.generation).toBe(3)
     })
 
     it('returns 404 when no envelope for user', async () => {
       const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({
+        generation: 1,
         envelopes: [{ pubkey: 'c'.repeat(64), enc: 'd'.repeat(64), ct: 'wrapped' }],
       })
       const { app } = createTestApp({
@@ -494,7 +498,7 @@ describe('hubs routes', () => {
     })
 
     it('returns 403 for non-member non-super-admin', async () => {
-      const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ envelopes: [] })
+      const getHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ generation: 0, envelopes: [] })
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }],
@@ -523,8 +527,8 @@ describe('hubs routes', () => {
   // -------------------------------------------------------------------------
 
   describe('PUT /hubs/:hubId/key', () => {
-    it('sets hub key envelopes', async () => {
-      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue(undefined)
+    it('sets hub key envelopes against the expected generation', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ generation: 2 })
       const { app } = createTestApp({
         permissions: ['hubs:manage-keys'],
         serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
@@ -534,6 +538,7 @@ describe('hubs routes', () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          expectedGeneration: 2,
           envelopes: [
             { pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' },
           ],
@@ -542,8 +547,44 @@ describe('hubs routes', () => {
 
       expect(res.status).toBe(200)
       expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', {
+        expectedGeneration: 2,
         envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
       })
+    })
+
+    it('rejects a body without an expected generation', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1/key', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }] }),
+      })
+
+      expect(res.status).toBe(400)
+      expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
+    })
+
+    it('returns 409 when the service refuses a stale generation', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockRejectedValue(
+        new ServiceError(409, 'Hub key write expects generation 1, but the current generation is 2'),
+      )
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1/key', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGeneration: 1, envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }] }),
+      })
+
+      expect(res.status).toBe(409)
     })
 
     it('returns 403 without hubs:manage-keys permission', async () => {
@@ -551,9 +592,71 @@ describe('hubs routes', () => {
       const res = await app.request('/hubs/hub-1/key', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envelopes: [] }),
+        body: JSON.stringify({ expectedGeneration: 1, envelopes: [] }),
       })
       expect(res.status).toBe(403)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // POST /hubs/:hubId/key/rotate — Atomic hub key rotation
+  // -------------------------------------------------------------------------
+
+  describe('POST /hubs/:hubId/key/rotate', () => {
+    const body = {
+      fromGeneration: 1,
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      tags: [{ id: 'tag-1', encryptedLabel: 'aa', encryptedCategory: null }],
+      teams: [{ id: 'team-1', encryptedName: 'bb', encryptedDescription: 'cc' }],
+    }
+
+    it('rotates and returns the new generation', async () => {
+      const rotateHubKeySpy = vi.fn().mockResolvedValue({ generation: 2 })
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { settings: { rotateHubKey: rotateHubKeySpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1/key/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ generation: 2 })
+      expect(rotateHubKeySpy).toHaveBeenCalledWith('hub-1', body)
+    })
+
+    it('returns 409 when the service refuses the rotation', async () => {
+      const rotateHubKeySpy = vi.fn().mockRejectedValue(new ServiceError(409, 'stale'))
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { settings: { rotateHubKey: rotateHubKeySpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1/key/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      expect(res.status).toBe(409)
+    })
+
+    it('returns 403 without hubs:manage-keys permission', async () => {
+      const rotateHubKeySpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['hubs:read', 'tags:update', 'teams:update'],
+        serviceMock: { settings: { rotateHubKey: rotateHubKeySpy } },
+      })
+      const res = await app.request('/hubs/hub-1/key/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      expect(res.status).toBe(403)
+      expect(rotateHubKeySpy).not.toHaveBeenCalled()
     })
   })
 })

@@ -53,7 +53,11 @@ import {
   events as hubCaseEvents,
   providerConfigs,
   users,
+  tags as tagsTable,
+  teams as teamsTable,
 } from '../db/schema'
+import type { z } from 'zod'
+import type { hubKeyEnvelopesBodySchema, rotateHubKeyBodySchema } from '@protocol/schemas/hubs'
 import type { SpamSettings, CallSettings } from '../types'
 import type {
   CustomFieldDefinition,
@@ -122,6 +126,29 @@ export class ServiceError extends Error {
   ) {
     super(message)
     this.name = 'ServiceError'
+  }
+}
+
+type HubKeyTx = Parameters<Parameters<Database['transaction']>[0]>[0]
+type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
+type RotateHubKeyBody = z.infer<typeof rotateHubKeyBodySchema>
+
+/**
+ * A hub-key rotation must re-encrypt EVERY record sealed under the old key.
+ * Refuse (409) when the client's list is not exactly the hub's current set.
+ */
+function assertCoversExactly(kind: string, stored: string[], supplied: string[]): void {
+  const storedSet = new Set(stored)
+  const suppliedSet = new Set(supplied)
+  const missing = stored.filter((id) => !suppliedSet.has(id))
+  const unknown = supplied.filter((id) => !storedSet.has(id))
+  if (missing.length || unknown.length || suppliedSet.size !== supplied.length) {
+    throw new ServiceError(
+      409,
+      `Hub key rotation does not cover the hub's current ${kind} ` +
+        `(${missing.length} missing, ${unknown.length} unknown, ${supplied.length - suppliedSet.size} duplicated); ` +
+        'reload and rotate again',
+    )
   }
 }
 
@@ -2424,19 +2451,30 @@ export class SettingsService {
   // Hub Key Management
   // =========================================================================
 
+  /** Every envelope of the hub's current key, and that key's generation (0 = no key yet). */
   async getHubKeyEnvelopes(hubId: string): Promise<{
+    generation: number
     envelopes: Array<{
       pubkey: string
       enc: string
       ct: string
     }>
   }> {
+    const [hub] = await this.db
+      .select({ generation: hubsTable.hubKeyGeneration })
+      .from(hubsTable)
+      .where(eq(hubsTable.id, hubId))
+    if (!hub) {
+      throw new ServiceError(404, 'Hub not found')
+    }
+
     const rows = await this.db
       .select()
       .from(hubKeys)
       .where(eq(hubKeys.hubId, hubId))
 
     return {
+      generation: hub.generation,
       envelopes: rows.map((r) => ({
         pubkey: r.recipientPubkey,
         enc: r.enc,
@@ -2445,39 +2483,116 @@ export class SettingsService {
     }
   }
 
-  async setHubKeyEnvelopes(
-    hubId: string,
-    data: {
-      envelopes: Array<{
-        pubkey: string
-        enc: string
-        ct: string
-      }>
-    },
-  ): Promise<{ ok: true }> {
-    // Validate hub exists
-    const [hub] = await this.db
-      .select()
+  /**
+   * Lock the hub row for the rest of `tx` and return its current key
+   * generation. Every envelope write goes through this lock, so the generation
+   * check and the write that depends on it cannot interleave with another
+   * writer. The row lock also blocks inserts of new tags/teams for the hub
+   * (their foreign key takes a KEY SHARE lock on it) until `tx` ends.
+   */
+  private async lockHubKeyGeneration(tx: HubKeyTx, hubId: string): Promise<number> {
+    const [hub] = await tx
+      .select({ generation: hubsTable.hubKeyGeneration })
       .from(hubsTable)
       .where(eq(hubsTable.id, hubId))
+      .for('update')
     if (!hub) {
       throw new ServiceError(404, 'Hub not found')
     }
+    return hub.generation
+  }
 
-    // Replace all envelopes in a transaction
-    await this.db.transaction(async (tx) => {
-      await tx.delete(hubKeys).where(eq(hubKeys.hubId, hubId))
-      for (const envelope of data.envelopes) {
-        await tx.insert(hubKeys).values({
-          hubId,
-          recipientPubkey: envelope.pubkey,
-          enc: envelope.enc,
-          ct: envelope.ct,
-        })
+  private async replaceHubKeyEnvelopes(
+    tx: HubKeyTx,
+    hubId: string,
+    generation: number,
+    envelopes: HubKeyEnvelopesBody['envelopes'],
+  ): Promise<void> {
+    await tx.delete(hubKeys).where(eq(hubKeys.hubId, hubId))
+    await tx.insert(hubKeys).values(envelopes.map((envelope) => ({
+      hubId,
+      recipientPubkey: envelope.pubkey,
+      enc: envelope.enc,
+      ct: envelope.ct,
+    })))
+    await tx
+      .update(hubsTable)
+      .set({ hubKeyGeneration: generation, updatedAt: new Date() })
+      .where(eq(hubsTable.id, hubId))
+  }
+
+  /**
+   * Store the envelope set of the hub's key, replacing the previous set of
+   * that same key. See hubKeyEnvelopesBodySchema.
+   *
+   * Refused with 409 — changing nothing — unless `expectedGeneration` is still
+   * the hub's current generation: 0 creates the first key (generation 1) of a
+   * hub that has none; n ≥ 1 re-distributes the current key. An older
+   * generation would re-install a key a departed member still holds; a first
+   * key for a hub that has one would replace the key without re-encrypting the
+   * data sealed under it (that path is rotateHubKey).
+   */
+  async setHubKeyEnvelopes(hubId: string, data: HubKeyEnvelopesBody): Promise<{ generation: number }> {
+    return this.db.transaction(async (tx) => {
+      const current = await this.lockHubKeyGeneration(tx, hubId)
+      if (data.expectedGeneration !== current) {
+        throw new ServiceError(
+          409,
+          `Hub key write expects generation ${data.expectedGeneration}, but the current generation is ${current}`,
+        )
       }
+      const generation = current === 0 ? 1 : current
+      await this.replaceHubKeyEnvelopes(tx, hubId, generation, data.envelopes)
+      return { generation }
     })
+  }
 
-    return { ok: true }
+  /**
+   * Rotate the hub key in ONE transaction: re-encrypted tags and teams, the new
+   * key's envelopes and the generation bump commit together or not at all.
+   *
+   * Refused with 409 — changing nothing — unless `fromGeneration` is still the
+   * current generation (no other rotation got there first) and the supplied
+   * records are exactly the hub's current tags and teams (nothing was created
+   * or deleted since the client decrypted them, so no record is left sealed
+   * under the retired key). An interrupted or refused rotation therefore
+   * always leaves the hub readable under its old key.
+   */
+  async rotateHubKey(hubId: string, data: RotateHubKeyBody): Promise<{ generation: number }> {
+    return this.db.transaction(async (tx) => {
+      const current = await this.lockHubKeyGeneration(tx, hubId)
+      if (current === 0) {
+        throw new ServiceError(409, 'Hub has no key to rotate')
+      }
+      if (data.fromGeneration !== current) {
+        throw new ServiceError(
+          409,
+          `Hub key rotation from generation ${data.fromGeneration} is stale; the current generation is ${current}`,
+        )
+      }
+
+      const hubTags = await tx.select({ id: tagsTable.id }).from(tagsTable).where(eq(tagsTable.hubId, hubId)).for('update')
+      const hubTeams = await tx.select({ id: teamsTable.id }).from(teamsTable).where(eq(teamsTable.hubId, hubId)).for('update')
+      assertCoversExactly('tags', hubTags.map((t) => t.id), data.tags.map((t) => t.id))
+      assertCoversExactly('teams', hubTeams.map((t) => t.id), data.teams.map((t) => t.id))
+
+      for (const tag of data.tags) {
+        await tx
+          .update(tagsTable)
+          .set({ encryptedLabel: tag.encryptedLabel, encryptedCategory: tag.encryptedCategory })
+          .where(and(eq(tagsTable.id, tag.id), eq(tagsTable.hubId, hubId)))
+      }
+      for (const team of data.teams) {
+        await tx
+          .update(teamsTable)
+          .set({ encryptedName: team.encryptedName, encryptedDescription: team.encryptedDescription, updatedAt: new Date() })
+          .where(and(eq(teamsTable.id, team.id), eq(teamsTable.hubId, hubId)))
+      }
+
+      const generation = current + 1
+      await this.replaceHubKeyEnvelopes(tx, hubId, generation, data.envelopes)
+      return { generation }
+    })
   }
 
   // =========================================================================

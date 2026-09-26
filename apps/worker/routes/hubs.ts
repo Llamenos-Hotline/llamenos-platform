@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, requireAnyPermission, checkPermission } from '../middleware/permission-guard'
-import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
+import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, rotateHubKeyBodySchema, rotateHubKeyResponseSchema } from '@protocol/schemas/hubs'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
@@ -373,24 +373,38 @@ routes.get('/:hubId/key',
     }
 
     try {
-      const { envelopes } = await services.settings.getHubKeyEnvelopes(hubId)
+      const { envelopes, generation } = await services.settings.getHubKeyEnvelopes(hubId)
 
       // Return only the envelope for this user
       const myEnvelope = envelopes.find(e => e.pubkey === pubkey)
       if (!myEnvelope) return c.json({ error: 'No key envelope for this user' }, 404)
 
-      return c.json({ envelope: myEnvelope })
+      return c.json({ envelope: myEnvelope, generation })
     } catch {
       return c.json({ error: 'Hub not found' }, 404)
     }
   },
 )
 
-// Set hub key envelopes (admin only — distributes wrapped hub key to all members)
+const hubKeyConflict = {
+  409: { description: 'The write is not for the hub\'s current key generation, or a rotation does not cover every hub-key-encrypted record; nothing was changed' },
+}
+
+function hubKeyErrorResponse(c: { json: (body: { error: string }, status: 404 | 409 | 500) => Response }, err: unknown, fallback: string): Response {
+  if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
+    return c.json({ error: err.message }, err.status)
+  }
+  const message = err instanceof Error ? err.message : fallback
+  return c.json({ error: message }, 500)
+}
+
+// Store the envelopes of the first key, or re-distribute the CURRENT key to
+// the current member set. Refused (409) for any other generation, so a stale
+// key set can never replace a newer one.
 routes.put('/:hubId/key',
   describeRoute({
     tags: ['Hubs'],
-    summary: 'Set hub key envelopes for all members',
+    summary: 'Set hub key envelopes for the current key generation',
     responses: {
       200: {
         description: 'Hub key envelopes set',
@@ -402,6 +416,7 @@ routes.put('/:hubId/key',
       },
       ...authErrors,
       ...notFoundError,
+      ...hubKeyConflict,
     },
   }),
   requirePermission('hubs:manage-keys'),
@@ -415,9 +430,43 @@ routes.put('/:hubId/key',
       await services.settings.setHubKeyEnvelopes(hubId, body)
       return c.json({ ok: true })
     } catch (err) {
-      const status = (err as { status?: number }).status ?? 500
-      const message = err instanceof Error ? err.message : 'Failed to set hub key'
-      return c.json({ error: message }, status as 404 | 500)
+      return hubKeyErrorResponse(c, err, 'Failed to set hub key')
+    }
+  },
+)
+
+// Rotate the hub key: new envelopes + every hub-key-encrypted record
+// re-encrypted under the new key, committed atomically.
+routes.post('/:hubId/key/rotate',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'Rotate the hub key and re-encrypt hub data in one atomic commit',
+    responses: {
+      200: {
+        description: 'Hub key rotated',
+        content: {
+          'application/json': {
+            schema: resolver(rotateHubKeyResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+      ...hubKeyConflict,
+    },
+  }),
+  requirePermission('hubs:manage-keys'),
+  validator('json', rotateHubKeyBodySchema),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    const services = c.get('services')
+    const body = c.req.valid('json')
+
+    try {
+      const { generation } = await services.settings.rotateHubKey(hubId, body)
+      return c.json({ generation })
+    } catch (err) {
+      return hubKeyErrorResponse(c, err, 'Failed to rotate hub key')
     }
   },
 )
