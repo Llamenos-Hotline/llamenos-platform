@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.UserIdentityInitializer
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
 
@@ -43,6 +44,9 @@ class AuthViewModelTest {
     private lateinit var cryptoService: CryptoService
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var biometricKeyStore: FakeBiometricKeyStore
+    private val userIdentity = object : UserIdentityInitializer {
+        override fun ensureInitializedInBackground() = Unit
+    }
 
     @Before
     fun setup() {
@@ -59,7 +63,7 @@ class AuthViewModelTest {
     }
 
     private fun createViewModel(): AuthViewModel {
-        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore)
+        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore, userIdentity)
     }
 
     /**

@@ -304,6 +304,22 @@ class OfflineQueue @Inject constructor(
         /** Whether an HTTP method is a write operation eligible for queueing. */
         fun isQueueableMethod(method: String): Boolean =
             method.uppercase() in QUEUEABLE_METHODS
+
+        /**
+         * Identity writes — sigchain links and PUK envelopes — are never queued.
+         * A link is signed over its sequence number and the chain head, and a PUK
+         * envelope upsert replaces the stored envelope for its generation, so a
+         * replayed stale write could overwrite the envelope of the PUK the chain
+         * actually names. Identity initialisation retries from the server's
+         * current chain instead (see UserIdentityService).
+         */
+        fun isIdentityWrite(path: String): Boolean =
+            path.startsWith("/api/puk/") ||
+                (path.startsWith("/api/users/") && path.endsWith("/sigchain"))
+
+        /** Whether a failed request should be queued for offline replay. */
+        fun isQueueable(method: String, path: String): Boolean =
+            isQueueableMethod(method) && !isIdentityWrite(path)
     }
 }
 

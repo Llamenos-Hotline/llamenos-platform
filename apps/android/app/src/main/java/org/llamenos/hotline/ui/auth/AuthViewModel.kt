@@ -19,6 +19,7 @@ import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
+import org.llamenos.hotline.crypto.UserIdentityInitializer
 import javax.inject.Inject
 
 /**
@@ -82,6 +83,7 @@ class AuthViewModel @Inject constructor(
     private val cryptoService: CryptoService,
     private val keystoreService: KeyValueStore,
     private val biometricKeyStore: BiometricKeyStore,
+    private val userIdentity: UserIdentityInitializer,
 ) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -209,6 +211,10 @@ class AuthViewModel @Inject constructor(
                 keystoreService.store(KeystoreService.KEY_ENCRYPTION_PUBKEY, encrypted.state.encryptionPubkeyHex)
                 keystoreService.store(KeystoreService.KEY_DEVICE_ID, encrypted.state.deviceId)
 
+                // Sigchain genesis + first PUK. Runs once the server knows this user,
+                // so it is also retried after every unlock.
+                userIdentity.ensureInitializedInBackground()
+
                 // Clear PIN from UI state after successful encryption
                 _uiState.update {
                     it.copy(
@@ -295,6 +301,9 @@ class AuthViewModel @Inject constructor(
 
                 // Success — reset failed attempts
                 ks?.resetFailedAttempts()
+
+                // Create or resume the user's sigchain genesis + first PUK (idempotent).
+                userIdentity.ensureInitializedInBackground()
 
                 _uiState.update {
                     it.copy(

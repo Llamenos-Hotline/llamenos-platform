@@ -4,9 +4,13 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.model.NotePayload
 import org.llamenos.protocol.CryptoLabels
 import org.llamenos.protocol.HubKeyEnvelopeResponse
+import org.llamenos.protocol.SharedDistributePukEnvelopesBodyEnvelope
 import org.llamenos.protocol.RecipientEnvelope
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -168,6 +172,17 @@ data class RecoveryGroupKeypair(
  */
 data class EphemeralKeyResult(
     val publicKeyHex: String,
+)
+
+/**
+ * The first Per-User Key of a new user: its public keys (bound into the sigchain by the
+ * `puk_epoch` link) and the seed's HPKE envelope sealed to this device.
+ */
+data class InitialPuk(
+    val generation: Int,
+    val signPubkeyHex: String,
+    val dhPubkeyHex: String,
+    val envelope: SharedDistributePukEnvelopesBodyEnvelope,
 )
 
 class CryptoException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -525,15 +540,33 @@ class CryptoService @Inject constructor() {
 
     // ---- PUK Operations ----
 
-    /** Create the initial Per-User Key (generation 1). */
-    suspend fun createInitialPuk(): String = withContext(computeDispatcher) {
+    /**
+     * Create the initial Per-User Key (generation 1), HPKE-sealed to this device.
+     *
+     * The envelope is sealed under `LABEL_PUK_WRAP_TO_DEVICE` with AAD
+     * `"<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>"` (packages/crypto `puk::create_initial_puk`).
+     * The FFI also returns the raw seed; it is dropped here — the device recovers the
+     * seed from its envelope, so it never needs to live in JVM memory.
+     */
+    suspend fun createInitialPuk(): InitialPuk = withContext(computeDispatcher) {
         check(nativeLibLoaded) { "Native crypto library not loaded." }
         if (!isUnlocked) throw CryptoException("No key loaded")
-        try {
+        val resultJson = try {
             org.llamenos.core.mobilePukCreate()
         } catch (e: org.llamenos.core.CryptoException) {
             throw CryptoException("PUK creation failed: ${e.message}", e)
         }
+        val result = json.parseToJsonElement(resultJson).jsonObject
+        val pukState = result.getValue("pukState").jsonObject
+        InitialPuk(
+            generation = pukState.getValue("generation").jsonPrimitive.int,
+            signPubkeyHex = pukState.getValue("signPubkeyHex").jsonPrimitive.content,
+            dhPubkeyHex = pukState.getValue("dhPubkeyHex").jsonPrimitive.content,
+            envelope = json.decodeFromJsonElement(
+                SharedDistributePukEnvelopesBodyEnvelope.serializer(),
+                result.getValue("envelope"),
+            ),
+        )
     }
 
     /**
@@ -640,24 +673,29 @@ class CryptoService @Inject constructor() {
         }
     }
 
-    /** Unwrap a PUK seed from an HPKE envelope using the device's X25519 key. */
-    suspend fun unwrapPukSeed(
-        envelope: HpkeEnvelope,
-        expectedLabel: String,
-    ): String = withContext(computeDispatcher) {
+    /**
+     * Open this device's PUK envelope and return the seed (hex).
+     *
+     * The AAD is bound to THIS device's ID (`"<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>"`),
+     * never to an ID supplied by the server, so an envelope addressed to another device
+     * cannot be opened here.
+     */
+    suspend fun unwrapPukSeed(envelope: SharedDistributePukEnvelopesBodyEnvelope): String = withContext(computeDispatcher) {
         check(nativeLibLoaded) { "Native crypto library not loaded." }
         if (!isUnlocked) throw CryptoException("No key loaded")
+        val ownDeviceId = deviceId ?: throw CryptoException("No device ID loaded")
+        val aad = "${CryptoLabels.LABEL_PUK_WRAP_TO_DEVICE}:$ownDeviceId"
         try {
             val ffiEnvelope = org.llamenos.core.HpkeEnvelope(
                 v = envelope.v.toUByte(),
-                labelId = envelope.labelId.toUByte(),
+                labelId = envelope.labelID.toUByte(),
                 enc = envelope.enc,
                 ct = envelope.ct,
             )
             org.llamenos.core.mobilePukUnwrapSeed(
                 envelope = ffiEnvelope,
-                expectedLabel = expectedLabel,
-                aadHex = "",
+                expectedLabel = CryptoLabels.LABEL_PUK_WRAP_TO_DEVICE,
+                aadHex = aad.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) },
             )
         } catch (e: org.llamenos.core.CryptoException) {
             throw CryptoException("PUK seed unwrap failed: ${e.message}", e)

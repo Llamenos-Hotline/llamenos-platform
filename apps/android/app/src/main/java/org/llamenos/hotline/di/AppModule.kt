@@ -7,6 +7,8 @@ import dagger.hilt.components.SingletonComponent
 import org.llamenos.hotline.crypto.BiometricKeyStore
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.UserIdentityInitializer
+import org.llamenos.hotline.crypto.UserIdentityService
 import javax.inject.Singleton
 
 /**
@@ -26,6 +28,7 @@ import javax.inject.Singleton
  *   AuthInterceptor     (CryptoService)
  *   ApiService          (AuthInterceptor, KeyValueStore)
  *   WebSocketService    (CryptoService, KeyValueStore)
+ *   UserIdentityService (CryptoService, ApiService) -> UserIdentityInitializer
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -38,4 +41,8 @@ abstract class AppModule {
     @Binds
     @Singleton
     abstract fun bindBiometricKeyStore(keystoreService: KeystoreService): BiometricKeyStore
+
+    @Binds
+    @Singleton
+    abstract fun bindUserIdentityInitializer(service: UserIdentityService): UserIdentityInitializer
 }

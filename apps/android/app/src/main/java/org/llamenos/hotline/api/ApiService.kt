@@ -193,7 +193,7 @@ class ApiService @Inject constructor(
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (OfflineQueue.isQueueable(httpMethod, path)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")
@@ -251,7 +251,7 @@ class ApiService @Inject constructor(
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (OfflineQueue.isQueueable(httpMethod, path)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")
