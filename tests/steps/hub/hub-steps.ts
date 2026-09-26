@@ -133,10 +133,13 @@ Given('a volunteer assigned to multiple hubs', async ({ page, backendRequest: re
   await addHubMemberViaApi(request, secondHubId, vol.pubkey)
   await loginAsVolunteer(page, vol.nsec)
   // Record after login (a full page load wipes window state); later steps read
-  // this to pick the created hub out of the switcher options.
-  await page.evaluate((id) => {
-    ;(window as unknown as Record<string, unknown>).__test_second_hub_id = id
-  }, secondHubId)
+  // the hub id to pick the created hub out of the switcher options, and the
+  // volunteer pubkey to put them in that hub's ring set (multi-hub call steps).
+  await page.evaluate(({ id, pubkey }) => {
+    const w = window as unknown as Record<string, unknown>
+    w.__test_second_hub_id = id
+    w.__test_multi_hub_volunteer_pubkey = pubkey
+  }, { id: secondHubId, pubkey: vol.pubkey })
 })
 
 Then('the hub selector should be visible', async ({ page }) => {

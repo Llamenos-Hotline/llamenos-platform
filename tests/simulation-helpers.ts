@@ -71,7 +71,7 @@ export interface SimulateIncomingCallOptions {
   language?: string
   /** Hub ID override. Optional. */
   hubId?: string
-  /** When true, returns error if no volunteers are on shift. Optional. */
+  /** When true, errors if the call would ring nobody (on shift / fallback group, available, hub access). Optional. */
   checkVolunteers?: boolean
 }
 

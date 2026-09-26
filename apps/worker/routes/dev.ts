@@ -8,6 +8,8 @@ import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedDemoDataset } from '../services/demo-seeder'
+import { ServiceError } from '../services/settings'
+import { resolveRingableVolunteers } from '../services/ringing'
 import { DEMO_HUB } from '../lib/demo-dataset'
 import { demoIdentities } from '../lib/demo-identities'
 import { getDb } from '../db'
@@ -769,7 +771,7 @@ interface SimulateIncomingCallBody {
   callerNumber: string
   language?: string
   hubId?: string
-  /** When true, returns 422 if no volunteers are on shift (mirrors real telephony routing) */
+  /** When true, returns 422 if the call would ring nobody (same ring set as real telephony routing) */
   checkVolunteers?: boolean
 }
 
@@ -837,15 +839,15 @@ dev.post('/test-simulate/incoming-call', async (c) => {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }
 
-  // Optionally check for on-shift volunteers (mirrors real telephony routing)
+  // Optionally refuse the call when nobody would be rung — the same ring set
+  // (on shift → fallback group; active, not on break, not on a live call, hub
+  // access) that real
+  // telephony routing rings and that the answer route accepts. Real routing never
+  // registers a ringing call nobody can answer; this makes a test that forgot to
+  // put anyone in the ring set fail here, not later as a 403 on answer.
   if (body.checkVolunteers) {
-    let volunteerPubkeys: string[] = []
-    try {
-      volunteerPubkeys = await services.shifts.getCurrentVolunteers(hubId)
-    } catch {
-      // Shifts not configured — proceed with empty list
-    }
-    if (volunteerPubkeys.length === 0) {
+    const ringable = await resolveRingableVolunteers(services, hubId)
+    if (!ringable || ringable.available.length === 0) {
       return c.json({ error: 'No volunteers available', status: 'no-volunteers' }, 422)
     }
   }
@@ -879,7 +881,14 @@ dev.post('/test-simulate/answer-call', async (c) => {
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
   if (!call) return c.json({ error: 'Call not found' }, 404)
-  await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+  try {
+    await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+  } catch (err) {
+    if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
+      return c.json({ error: err.message }, err.status)
+    }
+    throw err
+  }
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests

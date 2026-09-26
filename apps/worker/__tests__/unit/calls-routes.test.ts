@@ -1,8 +1,20 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { hashPhone } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
+import { ServiceError } from '@worker/services/settings'
+import { cancelLosingLegs } from '@worker/services/ringing'
+import { DEFAULT_ROLES } from '@shared/permissions'
+import type { Role } from '@shared/permissions'
+
+// Ring-leg cancellation talks to the telephony provider — covered in ringing-service.test.ts.
+// Here we only assert the answer route invokes it (and only after winning).
+vi.mock('@worker/services/ringing', async (orig) => ({
+  ...(await orig<typeof import('@worker/services/ringing')>()),
+  cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 
 const TEST_HMAC_SECRET = 'a'.repeat(64) // gitleaks:allow
 
@@ -98,6 +110,23 @@ function makeMockAuditService() {
 function makeMockSettingsService() {
   return {
     getTelephonyProvider: vi.fn().mockResolvedValue(null),
+    getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+  }
+}
+
+/** Every roster user is a volunteer member of the hub the tests answer in. */
+const HUB_MEMBER = { roles: [] as string[], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] }
+
+/** Volunteers a call would ring: on shift, active, not on break, members of hub-1. */
+function makeRingRoster(onShift: string[], users = onShift) {
+  return {
+    shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(onShift) },
+    identity: {
+      getUsers: vi.fn().mockResolvedValue({
+        users: users.map(pubkey => ({ pubkey, active: true, onBreak: false, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER })),
+      }),
+    },
   }
 }
 
@@ -109,6 +138,7 @@ function makeServices(overrides: Record<string, unknown> = {}) {
     records: makeMockRecordsService(),
     audit: makeMockAuditService(),
     settings: makeMockSettingsService(),
+    ...makeRingRoster(['a'.repeat(64)]),
     ...overrides,
   }
 }
@@ -308,55 +338,100 @@ describe('Calls Routes', () => {
   })
 
   describe('POST /:callId/answer', () => {
-    it('answers a call and returns the call object', async () => {
-      const callsSvc = makeMockCallsService()
-      callsSvc.answerCall.mockResolvedValue({ callId: 'call-1', status: 'in-progress' })
+    const ME = 'a'.repeat(64)
+    const ringingCall = { callId: 'call-1', hubId: 'hub-1', status: 'ringing', answeredBy: null }
 
-      const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+    function answerApp(callsSvc = makeMockCallsService(), extra: Record<string, unknown> = {}) {
+      callsSvc.getActiveCallById.mockResolvedValue(ringingCall)
+      const services = makeServices({ calls: callsSvc, ...extra })
+      const { app } = createTestApp({ permissions: ['calls:answer'], services })
+      return { app, services, callsSvc }
+    }
+
+    beforeEach(() => {
+      vi.mocked(cancelLosingLegs).mockClear()
+    })
+
+    it('answers a call, audits it, and cancels the other ringing legs', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.answerCall.mockResolvedValue({ callId: 'call-1', hubId: 'hub-1', callerLast4: '1234', status: 'in-progress' })
+      const { app, services } = answerApp(callsSvc)
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.call.status).toBe('in-progress')
-      expect(callsSvc.answerCall).toHaveBeenCalledWith('hub-1', 'call-1', 'a'.repeat(64))
+      expect(callsSvc.answerCall).toHaveBeenCalledWith('hub-1', 'call-1', ME)
+      expect((services.audit as ReturnType<typeof makeMockAuditService>).log).toHaveBeenCalled()
+      // In-app answer: no winning phone leg, so every phone leg is a loser.
+      expect(cancelLosingLegs).toHaveBeenCalledWith(expect.anything(), services, 'hub-1', 'call-1')
     })
 
-    it('returns 409 when call already answered', async () => {
+    it('returns 404 when the call does not exist', async () => {
       const callsSvc = makeMockCallsService()
-      const err = new Error('Call already answered') as Error & { status: number }
-      err.status = 409
-      callsSvc.answerCall.mockRejectedValue(err)
-
       const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+      const { app } = createTestApp({ permissions: ['calls:answer'], services })
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(404)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 409 without answering when the call is already in progress', async () => {
+      const callsSvc = makeMockCallsService()
+      const { app } = answerApp(callsSvc)
+      callsSvc.getActiveCallById.mockResolvedValue({ ...ringingCall, status: 'in-progress', answeredBy: 'b'.repeat(64) })
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(409)
-      const body = await res.json()
-      expect(body.error).toBe('Call already answered')
+      expect((await res.json()).error).toBe('Call already answered')
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+      expect(cancelLosingLegs).not.toHaveBeenCalled()
+    })
+
+    it('returns 409 and does no side effects when another answer wins the race', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.answerCall.mockRejectedValue(new ServiceError(409, 'Call already answered'))
+      const { app, services } = answerApp(callsSvc)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toBe('Call already answered')
+      expect((services.audit as ReturnType<typeof makeMockAuditService>).log).not.toHaveBeenCalled()
+      expect(cancelLosingLegs).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer was not rung for this call', async () => {
+      const callsSvc = makeMockCallsService()
+      // Someone else is on shift; the caller is not.
+      const { app } = answerApp(callsSvc, makeRingRoster(['b'.repeat(64)]))
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer is on shift but on break (not rung)', async () => {
+      const callsSvc = makeMockCallsService()
+      const roster = makeRingRoster([ME])
+      roster.identity.getUsers.mockResolvedValue({
+        users: [{ pubkey: ME, active: true, onBreak: true, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER }],
+      })
+      const { app } = answerApp(callsSvc, roster)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
     })
 
     it('returns 500 on generic answer failure', async () => {
       const callsSvc = makeMockCallsService()
       callsSvc.answerCall.mockRejectedValue(new Error('DB failure'))
-
-      const services = makeServices({ calls: callsSvc })
-      const { app } = createTestApp({
-        permissions: ['calls:answer'],
-        services,
-      })
+      const { app } = answerApp(callsSvc)
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(500)
-      const body = await res.json()
-      expect(body.error).toBe('Failed to answer call')
+      expect((await res.json()).error).toBe('Failed to answer call')
     })
 
     it('returns 403 when permission is missing', async () => {
