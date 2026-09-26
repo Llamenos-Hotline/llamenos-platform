@@ -480,9 +480,16 @@ export class CallsService {
     return row ?? null
   }
 
-  /** Mark a call as having a voicemail */
+  /**
+   * Mark a call as having a voicemail.
+   *
+   * The call is normally still in `active_calls`; if the caller's leg already ended and the
+   * call moved to `call_records`, the flag is set there instead. A call that exists in
+   * neither is a bug upstream (the record must be created before ringing — see
+   * `startParallelRinging`), so this throws 404 rather than silently updating zero rows.
+   */
   async markVoicemail(hubId: string, callId: string): Promise<{ ok: true }> {
-    await this.db
+    const updatedActive = await this.db
       .update(activeCalls)
       .set({ hasVoicemail: true })
       .where(
@@ -491,6 +498,24 @@ export class CallsService {
           eq(activeCalls.hubId, hubId),
         ),
       )
+      .returning({ callId: activeCalls.callId })
+
+    if (updatedActive.length > 0) return { ok: true }
+
+    const updatedHistory = await this.db
+      .update(callRecords)
+      .set({ hasVoicemail: true })
+      .where(
+        and(
+          eq(callRecords.callId, callId),
+          eq(callRecords.hubId, hubId),
+        ),
+      )
+      .returning({ callId: callRecords.callId })
+
+    if (updatedHistory.length === 0) {
+      throw new ServiceError(404, 'Call not found')
+    }
     return { ok: true }
   }
 

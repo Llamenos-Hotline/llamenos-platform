@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import type { Services } from '@worker/services'
+import { ServiceError } from '@worker/services/settings'
 // Ensure the crypto FFI mock is loaded before any code that imports @llamenos/crypto/ffi.
 // The real ffi.ts uses bun:ffi to load a native .so — unavailable in the Vitest environment.
 import '@worker/__tests__/mocks/llamenos-crypto-ffi'
@@ -814,7 +815,38 @@ describe('Telephony routes', () => {
       })
       expect(res.status).toBe(200)
       expect(services.calls.markVoicemail).toHaveBeenCalledWith('hub-1', 'CA-vm')
+      // The call is closed so it lands in history as unanswered + hasVoicemail (#1043)
+      expect(services.calls.endCall).toHaveBeenCalledWith('hub-1', 'CA-vm')
       expect(adapter.emptyResponse).toHaveBeenCalled()
+    })
+
+    it('tolerates the call having already ended', async () => {
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'completed', recordingSid: 'RE-vm', callSid: 'CA-vm' })
+      services.calls.endCall = vi.fn().mockRejectedValue(new ServiceError(404, 'Call not found'))
+
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/voicemail-recording?hub=hub-1&callSid=CA-vm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed&RecordingSid=RE-vm',
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('does not swallow a missing call record: markVoicemail failures surface', async () => {
+      adapter.parseRecordingWebhook = vi.fn().mockResolvedValue({ status: 'completed', recordingSid: 'RE-vm', callSid: 'CA-none' })
+      services.calls.markVoicemail = vi.fn().mockRejectedValue(new ServiceError(404, 'Call not found'))
+
+      const app = await createTestApp(adapter, services)
+      // Mirror the production global handler (apps/worker/app.ts) for ServiceError
+      app.onError((err, c) => c.json({ error: err.message }, err instanceof ServiceError ? (err.status as 404) : 500))
+      const res = await app.request('/api/telephony/voicemail-recording?hub=hub-1&callSid=CA-none', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'RecordingStatus=completed&RecordingSid=RE-vm',
+      })
+      expect(res.status).toBe(404)
+      expect(services.calls.endCall).not.toHaveBeenCalled()
     })
 
     it('does nothing on non-completed status', async () => {
