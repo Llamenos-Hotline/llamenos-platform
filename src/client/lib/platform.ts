@@ -14,6 +14,7 @@
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import type { AdminHpkeRecipient } from './admin-recipient'
+import type { PukHpkeEnvelope } from '@protocol/schemas'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -143,10 +144,14 @@ export interface PukState {
   dhPubkeyHex: string    // X25519 (64 hex chars)
 }
 
-/** PUK creation result. Seed stays in Rust CryptoState — never exposed to JS. */
+/**
+ * PUK creation result. Seed stays in Rust CryptoState — never exposed to JS.
+ * `envelope` is the v3 HPKE envelope of the seed, sealed to this device under
+ * LABEL_PUK_WRAP_TO_DEVICE with AAD `<label>:<deviceId>` (packages/crypto puk.rs).
+ */
 export interface PukCreateResult {
   pukState: PukState
-  envelope: HpkeEnvelope
+  envelope: PukHpkeEnvelope
 }
 
 /** PUK rotation result. */

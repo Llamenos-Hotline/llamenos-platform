@@ -51,6 +51,7 @@ import { IdentityService } from '../../services/identity'
 import { ServiceError } from '../../services/settings'
 import { ed25519Sign, ed25519PubkeyFromSeed } from '../mocks/llamenos-crypto-ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
+import type { SigchainLinkType } from '@protocol/schemas/sigchain'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -151,8 +152,8 @@ const USER_PUBKEY = bytesToHex(ed25519PubkeyFromSeed(identitySeed))
 
 interface LinkInput {
   seqNo: number
-  linkType: string
-  payload: unknown
+  linkType: SigchainLinkType
+  payload: Record<string, unknown>
   signature: string
   /** null for genesis (seqNo 1); '' accepted as a legacy alias. */
   prevHash: string | null
@@ -162,15 +163,29 @@ interface LinkInput {
   timestamp: string
 }
 
-/** Build a correctly-signed link extending `prevHash` at `seqNo`. */
+/** A genesis payload naming the sigchain owner's own device (the server validates its shape). */
+function genesisPayload(deviceId = 'dev-1'): Record<string, unknown> {
+  return { type: 'user_init', deviceId, devicePubkey: USER_PUBKEY, deviceEncryptionPubkey: 'bb'.repeat(32) }
+}
+
+/** A device_add payload authorising another device. */
+function deviceAddPayload(deviceId: string): Record<string, unknown> {
+  return { type: 'device_add', deviceId, devicePubkey: 'cc'.repeat(32), deviceEncryptionPubkey: 'dd'.repeat(32) }
+}
+
+/**
+ * Build a correctly-signed link extending `prevHash` at `seqNo`. The link type
+ * follows the payload (`user_init` → genesis). The signer defaults to the
+ * owner's identity key — the only signer the generic append route accepts.
+ */
 function buildLink(
   seqNo: number,
   prevHash: string | null,
-  payload: unknown,
+  payload: Record<string, unknown>,
   meta: { signerDeviceId?: string; signerPubkey?: string; timestamp?: string } = {},
 ): LinkInput {
   const signerDeviceId = meta.signerDeviceId ?? 'dev-1'
-  const signerPubkey = meta.signerPubkey ?? 'aa'.repeat(32)
+  const signerPubkey = meta.signerPubkey ?? USER_PUBKEY
   const timestamp = meta.timestamp ?? '2026-01-01T00:00:00Z'
   const hash = computeEntryHash(
     seqNo,
@@ -181,7 +196,8 @@ function buildLink(
     payload,
   )
   const signature = bytesToHex(ed25519Sign(identitySeed, hexToBytes(hash)))
-  return { seqNo, linkType: 'device_add', payload, signature, prevHash, hash, signerDeviceId, signerPubkey, timestamp }
+  const linkType: SigchainLinkType = payload.type === 'user_init' ? 'genesis' : 'device_add'
+  return { seqNo, linkType, payload, signature, prevHash, hash, signerDeviceId, signerPubkey, timestamp }
 }
 
 beforeAll(async () => {
@@ -216,7 +232,7 @@ beforeEach(async () => {
 describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)', () => {
   it('lets exactly one of N concurrent appends at the same seqNo succeed; the rest get a 409', async () => {
     // Genesis is seqNo 1 with prevHash null (#1537 crate-verifier contract).
-    const genesis = buildLink(1, null, { type: 'user_init', deviceId: 'dev-1' })
+    const genesis = buildLink(1, null, genesisPayload())
     const genesisLink = await service.appendSigchainLink(USER_PUBKEY, genesis)
 
     const CONCURRENCY = 8
@@ -224,7 +240,7 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
     // observed head (seqNo=2, prevHash=genesis.hash) — exactly what two
     // devices racing to add themselves would do.
     const attempts = Array.from({ length: CONCURRENCY }, (_, i) =>
-      buildLink(2, genesisLink.hash, { type: 'device_add', deviceId: `new-device-${i}` }),
+      buildLink(2, genesisLink.hash, deviceAddPayload(`new-device-${i}`)),
     )
 
     const results = await Promise.allSettled(
@@ -263,12 +279,12 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
   })
 
   it('serializes concurrent appends into a single valid chain across many rounds', async () => {
-    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, { type: 'user_init' }))
+    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, genesisPayload()))
 
     for (let round = 0; round < 5; round++) {
       const nextSeqNo = round + 2
       const attempts = Array.from({ length: 4 }, (_, i) =>
-        buildLink(nextSeqNo, head.hash, { type: 'device_add', deviceId: `round-${round}-writer-${i}` }),
+        buildLink(nextSeqNo, head.hash, deviceAddPayload(`round-${round}-writer-${i}`)),
       )
       const results = await Promise.allSettled(
         attempts.map((link) => service.appendSigchainLink(USER_PUBKEY, link)),
@@ -302,7 +318,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
   it('serializes revoke + appends: exactly one racer wins; losers get a 409, never a 500', async () => {
     await service.appendSigchainLink(
       USER_PUBKEY,
-      buildLink(1, null, { type: 'user_init', deviceId: 'dev-1' }),
+      buildLink(1, null, genesisPayload()),
     )
 
     const ROUNDS = 10
@@ -331,7 +347,7 @@ describe('IdentityService.revokeDevice racing a concurrent sigchain append (#114
       // Two competing appends — other devices racing to join at the same
       // seqNo — so each round has three concurrent writers at the head.
       const addLinks = [0, 1].map((i) =>
-        buildLink(nextSeqNo, prevHash, { type: 'device_add', deviceId: `dev-r${round}-${i}` }),
+        buildLink(nextSeqNo, prevHash, deviceAddPayload(`dev-r${round}-${i}`)),
       )
 
       const [revokeResult, ...appendResults] = await Promise.allSettled([

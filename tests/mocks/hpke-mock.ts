@@ -95,12 +95,20 @@ export function labelToId(label: string): number {
 
 // ── HPKE (RFC 9180, X25519-HKDF-SHA256-AES256GCM) ──────────────────
 
+/** Wire shape of packages/crypto `HpkeEnvelope` (serde camelCase). */
+export interface MockHpkeEnvelope {
+  v: number
+  labelId: number
+  enc: string
+  ct: string
+}
+
 export async function hpkeSealMock(
   plaintext: Uint8Array,
   recipientPubkeyHex: string,
   label: string,
   aad: Uint8Array,
-): Promise<{ v: number; labelId: number; enc: string; ct: string }> {
+): Promise<MockHpkeEnvelope> {
   const labelId = labelToId(label)
   const recipientPublicKey = await suite.importKey(
     'raw',
@@ -123,7 +131,7 @@ export async function hpkeSealMock(
 }
 
 export async function hpkeOpenMock(
-  envelope: { v: number; labelId: number; enc: string; ct: string },
+  envelope: MockHpkeEnvelope,
   recipientSecretHex: string,
   expectedLabel: string,
   aad: Uint8Array,
