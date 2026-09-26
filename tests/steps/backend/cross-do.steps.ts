@@ -64,7 +64,13 @@ Before({ tags: '@backend' }, async ({ world }) => {
 // ─── Volunteer Onboarding → Call → Note ─────────────────────────────
 
 When('an admin creates a volunteer', async ({ request, world }) => {
-  const vol = await createVolunteerViaApi(request, { name: uniqueName('XDO Vol') })
+  // Hub membership is the isolation boundary (#1037): the volunteer must be a
+  // member of the scenario hub to answer its calls and write its notes — a
+  // global volunteer role carries no authority inside any hub.
+  const vol = await createVolunteerViaApi(request, {
+    name: uniqueName('XDO Vol'),
+    hubId: getScenarioState(world).hubId,
+  })
   getCrossDoState(world).volunteerPubkey = vol.pubkey
   getCrossDoState(world).volunteerDeviceKey = vol.deviceKey
 })
@@ -111,10 +117,12 @@ When('the volunteer writes a note for the call', async ({ request, world }) => {
     },
     getCrossDoState(world).volunteerDeviceKey!,
   )
-  if (status < 300) {
-    getCrossDoState(world).noteId = (data as Record<string, unknown>)?.id as string
-      ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
-  }
+  // Fail here, not three steps later at the audit assertion, if the volunteer
+  // is refused.
+  expect(status).toBe(201)
+  getCrossDoState(world).noteId = (data as Record<string, unknown>)?.id as string
+    ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
+  expect(getCrossDoState(world).noteId).toBeTruthy()
 })
 
 Then('the call history should show a completed call', async ({ request, world }) => {
@@ -130,9 +138,9 @@ Then('the call history should show a completed call', async ({ request, world })
   expect(call!.status).toBe('completed')
 })
 
-Then('the notes list should contain the volunteer\'s note', async ({request, world: _world}) => {
-  const { notes } = await listNotesViaApi(request)
-  expect(notes.length).toBeGreaterThan(0)
+Then('the notes list should contain the volunteer\'s note', async ({request, world}) => {
+  const { notes } = await listNotesViaApi(request, { hubId: getScenarioState(world).hubId })
+  expect(notes.map(n => n.id)).toContain(getCrossDoState(world).noteId)
 })
 
 Then('the audit log should have entries for each step', async ({request, world}) => {
