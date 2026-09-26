@@ -63,6 +63,15 @@ Feature: Demo mock telephony
     When the admin simulates an incoming call
     Then the response status should be 422
 
+  # #1043: the call record is created before ringing is attempted, so a caller nobody could
+  # be rung for is still visible to the hotline (and can carry a voicemail) as `unanswered`.
+  @backend @demo-mode @calls
+  Scenario: A call nobody could be rung for is still recorded as unanswered
+    Given the hub uses the mock telephony provider
+    When the admin simulates an incoming call
+    Then the response status should be 422
+    And the hub call history should contain 1 unanswered call
+
   # The ring outcome (volunteersNotified) is server state: the count of volunteers the ringing
   # service actually selected, not anything the test remembers. See #1055.
   @backend @demo-mode @calls

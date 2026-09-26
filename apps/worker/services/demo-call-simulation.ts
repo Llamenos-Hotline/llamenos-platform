@@ -17,6 +17,9 @@ import { startParallelRinging } from './ringing'
 import { hashPhone } from '../lib/crypto'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE } from '@shared/event-kinds'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('demo-call-simulation')
 
 export type SimulateIncomingCallResult =
   | { ok: true; callId: string; callerLast4: string; volunteersNotified: number }
@@ -52,6 +55,13 @@ export async function simulateIncomingCall(params: {
   const callId = `${MOCK_CALL_SID_PREFIX}${crypto.randomUUID()}`
   const result = await startParallelRinging(callId, callerNumber, origin, env, services, hubId)
   if (!result.ringing) {
+    // The call record is created before ringing is attempted; a simulated caller never
+    // leaves a voicemail, so close it out rather than leave a phantom ringing call.
+    try {
+      await services.calls.endCall(hubId, callId)
+    } catch (err) {
+      logger.warn('Could not close simulated call after ring failure', { callId, err })
+    }
     const noOne = result.reason === 'no-volunteers' || result.reason === 'no-available-volunteers'
     return noOne
       ? { ok: false, status: 422, code: 'no-volunteers' }

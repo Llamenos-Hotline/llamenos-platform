@@ -6,6 +6,8 @@ import type { Services } from '../../services'
 import * as serviceFactories from '../../lib/service-factories'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
+import { incCounter } from '../../routes/metrics'
+import { publishEvent } from '../../lib/ws-events'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
@@ -115,16 +117,27 @@ describe('startParallelRinging', () => {
     vi.clearAllMocks()
   })
 
-  it('skips when no volunteers on shift and no fallback', async () => {
+  it('creates the call record even when no volunteers are on shift and there is no fallback (#1043)', async () => {
     const services = makeServices({
       onShiftPubkeys: [],
       fallbackPubkeys: [],
     })
 
-    await startParallelRinging('CA-1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+    const result = await startParallelRinging('CA-1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
-    // Should not register a call
-    expect(services.calls.addCall).not.toHaveBeenCalled()
+    expect(result).toEqual({ ringing: false, reason: 'no-volunteers', volunteersNotified: 0 })
+    // The caller is queued and will leave a voicemail — a record must exist to attach it to
+    expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', {
+      callId: 'CA-1',
+      callerNumber: hashPhone('+15551234567', TEST_HMAC_SECRET),
+      callerLast4: '4567',
+      status: 'ringing',
+    })
+    // ...but nobody is rung and no ring event is published
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(publishEvent).not.toHaveBeenCalled()
+    // ...and the operational emergency is counted for alerting
+    expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'no-volunteers' })
   })
 
   it('uses fallback group when no one is on shift', async () => {
@@ -175,7 +188,9 @@ describe('startParallelRinging', () => {
       const result = await startParallelRinging('CA-hb2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-B')
 
       expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
-      expect(services.calls.addCall).not.toHaveBeenCalled()
+      // The call record exists before ringing is attempted (#1043) — nobody is rung for it
+      expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+      expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'no-available-volunteers' })
       expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
     })
 
@@ -238,7 +253,10 @@ describe('startParallelRinging', () => {
     const result = await startParallelRinging('CA-fb2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
     expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
-    expect(services.calls.addCall).not.toHaveBeenCalled()
+    // The call record still exists so a voicemail has somewhere to land (#1043)
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(incCounter).toHaveBeenCalledWith('llamenos_calls_unroutable_total', { reason: 'no-available-volunteers' })
   })
 
   it('does not consult the fallback group when an on-shift volunteer is available', async () => {
@@ -399,6 +417,19 @@ describe('startParallelRinging', () => {
     await expect(
       startParallelRinging('CA-9', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1'),
     ).resolves.toEqual({ ringing: false, reason: 'error', volunteersNotified: 0 })
+    // The record is created before anything that can fail, so the call is still tracked
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates the call record before consulting shifts or users', async () => {
+    const order: string[] = []
+    const services = makeServices({ onShiftPubkeys: [] })
+    ;(services.calls.addCall as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('addCall') })
+    ;(services.shifts.getCurrentVolunteers as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('shifts'); return [] })
+
+    await startParallelRinging('CA-order', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    expect(order).toEqual(['addCall', 'shifts'])
   })
 
   it('skips volunteers with empty pubkey — no token created', async () => {
