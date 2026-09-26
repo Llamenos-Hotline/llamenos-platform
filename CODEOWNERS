@@ -21,6 +21,16 @@
 # dependency bumps (Dependabot PRs touching .github/workflows/) require
 # review, because a compromised or malicious action is a supply-chain vector.
 
+# ─── Why two owners ────────────────────────────────────────────────────
+# Every path below names BOTH @rhonda-rodododo and @llamenos-auto. GitHub
+# forbids self-approval, and @rhonda-rodododo authors every PR in this repo
+# (the fleet's workers commit under it). With a single owner, turning on a
+# real approval requirement would make every owned path permanently
+# unmergeable — including this file, orchestrator/, and all of packages/crypto/.
+# A second owner with write access is what makes `required_approving_review_count`
+# satisfiable at all. Neither account can approve its own PR, so the
+# two-person rule still holds.
+
 # ─── Crypto, protocol, and the key boundaries around them ──────────────
 # Every pattern below is a REAL path. CODEOWNERS is gitignore syntax, so a
 # bare `apps/worker/lib/auth` matches a file NAMED `auth` — which does not
@@ -28,62 +38,57 @@
 # owned nothing. tests/orchestrator/guards.test.ts now matches these patterns
 # against `git ls-files` with a gitignore matcher, so a rule that owns no real
 # file fails the suite.
-packages/crypto/                    @rhonda-rodododo
-packages/protocol/schemas/          @rhonda-rodododo
-packages/protocol/crypto-labels.json @rhonda-rodododo
-packages/shared/crypto-labels.ts    @rhonda-rodododo
-
+packages/crypto/                    @rhonda-rodododo @llamenos-auto
+packages/protocol/schemas/          @rhonda-rodododo @llamenos-auto
+packages/protocol/crypto-labels.json @rhonda-rodododo @llamenos-auto
+packages/shared/crypto-labels.ts    @rhonda-rodododo @llamenos-auto
 # Not the crypto crate itself, but the surfaces that keep (or could leak) a
 # device private key: the webview IPC boundary, the Tauri permission grants,
 # the iOS/Android Keychain/Keystore wrappers, and the Tauri IPC mock, which
 # mirrors the Rust CryptoState.
-src/client/lib/platform.ts          @rhonda-rodododo
-apps/desktop/src/crypto.rs          @rhonda-rodododo
-apps/desktop/capabilities/          @rhonda-rodododo
-apps/ios/Sources/Services/CryptoService.swift @rhonda-rodododo
-apps/android/app/src/main/java/org/llamenos/hotline/crypto/ @rhonda-rodododo
-tests/mocks/                        @rhonda-rodododo
-
+src/client/lib/platform.ts          @rhonda-rodododo @llamenos-auto
+apps/desktop/src/crypto.rs          @rhonda-rodododo @llamenos-auto
+apps/desktop/capabilities/          @rhonda-rodododo @llamenos-auto
+apps/ios/Sources/Services/CryptoService.swift @rhonda-rodododo @llamenos-auto
+apps/android/app/src/main/java/org/llamenos/hotline/crypto/ @rhonda-rodododo @llamenos-auto
+tests/mocks/                        @rhonda-rodododo @llamenos-auto
 # ─── Auth, sessions, sigchain, identity: state a revert does not restore ──
 # `.test.ts` siblings are owned too: weakening the test is the shortest route
 # to disabling the check it guards.
-apps/worker/middleware/             @rhonda-rodododo
-apps/worker/lib/auth.ts             @rhonda-rodododo
-apps/worker/lib/auth.test.ts        @rhonda-rodododo
-apps/worker/lib/webauthn.ts         @rhonda-rodododo
-apps/worker/lib/session-renewal.ts  @rhonda-rodododo
-apps/worker/lib/crypto.ts           @rhonda-rodododo
-apps/worker/lib/crypto.test.ts      @rhonda-rodododo
-apps/worker/lib/hub-event-crypto.ts @rhonda-rodododo
-apps/worker/lib/push-encryption.ts  @rhonda-rodododo
-apps/worker/lib/server-identity.ts  @rhonda-rodododo
-apps/worker/lib/agent-identity.ts   @rhonda-rodododo
-apps/worker/lib/timing-safe.ts      @rhonda-rodododo
-apps/worker/lib/blind-index-query.ts @rhonda-rodododo
-apps/worker/lib/blind-index-query.test.ts @rhonda-rodododo
-apps/worker/routes/auth.ts          @rhonda-rodododo
-apps/worker/routes/sessions.ts      @rhonda-rodododo
-apps/worker/routes/webauthn.ts      @rhonda-rodododo
-apps/worker/routes/sigchain.ts      @rhonda-rodododo
-apps/worker/db/schema/sigchain.ts   @rhonda-rodododo
-apps/worker/services/crypto-keys.ts @rhonda-rodododo
-
+apps/worker/middleware/             @rhonda-rodododo @llamenos-auto
+apps/worker/lib/auth.ts             @rhonda-rodododo @llamenos-auto
+apps/worker/lib/auth.test.ts        @rhonda-rodododo @llamenos-auto
+apps/worker/lib/webauthn.ts         @rhonda-rodododo @llamenos-auto
+apps/worker/lib/session-renewal.ts  @rhonda-rodododo @llamenos-auto
+apps/worker/lib/crypto.ts           @rhonda-rodododo @llamenos-auto
+apps/worker/lib/crypto.test.ts      @rhonda-rodododo @llamenos-auto
+apps/worker/lib/hub-event-crypto.ts @rhonda-rodododo @llamenos-auto
+apps/worker/lib/push-encryption.ts  @rhonda-rodododo @llamenos-auto
+apps/worker/lib/server-identity.ts  @rhonda-rodododo @llamenos-auto
+apps/worker/lib/agent-identity.ts   @rhonda-rodododo @llamenos-auto
+apps/worker/lib/timing-safe.ts      @rhonda-rodododo @llamenos-auto
+apps/worker/lib/blind-index-query.ts @rhonda-rodododo @llamenos-auto
+apps/worker/lib/blind-index-query.test.ts @rhonda-rodododo @llamenos-auto
+apps/worker/routes/auth.ts          @rhonda-rodododo @llamenos-auto
+apps/worker/routes/sessions.ts      @rhonda-rodododo @llamenos-auto
+apps/worker/routes/webauthn.ts      @rhonda-rodododo @llamenos-auto
+apps/worker/routes/sigchain.ts      @rhonda-rodododo @llamenos-auto
+apps/worker/db/schema/sigchain.ts   @rhonda-rodododo @llamenos-auto
+apps/worker/services/crypto-keys.ts @rhonda-rodododo @llamenos-auto
 # ─── Deanonymization surfaces ──────────────────────────────────────────
 # sip-bridge/ routes PSTN calls and handles caller phone numbers;
 # signal-notifier/ does HMAC-hashed contact resolution. Both are top-level,
 # NOT under apps/ despite what older docs say.
-sip-bridge/                         @rhonda-rodododo
-signal-notifier/                    @rhonda-rodododo
-
+sip-bridge/                         @rhonda-rodododo @llamenos-auto
+signal-notifier/                    @rhonda-rodododo @llamenos-auto
 # ─── The fleet's own trust base ────────────────────────────────────────
 # A worker that edits the orchestrator, the fragment defining its own lane's
 # write scope, or the hook enforcing the write-deny rules can widen its own
 # authority. These must never be self-approvable.
-orchestrator/                       @rhonda-rodododo
-.claude/agents/                     @rhonda-rodododo
-.claude/settings.json               @rhonda-rodododo
-CODEOWNERS                          @rhonda-rodododo
-
+orchestrator/                       @rhonda-rodododo @llamenos-auto
+.claude/agents/                     @rhonda-rodododo @llamenos-auto
+.claude/settings.json               @rhonda-rodododo @llamenos-auto
+CODEOWNERS                          @rhonda-rodododo @llamenos-auto
 # ─── The build's own trust base ────────────────────────────────────────
 # The gate jobs install from this lockfile and run from this workflow, so a
 # PR touching any of these is a PR editing the machinery that judges it. That
@@ -94,45 +99,42 @@ CODEOWNERS                          @rhonda-rodododo
 # the file that makes "the judge runs only trusted code" true.
 # `bunfig.toml` does not exist yet; it is owned pre-emptively because it
 # configures the same install.
-package.json                        @rhonda-rodododo
-bun.lockb                           @rhonda-rodododo
-bunfig.toml                         @rhonda-rodododo
-lefthook.yml                        @rhonda-rodododo
+package.json                        @rhonda-rodododo @llamenos-auto
+bun.lockb                           @rhonda-rodododo @llamenos-auto
+bunfig.toml                         @rhonda-rodododo @llamenos-auto
+lefthook.yml                        @rhonda-rodododo @llamenos-auto
 # vitest's MAIN process executes its config — and the config's globalSetup
 # and plugins — and that process writes the result file and owns the exit
 # code fleet/verify judges. fleet/verify installs the BASE's config bytes over
 # a PR's copy, so an edit here is never in effect on its own PR; what merges,
 # though, judges every PR after it. Rooted glob: the root configs only.
-/vitest.*.config.ts                 @rhonda-rodododo
-
+/vitest.*.config.ts                 @rhonda-rodododo @llamenos-auto
 # ─── Supply chain, release, deployment ─────────────────────────────────
-.github/workflows/                  @rhonda-rodododo
-knope.toml                          @rhonda-rodododo
-
+.github/workflows/                  @rhonda-rodododo @llamenos-auto
+knope.toml                          @rhonda-rodododo @llamenos-auto
 # ─── The fleet judging itself ──────────────────────────────────────────
 # Narrower than #615's blanket `tests/`, deliberately: every other test
 # directory is ordinary lane work and merges on green. A blanket `tests/`
 # would have held every BDD feature PR the backend and desktop lanes write.
 # (tests/mocks/ is owned above, with the other key-boundary files.)
-tests/orchestrator/                 @rhonda-rodododo
-
+tests/orchestrator/                 @rhonda-rodododo @llamenos-auto
 # ─── Key material, wherever it appears ─────────────────────────────────
 # Mirrors SECRET_PATH_PATTERNS (orchestrator/src/config.ts). checkScope
 # already refuses to WRITE these; this is the second half, so a secret that
 # reaches a diff by a route the write gate did not cover still stops here.
-**/.env                             @rhonda-rodododo
-**/.dev.vars                        @rhonda-rodododo
-**/.npmrc                           @rhonda-rodododo
-**/.pgpass                          @rhonda-rodododo
-**/authorized_keys                  @rhonda-rodododo
-**/id_rsa                           @rhonda-rodododo
-**/id_ed25519                       @rhonda-rodododo
-**/keystore.properties              @rhonda-rodododo
-**/*.pem                            @rhonda-rodododo
-**/*.jks                            @rhonda-rodododo
-**/*.keystore                       @rhonda-rodododo
-**/*.p8                             @rhonda-rodododo
-**/*.p12                            @rhonda-rodododo
-**/*.pfx                            @rhonda-rodododo
-**/*.key                            @rhonda-rodododo
-**/*.mobileprovision                @rhonda-rodododo
+**/.env                             @rhonda-rodododo @llamenos-auto
+**/.dev.vars                        @rhonda-rodododo @llamenos-auto
+**/.npmrc                           @rhonda-rodododo @llamenos-auto
+**/.pgpass                          @rhonda-rodododo @llamenos-auto
+**/authorized_keys                  @rhonda-rodododo @llamenos-auto
+**/id_rsa                           @rhonda-rodododo @llamenos-auto
+**/id_ed25519                       @rhonda-rodododo @llamenos-auto
+**/keystore.properties              @rhonda-rodododo @llamenos-auto
+**/*.pem                            @rhonda-rodododo @llamenos-auto
+**/*.jks                            @rhonda-rodododo @llamenos-auto
+**/*.keystore                       @rhonda-rodododo @llamenos-auto
+**/*.p8                             @rhonda-rodododo @llamenos-auto
+**/*.p12                            @rhonda-rodododo @llamenos-auto
+**/*.pfx                            @rhonda-rodododo @llamenos-auto
+**/*.key                            @rhonda-rodododo @llamenos-auto
+**/*.mobileprovision                @rhonda-rodododo @llamenos-auto
