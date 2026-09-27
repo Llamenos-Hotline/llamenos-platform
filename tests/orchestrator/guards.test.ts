@@ -8,7 +8,10 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { runReviewCi, decideReviewGate, type CiContext, type ReviewCiDeps } from '../../orchestrator/src/ci.js'
+import {
+  runReviewCi, decideReviewGate,
+  type CiContext, type ReviewCiDeps, type ReviewSetDecision,
+} from '../../orchestrator/src/ci.js'
 import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -721,8 +724,11 @@ describe('rail: lane modes are runtime state, not source', () => {
  * all. `gh pr view 848 --json statusCheckRollup` never listed it, and
  * `gh pr merge` refused with "the base branch policy prohibits the merge".
  * The fix here: trigger from the PR's OWN check suite — `pull_request`,
- * scoped to `types: [labeled]` so it fires on exactly one signal (the
- * `review` label), never on an ordinary push. A `pull_request`-triggered
+ * scoped to `types: [review_requested]` so it fires on exactly one signal
+ * (#1158: a review being requested or re-requested from `llamenos-auto`, or
+ * from `rhonda-rodododo` on the release PR), never on an ordinary push. The
+ * `labeled` trigger this replaced could not reach a release PR at all, which
+ * is #1114. A `pull_request`-triggered
  * run's check result attaches to the PR head SHA automatically, which is
  * what actually satisfies a required context — the same mechanism
  * `fleet/verify` already relies on. `merge_group` is dropped as a trigger
@@ -739,7 +745,7 @@ describe('rail: lane modes are runtime state, not source', () => {
  * why). `fleet/review` made the same move at #848 and changed its own
  * trigger again here, so this block now reads three files.
  */
-describe('rail: fleet/review runs once per review label, not on every push', () => {
+describe('rail: fleet/review runs once per review request, not on every push', () => {
   const workflowYaml = (file: string): string =>
     readFileSync(join(process.cwd(), '.github', 'workflows', file), 'utf8')
   const ciYaml = (): string => workflowYaml('ci.yml')
@@ -797,16 +803,23 @@ describe('rail: fleet/review runs once per review label, not on every push', () 
   })
 
   // The load-bearing assertion for fleet-review.yml's own trigger list:
-  // `pull_request` scoped to `types: [labeled]` ONLY (never `synchronize`,
-  // which would reopen the every-push bug #812 fixed the first time) plus
-  // `workflow_dispatch` for manual debugging, and specifically never `push`
-  // or `merge_group` — `merge_group` reachable here without a matching `if:`
-  // arm (asserted below) would reintroduce the fail-open bug this whole rail
-  // exists to prevent (a job instantiated on an event it then skips via
-  // `if:`, which GitHub's branch protection treats as satisfied).
-  it('fleet-review.yml triggers on pull_request (labeled only) AND workflow_dispatch, and NEVER push or merge_group', () => {
+  // `pull_request` scoped to `types: [review_requested]` ONLY (never
+  // `synchronize`, which would reopen the every-push bug #812 fixed the
+  // first time, and never `labeled`, which #1158 retired), plus
+  // `workflow_dispatch` for manual debugging, plus `merge_group` (#1187 —
+  // see fleet-review-merge-group.test.ts for the arm that makes it safe),
+  // and specifically never `push`.
+  //
+  // `merge_group` used to be forbidden here, because a trigger with no
+  // matching arm inside the job is the fail-open shape this whole rail
+  // exists to catch. #1187 added the arm — a STEP that always runs on the
+  // queue ref and always publishes a real verdict — so the trigger is now
+  // REQUIRED instead: without it `fleet/review` cannot report on the queue's
+  // synthetic commit at all, and a required context that never reports
+  // leaves every entry at `AWAITING_CHECKS` forever.
+  it('fleet-review.yml triggers on pull_request (review_requested only), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*labeled\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
@@ -816,12 +829,15 @@ describe('rail: fleet/review runs once per review label, not on every push', () 
     // `types:` entry.
     const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?:\n| {4,}.*\n)*)/)?.[0] ?? ''
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
-    expect(pullRequestBlock, 'fleet-review.yml pull_request trigger must be labeled-only — adding synchronize reopens the every-push bug')
-      .not.toContain('synchronize')
-    for (const forbiddenEvent of ['push', 'merge_group']) {
-      expect(onBlock, `fleet-review.yml must never trigger on "${forbiddenEvent}" — that reopens the fail-open bug`)
-        .not.toMatch(new RegExp(`\\n {2}${forbiddenEvent}:`))
+    for (const forbiddenType of ['synchronize', 'labeled', 'opened']) {
+      expect(pullRequestBlock, `fleet-review.yml pull_request trigger must be review_requested-only — adding ${forbiddenType} reopens the every-push/every-label bug`)
+        .not.toContain(forbiddenType)
     }
+    expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
+      .not.toMatch(/\n {2}push:/)
+    // #1187: present, and scoped to the one merge-queue event.
+    expect(onBlock, 'fleet-review.yml must trigger on merge_group — a required context that cannot report on the queue ref stalls every entry forever')
+      .toMatch(/\n {2}merge_group:\n {4}types:\s*\[\s*checks_requested\s*\]/)
   })
 
   /** The JOB-level `if:`, not a step's — always at exactly four-space
@@ -889,26 +905,61 @@ describe('rail: fleet/review runs once per review label, not on every push', () 
     expect(() => stepIf(block, 'Setup Bun')).not.toThrow()
   })
 
-  // The ctx step's own shell computes `requested` — the property the old
-  // job-level `if:` encoded — from the SAME two conditions the old `if:`
-  // used: a manual workflow_dispatch, or the label just applied being named
-  // exactly `review`. A mutation that drops the label condition, or widens
-  // it to a bare `event_name == 'pull_request'` (which would make every
-  // label event "requested"), must fail this test — that is the exact
-  // fail-open shape #848 shipped.
-  it('the ctx step computes "requested" from workflow_dispatch OR the review label, never a bare pull_request event_name check', () => {
+  // #1158: "did this event ask US for a review" is no longer decided in
+  // bash at all. It is `reviewIsRequested` (orchestrator/src/ci.ts), a pure
+  // function under direct test in specialist.test.ts, fed the RAW event
+  // fields through `env:`. This rail pins that the workflow actually hands
+  // it those fields and never re-derives the answer itself — a bash
+  // comparison nothing pins is exactly the fail-open shape #848 shipped.
+  it('the gate step is handed the raw event name and requested reviewer, and no shell recomputes "requested"', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
-    expect(block).toMatch(/EVENT_NAME"\s*==\s*"workflow_dispatch"\s*\|\|\s*"\$LABEL_NAME"\s*==\s*"review"/)
-    expect(block).not.toMatch(/"\$EVENT_NAME"\s*==\s*"pull_request"\s*\]\];\s*then\s*\n\s*requested=true/)
-    expect(block).toMatch(/echo "requested=\$requested"/)
+    expect(block).toContain('FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}')
+    expect(block).toContain('FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}')
+    // No shell branch anywhere in the job sets a `requested` variable.
+    expect(block).not.toMatch(/requested=(true|false)/)
+    expect(block).not.toMatch(/echo "requested=/)
+  })
+
+  // The review set must NOT reach `review-ci` from this file. On a
+  // `pull_request` event the workflow is the PR's own copy, so a set passed
+  // in through `env:` is a value the defendant chose: a PR could empty it
+  // and its crypto review would silently never run, leaving a reusable
+  // general-only PASS for a set nobody approved. Base code decides it
+  // (`runReviewCi` -> `decideReviewSet`), and this rail pins that the
+  // channel for overriding it does not exist.
+  it('never passes the review set into review-ci — base code decides it, not this file', () => {
+    expect(fleetReviewYaml()).not.toContain('FLEET_REVIEW_PROFILES')
+  })
+
+  // Every reviewing step is opt-in on `outcome == 'run-engine'`, which makes
+  // GREEN this job's default. This is the step that asserts the opposite.
+  it('asserts a review actually ran when the gate said to — green is never the default', () => {
+    const block = jobBlock(fleetReviewYaml(), 'fleet-review')
+    const assertIdx = block.indexOf('- name: Assert this run reached a real verdict')
+    expect(assertIdx, 'the assertion step is missing').toBeGreaterThan(-1)
+    const assertBlock = block.slice(assertIdx)
+    expect(assertBlock).toContain('gate-outcome-missing')
+    expect(assertBlock).toContain('review-did-not-run')
+    // #1187: the merge-queue arm is covered by the same step, so a
+    // merge_group run that reached no verdict cannot conclude green either.
+    expect(assertBlock).toContain('queue-verdict-missing')
+    // It must run even when an earlier step failed, or it could be skipped
+    // in exactly the case it exists to catch. A bare `always()` since #1187
+    // — the old `always() && steps.gate.conclusion == 'success'` skipped the
+    // whole assertion on merge_group, where the gate step does not run.
+    expect(stepIf(block, 'Assert this run reached a real verdict')).toBe('always()')
   })
 
   // The gate step is what used to be the job-level `if:` (see the rail
   // above) — it must never itself be conditioned on its OWN output, or it
-  // could never run at all.
-  it('the "Decide whether to run the review engine" step (the gate) always runs — it is never itself gated', () => {
+  // could never run at all. Since #1187 it carries exactly ONE condition,
+  // pinned literally here: the merge-queue arm, which produces this job's
+  // verdict on a `merge_group` ref without the gate. Anything else appearing
+  // on this line — and in particular anything naming `steps.gate` — is the
+  // regression this assertion exists to catch.
+  it('the "Decide whether to run the review engine" step (the gate) is gated by nothing but the merge-queue arm', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
-    expect(stepIf(block, 'Decide whether to run the review engine')).toBe('')
+    expect(stepIf(block, 'Decide whether to run the review engine')).toBe("github.event_name != 'merge_group'")
     expect(block).toMatch(/- name: Decide whether to run the review engine\n\s+id: gate\n/)
     expect(block).toContain('bun orchestrator/src/cli.ts review-gate')
   })
@@ -955,17 +1006,15 @@ describe('rail: fleet/review runs once per review label, not on every push', () 
     expect(guardBlock).toContain('merge')
   })
 
-  // Branch (c)'s fail-closed message, verbatim — an operator or agent
-  // reading a red `fleet/review` must be told exactly what to do (apply the
-  // `review` label), not left to guess why a check that "did nothing" is
-  // failing.
-  it('the review-gate CLI command fails with the exact "review not requested" message on branch (c)', () => {
+  // The `not-requested` fail-closed message — an operator or agent reading
+  // a red `fleet/review` must be told exactly what to do (request a review
+  // from `llamenos-auto`), not left to guess why a check that "did nothing"
+  // is failing. The account name comes from `REVIEW_REQUEST_LOGIN`, never a
+  // second literal that could drift from what the gate actually accepts.
+  it('the review-gate CLI command fails with an actionable "review not requested" message naming the reviewer to request', () => {
     const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
-    // Backtick-escaped in the SOURCE (this string is built inside a
-    // template literal, so a literal backtick in the source is `\``, not
-    // `` ` ``) — matched here against the raw file text, not the runtime
-    // string it evaluates to.
-    expect(text).toContain('review not requested — add the \\`review\\` label to run the non-author review')
+    expect(text).toContain('review not requested — request a review from \\`${REVIEW_REQUEST_LOGIN}\\`')
+    expect(text).not.toContain('add the \\`review\\` label')
   })
 
   it('fleet/review still carries no write permission and no --approve', () => {
@@ -1278,27 +1327,29 @@ describe('rail: the job that executes the judged commit\'s code cannot be reache
  * here to match, or this rail would itself start failing vacuously against a
  * job that no longer exists in `ci.yml`.
  *
- * `fleet/review` is DELIBERATELY NOT in this table. It moved off
- * `merge_group` entirely (see the "runs once per review label" rail above):
- * a `workflow_dispatch`-only trigger could never satisfy a required PR
- * context in the first place (verified on #848), and keeping `merge_group`
- * as a trigger while excluding it from the job's `if:` would recreate the
- * exact fail-open bug this whole file of rails exists to catch. This is safe
- * TODAY because this repo's merge queue is unavailable (owner type `User` —
- * the ruleset's `merge_queue` rule is rejected outright, see
- * fleet-review.yml's own header). The day an org migration enables the
- * queue, `fleet/review` genuinely will not report on a `merge_group` ref and
- * the queue will stall on it forever — that migration must re-add a
- * `merge_group` arm to both the trigger and the job's `if:` together, not
- * silently inherit this gap. The assertion below pins that `fleet/review`
- * does NOT trigger on `merge_group`, specifically so a future PR that adds
- * it back without also fixing the `if:` fails loudly here instead of
- * reintroducing the bug quietly.
+ * `fleet/review` IS in this table as of #1187. It used to be the documented
+ * exception: `merge_group` was excluded as a trigger on the reasoning that a
+ * trigger with no matching arm inside the job would recreate the fail-open
+ * bug, and that the exclusion was safe while this repo's merge queue was
+ * unavailable. The queue was then enabled — and #1185 sat at `position 1,
+ * AWAITING_CHECKS` indefinitely with every other required context green,
+ * because a required context that structurally cannot report on the queue
+ * ref does not fail the entry, it stalls it forever. The queue had to be
+ * turned off again.
+ *
+ * The fix was the arm that earlier note said the migration would need, in
+ * the only form invariant 1 allows: not a job-level `if:` (a skipped
+ * required check satisfies branch protection exactly like a green one) but a
+ * STEP that always runs on the queue ref and always publishes a real
+ * verdict, derived from the constituent PR's own existing `fleet/review`
+ * rather than from a second model call. See fleet-review-merge-group.test.ts
+ * for the rails on that arm.
  */
 describe('rail: every ruleset-15885614-required context reports on merge_group, except fleet/review', () => {
   const REQUIRED_CONTEXT_WORKFLOWS: Record<string, string> = {
     'ci-status': 'ci.yml',
     'fleet/verify': 'fleet-verify.yml',
+    'fleet/review': 'fleet-review.yml',
     gitleaks: 'secret-scan.yml',
   }
 
@@ -1313,9 +1364,9 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
     return /\n {2}merge_group:/.test(onBlock)
   }
 
-  it('the mapping table itself is non-empty and covers the three merge_group-reporting contexts', () => {
+  it('the mapping table itself is non-empty and covers the four merge_group-reporting contexts', () => {
     expect(Object.keys(REQUIRED_CONTEXT_WORKFLOWS).sort()).toEqual(
-      ['ci-status', 'fleet/verify', 'gitleaks'].sort(),
+      ['ci-status', 'fleet/verify', 'fleet/review', 'gitleaks'].sort(),
     )
   })
 
@@ -1325,8 +1376,12 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
     })
   }
 
-  it('fleet/review (fleet-review.yml) does NOT trigger on merge_group — known and deliberate while the merge queue is unavailable', () => {
-    expect(triggersOnMergeGroup(workflowYaml('fleet-review.yml'))).toBe(false)
+  // #1187's regression guard, stated as its own assertion rather than left
+  // implicit in the loop above: dropping `merge_group` from fleet-review.yml
+  // breaks no run and no other test — it just silently deadlocks the queue
+  // again, invisibly, the next time one is enabled.
+  it('fleet/review (fleet-review.yml) triggers on merge_group — without it the queue stalls at AWAITING_CHECKS forever (#1187)', () => {
+    expect(triggersOnMergeGroup(workflowYaml('fleet-review.yml'))).toBe(true)
   })
 })
 
@@ -1439,12 +1494,17 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     log: () => {},
     prDiff: vi.fn(async () => 'diff --git a/x b/x\n+hello\n'),
     secondOpinion: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'looks fine\nVERDICT: PASS' })),
+    reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
+    resolveProfile: async (name: string) => ({ ok: true as const, profile: { agent: name, instructions: `be a ${name}` } }),
+    stripExport: async () => {},
+    publishReport: async () => {},
+    profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' })),
     ...over,
   })
 
   it('records a fresh PASS exactly once', async () => {
     const cache = fakeCache()
-    const v = await runReviewCi(deps({ cache }))
+    const v = await runReviewCi(deps({ cacheFor: () => cache }))
     expect(v.ok).toBe(true)
     expect(cache.recordCalls).toBe(1)
   })
@@ -1456,7 +1516,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
-    const v = await runReviewCi(deps({ cache, prDiff: vi.fn(async () => diff), secondOpinion }))
+    const v = await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion }))
     expect(v.ok).toBe(true)
     expect(secondOpinion).not.toHaveBeenCalled()
   })
@@ -1470,29 +1530,71 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     const diff = 'diff --git a/x b/x\n+hello\n'
     const cache = fakeCache()
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
-    await runReviewCi(deps({ cache, prDiff: vi.fn(async () => diff), secondOpinion, ctx: ctx() }))
+    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion, ctx: ctx() }))
     expect(secondOpinion).toHaveBeenCalledTimes(1)
     await runReviewCi(deps({
-      cache, prDiff: vi.fn(async () => diff), secondOpinion,
+      cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion,
       ctx: { ...ctx(), headSha: 'a-totally-different-rebased-head-sha' },
     }))
     expect(secondOpinion).toHaveBeenCalledTimes(1)
   })
 
-  // The load-bearing property: nothing that ever returns FAIL is reused. A
-  // FAIL is never recorded in the first place, so a second call with the
-  // identical diff invokes the engine again rather than re-publishing.
-  it('never reuses a FAIL — a diff that failed is reviewed again next time', async () => {
+  // #1158: a SUBSTANTIVE FAIL is reused, and this is the measured reason —
+  // 60 Fleet Review runs in one 12-hour window, 10 on one failing PR and 8
+  // on another, each re-reviewing an unchanged diff after a branch-freshness
+  // rebase to reach the identical conclusion. The diff hash is what gates
+  // it: the moment the author pushes anything, the cache is bypassed.
+  it('reuses a substantive FAIL for an unchanged diff, instead of re-spending a review to reach the same answer', async () => {
     const diff = 'diff --git a/x b/x\n+bad\n'
     const cache = fakeCache()
     const failing = vi.fn(async () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL — leaks a key' }))
-    const first = await runReviewCi(deps({ cache, prDiff: vi.fn(async () => diff), secondOpinion: failing }))
+    const first = await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion: failing }))
+    expect(first.ok).toBe(false)
+    expect(cache.recordCalls).toBe(1)
+
+    const second = await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => diff), secondOpinion: failing }))
+    expect(second.ok).toBe(false)
+    expect(second.summary).toContain('leaks a key')
+    expect(failing, 'the unchanged diff must not be reviewed a second time').toHaveBeenCalledTimes(1)
+  })
+
+  it('reviews again once the diff itself changes — the cache is keyed on content, not on the PR', async () => {
+    const cache = fakeCache()
+    const failing = vi.fn(async () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL — leaks a key' }))
+    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => 'v1'), secondOpinion: failing }))
+    await runReviewCi(deps({ cacheFor: () => cache, prDiff: vi.fn(async () => 'v2 (a fix)'), secondOpinion: failing }))
+    expect(failing).toHaveBeenCalledTimes(2)
+  })
+
+  // The line that must never be fudged: an UNREADABLE is not a verdict. A
+  // bad model id, an outage or exhausted quota pinned to a diff hash would
+  // hold the PR red until someone pushed a commit, for a reason that had
+  // already gone away — far worse than the waste caching FAILs saves.
+  it('NEVER caches an infrastructure failure — an UNREADABLE is retried every time', async () => {
+    const cache = fakeCache()
+    const unreadable = vi.fn(async () => ({
+      verdict: 'UNREADABLE' as const, text: 'quota exhausted', failureKind: 'engine-unavailable' as const,
+    }))
+    const first = await runReviewCi(deps({ cacheFor: () => cache, secondOpinion: unreadable }))
     expect(first.ok).toBe(false)
     expect(cache.recordCalls).toBe(0)
+    await runReviewCi(deps({ cacheFor: () => cache, secondOpinion: unreadable }))
+    expect(unreadable).toHaveBeenCalledTimes(2)
+  })
 
-    const second = await runReviewCi(deps({ cache, prDiff: vi.fn(async () => diff), secondOpinion: failing }))
-    expect(second.ok).toBe(false)
-    expect(failing).toHaveBeenCalledTimes(2)
+  // One UNREADABLE poisons the whole record, not only its own reviewer's:
+  // the set's composed verdict is not a judgement of the diff if part of it
+  // never ran.
+  it('records nothing when ONE member of the set is UNREADABLE, even though another gave a real FAIL', async () => {
+    const cache = fakeCache()
+    const v = await runReviewCi(deps({
+      cacheFor: () => cache,
+      reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
+      secondOpinion: async () => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — real finding' }),
+      profileReview: async () => ({ verdict: 'UNREADABLE', text: 'engine died', failureKind: 'engine-unavailable' }),
+    }))
+    expect(v.ok).toBe(false)
+    expect(cache.recordCalls).toBe(0)
   })
 
   // "If the lookup errors, run the engine (fail safe)." A cache whose lookup
@@ -1505,7 +1607,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
       record: vi.fn(async () => {}),
     }
     const secondOpinion = vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' }))
-    const v = await runReviewCi(deps({ cache, secondOpinion }))
+    const v = await runReviewCi(deps({ cacheFor: () => cache, secondOpinion }))
     expect(v.ok).toBe(true)
     expect(secondOpinion).toHaveBeenCalledTimes(1)
   })
@@ -1517,7 +1619,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
       lookup: vi.fn(async () => undefined),
       record: vi.fn(async () => { throw new Error('disk full') }),
     }
-    const v = await runReviewCi(deps({ cache }))
+    const v = await runReviewCi(deps({ cacheFor: () => cache }))
     expect(v.ok).toBe(true)
   })
 
@@ -1566,10 +1668,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   }
 
   const diff = 'diff --git a/x b/x\n+hello\n'
-  // No `-reviewer` label on the PR — every branch below is exactly what it
-  // was before #1092 added `specialist-unmet` ahead of them (tested in
-  // specialist.test.ts).
-  const noSpecialists = async (): Promise<string[]> => []
+  // No `-reviewer` label and no crypto content — every branch below sees
+  // the ordinary review set (the general reviewer alone), so the review-set
+  // branch ahead of them never fires. `decideReviewSet`'s own fail-closed
+  // behaviour is tested directly in specialist.test.ts.
+  const generalOnly = async (): Promise<ReviewSetDecision> => ({ ok: true, profiles: [], fromLabels: [], reasons: [] })
   // A Tier 2 (default — not docs, not an instructions/tooling path) file, so
   // every pre-existing test below reaches the SAME cache-hit/not-requested/
   // run-engine branch it always has — the tier check must never change their
@@ -1589,7 +1692,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1599,7 +1702,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1609,7 +1712,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1623,12 +1726,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -1642,7 +1745,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1658,7 +1761,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') {
@@ -1671,7 +1774,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
-      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') expect(outcome.tier).toBe(1)
@@ -1691,7 +1794,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
-      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1708,7 +1811,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
-      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1725,7 +1828,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => [f],
-      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1737,7 +1840,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
   })
@@ -1752,7 +1855,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     })
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cache, requested: false, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1765,7 +1868,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
-      cache, requested: true, unmetSpecialists: noSpecialists, log: () => {},
+      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1839,23 +1942,26 @@ describe('rail: a base-provides-the-gate check runs BEFORE the gate step ever in
     expect(block).toContain('*review-gate*')
   })
 
-  // Never itself gated — same reasoning as "Decide whether to run the
-  // review engine" (see the rail on that step in the `describe` above): a
-  // guard that only runs conditionally could be skipped exactly when a
-  // stale base needs it most.
-  it('the guard step carries no step-level if: of its own — it must always run', () => {
+  // Gated by nothing but the merge-queue arm — same reasoning as "Decide
+  // whether to run the review engine" (see the rail on that step in the
+  // `describe` above): a guard that only runs conditionally could be skipped
+  // exactly when a stale base needs it most, so the ONE condition it may
+  // carry is pinned literally. On `merge_group` there is no base checkout to
+  // guard: that arm never invokes bun, never installs, and publishes the
+  // constituent PR's own verdict instead (#1187).
+  it('the guard step carries exactly one step-level if: — the merge-queue arm, and nothing else', () => {
     const block = guardBlock(fleetReviewYaml())
-    expect(block).not.toMatch(/\n {8}if:/)
+    const ifLines = block.split('\n').filter((l) => /^ {8}if:/.test(l))
+    expect(ifLines).toEqual(["        if: github.event_name != 'merge_group'"])
   })
 
-  it('the guard fails closed with an actionable message naming the review label re-apply step, for both crash shapes', () => {
+  it('the guard fails closed with an actionable message naming what to do next, for both crash shapes', () => {
     const block = guardBlock(fleetReviewYaml())
     expect(block).toMatch(/exit 1/)
-    // Backtick-escaped in the YAML source itself (double-quoted bash
-    // string), so the raw file text carries a literal backslash before each
-    // backtick — matched here against that raw text, not the string bash
-    // would ultimately print.
-    expect(block).toContain('re-apply the \\`review\\` label')
+    // #1158: re-running the gate means re-REQUESTING the review, not
+    // re-applying a label — nothing fires on a label any more.
+    expect(block).toContain('then re-request the review')
+    expect(block).not.toContain('re-apply the \\`review\\` label')
   })
 })
 

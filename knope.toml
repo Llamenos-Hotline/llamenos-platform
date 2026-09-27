@@ -57,5 +57,5 @@ name = "release"
 type = "Release"
 
 [github]
-owner = "rhonda-rodododo"
+owner = "Llamenos-Hotline"
 repo = "llamenos-platform"
