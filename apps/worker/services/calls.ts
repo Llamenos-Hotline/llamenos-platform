@@ -94,6 +94,28 @@ export class CallsService {
     return active
   }
 
+  /**
+   * Pubkeys of every user who is currently on a live call in ANY hub.
+   *
+   * A volunteer has one phone and one pair of ears, so "busy" is instance-wide: being
+   * `answeredBy` on an in-progress call in hub A makes them unavailable for hub B's calls.
+   * In-progress rows past the stale TTL are ignored (they are reaped by getActiveCalls).
+   */
+  async getBusyPubkeys(): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ answeredBy: activeCalls.answeredBy })
+      .from(activeCalls)
+      .where(
+        and(
+          eq(activeCalls.status, 'in-progress'),
+          gte(activeCalls.startedAt, new Date(Date.now() - IN_PROGRESS_TTL_MS)),
+        ),
+      )
+    const busy = new Set<string>()
+    for (const row of rows) if (row.answeredBy) busy.add(row.answeredBy)
+    return busy
+  }
+
   /** Count calls started today (active + historical) */
   async getTodayCount(hubId: string): Promise<number> {
     const todayStart = new Date()
