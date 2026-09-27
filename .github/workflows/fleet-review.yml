@@ -5,7 +5,10 @@
 # two gate jobs). ONE job, ONE check named `fleet/review`, N reviews inside it.
 #
 # HOW IT IS TRIGGERED (#1158): a review being REQUESTED — or re-requested —
-# from `llamenos-auto`, or from `rhonda-rodododo` on the `release` PR.
+# from `llamenos-auto`; or from `rhonda-rodododo` on the `release` PR and on
+# any PR `llamenos-auto` itself authored, where GitHub refuses to request
+# `llamenos-auto` (#1232). Never from a team. `reviewTriggerLogins`
+# (orchestrator/src/ci.ts) is the one statement of that rule.
 # Requesting a review is a real, human-meaningful act that already means
 # "look at this now". The `review` LABEL this replaces never meant that, and
 # a required context producible only by a `labeled` event has no path forward
@@ -132,8 +135,9 @@ name: Fleet Review
 
 on:
   # The one real trigger (see the file header): a review being REQUESTED, or
-  # re-requested, from `llamenos-auto` (or `rhonda-rodododo` on the release
-  # PR). `review_requested` fires on both, which is the whole signal needed.
+  # re-requested, from `llamenos-auto` (or `rhonda-rodododo` where
+  # `llamenos-auto` cannot be asked). `review_requested` fires on both, which
+  # is the whole signal needed.
   # NEVER add `synchronize`/`opened`/`labeled`/`push` — see invariant 2.
   # GitHub cannot filter this trigger by WHO was requested, so the job runs
   # on every review request and the gate step decides; it must never become
@@ -505,7 +509,7 @@ jobs:
             fi
           fi
           # NOTE: whether this event actually ASKS US for a review is NOT
-          # decided here. It is `reviewIsRequested` (orchestrator/src/ci.ts),
+          # decided here. It is `reviewRequestFor` (orchestrator/src/ci.ts),
           # evaluated inside the gate step from the raw event fields below —
           # one testable, fail-closed place, rather than a bash comparison
           # nothing pins. This step only resolves WHAT is being judged.
@@ -675,11 +679,16 @@ jobs:
       #     `if: always()`/`if: failure()` — none of the engine steps do)
       #     and fails the job. No engine call, no skip, fail closed.
       #
-      # `FLEET_REVIEW_EVENT_NAME` / `FLEET_REVIEW_REQUESTED_REVIEWER` are the
-      # raw event fields `reviewIsRequested` (ci.ts) judges — passed through
-      # `env:` and never interpolated into this script, because a reviewer
-      # login is attacker-influenced text. `requested_reviewer` is empty when
-      # the request named a TEAM, which is correctly not a request for us.
+      # The four `FLEET_REVIEW_*` event fields below are what `reviewRequestFor`
+      # (ci.ts) judges, read by `reviewRequestEventFromEnv` — passed through
+      # `env:` and never interpolated into this script, because a login is
+      # attacker-influenced text, and never compared HERE: a YAML copy of the
+      # rule is exactly what drifted into #1213's shim. The PR AUTHOR decides
+      # who may trigger the review (#1232: GitHub refuses to request a PR's
+      # author, so on a PR `llamenos-auto` wrote, the operator stands in).
+      # A TEAM request leaves `requested_reviewer` empty and fills
+      # `requested_team`, which is passed only so the red `not-requested`
+      # check can say a team was asked, and whom to ask instead.
       #
       # Needs only `contents: read` (git, already granted for the checkout
       # above), `pull-requests: read` (the live label/description read that
@@ -696,51 +705,8 @@ jobs:
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
           FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
           FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
-          # TRANSITIONAL SHIM (#1213) — delete this key, and this comment,
-          # in the PR immediately after this one merges. It exists for
-          # exactly one run: THIS PR's own.
-          #
-          # The gate is deliberately run from the BASE checkout, never from
-          # the commit it judges (see the file header). So on any PR this
-          # YAML comes from the HEAD while `orchestrator/src/cli.ts
-          # review-gate` comes from `main`, and the two halves speak only
-          # through this `env:` block. This PR changes what they say to each
-          # other: `main`'s `runReviewGate` reads one thing,
-          # `FLEET_REVIEW_REQUESTED === 'true'`, and knows nothing of the two
-          # variables above. Emitting only the new pair left this PR's own
-          # `fleet/review` at `not-requested`, exit 1, no engine — a required
-          # check with no honest way to pass. So we keep speaking the old
-          # dialect too, for the one base that still only understands it.
-          #
-          # It is NOT `true`. It is `reviewIsRequested` (ci.ts) transcribed
-          # into an expression, so the old gate reaches the same verdict the
-          # new one would: `workflow_dispatch` is a request (both sides agree
-          # — see the ctx step on `main` and `reviewIsRequested`'s first
-          # line); a `pull_request` — which on this workflow can ONLY be
-          # `review_requested` — is a request when it named `llamenos-auto`,
-          # or named `rhonda-rodododo` on the knope release PR, and is NOT
-          # one when it named a colleague or a TEAM (`requested_reviewer` is
-          # then empty). `merge_group` cannot reach this at all: the step's
-          # own `if:` above excludes it. Comparison is `==`, which GitHub
-          # evaluates case-insensitively, matching `reviewIsRequested`'s own
-          # `toLowerCase()`. The login is compared INSIDE the expression and
-          # never reaches the value, so no attacker-influenced text is
-          # interpolated — the env var is only ever `true` or `false`.
-          #
-          # This duplicates REVIEW_REQUEST_LOGIN / RELEASE_REVIEW_REQUEST_LOGIN
-          # / KNOPE_RELEASE_BRANCH in YAML, where nothing tests them and they
-          # will drift. That is the whole reason #1213 exists and why it is a
-          # deletion, not a maintenance task.
-          #
-          # Deliberately ONE long line, not a `>-` folded scalar: the rail
-          # "no label value is ever interpolated into a shell script — env
-          # only" (specialist.test.ts) requires every `${{ }}` mentioning
-          # `requested_reviewer` to sit on its own `key:` assignment line, so
-          # that a reviewer login can never be found inside a `run:` body.
-          # Folding puts the expression on a bare continuation line and trips
-          # that rail — correctly, since the rail cannot tell a folded env
-          # value from a shell heredoc.
-          FLEET_REVIEW_REQUESTED: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.requested_reviewer.login == 'llamenos-auto' || (github.event.requested_reviewer.login == 'rhonda-rodododo' && github.event.pull_request.head.ref == 'release'))) }}
+          FLEET_REVIEW_REQUESTED_TEAM: ${{ github.event.requested_team.slug }}
+          FLEET_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           # A re-published cached verdict is written here too, so a cache
           # hit still reads as a review on the PR rather than a bare status.
           FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
