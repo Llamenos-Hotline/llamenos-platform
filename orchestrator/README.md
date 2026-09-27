@@ -130,6 +130,34 @@ ships in the follow-on plan. Until then:
 - **`shadow` is the only mode with real content today.** `off` does nothing;
   `live` is refused.
 
+## Specialist reviewers (#1092)
+
+A PR label ending in `-reviewer` requests a specialist. For example,
+`crypto-security-reviewer` runs the agent defined at
+`.claude/agents/crypto-security-reviewer.md` against the PR. It posts its
+verdict as the check `fleet/review/crypto-security-reviewer` (workflow
+`.github/workflows/fleet-specialist-review.yml`, CLI `specialist-review-ci`,
+code `src/specialist.ts`).
+
+- **Adding a specialist** takes an agent definition whose frontmatter `name:`
+  equals the label. Merge it to `main` first, because the registry is read from
+  the PR's base. Then create a label of the same name. The workflow needs no
+  change.
+- **Triggering it:** apply the label. Only `labeled` triggers a run, never a
+  push. To re-request a review, re-apply the label.
+- **Fail closed:** an unknown or malformed `-reviewer` label fails its check.
+  It is never skipped.
+- **Never a required context.** A check that runs only when a label is present
+  would block every unlabelled PR. It binds at the merge decision instead,
+  and any FAIL fails:
+  - the required `fleet/review` gate fails while a requested specialist has no
+    PASS for the PR's diff;
+  - requesting a specialist disarms the PR's auto-merge;
+  - `board` and `review-and-merge` refuse on any failing, in-flight, or
+    requested-but-absent `fleet/review/*` check.
+- **Order:** apply the specialist label, wait for it to pass, then (re-)apply
+  `review`. Clearing a specialist FAIL takes a new head.
+
 ## Changing a lane's mode
 
 Lane modes are **runtime state, never source** (rail 8). Never edit
