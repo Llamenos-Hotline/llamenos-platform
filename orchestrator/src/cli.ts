@@ -22,7 +22,8 @@ import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } fr
 import { artifactReviewCache, diffHash } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
-  runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet, reviewIsRequested,
+  runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
+  reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1298,16 +1299,14 @@ async function runReviewGate(): Promise<number> {
   // payload at all. Unreadable is `undefined`, which fails closed inside
   // `decideReviewSet`.
   const facts = await readPrFacts(ctx.pr)
+  const event = reviewRequestEventFromEnv(process.env, ctx.branch)
+  const request = reviewRequestFor(event)
   const outcome = await decideReviewGate({
     ctx,
     prDiff: () => ciDiff(ctx),
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
-    requested: reviewIsRequested({
-      eventName: process.env['FLEET_REVIEW_EVENT_NAME'] ?? '',
-      requestedReviewer: process.env['FLEET_REVIEW_REQUESTED_REVIEWER'],
-      branch: ctx.branch,
-    }),
+    requested: request.requested,
     reviewSet: (changedFiles) => decideReviewSet({
       labels: facts?.labels,
       changedFiles,
@@ -1341,9 +1340,16 @@ async function runReviewGate(): Promise<number> {
     return 1
   }
   if (outcome.kind === 'not-requested') {
-    process.stderr.write(
-      `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`,
-    )
+    // Why THIS event did not count, then whom to ask instead — both derived
+    // from the event, because the answer depends on who wrote the PR. The
+    // fixed "request `llamenos-auto`" this used to print sent #1183's author
+    // to request itself, which GitHub refuses (#1232).
+    if (!request.requested) process.stderr.write(`${REVIEW_JOB}: ${request.reason}\n`)
+    const [ask] = reviewTriggerLogins(event)
+    process.stderr.write(ask === REVIEW_REQUEST_LOGIN
+      ? `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`
+      : `${REVIEW_JOB}: review not requested — this PR's author cannot be asked to review it, so request a review ` +
+        `from \`${ask}\` to run the non-author review\n`)
     return 1
   }
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
