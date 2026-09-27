@@ -43,7 +43,7 @@ EOF
 fi
 
 VERSION="${1:-}"
-REPO="rhonda-rodododo/llamenos-platform"
+REPO="Llamenos-Hotline/llamenos-platform"
 COSIGN_AVAILABLE=false
 
 echo "=== Llamenos Build Verification ==="

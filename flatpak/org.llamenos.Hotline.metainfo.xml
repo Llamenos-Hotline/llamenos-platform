@@ -26,8 +26,8 @@
   <launchable type="desktop-id">org.llamenos.Hotline.desktop</launchable>
 
   <url type="homepage">https://llamenos.org</url>
-  <url type="bugtracker">https://github.com/rhonda-rodododo/llamenos/issues</url>
-  <url type="vcs-browser">https://github.com/rhonda-rodododo/llamenos</url>
+  <url type="bugtracker">https://github.com/Llamenos-Hotline/llamenos-platform/issues</url>
+  <url type="vcs-browser">https://github.com/Llamenos-Hotline/llamenos-platform</url>
 
   <developer id="org.llamenos">
     <name>Llámenos Contributors</name>
