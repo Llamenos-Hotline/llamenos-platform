@@ -119,6 +119,10 @@ targets:
     platform: iOS
     sources:
       - path: Tests/UI
+      # TestAdminAPI signs real API requests; the auth-message label comes from
+      # codegen like everywhere else (never a raw "llamenos:" literal).
+      - path: ../../packages/protocol/generated/swift/CryptoLabels.swift
+        name: Generated
     dependencies:
       - target: Llamenos
     settings:

@@ -138,12 +138,6 @@ class BaseUITest: XCTestCase {
         app.launch()
     }
 
-    /// Signing seed of the test admin whose pubkey the test backend runs with as
-    /// ADMIN_PUBKEY (79215a4c…af9183 — ci.yml TEST_ADMIN_PUBKEY). Same fixture as
-    /// ADMIN_SEED in tests/helpers.ts. The app uses it, under UI_TESTING only, to
-    /// register its own fresh device key through the real admin API.
-    private static let testAdminSeedHex = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
-
     /// Launch the app against the live backend with a freshly registered device
     /// identity, member of this class's hub, which becomes the active hub.
     ///
@@ -155,7 +149,9 @@ class BaseUITest: XCTestCase {
             XCTFail("No test hub for \(type(of: self)) — is the backend running at \(testHubURL)?")
             return
         }
-        app.launchEnvironment["XCTEST_ADMIN_SECRET"] = Self.testAdminSeedHex
+        // The app registers its own fresh device key through the real admin API,
+        // signed as the test admin (UI_TESTING builds only — AppState).
+        app.launchEnvironment["XCTEST_ADMIN_SECRET"] = TestAdminAPI.seedHex
         app.launchArguments.append(contentsOf: [
             "--reset-keychain",
             "--test-authenticated",

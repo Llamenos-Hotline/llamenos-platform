@@ -235,6 +235,9 @@ struct CaseListView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .accessibilityIdentifier("case-tab-all")
+                // Selection is otherwise conveyed only by fill colour — VoiceOver
+                // users (and UI tests) could not tell which tab is active.
+                .accessibilityAddTraits(vm.entityTypeFilter == nil ? .isSelected : [])
 
                 // Per-type tabs
                 ForEach(vm.entityTypes) { et in
@@ -266,6 +269,7 @@ struct CaseListView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .accessibilityIdentifier("case-tab-\(et.name)")
+                    .accessibilityAddTraits(vm.entityTypeFilter == et.id ? .isSelected : [])
                 }
             }
             .padding(.horizontal, 16)

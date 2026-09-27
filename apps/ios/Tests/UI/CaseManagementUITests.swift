@@ -68,41 +68,65 @@ final class CaseManagementUITests: BaseUITest {
 
     // MARK: - Case List View (API-Connected)
 
-    /// Scenario: Entity type tabs appear when CMS is enabled with multiple entity types.
-    /// Requires the Docker Compose backend with CMS enabled and entity types configured.
+    /// Scenario: Case list shows entity type tabs (platform/mobile/cases/cms-case-management.feature)
+    ///
+    /// The tabs render only on a hub with case management on, more than one entity
+    /// type, and at least one case — an empty hub shows the empty state instead. So
+    /// the test puts the server in that state rather than branching on whatever it
+    /// finds: the jail-support template (Arrest Case + Mass Arrest Event) is applied
+    /// to this class's hub through the real API, and a case is created through the
+    /// app's own create-case sheet (client-side E2EE included).
     func testCaseListShowsEntityTypeTabs() {
-        given("I am authenticated as admin with API") {
+        given("case management is enabled with two entity types") {
+            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
+            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+        }
+        and("the app is launched and authenticated as admin") {
             launchAsAdminWithAPI()
         }
-        when("I navigate to the Cases tab") {
+        and("a case exists") {
+            navigateToCases()
+            createCase(title: "Entity tabs \(UUID().uuidString.prefix(8))", typeLabel: "Arrest Case")
+        }
+        when("I navigate to the Cases screen") {
             navigateToCases()
         }
-        then("I should see entity type tabs if multiple types exist") {
-            // Wait for CMS to load — could take a few seconds to check enabled status
-            // and fetch entity types from the API
-            let tabs = find("case-type-tabs")
-            let emptyState = find("case-empty-state")
-            let cmsDisabled = find("cms-not-enabled")
-
-            // CMS may or may not be enabled depending on server state.
-            // If enabled with multiple types, tabs should appear.
-            // If enabled with records, the "All" tab should be present.
-            if tabs.waitForExistence(timeout: 10) {
-                let allTab = find("case-tab-all")
-                XCTAssertTrue(
-                    allTab.waitForExistence(timeout: 3),
-                    "Entity type tabs should include an 'All' tab"
-                )
-            } else if emptyState.waitForExistence(timeout: 3) {
-                // CMS enabled but no records — tabs only show when >1 entity type
-                XCTAssertTrue(true, "Empty state shown — CMS enabled but no records or single entity type")
-            } else if cmsDisabled.waitForExistence(timeout: 3) {
-                // CMS not enabled on server
-                XCTAssertTrue(true, "CMS is not enabled on this server")
-            } else {
-                XCTFail("Cases view should show tabs, empty state, or CMS disabled indicator")
-            }
+        then("I should see the entity type tabs") {
+            XCTAssertTrue(find("case-type-tabs").waitForExistence(timeout: 15), "Entity type tabs should render")
         }
+        and("the \"All\" tab should be active") {
+            let allTab = find("case-tab-all")
+            XCTAssertTrue(allTab.waitForExistence(timeout: 5), "The All tab should exist")
+            XCTAssertTrue(allTab.isSelected, "The All tab should be the selected tab")
+        }
+    }
+
+    /// Create a case through the create-case sheet and wait for the sheet to close.
+    private func createCase(title: String, typeLabel: String) {
+        let newCase = find("case-new-btn")
+        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be offered once case management is on")
+        newCase.tap()
+
+        let sheet = find("create-case-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5), "The create-case sheet should open")
+
+        let picker = find("case-type-picker")
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "A case type picker should be shown for two entity types")
+        picker.tap()
+        let option = app.buttons[typeLabel]
+        XCTAssertTrue(option.waitForExistence(timeout: 5), "Case type '\(typeLabel)' should be selectable")
+        option.tap()
+
+        let titleInput = find("case-title-input")
+        XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
+        titleInput.tap()
+        titleInput.typeText(title)
+
+        let submit = find("case-create-submit")
+        XCTAssertTrue(submit.isEnabled, "Create should be enabled with a type and a title")
+        submit.tap()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 20), "The sheet should close once the case is created")
+        XCTAssertFalse(find("case-create-error").exists, "Case creation should not report an error")
     }
 
     /// Scenario: Case list shows case cards when records exist.
