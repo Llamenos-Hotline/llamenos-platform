@@ -6,7 +6,8 @@ Feature: Crypto Interop
 
   # ── Keypair Generation ────────────────────────────────────────────
 
-  @smoke
+  # @wip: signing-key steps have no desktop definitions (see also #1123) — #1195
+  @smoke @wip
   Scenario: Generated keypair has valid format
     When I generate a new keypair
     Then the signing key should be valid hex
@@ -14,7 +15,8 @@ Feature: Crypto Interop
     And the signing key should be 64 characters long
     And the npub should be 63 characters long
 
-  @smoke
+  # @wip: signing-key steps have no desktop definitions (see also #1123) — #1195
+  @smoke @wip
   Scenario: Generated keypair is unique each time
     When I generate keypair A
     And I generate keypair B
@@ -26,6 +28,8 @@ Feature: Crypto Interop
     Then the public key hex should be 64 characters
     And the public key should only contain hex characters [0-9a-f]
 
+  # @wip: signing-key steps have no desktop definitions (see also #1123) — #1195
+  @wip
   Scenario: Keypair import roundtrip
     When I generate a keypair and get the signing key
     And I import that signing key into a fresh CryptoService
@@ -63,7 +67,8 @@ Feature: Crypto Interop
     And the admin can decrypt the message
     And a third party with a wrong key cannot decrypt
 
-  @smoke
+  # @wip: signing-key steps have no desktop definitions (see also #1123) — #1195
+  @smoke @wip
   Scenario: PIN encryption matches format constraints
     Given the test-vectors.json fixture is loaded
     And the test PIN and signing key from vectors

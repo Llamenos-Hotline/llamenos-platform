@@ -1,4 +1,5 @@
-@backend
+# @wip: no backend step definitions for any scenario — #1193
+@backend @wip
 Feature: Signal Messaging Channel
   As the Signal messaging subsystem
   I want to handle receipts, reactions, registration, retry, identity trust, and failover
