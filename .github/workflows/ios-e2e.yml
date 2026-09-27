@@ -273,35 +273,37 @@ jobs:
       - name: Disable macOS application firewall
         run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
 
+      # One device, by UDID, for both the boot and the test destination: resolving
+      # it by name twice once found no device right after the boot (run 36356469649).
       - name: Detect simulator
         id: sim
         run: |
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
+          read -r UDID NAME < <(xcrun simctl list devices available -j | python3 -c "
           import json, sys
           data = json.load(sys.stdin)
           for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
               if 'iOS' in runtime:
                   for d in devices:
                       if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                          print(d['name'])
+                          print(d['udid'], d['name'])
                           sys.exit(0)
           sys.exit('no available iPhone simulator')
           ")
-          echo "device=$SIM" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $SIM"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $NAME ($UDID)"
 
-      # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
-      # manual dispatch run it too.
       # Boot before the first test: booting on a 3-core runner starved the backend
       # badly enough that the first class's hub creation took 30-49s (runs
       # 36343743065, 36348376614).
       - name: Boot simulator
         env:
-          DEVICE: ${{ steps.sim.outputs.device }}
+          UDID: ${{ steps.sim.outputs.udid }}
         run: |
-          xcrun simctl boot "$DEVICE" 2>/dev/null || true
-          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" -b
 
+      # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
+      # manual dispatch run it too.
       - name: Select test classes for shard ${{ matrix.shard }}
         id: shard
         env:
@@ -322,7 +324,7 @@ jobs:
           # shellcheck disable=SC2046
           xcodebuild test-without-building \
             -xctestrun "$XCTESTRUN" \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -parallel-testing-enabled NO \
             -test-timeouts-enabled YES \
             -maximum-test-execution-time-allowance 300 \
