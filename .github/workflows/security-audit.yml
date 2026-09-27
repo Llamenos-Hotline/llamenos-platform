@@ -303,13 +303,8 @@ jobs:
           # other's cache index under BuildKit's shared default scope. The
           # repo's Actions cache has a fixed quota shared with every other
           # workflow, so a full quota must degrade to an uncached build, never
-          # a failed scan: `ignore-error=true`. The registry entry is the
-          # `app` target's cache that docker-buildcache.yml refreshes from
-          # `main` — read-only here (a PR run never gets `packages: write`),
-          # and a harmless miss for the other legs.
-          cache-from: |
-            type=gha,scope=image-scan-${{ matrix.image.name }}
-            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          # a failed scan: `ignore-error=true`.
+          cache-from: type=gha,scope=image-scan-${{ matrix.image.name }}
           cache-to: type=gha,scope=image-scan-${{ matrix.image.name }},mode=max,ignore-error=true
 
       - name: Scan image with Trivy
