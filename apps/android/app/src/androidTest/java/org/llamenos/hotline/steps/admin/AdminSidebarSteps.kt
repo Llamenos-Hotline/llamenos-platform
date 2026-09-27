@@ -1,8 +1,6 @@
 package org.llamenos.hotline.steps.admin
 
 import androidx.compose.ui.test.ComposeTimeoutException
-import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -32,24 +30,13 @@ class AdminSidebarSteps : BaseSteps() {
     @Given("I navigate to admin settings with sidebar")
     fun iNavigateToAdminSettingsWithSidebar() {
         navigateToTab(NAV_SETTINGS)
-        try {
-            onNodeWithTag("settings-admin-card").performScrollTo()
-            onNodeWithTag("settings-admin-card").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Admin card not available — may already be on admin screen
-        }
-        // Wait for admin screen to load (sidebar toggle or admin title)
-        try {
-            waitForNode("admin-sidebar-toggle", timeoutMillis = 10_000)
-        } catch (_: Throwable) {
-            // Sidebar toggle may not appear immediately — check admin title instead
-            try {
-                waitForNode("admin-title", timeoutMillis = 5_000)
-            } catch (_: Throwable) {
-                // Admin screen not loaded
-            }
-        }
+        waitForNode("settings-admin-card", timeoutMillis = 10_000)
+        onNodeWithTag("settings-admin-card").performScrollTo()
+        onNodeWithTag("settings-admin-card").performClick()
+        composeRule.waitForIdle()
+        // Reaching the admin screen is the precondition; whether it offers the
+        // sidebar is what the Then steps assert.
+        assertAnyTagDisplayed("admin-title", timeoutMillis = 10_000)
     }
 
     // ---- Then (visibility assertions) ----
@@ -94,19 +81,13 @@ class AdminSidebarSteps : BaseSteps() {
     @Then("I should see sidebar items for:")
     fun iShouldSeeSidebarItemsFor(dataTable: DataTable) {
         val items = dataTable.asList().filter { it.lowercase() != "item" }
+        check(items.isNotEmpty()) { "Sidebar item table is empty" }
         for (item in items) {
             val tag = "admin-sidebar-item-$item"
-            try {
-                onNodeWithTag(tag).assertIsDisplayed()
-            } catch (_: Throwable) {
-                // Item may be scrolled off-screen — try scrolling to it
-                try {
-                    onNodeWithTag(tag).performScrollTo()
-                    onNodeWithTag(tag).assertIsDisplayed()
-                } catch (_: Throwable) {
-                    // Item not found — sidebar may not be fully loaded
-                }
-            }
+            // The drawer scrolls; bring each item into view before asserting it.
+            waitForNode(tag)
+            onNodeWithTag(tag).performScrollTo()
+            assertAnyTagDisplayed(tag)
         }
     }
 
@@ -114,30 +95,18 @@ class AdminSidebarSteps : BaseSteps() {
 
     @When("I tap the sidebar toggle button")
     fun iTapTheSidebarToggleButton() {
-        try {
-            onNodeWithTag("admin-sidebar-toggle").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Toggle button not available
-        }
+        waitForNode("admin-sidebar-toggle")
+        onNodeWithTag("admin-sidebar-toggle").performClick()
+        composeRule.waitForIdle()
     }
 
     @When("I tap the {string} sidebar item")
     fun iTapTheSidebarItem(itemSlug: String) {
         val tag = "admin-sidebar-item-$itemSlug"
-        try {
-            onNodeWithTag(tag).performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Sidebar item not available — try scrolling to it first
-            try {
-                onNodeWithTag(tag).performScrollTo()
-                onNodeWithTag(tag).performClick()
-                composeRule.waitForIdle()
-            } catch (_: Throwable) {
-                // Item still not available
-            }
-        }
+        waitForNode(tag)
+        onNodeWithTag(tag).performScrollTo()
+        onNodeWithTag(tag).performClick()
+        composeRule.waitForIdle()
     }
 
     // ---- Then (navigation assertions) ----
