@@ -42,9 +42,13 @@
  *
  * What this DOES catch:
  *   - A scenario whose step text has no matching registered step definition
- *     text/keyword-type on the target platform (the same condition that
- *     causes playwright-bdd's `missingSteps: "skip-scenario"` to silently
- *     skip the scenario at runtime).
+ *     text/keyword-type on the target platform. playwright.config.ts runs
+ *     every BDD project with `missingSteps: "fail-on-gen"`, so `bunx bddgen`
+ *     itself refuses such a scenario; this tool reports the same condition
+ *     for every platform in one pass, without generating specs (#1153).
+ *   - A `@wip` / `@fixme` / `@skip` tag with no linked issue — those tags are
+ *     the only sanctioned way to take a scenario out of a run, so each one
+ *     must name the issue that owns it (see findUntrackedSkipTags).
  *   - Deleting/renaming step definition files (proven via the delete
  *     experiment in the PR description).
  *   - Scenario Outline steps, via first-row Examples substitution (see
@@ -84,7 +88,8 @@
  *
  * Exit codes:
  *   0 — all scenarios have matching tests (or coverage is at/above threshold)
- *   1 — coverage is below the required threshold for a validated platform
+ *   1 — coverage is below the required threshold for a validated platform,
+ *       or a @wip/@fixme/@skip tag has no linked issue
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from "fs";
@@ -182,16 +187,16 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
   const lines = content.split("\n");
   const scenarios: Scenario[] = [];
   let featureName = "";
-  let featureTags: string[] = [];
+  const featureTags: string[] = [];
   let pendingTags: string[] = [];
   let featureTagsParsed = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // Collect tags before Feature: line
+    // Collect tags before Feature: line (Gherkin allows several tag lines)
     if (line.startsWith("@") && !featureTagsParsed) {
-      featureTags = parseTags(line);
+      featureTags.push(...parseTags(line));
       continue;
     }
 
@@ -204,7 +209,7 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
 
     // Collect tags before Scenario
     if (line.startsWith("@") && featureTagsParsed) {
-      pendingTags = parseTags(line);
+      pendingTags.push(...parseTags(line));
       continue;
     }
 
@@ -227,8 +232,9 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
       continue;
     }
 
-    // Reset pending tags if line is not a tag or scenario
-    if (!line.startsWith("@") && !line.startsWith("Scenario")) {
+    // Tags attach to the next keyword line; comments and blank lines between
+    // them do not detach them. Any other line (Rule:, Background:, a step) does.
+    if (line !== "" && !line.startsWith("#")) {
       pendingTags = [];
     }
   }
@@ -384,9 +390,14 @@ interface RawStepLine {
 
 /**
  * Extract the raw Given/When/Then/And/But step lines for one scenario,
- * including any Background steps (which apply to every scenario in the
- * file), and substitute the first Examples row's values into
- * `<placeholder>` tokens for Scenario Outlines.
+ * including any Background steps that apply to it, and substitute the first
+ * Examples row's values into `<placeholder>` tokens for Scenario Outlines.
+ *
+ * Background scoping follows Gherkin: a Feature-level Background applies to
+ * every scenario in the file, a Background inside a `Rule:` applies only to
+ * the scenarios of that Rule. Treating a Rule's Background as file-wide made
+ * this tool report scenarios in *other* Rules as unbound when playwright-bdd
+ * binds and runs them (admin/ban-management.feature, #1153).
  *
  * LIMITATION: only the first Examples row is used for substitution — see
  * the "What this DOES NOT catch" note at the top of this file.
@@ -395,10 +406,13 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
   const content = readFileSync(featurePath, "utf-8");
   const lines = content.split("\n");
 
-  const backgroundSteps: RawStepLine[] = [];
+  const featureBackgroundSteps: RawStepLine[] = [];
+  let ruleBackgroundSteps: RawStepLine[] = [];
+  let targetRuleBackgroundSteps: RawStepLine[] = [];
   const scenarioSteps: RawStepLine[] = [];
   const exampleTableRows: string[][] = [];
 
+  let inRule = false;
   let inBackground = false;
   let inTargetScenario = false;
   let inExamplesTable = false;
@@ -408,6 +422,16 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith("Rule:")) {
+      if (sawTargetScenario) break; // moved past our scenario into the next Rule
+      inRule = true;
+      ruleBackgroundSteps = [];
+      inBackground = false;
+      inTargetScenario = false;
+      inExamplesTable = false;
+      continue;
+    }
 
     if (trimmed.startsWith("Background:")) {
       inBackground = true;
@@ -421,8 +445,10 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
       inBackground = false;
       inExamplesTable = false;
       inTargetScenario = scenarioMatch[1].trim() === scenarioTitle;
-      if (inTargetScenario) sawTargetScenario = true;
-      else if (sawTargetScenario) break; // moved past our scenario into the next one
+      if (inTargetScenario) {
+        sawTargetScenario = true;
+        targetRuleBackgroundSteps = ruleBackgroundSteps;
+      } else if (sawTargetScenario) break; // moved past our scenario into the next one
       continue;
     }
 
@@ -449,7 +475,7 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
     const stepMatch = trimmed.match(stepLineRe);
     if (stepMatch) {
       const step: RawStepLine = { keyword: stepMatch[1] as RawStepLine["keyword"], text: stepMatch[2] };
-      if (inBackground) backgroundSteps.push(step);
+      if (inBackground) (inRule ? ruleBackgroundSteps : featureBackgroundSteps).push(step);
       else if (inTargetScenario) scenarioSteps.push(step);
     }
   }
@@ -467,7 +493,7 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
     });
   }
 
-  return [...backgroundSteps, ...resolvedScenarioSteps];
+  return [...featureBackgroundSteps, ...targetRuleBackgroundSteps, ...resolvedScenarioSteps];
 }
 
 /** Legacy string-only accessor, kept for the Android Cucumber matcher which does plain text matching. */
@@ -903,7 +929,12 @@ function reportUntaggedFeatures(featureFiles: string[]) {
   const warnings: string[] = [];
   for (const file of featureFiles) {
     const content = readFileSync(file, "utf-8");
-    const firstLine = content.split("\n")[0].trim();
+    // The feature's tag line may sit below comments (e.g. an `# @wip: ... — #N` note)
+    const firstLine =
+      content
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l !== "" && !l.startsWith("#")) ?? "";
     if (!firstLine.startsWith("@")) {
       warnings.push(relative(FEATURES_DIR, file));
     }
@@ -915,6 +946,94 @@ function reportUntaggedFeatures(featureFiles: string[]) {
     }
     console.log();
   }
+}
+
+/**
+ * Tags that take a scenario out of a run on purpose. `@wip` and `@fixme` are
+ * excluded by every BDD project's tag filter in playwright.config.ts; `@skip`
+ * and `@fixme` are also playwright-bdd special tags that render the test as
+ * skipped without looking up its steps.
+ */
+const SKIP_TAGS = ["wip", "fixme", "skip"];
+
+/** `#1234` (not an HTML entity or URL fragment) or a `.../issues/1234` URL. */
+const ISSUE_REF_RE = /(?:^|[^\w&/])#\d+\b|\/issues\/\d+\b/;
+
+export interface UntrackedSkipTag {
+  featureFile: string;
+  /** 1-indexed line of the tag line carrying the skip tag. */
+  line: number;
+  tags: string[];
+  /** The Feature/Rule/Scenario/Examples line the tags apply to. */
+  target: string;
+}
+
+/**
+ * Every `@wip` / `@fixme` / `@skip` must name the issue that owns it (#1153).
+ *
+ * The BDD projects run with `missingSteps: "fail-on-gen"`, so an unbound
+ * scenario can no longer drop out of a run silently — the only way out is one
+ * of these tags. Without this rule the tag would just be the old silent skip
+ * with an extra keystroke. With it, excluding a scenario is a recorded
+ * decision someone can find and schedule.
+ *
+ * The reference goes in a comment in the annotation block that carries the
+ * tag — the contiguous run of comment and tag lines directly above the
+ * keyword line, with no blank line in between (the convention the existing
+ * `@fixme`s already follow):
+ *
+ *   # @wip: step definitions not written yet — #1122
+ *   @wip
+ *   Scenario: ...
+ */
+export function findUntrackedSkipTags(path: string, featuresDir = FEATURES_DIR): UntrackedSkipTag[] {
+  const lines = readFileSync(path, "utf-8").split("\n");
+  const isComment = (l: string) => l.trim().startsWith("#");
+  const isTagLine = (l: string) => l.trim().startsWith("@");
+  const isAnnotation = (l: string) => isComment(l) || isTagLine(l);
+  const untracked: UntrackedSkipTag[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!isTagLine(lines[i])) continue;
+    const skipTags = parseTags(lines[i].trim()).filter((t) => SKIP_TAGS.includes(t));
+    if (skipTags.length === 0) continue;
+
+    let start = i;
+    while (start > 0 && isAnnotation(lines[start - 1])) start--;
+    let end = i;
+    while (end + 1 < lines.length && isAnnotation(lines[end + 1])) end++;
+
+    const hasIssueRef = lines
+      .slice(start, end + 1)
+      .filter(isComment)
+      .some((l) => ISSUE_REF_RE.test(l.trim().replace(/^#/, "")));
+    if (!hasIssueRef) {
+      untracked.push({
+        featureFile: relative(featuresDir, path),
+        line: i + 1,
+        tags: skipTags,
+        target: lines[end + 1]?.trim() ?? "",
+      });
+    }
+  }
+
+  return untracked;
+}
+
+function reportUntrackedSkipTags(featureFiles: string[]): number {
+  const untracked = featureFiles.flatMap((f) => findUntrackedSkipTags(f));
+  if (untracked.length > 0) {
+    console.log(
+      `ERROR: ${untracked.length} @wip/@fixme/@skip tag(s) with no linked issue.\n` +
+        `  Add a comment naming the owning issue directly above the tag, e.g.\n` +
+        `    # @wip: <why it is excluded> — #1234\n`
+    );
+    for (const u of untracked) {
+      console.log(`  - ${u.featureFile}:${u.line} @${u.tags.join(" @")} → ${u.target}`);
+    }
+    console.log();
+  }
+  return untracked.length;
 }
 
 function checkDuplicateFeatureNames(featureFiles: string[]) {
@@ -958,6 +1077,13 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * covered regardless of content, which is why desktop/backend were
  * fabricated at 100% before this fix.
  *
+ * Desktop/backend are 100: since #1153 their projects run with
+ * `missingSteps: "fail-on-gen"`, so every scenario their tag filters select
+ * must bind or bddgen fails. Scenarios not yet implemented are tagged `@wip`
+ * (or `@fixme` when a real defect blocks them) with a linked issue, which
+ * removes them from the denominator here exactly as it does in the runner.
+ * Anything below 100 means this tool and the runner disagree.
+ *
  * iOS is gated by the auth/PIN-unlock tranche in
  * Tests/Unit/AuthLoginBDDTests.swift (added after ios was first ratcheted to 2%).
  * Why iOS reads far below Android despite having ~480 Swift test methods: the two
@@ -971,8 +1097,8 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * worked, not of writing hundreds of new tests.
  */
 const COVERAGE_THRESHOLDS: Record<Platform, number> = {
-  desktop: 95,
-  backend: 77,
+  desktop: 100,
+  backend: 100,
   android: 76,
   ios: 5,
 };
@@ -1003,6 +1129,9 @@ function main() {
 
   // Check for duplicate feature basenames
   checkDuplicateFeatureNames(featureFiles);
+
+  // Every deliberate exclusion must name its issue
+  const untrackedSkipCount = reportUntrackedSkipTags(featureFiles);
 
   const results: { platform: string; total: number; covered: number; missing: number }[] = [];
 
@@ -1049,6 +1178,11 @@ function main() {
 
   let failed = false;
 
+  if (untrackedSkipCount > 0) {
+    console.log(`  ✗ ${untrackedSkipCount} @wip/@fixme/@skip tag(s) with no linked issue (listed above)`);
+    failed = true;
+  }
+
   for (const r of results) {
     const pct = r.total > 0 ? (r.covered / r.total) * 100 : 100;
     const pctStr = r.total > 0 ? pct.toFixed(1) : "N/A";
@@ -1064,7 +1198,7 @@ function main() {
   }
 
   if (failed) {
-    console.log(`\nFAILED: One or more platforms are below their required coverage threshold.`);
+    console.log(`\nFAILED: see the ✗ lines above.`);
     process.exit(1);
   } else {
     console.log("\nPASSED: All platforms meet their coverage thresholds.");
