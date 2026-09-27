@@ -23,7 +23,7 @@ compiled one produces fiction.
 | Plan | Covers | Entry criteria |
 |---|---|---|
 | **This plan** | Spec §6, §12, and the Phase 0 list in §18 | none — start now |
-| Plan 2 — per-volunteer identities on the PBX | Spec §7, §8, §11 (server side), Phase 1. Smaller than it first looked: the ARI dynamic-config client, the memory-wizard storage policy and the volunteer dialplan context already exist and are unwired. | this plan merged |
+| Plan 2 — per-volunteer identities and trunks on the PBX | Spec §5 (Layer 2), §7, §8, §11 (server side), Phase 1. Smaller than it first looked: the ARI dynamic-config client, the memory-wizard storage policy and the volunteer dialplan context already exist and are unwired. Covers the hub-provider → trunk mapping and the teardown that does not exist today. | this plan merged |
 | Plan 2b — the relay | Phase 1b: ephemeral credentials, TLS listener, relay port range, a configuration-management role where none exists | independent of Plan 2; both needed before audio is enabled |
 | Plan 3 — desktop spike | Phase 2: bindgen to one answered call on Linux | **needs the first slice of Plan 2** — the PBX has transports and no endpoints today, so there is nothing to register against |
 | Plan 4 — desktop voice and workspace | Spec §14, §15, §16, §17; Phase 3 | Plan 3 answered its question; §16's performance gate measured |
@@ -43,8 +43,12 @@ Copied from the spec and from `CLAUDE.md`; every task's requirements implicitly 
   is Plan 2. Do not describe it otherwise in a commit message, PR body or release note.
 - **No transcription work, no call workspace, no Rust.** Those are Plan 4 (spec §15–§17). This plan
   touches no `apps/desktop/src/*.rs` and adds no IPC command.
-- **No PBX work.** Provisioning per-volunteer endpoints is Plan 2. This plan touches nothing under
-  `sip-bridge/` or `deploy/`, and adds no caller for `configureDynamic` / `deleteDynamic`.
+- **No PBX work.** Provisioning per-volunteer endpoints and trunks is Plan 2. This plan touches
+  nothing under `sip-bridge/` or `deploy/`, and adds no caller for `configureDynamic` /
+  `deleteDynamic`.
+- **Do not touch `apps/worker/telephony/` adapters.** The eight `TelephonyAdapter` implementations
+  and their IVR dialects are unaffected by this architecture (spec §5, Layer 3). "One common SIP
+  interface" is not licence to collapse them.
 - **Do not delete `apps/worker/telephony/sip-tokens.ts`.** Phase 1 still needs its per-provider
   knowledge for trunking. Stop calling it from the client-credential path; leave the module.
 - **TypeScript strict, no `any`.** `bun run typecheck` and `bunx eslint` must stay clean.
@@ -629,12 +633,18 @@ git commit -m "feat(voice): sip-token returns the contract and declines to issue
   `onVoiceStateChange(handler: (s: VoiceCallState) => void): () => void`, `initVoice(): Promise<void>`.
 
 **What is deliberately not in this task.** No Rust, no IPC command, no liblinphone. Desktop cannot
-carry audio until Plan 3, and pretending otherwise is the exact failure (#1147) this plan exists to
-stop. This task makes the desktop UI *honest and contract-driven*, so Plan 3 changes one data
+carry audio until Plan 4, and pretending otherwise is the exact failure (#1147) this plan exists to
+stop. This task makes the desktop UI *honest and contract-driven*, so Plan 4 changes one data
 source and the UI already works.
 
-`in-app-audio.ts` is deleted rather than emptied: its whole purpose was a hardcoded provider
-allow-list, and capability now comes from the server. Its doc comment already anticipated this.
+**`in-app-audio.ts` is deleted rather than emptied, and rather than extended to eight providers.**
+This is the clearest user-visible consequence of the whole architecture (spec §5, Layer 1): the
+client gains **no** provider awareness, so there is no per-provider branch to get wrong and no
+capability matrix to keep in sync when a ninth provider arrives. In-app audio stops being a
+per-provider property. Its doc comment already anticipated this: *"Keep in sync … until in-app
+audio for all providers is routed through the SIP bridge."*
+
+A reviewer should reject this task if it replaces the two-member set with an eight-member one.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -713,7 +723,7 @@ export function onVoiceStateChange(handler: (s: VoiceCallState) => void): () => 
 
 /**
  * Reads the server's registration set and records what this deployment can do.
- * Media is carried by the Rust shell (see Plan 3); until that lands, capabilities
+ * Media is carried by the Rust shell (see Plan 4); until that lands, capabilities
  * always come back false and the UI renders the reason.
  */
 export async function initVoice(): Promise<void> {
@@ -1242,7 +1252,10 @@ git commit -m "test(voice): behavioural coverage for the registration contract"
 
 ## Definition of done
 
-- `grep -rn "supportsInAppAudio\|IN_APP_AUDIO_PROVIDERS\|@twilio/voice-sdk" src/ apps/` returns nothing.
+- `grep -rn "supportsInAppAudio\|IN_APP_AUDIO_PROVIDERS\|@twilio/voice-sdk" src/ apps/` returns nothing —
+  **deleted, not replaced by a longer provider list.** The client must contain no provider name
+  in any voice code path.
+- `apps/worker/telephony/*.ts` is untouched: the eight IVR adapters are out of scope.
 - No hand-written `SipTokenResponse` remains on either mobile platform.
 - `bun run typecheck`, `bun run test:desktop`, `bun run test:android`, `bun run ios:test`,
   `bun run test:backend:bdd`, `bun run i18n:validate:all` all pass.

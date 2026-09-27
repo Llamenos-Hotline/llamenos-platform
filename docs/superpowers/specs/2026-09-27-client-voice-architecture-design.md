@@ -286,11 +286,121 @@ Three things follow, and they are the point of the decision:
    `generateSipParams`'s five near-identical functions. `src/client/lib/in-app-audio.ts`'s own doc
    comment already anticipates this: *"Keep in sync … until in-app audio for all providers is
    routed through the SIP bridge."* [V]
-2. **Capability becomes a property of the deployment, not the provider.** A self-hoster who has not
-   configured a PBX or a relay has no in-app audio; a hub on any of the eight providers, in a
-   deployment that has them, does. That is what `VoiceCapabilities` (§6) expresses.
+2. **Capability becomes a property of the deployment, not of the client's provider awareness.** A
+   self-hoster who has not configured a PBX or a relay has no in-app audio. A hub whose provider
+   can be trunked to that PBX does — and the next subsection establishes which providers those are,
+   because it is **not** automatically all eight. The point is that the *client* no longer decides:
+   it asks, via `VoiceCapabilities` (§6).
 3. **The credential becomes ours to issue and ours to revoke** — per device, short-lived, with no
    vendor in the loop. §7.
+
+### Three layers, and they are easy to conflate
+
+"Support many SIP providers from one common interface" is true of this design, but it is true
+differently at each of three layers. Conflating them is how a reader concludes that the vendor
+abstractions should be collapsed — which would be wrong.
+
+| Layer | Interface | State |
+|---|---|---|
+| **1. Client → our PBX** | one, by construction | the client has **no provider awareness at all** |
+| **2. Our PBX → trunk providers** | `provider-setup` + `sip-bridge` | largely built; this is where "many providers" actually lives |
+| **3. `TelephonyAdapter` — IVR and call control** | eight vendor dialects | **unaffected, and must stay that way** |
+
+**Layer 1 is stronger than "a common interface over many providers": there is no provider in it.**
+The volunteer's device speaks SIP to our PBX and knows nothing else. There is no per-provider
+branch in the client to get wrong, no capability matrix to keep in sync, and no eight-way switch
+to extend when a ninth provider arrives.
+
+The clearest user-visible consequence, and worth stating plainly because it is the whole point:
+**`IN_APP_AUDIO_PROVIDERS` disappears rather than growing to eight.** In-app audio stops being a
+per-provider capability. A volunteer either has a working endpoint on our PBX or does not, and
+which vendor carries the caller's leg is invisible to them.
+
+**Layer 3 stays vendor-specific, deliberately.** `handleIncomingCall`, `handleLanguageMenu`,
+`handleCaptchaResponse`, `handleVoicemail` and `handleWaitMusic` each emit their vendor's dialect —
+TwiML, NCCO, Plivo XML. That abstraction already works, IVR genuinely *is* vendor-specific, and
+"one common SIP interface" is not licence to collapse it. No adapter gains or loses a method in
+this design.
+
+### Layer 2: which providers can actually be a trunk
+
+**Do not assume all eight.** The repo already answers this, and the answer is four [V] — the
+`capabilities` array in `apps/worker/services/provider-setup/providers/`:
+
+| Provider | declares `sipTrunks` | `createSipTrunk` |
+|---|---|---|
+| Twilio | yes | implemented |
+| Telnyx | yes | implemented |
+| Asterisk | yes | implemented (the orphan-`auth` call, §7) |
+| FreeSWITCH | yes | implemented (adds an outbound gateway, not a trunk — §7) |
+| SignalWire | no | throws *"SignalWire does not support SIP trunk creation"* |
+| Vonage | no | throws *"Vonage does not support SIP trunk creation"* |
+| Plivo | no | throws *"Plivo does not support SIP trunk creation"* |
+| Bandwidth | no | throws *"Bandwidth does not support SIP trunk creation"* |
+
+**Read those four "does not support" strings precisely.** They say the provider has no API for
+*automated trunk creation* through this codebase. They do **not** say the provider cannot carry a
+SIP trunk — SignalWire, Vonage, Plivo and Bandwidth all sell SIP trunking as a product **[I, needs
+per-provider confirmation]**. So the real split is:
+
+- **Automated:** the four above. A hub's configured provider becomes a PBX trunk through
+  `provider-setup`, with no human in the loop.
+- **Manual:** the other four. An admin configures the trunk at the vendor and enters its details;
+  **the runtime path is then identical.** Nothing downstream — the PBX, the client, the media path
+  — can tell the difference.
+- **Genuinely API-only:** a provider that cannot terminate to a SIP address at all would keep the
+  current webhook path and have no in-app audio. **Establish per provider whether any fall here
+  before promising eight-way coverage.** The design accommodates it; the spec does not claim it is
+  empty.
+
+**A contradiction worth recording, because it will otherwise mislead the next reader.** The
+codebase contains two different answers to "which providers support SIP", and they disagree almost
+completely [V]:
+
+- `sip-tokens.ts`'s `isSipConfigured` → twilio, signalwire, vonage, plivo, asterisk
+- `provider-setup`'s `sipTrunks` capability → twilio, telnyx, asterisk, freeswitch
+
+Only Twilio and Asterisk appear in both. They disagree because they answer different questions —
+the first asks *can a client register at this vendor* (a question this design deletes), the second
+asks *can we create a trunk at this vendor* (the question that survives). Nobody wrote that down.
+**`isSipConfigured` goes away with the client-registration path**; the `sipTrunks` capability is
+the one that means something afterwards.
+
+### Layer 2: the mapping, and it reuses what exists
+
+A hub's `TelephonyProviderConfig` becomes a PBX trunk through the **existing** `provider-setup`
+registry — not a new abstraction beside it. The uniform shape, whatever the provider:
+
+1. `provider-setup` yields trunk credentials and a SIP address for the vendor (automated for four
+   providers, admin-entered for the rest).
+2. The `PbxProvisioner` (§7) writes the trunk's `auth`, `aor`, `endpoint` and `identify` objects on
+   the PBX through the ARI dynamic-config client that already exists, tagged with the hub.
+3. Inbound calls from that trunk enter the dialplan with the hub as context; outbound calls select
+   the trunk by hub.
+
+Note this is the same provisioning interface the volunteer endpoints use, with a different subject
+— which is the argument for `PbxProvisioner` being its own interface rather than methods bolted
+onto `BridgeClient`. Trunks and volunteers are both identities on the PBX.
+
+**It also closes a real gap:** `provider-setup` is create-only with no teardown anywhere [V], so
+removing a provider from a hub leaks a trunk. The same `deleteDynamic` path that revokes a
+volunteer removes a trunk.
+
+### Per-hub, not global — the case most likely to be got wrong
+
+Different hubs may use different providers. `TelephonyProviderConfig` is already hub-scoped [V],
+and `ringing.ts` already resolves a per-hub adapter before falling back to a global one [V]. The
+design keeps that and adds one property:
+
+**A volunteer registers once, to our PBX, and calls from every hub they are on shift for reach
+them — regardless of which provider each hub uses.** Three hubs on three different vendors ring
+one endpoint set. The provider is a property of the *call's* hub, resolved at routing time; it is
+never a property of the volunteer, their device, or their registration.
+
+This is the multi-hub axiom meeting the provider abstraction, and it is the combination most
+likely to be implemented wrong — because the natural mistake is to make the volunteer's
+registration depend on their hub's provider, which is exactly what today's code does and exactly
+what Layer 1 removes.
 
 ### Hub attribution rides the channel that already exists
 
@@ -1264,6 +1374,9 @@ Phase 1 builds:
 - the configuration-management role actually shipping the Asterisk config files it mounts, which
   it does not today — without this, an Ansible-deployed PBX has no ARI user and no sorcery mapping,
   so dynamic provisioning silently cannot work at all [V];
+- the hub-provider → PBX trunk mapping (§5), reusing `provider-setup` rather than paralleling it,
+  plus the trunk **teardown** that does not exist today, so removing a provider stops leaking a
+  trunk;
 - deletion or guarding of the dead read-write-volume compose template (§8);
 - log redaction and the injected-defect guards.
 
@@ -1366,6 +1479,11 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
   there is no teardown path anywhere; and `pjsip.conf` documents a startup trunk write that is not
   implemented, so the PBX boots with no endpoints.
 - FreeSWITCH has no deployment artifact of any kind — it exists only as code.
+- Only **four** of eight providers declare the `sipTrunks` capability — Twilio, Telnyx, Asterisk,
+  FreeSWITCH. The other four's `createSipTrunk` throws *"<provider> does not support SIP trunk
+  creation"*. And the codebase's two answers to "which providers support SIP" — `isSipConfigured`
+  and the `sipTrunks` capability — overlap on only Twilio and Asterisk, because they answer
+  different questions and nobody said so.
 - The relay is a STUN server in a TURN server's clothing: static shared credential defaulting to
   `changeme`, TLS and DTLS off, no relay port range published, no configuration-management role.
 - liblinphone has no Rust binding (crates.io returns zero), a clean bindgen-able C API, is
@@ -1416,6 +1534,10 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
    every client re-registering has not been measured.
 8. **Whether the commented-out `registration` memory mapping still matters.** `sorcery.conf` cites
    an Asterisk 22.x crash while compose pins 20.x [V]; re-test rather than inherit the caveat.
+9. **Whether every provider can terminate to a SIP address at all.** Four declare no automated
+   trunk creation, and the assumption that they nonetheless sell SIP trunking is an inference, not
+   a verified fact. Confirm per provider before promising eight-way in-app audio; a provider that
+   genuinely cannot keeps the webhook-only path.
 7. **Transcoding load.** CPU per concurrent call on the target hardware is a number this design
    assumes exists and has not measured.
 
@@ -1444,6 +1566,10 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
 | 16a | Identities live on the **PBX**, provisioned through the existing ARI dynamic-config client — not on a new registrar | the machinery is written and unwired; a proxy would have needed an RTP relay beside it, and its own config says registration belongs to the backends |
 | 16b | Provisioning is a `PbxProvisioner` interface, separate from `BridgeClient` | per-call control and identity lifecycle are different concerns with different callers |
 | 16c | Volunteer PJSIP objects stay memory-backed | already configured; a seized disk yields nothing, and re-provisioning on clock-in makes it free |
+| 16d | The client has **no** provider awareness — `IN_APP_AUDIO_PROVIDERS` is deleted, not extended to eight | there is no per-provider branch to get wrong, and no matrix to keep in sync when a ninth arrives |
+| 16e | `TelephonyAdapter`'s eight IVR dialects are untouched | IVR genuinely is vendor-specific; "one common SIP interface" is not licence to collapse a working abstraction |
+| 16f | Trunk mapping reuses `provider-setup`; automated where the provider supports it, admin-entered otherwise, identical at runtime | four of eight declare `sipTrunks`; a manual trunk is indistinguishable downstream |
+| 16g | Provider is a property of the **call's hub**, never of the volunteer or their registration | one endpoint set serves every hub a volunteer is on shift for, whatever vendor each uses |
 | 17 | Transcription moves into the shell; the webview consumes text | audio never crosses the IPC boundary, and both legs are separately available before mixing, so speaker attribution is nearly free |
 | 18 | candle rather than whisper.cpp, gated on a measurement | pure Rust in the most exposed path, and no LLVM/Clang/CMake/MSYS2 across three OSes — with the fallback named rather than silently lost |
 | 19 | The model ships in the release artifact | a first-use fetch to a public model host announces that this deployment is about to transcribe a call |
