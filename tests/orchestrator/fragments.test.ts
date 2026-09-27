@@ -226,6 +226,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
+        'drizzle/',
+        'drizzle.config.ts',
       ],
       notOwned: [
         'tests/',

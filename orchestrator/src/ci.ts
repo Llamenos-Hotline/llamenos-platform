@@ -3,11 +3,13 @@ import { promisify } from 'node:util'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
-import { diffHash, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from './review-cache.js'
+import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
+import { diffHash, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
 import { tierFor, type ImpactTier } from './impact.js'
+import { isReviewerLabel, type ReviewerProfile, type ReviewerResolution } from './specialist.js'
+import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -54,6 +56,70 @@ const execFileAsync = promisify(execFile)
  */
 export const VERIFY_JOB = 'fleet/verify'
 export const REVIEW_JOB = 'fleet/review'
+
+/**
+ * The display name of the mandatory non-author review (`secondOpinion`),
+ * which is in every review set and is never a reviewer PROFILE — profiles
+ * (specialist.ts) run alongside it, never instead of it.
+ */
+export const GENERAL_REVIEWER = 'general'
+
+/** One reviewer's verdict as the PR will show it — see `publishReport`. */
+export interface ReviewReportEntry {
+  reviewer: string
+  verdict: 'PASS' | 'FAIL' | 'UNREADABLE'
+  /** The reviewer's own text in full, findings included — never just the
+   *  one-line `VERDICT:`, which is the whole defect this exists to fix. */
+  body: string
+}
+
+/**
+ * `fleet/review` runs when a review is REQUESTED from this account (#1158).
+ * Requesting a review is a real, human-meaningful act that already means
+ * "look at this now"; the `review` LABEL it replaces never meant that, which
+ * is why release PRs could never satisfy the gate at all (#1114) — nothing
+ * labelled them.
+ */
+export const REVIEW_REQUEST_LOGIN = 'llamenos-auto'
+
+/** Accepted INSTEAD of `REVIEW_REQUEST_LOGIN`, and only on the knope release
+ *  PR: that PR is opened by the operator's own automation on the `release`
+ *  branch, and the operator (`rhonda-rodododo`) is who actually reads it. */
+export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
+
+export interface ReviewRequestEvent {
+  /** `github.event_name`. */
+  eventName: string
+  /** `github.event.requested_reviewer.login` — `undefined` when the request
+   *  named a TEAM (`requested_team`) rather than a user, and on every event
+   *  that is not `review_requested`. */
+  requestedReviewer: string | undefined
+  /** The PR's head branch, for the release-PR exception. */
+  branch: string
+}
+
+/**
+ * Whether THIS event is the one asking for a review. The only thing that
+ * decides it is WHO was asked — never a label, and never a push.
+ *
+ * Fail closed in both directions this can be got wrong: an unrecognised
+ * event name is not a request, and a request naming anyone else (a human
+ * colleague, a team) is not a request either. It is deliberately NOT a job
+ * -level `if:` in the workflow: a job instantiated on an event and then
+ * skipped by `if:` satisfies branch protection exactly like a green check
+ * (#848), so "this review request was not for us" has to become a real,
+ * reported conclusion on `fleet/review`, never a skip.
+ *
+ * Logins are compared case-insensitively because GitHub's are.
+ */
+export function reviewIsRequested(e: ReviewRequestEvent): boolean {
+  if (e.eventName === 'workflow_dispatch') return true
+  if (e.eventName !== 'pull_request') return false
+  const login = (e.requestedReviewer ?? '').trim().toLowerCase()
+  if (login.length === 0) return false
+  if (login === REVIEW_REQUEST_LOGIN) return true
+  return login === RELEASE_REVIEW_REQUEST_LOGIN && e.branch === KNOPE_RELEASE_BRANCH
+}
 
 /**
  * A PR whose branch is not `fleet/<lane>/<item>` has no lane, so there is no
@@ -220,12 +286,133 @@ export interface ReviewCiDeps extends CiDeps {
   prDiff(): Promise<string>
   secondOpinion(input: SecondOpinionInput): Promise<SecondOpinionResult>
   /**
-   * `undefined` disables caching outright — every call reviews fresh,
-   * exactly like before this existed. Optional so every pre-existing test
-   * and call site that never heard of a review cache is unaffected: this
-   * is additive, not a new required wire.
+   * `decideReviewSet`, wired to a LIVE read of the PR — decided HERE, from
+   * scratch, never handed in.
+   *
+   * An earlier revision of #1158 had the gate step resolve the set once and
+   * pass it to this one through a `FLEET_REVIEW_PROFILES` env var. That was
+   * a fail-open: on a `pull_request` event the workflow file is the PR's
+   * OWN copy, so a PR could set that variable to the empty string and the
+   * crypto reviewer would silently never run — and the resulting
+   * general-only PASS would be recorded as a reusable cache entry for a set
+   * nobody approved. Base code decides what to review, or the decision is
+   * the defendant's to make.
    */
-  cache?: ReviewCache
+  reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
+  resolveProfile(name: string): Promise<ReviewerResolution>
+  /**
+   * `stripReviewerControlFiles` (review.ts) over the export, awaited ONCE
+   * before any reviewer starts. Required, not optional: it is a security
+   * control, and an unwired one would be a silent fail-open.
+   *
+   * `secondOpinion` strips the snapshot itself on the CI path, which was
+   * enough while it was the only reader. It is not enough now that profiles
+   * read the SAME directory concurrently (#1158) — a strip racing a reader
+   * is a reader that may see `.claude/`, `AGENTS.md` or a symlink out of the
+   * export, which is exactly what the strip exists to prevent. Hoisting it
+   * here makes the ordering a fact rather than a timing accident;
+   * `secondOpinion`'s own strip then finds nothing left to do.
+   */
+  stripExport(dir: string): Promise<void>
+  /** Runs ONE resolved profile, read-only, against the same export. */
+  profileReview(profile: ReviewerProfile, diff: string, changedFiles: readonly string[]): Promise<SecondOpinionResult>
+  /**
+   * Hands every reviewer's FULL text somewhere the PR itself will show it.
+   * Required, not optional, and the reason is a measured failure: two real
+   * reviews ran on #1117 and `pulls/1117/reviews` and
+   * `issues/1117/comments` were both EMPTY — the gate wrote a check run and
+   * a job log and nothing else, so both substantive findings existed only
+   * inside Actions logs and had to be dug out with `gh run view --log`.
+   * Anyone opening the PR saw a red check with no reason on it. A red check
+   * whose reason lives only in a log is not reviewable.
+   *
+   * This job is read-only by design (it runs a model next to the review
+   * key), so it cannot post anything itself: it WRITES the report, and the
+   * separate `fleet-review/publish` job — the only thing here with
+   * `pull-requests: write` — posts it and only then clears the labels.
+   */
+  publishReport(entries: readonly ReviewReportEntry[]): Promise<void>
+  /**
+   * The cache for a given review-set namespace (`reviewSetTag`). Omitted
+   * disables caching outright — every call reviews fresh, exactly like
+   * before this existed, so every pre-existing test and call site that
+   * never heard of a review cache is unaffected.
+   */
+  cacheFor?(scope: string | undefined): ReviewCache
+}
+
+// ---------------------------------------------------------------------------
+// The review SET — which reviews `fleet/review` runs for this PR (#1158).
+// ---------------------------------------------------------------------------
+
+export type ReviewSetDecision =
+  | { ok: true; profiles: string[]; fromLabels: string[]; reasons: string[] }
+  | { ok: false; reason: string }
+
+export interface ReviewSetDeps {
+  /** The PR's labels, read LIVE. `undefined` means the read FAILED — never
+   *  an empty list standing in for "could not look", which is the whole
+   *  reason the two are different values. */
+  labels: readonly string[] | undefined
+  /** Every path the diff touches, from the trusted base checkout. */
+  changedFiles: readonly string[]
+  /** The PR's title and body, concatenated — the "and from the PR itself"
+   *  half of the decision. */
+  description: string
+  /** `resolveReviewerLabel` against the BASE checkout's agent registry
+   *  (specialist.ts), injected rather than imported so this module does not
+   *  reach into the filesystem. */
+  resolve(name: string): Promise<ReviewerResolution>
+}
+
+/**
+ * The reviews to run, from the PR's LABELS and from the PR ITSELF.
+ *
+ * A label ending `-reviewer` names a profile explicitly — the ask, and the
+ * thing the job clears once that review has passed. The PR's own content
+ * names profiles nobody remembered to ask for: `requiredAdditionalReviewers`
+ * (review.ts) puts the crypto reviewer on any crypto diff, by changed path
+ * OR by the PR's own prose. Labels are a hint and an override, never the
+ * only input — that is the whole point of #1158's second decision.
+ *
+ * Fail CLOSED, every direction, because the alternative is a PR that looks
+ * reviewed and was not: unreadable labels, a malformed `-reviewer` label, an
+ * unknown profile, an unreadable agent registry — each REFUSES, and the
+ * refusal fails the required check. None of them may become "no review
+ * needed".
+ *
+ * The general non-author review is not in `profiles`: it is mandatory for
+ * every diff and is never something a label or a path can add or remove.
+ */
+export async function decideReviewSet(deps: ReviewSetDeps): Promise<ReviewSetDecision> {
+  if (deps.labels === undefined) {
+    return {
+      ok: false,
+      reason: 'the PR\'s labels could not be read, so the reviews it asks for are unknown — ' +
+        'refusing to treat an unreadable worklist as an empty one',
+    }
+  }
+  const fromLabels = deps.labels.filter(isReviewerLabel)
+  const fromContent = requiredAdditionalReviewers([...deps.changedFiles], deps.description)
+  const wanted = [...new Set([...fromLabels, ...fromContent])].sort()
+
+  const reasons: string[] = []
+  for (const name of wanted) {
+    const resolved = await deps.resolve(name)
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        reason: fromLabels.includes(name)
+          ? `the "${name}" label asks for a review that cannot be run: ${resolved.reason}`
+          : `this PR's own content asks for the "${name}" review, which cannot be run: ${resolved.reason}`,
+      }
+    }
+    const why: string[] = []
+    if (fromLabels.includes(name)) why.push('requested by label')
+    if (fromContent.includes(name)) why.push('required by the PR\'s own content')
+    reasons.push(`${name} (${why.join('; ')})`)
+  }
+  return { ok: true, profiles: wanted, fromLabels, reasons }
 }
 
 /**
@@ -344,10 +531,22 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
 }
 
 /**
- * `fleet/review` — the non-author model's verdict on EVERY pull request,
- * produced on the runner against the exact head commit by an engine that is
- * not the one that wrote the diff (`secondOpinion` picks it, and hands it a
- * `.git`-less snapshot).
+ * `fleet/review` — the non-author review of EVERY pull request, produced on
+ * the runner against the exact head commit from a `.git`-less snapshot the
+ * reviewers only ever READ.
+ *
+ * One job, one check, N reviews (#1158). The general non-author review
+ * (`secondOpinion`) is mandatory and always runs; every reviewer PROFILE in
+ * this run's review set (`decideReviewSet`) runs CONCURRENTLY WITH it, in
+ * this same job and against the same export — never as its own GitHub job
+ * and never as its own required-looking check. Composition rule, unchanged
+ * from the per-specialist design it replaces: ANY FAIL FAILS, and an
+ * UNREADABLE is a FAIL, so a profile's verdict can never be outranked by
+ * the general reviewer's PASS.
+ *
+ * Concurrency is `Promise.allSettled`, deliberately: one reviewer throwing
+ * must not discard the verdicts of the others, and a thrown reviewer is
+ * recorded as UNREADABLE for itself rather than as an opaque job crash.
  *
  * Scope is re-checked but tests are NOT re-run: `fleet/verify` runs them, and
  * twice doubles every fleet PR's CI cost for no extra signal. The scope
@@ -378,212 +577,329 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     }
   }
 
+  // Decided HERE, in base code, from the PR's live labels and its own
+  // content — never taken from the workflow step that invoked this process
+  // (see `reviewSet`). The gate step decides the same thing separately, to
+  // choose whether to spend a review at all; neither trusts the other.
+  // Fails CLOSED both times.
+  const set = await deps.reviewSet(report.changedFiles)
+  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}` }
+  const profiles: ReviewerProfile[] = []
+  for (const name of set.profiles) {
+    const resolved = await deps.resolveProfile(name)
+    if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}` }
+    profiles.push(resolved.profile)
+  }
+
   const diff = await deps.prDiff()
 
-  // Exactly one review per PR per DIFF CONTENT, not per merge-queue attempt —
-  // a re-queue after the queue rebases this PR onto a newer `main` is a new
-  // `merge_group` event with a new head SHA, but the same diff, and must
-  // still hit. Keyed by a hash of the diff itself (`review-cache.ts`), never
-  // the head SHA.
+  // Exactly one review per PR per DIFF CONTENT per REVIEW SET. Keyed by a
+  // hash of the diff itself (`review-cache.ts`), never the head SHA, so a
+  // rebase that only replays the PR onto a newer `main` still hits;
+  // namespaced by `reviewSetTag` so a PASS produced by the general reviewer
+  // alone can never be re-published as one that also included a profile
+  // that never ran.
   //
   // A lookup failure and a genuine cache miss are DELIBERATELY the same
   // thing here — `cached === undefined` — because both mean "run the
   // engine": see `artifactReviewCache`'s use of `ghJson`, which already
   // returns `undefined` rather than throwing. The `try` below exists only
-  // because `deps.cache` is an injected interface, not `ghJson` itself, and
+  // because the cache is an injected interface, not `ghJson` itself, and
   // a future or test implementation of it could still throw; the fail-safe
   // direction must hold even then.
   const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
-  if (deps.cache !== undefined) {
+  const exactScope = reviewSetTag(profiles.map((p) => p.agent))
+  const cache = deps.cacheFor?.(exactScope)
+  if (cache !== undefined) {
     let cached: CachedVerdict | undefined
     try {
-      cached = await deps.cache.lookup(cacheKey)
+      cached = await cache.lookup(cacheKey)
     } catch (e) {
       deps.log(`review cache lookup threw — running the engine (fail safe): ${e instanceof Error ? e.message : String(e)}`)
       cached = undefined
     }
     if (cached !== undefined) {
-      deps.log(`review cache hit for PR ${deps.ctx.pr} (sha256:${cacheKey.diffHash.slice(0, 12)}…) — re-publishing instead of invoking the engine`)
-      return { ok: true, summary: cached.text }
+      deps.log(
+        `review cache hit (${cached.verdict}) for PR ${deps.ctx.pr} ` +
+        `(sha256:${cacheKey.diffHash.slice(0, 12)}…) — re-publishing instead of invoking the engine`,
+      )
+      // Re-published verdicts still reach the PR: a cached result must read
+      // as a review, not as a bare status (see `publishReport`).
+      await deps.publishReport([{ reviewer: GENERAL_REVIEWER, verdict: cached.verdict, body: cached.text }])
+      return { ok: cached.verdict === 'PASS', summary: cached.text }
     }
   }
 
-  let result: SecondOpinionResult
+  // ONCE, and before any reviewer starts — see `stripExport`'s doc comment
+  // for why this may not be left to `secondOpinion` now that the export has
+  // concurrent readers. A strip that cannot run at all fails the check:
+  // handing a reviewer an unstripped tree is not a review worth having.
   try {
-    // `snapshotDir`, never `worktree`: the export already exists, so this
-    // job runs no git and creates nothing. Zero execution of the judged
-    // commit's code anywhere in this job — which is what lets it hold the key.
-    result = await deps.secondOpinion({
-      authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir, diff, report,
-    })
+    await deps.stripExport(deps.ctx.headDir)
   } catch (e) {
-    return { ok: false, summary: `review unavailable: ${e instanceof Error ? e.message : String(e)}` }
-  }
-
-  // UNREADABLE and FAIL both fail the job, but they are different facts and
-  // the summary says which: "the reviewer could not be run" is not "the
-  // reviewer found a problem". Within UNREADABLE, `failureKind` draws one
-  // more distinction that used to be lost here: `'engine-misconfigured'`
-  // (a `--model`/engine id the reviewer refuses outright) is a
-  // MISCONFIGURATION — a defect retrying will never fix — not an
-  // AVAILABILITY problem, which is what "unavailable" implies to a human
-  // reading the check. #866 hit exactly this: the engine was reachable and
-  // ran, and still produced an opaque `review unavailable: {"name":
-  // "UnknownError",...}` for what was, underneath, a bad model id — the
-  // wrong diagnostic sent whoever read it looking for an outage that was
-  // never happening. `'engine-unavailable'` (or no failureKind at all, e.g.
-  // a thrown tamper-detection error below) keeps the original wording.
-  const unreadablePrefix = result.failureKind === 'engine-misconfigured' ? 'review misconfigured' : 'review unavailable'
-  const summary = result.verdict === 'UNREADABLE'
-    ? `${unreadablePrefix}: ${verdictSummary(result.text)}`
-    : verdictSummary(result.text)
-  const verdict: CiVerdict = { ok: result.verdict === 'PASS', summary: `${summary}\n\n${result.text}` }
-
-  // Only a FRESH PASS this process itself just produced is ever recorded —
-  // never a FAIL, and never a cache hit being re-published (that would just
-  // re-upload the identical artifact under its own name for no benefit).
-  // Recording nothing for a FAIL is the entire mechanism behind "a FAIL is
-  // never reused": there is nothing a later lookup could ever find.
-  if (verdict.ok && deps.cache !== undefined) {
-    try {
-      await deps.cache.record(cacheKey, { verdict: 'PASS', text: verdict.summary })
-    } catch (e) {
-      deps.log(`review cache record failed (non-fatal — the review itself still passed): ${e instanceof Error ? e.message : String(e)}`)
+    return {
+      ok: false,
+      summary: 'review unavailable: could not strip agent configuration from the PR head export — ' +
+        `refusing to hand any reviewer an unstripped tree: ${e instanceof Error ? e.message : String(e)}`,
     }
   }
+
+  // The batch. `snapshotDir`, never `worktree`: the export already exists,
+  // so this job runs no git and creates nothing. Zero execution of the
+  // judged commit's code anywhere in this job — which is what lets it hold
+  // the key, and what every reviewer in this batch inherits.
+  const names = [GENERAL_REVIEWER, ...profiles.map((p) => p.agent)]
+  const settled = await Promise.allSettled([
+    deps.secondOpinion({ authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir, diff, report }),
+    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles)),
+  ])
+
+  const results = settled.map((s, i) => {
+    const name = names[i] as string
+    // The general reviewer says "review unavailable"/"review misconfigured",
+    // exactly as it did before this job learned to batch — that wording is
+    // what an operator scans a red check for. A profile says its own name.
+    const who = name === GENERAL_REVIEWER ? 'review' : name
+    if (s.status === 'rejected') {
+      const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
+      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail }
+    }
+    const r = s.value
+    // UNREADABLE and FAIL both fail, but they are different facts and the
+    // summary says which: "the reviewer could not be run" is not "the
+    // reviewer found a problem". Within UNREADABLE, `failureKind` draws one
+    // more distinction: `'engine-misconfigured'` (a `--model`/engine id the
+    // reviewer refuses outright) is a MISCONFIGURATION — a defect retrying
+    // will never fix — not an AVAILABILITY problem, which is what
+    // "unavailable" implies to a human reading the check. #866 hit exactly
+    // this: the engine was reachable and ran, and still produced an opaque
+    // `review unavailable: {"name":"UnknownError",...}` for what was,
+    // underneath, a bad model id — the wrong diagnostic sent whoever read
+    // it looking for an outage that was never happening.
+    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured` : `${who} unavailable`
+    const headline = r.verdict === 'UNREADABLE'
+      ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
+      : verdictSummary(r.text)
+    return { name, verdict: r.verdict, headline, text: r.text }
+  })
+
+  const ok = results.every((r) => r.verdict === 'PASS')
+  // A set of exactly one is the general reviewer on its own — the ordinary
+  // case — and its summary is spelled EXACTLY as it was before this job
+  // learned to batch, so the common check output did not change shape for a
+  // feature most PRs never use. More than one gets a roll-call line first
+  // (which reviewer said what, scannable without scrolling) and then every
+  // reviewer's full text under its own heading.
+  const summary = results.length === 1
+    ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
+    : `${results.length} reviews — ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
+      results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
+  const verdict: CiVerdict = { ok, summary }
+
+  // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
+  // ever recorded — never a cache hit being re-published (that would just
+  // re-upload the identical artifact for no benefit), and never one where
+  // ANY member of the set came back UNREADABLE.
+  //
+  // That last condition is the whole safety property of caching FAILs
+  // (#1158). A parsed PASS/FAIL means every reviewer looked and decided; an
+  // UNREADABLE means at least one could not look at all — a bad model id,
+  // an outage, exhausted quota, a response with no verdict line. Pinning
+  // that to a diff hash would hold the PR red until someone pushed a commit,
+  // for a reason that had already gone away. One UNREADABLE poisons the
+  // whole record, not just its own reviewer's: the set's composed verdict is
+  // not a judgement of the diff if part of it never ran.
+  const substantive = results.every((r) => r.verdict !== 'UNREADABLE')
+  if (substantive && deps.cacheFor !== undefined) {
+    // Recorded under the exact review set AND under the
+    // general-reviewer-only namespace. Both directions are load-bearing,
+    // and both exist because the review set for one diff CHANGES between
+    // runs — this job clears the labels it acted on, and a human can add or
+    // remove one at any time.
+    //
+    //   - A PASS: "every member of a SUPERSET passed" implies "every member
+    //     of any subset passed", and the general reviewer is in every set,
+    //     so this is sound proof for a later, smaller set. Without it the
+    //     very next invocation after a label clear computes a smaller set,
+    //     the namespace shifts, the lookup misses, and a review request
+    //     aimed at somebody else turns an already-green, fully-reviewed PR
+    //     red on `not-requested`.
+    //   - A FAIL: NOT sound in the same way — the failure may have been the
+    //     profile's, and a general-only run might legitimately pass. It is
+    //     recorded anyway, deliberately, because the alternative is worse
+    //     and is a fail-OPEN: a reviewer FAILS on diff D, somebody removes
+    //     the label, the namespace shrinks, the FAIL is orphaned, and D
+    //     goes GREEN with the defect still in it. A substantive FAIL is a
+    //     fact about the DIFF; removing a label does not un-find a defect.
+    //     The cost is a diff that stays red until it is actually changed,
+    //     which is the direction a merge gate is supposed to err in.
+    const scopes: (string | undefined)[] = exactScope === undefined ? [undefined] : [exactScope, undefined]
+    for (const scope of scopes) {
+      try {
+        await deps.cacheFor(scope).record(cacheKey, { verdict: verdict.ok ? 'PASS' : 'FAIL', text: verdict.summary })
+      } catch (e) {
+        deps.log(`review cache record failed (non-fatal — this run's own verdict still stands): ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  }
+
+  await deps.publishReport(results.map((r) => ({ reviewer: r.name, verdict: r.verdict, body: r.text })))
 
   return verdict
 }
 
 /**
- * The three outcomes `fleet-review.yml`'s job-level `if:` used to encode —
- * see #848 and this function's own comment for why that design fails open.
- * The job now has NO `if:` at all and always reaches a real conclusion; this
- * is what a step INSIDE it calls, before installing the review engine, to
- * decide which of the three branches applies:
+ * What `fleet-review.yml`'s "Decide whether to run the review engine" step
+ * calls, before installing anything. The job carries NO job-level `if:` at
+ * all and always reaches a real conclusion (#848: a job instantiated on an
+ * event and then skipped by `if:` satisfies branch protection exactly like a
+ * green check); this function is the whole decision, and its outcome becomes
+ * that step's exit code:
  *
- *  - `specialist-unmet` — checked before everything else (#1092): the PR
- *    carries a `-reviewer` label whose specialist has no PASS for this exact
- *    diff (or the label does not resolve). Fails the job. This is what makes
- *    a specialist binding on the REQUIRED check without the specialist's own
- *    `fleet/review/<agent>` context ever being required — see
- *    `fleet-specialist-review.yml`'s header.
- *  - `cache-hit`  — a prior PASS exists for this exact diff. Concludes the
- *    job successfully with no engine call, regardless of which label fired
- *    this run — this is what makes an unrelated label event (say,
- *    `agent-dispatchable` on an already-reviewed PR) cheap and
- *    non-destructive instead of a wasted (or worse, skipped) re-review.
- *  - `low-tier` — no cached PASS, but `tierFor` (impact.ts) classifies every
- *    changed file as Tier 0 or Tier 1: no executable content, or
- *    instructions/tooling that already earns a code-owner review on its
- *    own. Concludes the job successfully with no engine call, regardless of
- *    `requested` — checked BEFORE the label check below, deliberately: a
- *    docs-only PR that never gets the `review` label must still conclude a
- *    real, auditable success rather than sitting on `not-requested` forever
- *    for a review it was never going to need. The tier and the file-level
- *    reasons are logged (and printed to the job's own stdout by
- *    `runReviewGate`, cli.ts) so the decision is auditable from the check's
- *    own output, not just from reading this file's source.
+ *  - `review-set-unresolved` — checked FIRST, ahead of everything: the
+ *    PR's labels could not be read, or a review the PR asks for (by label
+ *    or by its own content) does not resolve to a known agent. FAILS the
+ *    job. First because every later branch would otherwise be deciding
+ *    against a review set it does not actually know, and "we could not work
+ *    out what to review" must never become "nothing needed reviewing".
+ *  - `cache-hit` — a prior SUBSTANTIVE verdict exists for this exact diff
+ *    AND this exact review set (`reviewSetTag`). No model call either way:
+ *    a cached PASS concludes the job successfully, a cached FAIL concludes
+ *    it red with the original verdict restated (#1158 — a rebase that does
+ *    not change the diff must not re-spend a review to reach the same
+ *    conclusion; 10 and 8 runs on two failing PRs in one 12-hour window).
+ *    Reached regardless of who the review was requested from, which is what
+ *    makes a second review request on an already-reviewed PR cheap and
+ *    non-destructive instead of a wasted re-review or (the old bug) a
+ *    silently-satisfied skip. Namespacing by the review set is what stops a
+ *    general-reviewer-only PASS from standing in for a set that also
+ *    includes a profile that never ran. An UNREADABLE is never cached, so an
+ *    infrastructure failure is always retried.
+ *  - `low-tier` — no cached PASS, no reviewer profile in the set, and `tierFor`
+ *    (impact.ts) classifies every changed file as Tier 0 or Tier 1: no
+ *    executable content, or instructions/tooling that already earns a
+ *    code-owner review on its own. Concludes the job successfully with no
+ *    model call, regardless of `requested` — checked BEFORE the request
+ *    check below, deliberately: a
+ *    docs-only PR must conclude a real, auditable success rather than sit
+ *    red forever waiting on a review it was never going to need. The tier
+ *    and the file-level reasons are logged (and printed to the job's own
+ *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
+ *    the check's own output, not just from reading this file's source.
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
- *    this run was not the `review` label (nor a manual `workflow_dispatch`).
- *    Fails the job outright: a `fleet/review` a reader has not yet asked for
- *    is not a passing review, and the old design's mistake was ever treating
- *    "not asked for" as anything other than a fail-closed red check.
- *  - `run-engine` — no cached PASS, Tier 2, and the review WAS requested.
- *    The workflow proceeds through engine install, auth, the smoke test and
- *    the real review exactly as before this file's `if:` removal.
+ *    this event did not ask us for one: the review was requested from
+ *    somebody else, from a team, or this is not a review-request event at
+ *    all (`reviewIsRequested`). Fails the job outright. A `fleet/review`
+ *    nobody has asked for is not a passing review, and the old design's
+ *    mistake was ever treating "not asked for" as anything other than a
+ *    fail-closed red check.
+ *  - `run-engine` — no cached PASS, Tier 2, and the review WAS requested of
+ *    us. Carries the resolved review set (`profiles`) into `review-ci`, and
+ *    the labels to clear once it passes (`clearLabels`).
  *
- * `runReviewCi` itself still opens with the identical cache lookup (see its
- * own comment) — so a direct call to it from anywhere else stays correct on
- * its own — at the cost of one redundant lookup on the `run-engine` path
- * once this decision has already been made. That redundancy is cheap and
- * never a correctness risk: both reads hit the same cache with the same key.
+ * `runReviewCi` itself resolves the same set and opens with the identical
+ * cache lookup — so a direct call to it from anywhere else stays correct on
+ * its own — at the cost of one redundant lookup on the `run-engine` path.
+ * That redundancy is cheap and never a correctness risk: both reads hit the
+ * same cache with the same key and the same namespace.
  */
 export type ReviewGateOutcome =
-  | { kind: 'specialist-unmet'; cacheKey: ReviewCacheKey; unmet: string[] }
-  | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict }
+  | { kind: 'review-set-unresolved'; cacheKey: ReviewCacheKey; reason: string }
+  | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict; profiles: string[] }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'not-requested'; cacheKey: ReviewCacheKey }
-  | { kind: 'run-engine'; cacheKey: ReviewCacheKey }
+  | { kind: 'run-engine'; cacheKey: ReviewCacheKey; profiles: string[]; clearLabels: string[] }
 
 export interface ReviewGateDeps {
   ctx: CiContext
   prDiff(): Promise<string>
-  /** The changed-file list this diff touches — `tierFor`'s only input. A
-   *  separate read from `prDiff()` rather than derived from its text (see
-   *  `ciChangedFiles`'s own comment on why a diff-text scan is not enough). */
+  /** The changed-file list this diff touches — `tierFor`'s input, and half
+   *  of `decideReviewSet`'s. A separate read from `prDiff()` rather than
+   *  derived from its text (see `ciChangedFiles`'s own comment on why a
+   *  diff-text scan is not enough). */
   changedFiles(): Promise<string[]>
-  cache: ReviewCache
-  /** Whether THIS event is the one that asks for a review: the `review`
-   *  label being applied, or a manual `workflow_dispatch`. Computed by the
-   *  workflow from `github.event_name` / `github.event.label.name` — never
-   *  re-derived here, so this function has exactly one job: cache first,
-   *  tier second, request third. */
-  requested: boolean
+  /** The cache for one review-set namespace — the namespace is not known
+   *  until the set has been decided, which is why this is a factory. */
+  cacheFor(scope: string | undefined): ReviewCache
   /**
-   * Every specialist requested on this PR (a `-reviewer` label) that has NOT
-   * passed on this exact diff, as reasons — `specialistRequirement`
-   * (specialist.ts), injected rather than imported so this module does not
-   * import one that imports it. Required, not optional: an unwired check
-   * here would be a specialist FAIL the required gate silently ignores.
+   * Whether THIS event asked US for a review — `reviewIsRequested` over the
+   * workflow's own event fields. Computed by the caller so this function has
+   * exactly one job: set first, cache second, tier third, request fourth.
    */
-  unmetSpecialists(cacheKey: ReviewCacheKey): Promise<string[]>
+  requested: boolean
+  /** `decideReviewSet` with its live PR read already wired — injected so
+   *  this function needs no `gh` and no filesystem of its own. */
+  reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
   log(msg: string): void
 }
 
 export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGateOutcome> {
   const diff = await deps.prDiff()
   const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
+  const changedFiles = await deps.changedFiles()
 
-  // FIRST, ahead of the cache, the tier and the request (#1092): a requested
-  // specialist that has not passed on this diff fails the REQUIRED check, so
-  // GitHub itself — not only this fleet — refuses the merge. Ahead of the
-  // cache because a generalist PASS must never outrank a specialist's missing
-  // or failed one (any FAIL fails); ahead of the tier because a label is an
-  // explicit request, which a docs-only diff does not get to ignore; ahead of
-  // `run-engine` so an unmet specialist never spends a generalist review.
-  const unmet = await deps.unmetSpecialists(cacheKey)
-  if (unmet.length > 0) {
-    deps.log(`specialist review(s) unmet for pr=${cacheKey.pr}:\n${unmet.map((u) => `  - ${u}`).join('\n')}`)
-    return { kind: 'specialist-unmet', cacheKey, unmet }
+  // FIRST, ahead of the cache, the tier and the request: work out WHAT this
+  // PR is asking to have reviewed. Fail closed — an unanswerable review set
+  // is a red check, never an empty one.
+  const set = await deps.reviewSet(changedFiles)
+  if (!set.ok) {
+    deps.log(`review set unresolved for pr=${cacheKey.pr}: ${set.reason}`)
+    return { kind: 'review-set-unresolved', cacheKey, reason: set.reason }
   }
+  deps.log(set.profiles.length === 0
+    ? `review set for pr=${cacheKey.pr}: ${GENERAL_REVIEWER} only`
+    : `review set for pr=${cacheKey.pr}: ${GENERAL_REVIEWER}, ${set.reasons.join(', ')}`)
 
   // Identical fail-safe direction as `runReviewCi`: a lookup failure and a
   // genuine miss are indistinguishable on purpose, because both mean "this
   // is not yet a known-good diff" — see `artifactReviewCache`'s own doc.
+  const cache = deps.cacheFor(reviewSetTag(set.profiles))
   let cached: CachedVerdict | undefined
   try {
-    cached = await deps.cache.lookup(cacheKey)
+    cached = await cache.lookup(cacheKey)
   } catch (e) {
     deps.log(`review cache lookup threw — treating pr=${cacheKey.pr} as a miss (fail safe): ${e instanceof Error ? e.message : String(e)}`)
     cached = undefined
   }
   if (cached !== undefined) {
-    deps.log(`reused verdict for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
-    return { kind: 'cache-hit', cacheKey, verdict: cached }
+    deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
+    return { kind: 'cache-hit', cacheKey, verdict: cached, profiles: set.profiles }
   }
 
-  // Ordered here — after the cache check, before the label/request check —
-  // per the operator rule this implements: ceremony should scale with
-  // impact. A diff with no reviewable content (Tier 0/1) must conclude a
-  // real success on its own, never wait on a human to apply the `review`
-  // label for a model review it will never need.
-  const changedFiles = await deps.changedFiles()
+  // Ordered here — after the cache check, before the request check — per
+  // the operator rule this implements: ceremony should scale with impact. A
+  // diff with no reviewable content (Tier 0/1) must conclude a real success
+  // on its own, never wait on someone to request a model review it will
+  // never need.
+  //
+  // ANY profile in the set overrides that, whichever input put it there. A
+  // label is somebody deciding this particular diff needs a particular pair
+  // of eyes; a content-derived profile is the PR's own paths or prose
+  // saying the same thing. Neither may be dropped by a tier heuristic
+  // WITHOUT A WORD, which is what a `low-tier` green would be — and the
+  // operator's rule is explicit: a PR that is plainly a crypto change gets
+  // the crypto review whether or not anyone remembered the label.
   const { tier, reasons } = tierFor(changedFiles)
-  if (tier < 2) {
+  if (tier < 2 && set.profiles.length > 0) {
+    deps.log(
+      `pr=${cacheKey.pr} is tier ${tier}, but ${set.profiles.join(', ')} is in its review set — ` +
+      'a named reviewer outranks the tier',
+    )
+  }
+  if (tier < 2 && set.profiles.length === 0) {
     deps.log(`no reviewable content (tier ${tier}) for pr=${cacheKey.pr} — ${reasons.join('; ') || 'no changed files'}`)
     return { kind: 'low-tier', cacheKey, tier, reasons }
   }
 
   if (!deps.requested) {
     deps.log(
-      `review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — ` +
-      'add the `review` label to run the non-author review',
+      `review not requested of ${REVIEW_REQUEST_LOGIN} for pr=${cacheKey.pr} ` +
+      `sha256:${cacheKey.diffHash.slice(0, 12)}… — request a review from ${REVIEW_REQUEST_LOGIN} to run it`,
     )
     return { kind: 'not-requested', cacheKey }
   }
 
-  return { kind: 'run-engine', cacheKey }
+  return { kind: 'run-engine', cacheKey, profiles: set.profiles, clearLabels: set.fromLabels }
 }
 
 /** `undefined` when the workflow did not supply a branch — a CI entry point

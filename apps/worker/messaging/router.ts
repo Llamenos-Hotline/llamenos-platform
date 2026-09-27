@@ -299,7 +299,7 @@ messaging.post('/:channel/webhook',
   }
 
   // Audit the incoming message (no PII — only hashed identifier)
-  c.executionCtx.waitUntil(
+  backgroundTask(c,
     audit(services.audit, 'messageReceived', 'system', {
       channel,
       senderHash: incoming.senderIdentifierHash,
@@ -312,7 +312,7 @@ messaging.post('/:channel/webhook',
 
 /**
  * Try to auto-assign a new conversation to an available volunteer.
- * This runs in background via executionCtx.waitUntil() to not delay webhook response.
+ * This runs in background via backgroundTask() to not delay webhook response.
  */
 async function tryAutoAssign(
   services: Services,

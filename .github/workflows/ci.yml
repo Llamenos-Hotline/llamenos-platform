@@ -273,6 +273,25 @@ jobs:
       - name: Validate test-specs coverage
         run: bun run test-specs:validate
 
+      # Every BDD project runs with missingSteps: "fail-on-gen" (#1153), so this
+      # fails when any scenario a project's tag filter selects has an unbound
+      # step — the condition that used to render it as a silently skipped test.
+      # Runs here, unconditionally, because the e2e and backend-bdd jobs that
+      # also run bddgen are path-filtered and would miss a feature-only change.
+      #
+      # `bddgen export` first, always: bddgen generates all BDD projects at once
+      # (one in the main thread, the rest in worker threads) and Playwright's TS
+      # transform cache is written non-atomically, so on a cold cache — every
+      # fresh runner — a thread can read a step file another thread is still
+      # writing. It then loads empty (its steps come out "missing" and a correct
+      # tree fails) or truncated (bddgen crashes). `export` loads every
+      # project's step files in one thread, so the cache is complete before the
+      # concurrent pass. Measured on cold caches: 4/22 bare runs failed, 0/25
+      # with the warm-up. Same pattern in the e2e and backend-bdd jobs below and
+      # in scripts/test-backend-bdd.sh.
+      - name: Generate BDD specs (fails on unbound scenarios)
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -472,7 +491,8 @@ jobs:
           wait_for_sip_bridge: 'true'
 
       - name: Generate BDD test files
-        run: bunx bddgen
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
 
       - name: Start Vite preview server
         run: |
@@ -610,7 +630,8 @@ jobs:
           wait_for_sip_bridge: 'true'
 
       - name: Generate BDD test files
-        run: bunx bddgen
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
 
       - name: Run backend BDD tests
         run: bun run test:backend:bdd --no-codegen
