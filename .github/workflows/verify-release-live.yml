@@ -335,7 +335,7 @@ jobs:
       - name: Fetch canonical latest.json and verify every platform artifact
         env:
           UPDATER_URL: ${{ inputs.updater_url || 'https://updates.llamenos-hotline.org/desktop/latest.json' }}
-          CHECKSUMS_BASE: ${{ env.CHECKSUMS_BASE || 'https://raw.githubusercontent.com/rhonda-rodododo/llamenos-releases/main/desktop' }}
+          CHECKSUMS_BASE: ${{ env.CHECKSUMS_BASE || 'https://raw.githubusercontent.com/Llamenos-Hotline/llamenos-releases/main/desktop' }}
         run: |
           set -euo pipefail
           echo "Manifest: $UPDATER_URL"
