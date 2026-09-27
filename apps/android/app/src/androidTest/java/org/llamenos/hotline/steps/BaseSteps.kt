@@ -14,6 +14,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
+import dagger.hilt.android.EntryPointAccessors
+import org.llamenos.hotline.LlamenosApp
+import org.llamenos.hotline.di.CryptoEntryPoint
+import org.llamenos.hotline.helpers.SimulationClient
 
 /**
  * Base class for UI step definitions.
@@ -104,6 +108,24 @@ abstract class BaseSteps : SemanticsNodeInteractionsProvider {
         // so key generation completes in <1s even on CI emulators. 15s covers navigation.
         waitForNode("dashboard-title", timeoutMillis = 15_000)
         onNodeWithTag("dashboard-title").assertIsDisplayed()
+    }
+
+    /**
+     * Register the app's current identity with the test backend as an admin.
+     *
+     * [navigateToMainScreen] only creates a local device identity; until the
+     * backend knows its signing pubkey every signed request is rejected with 401.
+     * Fails the step if promotion does not succeed — a scenario that silently
+     * runs as an unregistered user asserts nothing about the server.
+     */
+    protected fun promoteCurrentIdentityToAdmin() {
+        val pubkey = checkNotNull(
+            EntryPointAccessors.fromApplication(LlamenosApp.instance, CryptoEntryPoint::class.java)
+                .cryptoService().signingPubkeyHex,
+        ) { "No device identity to promote — navigateToMainScreen() must run first" }
+        val result = SimulationClient.promoteToAdmin(pubkey)
+        check(result.ok) { "test-promote-admin failed for ${pubkey.take(16)}…: ${result.error ?: result.detail}" }
+        Log.d(TAG, "Promoted ${pubkey.take(16)}… to admin")
     }
 
     /**

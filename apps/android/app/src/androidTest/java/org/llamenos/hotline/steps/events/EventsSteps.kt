@@ -104,10 +104,7 @@ class EventsSteps : BaseSteps() {
 
     @Then("I should see the events list or empty state")
     fun iShouldSeeTheEventsListOrEmptyState() {
-        assertAnyTagDisplayed(
-            "events-list", "events-empty", "events-loading",
-            "events-error", "events-cms-disabled", "events-title",
-        )
+        assertAnyTagDisplayed("events-list", "events-empty", timeoutMillis = 10_000)
     }
 
     @Then("I should see event cards or the empty state")
@@ -133,48 +130,31 @@ class EventsSteps : BaseSteps() {
 
     @Then("the events search field should be visible")
     fun theEventsSearchFieldShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "events-search", "events-title", "events-list", "events-empty",
-        )
+        assertAnyTagDisplayed("events-search")
     }
 
     @Then("I should see the event detail tabs")
     fun iShouldSeeTheEventDetailTabs() {
-        composeRule.waitUntil(10_000) {
-            composeRule.onAllNodesWithTag("event-detail-tabs").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("event-detail-title").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("event-detail-error").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title", "event-detail-error",
-        )
+        assertAnyTagDisplayed("event-detail-tabs", timeoutMillis = 10_000)
     }
 
     @Then("I should see the details tab in event detail")
     fun iShouldSeeTheDetailsTabInEventDetail() {
-        assertAnyTagDisplayed(
-            "event-details-tab", "event-detail-tabs", "event-detail-title",
-        )
+        assertAnyTagDisplayed("event-tab-details", timeoutMillis = 10_000)
     }
 
     @And("I should see the sub-events tab")
     fun iShouldSeeTheSubEventsTab() {
-        assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertAnyTagDisplayed("event-tab-sub_events")
     }
 
     @And("I should see the linked cases tab")
     fun iShouldSeeTheLinkedCasesTab() {
-        assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertAnyTagDisplayed("event-tab-linked_cases")
     }
 
     @And("I should see the linked reports tab")
     fun iShouldSeeTheLinkedReportsTab() {
-        assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertAnyTagDisplayed("event-tab-linked_reports")
     }
 }

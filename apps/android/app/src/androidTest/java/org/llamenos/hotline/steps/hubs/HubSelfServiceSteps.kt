@@ -1,17 +1,31 @@
 package org.llamenos.hotline.steps.hubs
 
 import android.util.Log
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.espresso.Espresso
+import dagger.hilt.android.EntryPointAccessors
 import io.cucumber.java.en.And
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import kotlinx.coroutines.runBlocking
+import org.llamenos.hotline.LlamenosApp
+import org.llamenos.hotline.di.HubOnboardApiEntryPoint
 import org.llamenos.hotline.steps.BaseSteps
+import org.llamenos.protocol.HubSetupStatus
 
 /**
  * Step definitions for hub-self-service.feature scenarios.
@@ -27,6 +41,24 @@ class HubSelfServiceSteps : BaseSteps() {
     companion object {
         private const val TAG = "HubSelfServiceSteps"
     }
+
+    /** The channel toggled by "I toggle the {string} channel" and the state it was toggled to. */
+    private var toggledChannel: String? = null
+    private var toggledChannelEnabled: Boolean? = null
+
+    private val hubOnboardApi
+        get() = EntryPointAccessors.fromApplication(
+            LlamenosApp.instance,
+            HubOnboardApiEntryPoint::class.java,
+        ).hubOnboardApi()
+
+    /** Hub setup status as the server reports it, read with the app's own signed API client. */
+    private fun serverSetupStatus(): HubSetupStatus = runBlocking { hubOnboardApi.getProviderStatus() }.getOrThrow()
+
+    private fun toggleStateOf(tag: String): ToggleableState =
+        onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsProperties.ToggleableState]
+
+    private fun Boolean.asToggleableState() = if (this) ToggleableState.On else ToggleableState.Off
 
     // ── Navigation ─────────────────────────────────────────────────────────
 
@@ -138,13 +170,16 @@ class HubSelfServiceSteps : BaseSteps() {
             composeRule.onAllNodesWithTag("channel-checklist").fetchSemanticsNodes().isNotEmpty()
         }
 
-        // Toggle voice channel on (if not already)
-        try {
-            onNodeWithTag("channel-switch-voice").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            Log.w(TAG, "Voice channel switch click failed — may already be toggled")
-        }
+        // The settings screen's own checklist stays composed behind the sheet, so
+        // address the voice row inside the onboarding checklist specifically.
+        val voiceInSheet = hasTestTag("channel-switch-voice") and
+            hasAnyAncestor(hasTestTag("onboarding-channel-checklist"))
+        onNode(voiceInSheet).performScrollTo()
+        val before = onNode(voiceInSheet).fetchSemanticsNode().config[SemanticsProperties.ToggleableState]
+        onNode(voiceInSheet).performClick()
+        composeRule.waitForIdle()
+        val expected = (before != ToggleableState.On).asToggleableState()
+        onNode(voiceInSheet).assert(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, expected))
     }
 
     @And("I proceed to the provider connection step")
@@ -201,11 +236,17 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the onboarding should be marked complete")
     fun theOnboardingShouldBeMarkedComplete() {
-        // After completing onboarding, the bottom sheet should dismiss
-        // and the provider status card should update
-        composeRule.waitUntil(15_000) {
-            composeRule.onAllNodesWithTag("hub-onboarding-sheet").fetchSemanticsNodes().isEmpty() ||
-                composeRule.onAllNodesWithTag("provider-status-card").fetchSemanticsNodes().isNotEmpty()
+        // Completing the last step closes the sheet, and the server records it.
+        try {
+            composeRule.waitUntil(15_000) {
+                composeRule.onAllNodesWithTag("hub-onboarding-sheet").fetchSemanticsNodes().isEmpty()
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("Onboarding sheet still open 15s after completing the summary step", e)
+        }
+        val status = serverSetupStatus()
+        if (!status.onboardingComplete) {
+            throw AssertionError("Server does not report onboarding complete for hub ${status.hubID}")
         }
     }
 
@@ -229,10 +270,8 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the channel checklist should be visible")
     fun theChannelChecklistShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "channel-checklist",
-            "hub-communications-loading",
-        )
+        // The checklist is always composed, even while settings load.
+        assertAnyTagDisplayed("channel-checklist")
     }
 
     @Then("all communication channel switches should be displayed")
@@ -261,52 +300,66 @@ class HubSelfServiceSteps : BaseSteps() {
     @When("I toggle the {string} channel")
     fun iToggleTheChannel(channelName: String) {
         val tag = "channel-switch-$channelName"
+        // Toggle from the server's state, not the pre-load default.
         composeRule.waitUntil(10_000) {
-            composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithTag("hub-communications-loading").fetchSemanticsNodes().isEmpty()
         }
-
-        try {
-            onNodeWithTag(tag).performScrollTo()
-        } catch (_: Throwable) {
-            // Scroll may not be needed
-        }
+        onNodeWithTag(tag).performScrollTo()
+        val enable = toggleStateOf(tag) != ToggleableState.On
         onNodeWithTag(tag).performClick()
         composeRule.waitForIdle()
+        onNodeWithTag(tag).assert(SemanticsMatcher.expectValue(SemanticsProperties.ToggleableState, enable.asToggleableState()))
+        toggledChannel = channelName
+        toggledChannelEnabled = enable
     }
 
     @Then("the channel setting should persist")
     fun theChannelSettingShouldPersist() {
-        // Allow time for the save to complete
-        composeRule.waitForIdle()
-        // The channel toggle state is managed by the ViewModel and persisted via API.
-        // Verification is done by navigating away and back (next step).
+        val channel = checkNotNull(toggledChannel) { "No channel was toggled in this scenario" }
+        val enabled = checkNotNull(toggledChannelEnabled)
+        try {
+            composeRule.waitUntil(10_000) {
+                serverSetupStatus().channelsConfigured.any { it.value == channel } == enabled
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("Server never recorded channel '$channel' as enabled=$enabled", e)
+        }
     }
 
     @Then("the channel state should be preserved")
     fun theChannelStateShouldBePreserved() {
-        // After navigating back, verify the channel checklist is still visible
-        assertAnyTagDisplayed(
-            "channel-checklist",
-            "hub-communications-loading",
-        )
+        val channel = checkNotNull(toggledChannel) { "No channel was toggled in this scenario" }
+        val expected = checkNotNull(toggledChannelEnabled).asToggleableState()
+        val tag = "channel-switch-$channel"
+        // The reopened screen reloads channels from the server; its switch must match.
+        try {
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodesWithTag("hub-communications-loading").fetchSemanticsNodes().isEmpty() &&
+                    composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()
+                        ?.config?.getOrNull(SemanticsProperties.ToggleableState) == expected
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("'$tag' is not $expected after returning to hub communications", e)
+        }
     }
 
     // ── Settings Panel ─────────────────────────────────────────────────────
 
     @Then("the provider status card should be visible")
     fun theProviderStatusCardShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "provider-status-card",
-            "hub-communications-loading",
-        )
+        // The provider card is always composed, even while settings load.
+        assertAnyTagDisplayed("provider-status-card")
     }
 
     @Then("the usage card should be visible")
     fun theUsageCardShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "hub-usage-card",
-            "hub-communications-loading",
-        )
+        // The usage card is always composed (it renders "--" until usage loads), but it
+        // sits below the provider card and channel checklist in a LazyColumn — scroll
+        // to it the way a user would before asserting it is on screen.
+        waitForNode("hub-communications-list", timeoutMillis = 10_000)
+        onNodeWithTag("hub-communications-list").performScrollToNode(hasTestTag("hub-usage-card"))
+        assertAnyTagDisplayed("hub-usage-card")
     }
 
     @When("I tap the refresh button")

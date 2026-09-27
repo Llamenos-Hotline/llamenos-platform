@@ -30,29 +30,24 @@ class TriageSteps : BaseSteps() {
     @Given("triage-eligible reports exist")
     fun triageEligibleReportsExist() {
         // Seed triage report data via declarative test-seed endpoint
-        val client = ScenarioHooks.apiClient
+        val client = checkNotNull(ScenarioHooks.apiClient) { "No API client — scenario hub was not provisioned" }
         val hubId = ScenarioHooks.currentHubId
-        if (client != null && hubId.isNotEmpty()) {
-            try {
-                val result = client.seed(
-                    TestApiClient.SeedSpec(
-                        hubId = hubId,
-                        adminSeed = ScenarioHooks.ADMIN_SEED,
-                        permissions = TestApiClient.SeedPermissions(
-                            grantVolunteerCms = true,
-                            enableCaseManagement = true,
-                        ),
-                        reportTypes = listOf(
-                            TestApiClient.SeedReportType(template = "general_report", triageReports = 2),
-                        ),
-                    )
-                )
-                check(result.ok) { "test-seed failed for triage: errors=${result.errors}" }
-                Log.i("TriageSteps", "Seeded ${result.reportTypes.size} report types, ${result.triageReports.size} reports")
-            } catch (e: Throwable) {
-                Log.w("TriageSteps", "test-seed for triage failed: ${e.message}")
-            }
-        }
+        check(hubId.isNotEmpty()) { "No current hub — triage reports would be seeded nowhere" }
+        val result = client.seed(
+            TestApiClient.SeedSpec(
+                hubId = hubId,
+                adminSeed = ScenarioHooks.ADMIN_SEED,
+                permissions = TestApiClient.SeedPermissions(
+                    grantVolunteerCms = true,
+                    enableCaseManagement = true,
+                ),
+                reportTypes = listOf(
+                    TestApiClient.SeedReportType(template = "general_report", triageReports = 2),
+                ),
+            )
+        )
+        check(result.ok) { "test-seed failed for triage: errors=${result.errors}" }
+        Log.i("TriageSteps", "Seeded ${result.reportTypes.size} report types, ${result.triageReports.size} reports")
         iNavigateToTheTriageScreen()
     }
 
@@ -75,25 +70,12 @@ class TriageSteps : BaseSteps() {
 
     @When("I tap the first triage report card")
     fun iTapTheFirstTriageReportCard() {
-        // Wait for either report cards or the empty/error state
+        // Every scenario using this step seeds triage reports first, so a card must exist.
         composeRule.waitUntil(10_000) {
-            composeRule.onAllNodes(hasTestTagPrefix("triage-card-"))
-                .fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("triage-empty").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("triage-error").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodes(hasTestTagPrefix("triage-card-")).fetchSemanticsNodes().isNotEmpty()
         }
-        val hasCards = composeRule.onAllNodes(hasTestTagPrefix("triage-card-"))
-            .fetchSemanticsNodes().isNotEmpty()
-        if (!hasCards) {
-            Log.w("TriageSteps", "No triage report cards available — empty or error state")
-            return
-        }
-        try {
-            onAllNodes(hasTestTagPrefix("triage-card-")).onFirst().performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            Log.w("TriageSteps", "No triage report cards available to tap")
-        }
+        onAllNodes(hasTestTagPrefix("triage-card-")).onFirst().performClick()
+        composeRule.waitForIdle()
 
         // Wait for the detail screen to *finish loading*, i.e. resolve to a report, not-found
         // or error. "triage-detail-title" is the TopAppBar title and is composed on the very
@@ -124,10 +106,7 @@ class TriageSteps : BaseSteps() {
 
     @Then("I should see the triage list or empty state")
     fun iShouldSeeTheTriageListOrEmptyState() {
-        assertAnyTagDisplayed(
-            "triage-list", "triage-empty", "triage-loading",
-            "triage-error", "triage-title",
-        )
+        assertAnyTagDisplayed("triage-list", "triage-empty", timeoutMillis = 10_000)
     }
 
     @Then("I should see triage cards or the empty state")
@@ -152,47 +131,33 @@ class TriageSteps : BaseSteps() {
 
     @Then("the triage filter chips should be visible")
     fun theTriageFilterChipsShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "triage-filters", "triage-title", "triage-list", "triage-empty",
-        )
+        assertAnyTagDisplayed("triage-filters")
     }
 
     @Then("I should see the triage detail view")
     fun iShouldSeeTheTriageDetailView() {
-        assertAnyTagDisplayed(
-            "triage-detail-title", "triage-detail-report-title",
-            "triage-detail-status", "triage-not-found",
-        )
+        // The loaded report, not just the TopAppBar title (composed before the fetch
+        // resolves) or the not-found state.
+        assertAnyTagDisplayed("triage-detail-report-title", timeoutMillis = 10_000)
     }
 
     @And("the triage report title should be visible")
     fun theTriageReportTitleShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "triage-detail-report-title", "triage-detail-title", "triage-not-found",
-        )
+        assertAnyTagDisplayed("triage-detail-report-title")
     }
 
     @And("the triage report status should be visible")
     fun theTriageReportStatusShouldBeVisible() {
-        assertAnyTagDisplayed(
-            "triage-detail-status", "triage-detail-title", "triage-not-found",
-        )
+        assertAnyTagDisplayed("triage-detail-status")
     }
 
     @Then("the convert to case button should be visible")
     fun theConvertToCaseButtonShouldBeVisible() {
-        // The convert button only shows for reports with allowCaseConversion.
-        val hasDetail = composeRule.onAllNodesWithTag("triage-detail-report-title")
-            .fetchSemanticsNodes().isNotEmpty() ||
-            composeRule.onAllNodesWithTag("triage-detail-title")
-                .fetchSemanticsNodes().isNotEmpty()
-
-        if (hasDetail) {
-            assertAnyTagDisplayed(
-                "triage-convert-button", "triage-detail-title",
-            )
-        }
-        // If no detail loaded (no reports), pass gracefully
+        // The scenario seeds open triage reports; the button shows for any non-closed
+        // report and sits below the metadata card, so scroll to it first.
+        waitForNode("triage-convert-button", timeoutMillis = 10_000)
+        onNodeWithTag("triage-convert-button").performScrollTo()
+        assertAnyTagDisplayed("triage-convert-button")
     }
 
     @Then("the convert confirmation dialog should appear")

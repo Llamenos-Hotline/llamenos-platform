@@ -1,5 +1,6 @@
 package org.llamenos.hotline.steps.admin
 
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,6 +18,14 @@ import org.llamenos.hotline.steps.BaseSteps
  * Tests the admin sidebar drawer navigation on Android.
  */
 class AdminSidebarSteps : BaseSteps() {
+
+    private companion object {
+        val AdminDrawerItemTags = arrayOf(
+            "admin-sidebar-item-call-settings",
+            "admin-sidebar-item-custom-fields",
+            "admin-sidebar-item-bans",
+        )
+    }
 
     // ---- Given ----
 
@@ -47,9 +56,7 @@ class AdminSidebarSteps : BaseSteps() {
 
     @Then("I should see the sidebar toggle button")
     fun iShouldSeeTheSidebarToggleButton() {
-        assertAnyTagDisplayed(
-            "admin-sidebar-toggle", "admin-title",
-        )
+        assertAnyTagDisplayed("admin-sidebar-toggle")
     }
 
     @Then("I should see the admin sidebar drawer")
@@ -60,7 +67,6 @@ class AdminSidebarSteps : BaseSteps() {
             "admin-sidebar-item-call-settings",
             "admin-sidebar-item-custom-fields",
             "admin-sidebar-item-bans",
-            "admin-title",
         )
     }
 
@@ -71,7 +77,7 @@ class AdminSidebarSteps : BaseSteps() {
             "Platform" -> "admin-sidebar-scope-platform"
             else -> "admin-sidebar-scope-${scopeName.lowercase().replace(" ", "-")}"
         }
-        assertAnyTagDisplayed(tag, "admin-sidebar-item-call-settings", "admin-title")
+        assertAnyTagDisplayed(tag)
     }
 
     @Then("I should see hub-level nav items")
@@ -138,11 +144,15 @@ class AdminSidebarSteps : BaseSteps() {
 
     @Then("the sidebar drawer should close")
     fun theSidebarDrawerShouldClose() {
-        composeRule.waitForIdle()
-        // After tapping a sidebar item, the drawer should close.
-        // Verify by checking that the sidebar items are no longer displayed
-        // (or that the main content area is now visible)
-        assertAnyTagDisplayed("admin-title", "admin-sidebar-toggle")
+        // After tapping a sidebar item the drawer closes: its items leave the screen
+        // and the toggle that reopens it is back in view.
+        val drawerItems = AdminDrawerItemTags
+        try {
+            composeRule.waitUntil(5_000) { !isAnyTagDisplayed(*drawerItems) }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("Admin sidebar drawer still open: one of ${drawerItems.joinToString()} is displayed", e)
+        }
+        assertAnyTagDisplayed("admin-sidebar-toggle")
     }
 
     @Then("I should see the call settings section content")
@@ -150,8 +160,6 @@ class AdminSidebarSteps : BaseSteps() {
         assertAnyTagDisplayed(
             "call-settings-ring-timeout",
             "call-settings-max-duration",
-            "admin-title",
-            "admin-settings-loading",
         )
     }
 
@@ -160,8 +168,6 @@ class AdminSidebarSteps : BaseSteps() {
         assertAnyTagDisplayed(
             "spam-max-calls-slider",
             "spam-captcha-toggle",
-            "admin-title",
-            "admin-settings-loading",
         )
     }
 
@@ -170,8 +176,6 @@ class AdminSidebarSteps : BaseSteps() {
         assertAnyTagDisplayed(
             "transcription-enabled-toggle",
             "transcription-optout-toggle",
-            "admin-title",
-            "admin-settings-loading",
         )
     }
 }

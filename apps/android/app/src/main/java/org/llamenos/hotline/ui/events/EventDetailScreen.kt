@@ -159,10 +159,10 @@ fun EventDetailScreen(
 
                     // Tab row
                     val tabs = listOf(
-                        stringResource(R.string.events_tab_details),
-                        stringResource(R.string.events_tab_timeline),
-                        stringResource(R.string.events_tab_cases),
-                        stringResource(R.string.events_tab_reports),
+                        "details" to stringResource(R.string.events_tab_details),
+                        "timeline" to stringResource(R.string.events_tab_timeline),
+                        "linked_cases" to stringResource(R.string.events_tab_cases),
+                        "linked_reports" to stringResource(R.string.events_tab_reports),
                     )
 
                     ScrollableTabRow(
@@ -170,12 +170,12 @@ fun EventDetailScreen(
                         edgePadding = 16.dp,
                         modifier = Modifier.testTag("event-detail-tabs"),
                     ) {
-                        tabs.forEachIndexed { index, title ->
+                        tabs.forEachIndexed { index, (slug, title) ->
                             Tab(
                                 selected = selectedTabIndex == index,
                                 onClick = { selectedTabIndex = index },
                                 text = { Text(title) },
-                                modifier = Modifier.testTag("event-tab-$index"),
+                                modifier = Modifier.testTag("event-tab-$slug"),
                             )
                         }
                     }
