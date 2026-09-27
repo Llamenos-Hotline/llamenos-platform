@@ -3,7 +3,7 @@
 ## What this is
 
 A scheduled dispatch loop that reads open GitHub issues labelled
-`agent-dispatchable` from `rhonda-rodododo/llamenos-platform`, routes each one
+`agent-dispatchable` from `Llamenos-Hotline/llamenos-platform`, routes each one
 to a lane (`backend`, `shared`, `desktop`, `ios`, `android`, `infra`) based on
 its `lane:<id>` label, and — once live dispatch ships in the follow-on plan —
 hands it to an agent scoped to that lane's owned paths.

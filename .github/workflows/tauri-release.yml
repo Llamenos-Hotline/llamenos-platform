@@ -726,7 +726,7 @@ jobs:
           fi
 
           PROBE_DIR=$(mktemp -d)
-          if ! git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/rhonda-rodododo/llamenos-releases.git" "$PROBE_DIR"; then
+          if ! git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/Llamenos-Hotline/llamenos-releases.git" "$PROBE_DIR"; then
             echo "::error::Could not clone llamenos-releases with RELEASES_REPO_PAT — token invalid or expired. Refusing to upload artifacts for v${VERSION}."
             rm -rf "$PROBE_DIR"
             exit 1
@@ -814,7 +814,7 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           RELEASES_DIR=$(mktemp -d)
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/rhonda-rodododo/llamenos-releases.git" "$RELEASES_DIR"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/Llamenos-Hotline/llamenos-releases.git" "$RELEASES_DIR"
 
           VERSION_DIR="${RELEASES_DIR}/desktop/v${VERSION}"
           mkdir -p "$VERSION_DIR"

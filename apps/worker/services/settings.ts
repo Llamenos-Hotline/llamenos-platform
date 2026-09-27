@@ -234,8 +234,20 @@ export function invalidateRolesCache(): void {
 // SettingsService
 // ---------------------------------------------------------------------------
 
+/**
+ * What an `ensureInit` call seeds: the defaults every deployment needs, plus —
+ * in demo or development mode — a completed setup state and enabled messaging.
+ */
+type InitMode = 'default' | 'development' | 'demo'
+
 export class SettingsService {
-  private initialized = false
+  /**
+   * Modes already initialised by this process (cleared by `reset`). Tracked per
+   * mode, not as one flag: the server initialises defaults at boot, and a later
+   * demo/development call must still apply its mode-specific seeding rather than
+   * being swallowed as a repeat.
+   */
+  private initializedModes = new Set<InitMode>()
 
   constructor(protected db: Database) {}
 
@@ -243,12 +255,19 @@ export class SettingsService {
   // Initialization — seeds defaults for empty tables
   // =========================================================================
 
+  /**
+   * Seed defaults into empty settings fields and an empty roles table. Only
+   * ever fills what is empty, so it is safe on every server boot: values an
+   * operator has set, and roles that exist, are never overwritten.
+   */
   async ensureInit(env?: {
     DEMO_MODE?: string
     ENVIRONMENT?: string
   }): Promise<void> {
-    if (this.initialized) return
-    this.initialized = true
+    const mode: InitMode =
+      env?.DEMO_MODE === 'true' ? 'demo' : env?.ENVIRONMENT === 'development' ? 'development' : 'default'
+    if (this.initializedModes.has(mode)) return
+    this.initializedModes.add(mode)
 
     const row = await getSettings(this.db)
     const spamSettings = row.spamSettings as SpamSettings | null
@@ -282,7 +301,8 @@ export class SettingsService {
         .where(eq(systemSettings.id, SINGLETON_ID))
     }
 
-    // Seed default roles if none exist
+    // Seed default roles if none exist. ON CONFLICT DO NOTHING: replicas booting
+    // together against a fresh database can both see an empty table.
     const existingRoles = await this.db.select().from(rolesTable)
     if (existingRoles.length === 0) {
       const now = new Date()
@@ -297,13 +317,13 @@ export class SettingsService {
           description: r.description,
           createdAt: now,
           updatedAt: now,
-        })
+        }).onConflictDoNothing()
       }
     }
 
     // Demo/development mode: mark setup complete, enable messaging
-    if (env?.DEMO_MODE === 'true' || env?.ENVIRONMENT === 'development') {
-      const isDemoMode = env.DEMO_MODE === 'true'
+    if (mode !== 'default') {
+      const isDemoMode = mode === 'demo'
       const setupState = row.setupState as SetupState | null
       if (!setupState || !setupState.setupCompleted) {
         await this.db
@@ -3379,7 +3399,7 @@ export class SettingsService {
     // between the delete above and the ensureInit re-seed below.
     invalidateRolesCache()
 
-    this.initialized = false
+    this.initializedModes.clear()
     await this.ensureInit(env)
 
     // Invalidate again after re-seeding: a concurrent request may have cached

@@ -99,6 +99,24 @@ function rowToUser(row: typeof users.$inferSelect): User {
   }
 }
 
+/** The user row created for a configured (ADMIN_PUBKEY) platform admin */
+function platformAdminRow(pubkey: string): typeof users.$inferInsert {
+  return {
+    pubkey,
+    displayName: 'Admin',
+    phone: '',
+    roles: ['role-super-admin'],
+    active: true,
+    encryptedSecretKey: '',
+    transcriptionEnabled: true,
+    spokenLanguages: ['en', 'es'],
+    uiLanguage: 'en',
+    profileCompleted: true,
+    onBreak: false,
+    callPreference: 'phone',
+  }
+}
+
 /** Strip encryptedSecretKey from volunteer for external responses */
 function sanitizeUser(vol: User): Omit<User, 'encryptedSecretKey'> & { encryptedSecretKey?: undefined } {
   return { ...vol, encryptedSecretKey: undefined }
@@ -269,21 +287,9 @@ export class IdentityService {
       // Use onConflictDoUpdate to ensure admin always has role-super-admin.
       // A race condition in test-add-hub-member can create the admin user
       // with role-volunteer; this corrects that on the next ensureInit call
-      // (e.g., during test-reset or server startup).
-      await this.db.insert(users).values({
-        pubkey: adminPubkey,
-        displayName: 'Admin',
-        phone: '',
-        roles: ['role-super-admin'],
-        active: true,
-        encryptedSecretKey: '',
-        transcriptionEnabled: true,
-        spokenLanguages: ['en', 'es'],
-        uiLanguage: 'en',
-        profileCompleted: true,
-        onBreak: false,
-        callPreference: 'phone',
-      }).onConflictDoUpdate({
+      // (e.g., during test-reset). Server startup uses ensurePlatformAdmin,
+      // which does not overwrite an existing row.
+      await this.db.insert(users).values(platformAdminRow(adminPubkey)).onConflictDoUpdate({
         target: users.pubkey,
         set: {
           roles: ['role-super-admin'],
@@ -310,6 +316,26 @@ export class IdentityService {
         }).onConflictDoNothing()
       }
     }
+  }
+
+  /**
+   * Server-startup initialisation of the ADMIN_PUBKEY platform admin. Runs on
+   * every boot, so unlike `ensureInit` it never overwrites an existing row: it
+   * creates the admin when missing and otherwise only restores the
+   * `enforceAdminRoles` invariant — appending role-super-admin if the row lacks
+   * it, keeping any other roles. `active` is left alone, so an admin who
+   * deliberately deactivated the configured admin is not overruled by a restart.
+   */
+  async ensurePlatformAdmin(): Promise<void> {
+    if (!this.adminPubkey) return
+    await this.db.insert(users).values(platformAdminRow(this.adminPubkey)).onConflictDoUpdate({
+      target: users.pubkey,
+      set: {
+        roles: sql`array_append(${users.roles}, 'role-super-admin')`,
+        updatedAt: new Date(),
+      },
+      setWhere: sql`NOT (${users.roles} @> ARRAY['role-super-admin']::text[])`,
+    })
   }
 
   // =========================================================================

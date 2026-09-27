@@ -37,13 +37,21 @@ services:
     # those layers — this only lets an unrelated-file PR pull instead of
     # rebuild. Cache import is a soft dependency: a missing/unreachable tag
     # falls back to a normal build rather than failing the job. The ref
-    # below is the literal form of `ghcr.io/${{ github.repository }}` (the
-    # same public GHCR package release.yml's docker-stable job already
-    # publishes real images to) — update it if the repo is ever renamed or
-    # transferred.
+    # below is the literal form of `ghcr.io/${{ github.repository }}`
+    # *lowercased* (the same public GHCR package release.yml's docker-stable
+    # job already publishes real images to). Compose has no expression
+    # context to derive it from, so this is a hand-maintained mirror of the
+    # producer's tag in docker-buildcache.yml — a rail in
+    # tests/orchestrator/ghcr-image-ref-lowercase.test.ts fails if the two
+    # ever drift apart, because a mismatch here is otherwise silent (a cache
+    # miss only costs a rebuild, it does not fail anything).
+    #
+    # Two things make the literal differ from a naive `github.repository`
+    # paste: the owner moved to `Llamenos-Hotline`, and OCI registries reject
+    # a mixed-case repository path, so the producer folds it to lowercase.
     build:
       cache_from:
-        - type=registry,ref=ghcr.io/rhonda-rodododo/llamenos-platform:buildcache
+        - type=registry,ref=ghcr.io/llamenos-hotline/llamenos-platform:buildcache
     ports:
       - "${APP_PORT:-3000}:3000"
     read_only: false
