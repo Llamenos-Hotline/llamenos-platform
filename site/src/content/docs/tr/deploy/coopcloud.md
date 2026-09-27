@@ -45,7 +45,7 @@ Tarif beş hizmet dağıtır:
 | Hizmet | İmaj | Amaç |
 |---------|-------|---------|
 | **web** | `nginx:1.27-alpine` | Traefik etiketleri ile ters proxy |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Bun uygulama sunucusu |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun uygulama sunucusu |
 | **db** | `postgres:17-alpine` | PostgreSQL veritabanı |
 | **RustFS** | `RustFS/RustFS` | S3-uyumlu dosya depolama |
 | **relay** | `dockurr/WebSocket relay` | Gerçek zamanlı olaylar için WebSocket rölesi |

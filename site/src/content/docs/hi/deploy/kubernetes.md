@@ -37,7 +37,7 @@ helm install llamenos deploy/helm/llamenos/ \
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/llamenos-hotline/llamenos-platform
+    repository: ghcr.io/rhonda-rodododo/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -139,7 +139,7 @@ kubectl get ingress llamenos
 
 | Parameter | विवरण | Default |
 |-----------|-------------|---------|
-| `app.image.repository` | Container image | `ghcr.io/llamenos-hotline/llamenos-platform` |
+| `app.image.repository` | Container image | `ghcr.io/rhonda-rodododo/llamenos-platform` |
 | `app.image.tag` | Image tag | Chart appVersion |
 | `app.port` | Application port | `3000` |
 | `app.replicas` | Pod replicas | `2` |

@@ -35,7 +35,7 @@ helm install llamenos deploy/helm/llamenos/ \
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/llamenos-hotline/llamenos-platform
+    repository: ghcr.io/rhonda-rodododo/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -304,7 +304,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | ፓራሜትር | መግለጫ | ነባሪ |
 |-----------|-------------|---------|
-| `app.image.repository` | የኮንቴይነር ምስል | `ghcr.io/llamenos-hotline/llamenos-platform` |
+| `app.image.repository` | የኮንቴይነር ምስል | `ghcr.io/rhonda-rodododo/llamenos-platform` |
 | `app.image.tag` | የምስል tag | Chart appVersion |
 | `app.image.pullPolicy` | Pull policy | `IfNotPresent` |
 | `app.port` | የመተግበሪያ ፖርት | `3000` |
@@ -365,7 +365,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 | ፓራሜትር | መግለጫ | ነባሪ |
 |-----------|-------------|---------|
 | `signalNotifier.enabled` | signal-notifier sidecar ን ይተግብሩ | `false` |
-| `signalNotifier.image.repository` | signal-notifier ምስል | `ghcr.io/llamenos-hotline/llamenos-signal-notifier` |
+| `signalNotifier.image.repository` | signal-notifier ምስል | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
 | `signalNotifier.resources` | CPU/ማህደረ ትውስታ requests እና limits | `{}` |
 
 ### SIP bridge

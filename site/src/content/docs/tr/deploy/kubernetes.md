@@ -35,7 +35,7 @@ Veya tekrarlanabilir dağıtımlar için bir `values-production.yaml` dosyası o
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/llamenos-hotline/llamenos-platform
+    repository: ghcr.io/rhonda-rodododo/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -304,7 +304,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | Parametre | Açıklama | Varsayılan |
 |-----------|-------------|---------|
-| `app.image.repository` | Konteyner imajı | `ghcr.io/llamenos-hotline/llamenos-platform` |
+| `app.image.repository` | Konteyner imajı | `ghcr.io/rhonda-rodododo/llamenos-platform` |
 | `app.image.tag` | İmaj etiketi | Grafik appVersion |
 | `app.image.pullPolicy` | Çekme politikası | `IfNotPresent` |
 | `app.port` | Uygulama bağlantı noktası | `3000` |
@@ -365,7 +365,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 | Parametre | Açıklama | Varsayılan |
 |-----------|-------------|---------|
 | `signalNotifier.enabled` | signal-notifier yan hizmetini dağıt | `false` |
-| `signalNotifier.image.repository` | signal-notifier imajı | `ghcr.io/llamenos-hotline/llamenos-signal-notifier` |
+| `signalNotifier.image.repository` | signal-notifier imajı | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
 | `signalNotifier.resources` | CPU/bellek istekleri ve limitleri | `{}` |
 
 ### SIP köprüsü

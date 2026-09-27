@@ -45,7 +45,7 @@ Receta despliega cinco servicios:
 | Servicio | Imagen | Propósito |
 |---------|-------|---------|
 | **web** | `nginx:1.27-alpine` | Proxy inverso nuu etiquetas Traefik |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Servidor aplicación Bun |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Servidor aplicación Bun |
 | **db** | `postgres:17-alpine` | Base datos PostgreSQL |
 | **RustFS** | `RustFS/RustFS` | Almacenamiento archivos compatible S3 |
 | **relay** | `dockurr/WebSocket relay` | Relé WebSocket nuu eventos tiempo real |

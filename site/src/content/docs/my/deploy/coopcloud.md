@@ -45,7 +45,7 @@ Recipe သည် ဝန်ဆောင်မှုငါးခုကို ဖ�
 | ဝန်ဆောင်မှု | Image | ရည်ရွယ်ချက် |
 |---|---|---|
 | **web** | `nginx:1.27-alpine` | Traefik labels ပါရှိသော Reverse proxy |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Bun application server |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun application server |
 | **db** | `postgres:17-alpine` | PostgreSQL ဒေတာဘေ့စ် |
 | **RustFS** | `RustFS/RustFS` | S3-compatible ဖိုင်သိုလှောင်မှု |
 | **relay** | `dockurr/WebSocket relay` | အချိန်နှင့်တပြေးညီဖြစ်ရပ်များအတွက် WebSocket relay |

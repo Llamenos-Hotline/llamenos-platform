@@ -45,7 +45,7 @@ Reçet pênc karûbaran belav dike:
 | Karûbar | Wêne | Mebest |
 |---------|------|--------|
 | **web** | `nginx:1.27-alpine` | Proksiya berevajî bi labelên Traefik |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Serverê sepanê Bun |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Serverê sepanê Bun |
 | **db** | `postgres:17-alpine` | Danegeha PostgreSQL |
 | **RustFS** | `RustFS/RustFS` | Depoya pelê ya lihevhatî bi S3 |
 | **relay** | `dockurr/WebSocket relay` | WebSocket relay ji bo bûyerên bi-dem |

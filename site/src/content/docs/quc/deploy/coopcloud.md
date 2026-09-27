@@ -45,7 +45,7 @@ Ri rutz'aqat nuch'ak'ij'oj' winaq taq samaj:
 | Samaj | Wachib'äl | Ruk'u'x samaj |
 |---------|-------|---------|
 | **web** | `nginx:1.27-alpine` | Reverse proxy rik'in Traefik taq etal |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Bun ruchojmil samaj |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun ruchojmil samaj |
 | **db** | `postgres:17-alpine` | PostgreSQL ruk'u'x tzij |
 | **RustFS** | `RustFS/RustFS` | S3-ruxaq' ruk'u'x k'ayib'äl |
 | **relay** | `dockurr/WebSocket relay` | WebSocket relay richin k'ak'a' samajib'äl |

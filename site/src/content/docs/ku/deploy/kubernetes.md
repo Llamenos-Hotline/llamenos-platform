@@ -35,7 +35,7 @@ An jî pelê `values-production.yaml` ji bo belavkirinên dubarekirî çêbikin:
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/llamenos-hotline/llamenos-platform
+    repository: ghcr.io/rhonda-rodododo/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -304,7 +304,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | Parametre | Sermawecî | Default |
 |-----------|-----------|---------|
-| `app.image.repository` | Wêneyê konteynerê | `ghcr.io/llamenos-hotline/llamenos-platform` |
+| `app.image.repository` | Wêneyê konteynerê | `ghcr.io/rhonda-rodododo/llamenos-platform` |
 | `app.image.tag` | Tagê wêneyê | Chart appVersion |
 | `app.image.pullPolicy` | Polîtîkaya کشش | `IfNotPresent` |
 | `app.port` | Porta sepanê | `3000` |
@@ -365,7 +365,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 | Parametre | Sermawecî | Default |
 |-----------|-----------|---------|
 | `signalNotifier.enabled` | signal-notifier sidecar belav bike | `false` |
-| `signalNotifier.image.repository` | Wêneyê signal-notifier | `ghcr.io/llamenos-hotline/llamenos-signal-notifier` |
+| `signalNotifier.image.repository` | Wêneyê signal-notifier | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
 | `signalNotifier.resources` | Daxwaz û sînorkirinên CPU/bîr | `{}` |
 
 ### SIP bridge

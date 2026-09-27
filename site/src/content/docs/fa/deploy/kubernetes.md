@@ -35,7 +35,7 @@ helm install llamenos deploy/helm/llamenos/ \
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/llamenos-hotline/llamenos-platform
+    repository: ghcr.io/rhonda-rodododo/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -304,7 +304,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | پارامتر | توضیحات | پیش‌فرض |
 |---|---|---|
-| `app.image.repository` | تصویر کانتینر | `ghcr.io/llamenos-hotline/llamenos-platform` |
+| `app.image.repository` | تصویر کانتینر | `ghcr.io/rhonda-rodododo/llamenos-platform` |
 | `app.image.tag` | برچسب تصویر | Chart appVersion |
 | `app.image.pullPolicy` | خط مشی دریافت | `IfNotPresent` |
 | `app.port` | پورت برنامه | `3000` |
@@ -365,7 +365,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 | پارامتر | توضیحات | پیش‌فرض |
 |---|---|---|
 | `signalNotifier.enabled` | استقرار سایدکار signal-notifier | `false` |
-| `signalNotifier.image.repository` | تصویر signal-notifier | `ghcr.io/llamenos-hotline/llamenos-signal-notifier` |
+| `signalNotifier.image.repository` | تصویر signal-notifier | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
 | `signalNotifier.resources` | درخواست‌ها و محدودیت‌های CPU/حافظه | `{}` |
 
 ### پل SIP

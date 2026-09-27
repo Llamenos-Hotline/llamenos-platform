@@ -45,7 +45,7 @@ abra app deploy hotline.example.com
 | አገልግሎት | ምስል | ዓላማ |
 |---------|-------|---------|
 | **web** | `nginx:1.27-alpine` | ከTraefik labels ጋር የገለልተኛ ፕሮክሲ |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Bun የመተግበሪያ ሰርቨር |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun የመተግበሪያ ሰርቨር |
 | **db** | `postgres:17-alpine` | PostgreSQL ዳታቤዝ |
 | **RustFS** | `RustFS/RustFS` | S3-ተኳሃኝ የፋይል ማከማቻ |
 | **relay** | `dockurr/WebSocket relay` | የበጊዜ ለውጥ ክስተቶች WebSocket relay |

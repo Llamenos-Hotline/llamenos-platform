@@ -45,7 +45,7 @@ Recipe-ga waxa uu dejiyaa shan adeeg:
 | Adeeg | Image | Ujeeddo |
 |---------|-------|---------|
 | **web** | `nginx:1.27-alpine` | Reverse proxy with Traefik labels |
-| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Bun application server |
+| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun application server |
 | **db** | `postgres:17-alpine` | PostgreSQL database |
 | **RustFS** | `RustFS/RustFS` | S3-compatible file storage |
 | **relay** | `dockurr/WebSocket relay` | WebSocket relay for real-time events |
