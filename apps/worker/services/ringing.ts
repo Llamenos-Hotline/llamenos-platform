@@ -85,24 +85,29 @@ export async function startParallelRinging(
     const { users: allUsers } = await services.identity.getUsers()
     const { roles: roleDefs } = await services.settings.getRoles()
 
-    // Availability rules: a volunteer must be active, not on break, and able
-    // to answer calls IN THIS HUB. Shift rosters and fallback groups are plain
-    // pubkey lists that are not pruned when someone leaves the hub; without the
-    // hub check a volunteer removed from the hub would keep being rung with its
-    // callers (#1037). Hub authority is hub-scoped: only a super-admin's global
-    // roles reach into a hub. Global-scope calls (hubId '') have no hub, so the
-    // authority there is the user's global roles.
+    // Busy = answering an in-progress call in ANY hub (one phone, one pair of ears).
+    const busyPubkeys = await services.calls.getBusyPubkeys()
+
+    // Availability rules: a volunteer must be active, not on break, not already on a
+    // live call, and able to answer calls IN THIS HUB. Shift rosters and fallback
+    // groups are plain pubkey lists that are not pruned when someone leaves the hub;
+    // without the hub check a volunteer removed from the hub would keep being rung
+    // with its callers (#1037). Hub authority is hub-scoped: only a super-admin's
+    // global roles reach into a hub. Global-scope calls (hubId '') have no hub, so
+    // the authority there is the user's global roles.
     const canAnswer = (v: (typeof allUsers)[number]) =>
       hubId === ''
         ? permissionGranted(resolvePermissions(v.roles ?? [], roleDefs), 'calls:answer')
         : hasHubPermission(v.roles ?? [], v.hubRoles ?? [], roleDefs, hubId, 'calls:answer')
     const pickAvailable = (pubkeys: string[]) =>
-      allUsers.filter(v => pubkeys.includes(v.pubkey) && v.active && !v.onBreak && canAnswer(v))
+      allUsers.filter(
+        v => pubkeys.includes(v.pubkey) && v.active && !v.onBreak && !busyPubkeys.has(v.pubkey) && canAnswer(v),
+      )
 
     // All available on-shift users (for Nostr relay notification)
     let available = pickAvailable(onShiftPubkeys)
 
-    // Everyone on shift is unavailable (inactive / on break) — try the fallback
+    // Everyone on shift is unavailable (inactive / on break / on a call) — try the fallback
     // group with the same availability rules before giving up. The fallback is
     // meant for exactly this case, not only for an empty roster.
     if (available.length === 0 && !usedFallback) {
