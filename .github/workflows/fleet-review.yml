@@ -696,6 +696,47 @@ jobs:
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
           FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
           FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
+          # TRANSITIONAL SHIM (#1213) — delete this key, and this comment,
+          # in the PR immediately after this one merges. It exists for
+          # exactly one run: THIS PR's own.
+          #
+          # The gate is deliberately run from the BASE checkout, never from
+          # the commit it judges (see the file header). So on any PR this
+          # YAML comes from the HEAD while `orchestrator/src/cli.ts
+          # review-gate` comes from `main`, and the two halves speak only
+          # through this `env:` block. This PR changes what they say to each
+          # other: `main`'s `runReviewGate` reads one thing,
+          # `FLEET_REVIEW_REQUESTED === 'true'`, and knows nothing of the two
+          # variables above. Emitting only the new pair left this PR's own
+          # `fleet/review` at `not-requested`, exit 1, no engine — a required
+          # check with no honest way to pass. So we keep speaking the old
+          # dialect too, for the one base that still only understands it.
+          #
+          # It is NOT `true`. It is `reviewIsRequested` (ci.ts) transcribed
+          # into an expression, so the old gate reaches the same verdict the
+          # new one would: `workflow_dispatch` is a request (both sides agree
+          # — see the ctx step on `main` and `reviewIsRequested`'s first
+          # line); a `pull_request` — which on this workflow can ONLY be
+          # `review_requested` — is a request when it named `llamenos-auto`,
+          # or named `rhonda-rodododo` on the knope release PR, and is NOT
+          # one when it named a colleague or a TEAM (`requested_reviewer` is
+          # then empty). `merge_group` cannot reach this at all: the step's
+          # own `if:` above excludes it. Comparison is `==`, which GitHub
+          # evaluates case-insensitively, matching `reviewIsRequested`'s own
+          # `toLowerCase()`. The login is compared INSIDE the expression and
+          # never reaches the value, so no attacker-influenced text is
+          # interpolated — the env var is only ever `true` or `false`.
+          #
+          # This duplicates REVIEW_REQUEST_LOGIN / RELEASE_REVIEW_REQUEST_LOGIN
+          # / KNOPE_RELEASE_BRANCH in YAML, where nothing tests them and they
+          # will drift. That is the whole reason #1213 exists and why it is a
+          # deletion, not a maintenance task.
+          FLEET_REVIEW_REQUESTED: >-
+            ${{ github.event_name == 'workflow_dispatch'
+            || (github.event_name == 'pull_request'
+            && (github.event.requested_reviewer.login == 'llamenos-auto'
+            || (github.event.requested_reviewer.login == 'rhonda-rodododo'
+            && github.event.pull_request.head.ref == 'release'))) }}
           # A re-published cached verdict is written here too, so a cache
           # hit still reads as a review on the PR rather than a bare status.
           FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
