@@ -4,8 +4,9 @@ import { useAuth } from '@/lib/auth'
 import { useNoteSheet } from '@/lib/note-sheet-context'
 import { useDraft } from '@/lib/use-draft'
 import { encryptNote } from '@/lib/platform'
+import { resolveCallHubId } from '@/lib/call-hubs'
 
-import { createNote, updateNote, getCallHistory, getCustomFields, type CallRecord } from '@/lib/api'
+import { createNote, updateNote, getCallHistory, getCustomFields, getActiveHub, type CallRecord } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { useToast } from '@/lib/toast'
@@ -29,7 +30,7 @@ import { CustomFieldInputs, validateCustomFields } from '@/components/notes/cust
 export function NoteSheet() {
   const { t } = useTranslation()
   const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
-  const { isOpen, mode, editNoteId, initialCallId, initialConversationId, initialText, initialFields, close, onSaved } = useNoteSheet()
+  const { isOpen, mode, editNoteId, initialCallId, initialConversationId, initialHubId, initialText, initialFields, close, onSaved } = useNoteSheet()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
   const [recentCalls, setRecentCalls] = useState<CallRecord[]>([])
@@ -94,9 +95,12 @@ export function NoteSheet() {
       if (mode === 'edit' && editNoteId) {
         await updateNote(editNoteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       } else if (isConversationNote) {
-        await createNote({ conversationId: initialConversationId, encryptedContent, authorEnvelope, adminEnvelopes })
+        // A conversation note belongs to the conversation's hub, not the active one.
+        await createNote({ conversationId: initialConversationId, encryptedContent, authorEnvelope, adminEnvelopes }, initialHubId)
       } else {
-        await createNote({ callId: draft.callId, encryptedContent, authorEnvelope, adminEnvelopes })
+        // A call note belongs to the call's hub, which may not be the active one.
+        const hubId = resolveCallHubId(draft.callId, getActiveHub())
+        await createNote({ callId: draft.callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
       }
       draft.clearDraft()
       close()
@@ -185,6 +189,7 @@ export function NoteSheet() {
               ) : (
                 <Input
                   id="sheet-call-id"
+                  data-testid="sheet-call-id-input"
                   value={draft.callId}
                   onChange={e => draft.setCallId(e.target.value)}
                   placeholder={t('notes.callIdPlaceholder')}

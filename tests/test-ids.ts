@@ -103,6 +103,7 @@ export const TestIds = {
   NOTE_SHEET: 'note-sheet',
   SHEET_NOTE_TEXT: 'sheet-note-text',
   SHEET_SAVE_BTN: 'sheet-save-btn',
+  SHEET_CALL_ID_INPUT: 'sheet-call-id-input',
 
   // ============ Calls ============
   CALL_LIST: 'call-list',
@@ -121,6 +122,8 @@ export const TestIds = {
   RECORDING_PLAYER: 'recording-player',
   RECORDING_PLAY_BTN: 'recording-play-btn',
   ACTIVE_CALL_PANEL: 'active-call-panel',
+  ACTIVE_CALL_NOTE_INPUT: 'active-call-note-input',
+  ACTIVE_CALL_NOTE_SAVE_BTN: 'active-call-note-save-btn',
   /** Incoming (ringing) call row; append `-<callId>` via rowTestId */
   INCOMING_CALL_ROW: 'incoming-call-row',
   /** Answer button inside an incoming call row; append `-<callId>` via rowTestId */
