@@ -4,6 +4,8 @@ Feature: Login Page Restore
   I want the login page to handle both fresh installs and returning users
   So that I can access the app whether I'm new or returning
 
+  # @wip: step "I should see the device key input" has no desktop definition — #1195
+  @wip
   Scenario: Fresh install shows device key input and Log in button
     Given I am on the login screen
     Then I should see the device key input
@@ -34,6 +36,8 @@ Feature: Login Page Restore
     When I visit the login page
     Then I should see the "Recovery Options" button
 
+  # @wip: step "I should see the device key input" has no desktop definition — #1195
+  @wip
   Scenario: Recovery options switches to recovery view
     Given I have a stored encrypted key
     When I visit the login page

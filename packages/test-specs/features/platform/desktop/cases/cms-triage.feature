@@ -1,4 +1,5 @@
-@desktop
+# @wip: Background step "the admin is logged in" has no desktop definition — #1195
+@desktop @wip
 Feature: CMS Triage Queue
   Admins triage incoming reports by reviewing encrypted content,
   creating linked case records, and tracking conversion progress.

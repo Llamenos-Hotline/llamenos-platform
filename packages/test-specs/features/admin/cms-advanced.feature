@@ -1,4 +1,5 @@
-@backend
+# @wip: Background steps have no backend definitions — #1198
+@backend @wip
 Feature: CMS Advanced Operations (EP06-A4)
   As an admin
   I want to merge duplicate contacts and records, perform bulk operations,

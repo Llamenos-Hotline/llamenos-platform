@@ -273,6 +273,14 @@ jobs:
       - name: Validate test-specs coverage
         run: bun run test-specs:validate
 
+      # Every BDD project runs with missingSteps: "fail-on-gen" (#1153), so this
+      # fails when any scenario a project's tag filter selects has an unbound
+      # step — the condition that used to render it as a silently skipped test.
+      # Runs here, unconditionally, because the e2e and backend-bdd jobs that
+      # also run bddgen are path-filtered and would miss a feature-only change.
+      - name: Generate BDD specs (fails on unbound scenarios)
+        run: bunx bddgen
+
       - name: Typecheck
         run: bun run typecheck
 

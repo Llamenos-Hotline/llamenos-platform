@@ -4,7 +4,8 @@ Feature: Entity System Unification
   Date and location fields use blind indexes for server-side filtering without
   revealing cleartext values.
 
-  @templates
+  # @wip: steps have no backend definitions — #1198
+  @templates @wip
   Scenario: List builtin entity type templates
     Given I am authenticated as admin
     When I request GET /api/settings/cms/templates
@@ -21,7 +22,8 @@ Feature: Entity System Unification
     And that entity type should have a field named "start_date" with indexType "date"
     And that entity type should have a field named "location" with indexType "location"
 
-  @templates
+  # @wip: steps have no backend definitions — #1198
+  @templates @wip
   Scenario: Template application is idempotent within a hub
     Given I am authenticated as admin
     And the builtin template "builtin:event" has been applied
@@ -38,7 +40,8 @@ Feature: Entity System Unification
     Then I should receive 1 record
     And the server should not have seen the plaintext date
 
-  @permission-aliasing
+  # @wip: steps have no backend definitions — #1198
+  @permission-aliasing @wip
   Scenario: events:read permission maps to cases:read
     Given a user has permission "events:read" but not "cases:read"
     When the user requests GET /api/records
