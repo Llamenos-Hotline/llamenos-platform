@@ -12,11 +12,9 @@ Feature: Sidebar Navigation
     When I visit "/notes" without authentication
     Then I should be redirected to the login page
 
-  # @wip: step "I should see the device key input" has no desktop definition — #1195
-  @wip
   Scenario: Login page renders with sign-in form
     When I visit the login page
-    Then I should see the device key input
+    Then I should see the device key import input field
 
   Scenario: Login rejects invalid device key
     When I visit the login page
