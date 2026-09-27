@@ -206,6 +206,15 @@ describe("checkIosCoverage", () => {
     expect(result).toEqual({ covered: 0, missing: 2 });
   });
 
+  test("does not credit a quarantined test — the merge gate skips it", () => {
+    write(
+      "apps/ios/Tests/UI/HubUITests.swift",
+      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() { XCTAssertTrue(app.exists) }\n}\n`
+    );
+    write("apps/ios/Tests/UI/ci-quarantine.txt", "# header\nHubUITests/testSwitchActiveHub  # fails on a filed defect — #1\n");
+    expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 0, missing: 1 });
+  });
+
   test("a throwing test that tries is asserting", () => {
     write(
       "apps/ios/Tests/Unit/ThrowingTests.swift",

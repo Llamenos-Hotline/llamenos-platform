@@ -23,11 +23,22 @@ name: iOS E2E
 
 on:
   workflow_call:
+    inputs:
+      include-quarantined:
+        description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      include-quarantined:
+        description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
+        type: boolean
+        default: true
   # ci.yml's `ios` flag is set by apps/ios/ and shared dependencies, not by
   # apps/worker/ or src/server/ — so a backend-only PR that breaks the iOS
   # client's API contract never runs this suite. The nightly run on main
-  # catches that within a day.
+  # catches that within a day. It also runs the quarantined tests, so each
+  # quarantined defect stays visible daily until it is fixed.
   schedule:
     - cron: "17 3 * * *"
 
@@ -60,6 +71,10 @@ jobs:
       # an accessibility identifier the app no longer defines anywhere (#755).
       - name: Check for stale accessibility identifiers in iOS UI tests
         run: python3 apps/ios/scripts/check-stale-identifiers.py
+
+      # Every test the merge gate skips must exist and name the issue that owns it.
+      - name: Check the UI test quarantine
+        run: python3 apps/ios/scripts/ui-tests.py check-quarantine
 
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
@@ -228,10 +243,16 @@ jobs:
           echo "device=$SIM" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $SIM"
 
+      # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
+      # manual dispatch run it too.
       - name: Select test classes for shard ${{ matrix.shard }}
         id: shard
+        env:
+          INCLUDE_QUARANTINED: ${{ github.event_name == 'schedule' || inputs.include-quarantined }}
         run: |
-          python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} | tee /tmp/shard-args.txt
+          extra=()
+          if [ "$INCLUDE_QUARANTINED" = "true" ]; then extra=(--include-quarantined); fi
+          python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee /tmp/shard-args.txt
           test -s /tmp/shard-args.txt || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
       # Inside the job's 60: leaves room for the always() report/upload steps.

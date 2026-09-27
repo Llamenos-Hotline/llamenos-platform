@@ -839,6 +839,8 @@ function checkBackendCoverage(scenarios: Scenario[]): { covered: number; missing
 //      matcher credited were in a target ci.yml passed -skip-testing for.
 //   5. No other @ios scenario maps to the same method name: one test is
 //      credited to at most one scenario.
+//   6. It is not in apps/ios/Tests/UI/ci-quarantine.txt — tests the per-PR
+//      gate skips (each naming the defect that owns it) run only nightly.
 //
 // This measures that a correctly-named, CI-executed test EXISTS. Whether it
 // passes is decided by the CI job that runs it, and whether its assertions
@@ -911,6 +913,22 @@ const DEFAULT_IOS_PATHS: IosCoveragePaths = {
   projectYml: IOS_PROJECT_YML,
   workflowsDir: WORKFLOWS_DIR,
 };
+
+/**
+ * `Class.testMethod` → reason, for the UI tests the per-PR merge gate skips
+ * (apps/ios/scripts/ui-tests.py shard). They still run nightly, but a test the
+ * merge gate does not run earns no scenario credit.
+ */
+export function readIosQuarantine(iosRoot: string): Map<string, string> {
+  const path = join(iosRoot, "Tests/UI/ci-quarantine.txt");
+  const quarantined = new Map<string, string>();
+  if (!existsSync(path)) return quarantined;
+  for (const raw of readFileSync(path, "utf-8").split("\n")) {
+    const m = raw.trim().match(/^(\w+)\/(test\w+)\s+#\s*(.*\S)\s*$/);
+    if (m) quarantined.set(`${m[1]}.${m[2]}`, m[3]);
+  }
+  return quarantined;
+}
 
 export function readIosTestTargets(projectYml: string): IosTestTarget[] {
   const project = Bun.YAML.parse(readFileSync(projectYml, "utf-8")) as XcodegenProject;
@@ -1058,6 +1076,11 @@ function checkIosCoverage(
   const targets = readIosTestTargets(paths.projectYml);
   const gated = iosTargetsGatedByCi(paths.workflowsDir);
   const methods = parseIosTestMethods(paths.iosRoot, targets);
+  const quarantined = readIosQuarantine(paths.iosRoot);
+  for (const m of methods) {
+    const why = quarantined.get(`${m.className}.${m.name}`);
+    if (why && !m.disqualified) m.disqualified = `quarantined from the merge gate: ${why}`;
+  }
 
   console.log(`  ${methods.length} Swift test methods under ${relative(ROOT, paths.iosRoot) || "."}/Tests`);
   for (const t of targets) {
