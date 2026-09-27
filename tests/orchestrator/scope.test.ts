@@ -76,6 +76,8 @@ describe('checkScope', () => {
         'src/server/',
         'tests/steps/backend/',
         'tests/steps/fixtures.ts',
+        'tests/api-helpers.ts',
+        'tests/simulation-helpers.ts',
         '.github/ci/*-baseline.json',
         'eslint.config.js',
         'lefthook.yml',
@@ -541,6 +543,47 @@ describe('checkScope', () => {
         'tests/steps/admin/admin-flow-steps.ts',
         'tests/steps/auth/pin-lockout-steps.ts',
         'tests/steps/cases/cms-events-steps.ts',
+      ])
+    })
+  })
+
+  describe('shared test-helper lane-scope fix: backend shared-write on tests/api-helpers.ts and tests/simulation-helpers.ts (#1115)', () => {
+    let backend: LaneScope
+    let desktop: LaneScope
+
+    beforeAll(async () => {
+      const scopes = await loadLaneScopes(process.cwd())
+      const b = scopes['backend']
+      const d = scopes['desktop']
+      if (!b || !d) throw new Error('expected backend and desktop lane fragments to exist')
+      backend = b
+      desktop = d
+    })
+
+    // Same class of grant, and the same reason, as tests/steps/fixtures.ts above:
+    // backend's own BDD suite imports these, so a lane that cannot write them
+    // cannot fix its own tests. tests/api-helpers.ts has 108 importers across
+    // tests/, tests/simulation-helpers.ts has 24, both heavily from
+    // tests/steps/backend/. Before this grant, #1064 and #1072 were hard-blocked
+    // at fleet/verify for touching test infrastructure they depend on.
+    it('backend may write the shared test helpers its own suite imports', () => {
+      expect(checkScope(['tests/api-helpers.ts', 'tests/simulation-helpers.ts'], backend, []).strayed).toEqual([])
+    })
+
+    it('desktop may write them too — via its unchanged blanket tests/ grant', () => {
+      expect(checkScope(['tests/api-helpers.ts', 'tests/simulation-helpers.ts'], desktop, []).strayed).toEqual([])
+    })
+
+    it('the grant is scoped to those two files — backend still may not write tests/mocks/ or desktop step directories', () => {
+      const r = checkScope(
+        ['tests/mocks/tauri.ts', 'tests/steps/calls/multi-hub-call-steps.ts', 'tests/steps/hub/hub-steps.ts'],
+        backend,
+        [],
+      )
+      expect(r.strayed).toEqual([
+        'tests/mocks/tauri.ts',
+        'tests/steps/calls/multi-hub-call-steps.ts',
+        'tests/steps/hub/hub-steps.ts',
       ])
     })
   })
