@@ -1,10 +1,34 @@
 import { describe, it, expect } from 'vitest'
 import { REPO, ghArgs, describeGhFailure } from '../../orchestrator/src/gh.js'
+import { actualRepository } from './repo-identity.js'
 
 describe('gh', () => {
   it('pins the repo on every invocation', () => {
-    expect(REPO).toBe('rhonda-rodododo/llamenos-platform')
+    expect(REPO).toBe('Llamenos-Hotline/llamenos-platform')
     expect(ghArgs(['issue', 'list'])).toEqual(['issue', 'list', '-R', REPO])
+  })
+
+  // The literal above is a spelling check; on its own it only proves the
+  // constant equals a copy of itself. This is the assertion that makes the
+  // pin mean something: it ties `REPO` to the repository this checkout
+  // actually belongs to, resolved from outside the source tree (see
+  // repo-identity.ts). Before #1218 the pin had drifted to the pre-move owner
+  // and nothing here noticed, because the only thing it was checked against
+  // was another literal that had drifted with it.
+  //
+  // Why this is a correctness rail and not housekeeping: `ghArgs` appends
+  // `-R REPO` to every `gh` subcommand the fleet runs, and `gh()`'s callers
+  // pass `repos/${REPO}/...` straight into `gh api`. GitHub keeps the
+  // old-owner redirect alive only while the vacated path is unoccupied, so a
+  // pin left on a redirect means anyone who registers that name inherits
+  // every merge, comment and label write the fleet makes — with `gh` still
+  // exiting 0.
+  //
+  // Compared case-insensitively: GitHub treats owner/repo paths as
+  // case-insensitive, and a remote URL or `GITHUB_REPOSITORY` may legitimately
+  // differ from the pin's casing. The exact spelling is the assertion above.
+  it('is pinned to the repository this checkout actually belongs to, not a redirect', () => {
+    expect(REPO.toLowerCase()).toBe(actualRepository().toLowerCase())
   })
 
   it('does not duplicate an explicit -R', () => {

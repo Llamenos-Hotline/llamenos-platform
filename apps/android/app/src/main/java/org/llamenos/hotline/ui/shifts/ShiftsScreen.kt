@@ -47,6 +47,7 @@ import org.llamenos.hotline.model.dayIndices
 import org.llamenos.hotline.model.displayStatus
 import org.llamenos.hotline.util.DateFormatUtils
 import org.llamenos.hotline.model.ShiftResponse
+import org.llamenos.protocol.SharedCreateShiftJoinRequestBodyType
 
 /**
  * Shifts screen showing clock in/out toggle and available shifts.
@@ -122,24 +123,12 @@ fun ShiftsScreen(
                         // Clock in/out card
                         item {
                             ClockInOutCard(
-                                isOnShift = uiState.currentStatus?.isOnShift ?: false,
+                                isOnShift = uiState.clockedInAt != null,
                                 isLoading = uiState.isClockingInOut,
-                                startedAt = uiState.currentStatus?.startedAt,
+                                startedAt = uiState.clockedInAt,
                                 onClockIn = { viewModel.clockIn() },
                                 onClockOut = { viewModel.clockOut() },
                             )
-                        }
-
-                        // Active shift info
-                        uiState.currentStatus?.let { status ->
-                            if (status.isOnShift) {
-                                item {
-                                    ActiveShiftInfo(
-                                        activeCallCount = status.activeCallCount ?: 0,
-                                        recentNoteCount = status.recentNoteCount ?: 0,
-                                    )
-                                }
-                            }
                         }
 
                         // Error card
@@ -183,6 +172,7 @@ fun ShiftsScreen(
                             ) { shift ->
                                 ShiftCard(
                                     shift = shift,
+                                    pendingRequest = uiState.pendingRequests[shift.id],
                                     onSignUp = { viewModel.signUp(shift.id) },
                                     onDrop = { viewModel.showDropConfirmation(shift.id) },
                                 )
@@ -294,66 +284,12 @@ private fun ClockInOutCard(
 }
 
 /**
- * Active shift info card showing call and note counts.
- */
-@Composable
-private fun ActiveShiftInfo(
-    activeCallCount: Int,
-    recentNoteCount: Int,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("active-shift-info"),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = activeCallCount.toString(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.testTag("active-call-count"),
-                )
-                Text(
-                    text = stringResource(R.string.active_calls),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = recentNoteCount.toString(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.testTag("recent-note-count"),
-                )
-                Text(
-                    text = stringResource(R.string.notes_title),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-/**
  * Individual shift card with time, status badge, and sign up/drop action.
  */
 @Composable
 private fun ShiftCard(
     shift: ShiftResponse,
+    pendingRequest: SharedCreateShiftJoinRequestBodyType?,
     onSignUp: () -> Unit,
     onDrop: () -> Unit,
     modifier: Modifier = Modifier,
@@ -414,8 +350,31 @@ private fun ShiftCard(
 
                 Spacer(Modifier.height(8.dp))
 
-                when (shift.displayStatus) {
-                    "available" -> {
+                when {
+                    pendingRequest != null -> {
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            modifier = Modifier.testTag("shift-request-pending-${shift.id}"),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    when (pendingRequest) {
+                                        SharedCreateShiftJoinRequestBodyType.Join -> R.string.shifts_requests_type_join
+                                        SharedCreateShiftJoinRequestBodyType.Leave -> R.string.shifts_requests_type_leave
+                                    },
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = stringResource(R.string.shifts_requests_status_pending),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                    }
+
+                    shift.displayStatus == "available" -> {
                         FilledTonalButton(
                             onClick = onSignUp,
                             modifier = Modifier.testTag("shift-signup-${shift.id}"),
@@ -424,7 +383,7 @@ private fun ShiftCard(
                         }
                     }
 
-                    "assigned" -> {
+                    shift.displayStatus == "assigned" -> {
                         OutlinedButton(
                             onClick = onDrop,
                             modifier = Modifier.testTag("shift-drop-${shift.id}"),
