@@ -13,7 +13,8 @@ import org.llamenos.hotline.steps.BaseSteps
 /**
  * Step definitions for admin-sidebar.feature.
  *
- * Tests the admin sidebar drawer navigation on Android.
+ * The drawer opens from the admin panel's top bar and from every admin section
+ * screen; picking an item opens that section.
  */
 class AdminSidebarSteps : BaseSteps() {
 
@@ -34,7 +35,7 @@ class AdminSidebarSteps : BaseSteps() {
         onNodeWithTag("settings-admin-card").performScrollTo()
         onNodeWithTag("settings-admin-card").performClick()
         composeRule.waitForIdle()
-        // Reaching the admin screen is the precondition; whether it offers the
+        // Reaching the admin panel is the precondition; whether it offers the
         // sidebar is what the Then steps assert.
         assertAnyTagDisplayed("admin-title", timeoutMillis = 10_000)
     }
@@ -50,11 +51,7 @@ class AdminSidebarSteps : BaseSteps() {
     fun iShouldSeeTheAdminSidebarDrawer() {
         // The ModalNavigationDrawer itself doesn't have a testTag, so verify
         // the drawer is open by checking for nav items inside it
-        assertAnyTagDisplayed(
-            "admin-sidebar-item-call-settings",
-            "admin-sidebar-item-custom-fields",
-            "admin-sidebar-item-bans",
-        )
+        assertAnyTagDisplayed(*AdminDrawerItemTags)
     }
 
     @Then("I should see {string} scope header")
@@ -64,6 +61,10 @@ class AdminSidebarSteps : BaseSteps() {
             "Platform" -> "admin-sidebar-scope-platform"
             else -> "admin-sidebar-scope-${scopeName.lowercase().replace(" ", "-")}"
         }
+        // The drawer scrolls (the Platform scope sits below every hub item);
+        // bring the header into view before asserting it.
+        waitForNode(tag)
+        onNodeWithTag(tag).performScrollTo()
         assertAnyTagDisplayed(tag)
     }
 
@@ -124,20 +125,17 @@ class AdminSidebarSteps : BaseSteps() {
         assertAnyTagDisplayed("admin-sidebar-toggle")
     }
 
+    // The section's controls render only once its settings have loaded; the
+    // card around them shows while loading, so it is not evidence of content.
+
     @Then("I should see the call settings section content")
     fun iShouldSeeTheCallSettingsSectionContent() {
-        assertAnyTagDisplayed(
-            "call-settings-ring-timeout",
-            "call-settings-max-duration",
-        )
+        assertAnyTagDisplayed("ring-timeout-slider")
     }
 
     @Then("I should see spam protection section content")
     fun iShouldSeeSpamProtectionSectionContent() {
-        assertAnyTagDisplayed(
-            "spam-max-calls-slider",
-            "spam-captcha-toggle",
-        )
+        assertAnyTagDisplayed("max-calls-per-hour-slider")
     }
 
     @Then("I should see transcription section content")
