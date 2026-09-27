@@ -25,7 +25,23 @@ settings:
     CODE_SIGN_STYLE: Automatic
     # The Rust XCFramework is only built for arm64 simulator slices.
     # Exclude x86_64 so Release builds on Apple Silicon Macs link cleanly.
+    # (The Linphone SDK's simulator slices are arm64+x86_64, so this does not
+    # drop anything Linphone needs.)
     "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+
+# Linphone SDK (liblinphone + Swift wrapper `linphonesw`), consumed as the upstream
+# Swift package. Pinned to the commit the `5.5.23-novideo` tag points at, not to the
+# tag: a tag is a movable ref, and Package.resolved lives inside the gitignored
+# .xcodeproj, so a tag pin would not be reproducible across fresh checkouts.
+# That commit's Package.swift carries a SHA-256 `checksum:` for every binary
+# xcframework zip, and SwiftPM refuses to use a download that does not match it.
+# `-novideo`: this is a voice-only hotline, so the video codecs are unused attack
+# surface; the Swift API is byte-identical to the full variant.
+# Keep in sync with Package.swift.
+packages:
+  linphonesw:
+    url: https://github.com/BelledonneCommunications/linphone-sdk-swift-ios
+    revision: dc3c6e3601a2aceeee74d0420353f20d911eb802 # tag 5.5.23-novideo
 
 targets:
   # ─── Main Application ───────────────────────────────────────
@@ -43,6 +59,7 @@ targets:
     dependencies:
       - framework: LlamenosCoreFFI.xcframework
         embed: false
+      - package: linphonesw
     info:
       path: Sources/App/Info.plist
       properties:
@@ -53,9 +70,10 @@ targets:
         # immediately invoke CXProvider.reportNewIncomingCall on every PushKit push;
         # non-compliant apps are terminated and have PushKit delivery blocked by iOS.
         # The Llamenos PushKit/CallKit integration is gated on the Linphone SDK
-        # (apps/ios/Frameworks/linphone-sdk.xcframework) being linked AND verified
-        # end-to-end on a real device. Until then, incoming-call notifications use
-        # the standard APNs path (remote-notification + UNUserNotification).
+        # (the `linphonesw` package above) being linked AND verified end-to-end on
+        # a real device. It is linked; device verification has NOT happened. Until
+        # then, incoming-call notifications use the standard APNs path
+        # (remote-notification + UNUserNotification).
         # Re-add `voip` when PushKit is registered and CallKit reporting is wired.
         UIBackgroundModes:
           - remote-notification
