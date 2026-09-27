@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { parseOwnedPaths, matchesPath, loadLaneScopes } from '../../orchestrator/src/fragments.js'
+import {
+  parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES, loadLaneScopes,
+} from '../../orchestrator/src/fragments.js'
 
 // Verbatim excerpt of .claude/agents/fragments/ios-supervisor.md
 const IOS = `
@@ -172,6 +174,68 @@ describe('matchesPath', () => {
   it('matches a bare glob pattern against the basename at any depth', () => {
     expect(matchesPath('Dockerfile.build', 'Dockerfile*')).toBe(true)
     expect(matchesPath('deploy/docker/Dockerfile', 'Dockerfile*')).toBe(true)
+  })
+})
+
+describe('matchesSecretPath — the never-write matcher (#1253)', () => {
+  // The defect: `.env` is a basename PREFIX pattern, so `matchesPath` judged
+  // `deploy/docker/.env.example` a secret and `fleet/review` refused the PR
+  // that makes a first deploy possible. Five committed templates were caught.
+
+  it('still forbids a real secret at every depth and under every environment name', () => {
+    for (const f of [
+      '.env',
+      'apps/worker/config/.env',
+      'deploy/docker/.env',
+      '.env.local',
+      '.env.production',
+      'deploy/docker/.env.production',
+      // The environment name nobody has added yet: the whole reason this is a
+      // suffix EXCLUSION and not an enumeration of known environments.
+      'deploy/docker/.env.1984',
+      '.env.flokinet',
+    ]) {
+      expect(matchesSecretPath(f, '.env'), `${f} must still be refused`).toBe(true)
+    }
+    expect(matchesSecretPath('apps/android/keystore.properties', 'keystore.properties')).toBe(true)
+    expect(matchesSecretPath('deploy/secrets/prod.pem', '*.pem')).toBe(true)
+    expect(matchesSecretPath('scripts/id_ed25519', 'id_ed25519')).toBe(true)
+  })
+
+  it('permits a committed template of that same secret', () => {
+    expect(matchesSecretPath('deploy/docker/.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('.env.live.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/ios/fastlane/.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/android/keystore.properties.example', 'keystore.properties')).toBe(false)
+  })
+
+  it('exempts only the three documented suffixes, case-sensitively', () => {
+    expect(SECRET_TEMPLATE_SUFFIXES).toEqual(['.example', '.sample', '.template'])
+    expect(matchesSecretPath('.env.sample', '.env')).toBe(false)
+    expect(matchesSecretPath('.env.template', '.env')).toBe(false)
+    // Every one of these is a spelling a real secret could hide behind, so
+    // none of them is exempt.
+    for (const f of ['.env.Example', '.env.EXAMPLE', '.env.exemple', '.env.dist', '.env.tpl', '.env.example.local']) {
+      expect(matchesSecretPath(f, '.env'), `${f} must not be treated as a template`).toBe(true)
+    }
+  })
+
+  it('requires the suffix to be a suffix OF something — a file named only `.example` is not a template', () => {
+    expect(isSecretTemplatePath('.example')).toBe(false)
+    expect(isSecretTemplatePath('deploy/.template')).toBe(false)
+    expect(isSecretTemplatePath('deploy/docker/.env.example')).toBe(true)
+  })
+
+  it('looks at the basename only — a secret inside a directory named `*.example` is still a secret', () => {
+    expect(matchesSecretPath('deploy/docker.example/.env', '.env')).toBe(true)
+  })
+
+  it('leaves `matchesPath` itself untouched, so lane OWNERSHIP of a template is unchanged', () => {
+    // If the carve-out had gone into `matchesPath`, a template would stop
+    // matching the `deploy/` its owning lane declares, and the same PR would
+    // fail the same gate as `strayed` instead of `forbidden`.
+    expect(matchesPath('deploy/docker/.env.example', '.env')).toBe(true)
+    expect(matchesPath('deploy/docker/.env.example', 'deploy/')).toBe(true)
   })
 })
 

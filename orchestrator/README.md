@@ -209,7 +209,16 @@ What a grant cannot do:
   Be precise about what that covers, because an earlier draft of this section
   overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
   **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
-  in it, because lanes legitimately own some of them.
+  in it, because lanes legitimately own some of them. Nor are committed
+  TEMPLATES of a secret (`.env.example`, `keystore.properties.example`): the
+  never-write comparison is `matchesSecretPath`, which subtracts
+  `SECRET_TEMPLATE_SUFFIXES` from the match, because a file that exists to be
+  committed and read cannot be a secret and a deploy template nobody may edit
+  is a deploy nobody may fix (#1253). The interactive write-deny hook in
+  `.claude/settings.json` never blocked them either — its `\.env$` is
+  anchored — so this removes a divergence rather than creating one. A
+  template is exempt from the WRITE gate only: `classifyImpact` still rates
+  it high-impact, and `gitleaks` still reads its contents.
 
 - **Reach CI or deploy config via a grant.** That is enforced separately, by
   `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,
