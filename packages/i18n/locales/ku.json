@@ -1485,6 +1485,9 @@
     "today": "Îro",
     "until": "heta",
     "users": "Bikarhêner",
+    "voipNotEnabled": "Gerîna di nav sepanê de ji bo hesabê te ne vekirî ye, ji ber vê yekê gerîn li ser vê cîhazê lê nadin. Ji rêveberê navenda xwe bixwaze ku wê çalak bike.",
+    "voipSetupFailed": "Gerîna di nav sepanê de nehat sazkirin, ji ber vê yekê dibe ku gerîn li ser vê cîhazê lê nedin. Şiftê biqedîne û ji nû ve dest pê bike, an bi rêveberê navenda xwe re têkilî dayne.",
+    "voipUnavailableInBuild": "Gerîna di nav sepanê de di vê guhertoyê de tune ye, ji ber vê yekê gerîn nikarin li ser vê cîhazê lê bidin. Tu hîn di şiftê de yî.",
     "weeklySchedule": "Bernameya Heftanî",
     "ringGroups": {
       "addMembers": "Add Members",

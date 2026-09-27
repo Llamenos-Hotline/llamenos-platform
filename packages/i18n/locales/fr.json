@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "jusqu'à",
     "users": "Bénévoles",
+    "voipNotEnabled": "Les appels dans l'application ne sont pas activés pour votre compte, les appels ne sonneront donc pas sur cet appareil. Demandez à l'administration de votre hub de les activer.",
+    "voipSetupFailed": "Les appels dans l'application n'ont pas pu être configurés, les appels risquent donc de ne pas sonner sur cet appareil. Essayez de terminer puis de reprendre votre service, ou contactez l'administration de votre hub.",
+    "voipUnavailableInBuild": "Les appels dans l'application ne sont pas inclus dans cette version, les appels ne peuvent donc pas sonner sur cet appareil. Vous êtes toujours en service.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

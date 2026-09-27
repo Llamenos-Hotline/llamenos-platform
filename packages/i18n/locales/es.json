@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "hasta",
     "users": "Voluntarios",
+    "voipNotEnabled": "Las llamadas en la aplicación no están activadas para tu cuenta, así que las llamadas no sonarán en este dispositivo. Pide a la administración de tu hub que las active.",
+    "voipSetupFailed": "No se pudieron configurar las llamadas en la aplicación, así que es posible que las llamadas no suenen en este dispositivo. Intenta terminar e iniciar el turno de nuevo, o contacta a la administración de tu hub.",
+    "voipUnavailableInBuild": "Las llamadas en la aplicación no están incluidas en esta versión, así que las llamadas no pueden sonar en este dispositivo. Sigues en turno.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

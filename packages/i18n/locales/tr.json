@@ -1485,6 +1485,9 @@
     "today": "Bugün",
     "until": "kadar",
     "users": "Kullanıcılar",
+    "voipNotEnabled": "Hesabınız için uygulama içi arama açık değil, bu nedenle aramalar bu cihazda çalmayacak. Etkinleştirmesi için merkez yöneticinize başvurun.",
+    "voipSetupFailed": "Uygulama içi arama kurulamadı, bu nedenle aramalar bu cihazda çalmayabilir. Vardiyayı bitirip yeniden başlatmayı deneyin veya merkez yöneticinizle iletişime geçin.",
+    "voipUnavailableInBuild": "Uygulama içi arama bu sürümde bulunmuyor, bu nedenle aramalar bu cihazda çalamaz. Hâlâ vardiyadasınız.",
     "weeklySchedule": "Haftalık Takvim",
     "overrides": {
       "date": "Tarih",

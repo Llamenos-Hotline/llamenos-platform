@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "até",
     "users": "Voluntários",
+    "voipNotEnabled": "As chamadas no aplicativo não estão ativadas para a sua conta, então as chamadas não vão tocar neste dispositivo. Peça à administração do seu hub para ativá-las.",
+    "voipSetupFailed": "Não foi possível configurar as chamadas no aplicativo, então as chamadas podem não tocar neste dispositivo. Tente encerrar e iniciar o turno novamente ou fale com a administração do seu hub.",
+    "voipUnavailableInBuild": "As chamadas no aplicativo não estão incluídas nesta versão, então as chamadas não podem tocar neste dispositivo. Você continua no turno.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

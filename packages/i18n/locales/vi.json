@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "đến",
     "users": "Tình nguyện viên",
+    "voipNotEnabled": "Tính năng gọi trong ứng dụng chưa được bật cho tài khoản của bạn, nên cuộc gọi sẽ không đổ chuông trên thiết bị này. Hãy nhờ quản trị viên hub của bạn bật tính năng này.",
+    "voipSetupFailed": "Không thể thiết lập tính năng gọi trong ứng dụng, nên cuộc gọi có thể không đổ chuông trên thiết bị này. Hãy thử kết thúc rồi bắt đầu ca lại, hoặc liên hệ quản trị viên hub của bạn.",
+    "voipUnavailableInBuild": "Phiên bản ứng dụng này không có tính năng gọi trong ứng dụng, nên cuộc gọi không thể đổ chuông trên thiết bị này. Bạn vẫn đang trong ca trực.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

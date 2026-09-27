@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "直到",
     "users": "志愿者",
+    "voipNotEnabled": "您的账户未开启应用内通话，因此来电不会在此设备上响铃。请联系您的中心管理员开启。",
+    "voipSetupFailed": "无法设置应用内通话，因此来电可能不会在此设备上响铃。请尝试结束并重新开始值班，或联系您的中心管理员。",
+    "voipUnavailableInBuild": "此版本的应用不包含应用内通话，因此来电无法在此设备上响铃。您仍在值班中。",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

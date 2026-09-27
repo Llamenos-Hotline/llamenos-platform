@@ -3881,6 +3881,9 @@
     "today": "Today",
     "until": "until",
     "users": "Volunteers",
+    "voipNotEnabled": "In-app calling is not turned on for your account, so calls will not ring this device. Ask your hub admin to enable it.",
+    "voipSetupFailed": "In-app calling could not be set up, so calls may not ring this device. Try clocking out and in again, or contact your hub admin.",
+    "voipUnavailableInBuild": "In-app calling is not included in this version of the app, so calls cannot ring this device. You are still on shift.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {
