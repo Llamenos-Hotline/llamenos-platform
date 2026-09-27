@@ -153,9 +153,13 @@ abstract class BaseSteps : SemanticsNodeInteractionsProvider {
      * Handles animation delays and Activity startup timing.
      */
     protected fun waitForNode(tag: String, timeoutMillis: Long = 5000) {
-        composeRule.waitUntil(timeoutMillis) {
-            composeRule.onAllNodesWithTag(tag)
-                .fetchSemanticsNodes().isNotEmpty()
+        try {
+            composeRule.waitUntil(timeoutMillis) {
+                composeRule.onAllNodesWithTag(tag)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("No node tagged '$tag' appeared within ${timeoutMillis}ms", e)
         }
     }
 
