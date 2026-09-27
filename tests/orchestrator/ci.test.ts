@@ -206,6 +206,26 @@ describe('fleet/verify in CI', () => {
       }
     })
 
+    // The fail-open the review gate caught on this PR's first revision: an
+    // `off` lane legitimately has an empty scope, and honouring a grant for
+    // it would have made the whole PR unrestricted.
+    it('drops a grant for a lane that owns nothing, rather than letting it widen the PR', async () => {
+      const emptyLane = (): Lane => ({
+        id: 'shared', mode: 'off', cap: 1, engine: 'claude',
+        requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
+        scope: { owned: [], notOwned: [] },
+      })
+      const logged: string[] = []
+      const d = deps({
+        lanes: async () => [lane(), emptyLane()],
+        prLabels: async () => ['scope:shared'],
+        log: (m) => logged.push(m),
+      })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+      expect(logged.join('\n')).toContain('grants nothing')
+    })
+
     it('a deps object with no prLabels at all behaves exactly like a PR with no grants', async () => {
       const d = deps({ lanes: bothLanes })
       await runVerifyCi(d)
