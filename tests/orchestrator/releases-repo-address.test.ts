@@ -151,12 +151,16 @@ describe('desktop release-metadata repo address (#1226)', () => {
         'checks a repo nothing was published to',
     ).toEqual({})
 
+    // Subset, not equality: the laggard set must be free to SHRINK without an
+    // edit here, or this rail turns main red the moment #1220 lands and fixes
+    // config.ts — punishing the migration it exists to encourage. Only growth
+    // is a regression.
     expect(
-      laggards.sort(),
-      'the set of files still on the pre-move owner changed. Shrinking it is good — drop the ' +
-        'file from EXPECTED_LAGGARDS. Growing it means a consumer regressed to a repo that ' +
-        'does not exist (gh api repos/rhonda-rodododo/llamenos-releases -> 404).',
-    ).toEqual([...EXPECTED_LAGGARDS].sort())
+      laggards.filter((f) => !EXPECTED_LAGGARDS.includes(f)).sort(),
+      'a consumer regressed to the pre-move owner, which is a repo that does not exist ' +
+        '(gh api repos/rhonda-rodododo/llamenos-releases -> 404). Only the files in ' +
+        'EXPECTED_LAGGARDS may still name it, and only until their open PR lands.',
+    ).toEqual([])
   })
 
   it('artifact publishing is not performed by CI', () => {
