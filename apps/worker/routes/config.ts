@@ -133,7 +133,7 @@ config.get('/verify',
       version: __BUILD_VERSION__,
       commit: __BUILD_COMMIT__,
       buildTime: __BUILD_TIME__,
-      verificationUrl: 'https://github.com/rhonda-rodododo/llamenos/releases',
+      verificationUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases',
       trustAnchor: 'GitHub Release checksums + SLSA provenance',
     })
   })

@@ -136,6 +136,20 @@ describe('SettingsService.ensureInit', () => {
     const secondInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
+
+  it('still applies demo seeding after a default-mode init (server boot, then demo seeder)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow()],
+      [makeRole()],
+      [makeSettingsRow({ setupState: null, messagingConfig: null })],
+      [makeRole()],
+    ])
+    await service.ensureInit() // boot
+    const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
+    await service.ensureInit({ DEMO_MODE: 'true' })
+    expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
+  })
 })
 
 // ---------------------------------------------------------------------------

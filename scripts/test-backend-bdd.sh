@@ -43,7 +43,31 @@ if [[ "$NO_CODEGEN" != "true" ]]; then
   fi
 fi
 
-# Step 2: Check backend is reachable
+# Step 2: Generate BDD test files from features + step definitions.
+# playwright-bdd v8 requires explicit bddgen before test execution, and every BDD
+# project runs with missingSteps: "fail-on-gen" (#1153): a scenario selected by a
+# project's tag filter with a step that has no definition fails generation here,
+# before any backend is needed — instead of being rendered as a silently skipped
+# test. Deliberately unimplemented scenarios carry @wip/@fixme with a linked
+# issue (enforced by `bun run test-specs:validate`).
+#
+# `bddgen export` runs first to fill Playwright's TS transform cache from a single
+# thread: bddgen itself generates every BDD project concurrently in worker threads,
+# and the cache is written non-atomically, so on a cold cache one thread can load a
+# step file another is still writing — empty (its steps read as "missing") or
+# truncated (bddgen crashes). See the build job in .github/workflows/ci.yml.
+if ! reporter_run_step "bddgen" bash -c 'bunx bddgen export > /dev/null && bunx bddgen'; then
+  echo "bddgen failed. If it printed 'Missing step definitions', a scenario selected"
+  echo "by a BDD project's tag filter has an unbound step: bind it, or tag it"
+  echo "@wip / @fixme with a '# ... — #<issue>' comment above the tag."
+  overall_result="fail"
+  reporter_record_suite "bddgen" 0 1 0
+  reporter_summary "$overall_result"
+  exit 1
+fi
+reporter_record_suite "bddgen" 1 0 0
+
+# Step 3: Check backend is reachable
 HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
 if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/live" >/dev/null 2>&1; then
   echo "Backend not reachable at ${HUB_URL}. Start it with:"
@@ -55,7 +79,7 @@ if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/live" >/de
 fi
 reporter_record_suite "health-check" 1 0 0
 
-# Step 3: API-level bootstrap — reset DB and create admin account without requiring
+# Step 4: API-level bootstrap — reset DB and create admin account without requiring
 # the frontend UI. The bootstrap Playwright project needs the desktop frontend running
 # at PLAYWRIGHT_BASE_URL; for backend-only test runs we bypass it via the dev API.
 ADMIN_SEED="${ADMIN_SEED:-f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7}"
@@ -79,10 +103,6 @@ else
   reporter_summary "$overall_result"
   exit 1
 fi
-
-# Step 4: Generate BDD test files from features + step definitions
-# playwright-bdd v8 requires explicit bddgen before test execution
-bunx bddgen 2>&1
 
 # Step 5: Run backend BDD tests via Playwright
 # Uses --no-deps to skip the bootstrap Playwright project (we bootstrapped via API above).

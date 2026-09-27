@@ -73,6 +73,13 @@ function step(j: WorkflowJob, name: string): WorkflowStep {
  *  workflow expression itself ever changes shape (caught by the assertion
  *  right after this is called, not silently). */
 function resolveImageName(rawImageNameEnv: string): string {
+  // Deliberately still `rhonda-rodododo`, NOT a missed rename (#1218). This
+  // literal is held in lockstep with `registry.app` in site/src/config.ts —
+  // see the comment there: the repository moved to `Llamenos-Hotline` but the
+  // GHCR package did not, so the old path is the one that still serves images
+  // (200, live tags) and the new one 403s. Both sides move together in #1223,
+  // which also replaces this hardcoded resolution with one sourced from the
+  // real repository, so the two can never go stale in step again.
   if (rawImageNameEnv === '${{ github.repository }}') return 'rhonda-rodododo/llamenos-platform'
   return rawImageNameEnv
 }

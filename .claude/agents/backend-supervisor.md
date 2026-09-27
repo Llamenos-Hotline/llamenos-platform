@@ -60,8 +60,14 @@ Each learned from a live fleet failure. Full list + failures:
 - **Fix the app, not the test** — a test passing when its dependency is unreachable is a
   no-op; make it fail loudly or exclude it by tag.
 - **Testid-only selectors** in any E2E test — no CSS class or text selectors.
-- **Invoke `crypto-security-reviewer`** on any change touching crypto: HPKE/Ed25519/X25519/
-  sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings.
+- **Request a review to get one.** Assigning `llamenos-auto` as reviewer — or re-requesting
+  review from them — is what runs `fleet/review`. No label triggers it. The agent decides
+  which reviews to run from the PR's `-reviewer` labels and from the PR itself; they run
+  together and report one check. Add a `-reviewer` label only to ask for a review the PR's
+  own content would not already imply.
+- **Crypto changes get `crypto-security-reviewer` automatically** — any diff touching
+  HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
+  by path or by your PR description. Say so in the description if the paths do not show it.
 
 ---
 
@@ -482,7 +488,7 @@ Prefix names with `ll-` to disambiguate from other projects in status.sh output.
 ### Git & Worktrees
 - **Always work in your worktree** — never `cd` to or `git checkout` in the main repo checkout (`$DISPATCH_REPO`; it is the first entry of `git worktree list`).
 - **Worktrees live at** `$WORKTREE_BASE/<repo-dir>-<name>`, where `<repo-dir>` is the main checkout's directory name (`llamenos` for a default clone). Your own worktree is your current directory.
-- **GitHub remote:** `git@github.com:rhonda-rodododo/llamenos-platform.git`
+- **GitHub remote:** `git@github.com:Llamenos-Hotline/llamenos-platform.git`
 
 ### Push & PR Creation (GitHub)
 ```bash

@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 description = "Shared cryptographic core for Llamenos — Ed25519/X25519, HPKE (RFC 9180), AES-256-GCM, sigchain"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/rhonda-rodododo/llamenos-platform"
+repository = "https://github.com/Llamenos-Hotline/llamenos-platform"
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
