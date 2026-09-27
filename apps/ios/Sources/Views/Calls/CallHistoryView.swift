@@ -138,7 +138,7 @@ struct CallHistoryView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
     @Environment(CryptoService.self) private var cryptoService
-    @State private var viewModel: CallHistoryViewModel?
+    @State private var viewModelBox = ViewModelBox<CallHistoryViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -298,13 +298,11 @@ struct CallHistoryView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: CallHistoryViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = CallHistoryViewModel(apiService: appState.apiService, cryptoService: cryptoService)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

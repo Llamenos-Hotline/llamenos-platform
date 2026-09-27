@@ -6,16 +6,16 @@ import SwiftUI
 /// to event details. Events are CMS records with category='event'.
 struct EventListView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: EventsViewModel?
+    @State private var viewModelBox = ViewModelBox<EventsViewModel>()
     @State private var showCreateEvent: Bool = false
 
     private var vm: EventsViewModel {
-        if let viewModel { return viewModel }
+        if let existing = viewModelBox.value { return existing }
         let vm = EventsViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService
         )
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 

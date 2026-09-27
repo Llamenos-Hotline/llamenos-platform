@@ -7,7 +7,7 @@ import SwiftUI
 struct ShiftsView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: ShiftsViewModel?
+    @State private var viewModelBox = ViewModelBox<ShiftsViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -299,7 +299,7 @@ struct ShiftsView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ShiftsViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = ShiftsViewModel(
@@ -308,9 +308,7 @@ struct ShiftsView: View {
             hubContext: hubContext,
             linphoneService: appState.linphoneService
         )
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }
