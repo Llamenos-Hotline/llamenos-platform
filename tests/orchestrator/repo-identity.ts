@@ -4,12 +4,12 @@ import { execFileSync } from 'node:child_process'
  * Ground truth for "which repository is this?" — resolved from outside the
  * source tree, never from a literal inside it.
  *
- * This exists because of #1218. Rails in this suite compare an owner/repo path
- * against something else in the tree, and they were resolving
+ * This exists because of #1218. Two rails in this suite compare an owner/repo
+ * path against something else in the tree, and both were resolving
  * `${{ github.repository }}` through a hardcoded `'rhonda-rodododo/...'`
  * constant. After the org move to `Llamenos-Hotline` that constant and the
  * thing it was compared against were BOTH stale, so the comparison held and
- * the rail could not fail. A rail that cannot fail is worse than no rail: it
+ * the rails could not fail. A rail that cannot fail is worse than no rail: it
  * reports green over exactly the drift it was built to catch.
  *
  * Resolution order, and why each entry is trustworthy:
@@ -63,4 +63,19 @@ export function actualRepository(): string {
 function parseRemoteUrl(url: string): string | undefined {
   const m = url.match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/)
   return m ? `${m[1]}/${m[2]}` : undefined
+}
+
+/**
+ * The repository path as an OCI registry will accept it. Registries reject a
+ * mixed-case repository path outright ("repository name must be lowercase"),
+ * and `github.repository` carries the owner's *display* casing —
+ * `Llamenos-Hotline/...` since the org move.
+ *
+ * Note on division of labour: this helper folds the case so a rail can compare
+ * namespaces without tripping over casing. Whether the *workflows themselves*
+ * fold before they hand a reference to a registry is a separate assertion,
+ * owned by `ghcr-image-ref-lowercase.test.ts`.
+ */
+export function actualRepositoryForRegistry(): string {
+  return actualRepository().toLowerCase()
 }

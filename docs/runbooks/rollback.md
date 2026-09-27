@@ -13,7 +13,7 @@ cd deploy/ansible
 ansible-playbook playbooks/rollback.yml \
   -i inventory.yml \
   -e "@vars.yml" \
-  -e "rollback_to_image=ghcr.io/rhonda-rodododo/llamenos-platform:<previous_tag>"
+  -e "rollback_to_image=ghcr.io/llamenos-hotline/llamenos-platform:<previous_tag>"
 ```
 
 ### Manual Docker rollback

@@ -45,7 +45,7 @@ abra app deploy hotline.example.com
 | Служба | Образ | Призначення |
 |---------|-------|-------------|
 | **web** | `nginx:1.27-alpine` | Зворотний проксі з мітками Traefik |
-| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Сервер додатка Bun |
+| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | Сервер додатка Bun |
 | **db** | `postgres:17-alpine` | База даних PostgreSQL |
 | **RustFS** | `RustFS/RustFS` | S3-сумісне файлове сховище |
 | **relay** | `dockurr/WebSocket relay` | Релей WebSocket для подій у реальному часі |
