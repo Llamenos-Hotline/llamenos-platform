@@ -27,6 +27,14 @@
  *      in the rollup's `needs`, and their `if:` must be a plain allow-list of
  *      events that excludes pull_request and merge_group, so they have no
  *      route to blocking a merge.
+ *   5. STAGED legs never upload to code scanning: every analyze step sets
+ *      `upload: never`, there is no upload-sarif step, and the job does not
+ *      hold `security-events: write`. GHAS judges each PR against every
+ *      configuration present on main; one that exists on main but never on
+ *      PRs turns every PR's `CodeQL` check into "cannot determine the alerts
+ *      introduced by this pull request" — `neutral`, which a required check
+ *      accepts. A staged upload would silently take the verdict out of the
+ *      required gate.
  *
  * Promoting a staged language to required means moving it into `analyze` AND
  * adding its identifier to REQUIRED_IDENTIFIERS below — a deliberate edit to
@@ -101,6 +109,7 @@ type Job = {
   name?: unknown
   if?: unknown
   needs?: unknown
+  permissions?: unknown
   strategy?: { matrix?: unknown }
   steps?: unknown
 }
@@ -111,6 +120,7 @@ type Workflow = {
 }
 
 type InitStep = { uses: string; with?: { languages?: unknown } }
+type ActionStep = { uses: string; with?: Record<string, unknown> }
 
 const violations: string[] = []
 
@@ -126,12 +136,16 @@ function resolve(identifier: string): string | undefined {
   return ALIASES[identifier.trim().toLowerCase()]
 }
 
-function initSteps(job: Job): InitStep[] {
+function stepsUsing(job: Job, action: string): ActionStep[] {
   if (!Array.isArray(job.steps)) return []
   return job.steps.filter(
-    (step): step is InitStep =>
-      isRecord(step) && typeof step.uses === 'string' && step.uses.startsWith('github/codeql-action/init@'),
+    (step): step is ActionStep =>
+      isRecord(step) && typeof step.uses === 'string' && step.uses.startsWith(`${action}@`),
   )
+}
+
+function initSteps(job: Job): InitStep[] {
+  return stepsUsing(job, 'github/codeql-action/init')
 }
 
 function triggers(on: unknown): string[] {
@@ -305,6 +319,27 @@ function main(): void {
     if (typeof job.name === 'string' && job.name.trim() === REQUIRED_CONTEXT) {
       violations.push(`staged job \`${id}\` is named \`${REQUIRED_CONTEXT}\`, the required context`)
     }
+
+    // No route to code scanning: a staged configuration on main neutralises
+    // the required gate on every PR (see header, point 5).
+    const analyzeSteps = stepsUsing(job, 'github/codeql-action/analyze')
+    if (analyzeSteps.length === 0) {
+      violations.push(`staged job \`${id}\` has no codeql-action/analyze step`)
+    }
+    for (const step of analyzeSteps) {
+      if (step.with?.upload !== 'never') {
+        violations.push(
+          `staged job \`${id}\` analyzes without \`upload: never\` (found ${String(step.with?.upload)}) — a staged configuration on main turns every PR's \`${REQUIRED_CONTEXT}\` check neutral ("cannot determine the alerts introduced")`,
+        )
+      }
+    }
+    if (stepsUsing(job, 'github/codeql-action/upload-sarif').length > 0) {
+      violations.push(`staged job \`${id}\` has an upload-sarif step — staged results must not reach code scanning`)
+    }
+    const permissions = job.permissions
+    if (permissions === 'write-all' || (isRecord(permissions) && permissions['security-events'] === 'write')) {
+      violations.push(`staged job \`${id}\` holds \`security-events: write\` — staged legs never upload, so they get read at most`)
+    }
     staged.push({ job: id, languages })
   }
 
@@ -358,7 +393,7 @@ function main(): void {
   console.log(`✅ ${path}: required CodeQL legs cover exactly the ${REQUIRED_IDENTIFIERS.length} default-setup identifiers (${byExtractor.size} analyses):`)
   for (const [extractor, ids] of byExtractor) console.log(`   ${ids.join(', ')} → ${extractor}`)
   if (staged.length > 0) {
-    console.log(`   Staged, not required (outside the ${REQUIRED_CONTEXT} rollup, never on ${MERGE_BLOCKING_EVENTS.join('/')}):`)
+    console.log(`   Staged, not required (outside the ${REQUIRED_CONTEXT} rollup, never on ${MERGE_BLOCKING_EVENTS.join('/')}, never uploaded to code scanning):`)
     for (const { job, languages } of staged) console.log(`   ${languages.join(', ')} (${job})`)
   }
 }

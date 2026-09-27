@@ -69,17 +69,22 @@
 # blocking a merge:
 #   - neither is in the `codeql` rollup's `needs`, and the rollup reads only
 #     `needs.analyze.result`, so its verdict is independent of theirs;
-#   - neither runs on `pull_request` or `merge_group`, so neither uploads
-#     results for a PR or queue commit, and neither can add alerts to the
-#     GHAS `CodeQL` alert gate a PR is judged by;
-#   - their names never equal a required context.
-# One visible side effect: once they have uploaded on main, a PR's GHAS
-# `CodeQL` check notes that the java-kotlin/swift configurations present on
-# main were not found for the PR. That is a warning in the check's summary,
-# not a failure.
-# Promotion to required (run on pull_request and merge_group, and join the
-# rollup's `needs`) waits until both are reliably green, and needs a
-# deliberate ruleset edit and a matching change to the rail's expected set.
+#   - neither runs on `pull_request` or `merge_group`, so neither can add
+#     alerts to the GHAS `CodeQL` alert gate a PR is judged by;
+#   - their names never equal a required context;
+#   - neither uploads to code scanning at all (`upload: never`, and only
+#     `security-events: read`, so it could not if asked); the SARIF is a
+#     workflow artifact instead. This one protects the gate rather than the
+#     merge: GHAS judges a PR against every configuration present on main,
+#     and a configuration uploaded on main but never on PRs turns EVERY PR's
+#     `CodeQL` check into "Code scanning cannot determine the alerts
+#     introduced by this pull request" — conclusion `neutral`, which a
+#     required check accepts. A staged upload on main would quietly take the
+#     verdict out of the required gate for every PR.
+# Promotion to required means all of it at once: run on pull_request and
+# merge_group, upload, join the rollup's `needs`, and a matching change to the
+# rail's expected set — so the configuration exists on both sides of every
+# PR comparison. Not before both are reliably green.
 
 name: CodeQL
 
@@ -158,7 +163,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
+      security-events: read  # staged: no upload, so no write
     timeout-minutes: 45
 
     steps:
@@ -197,10 +202,22 @@ jobs:
         working-directory: apps/android
         run: ./gradlew --no-daemon --no-build-cache compileDebugKotlin --console=plain
 
+      # upload: never — see the header: a staged configuration on main would
+      # neutralise the required gate on every PR.
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:java-kotlin
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/codeql-results
+
+      - name: Upload SARIF
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-staged-java-kotlin
+          path: ${{ runner.temp }}/codeql-results
+          if-no-files-found: error
 
   # ─── Staged, not required: swift (#1243) ──────────────────────────────
   # Swift analysis needs macOS. The minutes are free on this public repo, but
@@ -215,7 +232,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
+      security-events: read  # staged: no upload, so no write
     timeout-minutes: 90
 
     steps:
@@ -297,10 +314,22 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
+      # upload: never — see the header: a staged configuration on main would
+      # neutralise the required gate on every PR.
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:swift
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/codeql-results
+
+      - name: Upload SARIF
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-staged-swift
+          path: ${{ runner.temp }}/codeql-results
+          if-no-files-found: error
 
   # ─── Rollup (see the header for why the name depends on the event) ────
   # Needs ONLY the required matrix. `needs.analyze.result` is `success` only
