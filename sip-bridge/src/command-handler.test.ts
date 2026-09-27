@@ -621,6 +621,121 @@ describe('CommandHandler', () => {
     })
   })
 
+  // ================================================================
+  // State loss / PBX reconnect regressions (#1154)
+  // ================================================================
+
+  describe('bridge teardown', () => {
+    it('removes every bridge entry a channel appears in, not just the first', async () => {
+      let seq = 0
+      pbx.client.bridge = (async (...args: unknown[]) => {
+        pbx.calls.push({ method: 'bridge', args })
+        return `bridge-${++seq}`
+      }) as BridgeClient['bridge']
+
+      await queuedCaller()
+      await handler.executeCommands('leg-a', [{ action: 'bridge', queueName: CALLER, record: false }])
+      // The worker re-queues the caller and bridges a second volunteer, so two
+      // bridge entries now name the same caller channel.
+      await handler.executeCommands(CALLER, [queueCmd])
+      await handler.executeCommands('leg-b', [{ action: 'bridge', queueName: CALLER, record: false }])
+      expect(handler.getStatus().activeBridges).toBe(2)
+
+      await handler.handleEvent(hangup(CALLER))
+
+      // Stopping at the first match would leave bridge-2 — and its volunteer leg — live.
+      expect(handler.getStatus().activeBridges).toBe(0)
+      expect(pbx.of('destroyBridge')).toEqual([['bridge-1'], ['bridge-2']])
+    })
+  })
+
+  describe('PBX reconciliation after a connection reset', () => {
+    const reset = (): Promise<void> => handler.handleEvent({ type: 'connection_reset', timestamp: ts })
+    const liveChannels = (ids: string[]): void => {
+      pbx.client.listChannels = (async () =>
+        ids.map((id) => ({ id, state: 'Up', caller: '+1' }))) as BridgeClient['listChannels']
+    }
+    /** A caller holding in their own queue (queue name = their channel, as the worker does). */
+    async function holding(channelId: string): Promise<void> {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'queue', queueName: channelId, waitMusicEvent: 'wait_music', exitEvent: 'queue_exit', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming(channelId))
+    }
+
+    it('tears down a queued caller whose channel vanished while events were lost', async () => {
+      await holding('ch-gone')
+      await holding('ch-alive')
+      liveChannels(['ch-alive'])
+
+      await reset()
+
+      // The vanished caller's queue-exit webhook fired and its state is gone...
+      expect(worker.to('/api/telephony/queue-exit')).toMatchObject([
+        { payload: { channelId: 'ch-gone', result: 'hangup' } },
+      ])
+      // ...while the caller still on the PBX keeps theirs.
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 1, activeQueues: 1, untrackedChannels: 0 })
+    })
+
+    it('tears down all tracked state and hangs the channels up when the PBX cannot be enumerated', async () => {
+      await holding('ch-a')
+      pbx.client.listChannels = (async () => {
+        throw new Error('pbx unreachable')
+      }) as BridgeClient['listChannels']
+
+      await reset()
+
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 0, activeQueues: 0 })
+      expect(pbx.of('hangup')).toEqual([['ch-a']])
+    })
+
+    it('reports live channels it holds no state for instead of silently ignoring them', async () => {
+      liveChannels(['orphan-1', 'orphan-2'])
+
+      await reset()
+
+      expect(handler.getStatus().untrackedChannels).toBe(2)
+      // Not hung up: on Asterisk the channel list includes channels this bridge does not own.
+      expect(pbx.of('hangup')).toEqual([])
+    })
+
+    it('does not tear down a call that begins while the channel list is in flight', async () => {
+      let release: (v: Array<{ id: string; state: string; caller: string }>) => void = () => {}
+      pbx.client.listChannels = (() =>
+        new Promise((resolve) => {
+          release = resolve
+        })) as BridgeClient['listChannels']
+
+      const pending = reset()
+      await holding('ch-new') // arrives after the snapshot request, before the reply
+      release([]) // ...and is therefore absent from the (stale) listing
+      await pending
+
+      expect(handler.getStatus().activeCalls).toBe(1)
+    })
+
+    it('tears down a ringing volunteer leg that vanished and reports call-status', async () => {
+      await queuedCaller()
+      const [leg] = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [{ pubkey: 'tok-a', phone: '+15550200' }],
+      })
+      expect(handler.getStatus().ringingChannels).toBe(1)
+      liveChannels([CALLER])
+
+      await reset()
+
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 1, ringingChannels: 0 })
+      // Cause 38 (network out of order) is what the reconcile synthesizes for a
+      // hangup event it never received.
+      expect(worker.to('/api/telephony/call-status')).toMatchObject([
+        { payload: { channelId: leg, status: 'failed' }, query: { callToken: 'tok-a' } },
+      ])
+    })
+  })
+
   it('an unknown channel is never recorded (fails closed)', async () => {
     await handler.executeCommands('unknown', [{ action: 'record', maxDuration: 60, finishOnKey: '#', callbackEvent: 'recording_complete' }])
     expect(pbx.of('recordChannel')).toEqual([])
