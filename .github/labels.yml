@@ -84,3 +84,15 @@
 - name: "scope:infra"
   color: "5319e7"
   description: "fleet/verify: also judge this PR against the infra lane's scope"
+
+# Reviewer profiles (#1158). A label ending `-reviewer` names an agent in
+# `.claude/agents/`; applying it asks `fleet/review` to run that reviewer
+# alongside the general non-author review, in the same job, under the same
+# check. The label does NOT trigger anything — requesting a review from
+# `llamenos-auto` does — and the job removes the label once that review has
+# passed, so the labels left on a PR are the reviews still owed.
+#
+# The retired `review` label is deliberately absent: nothing fires on it.
+- name: "crypto-security-reviewer"
+  color: "35b2c5"
+  description: "fleet/review: also run the crypto-security-reviewer on this PR"

@@ -1,192 +1,177 @@
 # Fleet Review
 #
-# The non-author-model half of the fleet's merge gate (see the "Fleet gates"
-# comment above `fleet-verify` in `fleet-verify.yml` for the split rationale
-# between the two gate jobs). This job used to live inside `ci.yml`, gated by
-# a job-level `if:` restricting it to `merge_group` (plus a manual
-# `workflow_dispatch` re-run) — see #812/#842/#844. That design had a fail-open
-# bug: `ci.yml` ALSO triggers on `pull_request`, so on every ordinary PR push
-# this job was still INSTANTIATED by the workflow, just skipped by its own
-# `if:` — and GitHub's branch-protection rules treat a *skipped* required
-# check as satisfied, exactly like a green one. #844 itself merged with
-# `fleet/review` reporting "skipping" and no model review ever ran on it.
+# The non-author-review half of the fleet's merge gate (see the "Fleet gates"
+# comment above `fleet-verify` in `fleet-verify.yml` for the split between the
+# two gate jobs). ONE job, ONE check named `fleet/review`, N reviews inside it.
 #
-# #848 moved the job into this standalone file, triggered only by
-# `workflow_dispatch` + `merge_group`, so an ordinary PR push produced no
-# `fleet/review` context at all — MISSING, not skipped, which blocks a merge
-# exactly like a failing check does. That fixed the fail-open bug, but left
-# the only real trigger as an operator-run
-# `gh workflow run fleet-review.yml --ref <branch> -f pr_number=<n>` — and
-# `workflow_dispatch` is a repository-level event with no PR of its own, so
-# GitHub cannot attach its result to a PR's required contexts no matter how
-# the job is written. Verified empirically on #848 itself: the dispatched run
-# succeeded, produced a `fleet/review` check-run at `conclusion: success` on
-# the PR's head SHA, and the API even reports `pull_requests: [848]` for
-# it — yet `gh pr view 848 --json statusCheckRollup` never listed it, and
-# `gh pr merge` was refused with "the base branch policy prohibits the
-# merge". A `workflow_dispatch` check does not satisfy a required PR context,
-# regardless of how correct its result is.
+# HOW IT IS TRIGGERED (#1158): a review being REQUESTED — or re-requested —
+# from `llamenos-auto`, or from `rhonda-rodododo` on the `release` PR.
+# Requesting a review is a real, human-meaningful act that already means
+# "look at this now". The `review` LABEL this replaces never meant that, and
+# a required context producible only by a `labeled` event has no path forward
+# whenever labelling fails: release PRs were never labelled at all, so they
+# could never satisfy the gate (#1114), while showing no red check.
 #
-# #848's OWN fix reintroduced the exact bug class it was written to close:
-# `on: pull_request: types: [labeled]` fires this workflow on ANY label, and
-# the job carried a job-level `if: github.event_name == 'workflow_dispatch'
-# || github.event.label.name == 'review'` to narrow that back down. GitHub
-# cannot filter a `pull_request` trigger by label VALUE — only `types:` — so
-# applying any OTHER label (say, the fleet's own `agent-dispatchable`) still
-# INSTANTIATES this job, which the `if:` then SKIPS. A skipped required
-# check satisfies branch protection with no review ever run — caught on this
-# very PR by `fleet/review`'s own verdict on #848, before #848 merged.
+# WHAT IT REVIEWS: the general non-author review always runs. Reviewer
+# PROFILES run alongside it, concurrently, in this same job — decided from
+# the PR's `-reviewer` LABELS and from the PR ITSELF (a crypto diff gets the
+# crypto review whether or not anyone remembered the label). See
+# `decideReviewSet` in orchestrator/src/ci.ts. ANY FAIL FAILS. Once the whole
+# set has PASSED, the second job below removes the labels it acted on — a
+# self-clearing worklist, so what is still on the PR is what is still owed.
+# #1092's per-specialist `fleet/review/<agent>` checks are GONE: they were N
+# jobs and N required-looking contexts for one decision, and #1086 sat
+# unmergeable behind one of them with no way forward.
 #
-# The fix this time is structural, not a smarter `if:`: this job now carries
-# **no job-level `if:` at all**. It always runs and always reaches a real
-# conclusion (success or failure), on every `labeled` event. What used to be
-# the job's `if:` is now the "Decide whether to run the review engine" step
-# below, whose OWN exit code and `outcome` output gate every step after it:
+# WHERE IT REPORTS (#1187): on a PULL REQUEST it reviews, and on a
+# MERGE_GROUP it REPORTS the verdict the PR already earned — see "The merge
+# queue's own arm" step below. `fleet/review` is a required context, and a
+# required context that cannot report on the queue's synthetic
+# `gh-readonly-queue/<base>/pr-<n>-<sha>` commit does not fail the entry, it
+# leaves it at `AWAITING_CHECKS` forever. That is #1187: #1185 sat at
+# position 1 with `CI`, `Fleet Verify` and `Secret Scanning` all green and
+# this context simply absent, and the queue had to be turned off again.
 #
-#   (a) a prior PASS is cached for this exact diff content (`review-cache.ts`)
-#       → the step logs "reused verdict for <key>", exits 0, and every later
-#       step (engine install, auth, the smoke test, the real review) is
-#       skipped via its own step-level `if: steps.gate.outputs.outcome ==
-#       'run-engine'` — the job concludes SUCCESS with no engine call at all.
-#       This is what makes applying an unrelated label to an already-reviewed
-#       PR cheap and non-destructive instead of either a wasted model call or
-#       (the old bug) a silently-satisfied skip.
-#   (b') no cached PASS, but every changed file classifies Tier 0 or Tier 1
-#       (`tierFor`, orchestrator/src/impact.ts — no executable content, or
-#       instructions/tooling that already earns a code-owner review on its
-#       own) → the step logs "no reviewable content (tier N)" with the
-#       contributing files, exits 0, and every later step is skipped exactly
-#       as in (a) — the job concludes SUCCESS with no engine call, regardless
-#       of `requested`. This is checked BEFORE (c) below, deliberately: a
-#       docs-only PR must never sit red waiting for someone to apply the
-#       `review` label for a review it will never need. Operator rule,
-#       2026-09-19: "the ceremony should scale with impact too."
-#   (b) no cached PASS, Tier 2 (a real review is needed), and this event IS
-#       the `review` label (or a manual `workflow_dispatch`) → the step exits
-#       0 with `outcome=run-engine`, and the pipeline runs exactly as before:
-#       install the engine, authenticate, smoke-test it, then the real
-#       review.
-#   (c) no cached PASS, Tier 2, and this event is any OTHER label → the step
-#       FAILS (exit 1) with "review not requested — add the `review` label to
-#       run the non-author review". No engine call, no skip — the job goes
-#       red, which is the correct, honest state for a PR nobody has asked to
-#       be reviewed yet.
-#   (s) checked FIRST, ahead of (a): the PR carries a `-reviewer` label (a
-#       label-driven specialist, #1092 — see `fleet-specialist-review.yml`)
-#       whose specialist has no PASS for this exact diff, or the label does
-#       not resolve to a known agent → the step FAILS (exit 1) listing each
-#       unmet specialist. This is how a specialist binds on THIS required
-#       check while its own `fleet/review/<agent>` check stays out of the
-#       ruleset (a conditionally-posted check cannot be required). Any FAIL
-#       fails: a cached or fresh generalist PASS never outranks it.
+# ---------------------------------------------------------------------------
+# SIX THINGS THAT MUST NOT CHANGE. Each is a bug this file already shipped.
+# ---------------------------------------------------------------------------
+# 1. NO JOB-LEVEL `if:` ON `fleet-review`, EVER (#844/#848). GitHub treats a
+#    SKIPPED required check as satisfied, exactly like a green one. #844
+#    merged with `fleet/review` reporting "skipping" and no review ever run.
+#    The job therefore always runs and always reaches a real conclusion; the
+#    "Decide whether to run the review engine" step is what used to be the
+#    `if:`, and its `not-requested` branch FAILS rather than skipping. A
+#    review requested from somebody else is a red check, never a green skip.
+#    Pinned by a rail in tests/orchestrator/guards.test.ts.
+# 2. NEVER TRIGGER ON `synchronize` (or `opened`, or `push`). Every run is a
+#    real model call; running one on every push is the provider-quota burn
+#    #812 already fixed once, and `quotaBreaker` (orchestrator/src/circuit.ts)
+#    halts the WHOLE fleet at two QUOTA outcomes. `review_requested` fires on
+#    both the first request and every re-request, which is the entire signal
+#    needed — re-requesting a review is how you re-run this.
+# 3. THE GATE RUNS FROM THE BASE REF; THE HEAD IS DATA (#665). This job
+#    checks out the PR's BASE commit, installs from the BASE lockfile with
+#    `--ignore-scripts`, and runs the orchestrator from that trusted tree.
+#    The head arrives via `git archive | tar` with no `.git` and is never
+#    executed, never installed, never on a module path; agent configuration
+#    and every symlink are stripped from it. `headDirRefusal` (ci.ts) refuses
+#    outright if a `.git` ever appears in there. The first version of this
+#    design checked out the head and ran `bun install` from it, which handed
+#    any PR editing `package.json` arbitrary execution inside its own judge.
+# 4. FAIL CLOSED. Unreadable labels, an unresolvable reviewer profile, a
+#    missing agent registry, an engine that cannot run — every one of them is
+#    a red check naming the rule it broke. None may become "no review needed".
+# 5. THE CHECK NAME IS `fleet/review`, EXACTLY, ON EVERY EVENT. It is a
+#    required context in ruleset 15885614 (with `ci-status`, `gitleaks`,
+#    `CodeQL`, `fleet/verify`). Renaming it needs a ruleset change and leaves
+#    every open PR unmergeable in between. The job NAME is the check; do not
+#    rename the `name:` value — and because ONE job serves both
+#    `pull_request` and `merge_group`, there is exactly one `name:` to keep
+#    right, which is the whole reason the merge-queue arm below is a STEP in
+#    this job and not a second job of its own.
+# 6. THE MERGE-QUEUE ARM MUST NEVER BECOME A SKIP (#1187, and invariant 1
+#    again). `merge_group` is a trigger here, so this job is instantiated on
+#    the queue ref and MUST publish a real conclusion there. Making it skip
+#    instead — a job-level `if:`, or a second same-named job that skips on
+#    the other event — would satisfy branch protection exactly like a green
+#    check and let every queued merge bypass review invisibly: strictly
+#    worse than the deadlock it replaces. Pinned by rails in
+#    tests/orchestrator/fleet-review-merge-group.test.ts, which also runs
+#    the arm's real script against every fail-closed branch it has.
 #
-# A step failing mid-job is not a "skipped" job: GitHub Actions still runs
-# the job to a real conclusion (failure) and that conclusion IS what
-# `fleet/review`'s required check reports. Steps skipped by their OWN
-# `if:` inside an always-instantiated job are not the bug #848/#844 hit —
-# that bug was the whole JOB (and therefore its check run) never running at
-# all while still being reported "skipped", which branch protection treats
-# as green. A step-level skip changes nothing about whether the job itself
-# concludes; see `tests/orchestrator/guards.test.ts` for the rail pinning
-# that no job-level `if:` exists here again.
+# The label-clearing job below is deliberately a SEPARATE, GitHub-hosted job:
+# it is the only thing here with write access, it checks out nothing and runs
+# no repository code at all, and keeping it separate is what lets the review
+# job — the one that runs a model next to the review key — stay read-only
+# (`contents: read`, `pull-requests: read`, `actions: read`), which a rail in
+# guards.test.ts pins.
 #
-# Semantics, carried over from #848's intent: applying the `review` label to
-# a diff with no cached PASS is the only way to spend a fresh review; every
-# other event either reuses a cached PASS for free or fails closed. The
-# diff-content review cache (`review-cache.ts`) makes re-adding the label (or
-# any other label) to unchanged, already-passing content reuse the prior
-# PASS rather than re-spend provider quota; a FAIL is never cached, so a
-# re-label after a real fix reviews again for real.
+# Outcomes of the gate step, all of which reach a real conclusion:
+#   `review-set-unresolved` → FAIL. Could not work out what to review.
+#   `cache-hit`             → no model call. A prior SUBSTANTIVE verdict
+#                             exists for this exact diff AND this exact
+#                             review set (`reviewSetTag`, review-cache.ts):
+#                             a cached PASS concludes SUCCESS, a cached FAIL
+#                             concludes RED with the original verdict
+#                             restated. An UNREADABLE is never cached, so an
+#                             infrastructure failure is always retried.
+#   `low-tier`              → SUCCESS, no model call. `tierFor` (impact.ts)
+#                             classifies every changed file Tier 0/1 — no
+#                             reviewable content. Checked before the request
+#                             check so a docs-only PR never sits red.
+#   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
+#                             request was not for us.
+#   `run-engine`            → the real review, then the label clear.
 #
-# `merge_group` is DROPPED as a trigger here (#848 had kept it, "harmless",
-# for a future org migration). Keeping it while relying on the gate step
-# above to fail it closed on every event but the one that matters is strictly
-# more code for no behavioral gain today: this repo's merge queue is
-# unavailable regardless (owner type `User` — the ruleset's `merge_queue`
-# rule is rejected outright), so dropping it costs nothing now; re-adding it
-# later needs its own request-detection arm and its own rail together, not a
-# trigger sitting ahead of a queue that does not exist yet.
-#
-# Workflow-file honesty: on a `pull_request` event, the workflow definition
-# itself is read from the PR's OWN head — a PR can edit this file and have
-# the edited version run when it later gets labeled. This is the same
-# exposure `fleet/verify` already has on its own `pull_request` trigger
-# (finding #1 of the 2026-09-13 review), not a new gap introduced here;
-# `.github/workflows/` is CODEOWNERS-protected, and closing it fully needs a
-# required approving review from a non-author bot account — see #773.
-#
-# `fleet/verify` stays out of this file — it is cheap and mechanical, still
-# runs on `pull_request` for fast feedback (see `fleet-verify.yml`).
-# `fleet/review` is the expensive one — a non-author MODEL call — and must
-# run at most once per PR, on demand (the `review` label), never on every
-# push.
+# Workflow-file honesty: on a `pull_request` event the workflow definition is
+# read from the PR's OWN head, so a PR can edit this file and have the edited
+# version run. `.github/workflows/` is CODEOWNERS-protected; closing it fully
+# needs #773. Base code re-strips the export (`REVIEWER_CONTROL_NAMES`,
+# review.ts) and re-resolves the review set (`runReviewCi`) for exactly this
+# reason: nothing base code decides may rest on a step in this file.
 #
 # Operator decision (#812): coding-agent SESSIONS review better than a thin
-# API call. The evidence is this project's own gate history — the previous
-# `opencode`/Kimi-for-Coding reviewer's genuine findings were good, but most
-# of its failures were infrastructure (UNREADABLE from turn-budget
-# exhaustion, smoke-test failures, provider quota exhausted mid-week) rather
-# than the reviewer actually missing something, and its 2-3-turn cap could
-# not even be enforced on `opencode`'s own CLI (no equivalent flag existed).
-# A Claude Code session has real tools, can read the whole export and reason
-# over it with room to do so, and runs on the operator's own Max
-# subscription instead of a metered key.
+# API call. A self-hosted runner is registered for exactly this job — name
+# `llamenos-review-box`, labels `self-hosted,Linux,X64,fleet-review` — with
+# `claude` pre-installed and logged in under the operator's own account; that
+# login state under `HOME` is the whole authentication mechanism (see
+# `VERIFIER_ENV_ALLOWLIST` in orchestrator/src/review.ts).
+# `FLEET_REVIEW_API_KEY` is kept only as the operator's "review is enabled"
+# toggle and to keep CodeQL's cache-poisoning query treating this job as
+# privileged (see `REVIEW_KEY_ENV` in ci.ts). Running PR-triggered work on a
+# machine the operator owns is why "Refuse to run on a fork PR" is the
+# literal first step of every job here. If the box is offline this job
+# QUEUES — a PR simply cannot merge until it is back, which is fail-closed.
 #
-# A self-hosted runner is registered for exactly this job: name
-# `llamenos-review-box`, labels `self-hosted,Linux,X64,fleet-review`,
-# working dir `~/actions-runner-llamenos`. The `claude` CLI is authenticated
-# on that machine for the operator's own account — that login state (under
-# `HOME`) is the entire authentication mechanism for this job now; see
-# `VERIFIER_ENV_ALLOWLIST`'s doc comment in `orchestrator/src/review.ts`.
-# `FLEET_REVIEW_API_KEY` (below, still referenced) is NOT forwarded into the
-# reviewer's own environment — it is kept only as (1) the operator's
-# explicit "review is enabled for this repo" toggle, unchanged UX from
-# before #812, and (2) what keeps CodeQL's cache-poisoning query treating
-# this job as privileged and therefore out of scope for that specific query
-# (see the "job that executes the judged commit's code cannot be reached by
-# a cache-write event" rail in `tests/orchestrator/guards.test.ts`, and
-# `REVIEW_KEY_ENV`'s doc comment in `orchestrator/src/ci.ts`).
-#
-# Running PR-triggered work on a machine the operator owns is exactly the
-# kind of thing that must never process a fork PR unattended — see the
-# "Refuse to run on a fork PR" step below, the job's literal FIRST step, for
-# the mandatory guard. Availability is honest, not silently degraded: if
-# `llamenos-review-box` is offline, this job QUEUES (GitHub Actions holds a
-# job for a runner matching its labels; it does not fail it), and a PR
-# waiting on `fleet/review` simply cannot merge until the box comes back —
-# fail-closed, the same posture this file has had since #848.
-#
-# The honest cost, stated plainly rather than left implicit: the fleet's
-# workers author with `claude`, and the reviewer is now ALSO `claude` — a
-# different session on a different machine with no shared context, but no
-# longer an independent VENDOR the way `opencode` (Kimi) was. A model does
-# not review its own blind spots as well as a different model would.
-# Recommended mitigation, not yet applied: run the reviewer on a different
-# MODEL TIER than the lanes use (e.g. `opus` here, `sonnet` on the lanes)
-# once budget allows — `FLEET_REVIEW_MODEL` below is exactly the dial for
-# that, a repo variable, never a code change. See `verifierFor`'s doc
-# comment in `orchestrator/src/review.ts` for the full accounting.
+# The honest cost: the fleet's workers author with `claude` and the reviewer
+# is also `claude` — a different session on a different machine with no
+# shared context, but no longer an independent VENDOR. `FLEET_REVIEW_MODEL`
+# (a repo variable, never a code change) is the dial for running the reviewer
+# on a different model tier than the lanes use.
 name: Fleet Review
 
 on:
-  # The real trigger (see the file header above): applying the `review`
-  # label signals "this PR is ready for the non-author review". Scoped to
-  # `labeled` only — never `synchronize` (an ordinary push), `opened`, or
-  # `unlabeled` — so this never runs on every push, which is the exact
-  # provider-quota-burning bug #812 fixed the first time.
+  # The one real trigger (see the file header): a review being REQUESTED, or
+  # re-requested, from `llamenos-auto` (or `rhonda-rodododo` on the release
+  # PR). `review_requested` fires on both, which is the whole signal needed.
+  # NEVER add `synchronize`/`opened`/`labeled`/`push` — see invariant 2.
+  # GitHub cannot filter this trigger by WHO was requested, so the job runs
+  # on every review request and the gate step decides; it must never become
+  # a job-level `if:` (invariant 1).
   pull_request:
-    types: [labeled]
+    types: [review_requested]
   # Manual escape hatch only — local debugging, or forcing a re-review after
   # a provider-variable change (see "Switching the review engine provider" in
   # docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md).
-  # Never the primary path: see the file header above for why a
-  # workflow_dispatch run cannot satisfy a PR's required context on its own.
+  # It is write-access-gated, and it CAN satisfy the required context: a
+  # dispatch run's check attaches to `github.sha`, which for
+  # `--ref <branch>` is the PR's head (see the ctx step's own comment).
+  # Never the primary path all the same — it takes an operator typing a PR
+  # number, so nothing routine should depend on it.
   workflow_dispatch:
     inputs:
       pr_number:
         description: 'PR number to review (its current head, dispatched via --ref <branch>) — manual debugging only'
         required: true
         type: string
+  # The merge queue's own event (#1187). REQUIRED, not optional: a required
+  # status context that never reports on the queue's synthetic commit stalls
+  # every entry at `AWAITING_CHECKS` indefinitely rather than failing it
+  # loudly — `ci.yml`, `fleet-verify.yml` and `secret-scan.yml` all carry
+  # this trigger for exactly that reason, and this file's absence of it is
+  # the whole of #1187. It does NOT re-run the reviewer: the "Report the
+  # queued PR's own review verdict" step republishes the verdict the PR head
+  # already earned. See that step for why re-reviewing the queue commit is
+  # the wrong answer.
+  #
+  # This adds no CodeQL cache-poisoning exposure: `merge_group` is not one of
+  # the default-branch cache-write events that query keys off (`push`,
+  # `workflow_dispatch`, `repository_dispatch`, `delete`, `registry_package`,
+  # `page_build`, `schedule` — see fleet-verify.yml's file header), and this
+  # job is excluded from that query anyway by its explicit
+  # `secrets.FLEET_REVIEW_API_KEY` reference marking it privileged.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   # Distinct group names from ci.yml's and fleet-verify.yml's own groups —
@@ -197,10 +182,13 @@ concurrency:
   # two reviews of the same diff; `workflow_dispatch` groups by `run_id`
   # because two manual dispatches can target two different PRs at once and
   # must never collide.
-  group: ${{ github.event_name == 'pull_request' && format('fleet-review-pr-{0}', github.event.pull_request.number) || format('fleet-review-wd-{0}', github.run_id) }}
+  # `merge_group` groups by the queue commit: two entries in the queue are
+  # two different commits and must never cancel or queue behind each other.
+  group: ${{ github.event_name == 'pull_request' && format('fleet-review-pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('fleet-review-mg-{0}', github.sha) || format('fleet-review-wd-{0}', github.run_id) }}
   # Never cancelled: a required check that gets cancelled mid-run leaves its
   # context permanently missing rather than failing loudly (same reasoning as
-  # ci.yml's and fleet-verify.yml's own `concurrency:` blocks). A
+  # ci.yml's and fleet-verify.yml's own `concurrency:` blocks) — which on a
+  # `merge_group` ref is precisely the stall #1187 is about. A
   # workflow_dispatch run is already uniquely grouped by run id above, so
   # cancellation there would only ever cancel itself — moot either way, so
   # this stays `false` unconditionally rather than branching on event name
@@ -214,7 +202,7 @@ env:
 
 jobs:
   # The job NAME is the required check — `fleet/review` in the ruleset refers
-  # to this `name:` value, not the job key. Do not rename it.
+  # to this `name:` value, not the job key. Do not rename it (invariant 5).
   #
   # The job posts no commit status of its own: a job result already IS a
   # check run under this name, so a same-named status would be a second copy
@@ -227,29 +215,29 @@ jobs:
   # isolation from a default-branch-cache-write event to clear CodeQL's
   # cache-poisoning query: its explicit `secrets.FLEET_REVIEW_API_KEY` access
   # makes CodeQL treat it as "privileged", which that specific query excludes
-  # by design. This workflow's `on:` block is narrow anyway, for the
-  # fail-open reason in the file header, not for CodeQL.
+  # by design.
   fleet-review:
     name: fleet/review
-    # NO job-level `if:` here — deliberately, and never again (see the file
-    # header). `types: [labeled]` on the trigger above narrows away
-    # `synchronize`/`opened`/etc, but GitHub cannot filter a `pull_request`
-    # trigger by label VALUE, only by `types:` — so this job is instantiated
-    # on EVERY label application, including ones that have nothing to do
-    # with review (e.g. `agent-dispatchable`). The "Decide whether to run
-    # the review engine" step below is what used to be this `if:`; the
-    # difference is that its `not-requested` branch FAILS the job instead of
-    # skipping it, and its `cache-hit` branch SUCCEEDS the job instead of
-    # skipping it — either way the job reaches a real, reported conclusion,
-    # which a job-level `if:` can never guarantee once GitHub decides the
-    # job merely "didn't run".
-    # #812: a dedicated self-hosted runner, never a GitHub-hosted one — this
-    # is the only label combination that reaches `llamenos-review-box`. See
-    # the "Operator decision (#812)" paragraph in this file's header for why,
-    # and the "Refuse to run on a fork PR" step below (the job's literal
-    # first step) for the guard a self-hosted runner processing PR events
-    # requires.
+    # NO job-level `if:` here — deliberately, and never again (invariant 1 in
+    # the file header). GitHub cannot filter a `pull_request` trigger by WHO
+    # a review was requested from, only by `types:`, so this job IS
+    # instantiated on every review request, including ones aimed at a human
+    # colleague. The "Decide whether to run the review engine" step is what
+    # used to be this `if:`; the difference is that its `not-requested`
+    # branch FAILS the job instead of skipping it, and its `cache-hit` and
+    # `low-tier` branches SUCCEED the job instead of skipping it — either way
+    # the job reaches a real, reported conclusion, which a job-level `if:`
+    # can never guarantee once GitHub decides the job merely "didn't run".
+    # #812: a dedicated self-hosted runner, never a GitHub-hosted one — see
+    # the file header, and the "Refuse to run on a fork PR" step below.
     runs-on: [self-hosted, fleet-review]
+    # Read by the label-clearing job below. `outcome` and `clear_labels` are
+    # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
+    # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
+    # pass or any failure clears nothing.
+    outputs:
+      outcome: ${{ steps.gate.outputs.outcome }}
+      clear_labels: ${{ steps.gate.outputs.clear_labels }}
     permissions:
       # contents: read — the reviewer runs inside this job, so the
       # containment that matters is that NOTHING from the commit under
@@ -267,6 +255,13 @@ jobs:
       # this line is exactly why that rail asserts `read`, not the whole
       # key's absence.
       actions: read
+      # Read-only, for the merge-queue arm alone: reading the `fleet/review`
+      # CHECK RUN already recorded on the queued PR's head
+      # (`GET .../commits/<sha>/check-runs`) is what lets this job report
+      # that verdict on the queue commit instead of spending a second model
+      # call re-deriving it. Never `: write` — this job publishes its verdict
+      # by BEING the check run, never by writing someone else's.
+      checks: read
     # HIGH_IMPACT_TIMEOUT_MS is 20 minutes (review.ts — widened at #812 from
     # the old thin-API-call budget now that the reviewer is a full claude
     # session on the operator's own Max subscription, not a metered,
@@ -320,14 +315,128 @@ jobs:
             exit 1
           fi
 
-      # On `pull_request` (the labeled event), the base/head SHAs and the
-      # PR's own branch name all come straight from the event's own payload
-      # — GitHub computed it for exactly this label-application event, so
-      # there is no race to defend against and no extra `gh api` round trip
-      # needed (unlike the workflow_dispatch path below). This is also the
-      # event whose check-run attaches to the right commit automatically —
-      # see the file header for why that property is the whole reason this
-      # file no longer triggers on `merge_group`/`workflow_dispatch` alone.
+      # ── The merge queue's own arm (#1187): REPORT, do not re-review ─────
+      # A merge queue builds a synthetic `gh-readonly-queue/<base>/pr-<n>-<sha>`
+      # commit and waits for every required context on THAT commit. This step
+      # is how `fleet/review` reports there.
+      #
+      # It republishes the verdict the PR head already earned rather than
+      # reviewing the queue commit, because the queue commit is the PR merged
+      # into the CURRENT base — a DIFFERENT diff. The content-hashed review
+      # cache (`review-cache.ts`) therefore misses by construction, so
+      # re-reviewing is a full model call for every queued merge, on top of
+      # the one the PR already paid; this repo ran 100 review jobs in 24
+      # hours to land 6 PRs, and doubling that is the wrong direction. It
+      # would also be re-judging code that has already been reviewed and
+      # approved, against a base that moved for reasons unrelated to the PR.
+      # The claim stays honest either way: "this code was reviewed" is true
+      # of the PR head, and the queue commit adds only `main`, which was
+      # reviewed on its own way in.
+      #
+      # THIS STEP MUST NEVER BECOME A SKIP (invariant 6, and invariant 1
+      # before it). It is a step inside the one `fleet/review` job — not a
+      # job-level `if:`, not a second same-named job — so the job is
+      # instantiated on the queue ref and reaches a real conclusion there.
+      # Every path below either exits 0 having PROVEN a passing review
+      # exists, or exits 1 naming the PR and the reason. "Assert this run
+      # reached a real verdict", at the end of the job, refuses to let the
+      # job conclude green if this step did not run when it should have.
+      #
+      # The PR number is parsed out of `merge_group.head_ref` with the exact
+      # two lines `fleet-verify.yml`'s own `ctx` step uses, kept byte-for-byte
+      # identical by a rail in
+      # tests/orchestrator/fleet-review-merge-group.test.ts — two gates that
+      # disagreed about which PR a queue entry belongs to would be a far
+      # worse bug than the duplication.
+      - name: Report the queued PR's own review verdict (merge_group)
+        id: queue
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(echo "$MQ_HEAD_REF" | grep -oE 'pr-[0-9]+-' | grep -oE '[0-9]+' || true)
+          if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+            echo "::error::fleet/review FAILED: queue-ref-unparseable — could not parse a numeric PR number out of merge_group.head_ref: $MQ_HEAD_REF"
+            exit 1
+          fi
+
+          # Guarded captures throughout (`if ! x=$(...)`), for the same
+          # reason the workflow_dispatch branch of the `ctx` step below is:
+          # under the inherited `-e` a bare assignment dies on the first API
+          # hiccup with nothing but gh's raw stderr, and a required check
+          # that goes red with no reason is what stalls a queue entry a
+          # human then has to dig out of the logs.
+          if ! pr_json="$(gh api "repos/$REPO/pulls/$pr" 2>&1)"; then
+            echo "::error::fleet/review FAILED: queue-pr-lookup — \`gh api .../pulls/$pr\` failed while resolving the PR behind queue entry $MQ_HEAD_REF:"
+            printf '%s\n' "$pr_json"
+            exit 1
+          fi
+          pr_head="$(printf '%s' "$pr_json" | jq -r '.head.sha')"
+          if [[ ! "$pr_head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::fleet/review FAILED: queue-pr-head-unresolved — PR #$pr's head SHA did not parse out of the API response (got '$pr_head')"
+            exit 1
+          fi
+
+          # The verdict is read from the CHECK RUN this same job already
+          # published on the PR's head — the same context, the same name, the
+          # same job — never from a PR approval or a comment. An approving
+          # GitHub review is a human artifact the fleet must not read as its
+          # own gate, and a comment is text. `--paginate` with a jq filter
+          # rather than the `check_name=` query parameter: a head commit here
+          # carries well over a page of check runs, and a filter that
+          # silently matched nothing would fail this step for a PR that was
+          # in fact reviewed.
+          if ! runs="$(gh api --paginate "repos/$REPO/commits/$pr_head/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.name == "fleet/review")' | jq -s -c '.')"; then
+            echo "::error::fleet/review FAILED: queue-check-lookup — could not read the check runs on PR #$pr's head $pr_head:"
+            printf '%s\n' "$runs"
+            exit 1
+          fi
+          completed="$(printf '%s' "$runs" | jq -c '[.[] | select(.status == "completed")] | sort_by(.completed_at)')"
+          in_flight="$(printf '%s' "$runs" | jq -r '[.[] | select(.status != "completed")] | length')"
+          if [ "$in_flight" != "0" ]; then
+            echo "::warning::PR #$pr has $in_flight fleet/review run(s) still in flight on $pr_head; this verdict is the latest COMPLETED one"
+          fi
+          if [ "$(printf '%s' "$completed" | jq -r 'length')" = "0" ]; then
+            echo "::error::fleet/review FAILED: queue-pr-unreviewed — PR #$pr's head $pr_head carries no completed fleet/review check run, so this queue entry has no review to report"
+            echo "Request a review from the fleet reviewer on PR #$pr, let fleet/review conclude on its head, then re-queue it."
+            exit 1
+          fi
+          # The LATEST completed run, never "any of them passed": a
+          # re-requested review that found a problem after an earlier pass
+          # must block the queue, not be outvoted by the run it supersedes.
+          conclusion="$(printf '%s' "$completed" | jq -r 'last | .conclusion')"
+          run_url="$(printf '%s' "$completed" | jq -r 'last | .html_url')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::fleet/review FAILED: queue-pr-review-not-passing — PR #$pr's own fleet/review concluded '$conclusion' on its head $pr_head ($run_url); refusing to report a pass for queue commit $MQ_HEAD_SHA"
+            exit 1
+          fi
+          echo "fleet/review PASS — reported, not re-run."
+          echo "PR #$pr's own fleet/review concluded 'success' on its head $pr_head ($run_url)."
+          echo "Queue commit $MQ_HEAD_SHA is that reviewed head merged onto $MQ_BASE_SHA, which was itself reviewed on its own way into main."
+
+      # Everything from here to the end of the job is the PULL REQUEST /
+      # WORKFLOW_DISPATCH review path, and every step of it carries
+      # `if: github.event_name != 'merge_group'` — the queue arm above has
+      # already produced this job's verdict, and the reviewing pipeline must
+      # not spend a checkout, an install or a model call re-deriving it.
+      # These are STEP-level conditions, which skip a step without ever
+      # touching the JOB's conclusion; the job still runs and still reports
+      # (invariants 1 and 6).
+      #
+      # On `pull_request` (the review-request event), the base/head SHAs and
+      # the PR's own branch name all come straight from the event's own
+      # payload — GitHub computed it for exactly this event, so there is no
+      # race to defend against and no extra `gh api` round trip needed
+      # (unlike the workflow_dispatch path below). This is also the event
+      # whose check-run attaches to the right commit automatically — see the
+      # file header for why that property is the whole reason this file no
+      # longer triggers on `merge_group`/`workflow_dispatch` alone.
       #
       # On `workflow_dispatch`, `pr_number` is the operator-supplied input —
       # validated as digits-only before it goes anywhere near a `gh api` path
@@ -345,10 +454,10 @@ jobs:
       # are always the same commit by construction, not by timing luck.
       - name: Resolve the base/head SHAs and PR context for this event
         id: ctx
+        if: github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          LABEL_NAME: ${{ github.event.label.name }}
           PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
           PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -395,31 +504,23 @@ jobs:
               echo "::warning::PR #$pr's current head ($live_head) differs from the dispatched commit ($head_sha) — a newer commit has landed since this run was triggered. Reviewing the dispatched commit only; re-dispatch against the new head once it is ready."
             fi
           fi
-          # Whether THIS event is the one that actually asks for a review —
-          # the ONLY thing that used to live in this job's now-removed
-          # `if:`. A manual workflow_dispatch always counts (it has no label
-          # of its own to check); a pull_request event counts only when the
-          # label just applied is named exactly `review` — applying any
-          # OTHER label (e.g. `agent-dispatchable`) must NOT set this, or it
-          # would spend a review call by accident, the same bug this file's
-          # header describes for the job-level `if:` this replaces.
-          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$LABEL_NAME" == "review" ]]; then
-            requested=true
-          else
-            requested=false
-          fi
+          # NOTE: whether this event actually ASKS US for a review is NOT
+          # decided here. It is `reviewIsRequested` (orchestrator/src/ci.ts),
+          # evaluated inside the gate step from the raw event fields below —
+          # one testable, fail-closed place, rather than a bash comparison
+          # nothing pins. This step only resolves WHAT is being judged.
           {
             echo "base_sha=$base_sha"
             echo "head_sha=$head_sha"
             echo "branch=$branch"
             echo "pr=$pr"
-            echo "requested=$requested"
           } >> "$GITHUB_OUTPUT"
 
       # The BASE commit, not the head. Everything the gate decides is computed
       # from this tree: its git history, its orchestrator code, its lockfile,
       # its node_modules. The commit under judgement never becomes code here.
       - name: Checkout the PR BASE (trusted)
+        if: github.event_name != 'merge_group'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.ctx.outputs.base_sha }}
@@ -442,6 +543,7 @@ jobs:
       # again (REVIEWER_CONTROL_NAMES) from base code, because this workflow
       # file is the PR's own copy on the ref this job checked out.
       - name: Export the PR head as data
+        if: github.event_name != 'merge_group'
         env:
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
         run: |
@@ -470,6 +572,7 @@ jobs:
           fi
 
       - name: Setup Bun
+        if: github.event_name != 'merge_group'
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -478,6 +581,7 @@ jobs:
       # the shortest path from "PR edits a dependency" to "PR runs code inside
       # its own judge".
       - name: Install dependencies (base lockfile, no install scripts)
+        if: github.event_name != 'merge_group'
         run: bun install --frozen-lockfile --ignore-scripts
 
       # Bootstrap guard, part 1 of 2 — guards the INVOCATION OF THE GATE
@@ -501,8 +605,8 @@ jobs:
       # well before `review-gate` (or even `cli.ts` itself) landed on main,
       # with no PR-side action having removed anything.
       #
-      # Verified against two real, currently-open dependabot PRs re-labelled
-      # `review` by the operator (run 35403493398 for #630, run 35403500475
+      # Verified against two real, currently-open dependabot PRs re-reviewed
+      # by the operator (run 35403493398 for #630, run 35403500475
       # for #626): #630's base predates `orchestrator/src/cli.ts` entirely,
       # so `bun orchestrator/src/cli.ts review-gate` a few steps below failed
       # with bun's own uncaught `error: Module not found` — no diagnostic, no
@@ -518,14 +622,15 @@ jobs:
       # This step runs unconditionally, before that first invocation, so
       # BOTH shapes above become one clear, actionable failure instead of an
       # opaque crash: update or rebase the PR against a newer main to pick up
-      # `review-gate`, then re-apply the `review` label.
+      # `review-gate`, then re-request the review.
       - name: Check the base provides the review gate itself
+        if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
           if [ ! -f orchestrator/src/cli.ts ]; then
             echo "::error::fleet/review FAILED: base-predates-gate — the base commit predates the fleet review gate (orchestrator/src/cli.ts does not exist), so it cannot judge this PR"
             echo "The gate deliberately runs from the BASE, never from the commit it judges."
-            echo "This PR's base is stale — update/rebase it against a newer main to pick up fleet review support, then re-apply the \`review\` label."
+            echo "This PR's base is stale — update/rebase it against a newer main to pick up fleet review support, then re-request the review."
             exit 1
           fi
           usage="$(bun orchestrator/src/cli.ts 2>&1 || true)"
@@ -533,7 +638,7 @@ jobs:
             *review-gate*) ;;
             *)
               echo "::error::fleet/review FAILED: base-missing-review-gate-command — the base commit has no 'review-gate' command, so it cannot judge this PR"
-              echo "This PR's base predates the fleet review gate — update/rebase it against a newer main to pick up review-gate support, then re-apply the \`review\` label."
+              echo "This PR's base predates the fleet review gate — update/rebase it against a newer main to pick up review-gate support, then re-request the review."
               exit 1
               ;;
           esac
@@ -543,38 +648,102 @@ jobs:
       # JOB always reaches a conclusion instead of sometimes not running at
       # all. `decideReviewGate` (ci.ts) does the actual work; this step only
       # wires its four outcomes to the pipeline:
-      #   - `cache-hit`     → exits 0. Every later step's `if:` below reads
-      #     `outcome == 'run-engine'` and skips, so nothing past this point
-      #     spends a model call — the job still concludes SUCCESS.
+      #   - `cache-hit`     → no model call either way. Every later step's
+      #     `if:` below reads `outcome == 'run-engine'` and skips, so
+      #     nothing past this point spends one. A cached PASS exits 0 and
+      #     the job concludes SUCCESS; a cached substantive FAIL exits 1,
+      #     restating the original verdict (#1158) — the diff has not
+      #     changed since, so re-reviewing could only reach the same
+      #     conclusion. An UNREADABLE is never cached.
       #   - `low-tier`      → exits 0, with the tier and contributing files
       #     printed to this step's own stdout (`runReviewGate`, cli.ts) —
       #     `tierFor` (impact.ts) classified every changed file as Tier 0/1
       #     (no executable content, or instructions/tooling already earning a
       #     code-owner review). Every later step skips exactly as in
       #     `cache-hit` — the job concludes SUCCESS with no engine call,
-      #     regardless of `requested`.
-      #   - `run-engine`    → exits 0, later steps proceed exactly as before.
-      #   - `specialist-unmet` → exits 1 (#1092): a `-reviewer` label on the
-      #     PR (read live via `gh api .../pulls/<n>` — `pull-requests: read`,
-      #     already granted) whose specialist has no PASS for this diff. Same
-      #     fail-closed mechanics as `not-requested` below.
+      #     regardless of who the review was requested from.
+      #   - `run-engine`    → exits 0, later steps proceed. `profiles` names
+      #     the reviewer profiles to run alongside the general review, and
+      #     `clear_labels` the labels to remove once they all pass.
+      #   - `review-set-unresolved` → exits 1: the PR's labels could not be
+      #     read, or a review it asks for (by label or by its own content)
+      #     does not resolve to a known agent. Fail closed — "we could not
+      #     work out what to review" never becomes "nothing needed it".
       #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts), which
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
       #     `if: always()`/`if: failure()` — none of the engine steps do)
       #     and fails the job. No engine call, no skip, fail closed.
+      #
+      # `FLEET_REVIEW_EVENT_NAME` / `FLEET_REVIEW_REQUESTED_REVIEWER` are the
+      # raw event fields `reviewIsRequested` (ci.ts) judges — passed through
+      # `env:` and never interpolated into this script, because a reviewer
+      # login is attacker-influenced text. `requested_reviewer` is empty when
+      # the request named a TEAM, which is correctly not a request for us.
+      #
       # Needs only `contents: read` (git, already granted for the checkout
-      # above) and `actions: read` (the cache lookup, already granted below)
-      # — no new permission for this step.
+      # above), `pull-requests: read` (the live label/description read that
+      # decides the review set) and `actions: read` (the cache lookup) — no
+      # new permission for this step.
       - name: Decide whether to run the review engine
         id: gate
+        if: github.event_name != 'merge_group'
         env:
           FLEET_CI_BRANCH: ${{ steps.ctx.outputs.branch }}
           FLEET_CI_PR: ${{ steps.ctx.outputs.pr }}
           FLEET_CI_HEAD_DIR: ${{ runner.temp }}/head
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
-          FLEET_REVIEW_REQUESTED: ${{ steps.ctx.outputs.requested }}
+          FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
+          FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
+          # TRANSITIONAL SHIM (#1213) — delete this key, and this comment,
+          # in the PR immediately after this one merges. It exists for
+          # exactly one run: THIS PR's own.
+          #
+          # The gate is deliberately run from the BASE checkout, never from
+          # the commit it judges (see the file header). So on any PR this
+          # YAML comes from the HEAD while `orchestrator/src/cli.ts
+          # review-gate` comes from `main`, and the two halves speak only
+          # through this `env:` block. This PR changes what they say to each
+          # other: `main`'s `runReviewGate` reads one thing,
+          # `FLEET_REVIEW_REQUESTED === 'true'`, and knows nothing of the two
+          # variables above. Emitting only the new pair left this PR's own
+          # `fleet/review` at `not-requested`, exit 1, no engine — a required
+          # check with no honest way to pass. So we keep speaking the old
+          # dialect too, for the one base that still only understands it.
+          #
+          # It is NOT `true`. It is `reviewIsRequested` (ci.ts) transcribed
+          # into an expression, so the old gate reaches the same verdict the
+          # new one would: `workflow_dispatch` is a request (both sides agree
+          # — see the ctx step on `main` and `reviewIsRequested`'s first
+          # line); a `pull_request` — which on this workflow can ONLY be
+          # `review_requested` — is a request when it named `llamenos-auto`,
+          # or named `rhonda-rodododo` on the knope release PR, and is NOT
+          # one when it named a colleague or a TEAM (`requested_reviewer` is
+          # then empty). `merge_group` cannot reach this at all: the step's
+          # own `if:` above excludes it. Comparison is `==`, which GitHub
+          # evaluates case-insensitively, matching `reviewIsRequested`'s own
+          # `toLowerCase()`. The login is compared INSIDE the expression and
+          # never reaches the value, so no attacker-influenced text is
+          # interpolated — the env var is only ever `true` or `false`.
+          #
+          # This duplicates REVIEW_REQUEST_LOGIN / RELEASE_REVIEW_REQUEST_LOGIN
+          # / KNOPE_RELEASE_BRANCH in YAML, where nothing tests them and they
+          # will drift. That is the whole reason #1213 exists and why it is a
+          # deletion, not a maintenance task.
+          #
+          # Deliberately ONE long line, not a `>-` folded scalar: the rail
+          # "no label value is ever interpolated into a shell script — env
+          # only" (specialist.test.ts) requires every `${{ }}` mentioning
+          # `requested_reviewer` to sit on its own `key:` assignment line, so
+          # that a reviewer login can never be found inside a `run:` body.
+          # Folding puts the expression on a bare continuation line and trips
+          # that rail — correctly, since the rail cannot tell a folded env
+          # value from a shell heredoc.
+          FLEET_REVIEW_REQUESTED: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.requested_reviewer.login == 'llamenos-auto' || (github.event.requested_reviewer.login == 'rhonda-rodododo' && github.event.pull_request.head.ref == 'release'))) }}
+          # A re-published cached verdict is written here too, so a cache
+          # hit still reads as a review on the PR rather than a bare status.
+          FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
           GH_TOKEN: ${{ github.token }}
         run: bun orchestrator/src/cli.ts review-gate
 
@@ -825,24 +994,95 @@ jobs:
           FLEET_CI_HEAD_DIR: ${{ runner.temp }}/head
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
-          # Read-only lookup of a prior PASS for this exact diff — see
-          # `review-cache.ts`. `GH_TOKEN` is what lets that lookup call
-          # `gh api`; `FLEET_REVIEW_CACHE_DIR` is where a FRESH pass (never a
-          # replayed cache hit — `runReviewCi` in ci.ts only records one it
-          # just produced) gets written for the upload step below to pick up.
+          # Where every reviewer's FULL text is written for the publish
+          # job to post on the PR. The review set is NOT passed in: base
+          # code decides it from a live read of the PR (`runReviewCi`), so
+          # this file — which on a `pull_request` event is the PR's own
+          # copy — cannot shrink it.
+          FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
+          # Read-only lookup of a prior PASS for this exact diff AND review
+          # set — see `review-cache.ts`. `GH_TOKEN` is what lets that lookup
+          # call `gh api`; `FLEET_REVIEW_CACHE_DIR` is where a FRESH pass
+          # (never a replayed cache hit — `runReviewCi` in ci.ts only records
+          # one it just produced) gets written for the upload step below.
           GH_TOKEN: ${{ github.token }}
           FLEET_REVIEW_CACHE_DIR: ${{ runner.temp }}/review-cache
         run: bun orchestrator/src/cli.ts review-ci
 
-      # Best-effort and never affects this job's own result (`if: always()`,
-      # and `if-no-files-found: ignore` for the ordinary case where this run
-      # was itself a cache hit, or FAILed, and `record()` therefore wrote
-      # nothing at all — see the "FAIL is never reused" comment in
-      # review-cache.ts). Uploading uses the ephemeral per-run Actions
+      # Invariant 5 again, at the STEP level this time. Every reviewing step
+      # above is opt-in (`if: ... == 'run-engine'`), which makes GREEN this
+      # job's default: anything that leaves `outcome` unset or wrong skips
+      # all of them and the job concludes SUCCESS with no review. This step
+      # asserts the opposite — that a run which decided to review actually
+      # did. `runReviewGate` (cli.ts) refuses on the same condition from its
+      # own side; this is the half that cannot be bypassed by the CLI
+      # failing to write its output at all.
+      # #1187 widened this from `if: always() && steps.gate.conclusion ==
+      # 'success'` to a bare `always()`, and moved the gate-conclusion test
+      # inside the script, so that the MERGE_GROUP arm is covered by the same
+      # assertion. Without that, a merge_group run whose queue step failed to
+      # be selected at all — a typo in its `if:`, a renamed event — would
+      # skip every step in this job and conclude SUCCESS: a green
+      # `fleet/review` on a queue commit with no verdict behind it, which is
+      # the exact fail-open shape invariant 6 exists to prevent.
+      - name: Assert this run reached a real verdict
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_OUTCOME: ${{ steps.queue.outcome }}
+          GATE_CONCLUSION: ${{ steps.gate.conclusion }}
+          OUTCOME: ${{ steps.gate.outputs.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            if [ "$QUEUE_OUTCOME" != "success" ]; then
+              echo "::error::fleet/review FAILED: queue-verdict-missing — on merge_group the queued-PR verdict step reported '$QUEUE_OUTCOME'; refusing to conclude green on a queue commit with no verdict behind it"
+              exit 1
+            fi
+            echo "merge_group arm: queued-PR verdict step=$QUEUE_OUTCOME"
+            exit 0
+          fi
+          if [ "$GATE_CONCLUSION" != "success" ]; then
+            echo "gate step conclusion='$GATE_CONCLUSION' — the job is already failing or never reached the gate; nothing further to assert"
+            exit 0
+          fi
+          if [ -z "$OUTCOME" ]; then
+            echo "::error::fleet/review FAILED: gate-outcome-missing — the gate step succeeded but wrote no outcome, so every reviewing step was skipped; refusing to conclude green with no review"
+            exit 1
+          fi
+          if [ "$OUTCOME" = "run-engine" ] && [ "$REVIEW_OUTCOME" != "success" ]; then
+            echo "::error::fleet/review FAILED: review-did-not-run — the gate decided to review (outcome=$OUTCOME) but the Review step reported '$REVIEW_OUTCOME'"
+            exit 1
+          fi
+          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME"
+
+      # Every reviewer's FULL text, for `fleet-review/publish` to post on
+      # the PR. `if: always()` because a FAIL is exactly the case that most
+      # needs its reasoning on the PR — two real reviews ran on #1117 and
+      # left `pulls/1117/reviews` and `issues/1117/comments` both empty,
+      # with the findings readable only via `gh run view --log`.
+      - name: Upload the review report for publishing
+        if: always() && github.event_name != 'merge_group'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-report
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # `if: always()` is load-bearing, not defensive: the review step exits
+      # non-zero on a FAIL, and a substantive FAIL is exactly what #1158
+      # added to the cache — without `always()` the record this step exists
+      # to upload would be dropped on every run that produced one.
+      # `if-no-files-found: ignore` covers the runs where `record()` wrote
+      # nothing at all: a cache hit being re-published, or a verdict with an
+      # UNREADABLE in it (never cached — see review-cache.ts).
+      # Uploading uses the ephemeral per-run Actions
       # artifact token, never the job's own read-only `permissions:` above —
       # this step needs no permission this job does not already have to be a
       # write.
-      - name: Cache the verdict, if this run produced a fresh PASS
+      - name: Cache the verdict, if this run produced a fresh substantive one
         if: always() && steps.review.outputs.cache_artifact_name != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -853,3 +1093,155 @@ jobs:
           # its own storage-cost concern.
           retention-days: 30
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Publishing the reviews, then clearing the worklist (#1158).
+  # ---------------------------------------------------------------------------
+  # `fleet/review` used to write a check run and a job log and nothing else.
+  # Two real reviews ran on #1117 and left `pulls/1117/reviews` and
+  # `issues/1117/comments` both EMPTY: both substantive findings existed only
+  # inside Actions logs and had to be dug out with `gh run view --log`, while
+  # anyone opening the PR saw a red check with no reason on it. A red check
+  # whose reason lives only in a log is not reviewable.
+  #
+  # So this job posts each reviewer's full text as a PR COMMENT — never a
+  # GitHub REVIEW. An approving review from the fleet is a review GitHub
+  # COUNTS, one ruleset edit away from being an approval the fleet grants
+  # itself; a comment records the same text in the same thread and can never
+  # be that. (Same reasoning as `postReview`'s doc comment in review.ts.)
+  #
+  # THEN, and only then, it removes the `-reviewer` labels whose review
+  # passed — so the worklist never clears without a visible trace. What is
+  # still labelled on a PR is what is still owed.
+  #
+  # A FAIL posts and clears NOTHING, deliberately: leaving the label on is
+  # what makes the next review request re-run that reviewer. Clearing on a
+  # FAIL would be a fail-open — the worklist would forget a review that
+  # found a problem.
+  #
+  # A SEPARATE, GitHub-hosted job on purpose. It is the only thing in this
+  # file with write access; it checks out nothing, installs nothing and runs
+  # no repository code at all. Keeping it out of `fleet-review` is what lets
+  # that job — the one that runs a model next to the operator's logged-in
+  # `claude` session — stay read-only.
+  #
+  # This job's name is NOT a required context and must never become one: it
+  # runs only when `fleet-review` did, so requiring it would block every PR
+  # whose review was never requested. Its result cannot affect the gate —
+  # `fleet/review` has already concluded by the time this starts.
+  publish-reviews:
+    name: fleet-review/publish
+    needs: [fleet-review]
+    # A job-level `if:` is safe HERE and only here, because this job's name
+    # is not a required context: a skipped NON-required job satisfies
+    # nothing. Never copy this into `fleet-review` — see invariant 1.
+    # Runs on a FAIL too: that is the case whose reasoning the PR most needs.
+    # `github.event_name != 'merge_group'`: the queue arm posts nothing (it
+    # republishes a verdict already on the PR) and a `merge_group` event
+    # carries no PR number for this job to post against.
+    if: always() && github.event_name != 'merge_group' && (needs.fleet-review.result == 'success' || needs.fleet-review.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write   # post the comments, remove the labels
+      actions: read          # download this run's own review report
+    steps:
+      - name: Refuse to run on a fork PR
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::fleet-review/publish FAILED: fork-pr-guard — head repo '$HEAD_REPO' != '$THIS_REPO'"
+            exit 1
+          fi
+
+      # Every value below reaches the script through `env:`, never a `${{ }}`
+      # interpolation into the script text, so nothing a PR controls is ever
+      # parsed as shell. `jq --raw-output` reads the report files; the bodies
+      # are written to disk and passed with `--body-file`, never on a
+      # command line.
+      - name: Post each reviewer's findings on the PR, then clear the labels it passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event.inputs.pr_number }}
+          REVIEW_RESULT: ${{ needs.fleet-review.result }}
+          CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::fleet-review/publish FAILED: no numeric PR number (got '$PR')"
+            exit 1
+          fi
+
+          dir="$RUNNER_TEMP/review-report"
+          mkdir -p "$dir"
+          # No report is a legitimate state (a `not-requested` or
+          # `review-set-unresolved` run reviews nothing), so a missing
+          # artifact is not an error — but a report that EXISTS and cannot be
+          # read is, because that is a review silently not reaching the PR.
+          if gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$dir" 2>/dev/null; then
+            echo "downloaded $ARTIFACT"
+          else
+            echo "no review report in this run — nothing to post"
+          fi
+
+          # The markers already on the PR, so a re-request on an UNCHANGED
+          # diff re-posts nothing. Without this, every rebase-and-re-request
+          # would pile another copy of the same review onto the thread —
+          # the churn this issue exists to remove.
+          gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].body' > "$RUNNER_TEMP/existing.txt" || : > "$RUNNER_TEMP/existing.txt"
+
+          posted=0
+          shopt -s nullglob
+          for f in "$dir"/*.json; do
+            reviewer="$(jq -r '.reviewer' "$f")"
+            verdict="$(jq -r '.verdict' "$f")"
+            marker="$(jq -r '.marker' "$f")"
+            if [ -z "$marker" ] || [ "$marker" = "null" ]; then
+              echo "::error::report entry $f has no marker — refusing to post an untrackable comment"
+              exit 1
+            fi
+            if grep -qF -- "$marker" "$RUNNER_TEMP/existing.txt"; then
+              echo "already posted: $reviewer ($verdict)"
+              continue
+            fi
+            {
+              printf '%s\n\n' "$marker"
+              printf '### `fleet/review` — %s: **%s**\n\n' "$reviewer" "$verdict"
+              jq -r '.body' "$f"
+            } > "$RUNNER_TEMP/comment.md"
+            gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+            echo "posted: $reviewer ($verdict)"
+            posted=$((posted + 1))
+          done
+          echo "posted $posted comment(s)"
+
+          # Only AFTER the reviews are on the PR, and only on a PASS.
+          if [ "$REVIEW_RESULT" != "success" ] || [ -z "$CLEAR_LABELS" ]; then
+            echo "no labels to clear (review result=$REVIEW_RESULT)"
+            exit 0
+          fi
+          IFS=',' read -r -a labels <<< "$CLEAR_LABELS"
+          for label in "${labels[@]}"; do
+            [ -n "$label" ] || continue
+            # Re-checked here rather than trusting a value that crossed a job
+            # boundary, even though `resolveReviewerLabel` (specialist.ts)
+            # already matched each one against the BASE agent registry.
+            if [[ ! "$label" =~ ^[a-z0-9]+(-[a-z0-9]+)*-reviewer$ ]]; then
+              echo "::error::refusing to act on '$label' — not a well-formed reviewer label"
+              exit 1
+            fi
+            # One call per label, so one label already gone (a human removed
+            # it mid-run) cannot take the rest of the loop with it.
+            if gh api -X DELETE "repos/$REPO/issues/$PR/labels/$label" --silent 2>/dev/null; then
+              echo "cleared '$label' — its review passed on this diff"
+            else
+              echo "::warning::could not remove '$label' from PR #$PR (already gone?) — the review still passed"
+            fi
+          done

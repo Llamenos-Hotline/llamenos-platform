@@ -64,22 +64,52 @@ export function isCryptoDiff(changedFiles: string[]): boolean {
 }
 
 /**
- * The reviewers a diff requires. The non-author second opinion
- * (`secondOpinion` below) is mandatory for every diff and is never listed
- * here — this function only names what gets added ON TOP of it. For a
- * crypto diff that is exactly one thing: the crypto-security-reviewer
- * agent, as an ADDITIONAL mandatory reviewer, never a substitute for the
- * non-author opinion.
+ * Distinctive crypto vocabulary, matched case-insensitively against the PR's
+ * TITLE AND DESCRIPTION — the "and from the PR itself" half of the review-set
+ * decision (#1158): a PR that is plainly a crypto change gets the crypto
+ * review whether or not anyone remembered the label, and whether or not the
+ * paths it touches happen to be on `CRYPTO_REVIEW_PATHS`.
  *
- * Its verdict is advisory to a human and is never a merge permission: every
- * crypto path is owned in `CODEOWNERS`, so GitHub's own "require review from
- * Code Owners" rule holds the PR until a human approves it, regardless of
- * what any reviewer says about it. The point of requesting it is that the
- * human who ultimately approves starts from a security review instead of
- * from scratch.
+ * Deliberately narrow, and deliberately NOT `CRYPTO_PATH_KEYWORDS`: that
+ * list is matched against PATHS, where `auth` or `session` is a strong
+ * signal. Matched against free prose it is noise — "authorisation",
+ * "session timeout", "the crypto lane" would each pull in a review nobody
+ * needs, and a review set that fires on everything is one nobody trusts.
+ * Every entry here is a term that is hard to write by accident.
  */
-export function requiredAdditionalReviewers(changedFiles: string[]): readonly string[] {
-  return isCryptoDiff(changedFiles) ? [CRYPTO_SECURITY_REVIEWER_AGENT] : []
+const CRYPTO_TEXT_KEYWORDS: readonly string[] = [
+  'hpke', 'ed25519', 'x25519', 'xchacha20', 'chacha20', 'aes-gcm', 'sframe',
+  'sigchain', 'openmls', 'uniffi', 'e2ee', 'end-to-end encrypt',
+  'envelope encrypt', 'key wrap', 'crypto label', 'domain separation',
+  'per-user key', 'forward secrecy', 'keystore', 'keychain',
+]
+
+/** Whether a PR's own prose says it is a cryptographic change. Case
+ *  insensitive; `''` (no description available) is never a match. */
+export function isCryptoDescription(description: string): boolean {
+  const text = description.toLowerCase()
+  return CRYPTO_TEXT_KEYWORDS.some((k) => text.includes(k))
+}
+
+/**
+ * The reviewers a diff requires ON TOP of the general non-author review
+ * (`secondOpinion` below), which is mandatory for every diff and is never
+ * listed here. For a crypto change that is exactly one thing: the
+ * crypto-security-reviewer agent, as an ADDITIONAL mandatory reviewer, never
+ * a substitute for the general opinion.
+ *
+ * `description` is the PR's title and body. It is an OR with the path check,
+ * never an AND: either signal alone puts the reviewer in the set. Defaulted
+ * so a caller that has only a file list (the pre-PR loop) is unchanged.
+ *
+ * Under #1158 this is one of the two inputs to the review set `fleet/review`
+ * actually runs, alongside the PR's `-reviewer` labels — so a crypto review
+ * is no longer "advisory": its FAIL fails the required check. Code-owner
+ * review still applies on top; this only means the human who approves starts
+ * from a security review instead of from scratch.
+ */
+export function requiredAdditionalReviewers(changedFiles: string[], description = ''): readonly string[] {
+  return isCryptoDiff(changedFiles) || isCryptoDescription(description) ? [CRYPTO_SECURITY_REVIEWER_AGENT] : []
 }
 
 /**
