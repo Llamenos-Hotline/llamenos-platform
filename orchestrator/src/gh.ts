@@ -14,12 +14,17 @@ const execFileAsync = promisify(execFile)
  * the live path, never the pre-move one, and this is the reason it is a
  * blocker rather than tidying: GitHub serves the owner redirect
  * `rhonda-rodododo/llamenos-platform -> Llamenos-Hotline/llamenos-platform`
- * only for as long as the old path stays unoccupied. Anyone who creates a repo
- * at the vacated name takes the redirect down and inherits it — and every
- * write this pin governs (issue comments, PR merges, review verdicts, label
- * edits) would then land in their repository instead, silently, with `gh`
- * reporting success. Pinning the post-move path removes that dependency on an
- * unowned name entirely.
+ * only for as long as the old path stays unoccupied. Recreating a repo at that
+ * name takes the redirect down and inherits it — and every write this pin
+ * governs (issue comments, PR merges, review verdicts, label edits) would then
+ * land in that repository instead, silently, with `gh` reporting success.
+ *
+ * To be precise about the threat, since a vague one invites being dismissed:
+ * a repo under `rhonda-rodododo/` can only be created by that account, so this
+ * is not a name a stranger can grab today. It becomes one if the account is
+ * ever deleted or renamed, which frees the username for anyone to register.
+ * Either way the redirect's lifetime is a condition this project does not
+ * control, and pinning the post-move path removes the dependency on it.
  */
 export const REPO = 'Llamenos-Hotline/llamenos-platform'
 
