@@ -70,11 +70,13 @@ final class AuthFlowUITests: XCTestCase {
         }
         createButton.tap()
 
-        // PIN pad should appear directly (v3 flow: no onboarding/device key step)
-        let pinPad = find("pin-pad")
+        // PIN set appears directly (v3: no device key or backup step). It is a free-text
+        // field so a PIN or passphrase of 8+ characters can be set (PINSetView.swift);
+        // the digit pad is only the unlock screen's.
+        let pinInput = find("pin-input")
         XCTAssertTrue(
-            pinPad.waitForExistence(timeout: 10),
-            "PIN pad should appear after tapping Create New Identity (v3 direct-to-PIN flow)"
+            pinInput.waitForExistence(timeout: 10),
+            "PIN entry should appear after tapping Create New Identity (v3 direct-to-PIN flow)"
         )
     }
 
@@ -84,15 +86,12 @@ final class AuthFlowUITests: XCTestCase {
         navigateToOnboarding()
         navigateToPINSet()
 
-        // Enter 6-digit PIN: 123456
-        enterPIN("12345678")
+        submitPIN("12345678")
 
-        // Should transition to confirm phase
-        let pinPad = find("pin-pad")
-        XCTAssertTrue(pinPad.exists, "PIN pad should still be visible for confirmation")
+        // Should transition to the confirm phase, still on PIN entry
+        XCTAssertTrue(find("pin-input").waitForExistence(timeout: 5), "PIN entry should remain for confirmation")
 
-        // Confirm the same PIN: 123456
-        enterPIN("12345678")
+        submitPIN("12345678")
 
         // Should reach dashboard after successful PIN set
         let dashboardTitle = find("dashboard-title")
@@ -106,21 +105,18 @@ final class AuthFlowUITests: XCTestCase {
         navigateToOnboarding()
         navigateToPINSet()
 
-        // Enter first PIN: 123456
-        enterPIN("12345678")
-
-        enterPIN("56789012")
+        submitPIN("12345678")
+        submitPIN("56789012")
 
         // Error should be displayed
         let pinError = find("pin-error")
         XCTAssertTrue(
-            pinError.waitForExistence(timeout: 3),
+            pinError.waitForExistence(timeout: 5),
             "PIN mismatch error should be displayed"
         )
 
-        // PIN pad should still be visible for retry
-        let pinPad = find("pin-pad")
-        XCTAssertTrue(pinPad.exists, "PIN pad should remain visible for retry")
+        // PIN entry should still be available for retry
+        XCTAssertTrue(find("pin-input").exists, "PIN entry should remain for retry")
     }
 
     // MARK: - Import Flow
@@ -191,58 +187,43 @@ final class AuthFlowUITests: XCTestCase {
         )
     }
 
-    // MARK: - PIN Pad Interaction
+    // MARK: - PIN Pad Interaction (unlock screen — the only digit pad in v3)
 
     func testPINPadDigitButtons() {
-        navigateToOnboarding()
-        navigateToPINSet()
+        navigateToFullyAuthenticated()
+        lockApp()
 
-        // Wait for PIN pad to be fully rendered
         let pinPad = find("pin-pad")
         guard pinPad.waitForExistence(timeout: 5) else {
-            XCTFail("PIN pad should exist")
+            XCTFail("PIN pad should exist on the unlock screen")
             return
         }
 
-        // Verify all digit buttons exist
         for digit in 0...9 {
-            let button = find("pin-\(digit)")
-            XCTAssertTrue(button.exists, "PIN button \(digit) should exist")
+            XCTAssertTrue(find("pin-\(digit)").exists, "PIN button \(digit) should exist")
         }
-
-        // Verify backspace button exists
-        let backspace = find("pin-backspace")
-        XCTAssertTrue(backspace.exists, "Backspace button should exist")
+        XCTAssertTrue(find("pin-backspace").exists, "Backspace button should exist")
     }
 
     func testPINPadBackspace() {
-        navigateToOnboarding()
-        navigateToPINSet()
+        navigateToFullyAuthenticated()
+        lockApp()
 
-        // Wait for PIN pad
-        let pinPad = find("pin-pad")
-        guard pinPad.waitForExistence(timeout: 5) else {
-            XCTFail("PIN pad should exist")
+        guard find("pin-pad").waitForExistence(timeout: 5) else {
+            XCTFail("PIN pad should exist on the unlock screen")
             return
         }
 
-        // Enter 2 digits
-        find("pin-1").tap()
-        find("pin-2").tap()
-
-        // Backspace
+        // 1-2-3-4-5-6, delete the 6, then 6-7-8: the correct PIN only if backspace
+        // removed exactly one digit. Without it the pad would submit 12345667.
+        for digit in ["1", "2", "3", "4", "5", "6"] { find("pin-\(digit)").tap() }
         find("pin-backspace").tap()
+        for digit in ["6", "7", "8"] { find("pin-\(digit)").tap() }
 
-        // Enter more digits to reach 6 total (1 remaining + 5 new)
-        find("pin-3").tap()
-        find("pin-4").tap()
-        find("pin-5").tap()
-        find("pin-6").tap()
-        find("pin-7").tap()
-
-        // Should transition to confirm (PIN was "13456 7", 6 digits → auto-complete)
-        // The PIN pad should reset for confirmation
-        XCTAssertTrue(pinPad.exists)
+        XCTAssertTrue(
+            find("dashboard-title").waitForExistence(timeout: 20),
+            "The corrected PIN should unlock the app"
+        )
     }
 
     // MARK: - Navigation Helpers
@@ -262,34 +243,45 @@ final class AuthFlowUITests: XCTestCase {
 
     /// Wait for the PIN set screen (v3: navigateToOnboarding already lands here).
     private func navigateToPINSet() {
-        // V3: create-identity navigates directly to PINSetView — just wait for pin-pad.
-        let pinPad = find("pin-pad")
-        _ = pinPad.waitForExistence(timeout: 10)
+        _ = find("pin-input").waitForExistence(timeout: 10)
     }
 
     /// Navigate all the way through to the dashboard (create identity, set PIN).
     private func navigateToFullyAuthenticated() {
         navigateToOnboarding()
         navigateToPINSet()
-
-        // Enter PIN: 123456
-        enterPIN("12345678")
-
-        // Confirm PIN: 123456
-        enterPIN("12345678")
-
-        // Wait for dashboard
-        let dashboardTitle = find("dashboard-title")
-        _ = dashboardTitle.waitForExistence(timeout: 10)
+        submitPIN("12345678")
+        submitPIN("12345678")
+        XCTAssertTrue(
+            find("dashboard-title").waitForExistence(timeout: 20),
+            "Dashboard should appear after setting the PIN"
+        )
     }
 
-    /// Enter a PIN by tapping digit buttons.
-    private func enterPIN(_ pin: String) {
-        for char in pin {
-            let button = find("pin-\(char)")
-            if button.waitForExistence(timeout: 2) {
-                button.tap()
-            }
+    /// Type a PIN into the PIN set screen's field and submit it.
+    private func submitPIN(_ pin: String) {
+        let pinInput = find("pin-input")
+        guard pinInput.waitForExistence(timeout: 10) else {
+            XCTFail("PIN entry should exist")
+            return
         }
+        pinInput.tap()
+        pinInput.typeText(pin)
+        let submit = find("pin-submit")
+        guard submit.waitForExistence(timeout: 3) else {
+            XCTFail("PIN submit should exist")
+            return
+        }
+        submit.tap()
+    }
+
+    /// Lock from the dashboard, landing on the PIN unlock screen.
+    private func lockApp() {
+        let lockButton = find("lock-app")
+        guard lockButton.waitForExistence(timeout: 5) else {
+            XCTFail("Lock button should exist on the dashboard")
+            return
+        }
+        lockButton.tap()
     }
 }

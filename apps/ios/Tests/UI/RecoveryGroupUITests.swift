@@ -18,17 +18,14 @@ final class RecoveryGroupUITests: BaseUITest {
         ])
         XCTAssertTrue(found, "Recovery team config view should show content or loading state")
 
-        // Check for setup form elements (will appear after loading completes)
-        let thresholdPicker = scrollToFind("recovery-threshold-picker")
-        if thresholdPicker.exists {
-            XCTAssertTrue(thresholdPicker.exists, "Threshold picker should exist in setup state")
-
-            let totalPicker = scrollToFind("recovery-total-picker")
-            XCTAssertTrue(totalPicker.exists, "Total shares picker should exist in setup state")
-
-            let setupButton = scrollToFind("recovery-setup-button")
-            XCTAssertTrue(setupButton.exists, "Setup button should exist in setup state")
-        }
+        // This class's hub is fresh, so no recovery team exists: the setup form must show.
+        XCTAssertTrue(
+            find("recovery-team-setup").waitForExistence(timeout: 15),
+            "A hub without a recovery team should show the setup form"
+        )
+        XCTAssertTrue(scrollToFind("recovery-threshold-picker").exists, "Threshold picker should exist in setup state")
+        XCTAssertTrue(scrollToFind("recovery-total-picker").exists, "Total shares picker should exist in setup state")
+        XCTAssertTrue(scrollToFind("setup-recovery-team-button").exists, "Setup button should exist in setup state")
     }
 
     // MARK: - Admin Recovery Requests

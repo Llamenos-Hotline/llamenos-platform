@@ -121,6 +121,15 @@ cmd_start() {
   for _ in $(seq 1 90); do
     if curl -sf "http://127.0.0.1:$PORT/api/health/live" >/dev/null 2>&1; then
       log "Server is live (pid $pid)"
+      # The first dev-route request on a fresh database seeds default roles and
+      # settings; on a CI runner that took 49s, past BaseUITest's 15s hub-creation
+      # timeout, so whichever test class ran first had no hub. Pay it here.
+      local started=$SECONDS
+      curl -sf --max-time 300 -X POST "http://127.0.0.1:$PORT/api/test-create-hub" \
+        -H "Content-Type: application/json" -H "X-Test-Secret: test-reset-secret" \
+        -d '{"name":"native-backend-warmup"}' >/dev/null \
+        || { cat "$SERVER_LOG" >&2; die "warm-up hub creation failed"; }
+      log "Warm-up hub created in $((SECONDS - started))s"
       return 0
     fi
     if ! kill -0 "$pid" 2>/dev/null; then

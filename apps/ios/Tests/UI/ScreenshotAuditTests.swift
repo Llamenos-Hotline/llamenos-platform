@@ -13,13 +13,6 @@ import XCTest
 /// Run both sizes by repeating with "iPhone 17".
 final class ScreenshotAuditTests: BaseUITest {
 
-    /// Screenshot tests default to the Linux dev machine when TEST_HUB_URL is not set,
-    /// since XCUITest runners don't inherit host environment variables.
-    override var testHubURL: String {
-        ProcessInfo.processInfo.environment["TEST_HUB_URL"]
-            ?? "http://192.168.50.95:3000"
-    }
-
     /// Do not auto-launch in setUp — each test launches with the appropriate state.
     override func setUp() {
         super.setUp()
