@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { CommandHandler } from './command-handler'
-import type { BridgeClient, BridgeEvent } from './bridge-client'
+import type { BridgeClient } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeConfig, BridgeCommand } from './types'
 
@@ -474,6 +474,222 @@ describe('CommandHandler', () => {
 
       const playCalls = client.calls.filter((c) => c.method === 'playMedia' && c.args[1] === 'sound:beep')
       expect(playCalls.length).toBe(1)
+    })
+  })
+
+
+  // ================================================================
+  // Helpers for the state-loss / restart regressions below (#1154)
+  // ================================================================
+
+  const createCall = (channelId: string, args: string[] = []) =>
+    handler.handleEvent({
+      type: 'channel_create',
+      channelId,
+      callerNumber: '+15559876543',
+      calledNumber: '+15551234567',
+      args,
+      timestamp: new Date().toISOString(),
+    })
+
+  const hangup = (channelId: string, cause = 16) =>
+    handler.handleEvent({
+      type: 'channel_hangup',
+      channelId,
+      cause,
+      causeText: 'x',
+      timestamp: new Date().toISOString(),
+    })
+
+  describe('recording guard on the channel path fails closed', () => {
+    it('does not record a channel the bridge holds no state for (e.g. after a restart)', async () => {
+      // Tier 5 SFrame call whose ActiveCall entry was lost with the process.
+      await handler.executeCommands([
+        {
+          action: 'record',
+          channelId: 'ch-unknown',
+          name: 'vm-1',
+          maxDuration: 60,
+          beep: true,
+          callbackPath: '/api/telephony/voicemail',
+        },
+      ])
+
+      expect(client.calls.filter((c) => c.method === 'recordChannel')).toHaveLength(0)
+      expect(client.calls.filter((c) => c.method === 'playMedia')).toHaveLength(0)
+    })
+
+    it('does not record a tracked sframe call', async () => {
+      await createCall('ch-sf', ['sframe'])
+      await handler.executeCommands([
+        { action: 'record', channelId: 'ch-sf', name: 'vm-2', maxDuration: 60, beep: false, callbackPath: '/cb' },
+      ])
+      expect(client.calls.filter((c) => c.method === 'recordChannel')).toHaveLength(0)
+    })
+
+    it('still records a tracked pstn call (voicemail keeps working)', async () => {
+      await createCall('ch-pstn')
+      await handler.executeCommands([
+        { action: 'record', channelId: 'ch-pstn', name: 'vm-3', maxDuration: 60, beep: false, callbackPath: '/cb' },
+      ])
+      expect(client.calls.filter((c) => c.method === 'recordChannel')).toHaveLength(1)
+    })
+  })
+
+  describe('bridge cleanup when the volunteer hangs up first', () => {
+    async function bridged(callerId: string, volId: string, bridgeId: string) {
+      client.bridge = (async (...args: unknown[]) => {
+        client.calls.push({ method: 'bridge', args })
+        return bridgeId
+      }) as BridgeClient['bridge']
+      await createCall(callerId)
+      await handler.executeCommands([
+        { action: 'bridge', callerChannelId: callerId, volunteerChannelId: volId, record: false },
+      ])
+    }
+
+    it('hangs up the caller leg, destroys the bridge and drops the entry', async () => {
+      await bridged('ch-caller', 'ch-vol', 'br-1')
+      expect(handler.getStatus().activeBridges).toBe(1)
+
+      // The volunteer channel is never in `calls` — this used to skip cleanupBridge entirely.
+      await hangup('ch-vol')
+
+      expect(handler.getStatus().activeBridges).toBe(0)
+      expect(client.calls).toContainEqual({ method: 'hangup', args: ['ch-caller'] })
+      expect(client.calls).toContainEqual({ method: 'destroyBridge', args: ['br-1'] })
+    })
+
+    it('removes every bridge entry a channel appears in, not just the first', async () => {
+      await bridged('ch-caller', 'ch-vol', 'br-1')
+      client.bridge = (async () => 'br-2') as BridgeClient['bridge']
+      await handler.executeCommands([
+        { action: 'bridge', callerChannelId: 'ch-caller', volunteerChannelId: 'ch-vol-2', record: false },
+      ])
+      expect(handler.getStatus().activeBridges).toBe(2)
+
+      await hangup('ch-caller')
+
+      expect(handler.getStatus().activeBridges).toBe(0)
+      expect(client.calls).toContainEqual({ method: 'destroyBridge', args: ['br-1'] })
+      expect(client.calls).toContainEqual({ method: 'destroyBridge', args: ['br-2'] })
+    })
+  })
+
+  describe('gather timeouts', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('a superseded gather timeout cannot fire against the newer gather', async () => {
+      await createCall('ch-g')
+      await handler.executeCommands([
+        { action: 'gather', channelId: 'ch-g', numDigits: 1, timeout: 5, callbackPath: '/first' },
+      ])
+      await handler.executeCommands([
+        { action: 'gather', channelId: 'ch-g', numDigits: 1, timeout: 20, callbackPath: '/second' },
+      ])
+
+      await vi.advanceTimersByTimeAsync(6_000)
+      // The first gather's 5s timer must have been cancelled — nothing sent yet.
+      expect(webhook.sentWebhooks.filter((w) => w.path === '/first')).toHaveLength(0)
+      expect(webhook.sentWebhooks.filter((w) => w.path === '/second')).toHaveLength(0)
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(webhook.sentWebhooks.filter((w) => w.path === '/second')).toHaveLength(1)
+      expect(webhook.sentWebhooks.filter((w) => w.path === '/first')).toHaveLength(0)
+    })
+  })
+
+  describe('PBX reconciliation after a connection reset', () => {
+    const reset = () => handler.handleEvent({ type: 'connection_reset', timestamp: new Date().toISOString() })
+
+    async function queuedCaller(channelId: string) {
+      await createCall(channelId)
+      await handler.executeCommands([
+        {
+          action: 'queue',
+          channelId,
+          exitCallbackPath: '/api/telephony/queue-exit',
+          callbackParams: { hubId: 'h' },
+        },
+      ])
+    }
+
+    it('tears down a queued caller whose channel vanished while events were lost', async () => {
+      await queuedCaller('ch-gone')
+      await queuedCaller('ch-alive')
+      client.listChannels = (async () => [{ id: 'ch-alive', state: 'Up', caller: '+1' }]) as BridgeClient['listChannels']
+
+      await reset()
+
+      // The vanished caller's queue-exit webhook fired and its state is gone...
+      const exits = webhook.sentWebhooks.filter((w) => w.path === '/api/telephony/queue-exit')
+      expect(exits).toHaveLength(1)
+      expect(exits[0].payload).toMatchObject({ channelId: 'ch-gone', queueResult: 'hangup' })
+      // ...while the caller that is still on the PBX keeps its state.
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 1, activeQueues: 1, untrackedChannels: 0 })
+    })
+
+    it('tears down all tracked state and hangs the channels up when the PBX cannot be enumerated', async () => {
+      await queuedCaller('ch-a')
+      client.listChannels = (async () => {
+        throw new Error('pbx unreachable')
+      }) as BridgeClient['listChannels']
+
+      await reset()
+
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 0, activeQueues: 0 })
+      expect(client.calls).toContainEqual({ method: 'hangup', args: ['ch-a'] })
+    })
+
+    it('reports live channels it holds no state for instead of silently ignoring them', async () => {
+      client.listChannels = (async () => [
+        { id: 'orphan-1', state: 'Up', caller: '+1' },
+        { id: 'orphan-2', state: 'Up', caller: '+2' },
+      ]) as BridgeClient['listChannels']
+
+      await reset()
+
+      expect(handler.getStatus().untrackedChannels).toBe(2)
+      // Not hung up: on Asterisk the channel list includes channels this bridge does not own.
+      expect(client.calls.filter((c) => c.method === 'hangup')).toHaveLength(0)
+    })
+
+    it('does not tear down a call that begins while the channel list is in flight', async () => {
+      let release: (v: Array<{ id: string; state: string; caller: string }>) => void = () => {}
+      client.listChannels = (() =>
+        new Promise((resolve) => {
+          release = resolve
+        })) as BridgeClient['listChannels']
+
+      const pending = reset()
+      await createCall('ch-new') // arrives after the snapshot request, before the reply
+      release([]) // ...and is therefore absent from the (stale) listing
+      await pending
+
+      expect(handler.getStatus().activeCalls).toBe(1)
+    })
+
+    it('tears down a ringing volunteer leg that vanished and reports call-status', async () => {
+      await createCall('ch-caller')
+      await handler.executeCommands([
+        {
+          action: 'ring',
+          endpoint: 'PJSIP/100@trunk',
+          callerId: '+1',
+          timeout: 30,
+          answerCallbackPath: '/a',
+          answerCallbackParams: { parentCallSid: 'ch-caller', pubkey: 'pk1' },
+          statusCallbackPath: '/s',
+        },
+      ])
+      expect(handler.getStatus().ringingChannels).toBe(1)
+      client.listChannels = (async () => [{ id: 'ch-caller', state: 'Up', caller: '+1' }]) as BridgeClient['listChannels']
+
+      await reset()
+
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 1, ringingChannels: 0 })
+      expect(webhook.sentWebhooks.some((w) => w.path === '/api/telephony/call-status')).toBe(true)
     })
   })
 

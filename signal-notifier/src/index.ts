@@ -3,7 +3,7 @@ import { IdentifierStore } from './store'
 import { buildRoutes, type AuthConfig } from './routes'
 import { AuditLogger } from './audit'
 import { createConnection } from './db/connection'
-import { signalIdentifiers, signalAuditLog } from './db/schema'
+import { signalIdentifiers } from './db/schema'
 import type { BridgeConfig } from './signal-client'
 import { sql } from 'drizzle-orm'
 
@@ -88,13 +88,52 @@ app.get('/health', async (c) => {
 const notifierRoutes = buildRoutes(authConfig, tokenSecret, store, bridgeCfg, audit)
 app.route('/api', notifierRoutes)
 
+/** Max time to wait for in-flight requests before closing their connections anyway. */
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 10_000
+
+/**
+ * Graceful shutdown: stop accepting, let in-flight requests (e.g. a Signal send)
+ * finish within a bound, then close the PostgreSQL pool. Without this, SIGTERM
+ * from a deploy hard-kills requests mid-send.
+ */
+function registerShutdownHandlers(server: ReturnType<typeof Bun.serve>): void {
+  let shuttingDown = false
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.log(`[signal-notifier] ${signal} received — draining...`)
+
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      drainTimer = setTimeout(() => resolve('timeout'), SHUTDOWN_DRAIN_TIMEOUT_MS)
+    })
+    const outcome = await Promise.race([server.stop().then(() => 'drained' as const), timedOut])
+    clearTimeout(drainTimer)
+    if (outcome === 'timeout') {
+      console.warn('[signal-notifier] Drain timed out — closing remaining connections')
+      await server.stop(true)
+    }
+
+    try {
+      await pgClient.end({ timeout: 5 })
+    } catch (err) {
+      console.error('[signal-notifier] Error closing database pool:', err)
+    }
+    console.log('[signal-notifier] stopped')
+    process.exit(0)
+  }
+  process.on('SIGINT', () => void shutdown('SIGINT'))
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+}
+
 // Run migration first, then start server — prevents health check from querying
 // tables that don't exist yet (race condition if server started before migration).
 migrate()
   .then(() => {
     console.log(`[signal-notifier] tables ready, starting on port ${port}`)
-    Bun.serve({ port, fetch: app.fetch })
+    const server = Bun.serve({ port, fetch: app.fetch })
     console.log(`[signal-notifier] listening on port ${port}`)
+    registerShutdownHandlers(server)
   })
   .catch((err) => {
     console.error('[signal-notifier] migration failed:', err)

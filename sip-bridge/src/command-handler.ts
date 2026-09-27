@@ -50,6 +50,9 @@ export class CommandHandler {
    *  Pruning: entries removed via cleanupCall() and volunteer hangup path. */
   private readonly ringingMap = new Map<string, string>()
 
+  /** Channels present on the PBX at last reconcile that this handler holds no state for. */
+  private untrackedChannelCount = 0
+
   /** Configured hotline number (for the calledNumber field) */
   private hotlineNumber = ''
 
@@ -105,10 +108,15 @@ export class CommandHandler {
         clearInterval(call.queue.waitTimer)
         call.queue = undefined
       }
+    }
 
-      // 3. Clean up bridge (hang up other leg, destroy bridge)
-      this.cleanupBridge(channelId)
+    // 3. Clean up bridge (hang up other leg, destroy bridge). MUST run for every
+    //    hangup, not only tracked callers: volunteer channels are never in `calls`,
+    //    and when the volunteer hangs up first the caller's leg would otherwise stay
+    //    up on the PBX and the bridge entry would leak.
+    this.cleanupBridge(channelId)
 
+    if (call) {
       // 4. Cancel all ringing channels spawned by this call
       this.cancelRingingForCall(channelId)
 
@@ -180,6 +188,94 @@ export class CommandHandler {
       case 'playback_finished':
         await this.onPlaybackFinished(event)
         break
+      case 'connection_reset':
+        await this.reconcileWithPbx()
+        break
+    }
+  }
+
+  // ================================================================
+  // PBX reconciliation (connection loss / process restart)
+  // ================================================================
+
+  /** Every channel ID this handler holds any state for. */
+  private trackedChannelIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const id of this.calls.keys()) ids.add(id)
+    for (const id of this.queues.keys()) ids.add(id)
+    for (const id of this.ringingMap.keys()) ids.add(id)
+    for (const b of this.bridges.values()) {
+      ids.add(b.callerChannelId)
+      ids.add(b.volunteerChannelId)
+    }
+    return ids
+  }
+
+  /**
+   * All live-call state lives in this process's memory, so after a PBX
+   * disconnect (events dropped) or a bridge restart (state gone) it can disagree
+   * with what the PBX is actually doing. Reconcile instead of silently mis-serving:
+   *
+   * - state we track for a channel the PBX no longer has → the hangup event was
+   *   missed: run the normal hangup path (queue-exit / call-status webhooks, timers,
+   *   bridge and recording cleanup).
+   * - the PBX cannot be enumerated → we cannot trust ANY tracked state: hang up
+   *   the tracked channels and tear their state down.
+   * - channels present on the PBX that we hold no state for → cannot be served
+   *   (e.g. callers left on hold by a previous process). Reported loudly and in
+   *   `getStatus().untrackedChannels`; not hung up, because on Asterisk the channel
+   *   list also contains channels this bridge does not own.
+   */
+  async reconcileWithPbx(): Promise<void> {
+    // Snapshot tracked state BEFORE listing: anything tracked before the listing was
+    // taken must appear in it if still alive; calls that begin during the await are
+    // not in this snapshot and are never mistaken for vanished.
+    const trackedBefore = this.trackedChannelIds()
+
+    let live: Set<string> | null
+    try {
+      live = new Set((await this.client.listChannels()).map((c) => c.id))
+    } catch (err) {
+      logger.error('[handler]', 'Cannot enumerate PBX channels — tearing down tracked call state', err)
+      live = null
+    }
+
+    let tornDown = 0
+    for (const channelId of trackedBefore) {
+      if (live?.has(channelId)) continue
+      // Skip if the normal event path already cleaned it up while we were listing.
+      if (!this.trackedChannelIds().has(channelId)) continue
+      if (live === null) {
+        try {
+          await this.client.hangup(channelId)
+        } catch {
+          /* may already be gone */
+        }
+      }
+      tornDown++
+      await this.onChannelHangup({
+        type: 'channel_hangup',
+        channelId,
+        cause: 38, // network out of order — synthesized, the real hangup event was lost
+        causeText: 'CONNECTION_RESET',
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    if (tornDown > 0) {
+      logger.warn('[handler]', `PBX reconnect: tore down state for ${tornDown} channel(s) that no longer exist`)
+    }
+
+    if (live) {
+      const trackedNow = this.trackedChannelIds()
+      this.untrackedChannelCount = [...live].filter((id) => !trackedNow.has(id)).length
+      if (this.untrackedChannelCount > 0) {
+        logger.error(
+          '[handler]',
+          `${this.untrackedChannelCount} channel(s) exist on the PBX with no bridge state ` +
+            '(bridge restarted or events were lost) — they cannot be served'
+        )
+      }
     }
   }
 
@@ -538,13 +634,37 @@ export class CommandHandler {
     const call = this.calls.get(cmd.channelId)
     if (!call) return
 
+    // A previous gather may still have a pending timeout — cancel it so it cannot
+    // fire against this gather's state.
+    if (call.activeGather?.timeoutTimer) {
+      clearTimeout(call.activeGather.timeoutTimer)
+    }
+
     // Set up gather state
     call.dtmfBuffer = ''
-    call.activeGather = {
+    const gather: NonNullable<ActiveCall['activeGather']> = {
       numDigits: cmd.numDigits,
       timeout: cmd.timeout,
       callbackPath: cmd.callbackPath,
       callbackParams: cmd.callbackParams,
+    }
+    call.activeGather = gather
+
+    // Timeout handler — only acts if THIS gather is still the active one.
+    const startTimeout = (): void => {
+      gather.timeoutTimer = setTimeout(async () => {
+        if (call.activeGather !== gather) return
+        call.activeGather = undefined
+        const digits = call.dtmfBuffer
+        call.dtmfBuffer = ''
+        await this.sendGatherResult(
+          cmd.channelId,
+          call,
+          digits,
+          gather.callbackPath,
+          gather.callbackParams
+        )
+      }, cmd.timeout * 1000)
     }
 
     // Play the prompt (if any)
@@ -555,38 +675,11 @@ export class CommandHandler {
       } catch (err) {
         logger.warn('[handler]', 'Gather playback failed', err)
         // Start timeout even if playback fails
-        call.activeGather.timeoutTimer = setTimeout(async () => {
-          if (call.activeGather) {
-            const gather = call.activeGather
-            call.activeGather = undefined
-            call.dtmfBuffer = ''
-            await this.sendGatherResult(
-              cmd.channelId,
-              call,
-              '',
-              gather.callbackPath,
-              gather.callbackParams
-            )
-          }
-        }, cmd.timeout * 1000)
+        if (call.activeGather === gather) startTimeout()
       }
-    } else {
+    } else if (call.activeGather === gather) {
       // No prompt — just wait for digits
-      call.activeGather.timeoutTimer = setTimeout(async () => {
-        if (call.activeGather) {
-          const gather = call.activeGather
-          call.activeGather = undefined
-          const digits = call.dtmfBuffer
-          call.dtmfBuffer = ''
-          await this.sendGatherResult(
-            cmd.channelId,
-            call,
-            digits,
-            gather.callbackPath,
-            gather.callbackParams
-          )
-        }
-      }, cmd.timeout * 1000)
+      startTimeout()
     }
   }
 
@@ -677,10 +770,11 @@ export class CommandHandler {
     logger.info('[handler]', 'Recording channel')
 
     // Tier 5 voice E2EE guard — look up the call's mode and refuse to record
-    // SFrame calls. Default to mode='pstn' for untracked channels so the
-    // voicemail flow keeps working for PSTN callers.
+    // SFrame calls. If no ActiveCall is tracked (e.g. the bridge restarted and lost
+    // its in-memory state) the mode cannot be established, so default to
+    // mode='sframe' (fail-closed) — never record a call that might be E2EE.
     const callForGuard = this.calls.get(cmd.channelId)
-    const guardMode: CallMode = { mode: callForGuard?.mode ?? 'pstn' }
+    const guardMode: CallMode = { mode: callForGuard?.mode ?? 'sframe' }
     try {
       this.sframeDispatcher.assertRecordingAllowed(guardMode)
     } catch (err) {
@@ -716,6 +810,19 @@ export class CommandHandler {
     }
   }
 
+  /**
+   * Register an originated volunteer leg as ringing for `parentCallSid`, so its hangup
+   * reports call-status and PBX reconciliation knows the bridge owns it. Also used by
+   * the HTTP /ring endpoint, which originates outside the command flow.
+   */
+  trackRingingChannel(channelId: string, parentCallSid: string): void {
+    this.ringingMap.set(channelId, parentCallSid)
+    const parentCall = this.calls.get(parentCallSid)
+    if (parentCall) {
+      parentCall.ringingChannels.push(channelId)
+    }
+  }
+
   /** Originate an outbound call (ring a volunteer) */
   private async execRing(cmd: RingCommand): Promise<void> {
     logger.info('[handler]', 'Ringing volunteer')
@@ -731,11 +838,7 @@ export class CommandHandler {
       // Track this as a ringing channel
       const parentSid = cmd.answerCallbackParams?.parentCallSid
       if (parentSid) {
-        this.ringingMap.set(channel.id, parentSid)
-        const parentCall = this.calls.get(parentSid)
-        if (parentCall) {
-          parentCall.ringingChannels.push(channel.id)
-        }
+        this.trackRingingChannel(channel.id, parentSid)
       }
 
       logger.info('[handler]', 'Originated call')
@@ -906,6 +1009,7 @@ export class CommandHandler {
       activeBridges: this.bridges.size,
       ringingChannels: this.ringingMap.size,
       pendingRecordings: this.recordingCallbacks.size,
+      untrackedChannels: this.untrackedChannelCount,
     }
   }
 
@@ -988,7 +1092,6 @@ export class CommandHandler {
         this.client.hangup(otherChannel).catch(() => {})
         this.client.destroyBridge(bridgeId).catch(() => {})
         this.bridges.delete(bridgeId)
-        break
       }
     }
   }

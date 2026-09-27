@@ -10,7 +10,6 @@ import type {
   AriBridge,
   AriChannel,
   AriPlayback,
-  AriRecording,
   BridgeConfig,
   ChannelDestroyedEvent,
   ChannelDtmfReceivedEvent,
@@ -127,6 +126,9 @@ export class AriClient implements BridgeClient {
         this.connectionDeadline = null
         this.ws = ws
         resolve()
+        // Events may have been missed while the socket was down (or a previous bridge
+        // process may have left calls behind) — have the handler reconcile with the PBX.
+        this.emitBridgeEvent({ type: 'connection_reset', timestamp: new Date().toISOString() })
       })
 
       ws.addEventListener('message', (event) => {
@@ -148,16 +150,7 @@ export class AriClient implements BridgeClient {
           }
 
           const bridgeEvent = this.translateEvent(data)
-          if (bridgeEvent !== null) {
-            const snapshot = [...this.eventHandlers]
-            for (const handler of snapshot) {
-              try {
-                handler(bridgeEvent)
-            } catch (err) {
-              logger.error('[ari]', 'Event handler error', err)
-            }
-            }
-          }
+          if (bridgeEvent !== null) this.emitBridgeEvent(bridgeEvent)
         } catch (err) {
           logger.error('[ari]', 'Failed to parse event', err)
         }
@@ -267,16 +260,33 @@ export class AriClient implements BridgeClient {
     }
   }
 
+  private emitBridgeEvent(event: BridgeEvent): void {
+    // Snapshot-before-fanout: copy Set before iterating
+    const snapshot = [...this.eventHandlers]
+    for (const handler of snapshot) {
+      try {
+        handler(event)
+      } catch (err) {
+        logger.error('[ari]', 'Event handler error', err)
+      }
+    }
+  }
+
   private scheduleReconnect(): void {
     if (this.connectionDeadline !== null && Date.now() >= this.connectionDeadline) {
       logger.error('[ari]', `FATAL: Could not connect to Asterisk within ${Math.round(this.connectionTimeoutMs / 1000)}s — exiting.`)
       process.exit(1)
     }
 
+    // A failed doConnect() and the socket's close event can both ask for a reconnect.
+    if (this.reconnectTimer !== null) return
+
     const remaining = this.connectionDeadline
       ? ` (${Math.round((this.connectionDeadline - Date.now()) / 1000)}s until timeout)`
       : ''
-    logger.info('[ari]', `Reconnecting in ${this.reconnectDelay}ms...${remaining}`)
+    // +/-20% jitter so a fleet of bridges does not reconnect in lockstep.
+    const delay = Math.round(this.reconnectDelay * (0.8 + Math.random() * 0.4))
+    logger.info('[ari]', `Reconnecting in ${delay}ms...${remaining}`)
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
@@ -295,7 +305,7 @@ export class AriClient implements BridgeClient {
           this.scheduleReconnect()
         }
       }
-    }, this.reconnectDelay)
+    }, delay)
   }
 
   // ---- ARI REST API ----

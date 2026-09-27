@@ -16,6 +16,23 @@ export interface EslConfig {
 
 type EventHandler = (event: BridgeEvent) => void
 
+/** Events the bridge needs from FreeSWITCH — re-sent on EVERY (re)connect. */
+const EVENT_SUBSCRIPTION = 'event plain CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP_COMPLETE RECORD_STOP DTMF'
+
+/** How long an API command may wait for its reply before it is failed. */
+const COMMAND_TIMEOUT_MS = 10_000
+
+/** Random +/- fraction applied to reconnect delays so bridges do not reconnect in lockstep. */
+const RECONNECT_JITTER = 0.2
+
+interface PendingCommand {
+  resolve: (result: string) => void
+  reject: (err: Error) => void
+  /** Set when the command timed out — its late reply is still consumed (FIFO matching) but ignored. */
+  settled: boolean
+  timer: ReturnType<typeof setTimeout> | null
+}
+
 interface EslMessage {
   headers: Record<string, string>
   body: string
@@ -41,16 +58,18 @@ export class EslClient implements BridgeClient {
   private reconnectDelay = 1000
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private readonly maxReconnectDelay = 30_000
+  /** True once the CURRENT connection has authenticated AND subscribed. Reset on every close. */
   private hasConnected = false
+  /** True once the CURRENT connection's `auth` command was accepted. Reset on every close. */
+  private authenticated = false
+  /** True once any connection has completed its handshake — later ones are reconnects. */
+  private hasEverConnected = false
   private connectionDeadline: number | null = null
   private readonly connectionTimeoutMs: number
 
   private buffer = ''
 
-  private commandQueue: Array<{
-    resolve: (result: string) => void
-    reject: (err: Error) => void
-  }> = []
+  private commandQueue: PendingCommand[] = []
 
   constructor(config: Partial<EslConfig> & { password: string }) {
     this.config = {
@@ -75,7 +94,7 @@ export class EslClient implements BridgeClient {
 
   async connect(): Promise<void> {
     this.shouldReconnect = true
-    if (!this.hasConnected) {
+    if (!this.hasEverConnected) {
       this.connectionDeadline = Date.now() + this.connectionTimeoutMs
       logger.info('[esl]', `Will exit if FreeSWITCH is not reachable within ${Math.round(this.connectionTimeoutMs / 1000)}s`)
     }
@@ -84,7 +103,7 @@ export class EslClient implements BridgeClient {
 
   disconnect(): void {
     this.shouldReconnect = false
-    this.connected = false
+    this.resetConnectionState('Disconnected')
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -105,40 +124,77 @@ export class EslClient implements BridgeClient {
     return new Promise((resolve, reject) => {
       logger.info('[esl]', `Connecting to ${this.config.host}:${this.config.port}...`)
 
-      const self = this
-
       Bun.connect({
         hostname: this.config.host,
         port: this.config.port,
         socket: {
-          open(socket) {
+          open: (socket) => {
             logger.info('[esl]', 'TCP connected')
-            self.socket = socket as unknown as ReturnType<typeof Bun.connect>
+            // A fresh connection starts a fresh handshake and a fresh frame buffer.
+            this.resetConnectionState('Superseded by a new connection')
+            this.socket = socket as unknown as ReturnType<typeof Bun.connect>
           },
-          data(_socket, data) {
-            self.buffer += new TextDecoder().decode(data)
-            self.processBuffer(resolve, reject)
+          data: (socket, data) => {
+            if (this.isStaleSocket(socket)) return
+            this.buffer += new TextDecoder().decode(data)
+            this.processBuffer(resolve, reject)
           },
-          close() {
+          close: (socket) => {
+            // A late close from a superseded socket must not tear down the live one.
+            if (this.isStaleSocket(socket)) return
             logger.info('[esl]', 'TCP disconnected')
-            self.connected = false
-            self.socket = null
-            if (self.shouldReconnect) {
-              self.scheduleReconnect()
+            const handshakeDone = this.hasConnected
+            this.resetConnectionState('ESL connection closed')
+            this.socket = null
+            if (!handshakeDone) {
+              // Dropped mid-handshake: fail the pending doConnect() instead of leaking it.
+              reject(new Error('[esl] Connection closed before handshake completed'))
+            }
+            if (this.shouldReconnect) {
+              this.scheduleReconnect()
             }
           },
-          error(_socket, error) {
+          error: (socket, error) => {
+            if (this.isStaleSocket(socket)) return
             logger.error('[esl]', 'TCP error', error)
-            self.connected = false
-            if (!self.hasConnected) reject(error)
+            this.connected = false
+            if (!this.hasConnected) reject(error)
           },
-          connectError(_socket, error) {
+          connectError: (_socket, error) => {
             logger.error('[esl]', 'TCP connect error', error)
             reject(error)
+            // No close event follows a failed connect — keep retrying (idempotent).
+            if (this.shouldReconnect) this.scheduleReconnect()
           },
         },
       }).catch(reject)
     })
+  }
+
+  /** True when `socket` is not the socket this client currently owns. */
+  private isStaleSocket(socket: unknown): boolean {
+    return this.socket !== null && (this.socket as unknown) !== socket
+  }
+
+  /**
+   * Discard ALL per-connection state: handshake progress, the partial-frame buffer
+   * and every in-flight command. Called on close, disconnect and before a new
+   * connection starts, so nothing from a dead connection can leak into the next one.
+   */
+  private resetConnectionState(reason: string): void {
+    this.connected = false
+    this.hasConnected = false
+    this.authenticated = false
+    this.buffer = ''
+    const pending = this.commandQueue
+    this.commandQueue = []
+    for (const cmd of pending) {
+      if (cmd.timer !== null) clearTimeout(cmd.timer)
+      if (!cmd.settled) {
+        cmd.settled = true
+        cmd.reject(new Error(`[esl] ${reason}`))
+      }
+    }
   }
 
   private processBuffer(
@@ -198,30 +254,43 @@ export class EslClient implements BridgeClient {
 
       case 'command/reply': {
         const reply = message.headers['Reply-Text'] ?? ''
-        if (reply.startsWith('+OK')) {
-          if (!this.hasConnected) {
-            this.sendRaw(
-              'event plain CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP_COMPLETE RECORD_STOP DTMF\n\n'
-            )
-          } else {
-            const cb = this.commandQueue.shift()
-            if (cb) cb.resolve(reply)
-          }
-        } else if (reply.startsWith('-ERR')) {
-          if (!this.hasConnected) {
+        if (!this.authenticated) {
+          // Reply to `auth` — authenticate, then (re-)subscribe on EVERY connection.
+          if (reply.startsWith('+OK')) {
+            this.authenticated = true
+            this.sendRaw(`${EVENT_SUBSCRIPTION}\n\n`)
+          } else if (reply.startsWith('-ERR')) {
             this.shouldReconnect = false
             reject?.(new Error(`[esl] Authentication failed: ${reply}`))
-          } else {
-            const cb = this.commandQueue.shift()
-            if (cb) cb.reject(new Error(`ESL command failed: ${reply}`))
+          }
+        } else if (!this.hasConnected) {
+          // Reply to the event subscription.
+          if (reply.startsWith('+OK')) {
+            this.hasConnected = true
+            this.hasEverConnected = true
+            this.connected = true
+            this.reconnectDelay = 1000
+            this.connectionDeadline = null
+            logger.info('[esl]', 'Connected and subscribed to events')
+            resolve?.(undefined)
+            // Events may have been missed while the socket was down (or a previous bridge
+            // process may have left calls behind) — have the handler reconcile with the PBX.
+            this.emit({ type: 'connection_reset', timestamp: new Date().toISOString() })
+          } else if (reply.startsWith('-ERR')) {
+            reject?.(new Error(`[esl] Event subscription failed: ${reply}`))
+            this.closeSocket()
           }
         }
+        // Once ready every command goes through `api`, which replies with api/response;
+        // a stray command/reply must never resolve an unrelated queued command.
         break
       }
 
       case 'api/response': {
         const cb = this.commandQueue.shift()
-        if (cb) {
+        if (cb && cb.timer !== null) clearTimeout(cb.timer)
+        if (cb && !cb.settled) {
+          cb.settled = true
           const result = message.body.trim()
           if (result.startsWith('-ERR')) {
             cb.reject(new Error(`ESL api error: ${result}`))
@@ -235,33 +304,22 @@ export class EslClient implements BridgeClient {
       case 'text/event-plain': {
         const eventHeaders = this.parseHeaders(message.body)
         const bridgeEvent = this.translateEslEvent(eventHeaders)
-        if (bridgeEvent !== null) {
-          const snapshot = [...this.eventHandlers]
-          for (const handler of snapshot) {
-            try {
-              handler(bridgeEvent)
-            } catch (err) {
-              logger.error('[esl]', 'Event handler error', err)
-            }
-          }
-        }
+        if (bridgeEvent !== null) this.emit(bridgeEvent)
         break
       }
 
       default:
         break
     }
+  }
 
-    // Detect successful connection
-    if (contentType === 'command/reply') {
-      const reply = message.headers['Reply-Text'] ?? ''
-      if (!this.hasConnected && reply.startsWith('+OK') && reply.includes('Event Listener')) {
-        this.hasConnected = true
-        this.connected = true
-        this.reconnectDelay = 1000
-        this.connectionDeadline = null
-        logger.info('[esl]', 'Connected and subscribed to events')
-        resolve?.(undefined)
+  private emit(event: BridgeEvent): void {
+    const snapshot = [...this.eventHandlers]
+    for (const handler of snapshot) {
+      try {
+        handler(event)
+      } catch (err) {
+        logger.error('[esl]', 'Event handler error', err)
       }
     }
   }
@@ -275,9 +333,31 @@ export class EslClient implements BridgeClient {
     sock.write(text)
   }
 
+  private closeSocket(): void {
+    const sock = this.socket as unknown as { end?: () => void } | null
+    try {
+      sock?.end?.()
+    } catch {
+      // ignore — the close handler drives cleanup
+    }
+  }
+
   private sendCommand(command: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      this.commandQueue.push({ resolve, reject })
+      if (!this.connected || !this.socket) {
+        reject(new Error('[esl] Not connected'))
+        return
+      }
+      const pending: PendingCommand = { resolve, reject, settled: false, timer: null }
+      // On timeout the entry stays queued (settled) so the late reply is still matched
+      // to it rather than resolving the NEXT command with the wrong answer.
+      pending.timer = setTimeout(() => {
+        pending.timer = null
+        if (pending.settled) return
+        pending.settled = true
+        reject(new Error(`[esl] Command timed out after ${COMMAND_TIMEOUT_MS}ms`))
+      }, COMMAND_TIMEOUT_MS)
+      this.commandQueue.push(pending)
       this.sendRaw(`api ${command}\n\n`)
     })
   }
@@ -288,10 +368,16 @@ export class EslClient implements BridgeClient {
       process.exit(1)
     }
 
+    // close + a failed doConnect() can both ask for a reconnect — only one timer may exist.
+    if (this.reconnectTimer !== null) return
+
     const remaining = this.connectionDeadline
       ? ` (${Math.round((this.connectionDeadline - Date.now()) / 1000)}s until timeout)`
       : ''
-    logger.info('[esl]', `Reconnecting in ${this.reconnectDelay}ms...${remaining}`)
+    const delay = Math.round(this.reconnectDelay * (1 + (Math.random() * 2 - 1) * RECONNECT_JITTER))
+    logger.info('[esl]', `Reconnecting in ${delay}ms...${remaining}`)
+    // Exponential backoff, capped; reset to 1s once a handshake completes.
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
@@ -305,12 +391,11 @@ export class EslClient implements BridgeClient {
         await this.doConnect()
       } catch (err) {
         logger.error('[esl]', 'Reconnection failed', err)
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
         if (this.shouldReconnect) {
           this.scheduleReconnect()
         }
       }
-    }, this.reconnectDelay)
+    }, delay)
   }
 
   // ---- Event Translation ----
@@ -549,7 +634,16 @@ export class EslClient implements BridgeClient {
   }
 
   async listChannels(): Promise<Array<{ id: string; state: string; caller: string }>> {
-    return []
+    const result = await this.sendCommand('show channels as json')
+    // FreeSWITCH replies `{"row_count":0}` (no `rows`) when there are no channels.
+    const parsed = JSON.parse(result || '{}') as {
+      rows?: Array<{ uuid: string; state?: string; cid_num?: string }>
+    }
+    return (parsed.rows ?? []).map((row) => ({
+      id: row.uuid,
+      state: row.state ?? '',
+      caller: row.cid_num ?? '',
+    }))
   }
 
   async listBridges(): Promise<Array<{ id: string; channels: string[] }>> {

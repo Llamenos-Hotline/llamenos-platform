@@ -16,7 +16,12 @@ import { createTranscriptionService } from '../../apps/worker/lib/transcription-
 import { validateConfig } from '../../apps/worker/lib/config'
 import { getMessagingAdapterFromService } from '../../apps/worker/lib/service-factories'
 import { publishEvent, setEventOutbox, drainOutbox, cleanupOutbox } from '../../apps/worker/lib/ws-events'
-import { initConnectionManager } from '../../apps/worker/lib/ws-manager'
+import {
+  initConnectionManager,
+  getConnectionManager,
+  WS_CLOSE_SERVER_SHUTDOWN,
+  WS_CLOSE_REASON_SERVER_SHUTDOWN,
+} from '../../apps/worker/lib/ws-manager'
 import { EventOutbox } from '../../apps/worker/lib/event-outbox'
 import { deriveServerKeypair } from '../../apps/worker/lib/server-identity'
 import { createWsHandler, createConnectionData } from '../../apps/worker/routes/ws'
@@ -191,7 +196,7 @@ services.scheduler.start({
 })
 
 // --- Periodic webhook nonce cleanup (every 60s) ---
-setInterval(async () => {
+const nonceCleanupTimer = setInterval(async () => {
   try {
     await cleanupExpiredNonces(getDb())
   } catch (e) {
@@ -249,7 +254,7 @@ async function lookupUserHubs(pubkey: string): Promise<{ hubs: string[] } | null
   return { hubs: activeHubIds }
 }
 
-export default {
+const server = Bun.serve<WsConnectionData>({
   port,
   // Disable idle timeout so long-running dev/test operations (e.g. DB reset) can complete.
   // Default Bun HTTP idle timeout is 10s, which kills test-reset before it finishes.
@@ -266,7 +271,7 @@ export default {
     return app.fetch(req, server)
   },
   websocket: wsHandler,
-}
+})
 
 console.log(`[llamenos] Server running at http://localhost:${port}`)
 
@@ -285,12 +290,42 @@ if (process.env.ENVIRONMENT === 'development') {
 }
 
 // --- Graceful shutdown ---
+/** Max time to wait for in-flight requests before closing their connections anyway. */
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 8_000
+
+let shuttingDown = false
 const shutdown = async () => {
+  if (shuttingDown) return
+  shuttingDown = true
   console.log('[llamenos] Shutting down...')
+
+  // 1. Stop background producers so nothing new is queued while draining.
   clearInterval(outboxDrainTimer)
   clearInterval(outboxCleanupTimer)
+  clearInterval(nonceCleanupTimer)
   services.firehoseAgent?.shutdown()
   services.scheduler.stop()
+
+  // 2. Stop accepting new connections and tell WebSocket clients this is a deploy
+  //    (1001 Going Away), so they reconnect with backoff instead of treating it as
+  //    network loss or an auth failure.
+  const draining = server.stop()
+  const closed = getConnectionManager()?.closeAll(WS_CLOSE_SERVER_SHUTDOWN, WS_CLOSE_REASON_SERVER_SHUTDOWN) ?? 0
+  console.log(`[llamenos] Stopped accepting connections; closed ${closed} WebSocket connection(s)`)
+
+  // 3. Wait (bounded) for in-flight requests; force-close whatever is left.
+  let drainTimer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    drainTimer = setTimeout(() => resolve('timeout'), SHUTDOWN_DRAIN_TIMEOUT_MS)
+  })
+  const outcome = await Promise.race([draining.then(() => 'drained' as const), timedOut])
+  clearTimeout(drainTimer)
+  if (outcome === 'timeout') {
+    console.warn(`[llamenos] Drain timed out after ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms — closing remaining connections`)
+    await server.stop(true)
+  }
+
+  // 4. Only now that no request can still be running a query, close the database.
   await closeDb()
   console.log('[llamenos] Server stopped')
   process.exit(0)

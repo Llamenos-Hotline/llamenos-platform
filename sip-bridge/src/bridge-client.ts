@@ -12,6 +12,7 @@ export type BridgeEvent =
   | RecordingCompleteEvent
   | RecordingFailedEvent
   | PlaybackFinishedEvent
+  | ConnectionResetEvent
 
 export interface ChannelCreateEvent {
   type: 'channel_create'
@@ -69,6 +70,17 @@ export interface PlaybackFinishedEvent {
   type: 'playback_finished'
   channelId: string
   playbackId: string
+  timestamp: string
+}
+
+/**
+ * Emitted by a client each time it (re)establishes its PBX connection.
+ * Events (hangups, recordings, DTMF) may have been missed while it was down — or a
+ * previous bridge process may have left calls behind — so the CommandHandler must
+ * reconcile its in-memory call state against the PBX.
+ */
+export interface ConnectionResetEvent {
+  type: 'connection_reset'
   timestamp: string
 }
 
