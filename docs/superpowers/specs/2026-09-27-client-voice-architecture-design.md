@@ -5,7 +5,7 @@ Date: 2026-09-27
 Refs: #1173 (architecture), #1188 (registration gaps), #1147 / #1177 (desktop CSP), #769 (Internal Availability)
 Scope: `packages/protocol/schemas/`, `apps/desktop/src/`, `src/client/lib/`, `apps/ios/Sources/`,
 `apps/android/app/src/main/`, `apps/worker/telephony/`, `apps/worker/routes/webrtc.ts`,
-`deploy/` (registrar + relay), `packages/test-specs/features/`.
+`sip-bridge/`, `deploy/` (PBX + relay), `packages/test-specs/features/`.
 
 Evidence labels used throughout: **[V]** verified against `origin/main` at `159006b42`, file:line given;
 **[D]** documented upstream; **[I]** inference, with its strength stated.
@@ -233,7 +233,7 @@ is the single worst thing this product can do.
 | Desktop | `apps/desktop/src/voice.rs` + a `llamenos-voice` crate, bindgen over `linphone/core.h` | liblinphone in the shell; webview gets state over IPC and renders UI |
 | iOS | `apps/ios/Sources/Services/LinphoneService.swift` | existing service, wired; SDK actually linked; CallKit/PushKit |
 | Android | `.../telephony/LinphoneService.kt` | existing service, wired; ConnectionService, audio focus |
-| Infrastructure | `deploy/` | a home-realm SIP registrar and relay, on the encrypted tier |
+| Infrastructure | `sip-bridge/`, `deploy/` | per-volunteer identities on the PBX we already run, plus a relay, on the encrypted tier |
 
 The bindgen surface is small and the C API is clean **[D]**: `linphone_factory_create_core_3`,
 `linphone_core_create_account_params`, `linphone_account_params_set_identity_address` /
@@ -261,16 +261,24 @@ Today `src/client/lib/in-app-audio.ts:15` gates in-app audio to `{twilio, signal
 bandwidth and freeswitch. Six of eight providers get no in-app audio, and the two that do get it
 by registering at the vendor. [V]
 
-**The client speaks SIP only to our own realm.** One registrar, one credential shape, one client
+**The client speaks SIP only to our own realm.** One realm, one credential shape, one client
 code path, regardless of which provider a hub uses. The provider terminates on our media node
 through the existing `sip-bridge`; the volunteer leg is a separate dialog that never touches the
 vendor.
 
 ```
-provider trunk ──> [ media node ] <──DTLS-SRTP── volunteer client
-                        ^
-                   [ registrar ]  <──SIP/WSS or SIP/TLS── volunteer client
+                     ┌──────────────────────────────┐
+provider trunk ─────>│  the PBX we already run      │<──SIP/TLS + DTLS-SRTP── volunteer
+  (vendor sees       │  registrar + media, one box  │                          client
+   only our trunk)   └──────────────────────────────┘
 ```
+
+**One component, not two.** An earlier draft put a SIP proxy in front with a separate RTP relay
+beside it. That was solving a problem the PBX already solves: a proxy never touches media, so it
+needs an RTP proxy alongside, while Asterisk and FreeSWITCH are full PBXs that terminate both
+signalling and media natively. The proxy's own configuration says as much — it forwards REGISTER to
+the backends with the comment *"We don't handle registrations"* [V]. That is not a gap in the
+deployment; it is the deployment stating where registration belongs.
 
 Three things follow, and they are the point of the decision:
 
@@ -279,7 +287,7 @@ Three things follow, and they are the point of the decision:
    comment already anticipates this: *"Keep in sync … until in-app audio for all providers is
    routed through the SIP bridge."* [V]
 2. **Capability becomes a property of the deployment, not the provider.** A self-hoster who has not
-   configured a registrar or a relay has no in-app audio; a hub on any of the eight providers, in a
+   configured a PBX or a relay has no in-app audio; a hub on any of the eight providers, in a
    deployment that has them, does. That is what `VoiceCapabilities` (§6) expresses.
 3. **The credential becomes ours to issue and ours to revoke** — per device, short-lived, with no
    vendor in the loop. §7.
@@ -291,7 +299,7 @@ carrying `call:ring`, `call:answered` and `call:end`, with explicit multi-hub su
 (`docs/protocol/PROTOCOL.md` §3, kinds 1000/1001/20001). [V]
 
 **Do not put hub attribution in SIP.** SIP carries media and nothing else; the app channel and push
-carry call identity and hub. This keeps the SIP layer thin, keeps the registrar ignorant of which
+carry call identity and hub. This keeps the SIP layer thin, keeps the PBX ignorant of which
 hub a call belongs to, and reuses a path that is already encrypted and already multi-hub aware.
 
 ---
@@ -428,7 +436,7 @@ register one account, miss calls from every other hub.
 **Which hubs are in the array: every hub the volunteer is currently on shift for.** Not every hub
 they are a member of, and emphatically not just the active one. This reconciles two pulls that
 would otherwise contradict — §12's axiom says *all member hubs, never only the active one*, while
-§8 says *minimise the registrar's population*. On-shift membership satisfies both: it is always
+§8 says *minimise the PBX's registration population*. On-shift membership satisfies both: it is always
 potentially more than one, and it excludes hubs where parallel ringing would not have selected
 them anyway (`ringing.ts` filters to on-shift volunteers before anything else [V]). A volunteer
 clocked in for three hubs holds three registrations simultaneously.
@@ -490,115 +498,243 @@ the fresher statement of which hubs are eligible.
 `POST /api/shifts/clock-in` does one upsert into `activeShifts` and emits an audit event;
 `clock-out` does one delete. Nothing SIP-related is minted or torn down at either [V].
 
+### Where the identity lives: the PBX we already run
+
+**Not a new registrar.** An earlier draft of this spec proposed standing up a registrar,
+user-location store, WebSocket transport and authentication on the SIP proxy. That was solving a
+problem the PBX already solves, and the deployment had already said so: the proxy's template
+forwards REGISTER to the backends with the comment *"We don't handle registrations"* [V]. A proxy
+never touches media, so it would also have needed an RTP relay beside it. A PBX terminates both.
+
+The evidence for which component is real is decisive: **the PBX role is in the deployment
+playbook; the proxy's role is not** [V].
+
+So a volunteer registers to **our PBX**, with **their own** per-device endpoint, and the bridge
+holds the vendor trunk. The vendor sees calls arriving from our trunk — as it already does — and
+never sees a volunteer's address.
+
+### Most of this machinery is already built, and none of it is wired up
+
+This is the part that makes the revised design much smaller than the one it replaces. Verified
+against `origin/main`:
+
+| Piece | State |
+|---|---|
+| Generic ARI dynamic-config client, **create and delete**, generic over object type — `sip-bridge/src/clients/ari-client.ts:588` `configureDynamic`, `:604` `deleteDynamic`, `:600` `reloadModule` | **exists; zero callers anywhere in the repo** |
+| Sorcery mapped to the in-memory wizard for `auth`, `aor`, `endpoint`, `contact` — `deploy/docker/asterisk-config/sorcery.conf:13-17` | **exists, and is exactly the privacy-correct setting** (§8) |
+| ARI enabled with `read_only = no`, credentials injected at runtime — `ari.conf:10-23` | exists; the dynamic PUT/DELETE requires `read_only = no` and it is set |
+| A dialplan context purpose-built for volunteer endpoints — `extensions.conf:52` `[volunteers-sframe]`, with an adaptive jitter buffer | exists |
+| Signed, replay-protected worker → bridge command channel with an extensible action switch — `command-handler.ts:846`, HMAC + 300 s replay window at `index.ts:73` | exists; a provisioning action slots straight in |
+| `PBX_TYPE` selecting the backend client — `client-factory.ts:11` | exists |
+
+So the work is **calling machinery that is already written**, not writing it.
+
+**Three things genuinely do not exist, and one documented behaviour is fiction:**
+
+1. **Nothing ever creates an `endpoint`, `aor` or `identify` object.** The only dynamic-config call
+   in the worker (`provider-setup/providers/asterisk.ts:85`) writes an **`auth` object and nothing
+   else** — an orphan that no endpoint references [V].
+2. **There is no teardown path at all.** No DELETE route, no interface method, and `deleteDynamic`
+   has no callers. Provisioning today is create-only and leaks PBX state [V].
+3. **`BridgeClient` has no provisioning concept** — it is purely per-call [V]. Add a separate
+   `PbxProvisioner` interface implemented by the ARI and ESL clients rather than widening
+   `BridgeClient`; per-call control and identity lifecycle are different concerns with different
+   callers.
+4. **`pjsip.conf:4-8` documents behaviour that does not exist.** It states that trunk objects are
+   written at bridge startup via ARI when `SIP_PROVIDER` / `SIP_USERNAME` / `SIP_PASSWORD` are set.
+   Those variables are read into config (`sip-bridge/src/index.ts:61-63`) and **never used** [V].
+   Asterisk therefore boots with no endpoints whatsoever. Fix the comment or implement it; leaving
+   a file that describes a feature it does not have is how the next reader loses a day.
+
+### The two backends, and the honest state of each
+
+`PBX_TYPE` already abstracts the backend and the design stays agnostic at the interface. It should
+not pretend the two are equally real.
+
+**Asterisk — push.** The worker asks the bridge to provision; the bridge PUTs `auth`, `aor` and
+`endpoint` objects over ARI. Per device: `max_contacts=1` with `remove_existing=yes` **[D]**, so one
+device holds one binding and a fresh registration replaces a stale one rather than accumulating.
+This is the deployable backend today.
+
+**FreeSWITCH — pull, and this is the nicer model.** `mod_xml_curl` binds the `directory` section to
+an HTTP endpoint: at registration time FreeSWITCH POSTs `section=directory` with the user it is
+looking up, and our server answers from the credential store it already holds **[D]**. **Nothing is
+provisioned in advance and nothing is stored in the PBX** — which makes the §8 metadata question
+almost vacuous on that backend, and makes revocation "stop answering."
+
+**But FreeSWITCH is not deployable today.** There is no FreeSWITCH deployment artifact anywhere in
+the repo — no compose service, no configuration-management role, no chart. It exists only as code:
+a telephony adapter, an ESL client, and a provider-setup implementation [V]. And that
+implementation does not create a registrable identity: it adds a **sofia gateway on the external
+profile** — an outbound registration to a provider — not a directory user [V].
+
+**Conclusion: build Asterisk first and design the interface so FreeSWITCH fits, but do not claim
+two-backend parity.** The `PbxProvisioner` interface is where that promise is kept honestly.
+
 ### Revocation — the requirement that decides whether this is safe
 
-**Expiry is not revocation.** The proxy's `lookup()` reads user-location and never re-authenticates, so a
-bound contact keeps receiving INVITEs until its binding expires, regardless of whether the
-credential is still valid. [D]
+**Expiry is not revocation.** A bound contact keeps receiving INVITEs until it expires, regardless
+of whether the credential behind it is still valid, because the PBX routes to the contact it has
+and does not re-authenticate to do so.
 
 Revocation is therefore **two** actions, and a test that asserts only the second gives a false pass:
 
 1. **Invalidate the credential** so a fresh REGISTER is rejected.
-2. **Delete the live binding**, via the registrar's RPC interface — `usrloc.delete_contact` for one
-   device, `usrloc.delete_aor` for every device of a departed volunteer. (Prior research called
-   this `ul.rm`; the current RPC export table names it `usrloc.delete_aor` /
-   `usrloc.delete_contact` **[D]**, confirmed against the module's `rpc_export_t`.)
+2. **Tear down the live binding** so the endpoint stops receiving calls *now*.
 
-**The transport for step 2 already exists.** The SIP proxy's configuration-management role provisions a JSONRPC
-management port with credentials whose defaults comment says, in as many words, that it is *for
-sip-bridge integration*; and `sip-bridge/` already ships a JSONRPC client for it, selected by the
-existing `PBX_TYPE` switch [V]. Revocation is a new method on an existing client over
-an existing channel, not a new integration. This is the single largest piece of unexpected good
-news in the survey.
+Both are real operations with real APIs on both backends — which is precisely what was impossible
+under the shared trunk credential, where there was nothing per-volunteer to revoke.
 
-**Who performs it: the worker, through `sip-bridge`.** The JSONRPC credentials belong to the
-proxy's management interface, `sip-bridge` already holds a client for them, and keeping that
-credential out of the application server is the same separation the bridge already provides for
-PBX control. The worker issues a revoke command; the bridge translates it.
+**On the push backend (Asterisk):** delete the dynamic objects in **reverse order of creation** —
+endpoint, then AOR, then auth **[D]**:
+
+```
+DELETE /ari/asterisk/config/dynamic/res_pjsip/endpoint/{id}
+DELETE /ari/asterisk/config/dynamic/res_pjsip/aor/{id}
+DELETE /ari/asterisk/config/dynamic/res_pjsip/auth/{id}
+```
+
+Removing the AOR removes the contact bound to it, so one sequence does both halves. **Verify it
+rather than assume it** — the acceptance test asserts the contact is gone, not merely that the
+DELETEs returned 200.
+
+**On the pull backend (FreeSWITCH):** there is nothing provisioned to delete, which is the
+attractive half of that model. The PBX asks us for the user at lookup time (§7), so invalidating
+the credential means *stop answering for that user* — immediate, for every subsequent REGISTER,
+with no state to clean up. The live binding still has to go: flush that user's inbound
+registration on the profile. Same two actions, different mechanism.
+
+**Who performs it: the worker, through `sip-bridge`.** The PBX management credentials belong to
+the bridge, which already holds clients for both backends and already translates worker commands
+into backend operations — `PBX_TYPE` selects which. Revocation is a new command on an existing
+channel rather than a new integration, and it keeps PBX credentials out of the application server.
 
 **Distinguish routine churn from security revocation**, because conflating them produces either
-over-reaction or under-reaction. *Churn* — clock-out, a shift ending — removes the binding and
-lets the credential lapse; it needs no audit alarm and no key rotation. *Security revocation* —
-volunteer removed, device revoked in the sigchain, hub deleted — invalidates the credential
-immediately, deletes every binding for that device, and is audited. Both call the same two
-mechanisms; only the trigger, the urgency and the audit trail differ.
+over-reaction or under-reaction. *Churn* — clock-out, a shift ending — tears down the binding and
+lets the credential lapse; no audit alarm, no rotation. *Security revocation* — volunteer removed,
+device revoked in the sigchain, hub deleted — invalidates immediately, tears down every binding for
+that device, and is audited. Same two mechanisms; different trigger, urgency and trail.
 
-Note the codebase already has a working, atomic **device** revocation path
-(`services/identity.ts`, `routes/devices.ts`) that appends a sigchain link and deletes the device;
-SIP revocation hangs off that rather than becoming a parallel mechanism. There is **no** SIP
-revocation or rotation anywhere today — a grep for it returns zero matches [V].
+The codebase already has a working, atomic **device** revocation path (`services/identity.ts`,
+`routes/devices.ts`) that appends a sigchain link and deletes the device; SIP revocation hangs off
+that rather than becoming a parallel mechanism. There is **no** SIP revocation or rotation anywhere
+today — a grep returns zero matches [V].
 
-**The acceptance test asserts both, and it is the single most important test in this design.** An
-orphaned binding that still rings is a person who left continuing to receive crisis calls, and it
-appears in no UI.
+**The acceptance test asserts both halves, and it is the single most important test in this
+design.** An orphaned binding that still rings is a person who left continuing to receive crisis
+calls, and it appears in no UI.
 
-A useful second lever: `usrloc`'s `handle_lost_tcp` removes contacts when the underlying TCP
-connection drops **[D]**. Over WSS every registration owns a persistent connection, so enabling it
-makes a closed socket a deregistration — which tightens both revocation and fail-closed detection.
-`close_expired_tcp` is its counterpart. Both default to off.
+**Memory-backed objects give a third layer for free** (§8): because volunteer endpoints and
+contacts do not survive a PBX restart, a restart is itself a full deregistration. That is a
+backstop, not a mechanism — it must never be the plan — but it bounds the blast radius of a bug in
+the two steps above.
 
 ---
 
 ## 8. Registration is a metadata store, and it is ours now
 
-A registered SIP endpoint means *this volunteer is online, from this IP, right now*. The registrar's
-`location` rows carry `received`, `socket`, `user_agent`, `callid` and `path` — source address,
-transport, and a client fingerprint — continuously updated. That is exactly the metadata the threat
-model exists to protect.
+A registered SIP endpoint means *this volunteer is online, from this IP, right now*. On the PBX
+that record is the AOR's **contact** — source address, transport, user agent, expiry — rewritten on
+every re-registration. That is exactly the metadata the threat model exists to protect.
 
-Moving off the vendor's SDK removes the vendor's view and creates ours. **That is an improvement —
-we control retention and they did not — but it is not a deletion**, and the design treats it as a
+Moving off the vendor removes the vendor's view and creates ours. **That is an improvement — we
+control retention and they did not — but it is not a deletion**, and the design treats it as a
 store to be minimised rather than a side effect.
 
-Requirements, all of which must be **asserted by a guard, not merely configured**:
+### The persistence lever is already set correctly — the job is to keep it that way
 
-- **The location table never reaches disk.** `usrloc` `db_mode=0` is memory-only and is already the
-  module default (`int ul_db_mode = 0` **[D]**) — which is exactly why it must be asserted: a
-  default is one config line away from changing silently. The hazard is concrete and verified: the
-  database backup role dumps the whole application database, its
-  `backup_postgres_exclude_tables` defaults to `[]`, and its `backup_age_public_key` defaults to
-  empty — so the dump is **unencrypted unless configured**, and any table added to that database
-  is in it [V]. Relying on an exclude list to keep volunteer addresses out of an off-host backup is
-  a one-line-edit away from failing silently. Memory-only, or a separate store on the encrypted
-  tier, are the only safe options.
-- **The registrar and the relay run on the encrypted tier**, with everything else that accumulates
-  volunteer metadata.
-- **The credential store lives on the encrypted tier too, and out of the application database.**
-  §7 stores HA1 rather than passwords, but HA1 is realm-equivalent to a password, so it inherits
-  the same placement rule as the location table — and the same reason: the application database is
-  dumped whole, with the exclude list empty and backup encryption unset by default [V].
-- **Source IPs are stripped from logs**, at application level and at the ingress layer. There is a
-  precedent in this repo to copy verbatim rather than reinvent, and it has five properties worth
-  naming because a guard missing any one of them is decorative [V]:
-  1. a dedicated single-purpose `tasks/guard-*.yml` in the role, included from `tasks/main.yml`
-     conditionally on the disk-encryption fact, **before** any config is written — so a violating
-     host never gets a file;
-  2. the assert runs against the **rendered artifact**, not against variables, so it holds however
-     the setting arrives — template edit, image default change, or a stray environment entry;
-  3. an overridable input fact (`<thing>_rendered_compose | default(lookup(...))`) so CI can feed
-     it a deliberately mutated body;
-  4. a deny-list regex plus a `fail_msg` that names the offending setting and the remediation;
-  5. registration of both a `*_clean` case and a `*_<defect>` case in
-     `playbooks/check-disk-tier-guards.yml`'s whitelist, each injected case followed by a
-     **"prove the injection landed"** assert so a no-op injection cannot make the negative case
-     vacuously pass.
+This is the best news in the survey, and it inverts the work: the privacy-correct configuration
+**already exists**. `deploy/docker/asterisk-config/sorcery.conf:13-17` reads, in full:
 
-  The existing guard's own rationale — that a wake-notification topic plus a timestamp is a record
-  of which volunteer device was woken and when — maps onto SIP almost word for word. Registration
-  bindings, contact addresses and call detail records are the same category of accumulating
-  metadata, and they are richer.
-- **Registration expiry is chosen, not defaulted.** Expiry bounds the window in which a seized
-  registrar yields live volunteer addresses. Set `max_expires` explicitly — it is *disabled* by
-  default **[D]**, so a client can otherwise request an arbitrarily long binding — and set
-  `default_expires_range` to 10–20% so re-registrations do not synchronise into a thundering herd
-  after a restart. Over WSS the connection and its keepalive exist anyway, so a short expiry costs
-  little beyond signalling.
+```
+[res_pjsip]
+auth=memory
+aor=memory
+endpoint=memory
+contact=memory
+```
+
+That is not incidental. ARI push configuration only functions when sorcery maps the object type to
+a non-static wizard, and the choices are `memory` (gone on restart), `astdb` (a file) or `realtime`
+(a database) **[D]**. Someone already chose `memory` for all four — including **`contact`**, which
+is the object that holds a volunteer's source address.
+
+**So nothing about a volunteer's SIP identity or address survives a PBX restart, because none of it
+is ever written.** A seized disk yields no endpoints, no credentials and no contacts. That is a
+stronger property than "we delete it promptly", and it costs nothing: §7 re-provisions on clock-in,
+so the PBX is repopulated by the people who are actually working.
+
+It is reinforced at the container level: `/etc/asterisk` is mounted **read-only** on every path
+that actually runs — development compose, production compose, and the configuration-management
+role's template [V]. Asterisk *cannot* write its configuration to disk.
+
+**Two live hazards, both of which a guard must catch:**
+
+1. **A dead template that would break it.** A second, unused compose template at
+   `deploy/ansible/templates/compose/asterisk.j2:12` mounts `/etc/asterisk` as a **read-write named
+   volume** [V]. It is currently unreferenced — the role resolves to its own role-local template —
+   so it is inert. It is also exactly one `src:` edit away from persisting every volunteer contact
+   to disk, silently, with nothing failing. Delete it or guard it; do not leave it.
+2. **The configuration-management role never ships these files.** Its compose template mounts
+   `./asterisk-config:/etc/asterisk:ro`, but the role templates only a compose file and an env
+   file — it creates no `sorcery.conf`, no `ari.conf`, no `pjsip.conf` [V]. A PBX deployed that way
+   gets an empty configuration directory: no ARI user, and **no sorcery mapping, so ARI dynamic
+   config silently cannot create anything**. The memory-wizard property that this whole section
+   rests on exists only in the compose deployments. That is a real gap and Phase 1 must close it.
+
+**Sorcery is layered, so none of this disturbs the trunk.** Note the existing file's own caveat:
+`registration` is deliberately *not* memory-backed because of an upstream crash, so registration
+objects fall through to the read-only default backend — worth re-testing, since the comment cites
+Asterisk 22.x while compose pins 20.x [V].
+
+### What must be asserted, not merely configured
+
+Every item below gets a guard, because a default is one edit away from changing silently.
+
+- **No volunteer SIP object reaches disk.** Assert the sorcery mapping, and assert the PBX
+  container has no volume that would persist its configuration or database directory. The hazard
+  is concrete: if a deployment switched these object types to `realtime` against the application
+  database, contacts would be swept into the existing whole-database dump automatically — its
+  `backup_postgres_exclude_tables` defaults to `[]` and its `backup_age_public_key` defaults to
+  empty, so that dump is **unencrypted unless configured** [V]. Relying on an exclude list is one
+  edit away from failing silently.
+- **The PBX runs on the encrypted tier**, with everything else that accumulates volunteer metadata.
+- **The credential store lives on the encrypted tier and out of the application database.** §7
+  stores HA1 rather than passwords, but HA1 is realm-equivalent to a password, so it inherits the
+  same placement rule as the contacts — and the same reason.
+- **Source IPs are stripped from PBX logs**, at application level and at the ingress layer.
+- **Registration expiry is chosen, not defaulted.** Expiry bounds the window in which a live PBX
+  yields volunteer addresses. Set the AOR's maximum expiration explicitly rather than accepting
+  whatever a client requests, and give each device's AOR `max_contacts=1` with `remove_existing=yes`
+  **[D]** — one device, one binding, and a fresh registration replaces the stale one rather than
+  accumulating.
 - **Relay credentials are ephemeral and per-session**, never a static shared secret in client
   config.
-- **The desktop liblinphone config file is treated as sensitive.** liblinphone persists account
-  credentials and call history into it by default. Desktop must place it under the app's own data
-  directory, disable call-log persistence, and wipe it on sign-out — the same lifecycle the
+- **The client-side liblinphone config file is treated as sensitive.** liblinphone persists account
+  credentials and call history into it by default. Every client must place it under the app's own
+  data directory, disable call-log persistence, and wipe it on sign-out — the same lifecycle the
   existing key material already has.
+
+### Copy the guard pattern; do not reinvent it
+
+There is a precedent in this repo with five properties, and a guard missing any one of them is
+decorative [V]:
+
+1. a dedicated single-purpose `tasks/guard-*.yml` in the role, included from `tasks/main.yml`
+   conditionally on the disk-encryption fact, **before** any config is written — so a violating
+   host never gets a file;
+2. the assert runs against the **rendered artifact**, not against variables, so it holds however
+   the setting arrives — template edit, image default change, or a stray environment entry;
+3. an overridable input fact (`<thing>_rendered_compose | default(lookup(...))`) so CI can feed it
+   a deliberately mutated body;
+4. a deny-list regex plus a `fail_msg` naming the offending setting and the remediation;
+5. registration of both a `*_clean` case and a `*_<defect>` case in
+   `playbooks/check-disk-tier-guards.yml`'s whitelist, each injected case followed by a **"prove
+   the injection landed"** assert so a no-op injection cannot make the negative case vacuously pass.
+
+The existing guard's own rationale — that a wake-notification topic plus a timestamp is a record of
+which volunteer device was woken and when — maps onto SIP almost word for word. Contacts and call
+detail records are the same category of accumulating metadata, and they are richer.
 
 ---
 
@@ -706,12 +842,12 @@ count on the call record so an admin reviewing an unanswered call can see that t
 eligible volunteers had no reachable endpoint. Not a new dashboard; an existing surface told the
 truth.
 
-Where that fact comes from matters for §8: **ask the registrar, do not build a second store.**
-Reachability is a live query against the existing binding table over the JSONRPC channel that
-revocation already uses, not a client-reported presence record accumulated in the application
-database. One metadata store, not two. **Query once per call, for the whole candidate set** — a
-single batched lookup, not one round trip per volunteer. Ring setup is latency-critical and a
-per-candidate query puts an order of magnitude into the path for no benefit.
+Where that fact comes from matters for §8: **ask the PBX, do not build a second store.**
+Reachability is a live query for current contacts over the same bridge channel revocation uses, not
+a client-reported presence record accumulated in the application database. One metadata store, not
+two. **Query once per call, for the whole candidate set** — a single batched lookup, not one round
+trip per volunteer. Ring setup is latency-critical and a per-candidate query puts an order of
+magnitude into the path for no benefit.
 
 ### When the reachability query itself fails
 
@@ -727,10 +863,16 @@ failing open is some wasted INVITEs to endpoints that will not answer, which is 
 on every call. The cost of failing closed is a crisis call that rings nobody. Those are not
 comparable.
 
-One concrete reason this matters more than it looks: §8 mandates memory-only location storage, so
-**a registrar restart empties the binding table**. Every volunteer reads as unreachable for as long
-as it takes them to re-register. Under fail-closed routing, a registrar restart is a total outage
-of the hotline. Under fail-open it is a brief period of behaving exactly as the system does today.
+One concrete reason this matters more than it looks: §8 mandates memory-backed PJSIP objects, so
+**a PBX restart removes every volunteer endpoint and every contact**. Until each client re-fetches
+its credential set and re-registers, every volunteer reads as unreachable. Under fail-closed
+routing a PBX restart would be a total outage of the hotline. Under fail-open it is a brief period
+of behaving exactly as the system does today — phones still ring, because the phone leg never
+depended on registration.
+
+This is the clearest illustration of why the two failure policies differ. The same design choice
+that makes the metadata story strong — nothing on disk — is the one that makes fail-closed routing
+unacceptable.
 
 The query failing must still be loud: an admin alert, and a health-check signal, because a
 persistently failing reachability query means the skip logic has silently stopped working.
@@ -790,22 +932,22 @@ catch**, never by reading its configuration.
 
 | What | How | Where |
 |---|---|---|
-| Revocation drops a live binding **and** rejects re-REGISTER | backend BDD against a real registrar in dev compose | `packages/test-specs/features/` + `tests/steps/` |
+| Revocation drops a live binding **and** rejects re-REGISTER | backend BDD against the dev-compose PBX | `packages/test-specs/features/` + `tests/steps/` |
 | A volunteer registers **every** member hub | backend BDD, asserting binding count per member hub | same |
 | Routing skips an unregistered volunteer | backend BDD against `startParallelRinging` | same |
 | Location data never reaches disk | injected-defect guard, mirroring the existing disk-tier guard playbook | `deploy/ansible/playbooks/` |
-| Log redaction holds for registrar and relay | injected-defect guard, same playbook | same |
+| Log redaction holds for the PBX and the relay | injected-defect guard, same playbook | same |
 | Desktop IPC boundary stays consistent across all four layers | the existing static test already enforces `lib.rs` / `isolation/index.html` / `platform.ts` / `tests/mocks/tauri-core.ts` agreement — new voice commands must be added to all four or it fails | `src/client/lib/desktop-ipc-boundary.test.ts` |
 | Desktop call-state UI | Playwright against the mocked IPC layer, driving emitted voice events the way `emitNetWsEvent` drives `net-ws:<id>` | `tests/` |
 | Contract agreement | codegen + typecheck on all three platforms; the hand-written structs are gone, so drift cannot recur silently | CI |
-| Routing fails **open** when reachability is unavailable | backend BDD: with the registrar query erroring, every eligible volunteer is still rung, and an alert is raised | `tests/steps/` |
+| Routing fails **open** when reachability is unavailable | backend BDD: with the PBX query erroring, every eligible volunteer is still rung, and an alert is raised | `tests/steps/` |
 | Transcription holds real-time | a benchmark, not a unit test: quantized multilingual tiny, two concurrent telephone-bandwidth streams, on the minimum target hardware. **This is a gate on the approach, not a regression test** — §16 names the fallback if it fails. | `packages/crypto`-style `cargo bench`, run manually before Phase 3 commits |
 | No audio or transcript reaches disk | an integration assertion, not an inspection: run a call in a sandbox with the app data directory watched, and fail if any file appears whose contents correlate with the audio or transcript. Reading the config to check a flag proves the flag, not the property. | Phase 3 |
 | The call workspace survives call-state churn | Playwright: begin editing a note mid-call, drive `ringing → active → ended` through the mocked voice events, assert the edit is intact and unsaved changes are never discarded | `tests/` |
 | One answered call with real audio | manual, on real hardware, per platform. **There is no substitute and the plan must not pretend otherwise.** Acceptance: a five-minute two-way call on residential broadband and again on a mobile network, with no audible dropout, no echo reported by either party, and round-trip latency that does not cause the two speakers to talk over each other. Recorded as a signed-off checklist per platform per release, not a tester's recollection. | — |
 
 **The current e2e suite exercises the call UI, not the media path.** That is why none of this was
-caught. Adding UI tests will not catch it either; the registrar-level assertions above are the ones
+caught. Adding UI tests will not catch it either; the PBX-level assertions above are the ones
 that would have.
 
 Concretely, against what exists today [V]:
@@ -830,7 +972,7 @@ Concretely, against what exists today [V]:
 
 **The `TelephonyAdapter` interface is unchanged by this design.** It is entirely PSTN, IVR and
 webhook shaped — `handleIncomingCall`, `ringVolunteers`, `parseCallStatusWebhook` and so on — with
-no notion of endpoint registration or credentials [V]. The registrar is a peer of the adapter
+no notion of endpoint registration or credentials [V]. PBX provisioning is a peer of the adapter
 layer, not a member of it, and no adapter gains a method here.
 
 ---
@@ -842,7 +984,7 @@ already works.
 
 | Concern | Lives in | Why |
 |---|---|---|
-| SIP registration | **Rust shell** | needs a socket to the registrar that is not the pinned app origin |
+| SIP registration | **Rust shell** | needs a socket to the PBX that is not the pinned app origin |
 | RTP media, codecs, jitter, echo cancellation, device I/O | **Rust shell** | liblinphone's own media engine; never touches the DOM |
 | Transcription | **Rust shell** | follows the audio (§16) |
 | Call signalling, `call:ring` / `call:answered` / `call:end` | **webview, unchanged** | already works over the Rust-proxied WebSocket; already multi-hub correct; already tested |
@@ -1100,30 +1242,56 @@ silent catches. Bound the iOS pending map. Unify the two desktop call-state noti
 > only working description of each provider's SIP endpoint while Phase 1 still needs to know how
 > to trunk to them. Leave the module; stop calling it from the client-credential path.
 
-**Phase 1 — the realm. Greenfield, and larger than everything else here combined.**
-No registrar exists in any configuration: neither the development SIP proxy config nor the
-configuration-management template loads the registrar, user-location, WebSocket or authentication
-modules, and both forward REGISTER to the PBX backends — one by an explicit branch whose comment
-says *"We don't handle registrations"*, the other by having no REGISTER branch at all. The
-development config has no TLS listener. The proxy's role is disabled by default and **is not in the
-deployment playbook** [V].
+**Phase 1 — per-volunteer identities on the PBX. Materially smaller than the design it replaces.**
+An earlier draft called this greenfield and larger than everything else combined. That was true of
+a new registrar; it is not true of this. The ARI dynamic-config client with create and delete
+already exists and has zero callers; the memory-wizard sorcery mapping already exists; ARI is
+already enabled with `read_only = no`; the signed worker→bridge command channel already exists; and
+there is already a dialplan context written for volunteer endpoints [V].
 
-Phase 1 builds: registrar plus user-location with memory-only storage, WebSocket transport,
-REGISTER authentication, explicit expiry bounds, per-device credential minting replacing the
-client-credential path, log redaction, the injected-defect guards, revocation with its two-part
-test, and bringing the proxy role into the deployment path. **It should be split further when it is
-specced**; it is not one plan.
+Phase 1 builds:
+
+- a `PbxProvisioner` interface (separate from `BridgeClient`, which is per-call only) with an
+  Asterisk implementation calling the existing `configureDynamic` / `deleteDynamic`;
+- creation of `endpoint` and `aor` objects, not just the orphan `auth` the worker writes today,
+  with `max_contacts=1` and `remove_existing=yes`;
+- per-device credential minting replacing the client-credential path, and an HA1 store on the
+  encrypted tier;
+- a TLS transport for clients — `pjsip.conf`'s TLS stanza is commented out and there is no
+  listener today [V];
+- revocation, with its two-part test;
+- reachability lookup for routing, failing open (§11);
+- the configuration-management role actually shipping the Asterisk config files it mounts, which
+  it does not today — without this, an Ansible-deployed PBX has no ARI user and no sorcery mapping,
+  so dynamic provisioning silently cannot work at all [V];
+- deletion or guarding of the dead read-write-volume compose template (§8);
+- log redaction and the injected-defect guards.
+
+It also has to **verify the existing trunk path actually works**, because `pjsip.conf` documents a
+startup trunk write that is not implemented and the worker's one dynamic-config call creates an
+orphan `auth` object [V]. Do not build on an assumption that the trunk provisioning is sound.
+
+Kamailio is not removed by this phase — it remains a useful dispatcher in front of one or more
+PBXs, which is what it is configured as. What is removed is the plan to make it a registrar.
 
 **Phase 1b — the relay.** Ephemeral credential minting, a TLS listener, a published relay port
-range, log redaction, and a configuration-management role where none exists. This is an epic in its
-own right and §10 explains why it is not optional for UDP-blocked volunteers. Independent of
-Phase 1 except that both must land before in-app audio is enabled.
+range, log redaction, and a configuration-management role where none exists. §10 explains why it
+is not optional for volunteers on networks that block outbound UDP. Independent of Phase 1 except
+that both must land before in-app audio is enabled.
 
 **Phase 2 — the desktop spike.** bindgen over `linphone/core.h` in a `llamenos-voice` crate, one
 answered call with audio on Linux. **This is the single experiment that de-risks everything else.**
-It can run in parallel with Phase 1 because it registers against the **dev-compose PBX**, which
-*does* own registrations today — the proxy forwards REGISTER to it [V]. It does not need the
-Phase 1 registrar to exist.
+
+It needs something to register against, and an earlier draft claimed the dev-compose PBX would do
+because it owns registrations today. **That is wrong and the survey caught it:** `pjsip.conf`
+contains transport stanzas only — no endpoint, no AOR, no auth — and the startup code that was
+supposed to write them is documented but unimplemented [V]. The PBX boots with nothing to register
+to.
+
+So the spike's prerequisite is small but real: one hand-provisioned endpoint plus a TLS transport,
+which is the first slice of Phase 1. Sequence it as *Phase 1 slice → spike*, not as a parallel
+track. This is cheap — a handful of ARI calls against the existing client — and finding it now is
+better than a spike that fails for a reason unrelated to the question it was asked.
 
 **Phase 3 — desktop voice and the workspace.** `voice.rs`, the IPC surface across all four layers,
 the call-centre workspace (§15), transcription in the shell (§16) behind its performance gate, and
@@ -1183,10 +1351,21 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
   is computed in the route and discarded by every generator.
 - The desktop CSP and the single-origin pinned proxy — **and** that call signalling already works
   through it, with a multi-hub test to prove it.
-- The registrar is greenfield: no registrar, user-location, WebSocket or authentication module is
-  loaded in any configuration, and the proxy's role is absent from the deployment playbook.
-- A JSONRPC management channel to the proxy is already provisioned and already has a client in
-  `sip-bridge`, so revocation has a transport.
+- The SIP proxy owns no registrations by design — its template forwards REGISTER to the backends
+  with a comment saying so — and its role is absent from the deployment playbook, while the PBX
+  role is in it. The proxy's own client in `sip-bridge` exposes only dispatcher and health RPC:
+  there is no registrar machinery there to use.
+- The PBX provisioning machinery mostly exists and is entirely unwired: a generic ARI
+  dynamic-config client with create **and** delete (`ari-client.ts:588`/`:604`) has zero callers;
+  ARI is enabled with `read_only = no`; a signed worker→bridge command channel exists; and
+  `extensions.conf:52` already has a dialplan context for volunteer endpoints.
+- `sorcery.conf` already maps `auth`, `aor`, `endpoint` and `contact` to the **in-memory** wizard,
+  and `/etc/asterisk` is mounted read-only on every path that runs. The privacy-correct persistence
+  model is configured; the work is asserting it, not building it.
+- The only dynamic-config call in the worker writes an **orphan `auth` object** and nothing else;
+  there is no teardown path anywhere; and `pjsip.conf` documents a startup trunk write that is not
+  implemented, so the PBX boots with no endpoints.
+- FreeSWITCH has no deployment artifact of any kind — it exists only as code.
 - The relay is a STUN server in a TURN server's clothing: static shared credential defaulting to
   `changeme`, TLS and DTLS off, no relay port range published, no configuration-management role.
 - liblinphone has no Rust binding (crates.io returns zero), a clean bindgen-able C API, is
@@ -1198,7 +1377,14 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
 - Media transits our infrastructure on 100% of calls once the vendor SDK is gone. This follows from
   topology, not measurement.
 
-**Two claims corrected during review, recorded so they are not reintroduced.**
+**Four claims corrected during review, recorded so they are not reintroduced.**
+
+- **The registrar is not greenfield, because it is not a registrar.** Per-volunteer identities go
+  on the PBX, where the provisioning API, the storage policy and the dialplan context already
+  exist. The earlier Kamailio registrar design was solving a problem the deployment had already
+  solved, and it would have needed an RTP relay beside it that the PBX does not.
+- **The spike cannot run in parallel with Phase 1.** An earlier draft said the dev-compose PBX owns
+  registrations today; it does not — it has transports and nothing else.
 
 - **`PROTOCOL.md` does not document `sip-token` at all.** §4.18 documents `webrtc-token`, and it
   documents it *correctly* — the shape there matches the schema it was generated against. So the
@@ -1222,9 +1408,14 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
 4. **That prebuilt desktop liblinphone artifacts are available, current, and checksummable** for all
    three release targets.
 5. **Relay demand.** Deliberately unknown: §10 replaces the guess with a measurement.
-6. **Whether removing a contact when its transport connection drops is safe** for a population on
-   flaky consumer networks, or whether it turns a brief handover into a missed crisis call. A real
-   trade-off between revocation tightness and reachability.
+6. **Whether the existing trunk provisioning works at all.** `pjsip.conf` documents a startup
+   trunk write that is unimplemented, and the worker's one dynamic-config call creates an orphan
+   `auth` object [V]. Phase 1 must establish the actual state rather than build on top of it.
+7. **Whether a memory-backed PBX restart is tolerable in practice.** It is the right privacy
+   property and §11's fail-open routing bounds the damage, but the time between a restart and
+   every client re-registering has not been measured.
+8. **Whether the commented-out `registration` memory mapping still matters.** `sorcery.conf` cites
+   an Asterisk 22.x crash while compose pins 20.x [V]; re-test rather than inherit the caveat.
 7. **Transcoding load.** CPU per concurrent call on the target hardware is a number this design
    assumes exists and has not measured.
 
@@ -1242,14 +1433,17 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
 | 6 | Hub attribution over the existing app channel, not SIP | it is already authenticated, encrypted, multi-hub aware and tested, and it keeps the registrar ignorant |
 | 7 | DTLS-SRTP, and `none` is unrepresentable in the credential type | ZRTP's SAS needs two humans and the far end is our bridge; SFrame needs an SFU and there is none; a value you must reject at runtime does not belong in the type |
 | 8 | Registrations are an array | it makes "did you handle all of them?" a length assertion a test can make — not a compile error, see §21 |
-| 9 | Reachability is a live registrar query, and it fails **open** | one metadata store, not two; and the failure mode of fail-closed routing is an unanswered crisis call (§11) |
+| 9 | Reachability is a live PBX query, and it fails **open** | one metadata store, not two; and the failure mode of fail-closed routing is an unanswered crisis call (§11) |
 | 10 | Size for 100% media transit | there is no peer to be direct with; the far end is a phone |
 | 11 | Prebuilt, checksum-pinned liblinphone artifacts | a three-OS CMake build in CI is a liability this runner fleet cannot absorb |
 | 12 | No browser client | it would contradict the key-isolation, pinning and `platform.ts` invariants simultaneously |
 | 13 | One instance-level credential endpoint returning an array | a hub-scoped route invites the exact single-hub registration bug iOS has today |
 | 14 | Credentials cover every hub the volunteer is **currently on shift for** — which is more than one, and never just the active one | reconciles §12's axiom with §8's minimisation: all eligible hubs, and no hub where they could not be rung anyway |
-| 15 | `TelephonyAdapter` is untouched | it is PSTN/IVR/webhook shaped; the registrar is its peer, not its member |
+| 15 | `TelephonyAdapter` is untouched | it is PSTN/IVR/webhook shaped; PBX provisioning is its peer, not its member |
 | 16 | The server generates credential randomness; it is **bound to** a device, not derived from its key | the server cannot derive from a private key it does not hold; binding gives revocation, which is what was actually wanted |
+| 16a | Identities live on the **PBX**, provisioned through the existing ARI dynamic-config client — not on a new registrar | the machinery is written and unwired; a proxy would have needed an RTP relay beside it, and its own config says registration belongs to the backends |
+| 16b | Provisioning is a `PbxProvisioner` interface, separate from `BridgeClient` | per-call control and identity lifecycle are different concerns with different callers |
+| 16c | Volunteer PJSIP objects stay memory-backed | already configured; a seized disk yields nothing, and re-provisioning on clock-in makes it free |
 | 17 | Transcription moves into the shell; the webview consumes text | audio never crosses the IPC boundary, and both legs are separately available before mixing, so speaker attribution is nearly free |
 | 18 | candle rather than whisper.cpp, gated on a measurement | pure Rust in the most exposed path, and no LLVM/Clang/CMake/MSYS2 across three OSes — with the fallback named rather than silently lost |
 | 19 | The model ships in the release artifact | a first-use fetch to a public model host announces that this deployment is about to transcribe a call |
@@ -1262,14 +1456,13 @@ locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardco
 
 Each has a default recorded so no work is blocked.
 
-1. **Registration expiry.** What window is acceptable between a seized registrar and stale data?
+1. **Registration expiry.** What window is acceptable between a seized PBX and stale data?
    *Default taken: 600 seconds, with the maximum set explicitly — it is unbounded by default — and
    a 10–20% jitter range so re-registrations do not synchronise after a restart.* Over a persistent
    connection the cost is signalling only.
-2. **Dropping a binding when its transport connection drops.** Tightens revocation and makes
-   unreachability instant; risks deregistering a volunteer during a brief network handover.
-   *Default taken: on, with reconnect behaviour measured before it ships.* This is the single
-   setting most likely to be wrong.
+2. **What happens to the dead read-write-volume compose template.** It is inert today and one
+   `src:` edit from persisting every volunteer contact to disk. *Default taken: delete it, and add
+   a guard so its reintroduction fails the deploy.*
 3. **Does the call-centre workspace need to survive a page reload mid-call?** It changes whether
    call state is purely in-memory or persisted locally. *Default taken: yes for the records being
    edited, no for the transcript.*

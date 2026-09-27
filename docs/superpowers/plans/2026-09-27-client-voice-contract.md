@@ -23,9 +23,9 @@ compiled one produces fiction.
 | Plan | Covers | Entry criteria |
 |---|---|---|
 | **This plan** | Spec §6, §12, and the Phase 0 list in §18 | none — start now |
-| Plan 2 — the realm | Spec §7, §8, §11 (server side), Phase 1. Should itself be split when specced; it is larger than everything else combined. | this plan merged |
+| Plan 2 — per-volunteer identities on the PBX | Spec §7, §8, §11 (server side), Phase 1. Smaller than it first looked: the ARI dynamic-config client, the memory-wizard storage policy and the volunteer dialplan context already exist and are unwired. | this plan merged |
 | Plan 2b — the relay | Phase 1b: ephemeral credentials, TLS listener, relay port range, a configuration-management role where none exists | independent of Plan 2; both needed before audio is enabled |
-| Plan 3 — desktop spike | Phase 2: bindgen to one answered call on Linux, against the dev-compose PBX, which does own registrations today | none — can run in parallel with Plan 2 |
+| Plan 3 — desktop spike | Phase 2: bindgen to one answered call on Linux | **needs the first slice of Plan 2** — the PBX has transports and no endpoints today, so there is nothing to register against |
 | Plan 4 — desktop voice and workspace | Spec §14, §15, §16, §17; Phase 3 | Plan 3 answered its question; §16's performance gate measured |
 | Plan 5 — mobile platform integration | Phase 4, realistically one plan per platform | Plan 2 merged, so there is something to register against |
 | Plan 6 — capacity | Spec §10, Phase 5 | Plan 4 merged, so there is traffic to measure |
@@ -43,6 +43,8 @@ Copied from the spec and from `CLAUDE.md`; every task's requirements implicitly 
   is Plan 2. Do not describe it otherwise in a commit message, PR body or release note.
 - **No transcription work, no call workspace, no Rust.** Those are Plan 4 (spec §15–§17). This plan
   touches no `apps/desktop/src/*.rs` and adds no IPC command.
+- **No PBX work.** Provisioning per-volunteer endpoints is Plan 2. This plan touches nothing under
+  `sip-bridge/` or `deploy/`, and adds no caller for `configureDynamic` / `deleteDynamic`.
 - **Do not delete `apps/worker/telephony/sip-tokens.ts`.** Phase 1 still needs its per-provider
   knowledge for trunking. Stop calling it from the client-credential path; leave the module.
 - **TypeScript strict, no `any`.** `bun run typecheck` and `bunx eslint` must stay clean.
