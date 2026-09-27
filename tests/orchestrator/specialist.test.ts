@@ -327,16 +327,24 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
   it('fleet-review.yml triggers on review_requested ONLY, never on a label or a push', () => {
     const on = (parseYaml(reviewYml) as { on: Record<string, unknown> }).on
     expect(on['pull_request']).toEqual({ types: ['review_requested'] })
-    for (const forbidden of ['push', 'merge_group', 'pull_request_target', 'schedule']) {
+    for (const forbidden of ['push', 'pull_request_target', 'schedule']) {
       expect(on[forbidden], forbidden).toBeUndefined()
     }
+    // #1187: `merge_group` is required, not forbidden — `fleet/review` is a
+    // required status context and one that cannot report on the queue's
+    // synthetic commit stalls every entry at AWAITING_CHECKS forever. It
+    // spends no model call there; see fleet-review-merge-group.test.ts.
+    expect(on['merge_group']).toEqual({ types: ['checks_requested'] })
   })
 
   it('the publishing job is separate, GitHub-hosted, and the ONLY writer', () => {
     const jobs = (parseYaml(reviewYml) as { jobs: Record<string, { 'runs-on': unknown; permissions?: Record<string, string>; needs?: unknown }> }).jobs
     expect(Object.keys(jobs)).toEqual(['fleet-review', 'publish-reviews'])
     // The job that runs a model next to the review key stays read-only.
-    expect(jobs['fleet-review']?.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', actions: 'read' })
+    // `checks: read` (#1187) is the merge-queue arm's only new grant: it
+    // reads the `fleet/review` check run already recorded on the queued PR's
+    // head. Still no `: write` anywhere — pinned separately in guards.test.ts.
+    expect(jobs['fleet-review']?.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', actions: 'read', checks: 'read' })
     const publish = jobs['publish-reviews']
     expect(publish?.['runs-on']).toBe('ubuntu-latest')
     expect(publish?.needs).toEqual(['fleet-review'])

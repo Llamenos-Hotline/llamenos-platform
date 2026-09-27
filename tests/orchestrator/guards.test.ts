@@ -805,13 +805,19 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // The load-bearing assertion for fleet-review.yml's own trigger list:
   // `pull_request` scoped to `types: [review_requested]` ONLY (never
   // `synchronize`, which would reopen the every-push bug #812 fixed the
-  // first time, and never `labeled`, which #1158 retired) plus
-  // `workflow_dispatch` for manual debugging, and specifically never `push`
-  // or `merge_group` — `merge_group` reachable here without a matching `if:`
-  // arm (asserted below) would reintroduce the fail-open bug this whole rail
-  // exists to prevent (a job instantiated on an event it then skips via
-  // `if:`, which GitHub's branch protection treats as satisfied).
-  it('fleet-review.yml triggers on pull_request (review_requested only) AND workflow_dispatch, and NEVER push or merge_group', () => {
+  // first time, and never `labeled`, which #1158 retired), plus
+  // `workflow_dispatch` for manual debugging, plus `merge_group` (#1187 —
+  // see fleet-review-merge-group.test.ts for the arm that makes it safe),
+  // and specifically never `push`.
+  //
+  // `merge_group` used to be forbidden here, because a trigger with no
+  // matching arm inside the job is the fail-open shape this whole rail
+  // exists to catch. #1187 added the arm — a STEP that always runs on the
+  // queue ref and always publishes a real verdict — so the trigger is now
+  // REQUIRED instead: without it `fleet/review` cannot report on the queue's
+  // synthetic commit at all, and a required context that never reports
+  // leaves every entry at `AWAITING_CHECKS` forever.
+  it('fleet-review.yml triggers on pull_request (review_requested only), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
     expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
@@ -827,10 +833,11 @@ describe('rail: fleet/review runs once per review request, not on every push', (
       expect(pullRequestBlock, `fleet-review.yml pull_request trigger must be review_requested-only — adding ${forbiddenType} reopens the every-push/every-label bug`)
         .not.toContain(forbiddenType)
     }
-    for (const forbiddenEvent of ['push', 'merge_group']) {
-      expect(onBlock, `fleet-review.yml must never trigger on "${forbiddenEvent}" — that reopens the fail-open bug`)
-        .not.toMatch(new RegExp(`\\n {2}${forbiddenEvent}:`))
-    }
+    expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
+      .not.toMatch(/\n {2}push:/)
+    // #1187: present, and scoped to the one merge-queue event.
+    expect(onBlock, 'fleet-review.yml must trigger on merge_group — a required context that cannot report on the queue ref stalls every entry forever')
+      .toMatch(/\n {2}merge_group:\n {4}types:\s*\[\s*checks_requested\s*\]/)
   })
 
   /** The JOB-level `if:`, not a step's — always at exactly four-space
@@ -928,22 +935,31 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // GREEN this job's default. This is the step that asserts the opposite.
   it('asserts a review actually ran when the gate said to — green is never the default', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
-    const assertIdx = block.indexOf('- name: Assert a review actually ran when the gate said to')
+    const assertIdx = block.indexOf('- name: Assert this run reached a real verdict')
     expect(assertIdx, 'the assertion step is missing').toBeGreaterThan(-1)
     const assertBlock = block.slice(assertIdx)
     expect(assertBlock).toContain('gate-outcome-missing')
     expect(assertBlock).toContain('review-did-not-run')
+    // #1187: the merge-queue arm is covered by the same step, so a
+    // merge_group run that reached no verdict cannot conclude green either.
+    expect(assertBlock).toContain('queue-verdict-missing')
     // It must run even when an earlier step failed, or it could be skipped
-    // in exactly the case it exists to catch.
-    expect(stepIf(block, 'Assert a review actually ran when the gate said to')).toContain('always()')
+    // in exactly the case it exists to catch. A bare `always()` since #1187
+    // — the old `always() && steps.gate.conclusion == 'success'` skipped the
+    // whole assertion on merge_group, where the gate step does not run.
+    expect(stepIf(block, 'Assert this run reached a real verdict')).toBe('always()')
   })
 
   // The gate step is what used to be the job-level `if:` (see the rail
   // above) — it must never itself be conditioned on its OWN output, or it
-  // could never run at all.
-  it('the "Decide whether to run the review engine" step (the gate) always runs — it is never itself gated', () => {
+  // could never run at all. Since #1187 it carries exactly ONE condition,
+  // pinned literally here: the merge-queue arm, which produces this job's
+  // verdict on a `merge_group` ref without the gate. Anything else appearing
+  // on this line — and in particular anything naming `steps.gate` — is the
+  // regression this assertion exists to catch.
+  it('the "Decide whether to run the review engine" step (the gate) is gated by nothing but the merge-queue arm', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
-    expect(stepIf(block, 'Decide whether to run the review engine')).toBe('')
+    expect(stepIf(block, 'Decide whether to run the review engine')).toBe("github.event_name != 'merge_group'")
     expect(block).toMatch(/- name: Decide whether to run the review engine\n\s+id: gate\n/)
     expect(block).toContain('bun orchestrator/src/cli.ts review-gate')
   })
@@ -1311,27 +1327,29 @@ describe('rail: the job that executes the judged commit\'s code cannot be reache
  * here to match, or this rail would itself start failing vacuously against a
  * job that no longer exists in `ci.yml`.
  *
- * `fleet/review` is DELIBERATELY NOT in this table. It moved off
- * `merge_group` entirely (see the "runs once per review label" rail above):
- * a `workflow_dispatch`-only trigger could never satisfy a required PR
- * context in the first place (verified on #848), and keeping `merge_group`
- * as a trigger while excluding it from the job's `if:` would recreate the
- * exact fail-open bug this whole file of rails exists to catch. This is safe
- * TODAY because this repo's merge queue is unavailable (owner type `User` —
- * the ruleset's `merge_queue` rule is rejected outright, see
- * fleet-review.yml's own header). The day an org migration enables the
- * queue, `fleet/review` genuinely will not report on a `merge_group` ref and
- * the queue will stall on it forever — that migration must re-add a
- * `merge_group` arm to both the trigger and the job's `if:` together, not
- * silently inherit this gap. The assertion below pins that `fleet/review`
- * does NOT trigger on `merge_group`, specifically so a future PR that adds
- * it back without also fixing the `if:` fails loudly here instead of
- * reintroducing the bug quietly.
+ * `fleet/review` IS in this table as of #1187. It used to be the documented
+ * exception: `merge_group` was excluded as a trigger on the reasoning that a
+ * trigger with no matching arm inside the job would recreate the fail-open
+ * bug, and that the exclusion was safe while this repo's merge queue was
+ * unavailable. The queue was then enabled — and #1185 sat at `position 1,
+ * AWAITING_CHECKS` indefinitely with every other required context green,
+ * because a required context that structurally cannot report on the queue
+ * ref does not fail the entry, it stalls it forever. The queue had to be
+ * turned off again.
+ *
+ * The fix was the arm that earlier note said the migration would need, in
+ * the only form invariant 1 allows: not a job-level `if:` (a skipped
+ * required check satisfies branch protection exactly like a green one) but a
+ * STEP that always runs on the queue ref and always publishes a real
+ * verdict, derived from the constituent PR's own existing `fleet/review`
+ * rather than from a second model call. See fleet-review-merge-group.test.ts
+ * for the rails on that arm.
  */
 describe('rail: every ruleset-15885614-required context reports on merge_group, except fleet/review', () => {
   const REQUIRED_CONTEXT_WORKFLOWS: Record<string, string> = {
     'ci-status': 'ci.yml',
     'fleet/verify': 'fleet-verify.yml',
+    'fleet/review': 'fleet-review.yml',
     gitleaks: 'secret-scan.yml',
   }
 
@@ -1346,9 +1364,9 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
     return /\n {2}merge_group:/.test(onBlock)
   }
 
-  it('the mapping table itself is non-empty and covers the three merge_group-reporting contexts', () => {
+  it('the mapping table itself is non-empty and covers the four merge_group-reporting contexts', () => {
     expect(Object.keys(REQUIRED_CONTEXT_WORKFLOWS).sort()).toEqual(
-      ['ci-status', 'fleet/verify', 'gitleaks'].sort(),
+      ['ci-status', 'fleet/verify', 'fleet/review', 'gitleaks'].sort(),
     )
   })
 
@@ -1358,8 +1376,12 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
     })
   }
 
-  it('fleet/review (fleet-review.yml) does NOT trigger on merge_group — known and deliberate while the merge queue is unavailable', () => {
-    expect(triggersOnMergeGroup(workflowYaml('fleet-review.yml'))).toBe(false)
+  // #1187's regression guard, stated as its own assertion rather than left
+  // implicit in the loop above: dropping `merge_group` from fleet-review.yml
+  // breaks no run and no other test — it just silently deadlocks the queue
+  // again, invisibly, the next time one is enabled.
+  it('fleet/review (fleet-review.yml) triggers on merge_group — without it the queue stalls at AWAITING_CHECKS forever (#1187)', () => {
+    expect(triggersOnMergeGroup(workflowYaml('fleet-review.yml'))).toBe(true)
   })
 })
 
@@ -1920,13 +1942,17 @@ describe('rail: a base-provides-the-gate check runs BEFORE the gate step ever in
     expect(block).toContain('*review-gate*')
   })
 
-  // Never itself gated — same reasoning as "Decide whether to run the
-  // review engine" (see the rail on that step in the `describe` above): a
-  // guard that only runs conditionally could be skipped exactly when a
-  // stale base needs it most.
-  it('the guard step carries no step-level if: of its own — it must always run', () => {
+  // Gated by nothing but the merge-queue arm — same reasoning as "Decide
+  // whether to run the review engine" (see the rail on that step in the
+  // `describe` above): a guard that only runs conditionally could be skipped
+  // exactly when a stale base needs it most, so the ONE condition it may
+  // carry is pinned literally. On `merge_group` there is no base checkout to
+  // guard: that arm never invokes bun, never installs, and publishes the
+  // constituent PR's own verdict instead (#1187).
+  it('the guard step carries exactly one step-level if: — the merge-queue arm, and nothing else', () => {
     const block = guardBlock(fleetReviewYaml())
-    expect(block).not.toMatch(/\n {8}if:/)
+    const ifLines = block.split('\n').filter((l) => /^ {8}if:/.test(l))
+    expect(ifLines).toEqual(["        if: github.event_name != 'merge_group'"])
   })
 
   it('the guard fails closed with an actionable message naming what to do next, for both crash shapes', () => {
