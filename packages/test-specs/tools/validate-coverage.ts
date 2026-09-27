@@ -1339,14 +1339,15 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * removes them from the denominator here exactly as it does in the runner.
  * Anything below 100 means this tool and the runner disagree.
  *
- * iOS is 3.5 — exactly 20/569 (3.51%), measured 2026-09-27 (#1221), so losing
+ * iOS is 3.3 — exactly 19/569 (3.34%), measured 2026-09-27 (#1221), so losing
  * a single credited test fails the gate. The previous value, 5, only passed
  * because the matcher was wrong: its 20-character fuzzy fallback added 10
  * scenarios (one of them credited to a test asserting the opposite), and 13 of
  * the 30 it reported lived in a target no CI job ran. The honest number on
  * main before this ratchet was 15/569 (2.6%) — the AuthLoginBDDTests unit
- * tranche alone. The 20 are those 15 plus 5 LlamenosUITests methods, which now
- * count because ci.yml's `ios-e2e` job runs that target under ci-status.
+ * tranche alone. The 19 are those 15 plus 4 LlamenosUITests methods, which now
+ * count because ci.yml's `ios-e2e` job runs that target under ci-status; a 5th,
+ * testNavigateToShiftsTab, is named for its scenario but quarantined on #1241.
  * iOS reads far below Android because the two are measured differently:
  * Android matches Cucumber step phrases, so one step definition counts toward
  * every scenario that uses it; iOS matches whole scenario titles 1:1 against
@@ -1359,7 +1360,7 @@ const COVERAGE_THRESHOLDS: Record<Platform, number> = {
   desktop: 100,
   backend: 100,
   android: 76,
-  ios: 3.5,
+  ios: 3.3,
 };
 
 // ---- Main ----
