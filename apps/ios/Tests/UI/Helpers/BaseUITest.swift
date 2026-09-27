@@ -138,47 +138,50 @@ class BaseUITest: XCTestCase {
         app.launch()
     }
 
-    /// Launch the app connected to the live Docker API as admin.
-    /// Uses the admin mock identity (matches ADMIN_PUBKEY in Docker .env)
-    /// and registers via /api/auth/bootstrap.
+    /// Signing seed of the test admin whose pubkey the test backend runs with as
+    /// ADMIN_PUBKEY (79215a4c…af9183 — ci.yml TEST_ADMIN_PUBKEY). Same fixture as
+    /// ADMIN_SEED in tests/helpers.ts. The app uses it, under UI_TESTING only, to
+    /// register its own fresh device key through the real admin API.
+    private static let testAdminSeedHex = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
+
+    /// Launch the app against the live backend with a freshly registered device
+    /// identity, member of this class's hub, which becomes the active hub.
+    ///
+    /// Fails the test before launching when the class hub could not be created —
+    /// a backend that is not reachable must not turn into assertions about
+    /// connection-error screens.
+    private func launchConnected(_ identityArgs: [String]) {
+        guard !testHubId.isEmpty else {
+            XCTFail("No test hub for \(type(of: self)) — is the backend running at \(testHubURL)?")
+            return
+        }
+        app.launchEnvironment["XCTEST_ADMIN_SECRET"] = Self.testAdminSeedHex
+        app.launchArguments.append(contentsOf: [
+            "--reset-keychain",
+            "--test-authenticated",
+        ] + identityArgs + [
+            "--test-hub-url", testHubURL,
+            "--test-hub-id", testHubId,
+            "--test-register",
+        ])
+        app.launch()
+    }
+
+    /// Launch connected to the live backend as a super-admin (hub admin of this
+    /// class's hub).
     func launchWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected([])
     }
 
-    /// Launch the app connected to the live Docker API as a volunteer.
-    /// Uses a separate volunteer keypair. The admin is bootstrapped first,
-    /// then the user is created via POST /api/users.
+    /// Launch connected to the live backend as a volunteer of this class's hub.
     func launchAsVolunteerWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-volunteer-identity",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected(["--test-volunteer-identity"])
     }
 
-    /// Launch the app connected to the live Docker API as an admin.
-    /// The identity is bootstrapped as admin on the server.
+    /// Launch connected to the live backend as a super-admin, with the admin UI
+    /// role set before the server's `/api/auth/me` answer arrives.
     func launchAsAdminWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected(["--test-admin"])
     }
 
     // MARK: - Server State (deprecated)
