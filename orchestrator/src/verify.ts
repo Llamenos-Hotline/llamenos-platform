@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve as resolvePath, sep } from 'node:path'
-import { checkScope } from './scope.js'
+import { checkScopeAcross } from './scope.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS } from './config.js'
 import type { Lane } from './config.js'
@@ -26,6 +26,20 @@ export interface VerifyInput {
    *  passes the PR's base SHA so the range is exactly the PR's own change. */
   base?: string
   lane: Lane
+  /**
+   * Lanes this PR has been explicitly granted in addition to `lane`, from its
+   * `scope:<lane>` labels (#1115). A cross-lane change — a permission fix that
+   * spans the shared module, the server enforcing it and the client consuming
+   * it — is legitimate work the lane model previously could not express at
+   * all: the author's only options were to stray and be hard-blocked, or to
+   * split the change into PRs that cannot merge atomically.
+   *
+   * A grant widens which lane's ownership a file may satisfy. It never
+   * weakens `NEVER_WRITE_PATHS`, and it cannot be self-issued from the diff:
+   * labels live outside the commit, so the gate reads them from the API and
+   * fails closed (no grants) when they cannot be read.
+   */
+  grantedLanes?: Lane[]
   /**
    * Scope and impact only — used by the `fleet/review` CI job, where
    * `fleet/verify` is the job that runs the diff-targeted tests and running
@@ -536,12 +550,22 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const addedLines = addedLinesFrom(fullDiff ?? '')
 
   const reasons: string[] = []
-  const { forbidden, strayed } = checkScope(changedFiles, lane.scope, [...NEVER_WRITE_PATHS])
+  const granted = input.grantedLanes ?? []
+  const { forbidden, strayed } = checkScopeAcross(
+    changedFiles,
+    [lane.scope, ...granted.map((g) => g.scope)],
+    [...NEVER_WRITE_PATHS],
+  )
   if (forbidden.length > 0) {
     reasons.push(`touched never-write paths: ${forbidden.join(', ')}`)
   }
   if (strayed.length > 0) {
-    reasons.push(`touched files outside lane "${lane.id}"'s scope: ${strayed.join(', ')}`)
+    // Name the grants already in force, so a half-labelled cross-lane PR does
+    // not read as though its labels were ignored.
+    const scopeDesc = granted.length > 0
+      ? `lane "${lane.id}"'s scope (granted also: ${granted.map((g) => g.id).join(', ')})`
+      : `lane "${lane.id}"'s scope`
+    reasons.push(`touched files outside ${scopeDesc}: ${strayed.join(', ')}`)
   }
   const scopeFailed = forbidden.length > 0 || strayed.length > 0
 

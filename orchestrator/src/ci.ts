@@ -200,6 +200,16 @@ export interface CiDeps {
   pathExists(p: string): boolean
   /** The job log — the durable record of what the gate saw. */
   log(msg: string): void
+  /**
+   * The PR's current labels, for `scope:<lane>` grants (#1115). `undefined`
+   * means they could not be read — never an empty list standing in for "no
+   * labels", because the two must not be confused: unreadable fails CLOSED
+   * (no grants apply, the PR is judged on its own lane alone).
+   *
+   * Optional so every existing caller and test is unaffected; omitting it is
+   * exactly equivalent to a PR carrying no grants.
+   */
+  prLabels?(): Promise<string[] | undefined>
 }
 
 export type VerifyCiDeps = CiDeps
@@ -229,6 +239,41 @@ async function resolveLane(deps: CiDeps): Promise<Lane | undefined> {
   const laneId = laneIdFromBranch(deps.ctx.branch)
   if (laneId === undefined) return UNSCOPED_LANE
   return (await deps.lanes()).find((l) => l.id === laneId)
+}
+
+/** The prefix a label must carry to grant a lane's scope to a PR (#1115). */
+export const SCOPE_GRANT_PREFIX = 'scope:'
+
+/**
+ * The lanes a PR has been granted beyond its own, read from its
+ * `scope:<lane>` labels.
+ *
+ * Fails closed in every direction that matters: labels that cannot be read
+ * yield no grants; a label naming something that is not a real lane is
+ * ignored rather than treated as a wildcard; and the PR's own lane is never
+ * duplicated into the list. Anything unrecognised is logged, because a
+ * silently-dropped grant looks identical to a gate that ignored the operator.
+ */
+async function resolveGrantedLanes(deps: CiDeps, own: Lane): Promise<Lane[]> {
+  const labels = await deps.prLabels?.()
+  if (labels === undefined) return []
+  const requested = labels
+    .filter((l) => l.startsWith(SCOPE_GRANT_PREFIX))
+    .map((l) => l.slice(SCOPE_GRANT_PREFIX.length).trim())
+  if (requested.length === 0) return []
+  const all = await deps.lanes()
+  const granted: Lane[] = []
+  for (const id of requested) {
+    if (id === own.id) continue
+    const lane = all.find((l) => l.id === id)
+    if (lane === undefined) {
+      deps.log(`ignoring ${SCOPE_GRANT_PREFIX}${id}: not a known lane (${all.map((l) => l.id).join(', ')})`)
+      continue
+    }
+    if (!granted.some((g) => g.id === lane.id)) granted.push(lane)
+  }
+  if (granted.length > 0) deps.log(`scope grants in force: ${granted.map((g) => g.id).join(', ')}`)
+  return granted
 }
 
 /**
@@ -264,7 +309,9 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // PHASE 1 — trusted only. git runs in the base checkout; scope, never-write
   // and impact are pure functions over the file list it returns. No code from
   // the commit under judgement has executed, or can, at this point.
-  const gate = await deps.verify({ ...rangeFor(deps.ctx), lane, skipTests: true })
+  const grantedLanes = await resolveGrantedLanes(deps, lane)
+
+  const gate = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, skipTests: true })
   deps.log(`gate (no code from the commit under judgement executed): ${buildGateTrace({ report: gate })}`)
   if (!gate.passed) {
     return {
@@ -278,7 +325,7 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // was computed and printed, in a separate process, against the export — so
   // it can only AND into the result, never revise it. This job holds no
   // secrets for that code to reach.
-  const withTests = await deps.verify({ ...rangeFor(deps.ctx), lane, testDir: deps.ctx.headDir })
+  const withTests = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, testDir: deps.ctx.headDir })
   return {
     ok: withTests.passed,
     summary: [
@@ -311,7 +358,12 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
   const lane = await resolveLane(deps)
   if (lane === undefined) return { ok: false, summary: `unknown lane in branch ${deps.ctx.branch}` }
 
-  const report = await deps.verify({ ...rangeFor(deps.ctx), lane, skipTests: true })
+  const report = await deps.verify({
+    ...rangeFor(deps.ctx),
+    lane,
+    grantedLanes: await resolveGrantedLanes(deps, lane),
+    skipTests: true,
+  })
   if (!report.passed) {
     return {
       ok: false,

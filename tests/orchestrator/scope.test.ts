@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
+import { checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { trackedFiles } from './codeowners.js'
 
 const IOS: LaneScope = { owned: ['apps/ios/', '.github/workflows/ios*.yml'], notOwned: [] }
@@ -834,5 +835,59 @@ describe('scripts/ ownership (#1066): infra owns it, backend keeps its own gate 
       }
     }
     expect(dead, `lane scope rules matching no tracked file:\n${dead.join('\n')}`).toEqual([])
+  })
+})
+
+describe('checkScopeAcross — cross-lane grants (#1115)', () => {
+  const backend: LaneScope = { owned: ['apps/worker/', 'tests/steps/backend/'], notOwned: ['tests/'] }
+  const desktop: LaneScope = { owned: ['src/client/', 'tests/'], notOwned: ['tests/steps/backend/'] }
+  const never = ['deploy/secrets/']
+
+  it('a file owned by ANY authorised lane is in scope', () => {
+    const r = checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], [backend, desktop], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual([])
+  })
+
+  it('without the grant, the same diff strays', () => {
+    expect(checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], [backend], never).strayed)
+      .toEqual(['src/client/b.ts'])
+  })
+
+  it('a file owned by no authorised lane still strays', () => {
+    expect(checkScopeAcross(['apps/ios/X.swift'], [backend, desktop], never).strayed)
+      .toEqual(['apps/ios/X.swift'])
+  })
+
+  // The grant vocabulary names LANES, and no lane owns a never-write path,
+  // so no number of grants can reach one. This is the property that makes
+  // the whole mechanism safe to add.
+  it('never-write stays absolute regardless of how many lanes are granted', () => {
+    const r = checkScopeAcross(['deploy/secrets/prod.pem'], [backend, desktop], never)
+    expect(r.forbidden).toEqual(['deploy/secrets/prod.pem'])
+    expect(r.strayed).toEqual([])
+  })
+
+  // Each lane keeps its OWN longest-match resolution. Flattening the two
+  // into one union would let desktop's `tests/` grant cancel backend's
+  // `tests/` notOwned entry and make a path writable that neither lane can
+  // actually write on its own.
+  it('resolves each lane separately rather than unioning owned/notOwned', () => {
+    // desktop owns tests/ but explicitly not tests/steps/backend/; backend is
+    // the reverse. Each file is legal for exactly one of them.
+    const r = checkScopeAcross(['tests/steps/backend/a.steps.ts', 'tests/mocks/b.ts'], [backend, desktop], never)
+    expect(r.strayed).toEqual([])
+    // ...and a path neither owns is still caught.
+    expect(checkScopeAcross(['packages/crypto/src/lib.rs'], [backend, desktop], never).strayed)
+      .toEqual(['packages/crypto/src/lib.rs'])
+  })
+
+  // UNSCOPED_LANE semantics are unchanged: this change is additive and must
+  // not alter how non-fleet branches are judged today (#1115 tracks closing
+  // that separately, which cannot land until every path has an owner).
+  it('an unrestricted scope among the authorised set still means no ownership check', () => {
+    const r = checkScopeAcross(['anything/at/all.ts', 'deploy/secrets/k.pem'], [{ owned: [], notOwned: [] }], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual(['deploy/secrets/k.pem'])
   })
 })
