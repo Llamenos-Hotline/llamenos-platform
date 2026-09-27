@@ -46,6 +46,35 @@ IOS_RE='^apps/ios/'
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 DESKTOP_RE='^(apps/desktop/|src/client/|tests/)'
+# Carved out of DESKTOP_RE's blanket `tests/` prefix: directories under tests/
+# that are NOT desktop e2e. Without this, `ci.yml`'s `e2e` job
+# (`if: desktop == 'true' || backend == 'true'`) runs four Playwright shards,
+# E2E (Linux) and a Docker Compose stack for changes that cannot affect either.
+# On 2026-09-27 this was the sole reason #1164 — an orchestrator-only PR — sat
+# blocked on `ci-status`.
+#
+# Two independent sources agree these are not e2e, and this list must not drift
+# from either:
+#   - `playwright.config.ts`'s desktop project already carries
+#     `testIgnore: ["**/live/**", …, "**/orchestrator/**", "**/*.test.ts"]`.
+#     Playwright does not run them; the filter should not schedule a job for them.
+#   - `tests/load` (k6), `tests/iso-builder` and `tests/eslint` are referenced by
+#     no job in ci.yml at all.
+#
+# Deliberately NOT excluded: `tests/desktop/` (feeds desktop-unit), `tests/steps/`,
+# `tests/mocks/`, `tests/pages/`, `tests/fixtures/` and the root `*.spec.ts`
+# files — all genuinely e2e or its infrastructure.
+#
+# This stays an EXCLUDE list rather than becoming an include list on purpose.
+# An include list makes "a new test directory gates nothing" the default, which
+# is the same silent-non-execution failure this repo already has three open
+# issues for (#1126, #1153, #1167). Excluding fails toward running too much,
+# which costs minutes; including fails toward running nothing, which costs a
+# regression nobody sees.
+#
+# Checked as a separate expression rather than folded into DESKTOP_RE because
+# these are POSIX ERE (`grep -E`), which has no negative lookahead.
+DESKTOP_EXCLUDE_RE='^tests/(orchestrator|live|load|iso-builder|eslint)/'
 # src/server/ is the actual Bun server entry point (`bun run build:server`,
 # and the image `docker compose ... up --build` produces for e2e/backend-bdd/
 # android-e2e) — it lives outside apps/worker/ but is exactly as
@@ -114,7 +143,8 @@ while IFS= read -r file; do
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
   echo "$file" | grep -qE "$IOS_FULL_RE" && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
-  echo "$file" | grep -qE "$DESKTOP_RE" && { desktop=true; echo "Desktop file changed: $file" >&2; }
+  echo "$file" | grep -qE "$DESKTOP_RE" && ! echo "$file" | grep -qE "$DESKTOP_EXCLUDE_RE" \
+    && { desktop=true; echo "Desktop file changed: $file" >&2; }
   echo "$file" | grep -qE "$BACKEND_RE" && { backend=true; echo "Backend file changed: $file" >&2; }
   echo "$file" | grep -qE "$CRYPTO_RE" && { crypto=true; echo "Crypto file changed: $file" >&2; }
   echo "$file" | grep -qE "$ANSIBLE_RE" && { ansible=true; echo "Ansible file changed: $file" >&2; }
