@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO, gh, ghJson } from './gh.js'
-import { REVIEW_JOB } from './ci.js'
+import { decideReviewSet, REVIEW_JOB, REVIEW_REQUEST_LOGIN, type ReviewSetDecision } from './ci.js'
+import { resolveReviewerLabel, AGENT_REGISTRY_DIR } from './specialist.js'
 import { classifyImpact } from './impact.js'
 import type { VerifyReport } from './verify.js'
 import {
@@ -344,6 +345,9 @@ export interface ReviewAndMergeDeps {
   postCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void>
   currentHeadSha(pr: string): Promise<string | undefined>
   requiredChecks(pr: string): Promise<RequiredCheck[] | undefined>
+  /** #1158 — the reviews this PR needs, so the command can refuse rather
+   *  than post a `fleet/review` for a set it does not actually run. */
+  reviewSet(pr: string, changedFiles: readonly string[]): Promise<ReviewSetDecision>
   merge(pr: string): Promise<void>
   log(msg: string): void
 }
@@ -373,6 +377,31 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
 
   const facts = await deps.readPr(pr)
   if (facts === undefined) return { kind: 'not-mergeable', pr, reason: `could not read PR ${pr}` }
+
+  // This command is an INDEPENDENT producer of the required `fleet/review`
+  // check: it runs one reviewer (`invokeReviewer`, the general non-author
+  // one) and posts the verdict itself. Under #1092 that was safe, because
+  // the specialists had their own `fleet/review/<agent>` contexts and
+  // `evaluateMergeReadiness` refused on any of them that had not passed.
+  // Those contexts are gone (#1158) — every reviewer now runs inside the
+  // CI job — so nothing here would stop this command posting a GREEN
+  // `fleet/review` on a crypto PR after running only the general review.
+  //
+  // It refuses instead. Expanding it to run the whole set is a real
+  // feature, not a patch, and until it exists "use the CI gate" is the
+  // honest answer rather than a weaker verdict wearing the same name.
+  const reviewSet = await deps.reviewSet(pr, facts.changedFiles)
+  if (!reviewSet.ok) {
+    return { kind: 'not-mergeable', pr, reason: `could not work out which reviews PR ${pr} needs: ${reviewSet.reason}` }
+  }
+  if (reviewSet.profiles.length > 0) {
+    return {
+      kind: 'not-mergeable', pr,
+      reason: `PR ${pr} needs ${reviewSet.profiles.join(', ')} as well as the general non-author review, and this ` +
+        `command only runs the general one — it will not post a ${REVIEW_JOB} that claims otherwise. ` +
+        `Request a review from ${REVIEW_REQUEST_LOGIN} and let the CI gate run the whole set.`,
+    }
+  }
 
   const cachedCheckRuns = await deps.fetchReviewCheckRuns(facts.headSha)
   if (hasSuccessfulReview(cachedCheckRuns)) {
@@ -437,6 +466,17 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     postCheckRun: postReviewCheckRun,
     currentHeadSha: async (pr) => (await ghJson<{ headRefOid: string }>(['pr', 'view', pr, '--json', 'headRefOid']))?.headRefOid,
     requiredChecks: readRequiredChecks,
+    reviewSet: async (pr, changedFiles) => {
+      const view = await ghJson<{ labels: { name: string }[]; title: string; body: string | null }>(
+        ['pr', 'view', pr, '--json', 'labels,title,body'],
+      )
+      return decideReviewSet({
+        labels: view?.labels.map((l) => l.name),
+        changedFiles,
+        description: `${view?.title ?? ''}\n\n${view?.body ?? ''}`,
+        resolve: (name) => resolveReviewerLabel(name, join(repoRoot, AGENT_REGISTRY_DIR)),
+      })
+    },
     // The one merge call in this file — a REAL squash merge, not the
     // fleet's own `enableAutoMerge` (cli.ts), which only ever ARMS
     // auto-merge for GitHub to complete later. This command is the

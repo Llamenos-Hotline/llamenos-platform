@@ -332,21 +332,39 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     }
   })
 
-  it('the label-clearing job is separate, GitHub-hosted, and the ONLY writer', () => {
+  it('the publishing job is separate, GitHub-hosted, and the ONLY writer', () => {
     const jobs = (parseYaml(reviewYml) as { jobs: Record<string, { 'runs-on': unknown; permissions?: Record<string, string>; needs?: unknown }> }).jobs
-    expect(Object.keys(jobs)).toEqual(['fleet-review', 'clear-reviewer-labels'])
+    expect(Object.keys(jobs)).toEqual(['fleet-review', 'publish-reviews'])
+    // The job that runs a model next to the review key stays read-only.
     expect(jobs['fleet-review']?.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', actions: 'read' })
-    const clear = jobs['clear-reviewer-labels']
-    expect(clear?.['runs-on']).toBe('ubuntu-latest')
-    expect(clear?.needs).toEqual(['fleet-review'])
-    expect(clear?.permissions).toEqual({ 'pull-requests': 'write' })
+    const publish = jobs['publish-reviews']
+    expect(publish?.['runs-on']).toBe('ubuntu-latest')
+    expect(publish?.needs).toEqual(['fleet-review'])
+    expect(publish?.permissions).toEqual({ 'pull-requests': 'write', actions: 'read' })
   })
 
-  it('the label-clearing job runs only after a SUCCESSFUL review that named labels to clear', () => {
+  // A FAIL is the case whose reasoning the PR most needs, so publishing
+  // must not be conditioned on the review having passed.
+  it('publishes on a FAIL as well as a PASS — a red check whose reason is only in a log is not reviewable', () => {
     const jobs = (parseYaml(reviewYml) as { jobs: Record<string, { if?: string }> }).jobs
-    const cond = jobs['clear-reviewer-labels']?.if ?? ''
+    const cond = jobs['publish-reviews']?.if ?? ''
     expect(cond).toContain("needs.fleet-review.result == 'success'")
-    expect(cond).toContain("needs.fleet-review.outputs.clear_labels != ''")
+    expect(cond).toContain("needs.fleet-review.result == 'failure'")
+  })
+
+  it('posts the findings as PR COMMENTS, never as a GitHub review the fleet could have counted', () => {
+    expect(reviewYml).toContain('gh pr comment')
+    expect(reviewYml).not.toContain('gh pr review')
+  })
+
+  it('clears labels only AFTER posting, and only on a PASS', () => {
+    const publish = reviewYml.slice(reviewYml.indexOf('  publish-reviews:'))
+    const postIdx = publish.indexOf('gh pr comment')
+    const clearIdx = publish.indexOf('issues/$PR/labels/$label')
+    expect(postIdx, 'no comment step').toBeGreaterThan(-1)
+    expect(clearIdx, 'no label-clearing step').toBeGreaterThan(-1)
+    expect(postIdx, 'labels must not be cleared before the reviews are posted').toBeLessThan(clearIdx)
+    expect(publish).toContain('if [ "$REVIEW_RESULT" != "success" ] || [ -z "$CLEAR_LABELS" ]; then')
   })
 
   it('the label-clearing job re-checks the label grammar before acting on it', () => {

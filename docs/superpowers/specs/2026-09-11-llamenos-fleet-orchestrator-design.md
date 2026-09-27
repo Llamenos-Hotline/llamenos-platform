@@ -436,11 +436,12 @@ step after it:
   look at all, and pinning an outage to a diff hash would hold the PR red
   until someone pushed a commit for a reason that had already gone away.
   One UNREADABLE anywhere in the set suppresses the whole record.
-- **`low-tier`** — no reviewer label on the PR, and `tierFor` (`impact.ts`)
-  classifies every changed file Tier 0/1. Exits 0, same as a cached PASS, so
-  a docs-only PR never sits red waiting for a review it will never need. An
-  explicit `-reviewer` label overrides this: somebody decided *this* diff
-  needs *those* eyes, and a tier heuristic does not overrule that.
+- **`low-tier`** — the review set is the general reviewer alone, and
+  `tierFor` (`impact.ts`) classifies every changed file Tier 0/1. Exits 0,
+  same as a cached PASS, so a docs-only PR never sits red waiting for a
+  review it will never need. Any *profile* in the set overrides this,
+  whichever input put it there: a tier heuristic does not get to drop a
+  named reviewer without a word.
 - **`not-requested`** — Tier 2, no cached PASS, and this review request was
   not for us (a human colleague, a team, or not a review-request event). The
   step **fails** with "request a review from `llamenos-auto`". No model call,
@@ -459,12 +460,32 @@ two inputs, by `decideReviewSet` (`ci.ts`):
    prose, so a crypto change gets that review whether or not anyone
    remembered the label.
 
-Labels are a hint and an override, never the only input. Composition is **any
-FAIL fails**, and an UNREADABLE is a FAIL. Once the whole set has PASSED, a
-separate GitHub-hosted job removes the labels it acted on — a self-clearing
-worklist, so the labels left on a PR are the reviews still owed. A FAIL
-clears nothing, deliberately: the label is what makes the next request re-run
-that reviewer.
+Labels are a hint and an override, never the only input. The set is decided
+in BASE code, from a live read of the PR, in both the gate step and the
+review step independently — never handed between them through the workflow
+file, which on a `pull_request` event is the PR's own copy and could
+therefore shrink its own review set. Composition is **any FAIL fails**, and
+an UNREADABLE is a FAIL.
+
+**The findings are posted on the PR.** A separate GitHub-hosted job — the
+only one here with write access — posts each reviewer's full text as a PR
+comment, on a FAIL as well as a PASS, and only *then* removes the
+`-reviewer` labels whose review passed. A comment, never a GitHub *review*:
+an approving review from the fleet is one GitHub counts, which is one
+ruleset edit from being an approval the fleet grants itself. Comments carry
+a marker keyed to `(reviewer, diff hash)`, so re-requesting a review on an
+unchanged diff re-posts nothing.
+
+This was a real gap, not a nicety: two `run-engine` reviews ran on #1117 and
+left `pulls/1117/reviews` and `issues/1117/comments` both empty. Both
+substantive findings existed only inside Actions logs, readable via
+`gh run view --log`, while anyone opening the PR saw a red check with no
+reason on it. Leaving actual reviews is also the premise label removal
+depends on — a worklist that clears with no visible trace is worse than one
+that never clears.
+
+A FAIL clears nothing, deliberately: the label is what makes the next request
+re-run that reviewer.
 
 This replaces #1092's per-specialist design, which gave each specialist its
 own job and its own `fleet/review/<agent>` check: N jobs and N

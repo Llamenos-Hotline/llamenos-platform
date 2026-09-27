@@ -363,36 +363,38 @@ function requiredContextState(onHead: PrCheckContext[], name: string): CheckStat
 }
 
 /**
- * `fleet-review.yml`'s own step names, verbatim (see the file's own
- * comments): "Resolve the base/head SHAs...", "Checkout the PR BASE
- * (trusted)", "Export the PR head as data", "Setup Bun", "Install
- * dependencies (base lockfile, no install scripts)", "Check the base
- * provides the review gate itself", "Decide whether to run the review
- * engine", "Install the non-author review engine", "Authenticate the review
- * engine", "Smoke-test the review engine", "Check the base provides the
- * gate", "Review", "Cache the verdict, if this run produced a fresh PASS".
+ * Which `fleet-review.yml` step failed decides whether an auto-retry could
+ * possibly help. Two steps mean "do not retry", for different reasons:
  *
- * A failure in the step named exactly "Review" is the model's OWN verdict —
- * substantive, and this classifier must never suggest retrying it: a retry
- * of a real FAIL is not what "an engine that could not run" needs, and
- * treating it as infrastructure would let a genuine problem get silently
- * re-rolled instead of surfaced to a human (see `RERUN_REVIEW`'s own
- * doc comment on `classifyPr` below, and the rail in board.test.ts pinning
- * this exact case).
+ *  - **"Review"** — the model's OWN verdict. A retry of a real FAIL is not
+ *    what "an engine that could not run" needs, and treating it as
+ *    infrastructure would let a genuine finding get silently re-rolled
+ *    instead of surfaced to a human.
+ *  - **"Decide whether to run the review engine"** — the gate step, which
+ *    fails on exactly three DECIDED outcomes (`runReviewGate`, cli.ts): a
+ *    cached substantive FAIL for this diff, a review nobody requested of
+ *    `llamenos-auto`, and a review set that could not be resolved. Not one
+ *    of them changes on a retry: the diff is the same, the reviewer request
+ *    is the same, the labels are the same. Classifying these as
+ *    infrastructure produced exactly the churn #1158 exists to stop —
+ *    `RERUN_REVIEW` firing again and again on a PR whose state nothing was
+ *    going to change.
  *
  * Every other step failing — checkout, dependency install, either
- * "base provides..." bootstrap guard, the engine install/auth/smoke-test —
- * is this fleet's OWN infrastructure breaking before the model ever ran, and
- * is exactly what `RERUN_REVIEW` exists to recover from automatically. A
- * step list with no step literally named "Review" present at all (the job
- * failed before reaching it) falls into this branch for the same reason.
+ * "base provides..." bootstrap guard, the engine smoke test — is this
+ * fleet's OWN infrastructure breaking before the model ever ran, and is
+ * exactly what `RERUN_REVIEW` exists to recover from automatically. A step
+ * list with none of the named steps present at all (the job failed before
+ * reaching them) falls into that branch for the same reason.
  */
 export interface WorkflowStep { name: string; conclusion: string | null }
 
+/** Steps whose failure is a DECISION, never a flake — see above. */
+const DECIDED_REVIEW_STEPS: readonly string[] = ['Review', 'Decide whether to run the review engine']
+
 export function classifyReviewFailure(steps: WorkflowStep[]): ReviewFailureKind {
-  const reviewStep = steps.find((s) => s.name === 'Review')
-  if (reviewStep !== undefined && reviewStep.conclusion === 'failure') return 'substantive'
-  return 'infrastructure'
+  const decided = steps.some((s) => DECIDED_REVIEW_STEPS.includes(s.name) && s.conclusion === 'failure')
+  return decided ? 'substantive' : 'infrastructure'
 }
 
 /**

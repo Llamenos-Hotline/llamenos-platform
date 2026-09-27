@@ -64,6 +64,15 @@ export const REVIEW_JOB = 'fleet/review'
  */
 export const GENERAL_REVIEWER = 'general'
 
+/** One reviewer's verdict as the PR will show it — see `publishReport`. */
+export interface ReviewReportEntry {
+  reviewer: string
+  verdict: 'PASS' | 'FAIL' | 'UNREADABLE'
+  /** The reviewer's own text in full, findings included — never just the
+   *  one-line `VERDICT:`, which is the whole defect this exists to fix. */
+  body: string
+}
+
 /**
  * `fleet/review` runs when a review is REQUESTED from this account (#1158).
  * Requesting a review is a real, human-meaningful act that already means
@@ -277,14 +286,19 @@ export interface ReviewCiDeps extends CiDeps {
   prDiff(): Promise<string>
   secondOpinion(input: SecondOpinionInput): Promise<SecondOpinionResult>
   /**
-   * The reviewer PROFILES to run ALONGSIDE the general non-author review —
-   * the review set minus its mandatory member. Decided once by
-   * `decideReviewSet` in the gate step and handed here; re-validated below
-   * against the BASE agent registry before any of them runs, because the
-   * workflow step that carries them is the PR's own copy of the workflow
-   * file.
+   * `decideReviewSet`, wired to a LIVE read of the PR — decided HERE, from
+   * scratch, never handed in.
+   *
+   * An earlier revision of #1158 had the gate step resolve the set once and
+   * pass it to this one through a `FLEET_REVIEW_PROFILES` env var. That was
+   * a fail-open: on a `pull_request` event the workflow file is the PR's
+   * OWN copy, so a PR could set that variable to the empty string and the
+   * crypto reviewer would silently never run — and the resulting
+   * general-only PASS would be recorded as a reusable cache entry for a set
+   * nobody approved. Base code decides what to review, or the decision is
+   * the defendant's to make.
    */
-  profiles: readonly string[]
+  reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
   resolveProfile(name: string): Promise<ReviewerResolution>
   /**
    * `stripReviewerControlFiles` (review.ts) over the export, awaited ONCE
@@ -302,6 +316,22 @@ export interface ReviewCiDeps extends CiDeps {
   stripExport(dir: string): Promise<void>
   /** Runs ONE resolved profile, read-only, against the same export. */
   profileReview(profile: ReviewerProfile, diff: string, changedFiles: readonly string[]): Promise<SecondOpinionResult>
+  /**
+   * Hands every reviewer's FULL text somewhere the PR itself will show it.
+   * Required, not optional, and the reason is a measured failure: two real
+   * reviews ran on #1117 and `pulls/1117/reviews` and
+   * `issues/1117/comments` were both EMPTY — the gate wrote a check run and
+   * a job log and nothing else, so both substantive findings existed only
+   * inside Actions logs and had to be dug out with `gh run view --log`.
+   * Anyone opening the PR saw a red check with no reason on it. A red check
+   * whose reason lives only in a log is not reviewable.
+   *
+   * This job is read-only by design (it runs a model next to the review
+   * key), so it cannot post anything itself: it WRITES the report, and the
+   * separate `fleet-review/publish` job — the only thing here with
+   * `pull-requests: write` — posts it and only then clears the labels.
+   */
+  publishReport(entries: readonly ReviewReportEntry[]): Promise<void>
   /**
    * The cache for a given review-set namespace (`reviewSetTag`). Omitted
    * disables caching outright — every call reviews fresh, exactly like
@@ -547,14 +577,15 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     }
   }
 
-  // Re-validated HERE, against the BASE agent registry, even though the gate
-  // step already resolved the same set: the step that carries `profiles`
-  // into this process is a step in the PR's OWN copy of the workflow file
-  // (a `pull_request` run reads the workflow from the head), so it is an
-  // input, not a fact. Fails CLOSED — a name that does not resolve is a red
-  // check naming the rule it broke, never a review quietly not run.
+  // Decided HERE, in base code, from the PR's live labels and its own
+  // content — never taken from the workflow step that invoked this process
+  // (see `reviewSet`). The gate step decides the same thing separately, to
+  // choose whether to spend a review at all; neither trusts the other.
+  // Fails CLOSED both times.
+  const set = await deps.reviewSet(report.changedFiles)
+  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}` }
   const profiles: ReviewerProfile[] = []
-  for (const name of [...new Set(deps.profiles)].sort()) {
+  for (const name of set.profiles) {
     const resolved = await deps.resolveProfile(name)
     if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}` }
     profiles.push(resolved.profile)
@@ -577,7 +608,8 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
   // a future or test implementation of it could still throw; the fail-safe
   // direction must hold even then.
   const cacheKey: ReviewCacheKey = { pr: deps.ctx.pr, diffHash: diffHash(diff) }
-  const cache = deps.cacheFor?.(reviewSetTag(profiles.map((p) => p.agent)))
+  const exactScope = reviewSetTag(profiles.map((p) => p.agent))
+  const cache = deps.cacheFor?.(exactScope)
   if (cache !== undefined) {
     let cached: CachedVerdict | undefined
     try {
@@ -591,6 +623,9 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
         `review cache hit (${cached.verdict}) for PR ${deps.ctx.pr} ` +
         `(sha256:${cacheKey.diffHash.slice(0, 12)}…) — re-publishing instead of invoking the engine`,
       )
+      // Re-published verdicts still reach the PR: a cached result must read
+      // as a review, not as a bare status (see `publishReport`).
+      await deps.publishReport([{ reviewer: GENERAL_REVIEWER, verdict: cached.verdict, body: cached.text }])
       return { ok: cached.verdict === 'PASS', summary: cached.text }
     }
   }
@@ -675,13 +710,40 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
   // whole record, not just its own reviewer's: the set's composed verdict is
   // not a judgement of the diff if part of it never ran.
   const substantive = results.every((r) => r.verdict !== 'UNREADABLE')
-  if (substantive && cache !== undefined) {
-    try {
-      await cache.record(cacheKey, { verdict: verdict.ok ? 'PASS' : 'FAIL', text: verdict.summary })
-    } catch (e) {
-      deps.log(`review cache record failed (non-fatal — this run's own verdict still stands): ${e instanceof Error ? e.message : String(e)}`)
+  if (substantive && deps.cacheFor !== undefined) {
+    // Recorded under the exact review set AND under the
+    // general-reviewer-only namespace. Both directions are load-bearing,
+    // and both exist because the review set for one diff CHANGES between
+    // runs — this job clears the labels it acted on, and a human can add or
+    // remove one at any time.
+    //
+    //   - A PASS: "every member of a SUPERSET passed" implies "every member
+    //     of any subset passed", and the general reviewer is in every set,
+    //     so this is sound proof for a later, smaller set. Without it the
+    //     very next invocation after a label clear computes a smaller set,
+    //     the namespace shifts, the lookup misses, and a review request
+    //     aimed at somebody else turns an already-green, fully-reviewed PR
+    //     red on `not-requested`.
+    //   - A FAIL: NOT sound in the same way — the failure may have been the
+    //     profile's, and a general-only run might legitimately pass. It is
+    //     recorded anyway, deliberately, because the alternative is worse
+    //     and is a fail-OPEN: a reviewer FAILS on diff D, somebody removes
+    //     the label, the namespace shrinks, the FAIL is orphaned, and D
+    //     goes GREEN with the defect still in it. A substantive FAIL is a
+    //     fact about the DIFF; removing a label does not un-find a defect.
+    //     The cost is a diff that stays red until it is actually changed,
+    //     which is the direction a merge gate is supposed to err in.
+    const scopes: (string | undefined)[] = exactScope === undefined ? [undefined] : [exactScope, undefined]
+    for (const scope of scopes) {
+      try {
+        await deps.cacheFor(scope).record(cacheKey, { verdict: verdict.ok ? 'PASS' : 'FAIL', text: verdict.summary })
+      } catch (e) {
+        deps.log(`review cache record failed (non-fatal — this run's own verdict still stands): ${e instanceof Error ? e.message : String(e)}`)
+      }
     }
   }
+
+  await deps.publishReport(results.map((r) => ({ reviewer: r.name, verdict: r.verdict, body: r.text })))
 
   return verdict
 }
@@ -713,7 +775,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  *    general-reviewer-only PASS from standing in for a set that also
  *    includes a profile that never ran. An UNREADABLE is never cached, so an
  *    infrastructure failure is always retried.
- *  - `low-tier` — no cached PASS, no reviewer label on the PR, and `tierFor`
+ *  - `low-tier` — no cached PASS, no reviewer profile in the set, and `tierFor`
  *    (impact.ts) classifies every changed file as Tier 0 or Tier 1: no
  *    executable content, or instructions/tooling that already earns a
  *    code-owner review on its own. Concludes the job successfully with no
@@ -810,25 +872,21 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // on its own, never wait on someone to request a model review it will
   // never need.
   //
-  // An explicitly LABELLED profile overrides that, though: a label is
-  // somebody deciding this particular diff needs a particular pair of eyes,
-  // and a tier heuristic does not get to overrule it.
-  //
-  // A CONTENT-derived profile deliberately does NOT override it. By path it
-  // could never reach here anyway (every `CRYPTO_REVIEW_PATHS` entry is Tier
-  // 2), but by DESCRIPTION it can: a README that says "HPKE" is still a
-  // README. Tier 0/1 means the diff has no executable content, so there is
-  // nothing for a crypto reviewer to find in it — and firing a model call on
-  // the word "HPKE" in prose is exactly the ceremony-without-impact this
-  // branch exists to avoid. Label it if you disagree about a specific PR.
+  // ANY profile in the set overrides that, whichever input put it there. A
+  // label is somebody deciding this particular diff needs a particular pair
+  // of eyes; a content-derived profile is the PR's own paths or prose
+  // saying the same thing. Neither may be dropped by a tier heuristic
+  // WITHOUT A WORD, which is what a `low-tier` green would be — and the
+  // operator's rule is explicit: a PR that is plainly a crypto change gets
+  // the crypto review whether or not anyone remembered the label.
   const { tier, reasons } = tierFor(changedFiles)
-  if (tier < 2 && set.fromLabels.length > 0) {
+  if (tier < 2 && set.profiles.length > 0) {
     deps.log(
-      `pr=${cacheKey.pr} is tier ${tier}, but ${set.fromLabels.join(', ')} was requested by label — ` +
-      'an explicit request outranks the tier',
+      `pr=${cacheKey.pr} is tier ${tier}, but ${set.profiles.join(', ')} is in its review set — ` +
+      'a named reviewer outranks the tier',
     )
   }
-  if (tier < 2 && set.fromLabels.length === 0) {
+  if (tier < 2 && set.profiles.length === 0) {
     deps.log(`no reviewable content (tier ${tier}) for pr=${cacheKey.pr} — ${reasons.join('; ') || 'no changed files'}`)
     return { kind: 'low-tier', cacheKey, tier, reasons }
   }

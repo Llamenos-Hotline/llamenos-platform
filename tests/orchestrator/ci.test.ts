@@ -308,9 +308,10 @@ describe('fleet/review in CI', () => {
     secondOpinion: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'looks fine\nVERDICT: PASS' })),
     // #1158: the review SET. Empty is the ordinary case — the general
     // non-author review alone, which is mandatory and never listed here.
-    profiles: [],
+    reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
     resolveProfile: vi.fn(async (name: string) => ({ ok: true as const, profile: { agent: name, instructions: `be a ${name}` } })),
     stripExport: vi.fn(async () => {}),
+    publishReport: vi.fn(async () => {}),
     profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'nothing in my scope\nVERDICT: PASS' })),
     ...over,
   })
@@ -459,8 +460,10 @@ describe('the commit under judgement is data, never a checkout', () => {
       ctx: ctx(), apiKey: 'a-key', lanes: async () => [lane()], verify: vi.fn(async () => passing),
       pathExists: hasGitInHead, log: () => {},
       prDiff: vi.fn(async () => ''), secondOpinion,
-      profiles: [], resolveProfile: async (n) => ({ ok: true, profile: { agent: n, instructions: 'x' } }),
+      reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
+      resolveProfile: async (n) => ({ ok: true, profile: { agent: n, instructions: 'x' } }),
       stripExport: async () => {},
+      publishReport: async () => {},
       profileReview: async () => ({ verdict: 'PASS', text: 'VERDICT: PASS' }),
     })
     expect(v.ok).toBe(false)
@@ -536,15 +539,16 @@ describe('fleet/review runs the whole review set in one job', () => {
     log: () => {},
     prDiff: vi.fn(async () => 'diff --git a/x b/x'),
     secondOpinion: vi.fn(async () => PASS('general')),
-    profiles: [],
+    reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
     resolveProfile: vi.fn(async (name: string) => ({ ok: true as const, profile: { agent: name, instructions: `be a ${name}` } })),
     stripExport: vi.fn(async () => {}),
+    publishReport: vi.fn(async () => {}),
     profileReview: vi.fn(async () => PASS(CRYPTO)),
     ...over,
   })
 
   it('runs the general review and every profile, in one call, and passes when all pass', async () => {
-    const d = deps({ profiles: [CRYPTO, 'a-reviewer'] })
+    const d = deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO, 'a-reviewer'], fromLabels: [], reasons: [] }) })
     const v = await runReviewCi(d)
     expect(v.ok).toBe(true)
     expect(d.secondOpinion).toHaveBeenCalledTimes(1)
@@ -563,7 +567,7 @@ describe('fleet/review runs the whole review set in one job', () => {
       live -= 1
       return PASS('x')
     }
-    await runReviewCi(deps({ profiles: [CRYPTO, 'a-reviewer'], secondOpinion: hold, profileReview: hold }))
+    await runReviewCi(deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO, 'a-reviewer'], fromLabels: [], reasons: [] }), secondOpinion: hold, profileReview: hold }))
     expect(peak).toBe(3)
   })
 
@@ -574,7 +578,7 @@ describe('fleet/review runs the whole review set in one job', () => {
   it('strips the export exactly once, before any reviewer starts reading it', async () => {
     const order: string[] = []
     const d = deps({
-      profiles: [CRYPTO],
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       stripExport: vi.fn(async () => { order.push('strip') }),
       secondOpinion: async () => { order.push('general'); return PASS('general') },
       profileReview: async () => { order.push('profile'); return PASS(CRYPTO) },
@@ -587,7 +591,7 @@ describe('fleet/review runs the whole review set in one job', () => {
 
   it('fails the check, reviewing nothing, when the export cannot be stripped', async () => {
     const d = deps({
-      profiles: [CRYPTO],
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       stripExport: async () => { throw new Error('EACCES') },
     })
     const v = await runReviewCi(d)
@@ -599,7 +603,7 @@ describe('fleet/review runs the whole review set in one job', () => {
 
   it('ANY FAIL FAILS — a profile FAIL fails the check even when the general review passed', async () => {
     const v = await runReviewCi(deps({
-      profiles: [CRYPTO],
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       profileReview: async () => ({ verdict: 'FAIL', text: 'raw string label\nVERDICT: FAIL — raw crypto context' }),
     }))
     expect(v.ok).toBe(false)
@@ -609,7 +613,7 @@ describe('fleet/review runs the whole review set in one job', () => {
 
   it('a profile that could not be RUN fails, named as unavailable rather than as a finding', async () => {
     const v = await runReviewCi(deps({
-      profiles: [CRYPTO],
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       profileReview: async () => ({ verdict: 'UNREADABLE', text: 'engine died', failureKind: 'engine-unavailable' }),
     }))
     expect(v.ok).toBe(false)
@@ -618,7 +622,7 @@ describe('fleet/review runs the whole review set in one job', () => {
 
   it('a profile that THROWS fails only itself — the other verdicts survive', async () => {
     const v = await runReviewCi(deps({
-      profiles: [CRYPTO],
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       profileReview: async () => { throw new Error('spawn ENOENT') },
     }))
     expect(v.ok).toBe(false)
@@ -626,9 +630,31 @@ describe('fleet/review runs the whole review set in one job', () => {
     expect(v.summary).toContain(`${GENERAL_REVIEWER}: PASS`)
   })
 
+  // The fail-open an earlier revision of #1158 shipped: the gate step
+  // resolved the set and handed it to this one through an env var, but on a
+  // `pull_request` event the workflow file is the PR's OWN copy — so a PR
+  // could empty that variable and its crypto review would silently never
+  // run, leaving a reusable general-only PASS for a set nobody approved.
+  it('decides the review set ITSELF, from the changed files, never from what invoked it', async () => {
+    const d = deps({
+      reviewSet: vi.fn(async () => ({ ok: true as const, profiles: [CRYPTO], fromLabels: [], reasons: [] })),
+    })
+    await runReviewCi(d)
+    expect(d.reviewSet).toHaveBeenCalledWith(passing.changedFiles)
+    expect(d.profileReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails CLOSED, reviewing nothing, when it cannot decide its own review set', async () => {
+    const d = deps({ reviewSet: async () => ({ ok: false, reason: 'the PR\'s labels could not be read' }) })
+    const v = await runReviewCi(d)
+    expect(v.ok).toBe(false)
+    expect(v.summary).toContain('review set refused')
+    expect(d.secondOpinion).not.toHaveBeenCalled()
+  })
+
   it('fails CLOSED, before any review runs, when a profile does not resolve in the BASE registry', async () => {
     const d = deps({
-      profiles: ['bogus-reviewer'],
+      reviewSet: async () => ({ ok: true, profiles: ['bogus-reviewer'], fromLabels: [], reasons: [] }),
       resolveProfile: async () => ({ ok: false, reason: 'no agent definition "bogus-reviewer.md"' }),
     })
     const v = await runReviewCi(d)
@@ -638,8 +664,37 @@ describe('fleet/review runs the whole review set in one job', () => {
     expect(d.profileReview).not.toHaveBeenCalled()
   })
 
+  // Every reviewer's FULL text must reach the PR, not just the one-line
+  // verdict — two real reviews on #1117 left the PR with a red check and no
+  // stated reason, their findings readable only via `gh run view --log`.
+  it('reports every reviewer\'s full text for publishing, on a FAIL as well as a PASS', async () => {
+    const d = deps({
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
+      secondOpinion: async () => ({ verdict: 'PASS', text: 'nothing to report\nVERDICT: PASS' }),
+      profileReview: async () => ({ verdict: 'FAIL', text: 'the HKDF info is a raw string\nVERDICT: FAIL — raw label' }),
+    })
+    await runReviewCi(d)
+    expect(d.publishReport).toHaveBeenCalledTimes(1)
+    const entries = (d.publishReport as unknown as { mock: { calls: [readonly { reviewer: string; verdict: string; body: string }[]][] } }).mock.calls[0]?.[0] ?? []
+    expect(entries.map((e) => e.reviewer)).toEqual([GENERAL_REVIEWER, CRYPTO])
+    expect(entries.map((e) => e.verdict)).toEqual(['PASS', 'FAIL'])
+    expect(entries[1]?.body).toContain('the HKDF info is a raw string')
+  })
+
+  it('reports a re-published cached verdict too, so a cache hit still reads as a review', async () => {
+    const d = deps({
+      cacheFor: () => ({
+        async lookup() { return { verdict: 'PASS' as const, text: 'VERDICT: PASS (cached)\n\nwhy it passed' } },
+        async record() {},
+      }),
+    })
+    await runReviewCi(d)
+    const entries = (d.publishReport as unknown as { mock: { calls: [readonly { body: string }[]][] } }).mock.calls[0]?.[0] ?? []
+    expect(entries[0]?.body).toContain('why it passed')
+  })
+
   it('hands each profile its own resolved instructions, the diff and the export path', async () => {
-    const d = deps({ profiles: [CRYPTO] })
+    const d = deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }) })
     await runReviewCi(d)
     expect(d.profileReview).toHaveBeenCalledWith(
       { agent: CRYPTO, instructions: `be a ${CRYPTO}` },
@@ -656,25 +711,88 @@ describe('fleet/review runs the whole review set in one job', () => {
   // The fail-open this replaces: without namespacing, a PASS recorded by the
   // general reviewer alone would be found by a later run whose set also
   // includes a profile that never ran, and re-published as if it had.
-  it('records and looks up under a namespace that depends on the review set', async () => {
+  it('looks the cache up under the EXACT review set\'s namespace', async () => {
     const seen: (string | undefined)[] = []
     const cache = memCache()
-    await runReviewCi(deps({ profiles: [], cacheFor: (scope) => { seen.push(scope); return cache } }))
-    await runReviewCi(deps({ profiles: [CRYPTO], cacheFor: (scope) => { seen.push(scope); return cache } }))
+    const spy = (scope: string | undefined): ReviewCache => { seen.push(scope); return cache }
+    await runReviewCi(deps({ reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }), cacheFor: spy }))
     expect(seen[0]).toBeUndefined()
-    expect(seen[1]).toBe(reviewSetTag([CRYPTO]))
-    expect(cacheArtifactName('42', diffHash('d'), seen[0]))
-      .not.toBe(cacheArtifactName('42', diffHash('d'), seen[1]))
+    seen.length = 0
+    await runReviewCi(deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }), cacheFor: spy }))
+    expect(seen[0]).toBe(reviewSetTag([CRYPTO]))
+    expect(cacheArtifactName('42', diffHash('d'), undefined))
+      .not.toBe(cacheArtifactName('42', diffHash('d'), reviewSetTag([CRYPTO])))
+  })
+
+  // The label-clearing step makes the review set SHRINK between runs, so a
+  // full-set PASS must also satisfy the smaller set it leaves behind —
+  // otherwise the next review request (aimed at anyone) turns an
+  // already-green, fully-reviewed PR red on `not-requested`.
+  it('records a PASS under the exact set AND the general-only namespace, so a later smaller set still hits', async () => {
+    const recorded: (string | undefined)[] = []
+    const caches = new Map<string, ReviewCache>()
+    const cacheFor = (scope: string | undefined): ReviewCache => {
+      const key = scope ?? '(general)'
+      if (!caches.has(key)) {
+        const store = new Map<string, CachedVerdict>()
+        caches.set(key, {
+          async lookup(k) { return store.get(`${k.pr}:${k.diffHash}`) },
+          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.diffHash}`, v) },
+        })
+      }
+      return caches.get(key) as ReviewCache
+    }
+    await runReviewCi(deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [CRYPTO], reasons: [] }), cacheFor }))
+    expect(recorded).toEqual([reviewSetTag([CRYPTO]), undefined])
+
+    // Now the label is gone, so the set is general-only — and it hits.
+    const secondOpinion = vi.fn(async () => PASS('general'))
+    const v = await runReviewCi(deps({
+      reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }), cacheFor, secondOpinion,
+    }))
+    expect(v.ok).toBe(true)
+    expect(secondOpinion, 'the smaller set must reuse the full set\'s PASS').not.toHaveBeenCalled()
+  })
+
+  // The other direction, and it is fail-CLOSED on purpose: a reviewer found
+  // a defect in this diff, and removing its label does not un-find it.
+  it('records a FAIL under both namespaces too, so delabelling cannot orphan it into a green', async () => {
+    const recorded: (string | undefined)[] = []
+    const caches = new Map<string, ReviewCache>()
+    const cacheFor = (scope: string | undefined): ReviewCache => {
+      const key = scope ?? '(general)'
+      if (!caches.has(key)) {
+        const store = new Map<string, CachedVerdict>()
+        caches.set(key, {
+          async lookup(k) { return store.get(`${k.pr}:${k.diffHash}`) },
+          async record(k, v) { recorded.push(scope); store.set(`${k.pr}:${k.diffHash}`, v) },
+        })
+      }
+      return caches.get(key) as ReviewCache
+    }
+    await runReviewCi(deps({
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [CRYPTO], reasons: [] }),
+      cacheFor,
+      profileReview: async () => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — raw crypto context' }),
+    }))
+    expect(recorded).toEqual([reviewSetTag([CRYPTO]), undefined])
+
+    const secondOpinion = vi.fn(async () => PASS('general'))
+    const v = await runReviewCi(deps({
+      reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }), cacheFor, secondOpinion,
+    }))
+    expect(v.ok, 'removing the label must not turn a failed diff green').toBe(false)
+    expect(secondOpinion).not.toHaveBeenCalled()
   })
 
   it('records the set\'s composed FAIL, never a PASS, when one member failed', async () => {
     const recorded: CachedVerdict[] = []
     const cache: ReviewCache = { async lookup() { return undefined }, async record(_k, v) { recorded.push(v) } }
     await runReviewCi(deps({
-      profiles: [CRYPTO], cacheFor: () => cache,
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }), cacheFor: () => cache,
       profileReview: async () => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — no' }),
     }))
-    expect(recorded.map((r) => r.verdict)).toEqual(['FAIL'])
+    expect(new Set(recorded.map((r) => r.verdict))).toEqual(new Set(['FAIL']))
     expect(recorded[0]?.text).toContain('VERDICT: FAIL — no')
   })
 })
@@ -712,7 +830,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     expect(o.kind).toBe('run-engine')
   })
 
-  it('still takes the low-tier shortcut when only the PR\'s PROSE implied a profile — a README saying "HPKE" is still a README', async () => {
+  it('does NOT take the low-tier shortcut when the PR\'s own CONTENT put a profile in the set either', async () => {
     const o = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
@@ -720,7 +838,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
       log: () => {},
     })
-    expect(o.kind).toBe('low-tier')
+    expect(o.kind).toBe('run-engine')
   })
 
   it('still takes the low-tier shortcut for a docs-only diff nobody labelled', async () => {

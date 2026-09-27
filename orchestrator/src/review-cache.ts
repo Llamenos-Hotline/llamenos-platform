@@ -111,20 +111,48 @@ interface ArtifactListResponse {
   artifacts: { id: number; expired: boolean; workflow_run?: { id: number } | null }[]
 }
 
-/** The one unexpired artifact under `name`, or `undefined` — for a genuine
- *  miss AND for a lookup that could not be answered, which callers must not
- *  tell apart (see `artifactReviewCache`). */
+/**
+ * The ONLY workflow whose artifacts may be believed. An artifact's
+ * EXISTENCE is the whole PASS verdict, and any workflow run in this
+ * repository can create an artifact with any name it likes — so without
+ * this check a same-repo PR could add its own `pull_request`-triggered
+ * workflow that uploads an empty artifact named
+ * `fleet-review-pass-pr<N>-<sha256(diff)[0:24]>` and the next review
+ * request would find it, conclude `cache-hit`, and go green with no review
+ * ever run. The name is not a capability; the producing workflow is.
+ */
+const CACHE_WRITER_WORKFLOW = '.github/workflows/fleet-review.yml'
+
+/** The one unexpired artifact under `name` that `fleet-review.yml` itself
+ *  produced, or `undefined` — for a genuine miss, for one written by
+ *  anything else, AND for a lookup that could not be answered, which
+ *  callers must not tell apart (see `artifactReviewCache`). */
 async function findArtifact(
   name: string, log: (msg: string) => void,
-): Promise<{ id: number; runId: number | undefined } | undefined> {
+): Promise<{ id: number; runId: number } | undefined> {
   const data = await ghJson<ArtifactListResponse>(
-    ['api', `repos/${REPO}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=1`],
+    // `per_page=5`, not 1: the most recent artifact under this name may be
+    // expired, or (see above) forged by another workflow, and neither may
+    // mask a real one behind it.
+    ['api', `repos/${REPO}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=5`],
     30_000,
     (detail) => log(`review cache lookup failed for ${name} — running the engine (fail safe): ${detail}`),
   )
-  const hit = data?.artifacts.find((a) => !a.expired)
-  if (hit === undefined) return undefined
-  return { id: hit.id, runId: hit.workflow_run?.id }
+  for (const candidate of data?.artifacts ?? []) {
+    const runId = candidate.workflow_run?.id
+    if (candidate.expired || runId === undefined) continue
+    const run = await ghJson<{ path?: string }>(
+      ['api', `repos/${REPO}/actions/runs/${runId}`],
+      30_000,
+      (detail) => log(`could not read run ${runId} behind cache artifact ${name} — ignoring it (fail safe): ${detail}`),
+    )
+    if (run?.path !== CACHE_WRITER_WORKFLOW) {
+      log(`ignoring cache artifact ${name}: run ${runId} came from ${run?.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOW}`)
+      continue
+    }
+    return { id: candidate.id, runId }
+  }
+  return undefined
 }
 
 /**
@@ -142,9 +170,8 @@ async function findArtifact(
  * process could not actually read.
  */
 async function recordedText(
-  artifact: { id: number; runId: number | undefined }, name: string, log: (msg: string) => void,
+  artifact: { id: number; runId: number }, name: string, log: (msg: string) => void,
 ): Promise<string | undefined> {
-  if (artifact.runId === undefined) return undefined
   let dir: string | undefined
   try {
     dir = await mkdtemp(join(tmpdir(), 'fleet-review-cache-'))

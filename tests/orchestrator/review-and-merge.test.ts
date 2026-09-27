@@ -148,6 +148,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     postCheckRun: vi.fn(async () => {}),
     currentHeadSha: vi.fn(async () => 'head111'),
     requiredChecks: vi.fn(async () => requiredChecks()),
+    reviewSet: vi.fn(async () => ({ ok: true as const, profiles: [], fromLabels: [], reasons: [] })),
     merge: vi.fn(async () => {}),
     log: vi.fn(),
     ...over,
@@ -324,5 +325,44 @@ describe('evaluateMergeReadiness: no second specialist tree (#1158)', () => {
     expect(evaluateMergeReadiness({
       currentHeadSha: 'h', reviewedHeadSha: 'h', requiredChecks: requiredChecks(),
     })).toEqual({ ready: true })
+  })
+})
+
+// #1158 — this command is an INDEPENDENT producer of the required
+// `fleet/review` check and runs exactly ONE reviewer. The per-specialist
+// contexts that used to hold it back are gone, so nothing else would stop
+// it posting a GREEN `fleet/review` on a crypto PR after a general-only
+// review. It refuses instead.
+describe('runReviewAndMerge refuses a PR whose review set it does not actually run', () => {
+  it('posts nothing and merges nothing when the set needs a reviewer profile', async () => {
+    const deps = baseDeps({
+      reviewSet: vi.fn(async () => ({
+        ok: true as const, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [],
+      })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('crypto-security-reviewer')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('llamenos-auto')
+    expect(deps.invokeReviewer).not.toHaveBeenCalled()
+    expect(deps.postCheckRun, 'it must not post a fleet/review it did not earn').not.toHaveBeenCalled()
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the review set cannot be worked out at all', async () => {
+    const deps = baseDeps({
+      reviewSet: vi.fn(async () => ({ ok: false as const, reason: 'the PR\'s labels could not be read' })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('still reviews and merges a PR whose set is the general reviewer alone', async () => {
+    const deps = baseDeps()
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('merged')
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
   })
 })

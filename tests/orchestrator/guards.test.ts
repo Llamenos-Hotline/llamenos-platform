@@ -913,11 +913,29 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     expect(block).not.toMatch(/echo "requested=/)
   })
 
-  // The review set must reach `review-ci` from the gate step, not be
-  // recomputed there from a second source that could disagree with it.
-  it('the gate step hands its resolved review set to the Review step', () => {
+  // The review set must NOT reach `review-ci` from this file. On a
+  // `pull_request` event the workflow is the PR's own copy, so a set passed
+  // in through `env:` is a value the defendant chose: a PR could empty it
+  // and its crypto review would silently never run, leaving a reusable
+  // general-only PASS for a set nobody approved. Base code decides it
+  // (`runReviewCi` -> `decideReviewSet`), and this rail pins that the
+  // channel for overriding it does not exist.
+  it('never passes the review set into review-ci — base code decides it, not this file', () => {
+    expect(fleetReviewYaml()).not.toContain('FLEET_REVIEW_PROFILES')
+  })
+
+  // Every reviewing step is opt-in on `outcome == 'run-engine'`, which makes
+  // GREEN this job's default. This is the step that asserts the opposite.
+  it('asserts a review actually ran when the gate said to — green is never the default', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
-    expect(block).toContain('FLEET_REVIEW_PROFILES: ${{ steps.gate.outputs.profiles }}')
+    const assertIdx = block.indexOf('- name: Assert a review actually ran when the gate said to')
+    expect(assertIdx, 'the assertion step is missing').toBeGreaterThan(-1)
+    const assertBlock = block.slice(assertIdx)
+    expect(assertBlock).toContain('gate-outcome-missing')
+    expect(assertBlock).toContain('review-did-not-run')
+    // It must run even when an earlier step failed, or it could be skipped
+    // in exactly the case it exists to catch.
+    expect(stepIf(block, 'Assert a review actually ran when the gate said to')).toContain('always()')
   })
 
   // The gate step is what used to be the job-level `if:` (see the rail
@@ -1454,9 +1472,10 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     log: () => {},
     prDiff: vi.fn(async () => 'diff --git a/x b/x\n+hello\n'),
     secondOpinion: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'looks fine\nVERDICT: PASS' })),
-    profiles: [],
+    reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
     resolveProfile: async (name: string) => ({ ok: true as const, profile: { agent: name, instructions: `be a ${name}` } }),
     stripExport: async () => {},
+    publishReport: async () => {},
     profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'VERDICT: PASS' })),
     ...over,
   })
@@ -1548,7 +1567,7 @@ describe('rail: fleet/review reviews exactly once per diff, never twice on an id
     const cache = fakeCache()
     const v = await runReviewCi(deps({
       cacheFor: () => cache,
-      profiles: ['crypto-security-reviewer'],
+      reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
       secondOpinion: async () => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — real finding' }),
       profileReview: async () => ({ verdict: 'UNREADABLE', text: 'engine died', failureKind: 'engine-unavailable' }),
     }))

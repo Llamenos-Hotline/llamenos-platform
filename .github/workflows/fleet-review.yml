@@ -121,8 +121,11 @@ on:
   # Manual escape hatch only — local debugging, or forcing a re-review after
   # a provider-variable change (see "Switching the review engine provider" in
   # docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md).
-  # Never the primary path: see the file header above for why a
-  # workflow_dispatch run cannot satisfy a PR's required context on its own.
+  # It is write-access-gated, and it CAN satisfy the required context: a
+  # dispatch run's check attaches to `github.sha`, which for
+  # `--ref <branch>` is the PR's head (see the ctx step's own comment).
+  # Never the primary path all the same — it takes an operator typing a PR
+  # number, so nothing routine should depend on it.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -522,6 +525,9 @@ jobs:
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
           FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
           FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
+          # A re-published cached verdict is written here too, so a cache
+          # hit still reads as a review on the PR rather than a bare status.
+          FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
           GH_TOKEN: ${{ github.token }}
         run: bun orchestrator/src/cli.ts review-gate
 
@@ -772,13 +778,12 @@ jobs:
           FLEET_CI_HEAD_DIR: ${{ runner.temp }}/head
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
-          # The review set the gate step decided — profile names only; the
-          # general non-author review is mandatory and never listed. Every
-          # name is re-resolved against the BASE agent registry inside
-          # `runReviewCi` before it runs anything (this file is the PR's own
-          # copy, so a step in it is an input, not a fact), and the whole set
-          # runs concurrently in this one step.
-          FLEET_REVIEW_PROFILES: ${{ steps.gate.outputs.profiles }}
+          # Where every reviewer's FULL text is written for the publish
+          # job to post on the PR. The review set is NOT passed in: base
+          # code decides it from a live read of the PR (`runReviewCi`), so
+          # this file — which on a `pull_request` event is the PR's own
+          # copy — cannot shrink it.
+          FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
           # Read-only lookup of a prior PASS for this exact diff AND review
           # set — see `review-cache.ts`. `GH_TOKEN` is what lets that lookup
           # call `gh api`; `FLEET_REVIEW_CACHE_DIR` is where a FRESH pass
@@ -787,6 +792,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FLEET_REVIEW_CACHE_DIR: ${{ runner.temp }}/review-cache
         run: bun orchestrator/src/cli.ts review-ci
+
+      # Invariant 5 again, at the STEP level this time. Every reviewing step
+      # above is opt-in (`if: ... == 'run-engine'`), which makes GREEN this
+      # job's default: anything that leaves `outcome` unset or wrong skips
+      # all of them and the job concludes SUCCESS with no review. This step
+      # asserts the opposite — that a run which decided to review actually
+      # did. `runReviewGate` (cli.ts) refuses on the same condition from its
+      # own side; this is the half that cannot be bypassed by the CLI
+      # failing to write its output at all.
+      - name: Assert a review actually ran when the gate said to
+        if: always() && steps.gate.conclusion == 'success'
+        env:
+          OUTCOME: ${{ steps.gate.outputs.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "$OUTCOME" ]; then
+            echo "::error::fleet/review FAILED: gate-outcome-missing — the gate step succeeded but wrote no outcome, so every reviewing step was skipped; refusing to conclude green with no review"
+            exit 1
+          fi
+          if [ "$OUTCOME" = "run-engine" ] && [ "$REVIEW_OUTCOME" != "success" ]; then
+            echo "::error::fleet/review FAILED: review-did-not-run — the gate decided to review (outcome=$OUTCOME) but the Review step reported '$REVIEW_OUTCOME'"
+            exit 1
+          fi
+          echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME"
+
+      # Every reviewer's FULL text, for `fleet-review/publish` to post on
+      # the PR. `if: always()` because a FAIL is exactly the case that most
+      # needs its reasoning on the PR — two real reviews ran on #1117 and
+      # left `pulls/1117/reviews` and `issues/1117/comments` both empty,
+      # with the findings readable only via `gh run view --log`.
+      - name: Upload the review report for publishing
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-report
+          retention-days: 7
+          if-no-files-found: ignore
 
       # `if: always()` is load-bearing, not defensive: the review step exits
       # non-zero on a FAIL, and a substantive FAIL is exactly what #1158
@@ -812,40 +856,53 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # The self-clearing worklist (#1158).
+  # Publishing the reviews, then clearing the worklist (#1158).
   # ---------------------------------------------------------------------------
-  # A `-reviewer` label is a request. This job removes it once that review
-  # has actually PASSED, so the labels still on a PR are exactly the reviews
-  # still owed — no cached status to drift, and the PR shows what is
-  # outstanding without anyone reading a check.
+  # `fleet/review` used to write a check run and a job log and nothing else.
+  # Two real reviews ran on #1117 and left `pulls/1117/reviews` and
+  # `issues/1117/comments` both EMPTY: both substantive findings existed only
+  # inside Actions logs and had to be dug out with `gh run view --log`, while
+  # anyone opening the PR saw a red check with no reason on it. A red check
+  # whose reason lives only in a log is not reviewable.
   #
-  # A FAIL clears NOTHING, deliberately: leaving the label on is what makes
-  # the next review request re-run that reviewer. Clearing on a FAIL would be
-  # a fail-open — the worklist would forget a review that found a problem.
-  # `clear_labels` is non-empty only on the `run-engine` path, so a cache
-  # hit, a low-tier pass and every failure all clear nothing by construction.
+  # So this job posts each reviewer's full text as a PR COMMENT — never a
+  # GitHub REVIEW. An approving review from the fleet is a review GitHub
+  # COUNTS, one ruleset edit away from being an approval the fleet grants
+  # itself; a comment records the same text in the same thread and can never
+  # be that. (Same reasoning as `postReview`'s doc comment in review.ts.)
+  #
+  # THEN, and only then, it removes the `-reviewer` labels whose review
+  # passed — so the worklist never clears without a visible trace. What is
+  # still labelled on a PR is what is still owed.
+  #
+  # A FAIL posts and clears NOTHING, deliberately: leaving the label on is
+  # what makes the next review request re-run that reviewer. Clearing on a
+  # FAIL would be a fail-open — the worklist would forget a review that
+  # found a problem.
   #
   # A SEPARATE, GitHub-hosted job on purpose. It is the only thing in this
   # file with write access; it checks out nothing, installs nothing and runs
-  # no repository code at all — two `gh` calls against the PR number from the
-  # event payload. Keeping it out of `fleet-review` is what lets that job,
-  # the one that runs a model next to the review key, stay read-only.
+  # no repository code at all. Keeping it out of `fleet-review` is what lets
+  # that job — the one that runs a model next to the operator's logged-in
+  # `claude` session — stay read-only.
   #
   # This job's name is NOT a required context and must never become one: it
   # runs only when `fleet-review` did, so requiring it would block every PR
-  # whose review was never requested. Its result never affects the gate —
+  # whose review was never requested. Its result cannot affect the gate —
   # `fleet/review` has already concluded by the time this starts.
-  clear-reviewer-labels:
-    name: fleet-review/clear-labels
+  publish-reviews:
+    name: fleet-review/publish
     needs: [fleet-review]
     # A job-level `if:` is safe HERE and only here, because this job's name
     # is not a required context: a skipped NON-required job satisfies
     # nothing. Never copy this into `fleet-review` — see invariant 1.
-    if: needs.fleet-review.result == 'success' && needs.fleet-review.outputs.clear_labels != ''
+    # Runs on a FAIL too: that is the case whose reasoning the PR most needs.
+    if: always() && (needs.fleet-review.result == 'success' || needs.fleet-review.result == 'failure')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      pull-requests: write
+      pull-requests: write   # post the comments, remove the labels
+      actions: read          # download this run's own review report
     steps:
       - name: Refuse to run on a fork PR
         env:
@@ -855,41 +912,91 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
-            echo "::error::fleet-review/clear-labels FAILED: fork-pr-guard — head repo '$HEAD_REPO' != '$THIS_REPO'"
+            echo "::error::fleet-review/publish FAILED: fork-pr-guard — head repo '$HEAD_REPO' != '$THIS_REPO'"
             exit 1
           fi
 
-      # The labels reach this script through `env:`, never through a
-      # `${{ }}` interpolation into the script text — so no label value is
-      # ever parsed as shell. They were already constrained to
-      # `[a-z0-9-]+-reviewer` by `resolveReviewerLabel` (specialist.ts),
-      # which resolved every one of them against the BASE agent registry
-      # before the review ran; this loop re-checks the grammar anyway, and
-      # refuses on anything else, rather than trusting a value that crossed
-      # a job boundary. Only after that check is `$label` used in a URL
-      # path, quoted.
-      - name: Remove the reviewer labels whose review passed
+      # Every value below reaches the script through `env:`, never a `${{ }}`
+      # interpolation into the script text, so nothing a PR controls is ever
+      # parsed as shell. `jq --raw-output` reads the report files; the bodies
+      # are written to disk and passed with `--body-file`, never on a
+      # command line.
+      - name: Post each reviewer's findings on the PR, then clear the labels it passed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
           PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event.inputs.pr_number }}
+          REVIEW_RESULT: ${{ needs.fleet-review.result }}
           CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}
         run: |
           set -euo pipefail
           if [[ ! "$PR" =~ ^[0-9]+$ ]]; then
-            echo "::error::no numeric PR number to clear labels on (got '$PR')"
+            echo "::error::fleet-review/publish FAILED: no numeric PR number (got '$PR')"
             exit 1
+          fi
+
+          dir="$RUNNER_TEMP/review-report"
+          mkdir -p "$dir"
+          # No report is a legitimate state (a `not-requested` or
+          # `review-set-unresolved` run reviews nothing), so a missing
+          # artifact is not an error — but a report that EXISTS and cannot be
+          # read is, because that is a review silently not reaching the PR.
+          if gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$dir" 2>/dev/null; then
+            echo "downloaded $ARTIFACT"
+          else
+            echo "no review report in this run — nothing to post"
+          fi
+
+          # The markers already on the PR, so a re-request on an UNCHANGED
+          # diff re-posts nothing. Without this, every rebase-and-re-request
+          # would pile another copy of the same review onto the thread —
+          # the churn this issue exists to remove.
+          gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].body' > "$RUNNER_TEMP/existing.txt" || : > "$RUNNER_TEMP/existing.txt"
+
+          posted=0
+          shopt -s nullglob
+          for f in "$dir"/*.json; do
+            reviewer="$(jq -r '.reviewer' "$f")"
+            verdict="$(jq -r '.verdict' "$f")"
+            marker="$(jq -r '.marker' "$f")"
+            if [ -z "$marker" ] || [ "$marker" = "null" ]; then
+              echo "::error::report entry $f has no marker — refusing to post an untrackable comment"
+              exit 1
+            fi
+            if grep -qF -- "$marker" "$RUNNER_TEMP/existing.txt"; then
+              echo "already posted: $reviewer ($verdict)"
+              continue
+            fi
+            {
+              printf '%s\n\n' "$marker"
+              printf '### `fleet/review` — %s: **%s**\n\n' "$reviewer" "$verdict"
+              jq -r '.body' "$f"
+            } > "$RUNNER_TEMP/comment.md"
+            gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+            echo "posted: $reviewer ($verdict)"
+            posted=$((posted + 1))
+          done
+          echo "posted $posted comment(s)"
+
+          # Only AFTER the reviews are on the PR, and only on a PASS.
+          if [ "$REVIEW_RESULT" != "success" ] || [ -z "$CLEAR_LABELS" ]; then
+            echo "no labels to clear (review result=$REVIEW_RESULT)"
+            exit 0
           fi
           IFS=',' read -r -a labels <<< "$CLEAR_LABELS"
           for label in "${labels[@]}"; do
             [ -n "$label" ] || continue
+            # Re-checked here rather than trusting a value that crossed a job
+            # boundary, even though `resolveReviewerLabel` (specialist.ts)
+            # already matched each one against the BASE agent registry.
             if [[ ! "$label" =~ ^[a-z0-9]+(-[a-z0-9]+)*-reviewer$ ]]; then
               echo "::error::refusing to act on '$label' — not a well-formed reviewer label"
               exit 1
             fi
-            # `gh api ... -X DELETE` rather than `gh pr edit --remove-label`:
-            # it is one call per label, so one label already gone (a human
-            # removed it mid-run) cannot take the rest of the loop with it.
+            # One call per label, so one label already gone (a human removed
+            # it mid-run) cannot take the rest of the loop with it.
             if gh api -X DELETE "repos/$REPO/issues/$PR/labels/$label" --silent 2>/dev/null; then
               echo "cleared '$label' — its review passed on this diff"
             else

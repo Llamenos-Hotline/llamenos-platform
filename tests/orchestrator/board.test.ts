@@ -144,6 +144,25 @@ describe('classifyReviewFailure', () => {
     expect(classifyReviewFailure([{ name: 'Checkout the PR BASE (trusted)', conclusion: 'failure' }])).toBe('infrastructure')
   })
 
+  // #1158: the gate step FAILS on three DECIDED outcomes — a cached
+  // substantive FAIL for this diff, a review nobody requested of
+  // llamenos-auto, and an unresolvable review set. None of them changes on
+  // a retry, so classifying them as infrastructure produced exactly the
+  // RERUN_REVIEW churn this issue exists to stop.
+  it('is substantive when the GATE step failed — its outcomes are decisions, not flakes', () => {
+    expect(classifyReviewFailure([
+      { name: 'Checkout the PR BASE (trusted)', conclusion: 'success' },
+      { name: 'Decide whether to run the review engine', conclusion: 'failure' },
+    ])).toBe('substantive')
+  })
+
+  it('is still infrastructure when the gate SUCCEEDED and the engine smoke test broke', () => {
+    expect(classifyReviewFailure([
+      { name: 'Decide whether to run the review engine', conclusion: 'success' },
+      { name: 'Smoke-test the review engine', conclusion: 'failure' },
+    ])).toBe('infrastructure')
+  })
+
   // Mutation rail (mandatory, per the brief): treating every review failure
   // as infrastructure must be distinguishable from the real function — this
   // pins the one input where they disagree.

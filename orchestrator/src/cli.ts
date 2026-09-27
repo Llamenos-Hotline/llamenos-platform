@@ -19,14 +19,14 @@ import {
   HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
-import { artifactReviewCache } from './review-cache.js'
+import { artifactReviewCache, diffHash } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet, reviewIsRequested,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
-  type CiContext, type CiVerdict,
+  type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
 import {
   settle as settleWorktree,
@@ -1316,11 +1316,22 @@ async function runReviewGate(): Promise<number> {
     }),
     log: ciLog,
   })
+  // Every later step in the workflow is gated on `outcome == 'run-engine'`,
+  // so an outcome that never reaches `$GITHUB_OUTPUT` makes all of them
+  // skip and the job conclude GREEN with no review — invariant 5's exact
+  // shape, moved from the job level to the step level. Fail instead.
   const ghOutput = process.env['GITHUB_OUTPUT']
-  if (ghOutput !== undefined) {
-    const profiles = outcome.kind === 'run-engine' ? outcome.profiles.join(',') : ''
+  if (ghOutput === undefined) {
+    if (outcome.kind === 'run-engine') {
+      process.stderr.write(
+        `${REVIEW_JOB}: FAILED — GITHUB_OUTPUT is not set, so this gate cannot tell the workflow to run the ` +
+        'review; refusing to let the job conclude green with every reviewing step skipped\n',
+      )
+      return 1
+    }
+  } else {
     const clear = outcome.kind === 'run-engine' ? outcome.clearLabels.join(',') : ''
-    appendFileSync(ghOutput, `outcome=${outcome.kind}\nprofiles=${profiles}\nclear_labels=${clear}\n`)
+    appendFileSync(ghOutput, `outcome=${outcome.kind}\nclear_labels=${clear}\n`)
   }
   if (outcome.kind === 'review-set-unresolved') {
     process.stderr.write(
@@ -1342,6 +1353,9 @@ async function runReviewGate(): Promise<number> {
   // reviewing it again could only reach the same conclusion; pushing a fix
   // changes the hash and reviews afresh.
   if (outcome.kind === 'cache-hit') {
+    // A re-published verdict still reaches the PR as a review, not as a
+    // bare status — see `writeReviewReport`.
+    await writeReviewReport(ctx, [{ reviewer: 'general', verdict: outcome.verdict.verdict, body: outcome.verdict.text }])
     if (outcome.verdict.verdict === 'FAIL') {
       process.stderr.write(`${REVIEW_JOB}: FAILED — ${outcome.verdict.text}\n`)
       return 1
@@ -1364,6 +1378,48 @@ async function runReviewGate(): Promise<number> {
   }
   ciLog(`${REVIEW_JOB}: gate outcome = ${outcome.kind}`)
   return 0
+}
+
+/**
+ * Writes every reviewer's FULL text to `FLEET_REVIEW_REPORT_DIR`, one JSON
+ * file each, for the `fleet-review/publish` job to post on the PR.
+ *
+ * This process cannot post anything itself and must not be able to: it runs
+ * a model next to the operator's logged-in `claude` session, so it holds
+ * `pull-requests: read` and nothing more. Writing a file the next job picks
+ * up (via the run's own artifact) keeps that boundary while still getting
+ * the findings onto the PR.
+ *
+ * Why this exists at all: two real reviews ran on #1117 and
+ * `pulls/1117/reviews` and `issues/1117/comments` were both EMPTY. The gate
+ * wrote a check run and a job log, so both substantive findings had to be
+ * dug out with `gh run view --log`, and anyone opening the PR saw a red
+ * check with no reason on it.
+ *
+ * Never fatal: a report that could not be written costs the PR its comments,
+ * and must not also cost it its verdict.
+ */
+async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportEntry[]): Promise<void> {
+  const dir = process.env['FLEET_REVIEW_REPORT_DIR']
+  if (dir === undefined || dir.length === 0 || entries.length === 0) return
+  try {
+    mkdirSync(dir, { recursive: true })
+    const hash = diffHash(await ciDiff(ctx)).slice(0, 12)
+    entries.forEach((e, i) => {
+      // `marker` is what makes re-posting idempotent: the publish job skips
+      // a comment whose marker is already on the PR, so a re-request on an
+      // unchanged diff does not pile up duplicates — the churn this whole
+      // issue is about.
+      writeFileSync(join(dir, `${String(i).padStart(2, '0')}-${e.reviewer}.json`), JSON.stringify({
+        reviewer: e.reviewer,
+        verdict: e.verdict,
+        marker: `<!-- fleet/review:${e.reviewer}:${hash} -->`,
+        body: e.body,
+      }))
+    })
+  } catch (e) {
+    ciLog(`could not write the review report (the verdict itself is unaffected): ${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 
 /** The PR's current labels and its title+body, or `undefined` when they
@@ -1455,11 +1511,20 @@ const HANDLERS: Record<string, CommandHandler> = {
     prLabels: () => readPrLabels(ctx.pr),
     prDiff: () => ciDiff(ctx),
     secondOpinion,
-    // The review set the gate step already decided, carried here as a
-    // comma-separated list and re-resolved against the BASE agent registry
-    // before any of it runs (see `runReviewCi`).
-    profiles: (process.env['FLEET_REVIEW_PROFILES'] ?? '').split(',').filter((n) => n.length > 0),
+    // Decided HERE, from a live read of the PR — never handed in by the
+    // workflow step that started this process, which on a `pull_request`
+    // event is the PR's own copy of the workflow file.
+    reviewSet: async (changedFiles) => {
+      const facts = await readPrFacts(ctx.pr)
+      return decideReviewSet({
+        labels: facts?.labels,
+        changedFiles,
+        description: facts?.description ?? '',
+        resolve: (name) => resolveReviewerLabel(name, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
+      })
+    },
     resolveProfile: (name) => resolveReviewerLabel(name, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
+    publishReport: (entries) => writeReviewReport(ctx, entries),
     stripExport: async (dir) => { await stripReviewerControlFiles(dir) },
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.

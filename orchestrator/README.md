@@ -148,6 +148,12 @@ itself.** The general non-author review always runs. On top of it:
 They all run **concurrently, in one job**, and report **one check**:
 `fleet/review`. Any FAIL fails it; so does a reviewer that could not run.
 
+**The findings land on the PR.** Each reviewer's full text is posted as a PR
+comment — on a FAIL too, since that is the case whose reasoning you actually
+need. A comment, never a GitHub *review*: an approving review from the fleet
+would be one GitHub counts. Re-requesting a review on an unchanged diff
+re-posts nothing.
+
 **Labels are the worklist.** Once the whole set passes, the job removes the
 `-reviewer` labels it acted on, so what is left on a PR is what is still
 owed. A FAIL clears nothing — that is what makes the next review request
@@ -158,6 +164,11 @@ recorded against `sha256(diff)`, so a rebase that does not change the diff
 never re-spends a review to reach the same conclusion — push a fix and the
 hash changes, which reviews afresh. An infrastructure failure (timeout,
 quota, unparseable response) is **never** cached, so it is always retried.
+Adding or removing a `-reviewer` label cannot orphan either verdict.
+
+**`llamenos-fleet review-and-merge` only runs the general review**, so it
+refuses outright on a PR whose set needs more — request a review from
+`llamenos-auto` and let the CI gate run the whole set.
 
 **Fail closed.** Unreadable labels, an unknown or malformed `-reviewer`
 label, an unreadable agent registry: each fails the check with the rule it
