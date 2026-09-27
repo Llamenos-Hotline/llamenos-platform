@@ -116,10 +116,12 @@ function RootLayout() {
   }, [serverAddressConfigured, isLoading, configLoading, isAuthenticated, location.pathname, navigate, needsBootstrap])
 
   // Signed-in users are sent on from the signed-out entry points. For /onboarding
-  // this is a security boundary, not a convenience (#1166): redeeming an invite
-  // mints a new device key and stores it over this device's own, and the page can
-  // forget the server — neither is ever offered under a live session. Its route
-  // component also refuses to mount until this navigation lands.
+  // this is not a convenience (#1166): redeeming an invite mints a new device key
+  // and stores it over this device's own, and the page can forget the server —
+  // neither is offered to a signed-in user, and its route component refuses to
+  // mount until this navigation lands. It is not the whole defence: credentials
+  // can outlive the signed-in state (a webview reload leaves Rust CryptoState
+  // unlocked), so the page's server switch ends the session itself (leaveServer).
   useEffect(() => {
     if (!isLoading && isAuthenticated && (location.pathname === '/login' || location.pathname === '/onboarding')) {
       navigate({ to: profileCompleted ? '/' : '/profile-setup' })

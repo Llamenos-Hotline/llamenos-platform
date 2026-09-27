@@ -29,8 +29,10 @@ export const Route = createFileRoute('/onboarding')({
  * Onboarding is for a device no one is signed in on (#1166): redeeming an invite
  * mints a brand-new device key and stores it over whatever key this device
  * holds, and the code screen can forget the server. __root.tsx sends a signed-in
- * user on; until that navigation lands nothing here mounts, so none of the
- * page's effects ever run under a live session.
+ * user on; until that navigation lands nothing here mounts — which matters when
+ * the app loads straight onto /onboarding already signed in (a passkey session
+ * survives a reload), because a child's mount effects run before the root's
+ * redirect does.
  */
 function OnboardingRoute() {
   const { isAuthenticated } = useAuth()

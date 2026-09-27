@@ -11,6 +11,9 @@
  * key that signs auth tokens for it. Those tokens cover only method, pathname and
  * timestamp, so they replay verbatim against the old server, and its
  * certificate pins are forgotten along with its address.
+ *
+ * The first-run screen also ends any session when it mounts (`ServerAddressScreen`),
+ * for the ways of reaching it that bypass `leaveServer()`.
  */
 
 import * as keyManager from './key-manager'
@@ -18,6 +21,17 @@ import { setActiveHub } from './api/client'
 import { clearPendingServerAddress, resetApiBase, stagePendingServerAddress } from './api-config'
 
 const SESSION_TOKEN_KEY = 'llamenos-session-token'
+
+/**
+ * Drop everything that belongs to a server session, in the webview and in
+ * Rust: the session token, the active hub, and an unlocked CryptoState —
+ * resolving once Rust confirms the lock (and rejecting if it cannot).
+ */
+export async function endServerSession(): Promise<void> {
+  sessionStorage.removeItem(SESSION_TOKEN_KEY)
+  setActiveHub(null)
+  await keyManager.lockAndWait()
+}
 
 /**
  * End the session bound to the current server, forget the server, and reload
@@ -35,12 +49,11 @@ const SESSION_TOKEN_KEY = 'llamenos-session-token'
  * are still on — never carrying a live session towards another one.
  */
 export async function leaveServer(nextAddress: string | null): Promise<void> {
-  sessionStorage.removeItem(SESSION_TOKEN_KEY)
-  setActiveHub(null)
-  await keyManager.lockAndWait()
+  await endServerSession()
   await resetApiBase()
-  // Nothing is awaited from here to the reload: the first-run screen consumes a
-  // staged address on mount, and must never mount before the reload does.
+  // The first-run screen consumes a staged address when it mounts. Nothing is
+  // awaited between staging it and requesting the reload, so this document
+  // cannot re-render into that screen before the reload is under way.
   if (nextAddress) {
     stagePendingServerAddress(nextAddress)
   } else {

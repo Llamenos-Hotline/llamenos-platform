@@ -109,6 +109,35 @@ async function readStateAtUnload(page: Page): Promise<LiveSession | null> {
   return raw === null ? null : JSON.parse(raw) as LiveSession
 }
 
+/**
+ * The live-credential state that can still reach the invite-code screen once a
+ * signed-in user cannot: the webview has reloaded mid-session, so it starts
+ * signed out — but the Rust process did not reload, and its CryptoState is
+ * still unlocked. Under the mock the reload wiped CryptoState too, so it is
+ * unlocked again beneath the webview (which is not told), exactly as Rust would
+ * have kept it. A passkey session token is left in sessionStorage as well
+ * (passkey login is the only thing that writes one); what it holds is
+ * irrelevant — it must not outlive the server it was issued by.
+ */
+async function openInviteScreenWithLiveSession(page: Page, hubId: string): Promise<void> {
+  await page.reload()
+  await page.waitForURL(url => url.pathname === '/login', { timeout: Timeouts.AUTH })
+  await page.evaluate(async (pin) => {
+    if (!await window.__TEST_PLATFORM.unlockStoredKeys(pin)) throw new Error('stored device key did not unlock')
+  }, TEST_PIN)
+  await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
+
+  await navigateInApp(page, '/onboarding')
+  await expect(page.getByTestId(TestIds.INVITE_CODE_CHANGE_SERVER)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // /api/config names the hubs for signed-out clients too, so one is active here.
+  await page.waitForFunction((id) => window.__TEST_GET_ACTIVE_HUB() === id, hubId, { timeout: Timeouts.API })
+
+  const before = await readLiveSession(page)
+  expect(before.cryptoUnlocked, 'precondition: CryptoState must start unlocked').toBe(true)
+  expect(before.activeHub, 'precondition: the hub must start active').toBe(hubId)
+  expect(before.sessionToken, 'precondition: a session token must start present').not.toBeNull()
+}
+
 test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
   const createdHubs: string[] = []
 
@@ -149,30 +178,7 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
 
-    // The live-credential state that can still reach this screen: the webview
-    // has reloaded mid-session, so it starts signed out — but the Rust process
-    // did not reload, and its CryptoState is still unlocked. Under the mock the
-    // reload wiped CryptoState too; unlock it again beneath the webview (which
-    // is not told), exactly as Rust would have kept it.
-    await page.reload()
-    await page.waitForURL(url => url.pathname === '/login', { timeout: Timeouts.AUTH })
-    await page.evaluate(async (pin) => {
-      if (!await window.__TEST_PLATFORM.unlockStoredKeys(pin)) throw new Error('stored device key did not unlock')
-    }, TEST_PIN)
-    // And a passkey session token still in sessionStorage (passkey login is the
-    // only thing that writes one); what it holds is irrelevant — it must not
-    // outlive the server it was issued by.
-    await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
-
-    await navigateInApp(page, '/onboarding')
-    await expect(page.getByTestId(TestIds.INVITE_CODE_CHANGE_SERVER)).toBeVisible({ timeout: Timeouts.ELEMENT })
-    // /api/config names the hubs for signed-out clients too, so one is active here.
-    await page.waitForFunction((id) => window.__TEST_GET_ACTIVE_HUB() === id, hubId, { timeout: Timeouts.API })
-
-    const before = await readLiveSession(page)
-    expect(before.cryptoUnlocked, 'precondition: CryptoState must start unlocked').toBe(true)
-    expect(before.activeHub, 'precondition: the hub must start active').toBe(hubId)
-    expect(before.sessionToken, 'precondition: a session token must start present').not.toBeNull()
+    await openInviteScreenWithLiveSession(page, hubId)
 
     await recordStateAtUnload(page)
     await page.getByTestId(TestIds.INVITE_CODE_CHANGE_SERVER).click()
@@ -181,6 +187,54 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
 
     // What the next server's first-run screen inherits.
     expect(await readStateAtUnload(page)).toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
+  })
+
+  test('declining to forget the server leaves the user signed out of it — locked, no token, no hub — and nothing staged or reloaded', async ({ page, request }) => {
+    const hubId = await useOwnHub(page, request)
+    createdHubs.push(hubId)
+    await loginAsAdmin(page)
+    const origin = await simulatePackagedBuildOnOwnOrigin(page)
+    await openInviteScreenWithLiveSession(page, hubId)
+
+    // The volunteer presses Cancel on the native "Forget server address?" dialog.
+    // The marker lives in page JS, so it survives only if the page never reloads.
+    await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>
+      w.__TEST_DECLINE_FORGET_SERVER__ = true
+      w.__TEST_NOT_RELOADED__ = true
+    })
+    await page.getByTestId(TestIds.INVITE_CODE_CHANGE_SERVER).click()
+    await expect(page.getByTestId('toast-error')).toBeVisible({ timeout: Timeouts.ELEMENT })
+
+    // Fail closed, which also pins the order: the session had to end before the
+    // confirmation was asked for, because nothing after a declined one runs.
+    expect(await readLiveSession(page)).toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
+    expect(await page.evaluate(() => ({
+      apiBase: window.__TEST_API_CONFIG.getApiBase(),
+      staged: window.__TEST_API_CONFIG.peekPendingServerAddress(),
+      notReloaded: (window as unknown as Record<string, unknown>).__TEST_NOT_RELOADED__,
+    }))).toEqual({ apiBase: origin, staged: null, notReloaded: true })
+  })
+
+  test('the first-run screen ends a session left beneath it by a way in that bypassed the server switch', async ({ page, request }) => {
+    const hubId = await useOwnHub(page, request)
+    createdHubs.push(hubId)
+    await loginAsAdmin(page)
+    await simulatePackagedBuildOnOwnOrigin(page)
+    await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
+    expect(await readLiveSession(page)).toEqual({ cryptoUnlocked: true, activeHub: hubId, sessionToken: 'passkey-session-issued-by-the-old-server' })
+
+    // In production this is Rust discarding a stored address it no longer
+    // accepts when the webview loads, with CryptoState still unlocked from before
+    // the reload. The mock cannot keep CryptoState across a reload, so the same
+    // state is reached in place: the address is forgotten beneath the live
+    // session, and the next render shows the first-run screen.
+    await page.evaluate(() => window.__TEST_API_CONFIG.resetApiBase())
+    await navigateInApp(page, '/')
+    await expect(page.getByTestId(TestIds.SERVER_ADDRESS_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+
+    await expect.poll(() => readLiveSession(page), { timeout: Timeouts.ELEMENT })
+      .toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
   })
 
   test('an invite code the server could not be reached to check is not reported as invalid', async ({ page }) => {
@@ -202,7 +256,19 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
 
     await page.getByTestId(TestIds.INVITE_CODE_INPUT).fill(crypto.randomUUID())
     await page.getByTestId(TestIds.INVITE_CODE_SUBMIT).click()
-
     await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'unreachable', { timeout: Timeouts.API })
+
+    // A server error is not an answer about the code either.
+    await page.unroute('**/api/invites/validate/**')
+    await page.route('**/api/invites/validate/**', route => route.fulfill({ status: 502, contentType: 'text/html', body: '<html>Bad gateway</html>' }))
+    await page.getByTestId(TestIds.INVITE_CODE_INPUT).fill(crypto.randomUUID())
+    await page.getByTestId(TestIds.INVITE_CODE_SUBMIT).click()
+    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'unreachable', { timeout: Timeouts.API })
+
+    // The real server's answer about a well-formed code it never issued is still "invalid".
+    await page.unroute('**/api/invites/validate/**')
+    await page.getByTestId(TestIds.INVITE_CODE_INPUT).fill(crypto.randomUUID())
+    await page.getByTestId(TestIds.INVITE_CODE_SUBMIT).click()
+    await expect(page.getByTestId(TestIds.INVITE_CODE_ERROR)).toHaveAttribute('data-reason', 'invalid', { timeout: Timeouts.API })
   })
 })

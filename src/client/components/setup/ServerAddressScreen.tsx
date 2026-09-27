@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LogoMark } from '@/components/logo-mark'
 import { clearPendingServerAddress, HOSTED_SERVER_ADDRESS, peekPendingServerAddress, setApiBase } from '@/lib/api-config'
+import { endServerSession } from '@/lib/server-switch'
 import { ServerAddressForm } from './ServerAddressForm'
 
 /**
@@ -27,6 +28,16 @@ export function ServerAddressScreen({ onConfigured }: { onConfigured: (base: str
   useEffect(() => {
     if (staged) clearPendingServerAddress()
   }, [staged])
+
+  // No server is configured, so no session can belong to one (#1166).
+  // leaveServer() has already ended it on the way here, but other ways in have
+  // not: a stored address Rust discarded as invalid at load, or a webview reload
+  // that left Rust CryptoState unlocked beneath a signed-out webview.
+  useEffect(() => {
+    endServerSession().catch((err: unknown) => {
+      console.error('[server-address] could not end the previous session:', err)
+    })
+  }, [])
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-background p-4 overflow-hidden">

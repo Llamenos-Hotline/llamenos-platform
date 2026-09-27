@@ -565,9 +565,17 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return data.state
   },
 
+  // Mirrors CryptoState::lock (apps/desktop/src/crypto.rs): every key it holds
+  // goes, not just the device key — a test must not be able to use a hub key or
+  // PUK seed that the real app would already have lost.
   lock_crypto: () => {
     mockSecrets = null
     mockDeviceState = null
+    mockHubKey = null
+    mockServerEventKeys = []
+    mockRecoveryGroupKey = null
+    mockProvisioningEphemeral = null
+    mockPukSeed = null
   },
 
   is_crypto_unlocked: () => mockSecrets !== null,
@@ -1391,8 +1399,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   // Simulates the user confirming the native dialog Rust would show — see the
-  // MOCK_CLEAR_TOKEN_TTL_MS comment above.
+  // MOCK_CLEAR_TOKEN_TTL_MS comment above. A test that needs the user to press
+  // Cancel instead sets `window.__TEST_DECLINE_FORGET_SERVER__` (same error as
+  // api_config.rs's declined dialog).
   api_config_request_clear: async () => {
+    if ((window as unknown as Record<string, unknown>).__TEST_DECLINE_FORGET_SERVER__) {
+      throw new Error('cancelled: server address was not cleared')
+    }
     const token = mockGenerateClearToken()
     mockPendingClearToken = { token, issuedAt: Date.now() }
     return token
