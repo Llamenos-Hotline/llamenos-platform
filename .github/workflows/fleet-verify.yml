@@ -224,8 +224,17 @@ jobs:
               ;;
           esac
 
+      # GH_TOKEN: `verify-ci` reads the PR's live labels with `gh api
+      # repos/<repo>/pulls/<n>` (readPrFacts in cli.ts) to resolve its
+      # `scope:<lane>` grants (#1115). Without a token that read fails on
+      # every run and the grants are silently dropped. The workflow token,
+      # never a secret: this step runs the judged commit's own tests, and the
+      # job's `pull-requests: read` is all that read needs. A rail
+      # (tests/orchestrator/fleet-verify-token.test.ts) fails any step here
+      # that reaches `gh` without one.
       - name: Verify
         env:
+          GH_TOKEN: ${{ github.token }}
           FLEET_CI_BRANCH: ${{ steps.ctx.outputs.branch }}
           FLEET_CI_PR: ${{ steps.ctx.outputs.pr }}
           FLEET_CI_HEAD_DIR: ${{ runner.temp }}/head
