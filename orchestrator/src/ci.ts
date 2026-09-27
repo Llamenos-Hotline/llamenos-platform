@@ -82,9 +82,8 @@ export interface ReviewReportEntry {
  */
 export const REVIEW_REQUEST_LOGIN = 'llamenos-auto'
 
-/** Accepted INSTEAD of `REVIEW_REQUEST_LOGIN`, and only on the knope release
- *  PR: that PR is opened by the operator's own automation on the `release`
- *  branch, and the operator (`rhonda-rodododo`) is who actually reads it. */
+/** The operator's own login. Accepted on the knope release PR, and on any PR
+ *  `REVIEW_REQUEST_LOGIN` itself authored — see `reviewTriggerLogins`. */
 export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
 
 export interface ReviewRequestEvent {
@@ -94,9 +93,59 @@ export interface ReviewRequestEvent {
    *  named a TEAM (`requested_team`) rather than a user, and on every event
    *  that is not `review_requested`. */
   requestedReviewer: string | undefined
+  /** `github.event.requested_team.slug` — set INSTEAD of `requestedReviewer`
+   *  when the request named a team. Never a trigger (see `reviewRequestFor`);
+   *  carried only so the refusal can say so, rather than a team request
+   *  failing with advice that never mentions it. */
+  requestedTeam?: string | undefined
+  /** `github.event.pull_request.user.login` — the PR's AUTHOR, who can never
+   *  be its trigger (see `reviewTriggerLogins`). Absent only narrows: with no
+   *  author the stand-in route below stays shut, and a request for
+   *  `REVIEW_REQUEST_LOGIN` rests on GitHub's own refusal to request a PR's
+   *  author, exactly as it did before the author was known here. */
+  prAuthor?: string | undefined
   /** The PR's head branch, for the release-PR exception. */
   branch: string
 }
+
+/** GitHub logins are case-insensitive; `undefined` for an absent or blank one. */
+function loginOf(raw: string | undefined): string | undefined {
+  const login = (raw ?? '').trim().toLowerCase()
+  return login.length === 0 ? undefined : login
+}
+
+/**
+ * The users a review may be requested from to run `fleet/review` on THIS PR:
+ * never empty, and never the PR's own author.
+ *
+ * `REVIEW_REQUEST_LOGIN` on every PR it did not write. On a PR it DID write,
+ * GitHub refuses the request outright (422 "Review cannot be requested from
+ * pull request author"), so the operator stands in for it — without that,
+ * such a PR had no route to a verdict at all and could never merge (#1232,
+ * live on #1183). The knope release PR accepts the operator as well, since
+ * they are who actually reads it, whoever the release automation ran as.
+ *
+ * Deliberately NOT "either login, whenever it is not the author". CODEOWNERS
+ * names `rhonda-rodododo` on every high-impact path, so GitHub requests that
+ * login automatically when almost any PR opens; accepting it everywhere
+ * would start a full model review on every dependabot PR the moment it is
+ * opened — the trigger-on-`opened` fleet-review.yml's invariant 2 forbids,
+ * re-entering through CODEOWNERS. The operator counts only where the fleet's
+ * own identity cannot be asked.
+ */
+export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'branch'>): [string, ...string[]] {
+  const author = loginOf(pr.prAuthor)
+  if (author === REVIEW_REQUEST_LOGIN) return [RELEASE_REVIEW_REQUEST_LOGIN]
+  if (pr.branch === KNOPE_RELEASE_BRANCH && author !== RELEASE_REVIEW_REQUEST_LOGIN) {
+    return [REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN]
+  }
+  return [REVIEW_REQUEST_LOGIN]
+}
+
+/** `reviewRequestFor`'s answer: a request, or the reason this event is not one. */
+export type ReviewRequestDecision =
+  | { requested: true }
+  | { requested: false; reason: string }
 
 /**
  * Whether THIS event is the one asking for a review. The only thing that
@@ -104,21 +153,62 @@ export interface ReviewRequestEvent {
  *
  * Fail closed in both directions this can be got wrong: an unrecognised
  * event name is not a request, and a request naming anyone else (a human
- * colleague, a team) is not a request either. It is deliberately NOT a job
- * -level `if:` in the workflow: a job instantiated on an event and then
- * skipped by `if:` satisfies branch protection exactly like a green check
- * (#848), so "this review request was not for us" has to become a real,
- * reported conclusion on `fleet/review`, never a skip.
+ * colleague, a team, the PR's own author) is not a request either. It is
+ * deliberately NOT a job-level `if:` in the workflow: a job instantiated on
+ * an event and then skipped by `if:` satisfies branch protection exactly
+ * like a green check (#848), so "this review request was not for us" has to
+ * become a real, reported conclusion on `fleet/review`, never a skip — and
+ * the reason goes with it, so the red check says what to do next.
  *
- * Logins are compared case-insensitively because GitHub's are.
+ * A TEAM is never a trigger. GitHub refuses a request naming the PR's author
+ * but accepts one naming a team the author belongs to: on #1183 the
+ * operator requested `review-agent-team`, whose only member is
+ * `llamenos-auto`, on a PR `llamenos-auto` wrote. Accepting teams would let
+ * a PR's author ask itself for its own review.
  */
+export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
+  if (e.eventName === 'workflow_dispatch') return { requested: true }
+  if (e.eventName !== 'pull_request') {
+    return { requested: false, reason: `\`${e.eventName || '(no event)'}\` is not a review request` }
+  }
+  const login = loginOf(e.requestedReviewer)
+  if (login === undefined) {
+    const team = (e.requestedTeam ?? '').trim()
+    return {
+      requested: false,
+      reason: team.length === 0
+        ? 'this review request named no user'
+        : `this review was requested from the team \`${team}\`, and a team is never a trigger — GitHub accepts ` +
+          "a team request even when the PR's own author is on that team, so it cannot stand for a non-author review",
+    }
+  }
+  const triggers = reviewTriggerLogins(e)
+  if (triggers.includes(login)) return { requested: true }
+  return {
+    requested: false,
+    reason: `\`${login}\` is not a review trigger on this PR (author \`${loginOf(e.prAuthor) ?? 'unknown'}\`, ` +
+      `branch \`${e.branch}\`) — only ${triggers.map((t) => `\`${t}\``).join(' or ')} is`,
+  }
+}
+
+/** `reviewRequestFor`, as the yes/no alone. */
 export function reviewIsRequested(e: ReviewRequestEvent): boolean {
-  if (e.eventName === 'workflow_dispatch') return true
-  if (e.eventName !== 'pull_request') return false
-  const login = (e.requestedReviewer ?? '').trim().toLowerCase()
-  if (login.length === 0) return false
-  if (login === REVIEW_REQUEST_LOGIN) return true
-  return login === RELEASE_REVIEW_REQUEST_LOGIN && e.branch === KNOPE_RELEASE_BRANCH
+  return reviewRequestFor(e).requested
+}
+
+/**
+ * The raw review-request fields `fleet-review.yml`'s gate step hands over in
+ * `env:`, uninterpreted — `reviewRequestFor` judges them. The one reader of
+ * those variable names, so the workflow and the gate cannot disagree on one.
+ */
+export function reviewRequestEventFromEnv(env: NodeJS.ProcessEnv, branch: string): ReviewRequestEvent {
+  return {
+    eventName: env['FLEET_REVIEW_EVENT_NAME'] ?? '',
+    requestedReviewer: env['FLEET_REVIEW_REQUESTED_REVIEWER'],
+    requestedTeam: env['FLEET_REVIEW_REQUESTED_TEAM'],
+    prAuthor: env['FLEET_REVIEW_PR_AUTHOR'],
+    branch,
+  }
 }
 
 /**
@@ -789,7 +879,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
  *    this event did not ask us for one: the review was requested from
  *    somebody else, from a team, or this is not a review-request event at
- *    all (`reviewIsRequested`). Fails the job outright. A `fleet/review`
+ *    all (`reviewRequestFor`). Fails the job outright. A `fleet/review`
  *    nobody has asked for is not a passing review, and the old design's
  *    mistake was ever treating "not asked for" as anything other than a
  *    fail-closed red check.
@@ -822,7 +912,7 @@ export interface ReviewGateDeps {
    *  until the set has been decided, which is why this is a factory. */
   cacheFor(scope: string | undefined): ReviewCache
   /**
-   * Whether THIS event asked US for a review — `reviewIsRequested` over the
+   * Whether THIS event asked US for a review — `reviewRequestFor` over the
    * workflow's own event fields. Computed by the caller so this function has
    * exactly one job: set first, cache second, tier third, request fourth.
    */
@@ -892,10 +982,10 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   }
 
   if (!deps.requested) {
-    deps.log(
-      `review not requested of ${REVIEW_REQUEST_LOGIN} for pr=${cacheKey.pr} ` +
-      `sha256:${cacheKey.diffHash.slice(0, 12)}… — request a review from ${REVIEW_REQUEST_LOGIN} to run it`,
-    )
+    // Whom to ask instead depends on who wrote the PR (`reviewTriggerLogins`)
+    // — the caller has the event and says so; naming one fixed login here
+    // told #1183's author to request itself (#1232).
+    deps.log(`review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
     return { kind: 'not-requested', cacheKey }
   }
 

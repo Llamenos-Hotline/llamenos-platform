@@ -323,7 +323,7 @@ jobs:
             echo "### Desktop Downloads"
             echo ""
             echo "Desktop binaries are hosted on our self-hosted infrastructure at \`releases.llamenos-hotline.org\`."
-            echo "See the [desktop release metadata](https://github.com/rhonda-rodododo/llamenos-releases) for checksums and SBOM."
+            echo "See the [desktop release metadata](https://github.com/Llamenos-Hotline/llamenos-releases) for checksums and SBOM."
           } >> release-notes.md
 
           echo "--- Release notes ---"

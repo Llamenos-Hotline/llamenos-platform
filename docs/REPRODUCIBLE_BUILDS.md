@@ -91,7 +91,7 @@ docker rm llamenos-verify-extract
 (cd local-dist && find . -type f -exec sha256sum {} \; | sort) > local-checksums.txt
 
 # 5. Download the published checksums from the llamenos-releases repo
-curl -sL https://raw.githubusercontent.com/rhonda-rodododo/llamenos-releases/main/desktop/v1.0.0/CHECKSUMS.txt > release-checksums.txt
+curl -sL https://raw.githubusercontent.com/Llamenos-Hotline/llamenos-releases/main/desktop/v1.0.0/CHECKSUMS.txt > release-checksums.txt
 
 # 6. Compare
 diff local-checksums.txt release-checksums.txt
