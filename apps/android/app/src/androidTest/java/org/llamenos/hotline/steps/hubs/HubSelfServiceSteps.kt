@@ -217,7 +217,7 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the communications settings screen should be visible")
     fun theCommunicationsSettingsScreenShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "hub-communications-title",
             "provider-status-card",
             "channel-checklist",
@@ -229,7 +229,7 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the channel checklist should be visible")
     fun theChannelChecklistShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "channel-checklist",
             "hub-communications-loading",
         )
@@ -285,7 +285,7 @@ class HubSelfServiceSteps : BaseSteps() {
     @Then("the channel state should be preserved")
     fun theChannelStateShouldBePreserved() {
         // After navigating back, verify the channel checklist is still visible
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "channel-checklist",
             "hub-communications-loading",
         )
@@ -295,7 +295,7 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the provider status card should be visible")
     fun theProviderStatusCardShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "provider-status-card",
             "hub-communications-loading",
         )
@@ -303,7 +303,7 @@ class HubSelfServiceSteps : BaseSteps() {
 
     @Then("the usage card should be visible")
     fun theUsageCardShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "hub-usage-card",
             "hub-communications-loading",
         )
@@ -321,7 +321,7 @@ class HubSelfServiceSteps : BaseSteps() {
     @Then("the communications data should reload")
     fun theCommunicationsDataShouldReload() {
         // After refresh, the screen should show either loading or content
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "hub-communications-loading",
             "provider-status-card",
             "channel-checklist",

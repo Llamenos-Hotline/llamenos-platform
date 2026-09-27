@@ -127,12 +127,12 @@ class NavigationSteps : BaseSteps() {
 
     @Then("I should see the dashboard")
     fun iShouldSeeTheDashboard() {
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
     }
 
     @Then("the bottom navigation should be visible")
     fun theBottomNavigationShouldBeVisible() {
-        val found = assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
+        assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
     }
 
     @Then("the bottom navigation should not be visible")

@@ -124,7 +124,7 @@ class TriageSteps : BaseSteps() {
 
     @Then("I should see the triage list or empty state")
     fun iShouldSeeTheTriageListOrEmptyState() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "triage-list", "triage-empty", "triage-loading",
             "triage-error", "triage-title",
         )
@@ -152,14 +152,14 @@ class TriageSteps : BaseSteps() {
 
     @Then("the triage filter chips should be visible")
     fun theTriageFilterChipsShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "triage-filters", "triage-title", "triage-list", "triage-empty",
         )
     }
 
     @Then("I should see the triage detail view")
     fun iShouldSeeTheTriageDetailView() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "triage-detail-title", "triage-detail-report-title",
             "triage-detail-status", "triage-not-found",
         )
@@ -167,14 +167,14 @@ class TriageSteps : BaseSteps() {
 
     @And("the triage report title should be visible")
     fun theTriageReportTitleShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "triage-detail-report-title", "triage-detail-title", "triage-not-found",
         )
     }
 
     @And("the triage report status should be visible")
     fun theTriageReportStatusShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "triage-detail-status", "triage-detail-title", "triage-not-found",
         )
     }
@@ -188,7 +188,7 @@ class TriageSteps : BaseSteps() {
                 .fetchSemanticsNodes().isNotEmpty()
 
         if (hasDetail) {
-            val found = assertAnyTagDisplayed(
+            assertAnyTagDisplayed(
                 "triage-convert-button", "triage-detail-title",
             )
         }

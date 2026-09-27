@@ -2,6 +2,7 @@ package org.llamenos.hotline.steps
 
 import android.util.Log
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsNodeInteractionCollection
@@ -137,19 +138,36 @@ abstract class BaseSteps : SemanticsNodeInteractionsProvider {
     }
 
     /**
-     * Check if any of the given tags are displayed.
-     * Returns true if at least one tag is found.
+     * Assert that at least one node carrying any of [tags] becomes displayed
+     * within [timeoutMillis]. Fails the step with the full list of tags it
+     * looked for otherwise.
+     *
+     * This is an assertion: it throws. Use [isAnyTagDisplayed] only where a
+     * step genuinely branches on which of several UI states is showing.
      */
-    protected fun assertAnyTagDisplayed(vararg tags: String): Boolean {
-        for (tag in tags) {
-            try {
-                onNodeWithTag(tag).assertIsDisplayed()
-                return true
-            } catch (_: Throwable) {
-                continue
-            }
+    protected fun assertAnyTagDisplayed(vararg tags: String, timeoutMillis: Long = 5_000) {
+        require(tags.isNotEmpty()) { "assertAnyTagDisplayed needs at least one tag" }
+        try {
+            composeRule.waitUntil(timeoutMillis) { isAnyTagDisplayed(*tags) }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError(
+                "None of the expected tags was displayed within ${timeoutMillis}ms: " +
+                    tags.joinToString(", ") { "'$it'" },
+                e,
+            )
         }
-        return false
+    }
+
+    /**
+     * Predicate: true if at least one node carrying any of [tags] is displayed
+     * right now. Does not wait and never fails the step — callers must act on
+     * the result.
+     */
+    protected fun isAnyTagDisplayed(vararg tags: String): Boolean = tags.any { tag ->
+        val count = runCatching { onAllNodesWithTag(tag).fetchSemanticsNodes().size }.getOrDefault(0)
+        (0 until count).any { index ->
+            runCatching { onAllNodesWithTag(tag)[index].assertIsDisplayed() }.isSuccess
+        }
     }
 
     /**

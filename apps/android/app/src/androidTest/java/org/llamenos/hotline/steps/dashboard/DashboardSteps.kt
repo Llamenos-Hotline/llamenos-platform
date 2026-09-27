@@ -22,22 +22,22 @@ class DashboardSteps : BaseSteps() {
 
     @Then("I should see the connection status card")
     fun iShouldSeeTheConnectionStatusCard() {
-        val found = assertAnyTagDisplayed("connection-card", "dashboard-title")
+        assertAnyTagDisplayed("connection-card", "dashboard-title")
     }
 
     @Then("I should see the shift status card")
     fun iShouldSeeTheShiftStatusCard() {
-        val found = assertAnyTagDisplayed("shift-card", "dashboard-title")
+        assertAnyTagDisplayed("shift-card", "dashboard-title")
     }
 
     @Then("I should see the active calls card")
     fun iShouldSeeTheActiveCallsCard() {
-        val found = assertAnyTagDisplayed("calls-card", "dashboard-title")
+        assertAnyTagDisplayed("calls-card", "dashboard-title")
     }
 
     @Then("I should see the recent notes card")
     fun iShouldSeeTheRecentNotesCard() {
-        val found = assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
+        assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
     }
 
     // "I should see the identity card" step is defined in SettingsSteps
@@ -50,7 +50,7 @@ class DashboardSteps : BaseSteps() {
             onNodeWithTag("identity-card").assertIsDisplayed()
             onNodeWithTag("dashboard-npub").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("identity-card", "dashboard-title")
+            assertAnyTagDisplayed("identity-card", "dashboard-title")
         }
     }
 
@@ -59,52 +59,52 @@ class DashboardSteps : BaseSteps() {
 
     @Then("the connection card should show a status text")
     fun theConnectionCardShouldShowAStatusText() {
-        val found = assertAnyTagDisplayed("connection-status", "connection-card", "dashboard-title")
+        assertAnyTagDisplayed("connection-status", "connection-card", "dashboard-title")
     }
 
     @Then("the top bar should show a connection dot")
     fun theTopBarShouldShowAConnectionDot() {
-        val found = assertAnyTagDisplayed("connection-status", "dashboard-title")
+        assertAnyTagDisplayed("connection-status", "dashboard-title")
     }
 
     @Then("the shift card should show {string} or {string}")
     fun theShiftCardShouldShowOrStatus(status1: String, status2: String) {
-        val found = assertAnyTagDisplayed("shift-status-text", "shift-card", "dashboard-title")
+        assertAnyTagDisplayed("shift-status-text", "shift-card", "dashboard-title")
     }
 
     @Then("a clock in\\/out button should be visible")
     fun aClockInOutButtonShouldBeVisible() {
-        val found = assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
+        assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
     }
 
     @Then("the calls card should display a numeric call count")
     fun theCallsCardShouldDisplayANumericCallCount() {
-        val found = assertAnyTagDisplayed("active-call-count", "calls-card", "dashboard-title")
+        assertAnyTagDisplayed("active-call-count", "calls-card", "dashboard-title")
     }
 
     @Then("the count should be {string} for a fresh session")
     fun theCountShouldBeForAFreshSession(expectedCount: String) {
-        val found = assertAnyTagDisplayed("active-call-count", "calls-card", "dashboard-title")
+        assertAnyTagDisplayed("active-call-count", "calls-card", "dashboard-title")
     }
 
     @Then("the recent notes card should be displayed")
     fun theRecentNotesCardShouldBeDisplayed() {
-        val found = assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
+        assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
     }
 
     @Then("either recent notes or {string} message should appear")
     fun eitherRecentNotesOrMessageShouldAppear(message: String) {
-        val found = assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
+        assertAnyTagDisplayed("recent-notes-card", "dashboard-title")
     }
 
     @Then("the lock button should be visible in the top bar")
     fun theLockButtonShouldBeVisibleInTheTopBar() {
-        val found = assertAnyTagDisplayed("lock-button", "dashboard-title")
+        assertAnyTagDisplayed("lock-button", "dashboard-title")
     }
 
     @Then("the logout button should be visible in the top bar")
     fun theLogoutButtonShouldBeVisibleInTheTopBar() {
-        val found = assertAnyTagDisplayed("logout-button", "dashboard-title")
+        assertAnyTagDisplayed("logout-button", "dashboard-title")
     }
 
     // ---- Dashboard shift actions ----
@@ -131,7 +131,7 @@ class DashboardSteps : BaseSteps() {
 
     @Then("the dashboard clock button should say {string}")
     fun theDashboardClockButtonShouldSay(text: String) {
-        val found = assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
+        assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
     }
 
     @When("I tap the dashboard clock button")
@@ -146,11 +146,11 @@ class DashboardSteps : BaseSteps() {
 
     @Then("a clock-in request should be sent")
     fun aClockInRequestShouldBeSent() {
-        val found = assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
+        assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
     }
 
     @Then("the button should show a loading state briefly")
     fun theButtonShouldShowALoadingStateBriefly() {
-        val found = assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
+        assertAnyTagDisplayed("dashboard-clock-button", "dashboard-title")
     }
 }

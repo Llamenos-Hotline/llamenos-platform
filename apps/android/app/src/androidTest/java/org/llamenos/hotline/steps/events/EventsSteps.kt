@@ -104,7 +104,7 @@ class EventsSteps : BaseSteps() {
 
     @Then("I should see the events list or empty state")
     fun iShouldSeeTheEventsListOrEmptyState() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "events-list", "events-empty", "events-loading",
             "events-error", "events-cms-disabled", "events-title",
         )
@@ -133,7 +133,7 @@ class EventsSteps : BaseSteps() {
 
     @Then("the events search field should be visible")
     fun theEventsSearchFieldShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "events-search", "events-title", "events-list", "events-empty",
         )
     }
@@ -145,35 +145,35 @@ class EventsSteps : BaseSteps() {
                 composeRule.onAllNodesWithTag("event-detail-title").fetchSemanticsNodes().isNotEmpty() ||
                 composeRule.onAllNodesWithTag("event-detail-error").fetchSemanticsNodes().isNotEmpty()
         }
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "event-detail-tabs", "event-detail-title", "event-detail-error",
         )
     }
 
     @Then("I should see the details tab in event detail")
     fun iShouldSeeTheDetailsTabInEventDetail() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "event-details-tab", "event-detail-tabs", "event-detail-title",
         )
     }
 
     @And("I should see the sub-events tab")
     fun iShouldSeeTheSubEventsTab() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "event-detail-tabs", "event-detail-title",
         )
     }
 
     @And("I should see the linked cases tab")
     fun iShouldSeeTheLinkedCasesTab() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "event-detail-tabs", "event-detail-title",
         )
     }
 
     @And("I should see the linked reports tab")
     fun iShouldSeeTheLinkedReportsTab() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "event-detail-tabs", "event-detail-title",
         )
     }

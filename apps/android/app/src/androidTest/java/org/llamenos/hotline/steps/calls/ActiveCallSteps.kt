@@ -132,7 +132,7 @@ class ActiveCallSteps : BaseSteps() {
         composeRule.waitForIdle()
         // The card may or may not disappear immediately depending on WebSocket latency.
         // Assert the dashboard is still accessible.
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
     }
 
     @When("I tap the ban and hangup button")
