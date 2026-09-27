@@ -49,3 +49,6 @@ AdminSidebarUITests/testTapPlatformHubsNavigates  # tests a view the app never p
 
 # navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
 EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
+
+# The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
+CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
