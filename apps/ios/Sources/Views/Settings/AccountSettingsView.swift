@@ -28,7 +28,9 @@ struct AccountSettingsView: View {
         .navigationTitle(NSLocalizedString("settings_account_title", comment: "Account"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showDeviceLink) {
-            DeviceLinkView()
+            NavigationStack {
+                DeviceLinkView()
+            }
         }
         .overlay(alignment: .bottom) {
             if showCopyConfirmation {
