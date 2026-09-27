@@ -1,94 +1,42 @@
-# iOS E2E Tests (XCUITest)
+# iOS E2E — the LlamenosUITests (XCUITest) target against a live backend.
 #
-# Build once, test in 4 parallel shards on macOS runners.
-# Each shard gets its own isolated test hub for proper isolation.
-# Triggered on push to main/desktop and on pull requests.
+# Called by ci.yml's `ios-e2e` job whenever a change touches iOS paths, which
+# puts it inside the `ci-status` required aggregate: a failing UI test blocks
+# the merge. Also runnable by hand (workflow_dispatch) for a full re-run.
+#
+# History this replaces (#661, #1221): from 2026-05-04 (#168) the UI target was
+# not a member of the `Llamenos` scheme's test action, so `build-for-testing`
+# produced no UI test bundle; from 2026-05-10 the backend came from Docker
+# Compose, which GitHub-hosted macOS runners do not have (exit 125); from
+# 2026-09-12 (#682) the workflow was `workflow_dispatch`-only. For those four
+# months no iOS UI test ran anywhere in CI, while the coverage validator
+# credited scenarios to them.
+#
+# Shape: one job builds the app + UI test bundle once (UITesting
+# configuration, so the UI_TESTING launch hooks exist) and the server crypto
+# library; N shard jobs each start a native backend
+# (apps/ios/scripts/native-backend.sh — Homebrew PostgreSQL + `bun`, no
+# Docker) and run a disjoint, count-balanced slice of the test classes
+# (apps/ios/scripts/ui-tests.py). No retries: a flaky test is a failing test.
 
 name: iOS E2E
 
-# DISABLED on push/pull_request until #661 is resolved: the backend bootstrap
-# needs Docker, which GitHub-hosted macOS runners do not provide, so every
-# shard fails (exit 125) regardless of the change under test. Under the
-# "no red check" merge rule a check that cannot pass must be switched off
-# deliberately rather than merged around. Re-enable the triggers below in the
-# PR that closes #661.
 on:
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ios-e2e-pr-{0}', github.ref) || format('ios-e2e-push-{0}', github.sha) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}  # deny-all; per-job permissions below
 
 env:
   BUN_VERSION: "1.3.5"
-  TEST_ADMIN_PUBKEY: "79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
 
 jobs:
-  # ─── Detect Changed Files ─────────────────────────────────────
-  # Delegates to the SAME path map ci.yml's `changes` job uses — see
-  # .github/scripts/detect-changed-platforms.sh for the single source of
-  # truth (#664). Consolidated from what used to be this workflow's own
-  # `ios_related` regex. This workflow stays on `workflow_dispatch` only
-  # (see the header comment above `on:`) — that is an independent, deliberate
-  # decision pending #661, unrelated to the path-map consolidation here.
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    # Same guard, same scoping fix as ci.yml's `changes` job (#812) — kept in
-    # sync even though this workflow's `on:` block is currently
-    # `workflow_dispatch` only (#661), so `github.event_name` here is never
-    # `push` today. Fixing it anyway so re-enabling `pull_request`/`push`
-    # later doesn't silently reintroduce the bug this job was copy-pasted
-    # from.
-    if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
-
-    outputs:
-      ios_related: ${{ steps.filter.outputs.ios }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - name: Detect changes
-        id: filter
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-            HEAD="${{ github.event.pull_request.head.sha }}"
-          else
-            BASE="${{ github.event.before }}"
-            HEAD="${{ github.event.after }}"
-          fi
-
-          if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
-            BASE="HEAD^"
-          fi
-          if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
-            HEAD="HEAD"
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
-          echo "$CHANGED"
-
-          printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
-
-  # ─── Build App + Backend Once ──────────────────────────────────
-  ios-e2e-build:
-    needs: changes
-    if: needs.changes.outputs.ios_related == 'true'
+  build:
+    name: build
     runs-on: macos-latest
     permissions:
       contents: read
     timeout-minutes: 45
-
-    outputs:
-      simulator: ${{ steps.sim.outputs.device }}
 
     steps:
       - name: Checkout
@@ -102,12 +50,8 @@ jobs:
       - name: Install dependencies and run codegen
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
-      # Fails fast, before the expensive XCFramework/simulator build, the
-      # moment a test references an accessibility identifier the app no
-      # longer defines anywhere (see #755). New regressions fail the build;
-      # pre-existing, unrelated stale identifiers are tracked in
-      # stale-identifiers-baseline.txt so this doesn't block on debt this
-      # check didn't introduce.
+      # Fails fast, before the expensive build, the moment a test references
+      # an accessibility identifier the app no longer defines anywhere (#755).
       - name: Check for stale accessibility identifiers in iOS UI tests
         run: python3 apps/ios/scripts/check-stale-identifiers.py
 
@@ -122,15 +66,15 @@ jobs:
             packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
-      - name: Install Rust stable (for crypto xcframework)
-        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+      # Needed on every run: the server crypto library (below) is built here
+      # even when the XCFramework comes from cache.
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache
-        if: steps.xcframework-cache.outputs.cache-hit != 'true'
         uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: packages/crypto
@@ -143,15 +87,12 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Copy UniFFI bindings (from build or cache)
-        run: |
-          cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+        run: cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
 
-      - name: Check for hardcoded secrets in Swift source
-        run: |
-          if grep -rE '[0-9a-f]{64}' apps/ios/Sources/ --include="*.swift" | grep -v 'gitleaks:allow'; then
-            echo "ERROR: Potential hardcoded hex secret found in iOS source"
-            exit 1
-          fi
+      # The backend's crypto goes through bun:ffi into this library
+      # (packages/crypto/ffi.ts); the shards run the server natively.
+      - name: Build server crypto library
+        run: packages/crypto/scripts/build-server.sh
 
       - name: Install xcodegen
         run: brew install xcodegen
@@ -172,55 +113,58 @@ jobs:
                       if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
                           print(d['name'])
                           sys.exit(0)
-          print('iPhone 16')
+          sys.exit('no available iPhone simulator')
           ")
           echo "device=$SIM" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $SIM"
 
-      - name: Build app for testing
+      # UITesting configuration: the UI_TESTING launch hooks the suite relies
+      # on (--test-authenticated, --test-hub-url, ...) are compiled out of
+      # every other configuration.
+      - name: Build app + UI tests for testing
         working-directory: apps/ios
         run: |
-          xcodebuild build-for-testing \
-            -project Llamenos.xcodeproj \
-            -scheme Llamenos \
-            -configuration UITesting \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath /tmp/llamenos-build \
-            -parallelizeTargets \
-            EAGER_LINKING=YES \
-            DEBUG_INFORMATION_FORMAT=dwarf
+          if ! xcodebuild build-for-testing \
+              -project Llamenos.xcodeproj \
+              -scheme Llamenos \
+              -configuration UITesting \
+              -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+              -derivedDataPath /tmp/llamenos-build \
+              -parallelizeTargets \
+              EAGER_LINKING=YES \
+              DEBUG_INFORMATION_FORMAT=dwarf \
+              >/tmp/build-for-testing.log 2>&1; then
+            grep -E "error:" /tmp/build-for-testing.log | head -50
+            tail -40 /tmp/build-for-testing.log
+            exit 1
+          fi
+          grep -E "\*\* TEST BUILD" /tmp/build-for-testing.log
+          # The scheme regression this workflow was dark behind (#168): a
+          # build that succeeds without producing the UI test runner.
+          test -d /tmp/llamenos-build/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
+            || { echo "::error::build-for-testing produced no LlamenosUITests-Runner.app"; exit 1; }
 
-      - name: Upload test build artifacts
+      - name: Upload test build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-build-${{ github.run_id }}
+          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             /tmp/llamenos-build/Build/Products/
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
 
-      - name: Build backend bundle
-        run: bun run build:server
-
-      - name: Upload backend bundle + tools
+      - name: Upload server crypto library
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-backend-${{ github.run_id }}
-          path: |
-            dist/server/
-            scripts/run-migrations.ts
-            node_modules/
-            bun.lockb
-            package.json
+          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/crypto/dist/server/libllamenos_core.dylib
           retention-days: 1
-          compression-level: 1
           if-no-files-found: error
 
-  # ─── Run E2E Tests (4 Shards) ─────────────────────────────────
-  ios-e2e:
-    needs: [changes, ios-e2e-build]
-    if: needs.changes.outputs.ios_related == 'true'
+  ui:
+    name: ui (${{ matrix.shard }})
+    needs: build
     runs-on: macos-latest
     permissions:
       contents: read
@@ -232,7 +176,7 @@ jobs:
         shard: [0, 1, 2, 3]
 
     steps:
-      - name: Checkout (for test file discovery)
+      - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Bun
@@ -240,19 +184,26 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Download test build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
-        with:
-          name: ios-e2e-build-${{ github.run_id }}
-          path: /tmp/llamenos-build/Build/Products/
-          if-no-files-found: error
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Download backend bundle
+      - name: Download test build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-backend-${{ github.run_id }}
-          path: .
-          if-no-files-found: error
+          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/llamenos-build/Build/Products/
+
+      - name: Download server crypto library
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        with:
+          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/crypto/dist/server/
+
+      - name: Start native backend
+        run: apps/ios/scripts/native-backend.sh start
+
+      - name: Disable macOS application firewall
+        run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
 
       - name: Detect simulator
         id: sim
@@ -266,106 +217,55 @@ jobs:
                       if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
                           print(d['name'])
                           sys.exit(0)
-          print('iPhone 16')
+          sys.exit('no available iPhone simulator')
           ")
           echo "device=$SIM" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $SIM"
 
-      # ─── Docker (not pre-installed on macOS runners) ───────────
-      - name: Setup Docker
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
-
-      # ─── Start Backend Services ────────────────────────────────
-      - name: Bootstrap backend
-        uses: ./.github/actions/bootstrap-backend
-        with:
-          admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
-
-      - name: Disable macOS firewall for tests
-        run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
-
-      # ─── Create Test Hub for This Shard ────────────────────────
-      - name: Create test hub for shard ${{ matrix.shard }}
-        id: hub
+      - name: Select test classes for shard ${{ matrix.shard }}
+        id: shard
         run: |
-          RESPONSE=$(curl -s -X POST http://127.0.0.1:3000/api/test-create-hub \
-            -H "Content-Type: application/json" \
-            -H "X-Test-Secret: test-reset-secret" \
-            -d "{\"name\":\"ios-e2e-shard-${{ matrix.shard }}\",\"description\":\"iOS E2E test hub for shard ${{ matrix.shard }}\"}")
-          echo "Response: $RESPONSE"
-          HUB_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-          if [ -z "$HUB_ID" ]; then
-            echo "::error::Failed to create test hub"
-            exit 1
-          fi
-          echo "hub_id=$HUB_ID" >> "$GITHUB_OUTPUT"
-          echo "Created hub $HUB_ID for shard ${{ matrix.shard }}"
+          python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} | tee /tmp/shard-args.txt
+          test -s /tmp/shard-args.txt || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
-      # ─── Determine Tests for This Shard ────────────────────────
-      - name: Collect UI test classes for this shard
-        id: shard-tests
-        run: |
-          # Find all UI test files and sort them
-          TEST_FILES=($(find apps/ios/Tests/UI -name "*UITests.swift" -o -name "*Tests.swift" | grep -v "BaseUITest.swift" | sort))
-          TOTAL=${#TEST_FILES[@]}
-          echo "Total UI test files: $TOTAL"
-
-          SHARD_ID=${{ matrix.shard }}
-          TOTAL_SHARDS=${{ strategy.job-total }}
-
-          # Build -only-testing arguments for tests assigned to this shard
-          ONLY_TESTING_ARGS=""
-          IDX=0
-          for file in "${TEST_FILES[@]}"; do
-            if [ $((IDX % TOTAL_SHARDS)) -eq "$SHARD_ID" ]; then
-              CLASS_NAME=$(basename "$file" .swift)
-              ONLY_TESTING_ARGS="${ONLY_TESTING_ARGS} -only-testing:LlamenosUITests/${CLASS_NAME}"
-              echo "Shard ${SHARD_ID}: ${CLASS_NAME}"
-            fi
-            IDX=$((IDX + 1))
-          done
-
-          echo "tests=${ONLY_TESTING_ARGS}" >> "$GITHUB_OUTPUT"
-
-      # ─── Run XCUITests for This Shard ──────────────────────────
       - name: Run XCUITests (shard ${{ matrix.shard }})
-        working-directory: apps/ios
         run: |
+          set -o pipefail
+          XCTESTRUN=$(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
+          test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
+          # shellcheck disable=SC2046
           xcodebuild test-without-building \
-            -xctestrun $(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit) \
+            -xctestrun "$XCTESTRUN" \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
             -parallel-testing-enabled NO \
-            ${{ steps.shard-tests.outputs.tests }}
-        env:
-          TEST_HUB_ID: ${{ steps.hub.outputs.hub_id }}
-          TEST_HUB_URL: http://localhost:3000
+            -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 300 \
+            -resultBundlePath /tmp/ios-e2e-shard-${{ matrix.shard }}.xcresult \
+            $(cat /tmp/shard-args.txt) \
+            2>&1 | tee /tmp/xcodebuild-test.log
 
-      - name: Show backend runtime logs
+      - name: Report (shard ${{ matrix.shard }})
         if: ${{ !cancelled() }}
-        run: cat /tmp/backend.log || true
+        run: |
+          python3 apps/ios/scripts/ui-tests.py report /tmp/xcodebuild-test.log \
+            --json /tmp/ui-test-results-shard-${{ matrix.shard }}.json | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # ─── Upload Test Results ───────────────────────────────────
+      - name: Show backend log
+        if: ${{ !cancelled() }}
+        run: cat "$RUNNER_TEMP/llamenos-native-backend/server.log" || true
+
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() }}
         with:
           name: ios-e2e-results-shard-${{ matrix.shard }}
           path: |
-            /tmp/llamenos-build/Logs/Test/
-            apps/ios/build/reports/
+            /tmp/ios-e2e-shard-${{ matrix.shard }}.xcresult
+            /tmp/xcodebuild-test.log
+            /tmp/ui-test-results-shard-${{ matrix.shard }}.json
+            ${{ runner.temp }}/llamenos-native-backend/server.log
           retention-days: 7
 
-      - name: Tear down Docker Compose
+      - name: Stop native backend
         if: always()
-        run: |
-          docker compose --env-file .env \
-            -f deploy/docker/docker-compose.yml \
-            -f deploy/docker/docker-compose.test.yml \
-            down -v 2>/dev/null || true
-
-      - name: Stop backend services
-        if: always()
-        run: |
-          pkill -f "bun dist/server/index.js" || true
-          pkill -f rustfs || true
-          pg_ctl -D /tmp/pgdata stop 2>/dev/null || true
+        run: apps/ios/scripts/native-backend.sh stop
