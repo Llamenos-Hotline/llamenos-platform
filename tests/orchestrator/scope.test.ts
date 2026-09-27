@@ -918,6 +918,24 @@ describe('checkScopeAcross — cross-lane grants (#1115)', () => {
     })
 
     // The exclusion restricts GRANTS, never a lane's own scope.
+    // #1172 grants package.json/bun.lockb to every lane so a worker can propose
+    // a dependency instead of deleting the feature that needed it. That grant is
+    // for a lane's OWN PR. A self-applicable label must not widen an unrelated
+    // worker onto the manifest — install-time code execution is the most direct
+    // supply-chain reach there is. Caught by the fleet review on #1172.
+    it('refuses the dependency manifest and lockfile to a grant', () => {
+      const deps: LaneScope = { owned: ['package.json', 'bun.lockb', 'apps/worker/'], notOwned: [] }
+      const withManifests = [...excluded, 'package.json', 'bun.lockb']
+      const r = checkScopeAcross(['package.json', 'bun.lockb'], backend, [deps], never, withManifests)
+      expect(r.strayed).toEqual(['package.json', 'bun.lockb'])
+    })
+
+    it('still lets the owning lane write the manifest on its own PR', () => {
+      const deps: LaneScope = { owned: ['package.json', 'bun.lockb'], notOwned: [] }
+      const withManifests = [...excluded, 'package.json', 'bun.lockb']
+      expect(checkScopeAcross(['package.json'], deps, [], never, withManifests).strayed).toEqual([])
+    })
+
     it('does not stop the owning lane writing those paths on its own PR', () => {
       expect(checkScopeAcross(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, [], never, excluded).strayed)
         .toEqual([])
