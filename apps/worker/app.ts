@@ -84,8 +84,11 @@ app.onError((err, c) => {
   if (err instanceof ServiceError) {
     return c.json({ error: err.message }, err.status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500)
   }
-  // Log full error server-side — NEVER expose internals to clients
-  logger.error('Unhandled error', { error: err.message, stack: err.stack, path: c.req.path })
+  // Log full error server-side — NEVER expose internals to clients.
+  // Route through the logger's Error-unwrapping path so stack inclusion
+  // respects the stripStacks/LOG_STACKS control instead of bypassing it
+  // via an explicit `stack` extra field.
+  logger.error('Unhandled error', err, { path: c.req.path })
   return c.json({ error: 'Internal server error' }, 500)
 })
 

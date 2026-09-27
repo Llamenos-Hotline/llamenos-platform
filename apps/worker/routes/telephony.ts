@@ -119,7 +119,7 @@ telephony.post('/incoming',
   const services = c.get('services')
   const globalAdapter = (await getTelephonyFromService(c.env, services.settings))!
   const { callSid, callerNumber, calledNumber } = await globalAdapter.parseIncomingWebhook(c.req.raw)
-  logger.info('Incoming call', { callSid, callerLast4: callerNumber.slice(-4), calledNumber: calledNumber || 'unknown' })
+  logger.info('Incoming call', { callSid })
 
   // Look up which hub owns the called phone number
   let hubId: string | undefined
@@ -127,7 +127,7 @@ telephony.post('/incoming',
     try {
       const { hub } = await services.settings.getHubByPhone(calledNumber)
       hubId = hub.id
-      logger.info('Resolved hub for incoming call', { hubId, calledNumber })
+      logger.info('Resolved hub for incoming call', { hubId })
     } catch {
       // No hub found for this number
     }

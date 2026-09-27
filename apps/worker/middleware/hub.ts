@@ -2,6 +2,9 @@ import type { Context, Next } from 'hono'
 import type { AppEnv } from '../types'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('middleware.hub')
 
 /**
  * Hub middleware: extracts hubId from URL params, validates the user
@@ -45,7 +48,7 @@ export async function hubContext(c: Context<AppEnv>, next: Next): Promise<Respon
       hubRoles: user.hubRoles,
     }
     if (c.env?.ENVIRONMENT === 'development') {
-      console.warn(`[hub] Access denied: ${JSON.stringify(diag)}`)
+      logger.warn('Access denied', diag)
       return c.json({ error: 'Access denied', debug: diag }, 403)
     }
     return c.json({ error: 'Access denied' }, 403)
