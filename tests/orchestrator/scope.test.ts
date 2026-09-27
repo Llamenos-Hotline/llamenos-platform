@@ -86,7 +86,7 @@ describe('checkScope', () => {
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
         'package.json',
-        'bun.lock',
+        'bun.lockb',
       ])
       expect(backend.notOwned).toEqual([
         'tests/',
@@ -107,7 +107,7 @@ describe('checkScope', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'package.json',
-        'bun.lock',
+        'bun.lockb',
       ])
       expect(desktop.notOwned).toEqual([
         'tests/steps/backend/',

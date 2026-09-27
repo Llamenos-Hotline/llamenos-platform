@@ -200,7 +200,7 @@ describe('loadLaneScopes against the real fragments', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'package.json',
-        'bun.lock',
+        'bun.lockb',
       ],
       notOwned: [
         'tests/steps/backend/',
@@ -229,7 +229,7 @@ describe('loadLaneScopes against the real fragments', () => {
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
         'package.json',
-        'bun.lock',
+        'bun.lockb',
       ],
       notOwned: [
         'tests/',
