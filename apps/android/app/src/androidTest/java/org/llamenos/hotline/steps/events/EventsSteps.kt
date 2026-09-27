@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import io.cucumber.java.en.And
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
@@ -140,21 +141,33 @@ class EventsSteps : BaseSteps() {
 
     @Then("I should see the details tab in event detail")
     fun iShouldSeeTheDetailsTabInEventDetail() {
-        assertAnyTagDisplayed("event-tab-details", timeoutMillis = 10_000)
+        assertEventTabReachable("details", timeoutMillis = 10_000)
     }
 
     @And("I should see the sub-events tab")
     fun iShouldSeeTheSubEventsTab() {
-        assertAnyTagDisplayed("event-tab-sub_events")
+        assertEventTabReachable("sub_events")
     }
 
     @And("I should see the linked cases tab")
     fun iShouldSeeTheLinkedCasesTab() {
-        assertAnyTagDisplayed("event-tab-linked_cases")
+        assertEventTabReachable("linked_cases")
     }
 
     @And("I should see the linked reports tab")
     fun iShouldSeeTheLinkedReportsTab() {
-        assertAnyTagDisplayed("event-tab-linked_reports")
+        assertEventTabReachable("linked_reports")
+    }
+
+    /**
+     * The event detail tabs sit in a horizontally scrolling tab row that is wider
+     * than a phone screen, so later tabs start off-screen. Scroll the tab into
+     * view the way a user swipes the row, then require it to be displayed.
+     */
+    private fun assertEventTabReachable(slug: String, timeoutMillis: Long = 5_000) {
+        val tag = "event-tab-$slug"
+        waitForNode(tag, timeoutMillis)
+        onNodeWithTag(tag).performScrollTo()
+        onNodeWithTag(tag).assertIsDisplayed()
     }
 }
