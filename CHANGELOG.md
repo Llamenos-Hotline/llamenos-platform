@@ -404,6 +404,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.19.19 (2026-09-27)
+
+### Features
+
+- scope:<lane> grants make cross-lane PRs expressible (#1117)
+- one batched fleet/review, triggered by a review request (#1164)
+
+### Fixes
+
+- do not ring volunteers already on a live call in any hub (#1077)
+- backend owns the shared test helpers its own suite imports (#1116)
+- inbound webhooks 500 on Bun — use backgroundTask, not c.executionCtx (#1132) (#1157)
+- let a worker refuse a worse fix, and give migrations an owner (#1181)
+- fail generation on unbound scenarios instead of silently skipping them (#1153) (#1199)
+
 ## 0.19.18 (2026-09-26)
 
 ### Fixes
