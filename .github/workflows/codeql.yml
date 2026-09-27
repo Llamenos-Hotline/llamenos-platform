@@ -1,0 +1,327 @@
+# CodeQL — advanced setup (replaces GitHub-managed default setup)
+#
+# Why this file exists: the merge queue. GitHub only runs a workflow on the
+# queue's own ref (`gh-readonly-queue/main/...`) if it triggers on
+# `merge_group`, and default setup's triggers are fixed ("push and pull
+# requests to main and protected branches" + weekly) — there is no merge_group
+# option. With default setup, nothing analysed or uploaded on the queue's ref,
+# so the required `CodeQL` context never reported there and the queue ejected
+# every entry for "timed out awaiting a successful CI result".
+#
+# ─── What the required `CodeQL` context actually is ─────────────────────────
+# It was never a job. Under default setup — and under this file — the
+# `CodeQL` check-run on a pull request is created by the
+# github-advanced-security app once the analyses below upload: the alert gate,
+# "Code scanning results / CodeQL" ("No new alerts in code changed by this
+# pull request"). The `Analyze (<lang>)` jobs feed it; they are not it.
+#
+# The `codeql` rollup job at the bottom is named for the event:
+#   - pull_request → `CodeQL analysis`. Deliberately NOT `CodeQL`, so it
+#     never sits beside the GHAS alert gate under the same name. The ruleset
+#     pins no app for this context, and GitHub documents what happens when a
+#     check-run and a commit status share a required name (both must pass)
+#     but not when two check-runs from different apps do. A green rollup that
+#     might stand in for a red alert gate is not a risk worth one check name.
+#   - every other event → `CodeQL`. On `merge_group` that is what makes the
+#     required context report on the queue's ref at all — independently of
+#     whether GHAS also creates its results check there.
+#
+# ─── merge_group runs the full matrix ───────────────────────────────────────
+# The queue's commit (main + the queued PRs) is exactly what lands on main,
+# so it gets analysed, not rubber-stamped. Cost: the slowest leg is rust
+# (~8 min avg, 9 min max under default setup) against a median ci.yml PR run
+# of ~34 min, so CodeQL never becomes the queue's critical path; the price is
+# five ubuntu-latest jobs of the Free plan's 20-concurrent-job pool per entry,
+# for ~12 runner-minutes in total. Minutes themselves are free: this is a
+# public repository.
+#
+# ─── Languages: exact parity with default setup ─────────────────────────────
+# Default setup's API listed seven identifiers: actions, javascript,
+# javascript-typescript, python, ruby, rust, typescript. Three of them are ONE
+# analysis — GitHub's CodeQL language-identifier table lists `javascript` and
+# `typescript` as alternative identifiers for `javascript-typescript`, and
+# codeql-action's own alias table (src/languages/builtin.json at the SHA
+# pinned below) maps both `javascript-typescript` and `typescript` to the
+# `javascript` extractor, which init de-duplicates into a single analysis:
+#
+#   javascript-typescript ─┐
+#   javascript            ─┼─► one JS/TS analysis (the `javascript` extractor)
+#   typescript            ─┘
+#
+# Default setup itself ran exactly the five legs below — build-mode none,
+# category `/language:<identifier>` (code-scanning analyses API) — so the
+# matrix reproduces them one for one, with the same categories, so the alert
+# history carries over. `actions`, `python`, `ruby` and `rust` have no
+# aliases; `rust` is packages/crypto, the most security-critical code in the
+# repo.
+#
+# scripts/check-codeql-languages.ts commits the seven identifiers and the
+# alias table, and fails CI (ci.yml `docs-guard`, inside the required
+# `ci-status`) if this matrix stops covering exactly them. Dropping a leg is
+# a red check, not a silent loss of coverage.
+#
+# Query suite and threat model match default setup: no `queries:` input means
+# the `default` suite, and no `threat-models` configuration means `remote`.
+#
+# ─── Staged, NOT required: java-kotlin and swift (#1243) ────────────────────
+# Default setup never analysed apps/android/ or apps/ios/. The two
+# `Analyze staged (...)` jobs start that — visibly, and without any route to
+# blocking a merge:
+#   - neither is in the `codeql` rollup's `needs`, and the rollup reads only
+#     `needs.analyze.result`, so its verdict is independent of theirs;
+#   - neither runs on `pull_request` or `merge_group`, so neither uploads
+#     results for a PR or queue commit, and neither can add alerts to the
+#     GHAS `CodeQL` alert gate a PR is judged by;
+#   - their names never equal a required context.
+# One visible side effect: once they have uploaded on main, a PR's GHAS
+# `CodeQL` check notes that the java-kotlin/swift configurations present on
+# main were not found for the PR. That is a warning in the check's summary,
+# not a failure.
+# Promotion to required (run on pull_request and merge_group, and join the
+# rollup's `needs`) waits until both are reliably green, and needs a
+# deliberate ruleset edit and a matching change to the rail's expected set.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # The merge queue's own ref. See ci.yml's `on:` block: a required context
+  # that never reports on the queue's ref blocks the queue forever.
+  merge_group:
+    types: [checks_requested]
+  # Weekly, as default setup was. Also the only automatic trigger for the
+  # staged swift job (see its comment for why).
+  schedule:
+    - cron: "27 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('codeql-pr-{0}', github.ref) || format('codeql-{0}-{1}', github.event_name, github.sha) }}
+  # Never cancelled outside pull_request: a merge_group run cancelled mid-way
+  # leaves `CodeQL` missing on the queue's ref, which stalls the queue instead
+  # of failing it (same reasoning as ci.yml's concurrency block).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}  # deny-all; per-job permissions below
+
+env:
+  BUN_VERSION: "1.3.5"
+
+jobs:
+  # ─── Required legs: exact parity with default setup ───────────────────
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    timeout-minutes: 30
+    strategy:
+      # A cancelled leg uploads nothing; let every leg finish and let the
+      # rollup report the failure.
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+          - language: javascript-typescript
+          - language: python
+          - language: ruby
+          - language: rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+
+  # ─── Staged, not required: java-kotlin (#1243) ────────────────────────
+  # Kotlin needs a traced compile — build-mode none would analyse the Java
+  # and skip every .kt file with only a warning. On main pushes as well as the
+  # weekly schedule: it runs on ubuntu-latest, which costs nothing here.
+  analyze-java-kotlin:
+    name: Analyze staged (java-kotlin)
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The app compiles generated protocol types and I18n.kt, which are
+      # gitignored. Generated before init, so only the Gradle build is traced.
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      - name: Setup Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: java-kotlin
+          build-mode: manual
+
+      # --no-build-cache: gradle.properties sets org.gradle.caching=true, and
+      # a compile task restored FROM-CACHE never runs kotlinc — CodeQL would
+      # extract nothing and report an empty, green analysis.
+      - name: Build (traced)
+        working-directory: apps/android
+        run: ./gradlew --no-daemon --no-build-cache compileDebugKotlin --console=plain
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:java-kotlin
+
+  # ─── Staged, not required: swift (#1243) ──────────────────────────────
+  # Swift analysis needs macOS. The minutes are free on this public repo, but
+  # the Free plan allows only 5 concurrent macOS jobs across every workflow,
+  # shared with ci.yml's ios-build-test and ios-e2e.yml. A 30-45 minute build
+  # on every push to main would hold one of those slots for most of the day,
+  # so this runs weekly and on demand only.
+  analyze-swift:
+    name: Analyze staged (swift)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      # Same cache key as ci.yml's ios-build-test: the XCFramework and the
+      # UniFFI Swift bindings must come from the same Rust build.
+      - name: Cache crypto XCFramework + bindings
+        id: xcframework-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/ios/LlamenosCoreFFI.xcframework
+            packages/crypto/dist/ios/LlamenosCore.swift
+          key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
+
+      - name: Install Rust stable (for crypto xcframework)
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Rust cache
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/crypto
+
+      - name: Build crypto XCFramework
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/crypto
+          ./scripts/build-mobile.sh ios
+          cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
+
+      - name: Copy UniFFI bindings (from build or cache)
+        run: cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      # Initialised after the Rust build and project generation, so only
+      # xcodebuild is traced.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: swift
+          build-mode: manual
+
+      # A fresh DerivedData path, never a restored one: an incremental build
+      # that skips swiftc extracts nothing. One simulator architecture, as
+      # CodeQL recommends; signing is irrelevant to analysis.
+      - name: Build (traced)
+        working-directory: apps/ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Llamenos.xcodeproj \
+            -scheme Llamenos \
+            -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$RUNNER_TEMP/codeql-deriveddata" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:swift
+
+  # ─── Rollup (see the header for why the name depends on the event) ────
+  # Needs ONLY the required matrix. `needs.analyze.result` is `success` only
+  # if every leg succeeded; a failed, cancelled or skipped leg fails this job
+  # — unlike ci-status, `skipped` is not accepted, because `analyze` has no
+  # condition under which skipping it would be legitimate.
+  codeql:
+    name: ${{ github.event_name == 'pull_request' && 'CodeQL analysis' || 'CodeQL' }}
+    needs: [analyze]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+
+    steps:
+      - name: Require every required leg to have analysed and uploaded
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: |
+          if [[ "$ANALYZE_RESULT" != "success" ]]; then
+            echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage — see the Analyze (<language>) jobs."
+            exit 1
+          fi
+          echo "All required CodeQL legs analysed and uploaded."

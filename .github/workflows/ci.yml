@@ -1419,6 +1419,18 @@ jobs:
       - name: Check ECIES in active sections
         run: bash scripts/check-ecies-active.sh
 
+      # No `bun install`: the rail uses only Bun's built-in YAML parser.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # codeql.yml's required legs must cover exactly the languages default
+      # setup analysed — dropping one (e.g. rust, packages/crypto) fails here
+      # instead of silently shrinking SAST coverage.
+      - name: Check CodeQL language coverage
+        run: bun scripts/check-codeql-languages.ts
+
   docker-canary:
     needs: ci-status
     if: github.ref == 'refs/heads/main' && needs.ci-status.result == 'success'
