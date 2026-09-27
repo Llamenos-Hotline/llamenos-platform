@@ -1499,7 +1499,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    prLabels: () => readPrLabels(ctx.pr),
+    prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
   })),
   'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
@@ -1508,7 +1508,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    prLabels: () => readPrLabels(ctx.pr),
+    prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     prDiff: () => ciDiff(ctx),
     secondOpinion,
     // Decided HERE, from a live read of the PR — never handed in by the
