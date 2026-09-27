@@ -217,6 +217,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'src/server/',
         'tests/steps/backend/',
         'tests/steps/fixtures.ts',
+        'tests/api-helpers.ts',
+        'tests/simulation-helpers.ts',
         '.github/ci/*-baseline.json',
         'eslint.config.js',
         'lefthook.yml',
