@@ -22,6 +22,18 @@ import { TestIds } from '../test-ids'
 
 const SESSION_TOKEN_KEY = 'llamenos-session-token'
 
+/**
+ * The dev/test globals `src/client/main.tsx` puts on `window` that this spec
+ * reads, typed as the app assigns them (tests/global-window.d.ts declares only
+ * some of them, all optional).
+ */
+interface TestWindow {
+  __TEST_PLATFORM: typeof import('../../src/client/lib/platform')
+  __TEST_API_CONFIG: typeof import('../../src/client/lib/api-config')
+  __TEST_GET_ACTIVE_HUB: () => string | null
+  __TEST_SIMULATE_PACKAGED_TAURI__?: boolean
+}
+
 interface LiveSession {
   /** Rust CryptoState, as mirrored by the IPC mock. */
   cryptoUnlocked: boolean
@@ -46,8 +58,8 @@ async function useOwnHub(page: Page, request: APIRequestContext): Promise<string
 
 async function readLiveSession(page: Page): Promise<LiveSession> {
   return page.evaluate(async (tokenKey) => ({
-    cryptoUnlocked: await window.__TEST_PLATFORM.isCryptoUnlocked(),
-    activeHub: window.__TEST_GET_ACTIVE_HUB(),
+    cryptoUnlocked: await (window as unknown as TestWindow).__TEST_PLATFORM.isCryptoUnlocked(),
+    activeHub: (window as unknown as TestWindow).__TEST_GET_ACTIVE_HUB(),
     sessionToken: sessionStorage.getItem(tokenKey),
   }), SESSION_TOKEN_KEY)
 }
@@ -60,11 +72,12 @@ async function readLiveSession(page: Page): Promise<LiveSession> {
 async function simulatePackagedBuildOnOwnOrigin(page: Page): Promise<string> {
   const origin = new URL(page.url()).origin
   await page.addInitScript(() => {
-    window.__TEST_SIMULATE_PACKAGED_TAURI__ = true
+    (window as unknown as TestWindow).__TEST_SIMULATE_PACKAGED_TAURI__ = true
   })
   await page.evaluate(async (appOrigin) => {
-    await window.__TEST_API_CONFIG.setApiBase(appOrigin)
-    window.__TEST_SIMULATE_PACKAGED_TAURI__ = true
+    const w = window as unknown as TestWindow
+    await w.__TEST_API_CONFIG.setApiBase(appOrigin)
+    w.__TEST_SIMULATE_PACKAGED_TAURI__ = true
   }, origin)
   return origin
 }
@@ -95,7 +108,7 @@ async function recordStateAtUnload(page: Page): Promise<void> {
   await page.evaluate(({ tokenKey, snapshotKey }) => {
     const invoke = (window as unknown as Record<symbol, (cmd: string) => Promise<boolean>>)[Symbol.for('llamenos_test_invoke')]
     window.addEventListener('beforeunload', () => {
-      const activeHub = window.__TEST_GET_ACTIVE_HUB()
+      const activeHub = (window as unknown as TestWindow).__TEST_GET_ACTIVE_HUB()
       const sessionToken = sessionStorage.getItem(tokenKey)
       void invoke('is_crypto_unlocked').then(cryptoUnlocked => {
         sessionStorage.setItem(snapshotKey, JSON.stringify({ cryptoUnlocked, activeHub, sessionToken }))
@@ -123,14 +136,14 @@ async function openInviteScreenWithLiveSession(page: Page, hubId: string): Promi
   await page.reload()
   await page.waitForURL(url => url.pathname === '/login', { timeout: Timeouts.AUTH })
   await page.evaluate(async (pin) => {
-    if (!await window.__TEST_PLATFORM.unlockStoredKeys(pin)) throw new Error('stored device key did not unlock')
+    if (!await (window as unknown as TestWindow).__TEST_PLATFORM.unlockStoredKeys(pin)) throw new Error('stored device key did not unlock')
   }, TEST_PIN)
   await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
 
   await navigateInApp(page, '/onboarding')
   await expect(page.getByTestId(TestIds.INVITE_CODE_CHANGE_SERVER)).toBeVisible({ timeout: Timeouts.ELEMENT })
   // /api/config names the hubs for signed-out clients too, so one is active here.
-  await page.waitForFunction((id) => window.__TEST_GET_ACTIVE_HUB() === id, hubId, { timeout: Timeouts.API })
+  await page.waitForFunction((id) => (window as unknown as TestWindow).__TEST_GET_ACTIVE_HUB() === id, hubId, { timeout: Timeouts.API })
 
   const before = await readLiveSession(page)
   expect(before.cryptoUnlocked, 'precondition: CryptoState must start unlocked').toBe(true)
@@ -169,7 +182,7 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     const session = await readLiveSession(page)
     expect(session.cryptoUnlocked).toBe(true)
     expect(session.activeHub).toBe(hubId)
-    expect(await page.evaluate(() => window.__TEST_API_CONFIG.getApiBase())).toBe(origin)
+    expect(await page.evaluate(() => (window as unknown as TestWindow).__TEST_API_CONFIG.getApiBase())).toBe(origin)
   })
 
   test('using a different server from the invite-code screen locks the key, drops the session token and clears the hub before reloading', async ({ page, request }) => {
@@ -210,8 +223,8 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     // confirmation was asked for, because nothing after a declined one runs.
     expect(await readLiveSession(page)).toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
     expect(await page.evaluate(() => ({
-      apiBase: window.__TEST_API_CONFIG.getApiBase(),
-      staged: window.__TEST_API_CONFIG.peekPendingServerAddress(),
+      apiBase: (window as unknown as TestWindow).__TEST_API_CONFIG.getApiBase(),
+      staged: (window as unknown as TestWindow).__TEST_API_CONFIG.peekPendingServerAddress(),
       notReloaded: (window as unknown as Record<string, unknown>).__TEST_NOT_RELOADED__,
     }))).toEqual({ apiBase: origin, staged: null, notReloaded: true })
   })
@@ -229,7 +242,7 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     // the reload. The mock cannot keep CryptoState across a reload, so the same
     // state is reached in place: the address is forgotten beneath the live
     // session, and the next render shows the first-run screen.
-    await page.evaluate(() => window.__TEST_API_CONFIG.resetApiBase())
+    await page.evaluate(() => (window as unknown as TestWindow).__TEST_API_CONFIG.resetApiBase())
     await navigateInApp(page, '/')
     await expect(page.getByTestId(TestIds.SERVER_ADDRESS_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
 
@@ -238,14 +251,13 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
   })
 
   test('an invite code the server could not be reached to check is not reported as invalid', async ({ page }) => {
-    // A fresh install, configured through the real first-run screen.
-    await page.addInitScript(() => {
-      window.__TEST_SIMULATE_PACKAGED_TAURI__ = true
-    })
-    await page.goto('/')
-    await page.getByTestId(TestIds.SERVER_ADDRESS_INPUT).fill(new URL(page.url()).origin)
-    await page.getByTestId(TestIds.SERVER_ADDRESS_SUBMIT).click()
-    await page.waitForURL(url => url.pathname === '/login', { timeout: Timeouts.AUTH })
+    // A fresh install (no device key) on a packaged build with a server
+    // configured. Configured directly rather than through the first-run form:
+    // this test is about what the invite screen makes of a validation failure,
+    // and the form's health probe depends on the whole backend being healthy.
+    await page.goto('/login')
+    await simulatePackagedBuildOnOwnOrigin(page)
+    await page.reload()
     await page.getByTestId(TestIds.HAVE_INVITE_CODE_BTN).click()
     await expect(page.getByTestId(TestIds.INVITE_CODE_INPUT)).toBeVisible({ timeout: Timeouts.ELEMENT })
 
