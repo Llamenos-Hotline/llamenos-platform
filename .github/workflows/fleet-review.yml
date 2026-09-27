@@ -731,12 +731,16 @@ jobs:
           # / KNOPE_RELEASE_BRANCH in YAML, where nothing tests them and they
           # will drift. That is the whole reason #1213 exists and why it is a
           # deletion, not a maintenance task.
-          FLEET_REVIEW_REQUESTED: >-
-            ${{ github.event_name == 'workflow_dispatch'
-            || (github.event_name == 'pull_request'
-            && (github.event.requested_reviewer.login == 'llamenos-auto'
-            || (github.event.requested_reviewer.login == 'rhonda-rodododo'
-            && github.event.pull_request.head.ref == 'release'))) }}
+          #
+          # Deliberately ONE long line, not a `>-` folded scalar: the rail
+          # "no label value is ever interpolated into a shell script — env
+          # only" (specialist.test.ts) requires every `${{ }}` mentioning
+          # `requested_reviewer` to sit on its own `key:` assignment line, so
+          # that a reviewer login can never be found inside a `run:` body.
+          # Folding puts the expression on a bare continuation line and trips
+          # that rail — correctly, since the rail cannot tell a folded env
+          # value from a shell heredoc.
+          FLEET_REVIEW_REQUESTED: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.requested_reviewer.login == 'llamenos-auto' || (github.event.requested_reviewer.login == 'rhonda-rodododo' && github.event.pull_request.head.ref == 'release'))) }}
           # A re-published cached verdict is written here too, so a cache
           # hit still reads as a review on the PR rather than a bare status.
           FLEET_REVIEW_REPORT_DIR: ${{ runner.temp }}/review-report
