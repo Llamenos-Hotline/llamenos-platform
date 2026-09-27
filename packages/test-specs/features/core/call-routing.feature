@@ -47,11 +47,8 @@ Feature: Call Routing & History
     When a call needs to be routed
     Then all 3 volunteers should be in the ring group
 
-  @backend
-  Scenario: Exclude busy volunteers from ring group
-    Given a shift with 3 volunteers and 1 is on a call
-    When a call needs to be routed
-    Then only 2 volunteers should be in the ring group
+  # Busy-volunteer exclusion is asserted against the server's real ring set in
+  # demo-mock-telephony.feature (#1018).
 
   # The fallback group's ring behaviour (which volunteers are actually rung when no shift is
   # active) is asserted against the real ringing service in demo-mock-telephony.feature (#1017).
