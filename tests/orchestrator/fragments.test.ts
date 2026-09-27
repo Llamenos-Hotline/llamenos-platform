@@ -346,6 +346,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'lefthook.yml',
         'packages/test-specs/features/',
         'packages/i18n/locales/',
+        'package.json',
+        'bun.lock',
       ],
       notOwned: [
         'tests/steps/backend/',
@@ -375,6 +377,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'scripts/test-backend-bdd.sh',
         'drizzle/',
         'drizzle.config.ts',
+        'package.json',
+        'bun.lock',
       ],
       notOwned: [
         'tests/',
