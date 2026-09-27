@@ -14,13 +14,11 @@ call-in-progress
 call-ringing-indicator
 dashboard-active-call
 dashboard-events-action
-empty-state
 event-detail-tabs
 events-empty
 hubs-empty
 incoming-call-banner
 login-recover-account
-notes-empty
 recovery-hub-url-input
 recovery-requests-view
 recovery-start-button

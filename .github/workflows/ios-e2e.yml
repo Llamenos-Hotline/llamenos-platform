@@ -245,6 +245,16 @@ jobs:
 
       # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
       # manual dispatch run it too.
+      # Boot before the first test: booting on a 3-core runner starved the backend
+      # badly enough that the first class's hub creation took 30-49s (runs
+      # 36343743065, 36348376614).
+      - name: Boot simulator
+        env:
+          DEVICE: ${{ steps.sim.outputs.device }}
+        run: |
+          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE" -b
+
       - name: Select test classes for shard ${{ matrix.shard }}
         id: shard
         env:

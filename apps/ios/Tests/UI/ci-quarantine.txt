@@ -31,3 +31,21 @@ HubCommunicationsUITests/testProviderStepRendersContent  # Communications contra
 HubCommunicationsUITests/testStartFromScratchOptionExists  # Communications contract mismatch — #1242
 HubCommunicationsUITests/testSummaryStepRendersContent  # Communications contract mismatch — #1242
 HubCommunicationsUITests/testTemplateListAppearsOnFirstStep  # Communications contract mismatch — #1242
+
+# Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
+RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
+
+# AdminSidebarView is referenced only by its own #Preview; the app shows AdminTabView.
+AdminSidebarUITests/testAdminSidebarListExists  # tests a view the app never presents — #1245
+AdminSidebarUITests/testThisHubScopeHeaderVisible  # tests a view the app never presents — #1245
+AdminSidebarUITests/testPlatformScopeHeaderVisible  # tests a view the app never presents — #1245
+AdminSidebarUITests/testThisHubNavItemsPresent  # tests a view the app never presents — #1245
+AdminSidebarUITests/testAllThisHubNavItemsRendered  # tests a view the app never presents — #1245
+AdminSidebarUITests/testPlatformNavItemsPresent  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapLocationLookupNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapCallSettingsNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapBansNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapPlatformHubsNavigates  # tests a view the app never presents — #1245
+
+# navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
+EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245

@@ -87,7 +87,9 @@ class BaseUITest: XCTestCase {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(secret, forHTTPHeaderField: "X-Test-Secret")
-        request.timeoutInterval = 15
+        // Setup, not an assertion: the first request on a freshly booted CI runner has
+        // taken 30-49s, and a class without a hub fails every connected test in it.
+        request.timeoutInterval = 60
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": hubName])
 
         var hubId = ""
@@ -109,7 +111,7 @@ class BaseUITest: XCTestCase {
                 hubId = id
             }
         }.resume()
-        _ = semaphore.wait(timeout: .now() + 15)
+        _ = semaphore.wait(timeout: .now() + 65)
         if hubId.isEmpty {
             print("Warning: createClassHub(\(className)) returned empty hub ID — is the backend running?")
         }

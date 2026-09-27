@@ -135,8 +135,7 @@ final class HubSwitchUITests: BaseUITest {
             // Either the notes list or empty state must appear — no error screen
             let loaded = anyElementExists([
                 "notes-list",
-                "empty-state",
-                "notes-empty",
+                "notes-empty-state",
             ], timeout: 10)
             XCTAssertTrue(
                 loaded,

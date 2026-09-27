@@ -269,8 +269,9 @@ final class AppState {
         }
     }
 
-    /// POST `body` to `path`, signed as the test admin. Blocks (max 10s) — test setup
-    /// only, before any view exists. Any non-2xx outcome is fatal (see above).
+    /// POST `body` to `path`, signed as the test admin. Blocks (max 30s) — test setup
+    /// only, before any view exists; a CI runner still booting its simulator has
+    /// kept the backend busy for 30s. Any non-2xx outcome is fatal (see above).
     private func sendAsTestAdmin(baseURL: URL, adminSecretHex: String, path: String, body: [String: Any]) {
         let token: AuthToken
         do {
@@ -283,7 +284,7 @@ final class AppState {
 
         var request = URLRequest(url: baseURL.appendingPathComponent(String(path.dropFirst())))
         request.httpMethod = "POST"
-        request.timeoutInterval = 10
+        request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Server expects: Bearer {"pubkey":"...","timestamp":...,"token":"..."}
         guard let authJSON = try? JSONSerialization.data(withJSONObject: auth),
@@ -293,7 +294,7 @@ final class AppState {
         request.setValue("Bearer \(String(decoding: authJSON, as: UTF8.self))", forHTTPHeaderField: "Authorization")
         request.httpBody = bodyJSON
 
-        var outcome = "timed out after 10s"
+        var outcome = "timed out after 30s"
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: request) { data, response, error in
             defer { sem.signal() }
@@ -305,7 +306,7 @@ final class AppState {
                     : "HTTP \(http.statusCode) \(String(decoding: data ?? Data(), as: UTF8.self))"
             }
         }.resume()
-        _ = sem.wait(timeout: .now() + 10)
+        _ = sem.wait(timeout: .now() + 32)
         if outcome != "ok" {
             fatalError("UI_TESTING: registering the test identity failed at POST \(path): \(outcome)")
         }
