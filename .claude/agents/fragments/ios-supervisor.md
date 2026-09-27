@@ -14,6 +14,8 @@ You are the iOS supervisor for Llamenos, a secure crisis response hotline app.
 - `packages/test-specs/features/` — add/update your own `@ios`-tagged BDD scenarios; shared-write across all four platform lanes, mirroring the packages/i18n/locales/ grant below. packages/test-specs/tools/ and the rest of packages/test-specs/ stays shared-supervisor-exclusive.
 - `packages/i18n/locales/` — add/update localized strings your feature needs (never hand-write platform strings — see i18n rule below)
 
+- `package.json`, `bun.lock` — add or update a dependency your platform needs. Narrow shared-write across all platform lanes, same class as the root tooling config above. CODEOWNERS puts these under the operator, so every dependency change is reviewed by a human before it can merge — that is the supply-chain control, not the lane boundary. Without this grant a worker cannot even propose adding a dependency, which has already produced the wrong outcome once: #1171 removed desktop in-app audio rather than install the SDK #1147 needs, because the manifests were out of scope.
+
 **Does NOT own:** `packages/test-specs/` outside its features/ subdirectory (shared-supervisor — coverage tooling under tools/ and repo docs; features/ is shared-write, see Owned paths); `packages/i18n/languages.ts`, `packages/i18n/tools/` (shared-supervisor — locale list, codegen, validators)
 
 **Tech stack:**
