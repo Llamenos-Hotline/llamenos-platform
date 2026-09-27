@@ -45,7 +45,7 @@ abra app deploy hotline.example.com
 | سرویس | تصویر | هدف |
 |---|---|---|
 | **web** | `nginx:1.27-alpine` | پروکسی معکوس با برچسب‌های Traefik |
-| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | سرور برنامه Bun |
+| **app** | `ghcr.io/llamenos-hotline/llamenos-platform` | سرور برنامه Bun |
 | **db** | `postgres:17-alpine` | پایگاه داده PostgreSQL |
 | **RustFS** | `RustFS/RustFS` | ذخیره‌سازی فایل سازگار با S3 |
 | **relay** | `dockurr/WebSocket relay` | رله WebSocket برای رویدادهای بلادرنگ |

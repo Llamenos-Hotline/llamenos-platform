@@ -35,7 +35,7 @@ helm install llamenos deploy/helm/llamenos/ \
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/rhonda-rodododo/llamenos-platform
+    repository: ghcr.io/llamenos-hotline/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -304,7 +304,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 
 | ကန့်သတ်ချက် | ဖော်ပြချက် | ပုံသေ |
 |---|---|---|
-| `app.image.repository` | Container image | `ghcr.io/rhonda-rodododo/llamenos-platform` |
+| `app.image.repository` | Container image | `ghcr.io/llamenos-hotline/llamenos-platform` |
 | `app.image.tag` | Image tag | Chart appVersion |
 | `app.image.pullPolicy` | Pull policy | `IfNotPresent` |
 | `app.port` | အပလီကေးရှင်း port | `3000` |
@@ -365,7 +365,7 @@ kubectl logs -l app.kubernetes.io/instance=llamenos -c app -f
 | ကန့်သတ်ချက် | ဖော်ပြချက် | ပုံသေ |
 |---|---|---|
 | `signalNotifier.enabled` | signal-notifier sidecar ဖြန့်ကျက်ခြင်း | `false` |
-| `signalNotifier.image.repository` | signal-notifier image | `ghcr.io/rhonda-rodododo/llamenos-signal-notifier` |
+| `signalNotifier.image.repository` | signal-notifier image | `ghcr.io/llamenos-hotline/llamenos-signal-notifier` |
 | `signalNotifier.resources` | CPU/မှတ်ဉာဏ် တောင်းဆိုချက်များနှင့် ကန့်သတ်ချက်များ | `{}` |
 
 ### SIP တံတား

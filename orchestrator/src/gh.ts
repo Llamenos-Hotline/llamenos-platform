@@ -9,8 +9,19 @@ const execFileAsync = promisify(execFile)
  * like an auth or network failure rather than a configuration one. This repo is
  * meant to have exactly one remote (asserted by `doctor`); the pin means a
  * violation cannot silently retarget the fleet at another repository.
+ *
+ * The owner is `Llamenos-Hotline` since the org move (#1218). The pin MUST be
+ * the live path, never the pre-move one, and this is the reason it is a
+ * blocker rather than tidying: GitHub serves the owner redirect
+ * `rhonda-rodododo/llamenos-platform -> Llamenos-Hotline/llamenos-platform`
+ * only for as long as the old path stays unoccupied. Anyone who creates a repo
+ * at the vacated name takes the redirect down and inherits it — and every
+ * write this pin governs (issue comments, PR merges, review verdicts, label
+ * edits) would then land in their repository instead, silently, with `gh`
+ * reporting success. Pinning the post-move path removes that dependency on an
+ * unowned name entirely.
  */
-export const REPO = 'rhonda-rodododo/llamenos-platform'
+export const REPO = 'Llamenos-Hotline/llamenos-platform'
 
 /**
  * `gh api` has no `-R`/`--repo` flag at all — confirmed against the real

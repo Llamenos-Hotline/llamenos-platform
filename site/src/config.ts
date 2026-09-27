@@ -4,17 +4,31 @@ export const siteConfig = {
   description: 'Secure open-source crisis response hotline software with end-to-end encryption.',
 
   github: {
-    org: 'rhonda-rodododo',
+    org: 'Llamenos-Hotline',
     repo: 'llamenos-platform',
-    url: 'https://github.com/rhonda-rodododo/llamenos-platform',
-    releasesUrl: 'https://github.com/rhonda-rodododo/llamenos-platform/releases/latest',
-    issuesUrl: 'https://github.com/rhonda-rodododo/llamenos-platform/issues',
-    mobileReleasesUrl: 'https://github.com/rhonda-rodododo/llamenos-platform/releases/latest',
+    url: 'https://github.com/Llamenos-Hotline/llamenos-platform',
+    releasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest',
+    issuesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/issues',
+    mobileReleasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest',
   },
 
+  // The container images this project publishes. These are the addresses the
+  // download page and the deploy docs tell self-hosters to `docker pull`, so
+  // they are a public API in the only sense that matters: an operator pastes
+  // them into a terminal.
+  //
+  // Lowercase, unlike `github.org` above: OCI registries reject a mixed-case
+  // repository path outright ("repository name must be lowercase"), while
+  // GitHub renders the owner in its display casing. The producing workflow
+  // folds `${{ github.repository }}` the same way before it reaches ghcr.io.
+  //
+  // A rail in tests/orchestrator/release-ghcr-publish.test.ts asserts `app`
+  // equals what release.yml's `docker-stable` job actually publishes, with
+  // the repository half resolved from the real repository rather than from a
+  // literal — so this cannot go stale in step with the workflow again.
   registry: {
-    app: 'ghcr.io/rhonda-rodododo/llamenos-platform',
-    signalNotifier: 'ghcr.io/rhonda-rodododo/llamenos-signal-notifier',
+    app: 'ghcr.io/llamenos-hotline/llamenos-platform',
+    signalNotifier: 'ghcr.io/llamenos-hotline/llamenos-signal-notifier',
   },
 
   license: 'AGPL-3.0',
