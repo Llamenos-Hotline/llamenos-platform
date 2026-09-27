@@ -1085,6 +1085,29 @@ jobs:
   # FAIL would be a fail-open — the worklist would forget a review that
   # found a problem.
   #
+  # WHO the comments are authored by. They post as `llamenos-auto` — the
+  # identity a review is requested FROM — via `FLEET_REVIEW_COMMENT_TOKEN`,
+  # a FINE-GRAINED PAT owned by `llamenos-auto`, scoped to this repository
+  # alone, with `Pull requests: write` (plus the implicit `Metadata: read`)
+  # and nothing else. Never a classic PAT: `llamenos-auto`'s classic
+  # `public_repo` token can write to every public repo that account reaches,
+  # a scope escalation no comment attribution is worth. That token is used
+  # for `gh pr comment` and NOTHING else — reading the thread and clearing
+  # labels stay on `github.token`, and it must never submit a REVIEW (a
+  # `Pull requests: write` token CAN approve, and an approval from
+  # `llamenos-auto` is one the ruleset counts).
+  #
+  # The `fleet/review` CHECK stays `github-actions`, and must: it is the
+  # `fleet-review` job's own check run, and GitHub refuses to create a check
+  # run from any PAT (403 "must authenticate via a GitHub App").
+  #
+  # A missing, expired, revoked, wrong-account or under-scoped token NEVER
+  # fails this job: the comment falls back to `github.token` (authored by
+  # `github-actions[bot]`) with a `::warning::` naming the secret. Only the
+  # attribution degrades. (Same shape as tauri-release.yml's "Detect updater
+  # channel configuration": an unset secret is detected inside `run:` — an
+  # unset secret interpolates as "" — and skipped loudly, never fatally.)
+  #
   # A SEPARATE, GitHub-hosted job on purpose. It is the only thing in this
   # file with write access; it checks out nothing, installs nothing and runs
   # no repository code at all. Keeping it out of `fleet-review` is what lets
@@ -1132,6 +1155,9 @@ jobs:
       - name: Post each reviewer's findings on the PR, then clear the labels it passed
         env:
           GH_TOKEN: ${{ github.token }}
+          # Comment authorship only — see the job comment above. Empty when
+          # unset (and on every Dependabot PR, which gets no Actions secrets).
+          FLEET_REVIEW_COMMENT_TOKEN: ${{ secrets.FLEET_REVIEW_COMMENT_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           ARTIFACT: fleet-review-report-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1163,6 +1189,39 @@ jobs:
           # the churn this issue exists to remove.
           gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].body' > "$RUNNER_TEMP/existing.txt" || : > "$RUNNER_TEMP/existing.txt"
 
+          # Who authors the comments. Every way the token can be unusable
+          # degrades to `github.token` with a warning — never a failure.
+          fallback="posting as github-actions[bot] instead of llamenos-auto; the review and the gate are unaffected"
+          comment_token=""
+          if [ -z "${FLEET_REVIEW_COMMENT_TOKEN:-}" ]; then
+            echo "::warning::FLEET_REVIEW_COMMENT_TOKEN is not set — $fallback"
+          elif ! login="$(GH_TOKEN="$FLEET_REVIEW_COMMENT_TOKEN" gh api user --jq '.login' 2>/dev/null)"; then
+            echo "::warning::FLEET_REVIEW_COMMENT_TOKEN does not authenticate (expired or revoked?) — $fallback"
+          elif [ "$login" != "llamenos-auto" ]; then
+            echo "::warning::FLEET_REVIEW_COMMENT_TOKEN belongs to '$login', not llamenos-auto — $fallback"
+          else
+            comment_token="$FLEET_REVIEW_COMMENT_TOKEN"
+            echo "posting as llamenos-auto"
+          fi
+
+          # post_comment <body-file> <marker>
+          post_comment() {
+            if [ -n "$comment_token" ]; then
+              if GH_TOKEN="$comment_token" gh pr comment "$PR" -R "$REPO" --body-file "$1"; then
+                return 0
+              fi
+              echo "::warning::FLEET_REVIEW_COMMENT_TOKEN could not comment on PR #$PR (does it lack 'Pull requests: write'?) — $fallback"
+              comment_token=""
+              # A call that errored can still have landed; never post one
+              # review twice.
+              gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].body' > "$RUNNER_TEMP/recheck.txt" || : > "$RUNNER_TEMP/recheck.txt"
+              if grep -qF -- "$2" "$RUNNER_TEMP/recheck.txt"; then
+                return 0
+              fi
+            fi
+            gh pr comment "$PR" -R "$REPO" --body-file "$1"
+          }
+
           posted=0
           shopt -s nullglob
           for f in "$dir"/*.json; do
@@ -1182,7 +1241,7 @@ jobs:
               printf '### `fleet/review` — %s: **%s**\n\n' "$reviewer" "$verdict"
               jq -r '.body' "$f"
             } > "$RUNNER_TEMP/comment.md"
-            gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+            post_comment "$RUNNER_TEMP/comment.md" "$marker"
             echo "posted: $reviewer ($verdict)"
             posted=$((posted + 1))
           done
