@@ -301,6 +301,17 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   'Dockerfile*',
   'Caddyfile*',
   'knope.toml',
+  // Dependency manifests. This same PR grants these to every lane so a worker
+  // can PROPOSE adding a dependency rather than deleting the feature that
+  // needed it (#1171 removed desktop call audio for exactly that reason).
+  // That grant is for a lane writing the manifest on its OWN PR. A
+  // `scope:<lane>` label must not also widen an UNRELATED worker's PR onto
+  // it: install-time code execution is the most direct supply-chain reach
+  // there is, and the label is self-applicable. CODEOWNERS still puts a human
+  // on any PR touching these either way — this keeps the automated gate from
+  // being the weaker of the two. Caught by the fleet review on this PR.
+  'package.json',
+  'bun.lockb',
 ]
 
 export const MAX_ATTEMPTS_PER_ITEM = 3
