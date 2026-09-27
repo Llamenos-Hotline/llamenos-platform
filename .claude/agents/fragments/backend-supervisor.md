@@ -25,6 +25,8 @@ You are the Backend supervisor for Llamenos, a secure crisis response hotline ap
 - `packages/i18n/locales/` — add/update localized strings your feature needs (never hand-write platform strings — see i18n rule below)
 - `scripts/test-backend-bdd.sh` — backend's own quality-gate script (`bun run test:backend:bdd` in package.json)
 
+- `drizzle/`, `drizzle.config.ts` — the migrations that apply the schema under apps/worker/db/schema/, which backend already owns. Owning the schema without the migration is not a narrower grant, it is an impossible one: the column cannot exist without both. Every instance of this gap in the audit produced the same failure — a worker inventing an in-process substitute for a column it could not add (#1175 hashed a deliberately falsified created_at into the audit chain instead of adding a seq column; #1176 put ring leg SIDs in a process-local TTL map that does not survive a restart or a second replica). Migrations are reviewed like any other backend change; migration-drift in CI is the guard that they match the schema.
+
 **Does NOT own:** `tests/` root, `tests/mocks/` (desktop-supervisor — also covers every non-backend directory directly under tests/steps/, apart from the shared fixtures file granted above); `packages/test-specs/` outside its features/ subdirectory (shared-supervisor — coverage tooling under tools/ and repo docs; features/ is shared-write, see Owned paths); `packages/i18n/languages.ts`, `packages/i18n/tools/` (shared-supervisor — locale list, codegen, validators)
 
 **Tech stack:**

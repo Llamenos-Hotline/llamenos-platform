@@ -85,6 +85,8 @@ describe('checkScope', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
+        'drizzle/',
+        'drizzle.config.ts',
       ])
       expect(backend.notOwned).toEqual([
         'tests/',
