@@ -56,6 +56,11 @@ services:
       - ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      # Required by the app whenever ENVIRONMENT is production (the default above).
+      # validateConfig() throws without it rather than fall back to the spoofable
+      # Host header for webhook signature validation — so the container would
+      # crash-loop with no compose-level explanation. Fail at `up` instead.
+      - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:?WEBHOOK_BASE_URL is required — the public https:// base URL webhooks are delivered to, e.g. https://api.example.org}"
       - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required — generate with openssl rand -hex 32}"
       - STORAGE_ENDPOINT=http://rustfs:9000
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
