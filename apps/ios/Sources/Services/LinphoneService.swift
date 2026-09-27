@@ -217,12 +217,11 @@ final class LinphoneService: LinphoneServiceProtocol {
     /// SDK is ever unlinked.
     struct CoreConfigurationSnapshot: Equatable {
         let pushNotificationEnabled: Bool
-        let callkitEnabled: Bool
         let srtpMandatory: Bool
         let enabledAudioCodecs: Set<String>
         /// Configured SIP ports per transport: 0 = disabled, -1 = random, -2 = do not bind.
         let configuredPorts: [String: Int]
-        /// Ports the Core actually bound: 0 = none.
+        /// Ports the Core actually bound; a value <= 0 means that transport bound nothing.
         let boundPorts: [String: Int]
         let accountCount: Int
     }
@@ -235,7 +234,6 @@ final class LinphoneService: LinphoneServiceProtocol {
         }
         return CoreConfigurationSnapshot(
             pushNotificationEnabled: core.pushNotificationEnabled,
-            callkitEnabled: core.callkitEnabled,
             srtpMandatory: core.mediaEncryption == .SRTP && core.isMediaEncryptionMandatory,
             enabledAudioCodecs: Set(core.audioPayloadTypes.filter { $0.enabled() }.map(\.mimeType)),
             configuredPorts: ports(core.transports),
