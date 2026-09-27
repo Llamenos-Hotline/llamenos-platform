@@ -212,13 +212,14 @@ describe.each(CASES)('rail: $file folds the repository path to lowercase before 
     const doc = loadWorkflow(c.file)
     const j = job(doc, c.job)
     const s = step(j, c.step)
-    if (!s.run) throw new Error(`"${c.step}" has no run block — the fold cannot happen in \`with:\``)
-    return { doc, j, s, env: { ...c.inheritedEnv(doc, j), ...resolveEnv(s.env) } }
+    const { run } = s
+    if (!run) throw new Error(`"${c.step}" has no run block — the fold cannot happen in \`with:\``)
+    return { doc, j, s, run, env: { ...c.inheritedEnv(doc, j), ...resolveEnv(s.env) } }
   }
 
   it('running the real step against a mixed-case owner emits a lowercase, publishable image ref', () => {
-    const { s, env } = metaStep()
-    const outputs = runStep(s.run!, env)
+    const { run, env } = metaStep()
+    const outputs = runStep(run, env)
     expectPublishableImageRef(outputs['image'])
 
     // Every other output of these steps is also an image reference (the
@@ -233,8 +234,8 @@ describe.each(CASES)('rail: $file folds the repository path to lowercase before 
   })
 
   it('MUTATION: the same step without its lowercase fold emits the ref the registry rejected', () => {
-    const { s, env } = metaStep()
-    const image = runStep(withoutTheFold(s.run!), env)['image']
+    const { run, env } = metaStep()
+    const image = runStep(withoutTheFold(run), env)['image']
 
     // The defect, reproduced: the raw display casing reaches the tag.
     expect(image).toBe('ghcr.io/Llamenos-Hotline/llamenos-platform')
@@ -278,8 +279,9 @@ describe('rail: the buildcache consumer tracks the producer tag', () => {
   it('docker-compose.test.yml cache_from matches the tag docker-buildcache.yml pushes', () => {
     const doc = loadWorkflow('docker-buildcache.yml')
     const j = job(doc, 'refresh')
-    const s = step(j, 'Compute cache image reference')
-    const produced = `${runStep(s.run!, resolveEnv(doc.env))['image']}:buildcache`
+    const { run } = step(j, 'Compute cache image reference')
+    if (!run) throw new Error('the cache-ref step has no run block — the parser must not pass vacuously')
+    const produced = `${runStep(run, resolveEnv(doc.env))['image']}:buildcache`
 
     const composeSrc = readFileSync(
       join(process.cwd(), 'deploy', 'docker', 'docker-compose.test.yml'),
