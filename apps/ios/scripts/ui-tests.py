@@ -77,6 +77,9 @@ def shard(index: int, total: int) -> list[str]:
 
 
 def report(log_path: Path, json_out: Path | None) -> int:
+    if not log_path.is_file():
+        print(f"**No test log at `{log_path}`** — the test step never ran (see the failed step above).")
+        return 1
     cases = []
     for m in CASE_RE.finditer(log_path.read_text(encoding="utf-8", errors="replace")):
         if m.group("target") != TARGET:

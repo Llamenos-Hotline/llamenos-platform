@@ -12,7 +12,10 @@
 # What it deliberately does NOT start, and why that is safe for this suite:
 #   - S3 storage (RustFS). No iOS UI test uploads or downloads a file, and a
 #     failed hub bucket provisioning is logged and non-fatal
-#     (apps/worker/routes/hubs.ts). A test that needs storage must add it here.
+#     (apps/worker/routes/hubs.ts). The server refuses to boot without storage
+#     credentials but only connects on use, so they are set and pointed at a
+#     port nothing listens on: any storage call fails loudly instead of
+#     silently. A test that needs storage must add a real S3 service here.
 #   - signal-notifier / sip-bridge sidecars. No iOS UI test exercises them.
 #
 # Usage (from the repo root):
@@ -105,6 +108,10 @@ cmd_start() {
     export HMAC_SECRET
     export SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
     export LLAMENOS_CRYPTO_LIB="$CRYPTO_LIB"
+    export STORAGE_ENDPOINT=http://127.0.0.1:9
+    export STORAGE_ACCESS_KEY=ios-e2e-no-storage
+    export STORAGE_SECRET_KEY=ios-e2e-no-storage
+    export STORAGE_BUCKET=llamenos-files
     nohup bun src/server/index.ts >"$SERVER_LOG" 2>&1 &
     echo $! >"$SERVER_PID"
   )
