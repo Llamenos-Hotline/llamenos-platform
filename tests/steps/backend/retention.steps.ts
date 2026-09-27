@@ -4,7 +4,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
-import { setLastResponse, getSharedState } from './shared-state'
+import { setLastResponse, getSharedState, setActingAdmin } from './shared-state'
 import {
   apiGet,
   apiPatch,
@@ -36,11 +36,15 @@ Given('a hub admin user in hub {string}', async ({ request, world, workerHub }) 
   const s = getS(world)
   s.hubAdmin = await createUserViaApi(request, { roleIds: ['role-hub-admin'] })
   s.hubId = workerHub
+  setActingAdmin(world, s.hubAdmin)
 })
 
+// Shared step (see shared-state.ts setActingAdmin/getActingAdmin) — also used by
+// admin/platform-bans.feature, which relies on the same literal step text.
 Given('a super admin user', async ({ request, world }) => {
   const s = getS(world)
   s.superAdmin = await createUserViaApi(request, { roleIds: ['role-super-admin'] })
+  setActingAdmin(world, s.superAdmin)
 })
 
 Given('a non-admin volunteer user', async ({ request, world }) => {

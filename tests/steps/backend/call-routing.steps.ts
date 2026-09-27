@@ -21,13 +21,12 @@ When('a call arrives from {string}', async ({ request, world }, caller: string) 
     const result = await simulateIncomingCall(request, { callerNumber: caller, hubId: state.hubId })
     state.callId = result.callId
     state.callStatus = result.status
-
-    // Check if the caller is on the ban list — simulation endpoint bypasses ban logic
-    if (state.banPhones.includes(caller)) {
-      state.callStatus = 'rejected'
-    }
   } catch {
-    // Call rejected (e.g., banned caller, server error)
+    // The simulation endpoint runs the real ban check (services.records.checkBan) and
+    // returns non-2xx when the caller is banned — this catch is what actually observes
+    // that. Do NOT also derive "rejected" from state.banPhones here: that would mark the
+    // call rejected regardless of what the server actually did, silently passing even if
+    // the real ban check were removed or broken (see issue #1151).
     state.callStatus = 'rejected'
   }
 })

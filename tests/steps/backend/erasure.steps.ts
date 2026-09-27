@@ -4,7 +4,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
-import { setLastResponse, getSharedState } from './shared-state'
+import { setLastResponse, getSharedState, setActingAdmin, getActingAdmin } from './shared-state'
 import {
   apiGet,
   apiPost,
@@ -34,6 +34,22 @@ Before(async ({ world }) => {
 /** Feature files use the literal hub id "test-hub"; map it to this scenario's isolated hub. */
 function hubPath(path: string, workerHub: string): string {
   return path.replace('/hubs/test-hub/', `/hubs/${workerHub}/`)
+}
+
+/**
+ * Escape a literal "+" in the query-string portion of a path. Query strings follow
+ * application/x-www-form-urlencoded rules, where "+" decodes to a space — every
+ * real client (see src/client/lib/api/governance.ts's encodeURIComponent call)
+ * encodes a literal "+" (e.g. in an E.164 phone number) as "%2B" before use.
+ * Gherkin scenario text embeds the literal, unencoded phone number directly in a
+ * `{string}` path, so this generic step re-encodes it the same way a real client's
+ * URL construction would, rather than sending a raw "+" the server correctly reads
+ * back as a space.
+ */
+function encodeLiteralPlusInQuery(path: string): string {
+  const qIndex = path.indexOf('?')
+  if (qIndex === -1) return path
+  return path.slice(0, qIndex + 1) + path.slice(qIndex + 1).replace(/\+/g, '%2B')
 }
 
 interface ErasureConfigBody {
@@ -68,6 +84,7 @@ Given('a registered volunteer user with no pending erasure request', async ({ re
 Given('an admin user', async ({ request, world }) => {
   const s = getS(world)
   s.admin = await createUserViaApi(request, { roleIds: ['role-super-admin'] })
+  setActingAdmin(world, s.admin)
 })
 
 Given('{int} pending erasure requests exist', async ({ request }, count: number) => {
@@ -117,10 +134,14 @@ When('the volunteer GETs {string}', async ({ request, world, workerHub }, path: 
   setLastResponse(world, res)
 })
 
+// Shared across step files (see setActingAdmin/getActingAdmin in shared-state.ts) —
+// any Given that creates an admin-like actor for this scenario (erasure's "an admin
+// user", retention's "a super admin user", platform-bans' hub-admin actor, …) can
+// drive this generic verb step without a duplicate, ambiguously-matching definition.
 When('the admin GETs {string}', async ({ request, world, workerHub }, path: string) => {
-  const s = getS(world)
-  expect(s.admin).toBeDefined()
-  const res = await apiGet(request, hubPath(path, workerHub), s.admin!.deviceKey)
+  const actor = getActingAdmin(world)
+  expect(actor).toBeDefined()
+  const res = await apiGet(request, encodeLiteralPlusInQuery(hubPath(path, workerHub)), actor!.deviceKey)
   setLastResponse(world, res)
 })
 
