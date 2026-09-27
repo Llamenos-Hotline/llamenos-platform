@@ -64,46 +64,53 @@ export function checkScope(
 }
 
 /**
- * Scope across the set of lanes a PR is AUTHORISED to write: the lane it was
- * dispatched into, plus every lane explicitly granted to it by a `scope:<lane>`
- * label. A file is `strayed` only when it falls outside EVERY authorised lane —
- * being owned by any one of them is enough.
+ * Scope across the lanes a PR is AUTHORISED to write: its OWN lane, plus every
+ * lane explicitly granted to it by a `scope:<lane>` label. A file is `strayed`
+ * only when it falls outside every authorised lane.
  *
- * Three properties this deliberately preserves:
+ * The own scope and the granted scopes are separate parameters on purpose,
+ * because "an empty `owned` list means no ownership check" must apply to the
+ * PR's own lane and NEVER to a grant:
  *
- * 1. `forbidden` (neverWrite) is checked first and is still ABSOLUTE. A grant
- *    names a lane, and no lane owns a never-write path, so no grant can ever
- *    reach one. Secrets, CI and deploy config stay unreachable however many
- *    labels a PR carries.
+ * - For the PR's own lane it is correct and load-bearing. `UNSCOPED_LANE` is
+ *   exactly that, and it is how every branch not named `fleet/<lane>/…` is
+ *   judged today. Treating it otherwise would change behaviour for most PRs.
+ * - For a GRANT it is a fail-open. `assertLiveLanesHaveScope` only requires a
+ *   non-empty scope of lanes that are not `off`, so an `off` lane — or one
+ *   whose fragment is missing or unparseable — legitimately has `owned: []`.
+ *   If a grant for such a lane were honoured, a single `scope:<that lane>`
+ *   label would make the whole PR unrestricted and wave through a diff that
+ *   would otherwise be `scope=fail`. An empty granted scope is therefore
+ *   discarded: a grant may only ever widen by a real lane's real paths.
  *
- * 2. An unrestricted scope (`owned: []`) still means "no ownership check",
- *    exactly as `checkScope` has always treated it. That is what
- *    `UNSCOPED_LANE` relies on for branches that name no lane, so wiring this
- *    in changes nothing for them. Closing THAT hole is a separate, larger
- *    change (#1115) which cannot land until every path has an owner — today
- *    772 of 4165 tracked files have none.
+ * `forbidden` (neverWrite) is checked first and stays ABSOLUTE either way. The
+ * grant vocabulary names lanes, and no lane owns a never-write path, so no
+ * number of grants can reach one.
  *
- * 3. Each lane is evaluated with its own `owned`/`notOwned` pair, never a
- *    flattened union of all of them. Flattening would break longest-match:
- *    desktop's `tests/` grant merged with backend's `tests/` notOwned entry
- *    would resolve differently than either lane does alone, and a file could
- *    become writable that neither lane can actually write.
+ * Each lane is evaluated with its own `owned`/`notOwned` pair, never a
+ * flattened union: flattening would break longest-match, letting desktop's
+ * `tests/` grant cancel backend's `tests/` exclusion and making a path
+ * writable that neither lane can write on its own.
  */
 export function checkScopeAcross(
   changed: string[],
-  scopes: LaneScope[],
+  ownScope: LaneScope,
+  grantedScopes: LaneScope[],
   neverWrite: string[],
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
-  const unrestricted = scopes.some((s) => s.owned.length === 0)
+  // Only the PR's own lane may be unrestricted. A granted lane with no owned
+  // paths grants nothing at all.
+  const unrestricted = ownScope.owned.length === 0
+  const effective = [ownScope, ...grantedScopes.filter((s) => s.owned.length > 0)]
   for (const f of changed) {
     if (neverWrite.some((p) => matchesPath(f, p))) {
       forbidden.push(f)
       continue
     }
     if (unrestricted) continue
-    if (!scopes.some((s) => checkScope([f], s, []).strayed.length === 0)) strayed.push(f)
+    if (!effective.some((s) => checkScope([f], s, []).strayed.length === 0)) strayed.push(f)
   }
   return { forbidden, strayed }
 }

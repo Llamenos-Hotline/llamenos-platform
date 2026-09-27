@@ -183,12 +183,29 @@ What a grant cannot do:
   absolute. A grant names a lane, and no lane owns a never-write path, so
   secrets, CI and deploy config stay unreachable no matter how many labels a
   PR carries.
-- **Be self-issued from the diff.** Labels live outside the commit. A worker
-  cannot widen its own scope by editing a file in its own PR, which is the
-  whole reason the grant is a label and not a trailer in the PR body.
+- **Be self-issued from the diff.** Labels live outside the commit, so a
+  worker cannot widen its own scope by editing a file in its own PR. That is
+  the whole reason the grant is a label and not a trailer in the PR body.
+  **This is a narrower claim than "a worker cannot grant itself scope."** The
+  fleet pushes with a GitHub account that can also run `gh pr edit
+  --add-label`, so a worker that chose to could label its own PR. What the
+  label buys is that the grant is *outside the diff*: it cannot arrive by
+  merging a branch, it is visible on the PR without reading the patch, and it
+  survives review as an explicit, separately-auditable act. Restricting who
+  may apply `scope:*` is a follow-up, not something this mechanism provides.
 - **Silently apply when unreadable.** If the labels cannot be read the gate
   grants nothing and judges the PR on its own lane alone. Not knowing means
-  not granted.
+  not granted. The same applies inside a merge queue, where the PR number is
+  not available: grants drop, so a cross-lane PR that passed on its own branch
+  can still fail in the queue. That direction is safe but surprising — worth
+  knowing before enabling a merge queue.
+
+- **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
+  is missing or unparseable, has `owned: []` — and an empty owned list means
+  "no ownership check". Honouring a grant for such a lane would make the whole
+  PR unrestricted, so an empty granted scope is discarded and logged. Only the
+  PR's OWN lane may be unrestricted; a grant may widen only by a real lane's
+  real paths.
 - **Merge two lanes into one scope.** Each lane is still resolved with its own
   `owned`/`notOwned` pair and its own longest-match rules. Flattening them
   would let one lane's grant cancel another's exclusion and make a path

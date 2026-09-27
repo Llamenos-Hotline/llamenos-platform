@@ -270,6 +270,13 @@ async function resolveGrantedLanes(deps: CiDeps, own: Lane): Promise<Lane[]> {
       deps.log(`ignoring ${SCOPE_GRANT_PREFIX}${id}: not a known lane (${all.map((l) => l.id).join(', ')})`)
       continue
     }
+    // An `off` lane, or one whose fragment is missing or unparseable, has an
+    // empty owned list. Honouring such a grant would make the PR unrestricted
+    // — the grant would fail OPEN, which is the opposite of the contract.
+    if (lane.scope.owned.length === 0) {
+      deps.log(`ignoring ${SCOPE_GRANT_PREFIX}${id}: lane "${id}" has no owned paths, so it grants nothing`)
+      continue
+    }
     if (!granted.some((g) => g.id === lane.id)) granted.push(lane)
   }
   if (granted.length > 0) deps.log(`scope grants in force: ${granted.map((g) => g.id).join(', ')}`)

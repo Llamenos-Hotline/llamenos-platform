@@ -550,10 +550,14 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const addedLines = addedLinesFrom(fullDiff ?? '')
 
   const reasons: string[] = []
-  const granted = input.grantedLanes ?? []
+  // A granted lane with no owned paths grants nothing — see checkScopeAcross.
+  // Dropped here too so the failure message never credits a grant that had no
+  // effect.
+  const granted = (input.grantedLanes ?? []).filter((g) => g.scope.owned.length > 0)
   const { forbidden, strayed } = checkScopeAcross(
     changedFiles,
-    [lane.scope, ...granted.map((g) => g.scope)],
+    lane.scope,
+    granted.map((g) => g.scope),
     [...NEVER_WRITE_PATHS],
   )
   if (forbidden.length > 0) {
