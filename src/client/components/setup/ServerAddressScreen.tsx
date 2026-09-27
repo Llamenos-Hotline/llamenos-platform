@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LogoMark } from '@/components/logo-mark'
-import { clearPendingServerAddress, peekPendingServerAddress, setApiBase } from '@/lib/api-config'
+import { clearPendingServerAddress, HOSTED_SERVER_ADDRESS, peekPendingServerAddress, setApiBase } from '@/lib/api-config'
 import { ServerAddressForm } from './ServerAddressForm'
 
 /**
@@ -14,7 +14,9 @@ import { ServerAddressForm } from './ServerAddressForm'
  * This is the only place a server address is verified and persisted: the Rust
  * health probe is refused once a server is configured. Changing servers from
  * Settings stages the new address and returns here, where it is pre-filled and
- * checked automatically.
+ * checked automatically. Otherwise the hosted deployment's address is
+ * pre-filled, so the common case is a single confirm — and it stays editable
+ * for organizations running their own server.
  */
 export function ServerAddressScreen({ onConfigured }: { onConfigured: (base: string) => void }) {
   const { t } = useTranslation()
@@ -44,7 +46,7 @@ export function ServerAddressScreen({ onConfigured }: { onConfigured: (base: str
         <ServerAddressForm
           testIdPrefix="server-address"
           submitLabel={t('serverAddress.connect')}
-          initialValue={staged ?? ''}
+          initialValue={staged ?? HOSTED_SERVER_ADDRESS}
           autoSubmit={!!staged}
           verify
           onConfirm={async (origin) => {

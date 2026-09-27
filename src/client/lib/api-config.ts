@@ -37,6 +37,9 @@ import { clearConfiguredApiBase, getConfiguredApiBase, persistApiBase } from './
 const useTauri = typeof window !== 'undefined' &&
   ('__TAURI_INTERNALS__' in window || !!import.meta.env.PLAYWRIGHT_TEST)
 
+/** The hosted deployment's public address. */
+export const HOSTED_SERVER_ADDRESS = 'https://api.llamenos-hotline.org'
+
 /** Same-origin default — dev/test builds reach the backend via Vite's proxy. */
 const DEFAULT_API_BASE = ''
 

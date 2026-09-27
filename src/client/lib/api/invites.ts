@@ -27,6 +27,9 @@ export async function validateInvite(code: string) {
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
     const res = await netFetch(getApiUrl(`/invites/validate/${code}`), { signal: controller.signal })
+    // The route is rate-limited per client to stop code enumeration; its 429
+    // body has no `valid` field, and must not read as "invalid code".
+    if (res.status === 429) return { valid: false, error: 'rate_limited' } as const
     return res.json() as Promise<
       | { valid: true; name: string; roleIds?: string[] }
       | { valid: false; error?: string }

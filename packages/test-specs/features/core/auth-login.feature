@@ -340,8 +340,10 @@ Feature: Authentication & Login
     Then the error should disappear
 
   # ── Desktop/Mobile: Invite Onboarding ─────────────────────────────
+  # Desktop invite → paste → redeem is covered end to end, from a fresh
+  # install, in platform/desktop/auth/invite-redemption.feature.
 
-  @desktop @ios @android
+  @ios @android
   Scenario: Admin creates invite and volunteer completes onboarding
     Given I am logged in as an admin
     And I navigate to the "Volunteers" page
@@ -357,7 +359,8 @@ Feature: Authentication & Login
     When I navigate to "/onboarding?code=invalidcode123"
     Then I should see "Invalid invite"
 
-  @desktop @ios @android
+  # Desktop opens the paste-your-code screen here instead (invite-redemption.feature).
+  @ios @android
   Scenario: Missing invite code shows error
     When I navigate to "/onboarding"
     Then I should see "No invite code"
