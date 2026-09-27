@@ -319,61 +319,44 @@ jobs:
 
   # ─── Crypto Tests (Rust) ────────────────────────────────────
   #
-  # Runs on the Hetzner self-hosted runners (labels below), not a hosted
-  # runner, because it is the one thing a self-hosted runner does better:
-  # its disk survives between jobs. Toolchain, cargo registry and compiled
-  # dependencies all live OUTSIDE the checkout (actions/checkout runs
-  # `git clean -ffdx`, which would delete a `target/` inside it), in a
-  # per-runner directory — three runners share one $HOME, and concurrent
-  # `rustup toolchain install` runs into one RUSTUP_HOME race each other
-  # (`could not rename 'downloaded' file`). swatinem/rust-cache is
-  # deliberately gone: it tars `target/` up to the Actions cache and back on
-  # every run, which is pure overhead when the directory is already on disk.
+  # GitHub-hosted, like every other job a `pull_request` can reach: a
+  # self-hosted runner would execute PR-authored code on a persistent box
+  # that keeps state between jobs. Swatinem/rust-cache restores the cargo
+  # registry and `target/` from the Actions cache in place of a persistent
+  # disk.
   crypto-tests:
     needs: changes
     if: needs.changes.outputs.crypto == 'true'
-    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 15
+    # Warm runs measured 2.5-5.6 min on the old self-hosted runners; a cold
+    # hosted run (no rust-cache hit yet) compiles every dependency from
+    # scratch and can pass 15 min, so the ceiling is 30.
+    timeout-minutes: 30
     env:
       # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
       # targets (mobile, wasm, macOS, Windows) that rustup would install on
-      # the first `cargo` call — ~1.3 GB of the runner's persistent disk, per
-      # runner, for tests that only ever build the host target. Naming the
-      # channel here overrides that file; the compiler is the same `stable`.
+      # the first `cargo` call — ~1.3 GB of downloads for tests that only
+      # ever build the host target. Naming the channel here overrides that
+      # file; the compiler is the same `stable`.
       RUSTUP_TOOLCHAIN: stable
 
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Use this runner's persistent Rust cache
-        run: |
-          set -euo pipefail
-          root="${HOME}/.cache/llamenos-ci/${RUNNER_NAME}"
-          # Bounded growth: a stale `target/` for every past rustc would
-          # otherwise only ever grow. Past the cap, drop the lot and let this
-          # run rebuild cold once.
-          cap_mb=6144
-          if [ -d "$root" ] && [ "$(du -sm "$root" | cut -f1)" -gt "$cap_mb" ]; then
-            echo "::warning::$root passed ${cap_mb} MB; wiping it so the cache stays bounded"
-            rm -rf "$root"
-          fi
-          mkdir -p "$root/rustup" "$root/cargo" "$root/target/crypto"
-          {
-            echo "RUSTUP_HOME=$root/rustup"
-            echo "CARGO_HOME=$root/cargo"
-            echo "CARGO_TARGET_DIR=$root/target/crypto"
-            echo "CARGO_INCREMENTAL=0"
-          } >> "$GITHUB_ENV"
-          echo "$root/cargo/bin" >> "$GITHUB_PATH"
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
           components: clippy, rustfmt
+
+      # After the toolchain step: rust-cache keys on the installed rustc.
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
 
       - name: Run tests
         run: cargo test --manifest-path packages/crypto/Cargo.toml --features mobile
