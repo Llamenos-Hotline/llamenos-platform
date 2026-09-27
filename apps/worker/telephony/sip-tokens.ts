@@ -1,20 +1,28 @@
-import type { TelephonyProviderConfig, TelephonyProviderType } from '@shared/types'
+import type { TelephonyProviderConfig } from '@shared/types'
+import type { SipTokenResponse } from '@protocol/schemas/webrtc'
 
 /**
  * SIP connection parameters returned to mobile clients.
  * Provider-agnostic — Linphone SDK consumes these directly.
+ *
+ * Structurally identical to the published contract by construction: the type is
+ * the schema's inferred type, so a change to one is a compile error in the other.
  */
-export interface SipConnectionParams {
-  provider: TelephonyProviderType
-  sip: {
-    domain: string
-    transport: 'tls' | 'tcp' | 'udp'
-    username: string
-    password: string
-    iceServers: Array<{ url: string; username?: string; credential?: string }>
-    mediaEncryption: 'srtp' | 'zrtp' | 'dtls-srtp' | 'none'
-  }
-}
+export type SipConnectionParams = SipTokenResponse
+
+/** Everything `generateSipParams` derives from provider config, before it is stamped with a validity window. */
+type SipCredentialParams = Omit<SipConnectionParams, 'issuedAt' | 'expiresAt'>
+
+/**
+ * How long a set of SIP parameters is considered valid.
+ *
+ * The underlying SIP passwords are provider config and do not themselves expire,
+ * so this is a re-registration deadline rather than a credential lifetime: it
+ * gives the client a definite moment at which to re-fetch and re-REGISTER, and
+ * bounds how long a stale registration can outlive a credential rotation or a
+ * provider switch by an admin.
+ */
+export const SIP_PARAMS_TTL_SECONDS = 3600
 
 /**
  * Check whether a provider has SIP endpoints configured for native VoIP clients.
@@ -48,7 +56,20 @@ export function isSipConfigured(config: TelephonyProviderConfig | null): boolean
 export function generateSipParams(
   config: TelephonyProviderConfig,
   identity: string,
+  now: Date = new Date(),
 ): SipConnectionParams {
+  const credentials = generateSipCredentials(config, identity)
+  return {
+    ...credentials,
+    issuedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + SIP_PARAMS_TTL_SECONDS * 1000).toISOString(),
+  }
+}
+
+function generateSipCredentials(
+  config: TelephonyProviderConfig,
+  identity: string,
+): SipCredentialParams {
   switch (config.type) {
     case 'twilio':
       return generateTwilioSipParams(config, identity)
@@ -70,7 +91,7 @@ export function generateSipParams(
 function generateTwilioSipParams(
   config: TelephonyProviderConfig,
   _identity: string,
-): SipConnectionParams {
+): SipCredentialParams {
   if (!config.sipDomain || !config.sipUsername || !config.sipPassword) {
     throw new Error('Missing Twilio SIP config: sipDomain, sipUsername, sipPassword')
   }
@@ -93,7 +114,7 @@ function generateTwilioSipParams(
 function generateSignalWireSipParams(
   config: TelephonyProviderConfig,
   _identity: string,
-): SipConnectionParams {
+): SipCredentialParams {
   if (!config.sipDomain || !config.sipUsername || !config.sipPassword) {
     throw new Error('Missing SignalWire SIP config')
   }
@@ -117,7 +138,7 @@ function generateSignalWireSipParams(
 function generateVonageSipParams(
   config: TelephonyProviderConfig,
   _identity: string,
-): SipConnectionParams {
+): SipCredentialParams {
   // Vonage doesn't support SIP client registration directly.
   // Route through Asterisk as a SIP gateway.
   if (!config.asteriskGateway || !config.asteriskSipUsername || !config.asteriskSipPassword) {
@@ -142,7 +163,7 @@ function generateVonageSipParams(
 function generatePlivoSipParams(
   config: TelephonyProviderConfig,
   _identity: string,
-): SipConnectionParams {
+): SipCredentialParams {
   if (!config.sipEndpointUsername || !config.sipEndpointPassword) {
     throw new Error('Missing Plivo SIP endpoint config')
   }
@@ -165,7 +186,7 @@ function generatePlivoSipParams(
 function generateAsteriskSipParams(
   config: TelephonyProviderConfig,
   _identity: string,
-): SipConnectionParams {
+): SipCredentialParams {
   if (!config.sipDomain || !config.sipUsername || !config.sipPassword) {
     throw new Error('Missing Asterisk SIP config')
   }
