@@ -158,6 +158,88 @@ code `src/specialist.ts`).
 - **Order:** apply the specialist label, wait for it to pass, then (re-)apply
   `review`. Clearing a specialist FAIL takes a new head.
 
+## Cross-lane PRs: `scope:<lane>` grants (#1115)
+
+A lane's scope is the set of paths its workers may write, parsed from
+`.claude/agents/fragments/<lane>-supervisor.md`. Most work fits one lane.
+Some genuinely does not: a permission-boundary fix spans the shared module,
+the server that enforces it, the client that consumes it and the tests that
+prove it. That is one atomic change — splitting it produces PRs that each go
+green alone and leave `main` red between merges.
+
+Before this existed the author had no legal move: stray and be hard-blocked
+at `fleet/verify` with `scope=fail`, or split and break `main`. Now a PR can
+carry `scope:<lane>` labels, and `fleet/verify` treats a file as in-scope if
+**any** authorised lane owns it — its own, plus each granted one.
+
+```
+# a backend fix that must also update the desktop BDD steps it invalidates
+gh pr edit <N> --add-label scope:desktop
+```
+
+What a grant cannot do:
+
+- **Reach a secret.** `NEVER_WRITE_PATHS` is checked first and is absolute.
+  Be precise about what that covers, because an earlier draft of this section
+  overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
+  **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
+  in it, because lanes legitimately own some of them.
+
+- **Reach CI or deploy config via a grant.** That is enforced separately, by
+  `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,
+  `deploy/`, `Dockerfile*`, `Caddyfile*`, `knope.toml`. A grant is refused
+  these even when the granted lane owns them. Without that list, one
+  self-applied `scope:infra` label would extend any worker's write scope to
+  the supply chain that builds, tests, signs and ships the app, and
+  `fleet/verify` would say `scope=pass`.
+
+  The exclusion binds **grants only**. The owning lane still writes these
+  normally on its own PR: infra edits its own workflows, ios edits
+  `.github/workflows/ios*.yml`. And it is deliberately narrow — `scripts/` is
+  infra-owned but *not* excluded, because a cross-lane fix such as #1060
+  genuinely needs `scripts/bootstrap-admin.ts`. `.github/ci/` is likewise
+  absent: those are lint baselines, already shared-write, and not supply
+  chain.
+- **Be self-issued from the diff.** Labels live outside the commit, so a
+  worker cannot widen its own scope by editing a file in its own PR. That is
+  the whole reason the grant is a label and not a trailer in the PR body.
+  **This is a narrower claim than "a worker cannot grant itself scope."** The
+  fleet pushes with a GitHub account that can also run `gh pr edit
+  --add-label`, so a worker that chose to could label its own PR. What the
+  label buys is that the grant is *outside the diff*: it cannot arrive by
+  merging a branch, it is visible on the PR without reading the patch, and it
+  survives review as an explicit, separately-auditable act. Restricting who
+  may apply `scope:*` is a follow-up, not something this mechanism provides.
+- **Silently apply when unreadable.** If the labels cannot be read the gate
+  grants nothing and judges the PR on its own lane alone. Not knowing means
+  not granted. The same applies inside a merge queue, where the PR number is
+  not available: grants drop, so a cross-lane PR that passed on its own branch
+  can still fail in the queue. That direction is safe but surprising — worth
+  knowing before enabling a merge queue.
+
+- **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
+  is missing or unparseable, has `owned: []` — and an empty owned list means
+  "no ownership check". Honouring a grant for such a lane would make the whole
+  PR unrestricted, so an empty granted scope is discarded and logged. Only the
+  PR's OWN lane may be unrestricted; a grant may widen only by a real lane's
+  real paths.
+- **Merge two lanes into one scope.** Each lane is still resolved with its own
+  `owned`/`notOwned` pair and its own longest-match rules. Flattening them
+  would let one lane's grant cancel another's exclusion and make a path
+  writable that neither lane can write by itself.
+
+### Known gap this does not close
+
+`resolveLane` still falls back to `UNSCOPED_LANE` for any branch not named
+`fleet/<lane>/…`, and an unrestricted scope means no ownership check at all.
+So the scope gate is currently **opt-in by branch name** — the one string the
+worker being contained chooses. Closing that requires every path to have an
+owner first: **772 of 4165 tracked files currently have none** (most of
+`docs/`, all of `drizzle/migrations/`, `orchestrator/` itself, and
+`.claude/agents/` — including the lane fragments that define scope). Tracked
+in #1115; `NEVER_WRITE_PATHS` and CODEOWNERS are the defences that do bind
+universally in the meantime.
+
 ## Changing a lane's mode
 
 Lane modes are **runtime state, never source** (rail 8). Never edit

@@ -1439,6 +1439,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
+    prLabels: () => readPrLabels(ctx.pr),
   })),
   'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
@@ -1447,6 +1448,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
+    prLabels: () => readPrLabels(ctx.pr),
     prDiff: () => ciDiff(ctx),
     secondOpinion,
     // `FLEET_REVIEW_CACHE_DIR` unset (e.g. a local run) disables recording

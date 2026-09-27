@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { checkScope } from '../../orchestrator/src/scope.js'
+import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
 import { trackedFiles } from './codeowners.js'
 
@@ -877,5 +877,102 @@ describe('scripts/ ownership (#1066): infra owns it, backend keeps its own gate 
       }
     }
     expect(dead, `lane scope rules matching no tracked file:\n${dead.join('\n')}`).toEqual([])
+  })
+})
+
+describe('checkScopeAcross — cross-lane grants (#1115)', () => {
+  const backend: LaneScope = { owned: ['apps/worker/', 'tests/steps/backend/'], notOwned: ['tests/'] }
+  const desktop: LaneScope = { owned: ['src/client/', 'tests/'], notOwned: ['tests/steps/backend/'] }
+  const emptyLane: LaneScope = { owned: [], notOwned: [] }
+  const never = ['deploy/secrets/']
+
+  it('a file owned by ANY authorised lane is in scope', () => {
+    const r = checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [desktop], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual([])
+  })
+
+  it('without the grant, the same diff strays', () => {
+    expect(checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [], never).strayed)
+      .toEqual(['src/client/b.ts'])
+  })
+
+  it('a file owned by no authorised lane still strays', () => {
+    expect(checkScopeAcross(['apps/ios/X.swift'], backend, [desktop], never).strayed)
+      .toEqual(['apps/ios/X.swift'])
+  })
+
+  // The grant vocabulary names LANES, and no lane owns a never-write path, so
+  // no number of grants can reach one.
+  it('never-write stays absolute regardless of how many lanes are granted', () => {
+    const r = checkScopeAcross(['deploy/secrets/prod.pem'], backend, [desktop], never)
+    expect(r.forbidden).toEqual(['deploy/secrets/prod.pem'])
+    expect(r.strayed).toEqual([])
+  })
+
+  it('resolves each lane separately rather than unioning owned/notOwned', () => {
+    // desktop owns tests/ but not tests/steps/backend/; backend is the
+    // reverse. Each file is legal for exactly one of them.
+    expect(checkScopeAcross(['tests/steps/backend/a.steps.ts', 'tests/mocks/b.ts'], backend, [desktop], never).strayed)
+      .toEqual([])
+    expect(checkScopeAcross(['packages/crypto/src/lib.rs'], backend, [desktop], never).strayed)
+      .toEqual(['packages/crypto/src/lib.rs'])
+  })
+
+  // UNSCOPED_LANE semantics, unchanged: this must stay true of the PR's OWN
+  // lane so non-fleet branches are judged exactly as they are today.
+  it('an unrestricted OWN scope still means no ownership check', () => {
+    const r = checkScopeAcross(['anything/at/all.ts', 'deploy/secrets/k.pem'], emptyLane, [], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual(['deploy/secrets/k.pem'])
+  })
+
+  // The inverse, and the one that matters for safety. `assertLiveLanesHaveScope`
+  // only requires a non-empty scope of lanes that are not `off`, so an `off`
+  // lane legitimately has `owned: []`. If a grant for it were honoured, one
+  // label would make the whole PR unrestricted — the grant would fail OPEN.
+  it('a GRANTED lane with an empty scope grants nothing — it must not make the PR unrestricted', () => {
+    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane], never)
+    expect(r.strayed).toEqual(['src/client/b.ts', 'apps/ios/X.swift'])
+  })
+
+  // The second thing the review gate caught: NEVER_WRITE_PATHS is
+  // SECRET_PATH_PATTERNS only, and `deploy/` + `.github/workflows/` are
+  // deliberately NOT in it because lanes own some of them. Without a grant
+  // exclusion, one self-applied `scope:infra` label would extend any worker's
+  // write scope to the supply chain.
+  describe('grant exclusion: a grant may not reach CI or deploy config', () => {
+    const infra: LaneScope = { owned: ['deploy/', '.github/workflows/', 'scripts/'], notOwned: [] }
+    const excluded = ['.github/workflows/', '.github/actions/', 'deploy/', 'Dockerfile*', 'Caddyfile*', 'knope.toml']
+
+    it('refuses CI and deploy paths to a grant even though the granted lane owns them', () => {
+      const r = checkScopeAcross(
+        ['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'],
+        backend, [infra], never, excluded,
+      )
+      expect(r.strayed).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
+    })
+
+    it('still lets a grant reach the granted lane\'s non-supply-chain paths', () => {
+      // scripts/ is infra-owned and NOT excluded — #1060 legitimately needs
+      // scripts/bootstrap-admin.ts from the backend lane.
+      expect(checkScopeAcross(['scripts/bootstrap-admin.ts'], backend, [infra], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    // The exclusion restricts GRANTS, never a lane's own scope.
+    it('does not stop the owning lane writing those paths on its own PR', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, [], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    it('defaults to no exclusion when the list is omitted, so existing callers are unaffected', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml'], backend, [infra], never).strayed).toEqual([])
+    })
+  })
+
+  it('an empty granted scope alongside a real one leaves the real grant intact and nothing more', () => {
+    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane, desktop], never)
+    expect(r.strayed).toEqual(['apps/ios/X.swift'])
   })
 })
