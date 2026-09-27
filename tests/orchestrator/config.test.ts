@@ -8,6 +8,7 @@ import {
 } from '../../orchestrator/src/config.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
+import { trackedFiles } from './codeowners.js'
 
 describe('assertLiveLanesHaveScope', () => {
   const lane = (mode: Lane['mode'], owned: string[]): Lane => ({
@@ -141,10 +142,14 @@ describe('config', () => {
     expect(r.forbidden).toEqual(secrets)
   })
 
-  it('permits every committed secret TEMPLATE actually tracked in this repo', async () => {
-    const { execFileSync } = await import('node:child_process')
-    const tracked = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean)
-    const templates = tracked.filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+  // `trackedFiles`, never a bare `git ls-files`: under `fleet/verify` this
+  // suite runs inside a `git archive` EXPORT of the commit under judgement,
+  // which has no `.git` on purpose (`fleet-verify.yml` asserts its absence),
+  // so a raw git call throws there and passes here. The shared helper answers
+  // from the export's own tree instead, and refuses to return a vacuously
+  // short list.
+  it('permits every committed secret TEMPLATE actually tracked in this repo', () => {
+    const templates = trackedFiles().filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
     // Guards the guard: if the repo ever stops tracking these, this test
     // would silently assert nothing.
     expect(templates).toEqual(expect.arrayContaining([
