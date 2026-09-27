@@ -45,7 +45,7 @@ installer's `.sig` and `url` = `https://releases.<domain>/desktop/v<version>/<in
 
 ```bash
 # 1. get the signed artifacts (GitHub Release is the source of truth)
-gh release download desktop-v<version> --repo rhonda-rodododo/llamenos-platform -D flat-artifacts
+gh release download desktop-v<version> --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts
 
 # 2. manifest (URLs must point at the self-hosted origin)
 VERSION=<version> RUSTFS_PUBLIC_URL=https://releases.<domain> \

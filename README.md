@@ -1,9 +1,9 @@
 # Llámenos
 
-[![CI](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ci.yml)
-[![Desktop E2E](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/desktop-e2e.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/desktop-e2e.yml)
-[![iOS E2E](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ios-e2e.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ios-e2e.yml)
-[![Docker](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/docker.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/docker.yml)
+[![CI](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml)
+[![Desktop E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml)
+[![iOS E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml)
+[![Docker](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml)
 
 A secure, self-hosted crisis response platform. Supports voice calls, SMS, WhatsApp, and Signal — all routed to on-shift volunteers. Volunteers log encrypted notes and manage conversations in a native desktop app. Admins manage shifts, volunteers, channels, and ban lists. Reporters can submit encrypted reports through a dedicated portal.
 

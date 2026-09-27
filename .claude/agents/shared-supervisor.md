@@ -496,7 +496,7 @@ Prefix names with `ll-` to disambiguate from other projects in status.sh output.
 ### Git & Worktrees
 - **Always work in your worktree** — never `cd` to or `git checkout` in the main repo checkout (`$DISPATCH_REPO`; it is the first entry of `git worktree list`).
 - **Worktrees live at** `$WORKTREE_BASE/<repo-dir>-<name>`, where `<repo-dir>` is the main checkout's directory name (`llamenos` for a default clone). Your own worktree is your current directory.
-- **GitHub remote:** `git@github.com:rhonda-rodododo/llamenos-platform.git`
+- **GitHub remote:** `git@github.com:Llamenos-Hotline/llamenos-platform.git`
 
 ### Push & PR Creation (GitHub)
 ```bash
