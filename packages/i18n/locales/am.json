@@ -3794,6 +3794,7 @@
     "noFields": "No custom fields defined for this event type.",
     "noLinkedCases": "No cases linked to this event.",
     "noLinkedReports": "No reports linked to this event.",
+    "noSubEvents": "No sub-events for this event.",
     "noTimeline": "No timeline entries yet.",
     "searchCases": "Search cases...",
     "searchPlaceholder": "Search events...",

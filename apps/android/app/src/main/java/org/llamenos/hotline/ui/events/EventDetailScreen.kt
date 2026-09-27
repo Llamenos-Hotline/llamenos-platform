@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.Card
@@ -41,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -58,8 +63,10 @@ import org.llamenos.protocol.Record
  * Event detail screen showing full event information.
  *
  * Displays the event header (case number, status, entity type)
- * and a tabbed content area with Details, Timeline, Cases, and
- * Reports tabs. The status can be changed via status filter chips
+ * and a tabbed content area with Details, Sub-Events, Timeline,
+ * Cases, and Reports tabs. Sub-events and linked cases are the
+ * event's child records, split by whether their entity type is an
+ * event. The status can be changed via status filter chips
  * if the user has permission.
  *
  * @param viewModel Shared EventsViewModel
@@ -160,6 +167,7 @@ fun EventDetailScreen(
                     // Tab row
                     val tabs = listOf(
                         "details" to stringResource(R.string.events_tab_details),
+                        "sub_events" to stringResource(R.string.events_tab_sub_events),
                         "timeline" to stringResource(R.string.events_tab_timeline),
                         "linked_cases" to stringResource(R.string.events_tab_cases),
                         "linked_reports" to stringResource(R.string.events_tab_reports),
@@ -181,11 +189,32 @@ fun EventDetailScreen(
                     }
 
                     // Tab content
-                    when (selectedTabIndex) {
-                        0 -> EventDetailsTab(event = event, entityType = entityType)
-                        1 -> EventTimelineTab()
-                        2 -> EventLinkedCasesTab()
-                        3 -> EventLinkedReportsTab()
+                    when (tabs[selectedTabIndex].first) {
+                        "details" -> EventDetailsTab(event = event, entityType = entityType)
+                        "sub_events" -> EventChildRecordsTab(
+                            records = uiState.subEvents,
+                            entityTypeMap = uiState.entityTypeMap,
+                            isLoading = uiState.isLoadingChildren,
+                            error = uiState.childrenError,
+                            onRetry = { viewModel.loadChildRecords(eventId) },
+                            onDismissError = { viewModel.dismissChildrenError() },
+                            icon = Icons.Filled.Layers,
+                            emptyTitle = stringResource(R.string.events_no_sub_events),
+                            testTagPrefix = "event-sub-events",
+                        )
+                        "timeline" -> EventTimelineTab()
+                        "linked_cases" -> EventChildRecordsTab(
+                            records = uiState.linkedCases,
+                            entityTypeMap = uiState.entityTypeMap,
+                            isLoading = uiState.isLoadingChildren,
+                            error = uiState.childrenError,
+                            onRetry = { viewModel.loadChildRecords(eventId) },
+                            onDismissError = { viewModel.dismissChildrenError() },
+                            icon = Icons.Filled.Folder,
+                            emptyTitle = stringResource(R.string.events_no_linked_cases),
+                            testTagPrefix = "event-cases",
+                        )
+                        "linked_reports" -> EventLinkedReportsTab()
                     }
                 }
             }
@@ -420,20 +449,127 @@ private fun EventTimelineTab(
 }
 
 /**
- * Linked cases tab placeholder.
+ * Lists child records of the event: sub-events on the Sub-Events tab,
+ * everything else on the Cases tab.
  */
 @Composable
-private fun EventLinkedCasesTab(
+private fun EventChildRecordsTab(
+    records: List<Record>,
+    entityTypeMap: Map<String, EntityTypeDefinition>,
+    isLoading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    onDismissError: () -> Unit,
+    icon: ImageVector,
+    emptyTitle: String,
+    testTagPrefix: String,
     modifier: Modifier = Modifier,
 ) {
-    EmptyState(
-        icon = Icons.Filled.Description,
-        title = stringResource(R.string.events_no_linked_cases),
-        testTag = "event-cases-empty",
+    when {
+        isLoading -> {
+            Box(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .testTag("$testTagPrefix-loading"),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+
+        error != null -> {
+            org.llamenos.hotline.ui.components.ErrorCard(
+                error = error,
+                onDismiss = onDismissError,
+                onRetry = onRetry,
+                testTag = "$testTagPrefix-error",
+                modifier = modifier,
+            )
+        }
+
+        records.isEmpty() -> {
+            EmptyState(
+                icon = icon,
+                title = emptyTitle,
+                testTag = "$testTagPrefix-empty",
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+            )
+        }
+
+        else -> {
+            LazyColumn(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+                    .testTag("$testTagPrefix-list"),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(records, key = { it.id }) { record ->
+                    EventChildRecordCard(
+                        record = record,
+                        entityType = entityTypeMap[record.entityTypeID],
+                        icon = icon,
+                        testTag = "$testTagPrefix-item",
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventChildRecordCard(
+    record: Record,
+    entityType: EntityTypeDefinition?,
+    icon: ImageVector,
+    testTag: String,
+    modifier: Modifier = Modifier,
+) {
+    Card(
         modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-    )
+            .fillMaxWidth()
+            .testTag(testTag),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = record.caseNumber ?: record.id.take(8),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = stringResource(R.string.events_created_at, DateFormatUtils.formatTimestamp(record.createdAt)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (entityType != null) {
+                Text(
+                    text = entityType.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
+        }
+    }
 }
 
 /**
