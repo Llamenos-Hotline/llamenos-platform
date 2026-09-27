@@ -142,6 +142,97 @@ describe('fleet/verify in CI', () => {
     expect(v.summary).toContain('touched never-write paths')
   })
 
+  describe('scope:<lane> grants (#1115)', () => {
+    const desktopLane = (): Lane => ({
+      id: 'desktop', mode: 'off', cap: 1, engine: 'claude',
+      requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
+      scope: { owned: ['src/client/'], notOwned: [] },
+    })
+    const bothLanes = async (): Promise<Lane[]> => [lane(), desktopLane()]
+    const grantedIn = (d: VerifyCiDeps): string[] =>
+      (((d.verify as Mock).mock.calls[0]?.[0] as VerifyInput).grantedLanes ?? []).map((l) => l.id)
+
+    it('passes the granted lane through to verify', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['review', 'scope:desktop'] })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual(['desktop'])
+    })
+
+    it('grants nothing when the PR carries no scope label', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['review'] })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+    })
+
+    // Unreadable labels must not be confused with "no labels": the gate is
+    // judging whether a diff is authorised, so not knowing has to mean not
+    // granted.
+    it('fails closed when the labels cannot be read', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => undefined })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+    })
+
+    it('ignores a label naming something that is not a lane, rather than treating it as a wildcard', async () => {
+      const logged: string[] = []
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:everything'], log: (m) => logged.push(m) })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+      expect(logged.join('\n')).toContain('not a known lane')
+    })
+
+    it('never duplicates the PR\'s own lane into the grant list', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:ios', 'scope:desktop'] })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual(['desktop'])
+    })
+
+    it('deduplicates a repeated grant', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:desktop', 'scope: desktop'] })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual(['desktop'])
+    })
+
+    // The tests run against the head export get the same grants as the
+    // mechanical pass — otherwise the second call would re-judge the diff
+    // against the bare lane and contradict the first.
+    it('applies the same grants to the tested run, not just the mechanical pass', async () => {
+      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:desktop'] })
+      await runVerifyCi(d)
+      const calls = (d.verify as Mock).mock.calls as [VerifyInput][]
+      expect(calls.length).toBeGreaterThan(1)
+      for (const [input] of calls) {
+        expect((input.grantedLanes ?? []).map((l) => l.id)).toEqual(['desktop'])
+      }
+    })
+
+    // The fail-open the review gate caught on this PR's first revision: an
+    // `off` lane legitimately has an empty scope, and honouring a grant for
+    // it would have made the whole PR unrestricted.
+    it('drops a grant for a lane that owns nothing, rather than letting it widen the PR', async () => {
+      const emptyLane = (): Lane => ({
+        id: 'shared', mode: 'off', cap: 1, engine: 'claude',
+        requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
+        scope: { owned: [], notOwned: [] },
+      })
+      const logged: string[] = []
+      const d = deps({
+        lanes: async () => [lane(), emptyLane()],
+        prLabels: async () => ['scope:shared'],
+        log: (m) => logged.push(m),
+      })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+      expect(logged.join('\n')).toContain('grants nothing')
+    })
+
+    it('a deps object with no prLabels at all behaves exactly like a PR with no grants', async () => {
+      const d = deps({ lanes: bothLanes })
+      await runVerifyCi(d)
+      expect(grantedIn(d)).toEqual([])
+    })
+  })
+
   it('passes with the gate trace as its summary when verification passes', async () => {
     expect(await runVerifyCi(deps())).toEqual({
       ok: true,
