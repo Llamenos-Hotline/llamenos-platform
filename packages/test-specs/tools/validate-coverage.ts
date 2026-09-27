@@ -828,7 +828,9 @@ function checkBackendCoverage(scenarios: Scenario[]): { covered: number; missing
 //      `Wrong PIN shows error on unlock` (#1221).
 //   2. XCTest actually runs it: a parameterless, non-private `test*` method of
 //      an XCTestCase subclass (directly or via e.g. BaseUITest), or a Swift
-//      Testing `@Test` function, with no `XCTSkip` in its body.
+//      Testing `@Test` function, with no `XCTSkip` in its body — and the body
+//      can fail: it makes at least one assertion, and none of them is
+//      `XCTAssertTrue(true…)` (the "pass gracefully" branch 29 iOS UI tests use).
 //   3. Its file belongs to a test target that the `Llamenos` scheme's test
 //      action includes (apps/ios/project.yml). #168 removed LlamenosUITests
 //      from that list; for four months no UI test could run, anywhere.
@@ -894,8 +896,8 @@ export interface IosTestMethod {
   className: string;
   /** Test target owning the file, if any. */
   target: string | undefined;
-  /** Why XCTest would not run it, if it would not. */
-  notRunnable?: string;
+  /** Why it earns no scenario credit even when correctly named, if it does not. */
+  disqualified?: string;
 }
 
 export interface IosCoveragePaths {
@@ -979,8 +981,10 @@ const SWIFT_TEST_FUNC_RE =
   /^([ \t]*)((?:@\w+(?:\([^)]*\))?[ \t]+)*)((?:(?:private|fileprivate|public|internal|open|override|final|nonisolated)[ \t]+)*)func[ \t]+(test\w*)[ \t]*\(([^)]*)\)/gm;
 
 /**
- * Parse every Swift file under apps/ios/Tests into test methods, marking the
- * ones XCTest would not run and the target each file belongs to.
+ * Parse every Swift file under apps/ios/Tests into test methods, with the
+ * target each file belongs to and, for methods that cannot earn scenario
+ * credit, why. A method's body is approximated as the text up to the next
+ * test method, which can only over-disqualify, never over-credit.
  */
 export function parseIosTestMethods(iosRoot: string, targets: IosTestTarget[]): IosTestMethod[] {
   const files = findFiles(join(iosRoot, "Tests"), ".swift");
@@ -1026,13 +1030,17 @@ export function parseIosTestMethods(iosRoot: string, targets: IosTestTarget[]): 
       const params = m[5].trim();
       const isSwiftTesting = /@Test\b/.test(attributes);
 
-      let notRunnable: string | undefined;
-      if (/\b(?:private|fileprivate)\b/.test(modifiers)) notRunnable = "private";
-      else if (params !== "" && !isSwiftTesting) notRunnable = "takes parameters";
-      else if (!isSwiftTesting && !isXCTestCase(enclosing)) notRunnable = `${enclosing} is not an XCTestCase`;
-      else if (/\bXCTSkip\b/.test(content.slice(start, end))) notRunnable = "calls XCTSkip";
+      const body = content.slice(start, end);
+      let disqualified: string | undefined;
+      if (/\b(?:private|fileprivate)\b/.test(modifiers)) disqualified = "private — XCTest does not run it";
+      else if (params !== "" && !isSwiftTesting) disqualified = "takes parameters — XCTest does not run it";
+      else if (!isSwiftTesting && !isXCTestCase(enclosing)) disqualified = `${enclosing} is not an XCTestCase`;
+      else if (/\bXCTSkip\b/.test(body)) disqualified = "calls XCTSkip";
+      else if (/\bXCTAssertTrue\(\s*true\b/.test(body)) disqualified = "contains XCTAssertTrue(true…) — a branch that cannot fail";
+      // A thrown error fails the test, so `try` (not `try?`) is an assertion too.
+      else if (!/(?:\b(?:XCTAssert\w*|XCTFail|XCTUnwrap)|#expect|#require)\s*\(|\btry(?:!|\s)/.test(body)) disqualified = "makes no assertion";
 
-      methods.push({ name: m[4], file, className: enclosing, target, notRunnable });
+      methods.push({ name: m[4], file, className: enclosing, target, disqualified });
     });
   }
   return methods;
@@ -1080,7 +1088,7 @@ function checkIosCoverage(
     const expected = scenarioToSwiftMethod(scenario.title);
     const named = byName.get(expected) ?? [];
     const credited = named.find(
-      (m) => !m.notRunnable && m.target && targets.find((t) => t.name === m.target)?.inScheme && gated.has(m.target)
+      (m) => !m.disqualified && m.target && targets.find((t) => t.name === m.target)?.inScheme && gated.has(m.target)
     );
 
     if (credited && (claims.get(expected) ?? 0) === 1) {
@@ -1096,7 +1104,7 @@ function checkIosCoverage(
     }
     const reasons = named.map((m) => {
       const where = `${m.className}.${m.name} [${m.target ?? "no target"}]`;
-      if (m.notRunnable) return `${where}: not run by XCTest (${m.notRunnable})`;
+      if (m.disqualified) return `${where}: ${m.disqualified}`;
       if (!m.target) return `${where}: file is in no test target`;
       if (!targets.find((t) => t.name === m.target)?.inScheme) return `${where}: target not in the ${IOS_SCHEME} scheme`;
       if (!gated.has(m.target)) return `${where}: target not run by any merge-gating CI job`;

@@ -106,7 +106,7 @@ describe("checkIosCoverage", () => {
   test("credits an exactly-named test in a CI-gated target, through BaseUITest", () => {
     write(
       "apps/ios/Tests/UI/HubUITests.swift",
-      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() {}\n}\n`
+      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() { XCTAssertTrue(app.exists) }\n}\n`
     );
     expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 1, missing: 0 });
   });
@@ -115,7 +115,7 @@ describe("checkIosCoverage", () => {
     // The real case from #1221: this test asserts the active hub is NOT switched.
     write(
       "apps/ios/Tests/Unit/PushRoutingTests.swift",
-      `final class PushRoutingTests: XCTestCase {\n    func testBackgroundPushForHubBDoesNotSwitchActiveHubFromHubA() {}\n}\n`
+      `final class PushRoutingTests: XCTestCase {\n    func testBackgroundPushForHubBDoesNotSwitchActiveHubFromHubA() { XCTAssertTrue(app.exists) }\n}\n`
     );
     expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 0, missing: 1 });
   });
@@ -123,7 +123,7 @@ describe("checkIosCoverage", () => {
   test("does not credit one method twice for a scenario whose title merely extends it", () => {
     write(
       "apps/ios/Tests/Unit/AuthLoginBDDTests.swift",
-      `final class AuthLoginBDDTests: XCTestCase {\n    func testWrongPinShowsErrorOnUnlock() {}\n}\n`
+      `final class AuthLoginBDDTests: XCTestCase {\n    func testWrongPinShowsErrorOnUnlock() { XCTAssertTrue(app.exists) }\n}\n`
     );
     const result = checkIosCoverage(
       [scenario("Wrong PIN shows error on unlock"), scenario("Wrong PIN shows error")],
@@ -136,7 +136,7 @@ describe("checkIosCoverage", () => {
     write("apps/ios/project.yml", PROJECT_YML.replace("        - LlamenosUITests\n", ""));
     write(
       "apps/ios/Tests/UI/HubUITests.swift",
-      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() {}\n}\n`
+      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() { XCTAssertTrue(app.exists) }\n}\n`
     );
     expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 0, missing: 1 });
   });
@@ -145,7 +145,7 @@ describe("checkIosCoverage", () => {
     write(".github/workflows/ci.yml", CI_YML.replace("needs: [changes, ios-build-test, ios-e2e]", "needs: [changes, ios-build-test]"));
     write(
       "apps/ios/Tests/UI/HubUITests.swift",
-      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() {}\n}\n`
+      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() { XCTAssertTrue(app.exists) }\n}\n`
     );
     expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 0, missing: 1 });
   });
@@ -155,7 +155,7 @@ describe("checkIosCoverage", () => {
     write(".github/workflows/ci.yml", CI_YML.replace("  ios-e2e:\n    uses: ./.github/workflows/ios-e2e.yml\n", ""));
     write(
       "apps/ios/Tests/UI/HubUITests.swift",
-      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() {}\n}\n`
+      `final class HubUITests: BaseUITest {\n    func testSwitchActiveHub() { XCTAssertTrue(app.exists) }\n}\n`
     );
     expect(checkIosCoverage([scenario("Switch active hub")], paths)).toEqual({ covered: 0, missing: 1 });
   });
@@ -165,15 +165,15 @@ describe("checkIosCoverage", () => {
       "apps/ios/Tests/Unit/NotRunTests.swift",
       [
         "final class NotRunTests: XCTestCase {",
-        "    private func testPrivateScenario() {}",
-        "    func testParameterScenario(_ x: Int) {}",
+        "    private func testPrivateScenario() { XCTAssertTrue(ok) }",
+        "    func testParameterScenario(_ x: Int) { XCTAssertTrue(ok) }",
         "    func testSkippedScenario() throws {",
         '        throw XCTSkip("later")',
         "    }",
         "    // func testCommentedScenario() {}",
         "}",
         "final class Helper {",
-        "    func testHelperScenario() {}",
+        "    func testHelperScenario() { XCTAssertTrue(ok) }",
         "}",
         "",
       ].join("\n")
@@ -187,8 +187,38 @@ describe("checkIosCoverage", () => {
     expect(result).toEqual({ covered: 0, missing: 5 });
   });
 
+  test("does not credit a test that cannot fail", () => {
+    write(
+      "apps/ios/Tests/UI/HollowUITests.swift",
+      [
+        "final class HollowUITests: BaseUITest {",
+        "    func testNoAssertionScenario() {",
+        "        app.launch()",
+        "    }",
+        "    func testGracefulPassScenario() {",
+        '        if !find("x").exists { XCTAssertTrue(true, "not enabled on this server") }',
+        "    }",
+        "}",
+        "",
+      ].join("\n")
+    );
+    const result = checkIosCoverage([scenario("No assertion scenario"), scenario("Graceful pass scenario")], paths);
+    expect(result).toEqual({ covered: 0, missing: 2 });
+  });
+
+  test("a throwing test that tries is asserting", () => {
+    write(
+      "apps/ios/Tests/Unit/ThrowingTests.swift",
+      `final class ThrowingTests: XCTestCase {\n    func testConfiguresHttps() throws {\n        try api.configure(hubURLString: "https://x")\n    }\n}\n`
+    );
+    expect(checkIosCoverage([scenario("Configures HTTPS")], paths)).toEqual({ covered: 1, missing: 0 });
+  });
+
   test("credits a Swift Testing @Test function", () => {
-    write("apps/ios/Tests/Unit/SwiftTestingTests.swift", `struct SwiftTestingTests {\n    @Test func testDecryptsPayload() {}\n}\n`);
+    write(
+      "apps/ios/Tests/Unit/SwiftTestingTests.swift",
+      `struct SwiftTestingTests {\n    @Test func testDecryptsPayload() {\n        #expect(decrypt() == "x")\n    }\n}\n`
+    );
     expect(checkIosCoverage([scenario("Decrypts payload")], paths)).toEqual({ covered: 1, missing: 0 });
   });
 
@@ -200,7 +230,7 @@ describe("checkIosCoverage", () => {
         "    private struct Fixture {",
         '        let json = "{\\"a\\": 1}"',
         "    }",
-        "    func testNestedScenario() {}",
+        "    func testNestedScenario() { XCTAssertEqual(1, 1) }",
         "}",
         "",
       ].join("\n")
@@ -211,7 +241,7 @@ describe("checkIosCoverage", () => {
   test("two scenarios with one title cannot share one test", () => {
     write(
       "apps/ios/Tests/Unit/QrTests.swift",
-      `final class QrTests: XCTestCase {\n    func testQrCodeWithLocalhostRelayShowsError() {}\n}\n`
+      `final class QrTests: XCTestCase {\n    func testQrCodeWithLocalhostRelayShowsError() { XCTAssertTrue(app.exists) }\n}\n`
     );
     const result = checkIosCoverage(
       [
