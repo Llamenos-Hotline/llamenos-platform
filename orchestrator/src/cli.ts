@@ -14,7 +14,10 @@ import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
 import { dispatch as dispatchWorker, type EffortLevel } from './engines.js'
 import { verifyMechanical } from './verify.js'
-import { secondOpinion, postReview } from './review.js'
+import { secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS } from './review.js'
+import {
+  runSpecialistReviewCi, specialistRequirement, resolveSpecialistLabel, specialistCheckName, AGENT_REGISTRY_DIR,
+} from './specialist.js'
 import { artifactReviewCache } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
@@ -1292,10 +1295,25 @@ async function runReviewGate(): Promise<number> {
     changedFiles: () => ciChangedFiles(ctx),
     cache: artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog),
     requested: process.env['FLEET_REVIEW_REQUESTED'] === 'true',
+    // #1092: read the labels LIVE, not from the event payload — a label added
+    // after this event fired still counts, and workflow_dispatch has no
+    // payload at all. Unreadable is `undefined`, which fails closed.
+    unmetSpecialists: async (cacheKey) => specialistRequirement(cacheKey, {
+      labels: await readPrLabels(ctx.pr),
+      resolve: (label) => resolveSpecialistLabel(label, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
+      cacheFor: (agent) => artifactReviewCache(undefined, ciLog, agent),
+    }),
     log: ciLog,
   })
   const ghOutput = process.env['GITHUB_OUTPUT']
   if (ghOutput !== undefined) appendFileSync(ghOutput, `outcome=${outcome.kind}\n`)
+  if (outcome.kind === 'specialist-unmet') {
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — requested specialist review(s) have not passed on this diff (any FAIL fails):\n` +
+      `${outcome.unmet.map((u) => `  - ${u}`).join('\n')}\n`,
+    )
+    return 1
+  }
   if (outcome.kind === 'not-requested') {
     process.stderr.write(
       `${REVIEW_JOB}: review not requested — add the \`review\` label to run the non-author review\n`,
@@ -1315,6 +1333,49 @@ async function runReviewGate(): Promise<number> {
   }
   ciLog(`${REVIEW_JOB}: gate outcome = ${outcome.kind}`)
   return 0
+}
+
+/** The PR's current labels, or `undefined` when they could not be read (or
+ *  the PR number is not a number) — never an empty list standing in for
+ *  "could not look". Needs only `pull-requests: read`. */
+async function readPrLabels(pr: string): Promise<string[] | undefined> {
+  if (!/^[0-9]+$/.test(pr)) return undefined
+  const data = await ghJson<{ labels: { name: string }[] }>(
+    ['api', `repos/${REPO}/pulls/${pr}`],
+    30_000,
+    (detail) => ciLog(`reading PR #${pr}'s labels failed — treating its specialist requests as unmet: ${detail}`),
+  )
+  return data?.labels.map((l) => l.name)
+}
+
+/**
+ * `specialist-review-ci` — the step `fleet-specialist-review.yml` runs to
+ * produce `fleet/review/<agent>` (#1092). Same CI context contract as
+ * `review-ci`, plus `FLEET_SPECIALIST_LABEL`: the label that fired the run,
+ * raw and untrusted — `runSpecialistReviewCi` resolves it against the BASE
+ * checkout's agent registry and fails closed on anything it cannot resolve.
+ * The specialist always gets the high-impact budget: someone asked for it by
+ * name.
+ */
+async function runSpecialistReviewCommand(): Promise<number> {
+  const label = process.env['FLEET_SPECIALIST_LABEL'] ?? ''
+  return runCiGate(specialistCheckName(label.length > 0 ? label : '(no label)'), (ctx) => runSpecialistReviewCi({
+    ctx,
+    label,
+    registryDir: join(REPO_ROOT, AGENT_REGISTRY_DIR),
+    pathExists: existsSync,
+    prDiff: () => ciDiff(ctx),
+    changedFiles: () => ciChangedFiles(ctx),
+    cacheFor: (agent) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, agent),
+    runEngine: async ({ prompt, exportDir }) => toSecondOpinion(await invokeVerifierEngine({
+      authorEngine: 'claude',
+      exportDir,
+      prompt,
+      maxTurns: HIGH_IMPACT_MAX_TURNS,
+      timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
+    })),
+    log: ciLog,
+  }))
 }
 
 /**
@@ -1394,6 +1455,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     cache: artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog),
   })),
   'review-gate': () => runReviewGate(),
+  'specialist-review-ci': () => runSpecialistReviewCommand(),
   'review-and-merge': (rest) => runReviewAndMergeCommand(rest[0]),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),

@@ -109,6 +109,91 @@ lefthook.yml                        @rhonda-rodododo
 .github/workflows/                  @rhonda-rodododo
 knope.toml                          @rhonda-rodododo
 
+# ─── scripts/: key generation, signing, installers, updater, and gates ──
+# scripts/ as a whole is the infra lane's to write (see
+# .claude/agents/fragments/infra-supervisor.md) — dev, setup and build helpers
+# merge on green like any other lane work. The entries below are the two
+# subsets that need a human even though a lane may author them:
+#   1. where one quiet edit compromises every install rather than one build;
+#   2. every script that ENFORCES a check. The test for membership is "could
+#      weakening this let a defect through a check?" — a lane that may quietly
+#      weaken the gate judging it can widen its own authority, the same reason
+#      orchestrator/ and .claude/agents/ are owned above.
+# Mirrored in HIGH_IMPACT_PATHS (orchestrator/src/impact.ts); guards.test.ts
+# fails if any of them stops matching a tracked file or stops being owned here.
+#
+# Generates the admin keypair: a weakened RNG or a leaked key is a full
+# takeover of the hub, and nothing a revert can undo.
+scripts/bootstrap-admin.ts          @rhonda-rodododo
+# Release signing and promotion (sign-artifacts.sh, promote-release.sh,
+# fetch-staging.sh, verify-live.sh): decide which bytes get signed and what
+# ships as a release.
+scripts/release/                    @rhonda-rodododo
+# The full-disk-encrypted installer image: build-iso.sh and the image's own
+# contents (preseed, dropbear remote-unlock setup, late-command). Whatever is
+# in these files runs as root on every server installed from the ISO.
+scripts/build-iso.sh                @rhonda-rodododo
+scripts/iso-builder/                @rhonda-rodododo
+# Reproducible-build and ISO verification: the checks an operator runs to
+# confirm a release matches its source. A verifier that always passes is
+# worse than none.
+scripts/verify-build.sh             @rhonda-rodododo
+scripts/verify-iso.sh               @rhonda-rodododo
+# The desktop updater manifest decides what every installed desktop client
+# fetches and runs next — the single widest supply-chain surface we have.
+scripts/generate-update-manifest.sh @rhonda-rodododo
+scripts/generate-update-manifest.ts @rhonda-rodododo
+# Certificate pinning: which server keys the clients trust. A wrong pin is a
+# MITM that every client accepts.
+scripts/inject-cert-pins.ts         @rhonda-rodododo
+scripts/extract-cert-pins.sh        @rhonda-rodododo
+#
+# ── The gates: scripts whose exit status is a check's verdict ──
+# Repo checks CI (ci.yml) or the git hooks (lefthook.yml) run, one glob so a
+# new check-*.sh is owned from its first commit (guards.test.ts also requires
+# every file it matches to be listed in HIGH_IMPACT_PATHS):
+#   check-ipc-allowlist.sh  — pre-commit entry to the Tauri isolation-allowlist
+#                             test: the webview/Rust boundary for key material.
+#   check-ecies-active.sh   — CI: ECIES/nsec/secp256k1 must not reappear in
+#                             PROTOCOL.md's active sections (HPKE migration).
+#   check-label-count.sh    — CI: no doc may pin a stale crypto-label count.
+#   check-migration-drift.* — CI + pre-commit/pre-push: a schema change must
+#                             ship with its migration.
+scripts/check-*                     @rhonda-rodododo
+# CI's tests/ typecheck, gated against a per-file error baseline: loosen its
+# comparison and every new type error in tests/ passes.
+scripts/typecheck-tests-gate.ts     @rhonda-rodododo
+# Custom lint rules loaded by eslint.config.js (no-inline-api-shape, the
+# api-schema-binding rail): a rule that reports nothing is a lint gate off.
+scripts/eslint-rules/               @rhonda-rodododo
+# Rewrites the drizzle snapshot that check-migration-drift compares against —
+# the migration gate's baseline writer.
+scripts/regenerate-snapshot.ts      @rhonda-rodododo
+# The built-image gate (image-smoke.yml, and release.yml before publish):
+# image-smoke.sh runs the REAL entrypoint under production hardening against
+# PostgreSQL 17. verify-runtime.ts is the startup invariant that entrypoint
+# runs in every production container, and run-migrations.ts applies the
+# schema to every install's database — both ship inside the image
+# (deploy/docker/Dockerfile), so an edit reaches every server, not one build.
+scripts/image-smoke.sh              @rhonda-rodododo
+scripts/verify-runtime.ts           @rhonda-rodododo
+scripts/run-migrations.ts           @rhonda-rodododo
+# Test runners: exit 0 from any of these is a PASS someone acts on.
+# test-backend-bdd.sh is CI's backend-bdd job (`bun run test:backend:bdd`);
+# test-orchestrator.sh is `test:all`, which aggregates the per-platform
+# runners' exit codes; test-fleet.sh runs the fleet's own safety-rail suite.
+# One glob, same reasoning as check-* above. The backend lane keeps its write
+# grant on test-backend-bdd.sh — owning it here only adds the human review.
+scripts/test-*.sh                   @rhonda-rodododo
+scripts/android-parallel-e2e.sh     @rhonda-rodododo
+# Sourced by every test runner above: test-reporter.sh prints the PASS/FAIL
+# the runners report, codegen-guard.sh fails a run on stale generated code,
+# and platform-detect.sh decides which platforms test:all runs at all — so
+# detecting none skips every suite and still exits 0. (#1060's
+# bootstrap-admin-keys.ts lands here too, and is key generation — owned
+# either way.)
+scripts/lib/                        @rhonda-rodododo
+
 # ─── The fleet judging itself ──────────────────────────────────────────
 # Narrower than #615's blanket `tests/`, deliberately: every other test
 # directory is ordinary lane work and merges on green. A blanket `tests/`

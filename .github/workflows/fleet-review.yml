@@ -71,6 +71,14 @@
 #       run the non-author review". No engine call, no skip — the job goes
 #       red, which is the correct, honest state for a PR nobody has asked to
 #       be reviewed yet.
+#   (s) checked FIRST, ahead of (a): the PR carries a `-reviewer` label (a
+#       label-driven specialist, #1092 — see `fleet-specialist-review.yml`)
+#       whose specialist has no PASS for this exact diff, or the label does
+#       not resolve to a known agent → the step FAILS (exit 1) listing each
+#       unmet specialist. This is how a specialist binds on THIS required
+#       check while its own `fleet/review/<agent>` check stays out of the
+#       ruleset (a conditionally-posted check cannot be required). Any FAIL
+#       fails: a cached or fresh generalist PASS never outranks it.
 #
 # A step failing mid-job is not a "skipped" job: GitHub Actions still runs
 # the job to a real conclusion (failure) and that conclusion IS what
@@ -546,6 +554,10 @@ jobs:
       #     `cache-hit` — the job concludes SUCCESS with no engine call,
       #     regardless of `requested`.
       #   - `run-engine`    → exits 0, later steps proceed exactly as before.
+      #   - `specialist-unmet` → exits 1 (#1092): a `-reviewer` label on the
+      #     PR (read live via `gh api .../pulls/<n>` — `pull-requests: read`,
+      #     already granted) whose specialist has no PASS for this diff. Same
+      #     fail-closed mechanics as `not-requested` below.
       #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts), which
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
