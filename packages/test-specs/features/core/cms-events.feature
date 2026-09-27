@@ -4,7 +4,9 @@ Feature: CMS Events — Unified Entity System
   The /api/events routes are deprecated and return 301 redirects.
   Event data uses 3-tier E2EE like all other records.
 
-  # @wip: Location-header step has no backend definition — #1198
+  # @wip: Location-header step is unbound, and "a client sends GET /api/events" records its
+  # response only in entity-unification state (never the shared state the status step reads)
+  # with an empty Bearer token — needs the step fixed, not just the wording — #1198
   @events @deprecated-api @wip
   Scenario: Deprecated /api/events returns 301 redirect
     Given case management is enabled

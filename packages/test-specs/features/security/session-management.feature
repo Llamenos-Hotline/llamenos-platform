@@ -49,31 +49,27 @@ Feature: Session Management
     Then device 1's session should be invalid
     And device 2's session should still be valid
 
-  # @wip: session-list/terminate steps have no backend definitions — #1198
-  @backend @wip
+  @backend
   Scenario: List active sessions via API
     Given a registered user with a known keypair
     When the user lists their sessions
     Then the response status is 200
     And the session list is returned
 
-  # @wip: session-list/terminate steps have no backend definitions — #1198
-  @backend @wip
+  @backend
   Scenario: Terminate all other sessions via API
     Given a registered user with a known keypair
     When the user terminates all other sessions
     Then the response status is 200
     And the terminated session count is returned
 
-  # @wip: session-list/terminate steps have no backend definitions — #1198
-  @backend @wip
+  @backend
   Scenario: Terminate a specific session that does not exist returns 404
     Given a registered user with a known keypair
     When the user terminates session "nonexistent-session-id"
     Then the response status is 404
 
-  # @wip: session-list/terminate steps have no backend definitions — #1198
-  @backend @wip
+  @backend
   Scenario: List security events
     Given a registered user with a known keypair
     When the user lists their security events

@@ -1,5 +1,4 @@
-# @wip: Background steps have no backend definitions — #1198
-@backend @wip
+@backend
 Feature: CMS Advanced Operations (EP06-A4)
   As an admin
   I want to merge duplicate contacts and records, perform bulk operations,
@@ -7,8 +6,8 @@ Feature: CMS Advanced Operations (EP06-A4)
   So that I can maintain a clean and efficient case management system
 
   Background:
-    Given case management is enabled for the hub
-    And a case management template has been applied
+    Given case management is enabled
+    And the "jail-support" template is applied
 
   # ---------------------------------------------------------------------------
   # Contact Merge
@@ -49,6 +48,8 @@ Feature: CMS Advanced Operations (EP06-A4)
   # Bulk Contact Operations
   # ---------------------------------------------------------------------------
 
+  # @fixme: bulk delete soft-deletes but the directory list never filters deletedAt — #1202
+  @fixme
   Scenario: Admin can delete multiple contacts in bulk
     Given three contacts exist in the directory
     When I perform a bulk delete action on all three contacts
