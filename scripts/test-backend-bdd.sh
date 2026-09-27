@@ -50,7 +50,13 @@ fi
 # before any backend is needed — instead of being rendered as a silently skipped
 # test. Deliberately unimplemented scenarios carry @wip/@fixme with a linked
 # issue (enforced by `bun run test-specs:validate`).
-if ! reporter_run_step "bddgen" bunx bddgen; then
+#
+# `bddgen export` runs first to fill Playwright's TS transform cache from a single
+# thread: bddgen itself generates every BDD project concurrently in worker threads,
+# and the cache is written non-atomically, so on a cold cache one thread can load a
+# step file another is still writing — empty (its steps read as "missing") or
+# truncated (bddgen crashes). See the build job in .github/workflows/ci.yml.
+if ! reporter_run_step "bddgen" bash -c 'bunx bddgen export > /dev/null && bunx bddgen'; then
   echo "bddgen failed. If it printed 'Missing step definitions', a scenario selected"
   echo "by a BDD project's tag filter has an unbound step: bind it, or tag it"
   echo "@wip / @fixme with a '# ... — #<issue>' comment above the tag."
