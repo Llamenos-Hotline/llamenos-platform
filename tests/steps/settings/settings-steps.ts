@@ -370,6 +370,44 @@ Then('I can cancel without applying the change', async ({ page }) => {
   await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
+// Regression coverage for #1130: exercises the admin *sidebar* route
+// (/admin/spam-protection), which renders a different component tree than
+// the "Hub Settings" page used by the scenario above. The bug was that this
+// route's toggle handler re-read settings from the server instead of
+// PATCHing them, so the switch visually flipped and then silently reverted
+// on reload — confirming the switch state right after the click would not
+// have caught that; only a reload (or a re-fetch) proves the write landed.
+When('I toggle the CAPTCHA setting and confirm the change', async ({ page }) => {
+  const spamSection = page.getByTestId(TestIds.SETTINGS_SPAM)
+  const toggle = spamSection.getByRole('switch').first()
+  await expect(toggle).toBeVisible({ timeout: Timeouts.ELEMENT })
+  const before = await toggle.getAttribute('aria-checked')
+
+  await toggle.click()
+  const confirmBtn = page.getByTestId(TestIds.CONFIRM_DIALOG_OK)
+  await expect(confirmBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await confirmBtn.click()
+  await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
+
+  // The switch must reflect the server's PATCH response, not just the
+  // pre-click intent — confirm it actually flipped.
+  const expected = before === 'true' ? 'false' : 'true'
+  await expect(toggle).toHaveAttribute('aria-checked', expected, { timeout: Timeouts.ELEMENT })
+})
+
+Then('the CAPTCHA setting change should persist after a reload', async ({ page }) => {
+  const spamSection = page.getByTestId(TestIds.SETTINGS_SPAM)
+  const toggle = spamSection.getByRole('switch').first()
+  const expected = (await toggle.getAttribute('aria-checked')) ?? 'false'
+
+  await page.reload()
+  await page.waitForLoadState('domcontentloaded')
+
+  const sectionAfterReload = page.getByTestId(TestIds.SETTINGS_SPAM)
+  const toggleAfterReload = sectionAfterReload.getByRole('switch').first()
+  await expect(toggleAfterReload).toHaveAttribute('aria-checked', expected, { timeout: Timeouts.ELEMENT })
+})
+
 When('I press {string}', async ({ page }, keys: string) => {
   // Ensure page body has focus before sending keyboard shortcuts
   await page.locator('body').click({ position: { x: 10, y: 10 } }).catch(() => {})
