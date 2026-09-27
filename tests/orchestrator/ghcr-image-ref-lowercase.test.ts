@@ -20,12 +20,20 @@ import {
  *   "ghcr.io/Llamenos-Hotline/llamenos-platform:buildcache":
  *   repository name must be lowercase
  *
- * Scope note. This rail covers addresses the project *derives from the
- * repository* — the build caches — where folding to lowercase is safe
- * because we own the address. It deliberately does NOT cover release.yml's
- * publish address, which is read from `site/src/config.ts` and must be
- * validated rather than folded: silently rewriting a published contract is
- * its own defect. That address is railed in release-ghcr-publish.test.ts.
+ * Scope note. This rail covers the addresses this project DERIVES from
+ * `github.repository` — the build caches — where folding to lowercase is
+ * safe because we own the address and nothing external is promised it.
+ *
+ * `release.yml`'s `docker-stable` is deliberately NOT covered, and is
+ * deliberately not fixed in the same change. Its publish address is a
+ * published contract (`registry.app` in site/src/config.ts, what
+ * self-hosters `docker pull` and what cosign signs), and there is currently
+ * no address that is both advertised and writable: the advertised namespace
+ * cannot be written by this repo's GITHUB_TOKEN (`denied:
+ * permission_denied`, observed on ci-base-image-nightly run 36309067787),
+ * and the writable one is unadvertised, nonexistent, and private on
+ * creation. Folding the case there would make an unwritable push
+ * *look* fixed. That is an operator decision, tracked separately.
  *
  * Why a rail and not a code read. GitHub Actions has no lowercase function
  * in `${{ }}` expressions, and `with:` inputs are not shell — so `${VAR,,}`
@@ -71,7 +79,7 @@ function expectPublishableRef(actual: string | undefined, expected: string): voi
   expect(actual).not.toMatch(/[A-Z]/)
 }
 
-/** The three workflows that interpolate `github.repository` into an image. */
+/** The workflows that derive an image address from `github.repository`. */
 const CASES: ReadonlyArray<{
   file: string
   job: string
@@ -85,28 +93,6 @@ const CASES: ReadonlyArray<{
   /** What that output must be once folded. */
   expectedFolded: string
 }> = [
-  {
-    file: 'release.yml',
-    job: 'docker-stable',
-    step: 'Compute stable tags',
-    inheritedEnv: (_doc, j) => resolveEnv(j.env, EXPRESSIONS),
-    // `image`/`tags` here are the ADVERTISED address, read from
-    // site/src/config.ts and validated rather than folded (see this file's
-    // scope note). Only the layer-cache ref is repo-derived, so it is the
-    // one this rail owns.
-    foldedOutput: 'cache',
-    expectedFolded: `${FOLDED_REPOSITORY}:buildcache`,
-    consumers: (j) => {
-      const push = getStep(j, 'Build and push stable image')
-      const smoke = getStep(j, 'Build image for the pre-publish smoke')
-      return [
-        String(push.with?.['tags']),
-        String(push.with?.['cache-from']),
-        String(push.with?.['cache-to']),
-        String(smoke.with?.['cache-from']),
-      ]
-    },
-  },
   {
     file: 'docker-buildcache.yml',
     job: 'refresh',
@@ -194,16 +180,16 @@ describe.each(CASES)('rail: $file folds the repository path to lowercase before 
       // text — both are the bug this rail exists to stop.
       expect(value, `"${value}" interpolates github.repository directly`).not.toContain('github.repository')
       expect(value, `"${value}" uses bash syntax in a non-shell context`).not.toContain(',,}')
-      // Any output of the meta step is acceptable — `image` and the `tags`
-      // list release.yml derives from it are both folded at the source, and
-      // the test above proves every emitted output is lowercase.
+      // Any output of the meta step is acceptable: they are all folded at
+      // the source, and the test above proves every emitted output is
+      // lowercase.
       expect(value).toContain('steps.meta.outputs.')
     }
   })
 })
 
 describe('rail: every buildcache consumer tracks the producer tag', () => {
-  // docker-buildcache.yml PRODUCES `<repo>:buildcache`. Three places CONSUME
+  // docker-buildcache.yml PRODUCES `<repo>:buildcache`. Other places CONSUME
   // it, and a mismatch in any of them is *silent* — cache import is a soft
   // dependency, so a wrong address costs a full rebuild and fails nothing.
   // Nothing else would catch that, so it is pinned here against the address
@@ -239,20 +225,4 @@ describe('rail: every buildcache consumer tracks the producer tag', () => {
     expect(`${r.outputs['image']}:buildcache`).toBe(producedTag())
   })
 
-  it("release.yml's docker-stable uses that same cache, not its publish address", () => {
-    // The release build is the single biggest beneficiary of a warm cache
-    // (it compiles the Rust crypto FFI), and its cache must be somewhere
-    // this repo's token can WRITE — which the advertised publish address
-    // need not be. Proven by running the real step.
-    const doc = loadWorkflow('release.yml')
-    const j = getJob(doc, 'docker-stable')
-    const s = getStep(j, 'Compute stable tags')
-    if (!s.run) throw new Error('no run block — the parser must not pass vacuously')
-    const r = runShellStep(s.run, { ...resolveEnv(j.env, EXPRESSIONS), ...resolveEnv(s.env, EXPRESSIONS) })
-    expect(r.status, r.stderr).toBe(0)
-    expect(r.outputs['cache']).toBe(producedTag())
-    // ...and it is genuinely a different address from what it publishes,
-    // so this is not passing by the two happening to coincide today.
-    expect(r.outputs['cache']).not.toContain(String(r.outputs['image']))
-  })
 })

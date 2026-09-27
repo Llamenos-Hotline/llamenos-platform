@@ -376,21 +376,15 @@ jobs:
 
     env:
       REGISTRY: ghcr.io
-      # Authenticated with the built-in GITHUB_TOKEN — no operator-provided
-      # secret to configure or rotate (unlike the Docker Hub push this
-      # replaces, #885/#902, which never had DOCKERHUB_USERNAME /
-      # DOCKERHUB_TOKEN configured and so never produced an image).
-      #
-      # There is deliberately no `IMAGE_NAME` here. The address we publish to
-      # and the address we tell self-hosters to `docker pull` must be the
-      # same string, and the only way to guarantee that is for there to be
-      # exactly ONE string. That one lives in `registry.app` in the file
-      # below; `Compute stable tags` reads it. Re-deriving it here from
-      # `github.repository` would make a second, independent copy that can
-      # drift — which is exactly what happened, and what the rail in
-      # tests/orchestrator/release-ghcr-publish.test.ts was reduced to
-      # asserting after the fact instead of preventing.
-      SITE_CONFIG: site/src/config.ts
+      # Published under this repository's own GHCR namespace — no
+      # operator-provided secret to configure or rotate (unlike the Docker
+      # Hub push this replaces, #885/#902, which never had DOCKERHUB_USERNAME
+      # / DOCKERHUB_TOKEN configured and so never produced an image). This
+      # value MUST match `registry.app` in `site/src/config.ts`, the address
+      # the download page advertises for `docker pull` — a rail in
+      # tests/orchestrator/release-ghcr-publish.test.ts fails if the two ever
+      # drift apart.
+      IMAGE_NAME: ${{ github.repository }}
 
     steps:
       - name: Checkout
@@ -417,46 +411,11 @@ jobs:
         id: meta
         env:
           VERSION: ${{ needs.check.outputs.version }}
-          REPOSITORY: ${{ github.repository }}
         run: |
           MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
-
-          # ── Publish address: READ, never re-derived ──────────────────
-          # `registry.app` is the address the download page and the deploy
-          # docs tell operators to pull. Reading it here is what makes
-          # "where we publish" and "where we advertise" one literal instead
-          # of two that a rail has to police. Moving the package is then a
-          # one-line change to that file, and this job follows it.
-          mapfile -t ADVERTISED < <(grep -oP "(?<=app: ')[^']+" "$SITE_CONFIG")
-          if [ "${#ADVERTISED[@]}" -ne 1 ]; then
-            echo "::error::expected exactly one registry.app in ${SITE_CONFIG}, found ${#ADVERTISED[@]}"
-            exit 1
-          fi
-          IMAGE="${ADVERTISED[0]}"
-
-          # Validate the advertised address; do NOT fold it. OCI registries
-          # reject a mixed-case path, but silently lowercasing a *published
-          # contract* would republish under an address nobody was told
-          # about — the same silent-divergence failure this step exists to
-          # make impossible. A bad value here fails the release loudly.
-          if ! [[ "$IMAGE" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+$ ]]; then
-            echo "::error::registry.app '${IMAGE}' is not a legal lowercase OCI reference"
-            exit 1
-          fi
-
-          # ── Cache address: ours, so fold it ──────────────────────────
-          # The layer cache is private infrastructure, not a published
-          # address: it must live where THIS repo's GITHUB_TOKEN can write,
-          # which is its own namespace and nowhere else (a cross-namespace
-          # push fails `denied: permission_denied`). That namespace comes
-          # from `github.repository`, which carries the owner's display
-          # casing, so it needs the lowercase fold the publish address must
-          # not get. This is also the tag docker-buildcache.yml keeps warm.
-          CACHE="${REGISTRY}/${REPOSITORY,,}:buildcache"
-
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           {
-            echo "image=$IMAGE"
-            echo "cache=$CACHE"
             echo "tags<<EOF"
             echo "${IMAGE}:${VERSION}"
             echo "${IMAGE}:${MAJOR_MINOR}"
@@ -481,7 +440,7 @@ jobs:
           load: true
           push: false
           tags: llamenos-release-smoke:${{ github.sha }}
-          cache-from: type=registry,ref=${{ steps.meta.outputs.cache }}
+          cache-from: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache
 
       - name: Smoke image against PostgreSQL 17 (runner CPU)
         env:
@@ -536,8 +495,8 @@ jobs:
           # strategy). `mode=max` is kept — worth it for a release build
           # that includes the Rust crypto FFI compile — because registry
           # storage isn't the resource that was exhausted.
-          cache-from: type=registry,ref=${{ steps.meta.outputs.cache }}
-          cache-to: type=registry,ref=${{ steps.meta.outputs.cache }},mode=max
+          cache-from: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache,mode=max
 
       - name: Generate SBOM attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v2.1.0

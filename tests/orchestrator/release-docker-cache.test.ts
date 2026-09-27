@@ -95,26 +95,16 @@ describe('rail: docker-stable cache export no longer draws on the shared Actions
     expect(usesSharedActionsCacheQuota(step.with?.['cache-to'])).toBe(false)
   })
 
-  it('cache-to is registry-backed, mode=max, and targets the job\'s own computed cache ref — not a re-derived or hardcoded one', () => {
+  it('cache-to is registry-backed, mode=max, and targets the same image this job authenticates to and pushes (GHCR) — not a re-derived or hardcoded ref', () => {
     const doc = loadWorkflow()
     const step = buildPushStep(dockerStableJob(doc))
     const cacheTo = step.with?.['cache-to']
     expect(cacheTo).toContain('type=registry')
     expect(cacheTo).toContain('mode=max')
-    // Must reference the job's own computed output, never a literal
-    // registry/namespace.
-    //
-    // This is `steps.meta.outputs.cache`, NOT `.image`, and the distinction
-    // is load-bearing. `.image` is the address we advertise to self-hosters
-    // (`registry.app` in site/src/config.ts) — a published contract this
-    // repo may not even have write access to, since a repository transfer
-    // does not carry its GHCR packages and a cross-namespace push fails
-    // `denied: permission_denied`. The layer cache is private
-    // infrastructure and must live where this repo's GITHUB_TOKEN can
-    // write: its own namespace, derived from `github.repository`. They
-    // coincide once the advertised package and the repo share an owner;
-    // conflating them makes the cache unwritable whenever they do not.
-    expect(cacheTo).toContain('${{ steps.meta.outputs.cache }}')
+    // Must reference the job's own computed image output (steps.meta.outputs.image),
+    // never a literal registry/namespace, so the cache always lands in the same
+    // place the image itself is pushed.
+    expect(cacheTo).toContain('${{ steps.meta.outputs.image }}')
   })
 
   it('cache-from matches the same registry ref cache-to writes to, so the cache is actually reusable across runs', () => {
