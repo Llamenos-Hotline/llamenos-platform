@@ -4,38 +4,19 @@ import XCTest
 /// viewing volunteers, viewing the ban list, and verifying admin-only visibility.
 ///
 /// These tests require the app to be in an authenticated state with admin role.
-/// They use the `--test-authenticated` and `--test-admin` launch arguments.
-final class AdminFlowUITests: XCTestCase {
-
-    private var app: XCUIApplication!
+/// They run as a super-admin registered with the live backend (`launchAsAdminWithAPI`):
+/// admin UI is gated on server-granted permissions, which an offline launch never has.
+final class AdminFlowUITests: BaseUITest {
 
     override func setUp() {
         super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        // Launch with pre-authenticated admin state
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-        ])
-        app.launch()
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
+        launchAsAdminWithAPI()
     }
 
     // MARK: - Settings Navigation
 
     func testSettingsHasAdminSection() {
-        navigateToSettingsTab()
+        navigateToSettings()
 
         // Admin panel link should be visible for admin users
         let adminLink = find("settings-admin-link")
@@ -47,7 +28,7 @@ final class AdminFlowUITests: XCTestCase {
     }
 
     func testAdminPanelOpens() {
-        navigateToSettingsTab()
+        navigateToSettings()
 
         let adminLink = find("settings-admin-link")
         guard adminLink.waitForExistence(timeout: 10) else {
@@ -189,7 +170,7 @@ final class AdminFlowUITests: XCTestCase {
     // MARK: - Settings Device Link
 
     func testDeviceLinkButtonExists() {
-        navigateToSettingsTab()
+        navigateToSettings()
 
         // Device link is now in Account Settings sub-page
         let accountLink = find("settings-account-link")
@@ -207,73 +188,12 @@ final class AdminFlowUITests: XCTestCase {
     }
 
     func testSettingsRoleBadgeExists() {
-        navigateToSettingsTab()
+        navigateToSettings()
 
         let roleRow = find("settings-role")
         XCTAssertTrue(
             roleRow.waitForExistence(timeout: 10),
             "Role display should exist in settings"
         )
-    }
-
-    // MARK: - Helpers
-
-    @discardableResult
-    private func scrollToFind(_ identifier: String, maxSwipes: Int = 5, timeout: TimeInterval = 2) -> XCUIElement {
-        let element = find(identifier)
-        if element.waitForExistence(timeout: timeout) {
-            return element
-        }
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) {
-                return element
-            }
-        }
-        return element
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
-    }
-
-    // MARK: - Navigation Helpers
-
-    private func navigateToSettingsTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
-        }
-
-        let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else { return }
-        // Fifth tab = Settings (0: Dashboard, 1: Notes, 2: Conversations, 3: Shifts, 4: Settings)
-        let settingsTabButton = tabBar.buttons.element(boundBy: 4)
-        if settingsTabButton.exists {
-            settingsTabButton.tap()
-        }
-    }
-
-    private func navigateToAdminPanel() {
-        navigateToSettingsTab()
-
-        let adminLink = scrollToFind("settings-admin-link", timeout: 10)
-        guard adminLink.exists else {
-            // Not visible — might not be admin. Skip gracefully.
-            return
-        }
-        adminLink.tap()
-
-        // Wait for admin view to load
-        let adminTabView = find("admin-tab-view")
-        _ = adminTabView.waitForExistence(timeout: 5)
     }
 }

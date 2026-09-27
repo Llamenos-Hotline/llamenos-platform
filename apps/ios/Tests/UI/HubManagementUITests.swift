@@ -25,7 +25,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies the hub list screen renders after navigating from Settings.
     func testHubListShowsHubs() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Settings > Hubs") {
             navigateToHubs()
@@ -98,7 +98,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies the "Create Hub" button is visible on the hub management screen.
     func testCreateHubButtonVisible() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Settings > Hubs") {
             navigateToHubs()
@@ -117,7 +117,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies tapping the create hub button opens the creation form.
     func testCreateHubFormOpens() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Hubs and tap Create Hub") {
             navigateToHubs()
@@ -156,7 +156,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies cancelling the hub creation form returns to the hub list.
     func testCancelHubCreation() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the hub creation form and cancel") {
             navigateToHubs()

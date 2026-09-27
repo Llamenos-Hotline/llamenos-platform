@@ -24,6 +24,12 @@ name: iOS E2E
 on:
   workflow_call:
   workflow_dispatch:
+  # ci.yml's `ios` flag is set by apps/ios/ and shared dependencies, not by
+  # apps/worker/ or src/server/ — so a backend-only PR that breaks the iOS
+  # client's API contract never runs this suite. The nightly run on main
+  # catches that within a day.
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions: {}  # deny-all; per-job permissions below
 
@@ -228,7 +234,9 @@ jobs:
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} | tee /tmp/shard-args.txt
           test -s /tmp/shard-args.txt || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
+      # Inside the job's 60: leaves room for the always() report/upload steps.
       - name: Run XCUITests (shard ${{ matrix.shard }})
+        timeout-minutes: 45
         run: |
           set -o pipefail
           XCTESTRUN=$(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
@@ -244,19 +252,20 @@ jobs:
             $(cat /tmp/shard-args.txt) \
             2>&1 | tee /tmp/xcodebuild-test.log
 
+      # always(): a shard that hits its timeout must still report what ran.
       - name: Report (shard ${{ matrix.shard }})
-        if: ${{ !cancelled() }}
+        if: always()
         run: |
           python3 apps/ios/scripts/ui-tests.py report /tmp/xcodebuild-test.log \
             --json /tmp/ui-test-results-shard-${{ matrix.shard }}.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Show backend log
-        if: ${{ !cancelled() }}
+        if: always()
         run: cat "$RUNNER_TEMP/llamenos-native-backend/server.log" || true
 
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: ios-e2e-results-shard-${{ matrix.shard }}
           path: |

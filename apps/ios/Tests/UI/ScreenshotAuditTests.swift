@@ -87,7 +87,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_02a_Dashboard() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         _ = dashboard.waitForExistence(timeout: 10)
         screenshot("02a-dashboard")
@@ -125,7 +125,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_04a_NotesList() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToNotes()
         let list = find("notes-list")
         let empty = find("notes-empty-state")
@@ -147,7 +147,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_05a_CasesList() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToCases()
         _ = anyElementExists(["case-list", "case-empty-state", "case-loading", "cms-not-enabled"], timeout: 10)
         screenshot("05a-cases-list")
@@ -166,7 +166,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_06a_ConversationsList() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToConversations()
         _ = anyElementExists(["conversations-list", "conversations-empty-state", "conversations-loading"], timeout: 10)
         screenshot("06a-conversations-list")
@@ -206,7 +206,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_07_Shifts() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToShifts()
         _ = anyElementExists(["shifts-empty-state", "clock-in-button", "shifts-loading"], timeout: 10)
         screenshot("07-shifts")
@@ -217,7 +217,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_08a_Reports() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let reportsBtn = find("dashboard-reports-action")
@@ -244,7 +244,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_09_Contacts() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let contactsBtn = find("dashboard-contacts-action")
@@ -259,7 +259,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_10_Blasts() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let blastsBtn = find("dashboard-blasts-action")
@@ -274,7 +274,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_11_Triage() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let triageBtn = find("dashboard-triage-action")
@@ -289,7 +289,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_12_CallHistory() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let historyBtn = find("dashboard-call-history-action")
@@ -304,7 +304,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_13_Help() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
         guard dashboard.waitForExistence(timeout: 10) else { return }
         let helpBtn = find("dashboard-help-action")
@@ -322,7 +322,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_14a_Settings() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToSettings()
         _ = find("settings-account-link").waitForExistence(timeout: 8)
         screenshot("14a-settings")
@@ -331,21 +331,21 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_14c_AccountSettings() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAccountSettings()
         _ = anyElementExists(["settings-signing-pubkey", "settings-device-id", "copy-signing-pubkey"], timeout: 8)
         screenshot("14c-account-settings")
     }
 
     func testScreenshot_14d_Preferences() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToPreferencesSettings()
         _ = anyElementExists(["settings-call-sounds", "settings-language-picker", "settings-auto-lock-picker"], timeout: 8)
         screenshot("14d-preferences")
     }
 
     func testScreenshot_14e_TranscriptionSettings() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToSettings()
         let transcriptionLink = scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 5)
         guard transcriptionLink.exists && transcriptionLink.isHittable else { return }
@@ -355,7 +355,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_14f_Diagnostics() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToSettings()
         let diagLink = scrollToFind("settings-diagnostics-link", maxSwipes: 5, timeout: 5)
         guard diagLink.exists && diagLink.isHittable else { return }
@@ -365,7 +365,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_14g_HubManagement() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToSettings()
         let hubsLink = scrollToFind("settings-hubs-link", maxSwipes: 5, timeout: 5)
         guard hubsLink.exists && hubsLink.isHittable else { return }
@@ -375,7 +375,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_14h_PanicWipe() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToSettings()
         let panicLink = scrollToFind("settings-panic-wipe", maxSwipes: 5, timeout: 5)
         guard panicLink.exists && panicLink.isHittable else { return }
@@ -390,7 +390,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_15a_AdminPanel() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         _ = find("admin-tab-view").waitForExistence(timeout: 8)
         screenshot("15a-admin-panel")
@@ -399,7 +399,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15c_AdminVolunteers() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-volunteers", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -409,7 +409,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15d_AdminBanList() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-bans", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -419,7 +419,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15e_AdminAuditLog() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-audit-log", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -429,7 +429,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15f_AdminInvites() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-invites", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -439,7 +439,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15g_AdminCustomFields() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-custom-fields", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -449,7 +449,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15h_AdminSchemaBrowser() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-schema-browser", maxSwipes: 3, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -459,7 +459,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15i_AdminTelephony() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-telephony-settings", maxSwipes: 5, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -469,7 +469,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15j_AdminSpam() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-spam-settings", maxSwipes: 5, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -479,7 +479,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15k_AdminSystemHealth() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-system-health", maxSwipes: 5, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -489,7 +489,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15l_AdminIVR() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-ivr-settings", maxSwipes: 5, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -499,7 +499,7 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_15m_AdminReportCategories() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-report-categories", maxSwipes: 5, timeout: 5)
         guard link.exists && link.isHittable else { return }
@@ -513,7 +513,7 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_16_DeviceLink() {
-        launchAsAdmin()
+        launchAsAdminWithAPI()
         navigateToAccountSettings()
         let linkBtn = scrollToFind("settings-link-device", maxSwipes: 5, timeout: 5)
         guard linkBtn.exists && linkBtn.isHittable else { return }

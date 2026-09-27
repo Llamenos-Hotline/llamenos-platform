@@ -38,6 +38,8 @@ class BaseUITest: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         app = XCUIApplication()
+        // Tab titles and system labels ("More") are matched by text; pin the language.
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
     }
 
     override func tearDown() {
@@ -125,16 +127,6 @@ class BaseUITest: XCTestCase {
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launch()
-    }
-
-    /// Launch the app in a pre-authenticated admin state (no API connection).
-    func launchAsAdmin() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-        ])
         app.launch()
     }
 
@@ -337,24 +329,47 @@ class BaseUITest: XCTestCase {
 
     // MARK: - Navigation
 
-    /// Tab indices: 0=Dashboard, 1=Notes, 2=Cases, 3=Conversations, 4=Shifts, 5=Settings
+    /// MainTabView's tabs, in order, by their English titles (setUp pins English).
+    private static let mainTabTitles = ["Dashboard", "Notes", "Cases", "Messages", "Shifts", "Settings"]
+
+    /// Select a main tab the way a user does. Indices follow `mainTabTitles`.
+    ///
+    /// An iPhone tab bar shows at most five items, so with six tabs Shifts and
+    /// Settings are reached through "More". This helper used to tap the button at
+    /// `index` if one existed and silently do nothing otherwise — so every test that
+    /// opened Shifts or Settings on an iPhone was asserting against the dashboard.
     func navigateToTab(index: Int) {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
+        guard find("main-tab-view").waitForExistence(timeout: 10) else {
             XCTFail("Main tab view should be visible")
             return
         }
-
         let tabBar = app.tabBars.firstMatch
         guard tabBar.waitForExistence(timeout: 5) else {
             XCTFail("Tab bar should exist")
             return
         }
-
-        let button = tabBar.buttons.element(boundBy: index)
-        if button.exists {
-            button.tap()
+        let title = Self.mainTabTitles[index]
+        let direct = tabBar.buttons[title]
+        if direct.exists {
+            direct.tap()
+            return
         }
+        let more = tabBar.buttons["More"]
+        guard more.exists else {
+            XCTFail("Tab '\(title)' is neither in the tab bar nor behind More")
+            return
+        }
+        more.tap()
+        let row = app.tables.cells.staticTexts[title]
+        if !row.waitForExistence(timeout: 2) {
+            // More re-opens the overflow tab shown last; tapping it again pops to its list.
+            more.tap()
+        }
+        guard row.waitForExistence(timeout: 5) else {
+            XCTFail("Tab '\(title)' should be listed under More")
+            return
+        }
+        row.tap()
     }
 
     func navigateToDashboard() { navigateToTab(index: 0) }
@@ -364,6 +379,7 @@ class BaseUITest: XCTestCase {
     func navigateToShifts() { navigateToTab(index: 4) }
     func navigateToSettings() { navigateToTab(index: 5) }
 
+    /// Open the admin panel from Settings, failing the test if it does not open.
     func navigateToAdminPanel() {
         navigateToSettings()
 
@@ -374,8 +390,22 @@ class BaseUITest: XCTestCase {
         }
         adminLink.tap()
 
-        let adminTabView = find("admin-tab-view")
-        _ = adminTabView.waitForExistence(timeout: 5)
+        guard anyElementExists(["admin-sidebar-list", "admin-tab-view"]) else {
+            XCTFail("Admin panel should appear after tapping the admin link")
+            return
+        }
+    }
+
+    /// Open one admin settings screen from the admin panel.
+    func navigateToAdminSettingsScreen(_ linkIdentifier: String) {
+        navigateToAdminPanel()
+
+        let link = scrollToFind(linkIdentifier)
+        guard link.exists else {
+            XCTFail("\(linkIdentifier) should exist in admin panel")
+            return
+        }
+        link.tap()
     }
 
     func navigateToAccountSettings() {
