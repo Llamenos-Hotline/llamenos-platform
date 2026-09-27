@@ -74,6 +74,18 @@ const services: Services = createServices(db, {
 })
 console.log('[llamenos] Services initialized')
 
+// --- Seed defaults and the configured admin before anything serves ---
+// Settings first: the roles table must be populated before the admin user
+// exists, or a request authenticating in between resolves role-super-admin
+// against an empty table and is refused (see the ordering note in
+// routes/dev.ts test-reset). Both only fill what is missing, so they are safe
+// on every boot against an existing database. Mode-specific seeding (demo
+// accounts, a pre-completed setup) stays with the demo/dev flows that own it.
+// A failure here must stop the boot: a server without roles cannot authorise.
+await services.settings.ensureInit()
+await services.identity.ensurePlatformAdmin()
+console.log('[llamenos] Default settings, roles and platform admin ensured')
+
 // --- Startup: warn if any plaintext (un-encrypted) contacts exist ---
 try {
   const [result] = await db
