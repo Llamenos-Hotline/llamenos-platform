@@ -52,9 +52,15 @@
 # client consuming it is one atomic change, not three. `fleet/verify` widens
 # which lane's ownership a file may satisfy for each grant present.
 #
-# These never reach NEVER_WRITE_PATHS — the grant names a lane, and no lane
-# owns a never-write path. They live outside the commit on purpose, so a
-# worker cannot grant itself scope from inside its own diff.
+# Two separate guards, easy to conflate:
+#   - NEVER_WRITE_PATHS (secrets only) is absolute and no grant reaches it.
+#   - GRANT_EXCLUDED_PATHS (.github/workflows, .github/actions, deploy/,
+#     Dockerfile*, Caddyfile*, knope.toml) is what keeps CI and deploy config
+#     out of a grant. Those ARE lane-owned, so without it a self-applied
+#     scope:infra label would widen any worker onto the supply chain.
+# The exclusion binds grants only — the owning lane still writes those paths
+# on its own PR. Labels live outside the commit so a grant cannot arrive by
+# merging a branch.
 - name: "scope:backend"
   color: "5319e7"
   description: "fleet/verify: also judge this PR against the backend lane's scope"

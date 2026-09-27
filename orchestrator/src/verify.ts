@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeAcross } from './scope.js'
 import { classifyImpact } from './impact.js'
-import { NEVER_WRITE_PATHS } from './config.js'
+import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
 import type { Lane } from './config.js'
 
 const execFileAsync = promisify(execFile)
@@ -559,6 +559,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     lane.scope,
     granted.map((g) => g.scope),
     [...NEVER_WRITE_PATHS],
+    [...GRANT_EXCLUDED_PATHS],
   )
   if (forbidden.length > 0) {
     reasons.push(`touched never-write paths: ${forbidden.join(', ')}`)

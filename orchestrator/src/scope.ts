@@ -83,9 +83,18 @@ export function checkScope(
  *   would otherwise be `scope=fail`. An empty granted scope is therefore
  *   discarded: a grant may only ever widen by a real lane's real paths.
  *
- * `forbidden` (neverWrite) is checked first and stays ABSOLUTE either way. The
- * grant vocabulary names lanes, and no lane owns a never-write path, so no
- * number of grants can reach one.
+ * `forbidden` (neverWrite) is checked first and stays ABSOLUTE either way —
+ * but note precisely what that covers: `NEVER_WRITE_PATHS` is
+ * `SECRET_PATH_PATTERNS`, i.e. **secrets only**. `deploy/` and
+ * `.github/workflows/` are deliberately NOT never-write, because lanes own
+ * some of them. So "no grant can reach a never-write path" is true and also
+ * much weaker than it sounds, and an earlier revision of this file overstated
+ * it into "secrets, CI and deploy config are unreachable", which was false.
+ *
+ * `grantExcluded` is what actually makes CI and deploy unreachable *by grant*:
+ * paths on that list are refused to a grant even when the granted lane owns
+ * them, while the owning lane still writes them normally on its own PR. See
+ * `GRANT_EXCLUDED_PATHS`.
  *
  * Each lane is evaluated with its own `owned`/`notOwned` pair, never a
  * flattened union: flattening would break longest-match, letting desktop's
@@ -97,20 +106,30 @@ export function checkScopeAcross(
   ownScope: LaneScope,
   grantedScopes: LaneScope[],
   neverWrite: string[],
+  grantExcluded: string[] = [],
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
   // Only the PR's own lane may be unrestricted. A granted lane with no owned
   // paths grants nothing at all.
   const unrestricted = ownScope.owned.length === 0
-  const effective = [ownScope, ...grantedScopes.filter((s) => s.owned.length > 0)]
+  const granted = grantedScopes.filter((s) => s.owned.length > 0)
   for (const f of changed) {
     if (neverWrite.some((p) => matchesPath(f, p))) {
       forbidden.push(f)
       continue
     }
     if (unrestricted) continue
-    if (!effective.some((s) => checkScope([f], s, []).strayed.length === 0)) strayed.push(f)
+    // The PR's own lane is checked first and is never subject to the grant
+    // exclusion: infra writes its own workflows on its own PR.
+    if (checkScope([f], ownScope, []).strayed.length === 0) continue
+    // Beyond the own lane, a grant may not reach the supply chain even when
+    // the granted lane owns it.
+    if (grantExcluded.some((p) => matchesPath(f, p))) {
+      strayed.push(f)
+      continue
+    }
+    if (!granted.some((s) => checkScope([f], s, []).strayed.length === 0)) strayed.push(f)
   }
   return { forbidden, strayed }
 }
