@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parse as parseYaml } from 'yaml'
+import {
+  loadWorkflow, getJob, getStep, resolveEnv, runShellStep,
+  type WorkflowJob, type WorkflowDoc,
+} from './helpers/workflow-shell.js'
 
 /**
  * Rail: no workflow may put a mixed-case repository path into a container
- * image reference.
+ * image reference it derives from `github.repository`.
  *
  * What went wrong. The repo moved to the `Llamenos-Hotline` org, so
  * `github.repository` now evaluates to `Llamenos-Hotline/llamenos-platform`
@@ -18,6 +19,13 @@ import { parse as parseYaml } from 'yaml'
  *   ERROR: failed to build: invalid tag
  *   "ghcr.io/Llamenos-Hotline/llamenos-platform:buildcache":
  *   repository name must be lowercase
+ *
+ * Scope note. This rail covers addresses the project *derives from the
+ * repository* — the build caches — where folding to lowercase is safe
+ * because we own the address. It deliberately does NOT cover release.yml's
+ * publish address, which is read from `site/src/config.ts` and must be
+ * validated rather than folded: silently rewriting a published contract is
+ * its own defect. That address is railed in release-ghcr-publish.test.ts.
  *
  * Why a rail and not a code read. GitHub Actions has no lowercase function
  * in `${{ }}` expressions, and `with:` inputs are not shell — so `${VAR,,}`
@@ -34,107 +42,13 @@ import { parse as parseYaml } from 'yaml'
  * vacuously green just because today's owner happens to be lowercase.
  */
 
-const WORKFLOWS = join(process.cwd(), '.github', 'workflows')
-
 /** The owner casing that actually broke production. */
 const MIXED_CASE_REPOSITORY = 'Llamenos-Hotline/llamenos-platform'
-const EXPECTED_IMAGE = 'ghcr.io/llamenos-hotline/llamenos-platform'
+const FOLDED_REPOSITORY = 'ghcr.io/llamenos-hotline/llamenos-platform'
 
-interface WorkflowStep {
-  name?: string
-  id?: string
-  run?: string
-  uses?: string
-  with?: Record<string, string>
-  env?: Record<string, string>
-}
-interface WorkflowJob {
-  env?: Record<string, string>
-  steps: WorkflowStep[]
-}
-interface WorkflowDoc {
-  env?: Record<string, string>
-  jobs: Record<string, WorkflowJob>
-}
-
-function loadWorkflow(file: string): WorkflowDoc {
-  return parseYaml(readFileSync(join(WORKFLOWS, file), 'utf8')) as WorkflowDoc
-}
-
-function job(doc: WorkflowDoc, name: string): WorkflowJob {
-  const j = doc.jobs?.[name]
-  if (!j) throw new Error(`no "${name}" job — the parser must not pass vacuously`)
-  return j
-}
-
-function step(j: WorkflowJob, name: string): WorkflowStep {
-  const s = j.steps.find((s) => s.name === name)
-  if (!s) throw new Error(`no "${name}" step — the parser must not pass vacuously`)
-  return s
-}
-
-/**
- * The runner-supplied values these meta steps read. `github.repository` is
- * deliberately the casing that broke production; the rest are inert
- * fixtures the fold does not depend on.
- */
 const EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.repository': MIXED_CASE_REPOSITORY,
-  'needs.check.outputs.version': '1.2.3',
-}
-
-/**
- * Resolves the `${{ ... }}` expressions an env block may contain. An
- * expression with no fixture throws rather than quietly feeding the shell an
- * unexpanded literal — a silently-unsubstituted value would make the fold
- * assertion below meaningless.
- */
-function resolveEnv(raw: Record<string, string> | undefined): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(raw ?? {})) {
-    out[k] = String(v).replaceAll(/\$\{\{\s*([^}\s]+)\s*\}\}/g, (_m, path: string) => {
-      const fixture = EXPRESSIONS[path]
-      if (fixture === undefined) {
-        throw new Error(`env "${k}" reads \${{ ${path} }}, which this rail has no fixture for`)
-      }
-      return fixture
-    })
-  }
-  return out
-}
-
-/**
- * Runs a workflow `run:` block under bash — the shell GitHub uses for
- * `run:` on ubuntu-latest — with `$GITHUB_OUTPUT` pointed at a temp file,
- * and returns the step outputs it wrote.
- */
-function runStep(script: string, env: Record<string, string>): Record<string, string> {
-  const dir = mkdtempSync(join(tmpdir(), 'ghcr-ref-rail-'))
-  const outputFile = join(dir, 'github_output')
-  writeFileSync(outputFile, '')
-
-  execFileSync('bash', ['-eo', 'pipefail', '-c', script], {
-    env: { PATH: process.env['PATH'] ?? '', ...env, GITHUB_OUTPUT: outputFile },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
-  // Parse the `key=value` and `key<<EOF ... EOF` forms the real runner does.
-  const outputs: Record<string, string> = {}
-  const lines = readFileSync(outputFile, 'utf8').split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    const heredoc = line.match(/^([^=<]+)<<(.+)$/)
-    if (heredoc) {
-      const [, key, delimiter] = heredoc
-      const body: string[] = []
-      while (++i < lines.length && lines[i] !== delimiter) body.push(lines[i] ?? '')
-      outputs[(key ?? '').trim()] = body.join('\n')
-      continue
-    }
-    const eq = line.indexOf('=')
-    if (eq > 0) outputs[line.slice(0, eq)] = line.slice(eq + 1)
-  }
-  return outputs
+  'needs.check.outputs.version': '9.9.9',
 }
 
 /** Strips bash's lowercase fold, reproducing the pre-fix defect exactly. */
@@ -147,15 +61,14 @@ function withoutTheFold(script: string): string {
 }
 
 /**
- * `image` must be a legal OCI repository path: the name component is
- * `[a-z0-9]+(?:[._-][a-z0-9]+)*` per path segment. A single uppercase letter
- * anywhere is what the registry rejects.
+ * A repo-derived reference must be a legal OCI repository path: a single
+ * uppercase letter anywhere is what the registry rejects.
  */
-function expectPublishableImageRef(image: string | undefined): void {
-  expect(image, 'the meta step emitted no `image` output at all').toBeTruthy()
-  expect(image).toBe(EXPECTED_IMAGE)
-  expect(image).toMatch(/^[a-z0-9.\-_/:]+$/)
-  expect(image).not.toMatch(/[A-Z]/)
+function expectPublishableRef(actual: string | undefined, expected: string): void {
+  expect(actual, 'the meta step emitted no such output at all').toBeTruthy()
+  expect(actual).toBe(expected)
+  expect(actual).toMatch(/^[a-z0-9.\-_/:]+$/)
+  expect(actual).not.toMatch(/[A-Z]/)
 }
 
 /** The three workflows that interpolate `github.repository` into an image. */
@@ -165,17 +78,27 @@ const CASES: ReadonlyArray<{
   step: string
   /** Job- and workflow-level env the run block reads, beyond the step's own. */
   inheritedEnv: (doc: WorkflowDoc, j: WorkflowJob) => Record<string, string>
-  /** Every `with:` value that must consume the folded output, never the raw name. */
+  /** Every `with:` value that must consume a meta output, never the raw name. */
   consumers: (j: WorkflowJob) => string[]
+  /** The output that is derived from `github.repository` and so must be folded. */
+  foldedOutput: string
+  /** What that output must be once folded. */
+  expectedFolded: string
 }> = [
   {
     file: 'release.yml',
     job: 'docker-stable',
     step: 'Compute stable tags',
-    inheritedEnv: (_doc, j) => resolveEnv(j.env),
+    inheritedEnv: (_doc, j) => resolveEnv(j.env, EXPRESSIONS),
+    // `image`/`tags` here are the ADVERTISED address, read from
+    // site/src/config.ts and validated rather than folded (see this file's
+    // scope note). Only the layer-cache ref is repo-derived, so it is the
+    // one this rail owns.
+    foldedOutput: 'cache',
+    expectedFolded: `${FOLDED_REPOSITORY}:buildcache`,
     consumers: (j) => {
-      const push = step(j, 'Build and push stable image')
-      const smoke = step(j, 'Build image for the pre-publish smoke')
+      const push = getStep(j, 'Build and push stable image')
+      const smoke = getStep(j, 'Build image for the pre-publish smoke')
       return [
         String(push.with?.['tags']),
         String(push.with?.['cache-from']),
@@ -188,9 +111,11 @@ const CASES: ReadonlyArray<{
     file: 'docker-buildcache.yml',
     job: 'refresh',
     step: 'Compute cache image reference',
-    inheritedEnv: (doc) => resolveEnv(doc.env),
+    inheritedEnv: (doc) => resolveEnv(doc.env, EXPRESSIONS),
+    foldedOutput: 'image',
+    expectedFolded: FOLDED_REPOSITORY,
     consumers: (j) => {
-      const build = step(j, 'Build app image and export layer cache')
+      const build = getStep(j, 'Build app image and export layer cache')
       return [
         String(build.with?.['tags']),
         String(build.with?.['cache-from']),
@@ -203,47 +128,54 @@ const CASES: ReadonlyArray<{
     job: 'smoke',
     step: 'Compute cache image reference',
     inheritedEnv: () => ({}),
-    consumers: (j) => [String(step(j, 'Build app image').with?.['cache-from'])],
+    foldedOutput: 'image',
+    expectedFolded: FOLDED_REPOSITORY,
+    consumers: (j) => [String(getStep(j, 'Build app image').with?.['cache-from'])],
   },
 ]
 
 describe.each(CASES)('rail: $file folds the repository path to lowercase before it reaches a registry', (c) => {
   function metaStep() {
     const doc = loadWorkflow(c.file)
-    const j = job(doc, c.job)
-    const s = step(j, c.step)
+    const j = getJob(doc, c.job)
+    const s = getStep(j, c.step)
     const { run } = s
     if (!run) throw new Error(`"${c.step}" has no run block — the fold cannot happen in \`with:\``)
-    return { doc, j, s, run, env: { ...c.inheritedEnv(doc, j), ...resolveEnv(s.env) } }
+    return { doc, j, s, run, env: { ...c.inheritedEnv(doc, j), ...resolveEnv(s.env, EXPRESSIONS) } }
   }
 
-  it('running the real step against a mixed-case owner emits a lowercase, publishable image ref', () => {
-    const { run, env } = metaStep()
-    const outputs = runStep(run, env)
-    expectPublishableImageRef(outputs['image'])
+  function outputsOf(script: string): Record<string, string> {
+    const { env } = metaStep()
+    const r = runShellStep(script, env)
+    if (r.status !== 0) throw new Error(`"${c.step}" exited ${r.status}: ${r.stderr}${r.stdout}`)
+    return r.outputs
+  }
 
-    // Every other output of these steps is also an image reference (the
-    // `tags` list release.yml actually pushes), so none of them may carry
-    // the raw casing either.
+  it('running the real step against a mixed-case owner emits a lowercase, publishable ref', () => {
+    const { run } = metaStep()
+    const outputs = outputsOf(run)
+    expectPublishableRef(outputs[c.foldedOutput], c.expectedFolded)
+
+    // No output of these steps may carry the raw casing — every one of them
+    // is an image reference that reaches a registry.
     for (const [key, value] of Object.entries(outputs)) {
       for (const line of value.split('\n').filter(Boolean)) {
         expect(line, `output "${key}" line "${line}" is not a lowercase image ref`).not.toMatch(/[A-Z]/)
-        expect(line).toContain(EXPECTED_IMAGE)
       }
     }
   })
 
   it('MUTATION: the same step without its lowercase fold emits the ref the registry rejected', () => {
-    const { run, env } = metaStep()
-    const image = runStep(withoutTheFold(run), env)['image']
+    const { run } = metaStep()
+    const mutated = outputsOf(withoutTheFold(run))[c.foldedOutput]
 
-    // The defect, reproduced: the raw display casing reaches the tag.
-    expect(image).toBe('ghcr.io/Llamenos-Hotline/llamenos-platform')
+    // The defect, reproduced: the raw display casing reaches the ref.
+    expect(mutated).toContain('Llamenos-Hotline')
 
     // ...and the assertion from the test above correctly rejects it.
     let caught: unknown
     try {
-      expectPublishableImageRef(image)
+      expectPublishableRef(mutated, c.expectedFolded)
     } catch (e) {
       caught = e
     }
@@ -270,26 +202,57 @@ describe.each(CASES)('rail: $file folds the repository path to lowercase before 
   })
 })
 
-describe('rail: the buildcache consumer tracks the producer tag', () => {
-  // `deploy/docker/docker-compose.test.yml` imports the cache
-  // `docker-buildcache.yml` exports. Compose has no expression context, so
-  // the ref there is a hand-written mirror — and a mismatch is *silent*
-  // (cache import is a soft dependency; a miss just costs a full rebuild).
-  // Nothing else would catch it, so it is checked here.
-  it('docker-compose.test.yml cache_from matches the tag docker-buildcache.yml pushes', () => {
+describe('rail: every buildcache consumer tracks the producer tag', () => {
+  // docker-buildcache.yml PRODUCES `<repo>:buildcache`. Three places CONSUME
+  // it, and a mismatch in any of them is *silent* — cache import is a soft
+  // dependency, so a wrong address costs a full rebuild and fails nothing.
+  // Nothing else would catch that, so it is pinned here against the address
+  // the producer actually computes.
+  function producedTag(): string {
     const doc = loadWorkflow('docker-buildcache.yml')
-    const j = job(doc, 'refresh')
-    const { run } = step(j, 'Compute cache image reference')
+    const { run } = getStep(getJob(doc, 'refresh'), 'Compute cache image reference')
     if (!run) throw new Error('the cache-ref step has no run block — the parser must not pass vacuously')
-    const produced = `${runStep(run, resolveEnv(doc.env))['image']}:buildcache`
+    const r = runShellStep(run, resolveEnv(doc.env, EXPRESSIONS))
+    expect(r.status, r.stderr).toBe(0)
+    return `${r.outputs['image']}:buildcache`
+  }
 
+  it('docker-compose.test.yml cache_from matches the tag docker-buildcache.yml pushes', () => {
+    // Compose has no expression context, so this one is a hand-written
+    // mirror — the most drift-prone of the three.
     const composeSrc = readFileSync(
       join(process.cwd(), 'deploy', 'docker', 'docker-compose.test.yml'),
       'utf8',
     )
     const match = composeSrc.match(/cache_from:\s*\n\s*-\s*type=registry,ref=(\S+)/)
     if (!match) throw new Error('no cache_from ref in docker-compose.test.yml — the parser must not pass vacuously')
+    expect(match[1]).toBe(producedTag())
+  })
 
-    expect(match[1]).toBe(produced)
+  it('image-smoke.yml imports the tag docker-buildcache.yml pushes', () => {
+    const doc = loadWorkflow('image-smoke.yml')
+    const j = getJob(doc, 'smoke')
+    const { run } = getStep(j, 'Compute cache image reference')
+    if (!run) throw new Error('no run block — the parser must not pass vacuously')
+    const r = runShellStep(run, resolveEnv(getStep(j, 'Compute cache image reference').env, EXPRESSIONS))
+    expect(r.status, r.stderr).toBe(0)
+    expect(`${r.outputs['image']}:buildcache`).toBe(producedTag())
+  })
+
+  it("release.yml's docker-stable uses that same cache, not its publish address", () => {
+    // The release build is the single biggest beneficiary of a warm cache
+    // (it compiles the Rust crypto FFI), and its cache must be somewhere
+    // this repo's token can WRITE — which the advertised publish address
+    // need not be. Proven by running the real step.
+    const doc = loadWorkflow('release.yml')
+    const j = getJob(doc, 'docker-stable')
+    const s = getStep(j, 'Compute stable tags')
+    if (!s.run) throw new Error('no run block — the parser must not pass vacuously')
+    const r = runShellStep(s.run, { ...resolveEnv(j.env, EXPRESSIONS), ...resolveEnv(s.env, EXPRESSIONS) })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.outputs['cache']).toBe(producedTag())
+    // ...and it is genuinely a different address from what it publishes,
+    // so this is not passing by the two happening to coincide today.
+    expect(r.outputs['cache']).not.toContain(String(r.outputs['image']))
   })
 })
