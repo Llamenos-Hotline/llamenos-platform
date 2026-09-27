@@ -228,9 +228,9 @@ describe('classifyPr — fleet/review tree', () => {
     expect(classify(pr({ checks: [...cheapPassChecks(), reviewCheck({ state: 'PENDING' })] })).action).toBe('WAITING')
   })
 
-  it('STALE_LABEL when the "review" label is present but there is no verdict on this head', () => {
+  it('the retired "review" label no longer makes a PR STALE_LABEL — nothing fires on it (#1158)', () => {
     const result = classify(pr({ labels: ['review'], checks: cheapPassChecks() }))
-    expect(result.action).toBe('STALE_LABEL')
+    expect(result.action).toBe('LABEL_FOR_REVIEW_CANDIDATE')
   })
 
   it('RERUN_REVIEW for an infrastructure failure not yet retried', () => {
@@ -717,61 +717,41 @@ describe('CODEOWNERS parsing and matching', () => {
   })
 })
 
-// #1092 — label-driven specialists (`fleet/review/<agent>`) are not in the
-// ruleset, so the board binds them itself, ahead of the generalist verdict.
-// Every case below has every REQUIRED context green, fleet/review PASS, and a
-// non-bot author touching no owned path — i.e. would be MERGE without them.
-describe('classifyPr: a specialist review binds at the merge decision (any FAIL fails)', () => {
-  const SPECIALIST = 'fleet/review/crypto-security-reviewer'
+// #1158 — there is no separate `fleet/review/<agent>` check any more: every
+// reviewer a PR needs runs inside the one `fleet/review` job, so a profile's
+// FAIL is already that check's FAIL and the board has nothing extra to bind.
+// What the board still reads from labels is the WORKLIST: a `-reviewer`
+// label survives only until its review has passed, so one still sitting on a
+// PR with no verdict on the current head means the review has not run here.
+// Every case below has every REQUIRED context green and a non-bot author
+// touching no owned path — i.e. would be MERGE without them.
+describe('classifyPr: reviewer labels are the worklist, not a second check (#1158)', () => {
   const green = (extra: PrCheckContext[] = [], labels: string[] = []): PrFact =>
     pr({ labels, checks: [...cheapPassChecks(), reviewCheck(), ...extra] })
 
-  it('baseline: with no specialist at all the PR is MERGE', () => {
+  it('baseline: with no reviewer label at all the PR is MERGE', () => {
     expect(classify(green()).action).toBe('MERGE')
   })
 
-  it('a FAILED specialist is NEEDS_FIX even though fleet/review PASSED', () => {
-    const c = classify(green([ctx(SPECIALIST, 'FAIL')], ['crypto-security-reviewer']))
-    expect(c.action).toBe('NEEDS_FIX')
-    expect(c.failingContexts).toEqual([SPECIALIST])
+  it('a reviewer label that SURVIVED a passing review still merges — the verdict is on the head', () => {
+    // The clear-labels job is best-effort: a label it could not remove must
+    // never turn a green, fully-reviewed PR into a blocker.
+    expect(classify(green([], ['crypto-security-reviewer'])).action).toBe('MERGE')
   })
 
-  it('a FAILED specialist still blocks after its label is removed', () => {
-    expect(classify(green([ctx(SPECIALIST, 'FAIL')])).action).toBe('NEEDS_FIX')
-  })
-
-  it('a later PASS on the same head does not hide an earlier FAIL (worst of same-named runs)', () => {
-    expect(classify(green([ctx(SPECIALIST, 'FAIL'), ctx(SPECIALIST, 'PASS')], ['crypto-security-reviewer'])).action)
-      .toBe('NEEDS_FIX')
-  })
-
-  it('a specialist still in flight is WAITING, never MERGE', () => {
-    expect(classify(green([ctx(SPECIALIST, 'PENDING')], ['crypto-security-reviewer'])).action).toBe('WAITING')
-  })
-
-  it('a specialist requested by label with no check on this head is STALE_LABEL', () => {
-    const c = classify(green([], ['crypto-security-reviewer']))
+  it('a reviewer label with NO fleet/review verdict on this head is STALE_LABEL, naming the label', () => {
+    const c = classify(pr({ labels: ['crypto-security-reviewer'], checks: cheapPassChecks() }))
     expect(c.action).toBe('STALE_LABEL')
-    expect(c.reason).toContain(SPECIALIST)
+    expect(c.reason).toContain('crypto-security-reviewer')
+    expect(c.reason).toContain('re-request a review')
   })
 
-  it('a specialist verdict on a STALE sha does not count for the current head', () => {
-    expect(classify(green([ctx(SPECIALIST, 'PASS', OTHER_SHA)], ['crypto-security-reviewer'])).action).toBe('STALE_LABEL')
+  it('a stale `fleet/review/<agent>` check from the retired design never blocks anything', () => {
+    expect(classify(green([ctx('fleet/review/crypto-security-reviewer', 'FAIL')])).action).toBe('MERGE')
   })
 
-  it('an unknown -reviewer label\'s failing check blocks exactly like a real specialist\'s', () => {
-    expect(classify(green([ctx('fleet/review/bogus-reviewer', 'FAIL')], ['bogus-reviewer'])).action).toBe('NEEDS_FIX')
-  })
-
-  it('a passing specialist lets the PR through to MERGE', () => {
-    expect(classify(green([ctx(SPECIALIST, 'PASS')], ['crypto-security-reviewer'])).action).toBe('MERGE')
-  })
-
-  // GitHub does not evaluate a SKIPPED job's `name:` expression — the check
-  // carries the raw expression text (observed on run 36272104112, label
-  // `lane:infra`). It must stay outside the `fleet/review/` prefix.
-  it('the skipped specialist job of an unrelated label never blocks, under the name GitHub really gives it', () => {
-    const skippedName = "endsWith(github.event.label.name, '-reviewer') && format('fleet/review/{0}', github.event.label.name) || 'fleet-specialist/not-requested'"
-    expect(classify(green([ctx(skippedName, 'PASS'), ctx('fleet-specialist/disarm-auto-merge', 'PASS')], ['lane:infra'])).action).toBe('MERGE')
+  it('an ordinary label is not a reviewer request and never makes a PR STALE_LABEL', () => {
+    expect(classify(pr({ labels: ['lane:infra', 'crypto'], checks: cheapPassChecks() })).action)
+      .toBe('LABEL_FOR_REVIEW_CANDIDATE')
   })
 })

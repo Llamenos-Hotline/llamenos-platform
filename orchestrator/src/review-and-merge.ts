@@ -6,10 +6,6 @@ import { join } from 'node:path'
 import { REPO, gh, ghJson } from './gh.js'
 import { REVIEW_JOB } from './ci.js'
 import { classifyImpact } from './impact.js'
-import { normalizeCheckRunState, normalizeStatusContextState } from './board.js'
-import {
-  specialistMergeBlockers, hasSpecialistBlockers, describeSpecialistBlockers, type SpecialistCheck,
-} from './specialist.js'
 import type { VerifyReport } from './verify.js'
 import {
   buildReviewPrompt, exportReviewSnapshot, invokeVerifierEngine, toSecondOpinion,
@@ -272,30 +268,6 @@ async function readRequiredChecks(pr: string): Promise<RequiredCheck[] | undefin
   return ghJson<RequiredCheck[]>(['pr', 'checks', pr, '--required', '--json', 'name,state,bucket'])
 }
 
-/**
- * Every check on the PR's head plus its labels, read together from ONE
- * `gh pr view` so they describe the same head (`headSha` says which). This is
- * where the label-driven `fleet/review/<agent>` specialists are read (#1092):
- * they are deliberately NOT required contexts, so `readRequiredChecks` above
- * never sees them. `gh pr view` rather than `gh pr checks`: the latter exits
- * non-zero whenever a check is failing or pending — exactly the states this
- * read exists to see — which `ghJson` would turn into "could not read".
- */
-export interface SpecialistState { headSha: string; checks: SpecialistCheck[]; labels: string[] }
-
-interface GhRollupNode { __typename: string; name?: string; status?: string; conclusion?: string | null; context?: string; state?: string }
-
-async function readSpecialistState(pr: string): Promise<SpecialistState | undefined> {
-  const view = await ghJson<{ headRefOid: string; labels: { name: string }[]; statusCheckRollup: GhRollupNode[] }>(
-    ['pr', 'view', pr, '--json', 'headRefOid,labels,statusCheckRollup'],
-  )
-  if (view === undefined) return undefined
-  const checks: SpecialistCheck[] = view.statusCheckRollup.map((n) => (n.__typename === 'CheckRun'
-    ? { name: n.name ?? '', state: normalizeCheckRunState(n.status ?? '', n.conclusion ?? null) }
-    : { name: n.context ?? '', state: normalizeStatusContextState(n.state ?? '') }))
-  return { headSha: view.headRefOid, checks, labels: view.labels.map((l) => l.name) }
-}
-
 export type MergeReadiness = { ready: true } | { ready: false; reason: string }
 
 /**
@@ -307,8 +279,6 @@ export function evaluateMergeReadiness(input: {
   currentHeadSha: string
   reviewedHeadSha: string
   requiredChecks: RequiredCheck[] | undefined
-  /** #1092 — `undefined` when it could not be read, which refuses. */
-  specialists: SpecialistState | undefined
 }): MergeReadiness {
   if (input.currentHeadSha !== input.reviewedHeadSha) {
     return {
@@ -334,19 +304,10 @@ export function evaluateMergeReadiness(input: {
       reason: `required check(s) not green: ${notGreen.map((c) => `${c.name}=${c.bucket}`).join(', ')}`,
     }
   }
-  // Specialists last: they are not required contexts, so GitHub will not
-  // refuse on them — this command must. Any FAIL fails (#1092).
-  if (input.specialists === undefined) {
-    return { ready: false, reason: 'could not read this PR\'s checks and labels to rule out a failed specialist review — refusing to merge' }
-  }
-  if (input.specialists.headSha !== input.reviewedHeadSha) {
-    return {
-      ready: false,
-      reason: `the specialist-review read saw head ${input.specialists.headSha}, not the reviewed ${input.reviewedHeadSha} — refusing to merge`,
-    }
-  }
-  const blockers = specialistMergeBlockers(input.specialists.checks, input.specialists.labels)
-  if (hasSpecialistBlockers(blockers)) return { ready: false, reason: describeSpecialistBlockers(blockers) }
+  // No separate specialist tree to consult (#1158): every reviewer a PR
+  // needs runs inside the one `fleet/review` job, so its verdict above
+  // already carries them. There is nothing left here that GitHub's own
+  // required-context check does not already refuse on.
   return { ready: true }
 }
 
@@ -383,9 +344,6 @@ export interface ReviewAndMergeDeps {
   postCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void>
   currentHeadSha(pr: string): Promise<string | undefined>
   requiredChecks(pr: string): Promise<RequiredCheck[] | undefined>
-  /** #1092 — the PR's checks (all of them) and labels, for the specialist
-   *  binding. `undefined` on any read failure. */
-  specialistState(pr: string): Promise<SpecialistState | undefined>
   merge(pr: string): Promise<void>
   log(msg: string): void
 }
@@ -445,10 +403,8 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
   if (currentHead === undefined) return { kind: 'not-mergeable', pr, reason: `could not re-read PR ${pr}'s current head` }
 
   const requiredChecksNow = await deps.requiredChecks(pr)
-  const specialistsNow = await deps.specialistState(pr)
   const readiness = evaluateMergeReadiness({
     currentHeadSha: currentHead, reviewedHeadSha: facts.headSha, requiredChecks: requiredChecksNow,
-    specialists: specialistsNow,
   })
   if (!readiness.ready) return { kind: 'not-mergeable', pr, reason: readiness.reason }
 
@@ -481,7 +437,6 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     postCheckRun: postReviewCheckRun,
     currentHeadSha: async (pr) => (await ghJson<{ headRefOid: string }>(['pr', 'view', pr, '--json', 'headRefOid']))?.headRefOid,
     requiredChecks: readRequiredChecks,
-    specialistState: readSpecialistState,
     // The one merge call in this file — a REAL squash merge, not the
     // fleet's own `enableAutoMerge` (cli.ts), which only ever ARMS
     // auto-merge for GitHub to complete later. This command is the

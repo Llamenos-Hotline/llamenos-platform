@@ -14,15 +14,18 @@ import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
 import { dispatch as dispatchWorker, type EffortLevel } from './engines.js'
 import { verifyMechanical } from './verify.js'
-import { secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS } from './review.js'
 import {
-  runSpecialistReviewCi, specialistRequirement, resolveSpecialistLabel, specialistCheckName, AGENT_REGISTRY_DIR,
-} from './specialist.js'
+  secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
+  HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
+} from './review.js'
+import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
-  runVerifyCi, runReviewCi, decideReviewGate, ciContextFromEnv, ciDiff, ciChangedFiles,
-  REVIEW_JOB, REVIEW_KEY_ENV, VERIFY_JOB, itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
+  runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet, reviewIsRequested,
+  ciContextFromEnv, ciDiff, ciChangedFiles,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB,
+  itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict,
 } from './ci.js'
 import {
@@ -1267,18 +1270,19 @@ async function runCiGate(job: string, run: (ctx: CiContext) => Promise<CiVerdict
 }
 
 /**
- * `review-gate` — the step `fleet-review.yml` runs BEFORE installing the
- * review engine, now that the job carries no job-level `if:` at all (#848's
+ * `review-gate` — the step `fleet-review.yml` runs BEFORE the review
+ * engine, now that the job carries no job-level `if:` at all (#848's
  * fail-open bug — a job instantiated on an event and then skipped by `if:`
  * satisfies branch protection exactly like a green check). Its exit code is
- * what actually enforces branch (c) of `decideReviewGate`'s three outcomes:
- * a `not-requested` result exits 1 here, which is what stops every
- * subsequent step (engine install, auth, the smoke test, the real review)
- * from ever running — GitHub Actions does not run later steps after one
- * fails unless they opt in with `if: always()`/`if: failure()`, and none of
- * the engine steps do. `cache-hit` and `run-engine` both exit 0; the
- * `outcome` step output is what the workflow's own `if:` on each later step
- * reads to decide whether IT runs.
+ * what enforces the fail-closed branches of `decideReviewGate`:
+ * `review-set-unresolved`, `not-requested` and a cached FAIL exit 1, which stops every
+ * subsequent step (the smoke test, the real review) from ever running —
+ * GitHub Actions does not run later steps after one fails unless they opt
+ * in with `if: always()`/`if: failure()`, and none of the review steps do.
+ * `cache-hit`, `low-tier` and `run-engine` all exit 0; the `outcome` step
+ * output is what the workflow's own `if:` on each later step reads, and
+ * `profiles`/`clear_labels` are what it carries into `review-ci` and into
+ * the label-clearing job.
  */
 async function runReviewGate(): Promise<number> {
   const ctx = ciContextFromEnv(process.env, REPO_ROOT)
@@ -1289,36 +1293,63 @@ async function runReviewGate(): Promise<number> {
     )
     return 2
   }
+  // Read the PR ONCE, live — never from the event payload: a label added
+  // after this event fired still counts, and `workflow_dispatch` has no
+  // payload at all. Unreadable is `undefined`, which fails closed inside
+  // `decideReviewSet`.
+  const facts = await readPrFacts(ctx.pr)
   const outcome = await decideReviewGate({
     ctx,
     prDiff: () => ciDiff(ctx),
     changedFiles: () => ciChangedFiles(ctx),
-    cache: artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog),
-    requested: process.env['FLEET_REVIEW_REQUESTED'] === 'true',
-    // #1092: read the labels LIVE, not from the event payload — a label added
-    // after this event fired still counts, and workflow_dispatch has no
-    // payload at all. Unreadable is `undefined`, which fails closed.
-    unmetSpecialists: async (cacheKey) => specialistRequirement(cacheKey, {
-      labels: await readPrLabels(ctx.pr),
-      resolve: (label) => resolveSpecialistLabel(label, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
-      cacheFor: (agent) => artifactReviewCache(undefined, ciLog, agent),
+    cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
+    requested: reviewIsRequested({
+      eventName: process.env['FLEET_REVIEW_EVENT_NAME'] ?? '',
+      requestedReviewer: process.env['FLEET_REVIEW_REQUESTED_REVIEWER'],
+      branch: ctx.branch,
+    }),
+    reviewSet: (changedFiles) => decideReviewSet({
+      labels: facts?.labels,
+      changedFiles,
+      description: facts?.description ?? '',
+      resolve: (name) => resolveReviewerLabel(name, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
     }),
     log: ciLog,
   })
   const ghOutput = process.env['GITHUB_OUTPUT']
-  if (ghOutput !== undefined) appendFileSync(ghOutput, `outcome=${outcome.kind}\n`)
-  if (outcome.kind === 'specialist-unmet') {
+  if (ghOutput !== undefined) {
+    const profiles = outcome.kind === 'run-engine' ? outcome.profiles.join(',') : ''
+    const clear = outcome.kind === 'run-engine' ? outcome.clearLabels.join(',') : ''
+    appendFileSync(ghOutput, `outcome=${outcome.kind}\nprofiles=${profiles}\nclear_labels=${clear}\n`)
+  }
+  if (outcome.kind === 'review-set-unresolved') {
     process.stderr.write(
-      `${REVIEW_JOB}: FAILED — requested specialist review(s) have not passed on this diff (any FAIL fails):\n` +
-      `${outcome.unmet.map((u) => `  - ${u}`).join('\n')}\n`,
+      `${REVIEW_JOB}: FAILED — could not work out which reviews this PR needs, so none were run:\n` +
+      `  - ${outcome.reason}\n`,
     )
     return 1
   }
   if (outcome.kind === 'not-requested') {
     process.stderr.write(
-      `${REVIEW_JOB}: review not requested — add the \`review\` label to run the non-author review\n`,
+      `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`,
     )
     return 1
+  }
+  // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
+  // cached PASS concludes green below; a cached FAIL fails HERE, restating
+  // the original verdict so the check says WHY rather than going red with
+  // no explanation. The diff has not changed since that verdict, so
+  // reviewing it again could only reach the same conclusion; pushing a fix
+  // changes the hash and reviews afresh.
+  if (outcome.kind === 'cache-hit') {
+    if (outcome.verdict.verdict === 'FAIL') {
+      process.stderr.write(`${REVIEW_JOB}: FAILED — ${outcome.verdict.text}\n`)
+      return 1
+    }
+    // A green required check must always state its reason — see the
+    // low-tier branch below, and #848 before it. The cached text names the
+    // artifact the verdict came from.
+    process.stdout.write(`${REVIEW_JOB}: ${outcome.verdict.text}\n`)
   }
   // Tier 0/1 (no reviewable content): a real, explicit success — never a
   // skip — with the tier and the contributing files printed to stdout, which
@@ -1335,47 +1366,20 @@ async function runReviewGate(): Promise<number> {
   return 0
 }
 
-/** The PR's current labels, or `undefined` when they could not be read (or
- *  the PR number is not a number) — never an empty list standing in for
- *  "could not look". Needs only `pull-requests: read`. */
-async function readPrLabels(pr: string): Promise<string[] | undefined> {
+/** The PR's current labels and its title+body, or `undefined` when they
+ *  could not be read (or the PR number is not a number) — never an empty
+ *  list standing in for "could not look", which is what `decideReviewSet`
+ *  refuses on. One read, so the labels and the description always describe
+ *  the same PR. Needs only `pull-requests: read`. */
+async function readPrFacts(pr: string): Promise<{ labels: string[]; description: string } | undefined> {
   if (!/^[0-9]+$/.test(pr)) return undefined
-  const data = await ghJson<{ labels: { name: string }[] }>(
+  const data = await ghJson<{ labels: { name: string }[]; title?: string; body?: string | null }>(
     ['api', `repos/${REPO}/pulls/${pr}`],
     30_000,
-    (detail) => ciLog(`reading PR #${pr}'s labels failed — treating its specialist requests as unmet: ${detail}`),
+    (detail) => ciLog(`reading PR #${pr} failed — the reviews it asks for are unknown, which fails closed: ${detail}`),
   )
-  return data?.labels.map((l) => l.name)
-}
-
-/**
- * `specialist-review-ci` — the step `fleet-specialist-review.yml` runs to
- * produce `fleet/review/<agent>` (#1092). Same CI context contract as
- * `review-ci`, plus `FLEET_SPECIALIST_LABEL`: the label that fired the run,
- * raw and untrusted — `runSpecialistReviewCi` resolves it against the BASE
- * checkout's agent registry and fails closed on anything it cannot resolve.
- * The specialist always gets the high-impact budget: someone asked for it by
- * name.
- */
-async function runSpecialistReviewCommand(): Promise<number> {
-  const label = process.env['FLEET_SPECIALIST_LABEL'] ?? ''
-  return runCiGate(specialistCheckName(label.length > 0 ? label : '(no label)'), (ctx) => runSpecialistReviewCi({
-    ctx,
-    label,
-    registryDir: join(REPO_ROOT, AGENT_REGISTRY_DIR),
-    pathExists: existsSync,
-    prDiff: () => ciDiff(ctx),
-    changedFiles: () => ciChangedFiles(ctx),
-    cacheFor: (agent) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, agent),
-    runEngine: async ({ prompt, exportDir }) => toSecondOpinion(await invokeVerifierEngine({
-      authorEngine: 'claude',
-      exportDir,
-      prompt,
-      maxTurns: HIGH_IMPACT_MAX_TURNS,
-      timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
-    })),
-    log: ciLog,
-  }))
+  if (data === undefined) return undefined
+  return { labels: data.labels.map((l) => l.name), description: `${data.title ?? ''}\n\n${data.body ?? ''}` }
 }
 
 /**
@@ -1451,13 +1455,27 @@ const HANDLERS: Record<string, CommandHandler> = {
     prLabels: () => readPrLabels(ctx.pr),
     prDiff: () => ciDiff(ctx),
     secondOpinion,
+    // The review set the gate step already decided, carried here as a
+    // comma-separated list and re-resolved against the BASE agent registry
+    // before any of it runs (see `runReviewCi`).
+    profiles: (process.env['FLEET_REVIEW_PROFILES'] ?? '').split(',').filter((n) => n.length > 0),
+    resolveProfile: (name) => resolveReviewerLabel(name, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
+    stripExport: async (dir) => { await stripReviewerControlFiles(dir) },
+    // A profile always gets the high-impact budget: something asked for it
+    // by name, either a human's label or the PR's own crypto content.
+    profileReview: async (profile, diff, changedFiles) => toSecondOpinion(await invokeVerifierEngine({
+      authorEngine: 'claude',
+      exportDir: ctx.headDir,
+      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir),
+      maxTurns: HIGH_IMPACT_MAX_TURNS,
+      timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
+    })),
     // `FLEET_REVIEW_CACHE_DIR` unset (e.g. a local run) disables recording
     // without disabling lookup — a lookup that finds nothing behaves
     // identically either way, and this command still runs the engine.
-    cache: artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog),
+    cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
   })),
   'review-gate': () => runReviewGate(),
-  'specialist-review-ci': () => runSpecialistReviewCommand(),
   'review-and-merge': (rest) => runReviewAndMergeCommand(rest[0]),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),
