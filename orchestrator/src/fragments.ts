@@ -193,6 +193,29 @@ export function isSecretTemplatePath(file: string): boolean {
 }
 
 /**
+ * The ONLY secret patterns a committed template may be exempt from.
+ *
+ * Derived from evidence, not from a general rule: these are exactly the two
+ * patterns that a template tracked in this repo actually matches. All five
+ * tracked templates — `.env.example`, `.env.live.example`,
+ * `apps/ios/fastlane/.env.example`, `deploy/docker/.env.example`,
+ * `apps/android/keystore.properties.example` — fall under one of them.
+ *
+ * A NEW secret pattern does NOT get a carve-out. It gets one only when a
+ * tracked template proves it needs one, and then only by being added here
+ * deliberately. `tests/orchestrator/config.test.ts` enforces both directions
+ * against the real tree: every tracked template must be covered by an entry
+ * here, and every entry here must be justified by at least one tracked
+ * template, so this list can neither silently under-cover nor rot into a
+ * dead exemption.
+ *
+ * Concretely, this is why `.npmrc.example`, `id_rsa.example`,
+ * `.dev.vars.example` and `authorized_keys.template` are still FORBIDDEN:
+ * nothing in this repo needs them, so nothing exempts them.
+ */
+export const TEMPLATED_SECRET_PATTERNS: readonly string[] = ['.env', 'keystore.properties']
+
+/**
  * `matchesPath` for the NEVER-WRITE gate specifically: the secret patterns,
  * minus committed templates.
  *
@@ -204,14 +227,22 @@ export function isSecretTemplatePath(file: string): boolean {
  * PR failing the same gate for a different stated reason. The carve-out is a
  * property of the secret deny list, so it lives in the secret matcher.
  *
- * Applied to every pattern shape, not just the bare-filename one the bug
- * appeared in: `*.pem` already anchors its extension so `ca.pem.example`
- * never matched, but a future directory-shaped secret pattern
- * (`deploy/secrets/`) should get the same carve-out without anyone having to
- * remember to re-derive this reasoning.
+ * Scoped to `TEMPLATED_SECRET_PATTERNS` — it is NOT applied to every secret
+ * pattern. Only two patterns have a tracked template to justify one, and a
+ * carve-out that buys nothing today is latent surface: the glob patterns
+ * (`*.pem`, `*.key`, …) anchor their extension in `globToRegExp`, so
+ * `ca.pem.example` never matched them and exempting them was already a
+ * no-op — but if `globToRegExp` were ever loosened, or a directory-shaped
+ * secret pattern added, a blanket carve-out would silently become
+ * load-bearing for patterns nobody analysed, and a `server.key.example`
+ * holding a real key would become writable. The fail-closed default is that
+ * a NEW pattern inherits no carve-out and someone must justify adding one,
+ * which is the same reasoning that rejected environment enumeration above.
  */
 export function matchesSecretPath(file: string, pattern: string): boolean {
-  return matchesPath(file, pattern) && !isSecretTemplatePath(file)
+  if (!matchesPath(file, pattern)) return false
+  if (!TEMPLATED_SECRET_PATTERNS.includes(pattern)) return true
+  return !isSecretTemplatePath(file)
 }
 
 export async function loadLaneScopes(repoRoot: string): Promise<Record<string, LaneScope>> {

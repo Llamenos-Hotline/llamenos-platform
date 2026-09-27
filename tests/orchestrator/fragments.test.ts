@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES, loadLaneScopes,
+  parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES,
+  TEMPLATED_SECRET_PATTERNS, loadLaneScopes,
 } from '../../orchestrator/src/fragments.js'
 
 // Verbatim excerpt of .claude/agents/fragments/ios-supervisor.md
@@ -228,6 +229,33 @@ describe('matchesSecretPath — the never-write matcher (#1253)', () => {
 
   it('looks at the basename only — a secret inside a directory named `*.example` is still a secret', () => {
     expect(matchesSecretPath('deploy/docker.example/.env', '.env')).toBe(true)
+  })
+
+  // Break-test 5 (#1256 review): the carve-out is scoped to the two patterns
+  // that a tracked template actually justifies. A template SUFFIX on any
+  // other secret pattern buys nothing today and must not be exempt, so that
+  // a future loosening of `globToRegExp` — or a new directory-shaped secret
+  // pattern — cannot silently inherit an exemption nobody analysed.
+  it('does NOT exempt a template suffix on a pattern with no tracked template to justify it', () => {
+    expect(TEMPLATED_SECRET_PATTERNS).toEqual(['.env', 'keystore.properties'])
+    const notCarvedOut: Array<[string, string]> = [
+      ['.npmrc.example', '.npmrc'],
+      ['deploy/.dev.vars.example', '.dev.vars'],
+      ['scripts/id_rsa.example', 'id_rsa'],
+      ['scripts/id_ed25519.template', 'id_ed25519'],
+      ['home/authorized_keys.template', 'authorized_keys'],
+      ['deploy/.pgpass.sample', '.pgpass'],
+    ]
+    for (const [file, pattern] of notCarvedOut) {
+      expect(matchesSecretPath(file, pattern), `${file} must still be refused by ${pattern}`).toBe(true)
+    }
+  })
+
+  it('carves out only the two justified patterns, so a same-named file under another pattern is unaffected', () => {
+    // `.env.example` is exempt from `.env` and from nothing else.
+    expect(matchesSecretPath('.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/android/keystore.properties.example', 'keystore.properties')).toBe(false)
+    expect(matchesSecretPath('.npmrc.example', '.npmrc')).toBe(true)
   })
 
   it('leaves `matchesPath` itself untouched, so lane OWNERSHIP of a template is unchanged', () => {

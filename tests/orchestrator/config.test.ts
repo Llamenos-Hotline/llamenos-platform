@@ -9,6 +9,8 @@ import {
 import type { Lane } from '../../orchestrator/src/config.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { trackedFiles } from './codeowners.js'
+import { matchesPath, TEMPLATED_SECRET_PATTERNS } from '../../orchestrator/src/fragments.js'
+import { SECRET_PATH_PATTERNS } from '../../orchestrator/src/config.js'
 
 describe('assertLiveLanesHaveScope', () => {
   const lane = (mode: Lane['mode'], owned: string[]): Lane => ({
@@ -161,6 +163,38 @@ describe('config', () => {
     ]))
     const r = checkScope(templates, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS])
     expect(r.forbidden).toEqual([])
+  })
+
+  // The carve-out list is EVIDENCE-DRIVEN, both directions, against the real
+  // tree — so it can neither silently under-cover a template nor rot into a
+  // dead exemption for a pattern nothing needs (#1256 review).
+
+  it('covers every tracked template with a carved-out pattern — no template is left unwritable', () => {
+    const templates = trackedFiles()
+      .filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+    for (const t of templates) {
+      const hits = SECRET_PATH_PATTERNS.filter((p) => matchesPath(t, p))
+      for (const p of hits) {
+        expect(
+          TEMPLATED_SECRET_PATTERNS,
+          `tracked template ${t} matches secret pattern ${p}, which is not carved out — it would be unwritable`,
+        ).toContain(p)
+      }
+    }
+  })
+
+  it('justifies every carved-out pattern with at least one tracked template — no dead exemption', () => {
+    const templates = trackedFiles()
+      .filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+    for (const p of TEMPLATED_SECRET_PATTERNS) {
+      expect(
+        templates.some((t) => matchesPath(t, p)),
+        `carve-out for ${p} is justified by no tracked template — remove it rather than carry latent surface`,
+      ).toBe(true)
+      // A carve-out for a pattern that is not a secret pattern at all would
+      // be meaningless.
+      expect(SECRET_PATH_PATTERNS).toContain(p)
+    }
   })
 
   it('gives up on an item after three failed attempts', () => {

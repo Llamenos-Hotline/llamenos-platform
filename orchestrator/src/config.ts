@@ -231,7 +231,12 @@ export async function loadLanes(
  * including one nobody has invented yet. The one thing they do NOT cover is
  * a committed template: the never-write gate compares with
  * `matchesSecretPath`, which subtracts `SECRET_TEMPLATE_SUFFIXES`
- * (`.example`/`.sample`/`.template`) from the match. This repo tracks five
+ * (`.example`/`.sample`/`.template`) from the match — and does so ONLY for
+ * the patterns in `TEMPLATED_SECRET_PATTERNS` (`.env`,
+ * `keystore.properties`), the two a tracked template actually justifies. A
+ * pattern added below inherits NO carve-out; it gets one only if a tracked
+ * template proves it needs one. `.npmrc.example` and `id_rsa.example` stay
+ * forbidden. This repo tracks five
  * such files on purpose — `.env.example`, `.env.live.example`,
  * `apps/ios/fastlane/.env.example`, `deploy/docker/.env.example`,
  * `apps/android/keystore.properties.example` — and without that subtraction

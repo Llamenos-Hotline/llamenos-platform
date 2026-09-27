@@ -214,7 +214,11 @@ What a grant cannot do:
   never-write comparison is `matchesSecretPath`, which subtracts
   `SECRET_TEMPLATE_SUFFIXES` from the match, because a file that exists to be
   committed and read cannot be a secret and a deploy template nobody may edit
-  is a deploy nobody may fix (#1253). The interactive write-deny hook in
+  is a deploy nobody may fix (#1253). That subtraction applies only to
+  `TEMPLATED_SECRET_PATTERNS` — `.env` and `keystore.properties`, the two
+  patterns a tracked template justifies. A new secret pattern inherits no
+  carve-out unless a tracked template proves it needs one, so
+  `.npmrc.example` and `id_rsa.example` remain forbidden. The interactive write-deny hook in
   `.claude/settings.json` never blocked them either — its `\.env$` is
   anchored — so this removes a divergence rather than creating one. A
   template is exempt from the WRITE gate only: `classifyImpact` still rates
