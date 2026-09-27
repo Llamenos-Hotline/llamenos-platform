@@ -3,6 +3,7 @@ import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
 import { REVIEW_JOB } from './ci.js'
+import { reviewerIsAuthor } from './request-review.js'
 import { specialistMergeBlockers, describeSpecialistBlockers } from './specialist.js'
 
 /**
@@ -183,7 +184,7 @@ export interface BoardFacts {
  * that says it cannot decide.
  */
 export type BoardAction =
-  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'LABEL_FOR_REVIEW' | 'RERUN_REVIEW'
+  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'REQUEST_REVIEW' | 'RERUN_REVIEW'
   | 'NEEDS_FIX' | 'REVIEW_BLOCKED' | 'WAITING' | 'STALE_LABEL' | 'OPERATOR' | 'CANNOT_DECIDE'
 
 export interface BoardRow {
@@ -397,16 +398,24 @@ export function classifyReviewFailure(steps: WorkflowStep[]): ReviewFailureKind 
 
 /**
  * `classifyPr`'s own action space is one wider than the public `BoardAction`:
- * `LABEL_FOR_REVIEW_CANDIDATE` marks a PR that passed every cheap check and
- * has no `fleet/review` verdict on its head and no `review` label yet — a
- * CANDIDATE for `LABEL_FOR_REVIEW`, not yet the verdict. `buildBoard` caps
- * how many candidates actually become `LABEL_FOR_REVIEW` to one per
- * invocation (see its own comment), demoting every other candidate to
- * `WAITING`. This internal action never reaches a `BoardRow` — `buildBoard`
- * resolves every one of them before rows are built.
+ * `REQUEST_REVIEW_CANDIDATE` marks a PR that passed every cheap check and
+ * has no `fleet/review` verdict on its head and no outstanding review
+ * request yet — a CANDIDATE for `REQUEST_REVIEW`, not yet the verdict.
+ * `buildBoard` caps how many candidates actually become `REQUEST_REVIEW` to
+ * one per invocation (see its own comment), demoting every other candidate
+ * to `WAITING`. This internal action never reaches a `BoardRow` —
+ * `buildBoard` resolves every one of them before rows are built.
+ *
+ * The action was called `LABEL_FOR_REVIEW` until #1158. Applying the
+ * `review` label is no longer the whole of what starts a review: the
+ * migration to `fleet-review.yml`'s `review_requested` trigger (#1164) means
+ * a review is started by REQUESTING one from `llamenos-auto`. `executeRequestReview`
+ * (request-review.ts) does BOTH for the length of the migration — see its
+ * own doc comment — so the name here says what the fleet is being told to
+ * achieve, not which of the two API calls achieves it.
  */
 export interface PrClassification {
-  action: BoardAction | 'LABEL_FOR_REVIEW_CANDIDATE'
+  action: BoardAction | 'REQUEST_REVIEW_CANDIDATE'
   reason: string
   failingContexts: string[]
 }
@@ -576,7 +585,22 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
         failingContexts: [],
       }
     }
-    return { action: 'LABEL_FOR_REVIEW_CANDIDATE', reason: 'cheap checks pass; no review requested yet', failingContexts: [] }
+    // #1158: `REQUEST_REVIEW` is now an instruction to request a review
+    // from a specific login (`reviewerFor`, request-review.ts), and GitHub
+    // refuses a review request naming the PR's own author. Emitting
+    // REQUEST_REVIEW for such a PR would put an un-actionable row on the
+    // board that every tick retries and nothing can ever satisfy — so it is
+    // surfaced here, by name, as needing a human instead.
+    if (reviewerIsAuthor(pr.headRefName, pr.authorLogin)) {
+      return {
+        action: 'OPERATOR',
+        reason: `ready for its non-author review, but ${pr.authorLogin} authored it and is also who a review would be ` +
+          `requested from — GitHub refuses a review request naming a PR's own author, so no review can be started ` +
+          'by request; it needs a human reviewer',
+        failingContexts: [],
+      }
+    }
+    return { action: 'REQUEST_REVIEW_CANDIDATE', reason: 'cheap checks pass; no review requested yet', failingContexts: [] }
   }
 
   if (review.state === 'PENDING') {
@@ -644,17 +668,20 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
  *  ordering, not alphabetical or PR-number order, is the default grouping. */
 const ACTION_ORDER: readonly BoardAction[] = [
   'CANNOT_DECIDE', 'MERGE', 'APPROVE_THEN_MERGE', 'RERUN_REVIEW', 'NEEDS_FIX',
-  'REVIEW_BLOCKED', 'LABEL_FOR_REVIEW', 'STALE_LABEL', 'WAITING', 'OPERATOR',
+  'REVIEW_BLOCKED', 'REQUEST_REVIEW', 'STALE_LABEL', 'WAITING', 'OPERATOR',
 ]
 
 /**
  * Pure: every fact `buildBoard` needs is already in `facts` — no `gh` call,
  * no filesystem read, no label read. `classifyPr` decides every PR
  * independently; this function's only extra job is the cross-PR
- * `LABEL_FOR_REVIEW` cap (batching review requests correlates with engine
+ * `REQUEST_REVIEW` cap (batching review requests correlates with engine
  * smoke failures — see the brief — so at most one PR per invocation ever
  * carries it, chosen as the OLDEST eligible by PR number, never by
- * `createdAt` or list order).
+ * `createdAt` or list order). The cap survived the #1158 rename: it is a
+ * cap on how many REVIEWS get started per tick, and the reason for it —
+ * engine load — is unchanged by whether the trigger is a label or a
+ * review request.
  */
 export function buildBoard(facts: BoardFacts): BoardView {
   const classified = facts.prs.map((pr) => {
@@ -664,22 +691,22 @@ export function buildBoard(facts: BoardFacts): BoardView {
   })
 
   const candidates = classified
-    .filter((c) => c.result.action === 'LABEL_FOR_REVIEW_CANDIDATE')
+    .filter((c) => c.result.action === 'REQUEST_REVIEW_CANDIDATE')
     .sort((a, b) => a.pr.number - b.pr.number)
   const chosenNumber = candidates[0]?.pr.number
 
   const rows: BoardRow[] = classified.map(({ pr, result }) => {
-    if (result.action === 'LABEL_FOR_REVIEW_CANDIDATE') {
+    if (result.action === 'REQUEST_REVIEW_CANDIDATE') {
       const chosen = pr.number === chosenNumber
       return {
         number: pr.number,
         author: pr.authorLogin,
         headRefOid: pr.headRefOid,
         failingContexts: [],
-        action: chosen ? 'LABEL_FOR_REVIEW' : 'WAITING',
+        action: chosen ? 'REQUEST_REVIEW' : 'WAITING',
         reason: chosen
           ? result.reason
-          : `${result.reason} — deferred: only one PR gets labelled for review per invocation (#${chosenNumber} is older)`,
+          : `${result.reason} — deferred: only one PR gets a review requested per invocation (#${chosenNumber} is older)`,
       }
     }
     return {

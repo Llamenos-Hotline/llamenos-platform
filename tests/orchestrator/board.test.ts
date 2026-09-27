@@ -7,6 +7,7 @@ import {
   type BranchGate, type BranchRuleset, type CheckState,
 } from '../../orchestrator/src/board.js'
 import { VERIFY_JOB, REVIEW_JOB } from '../../orchestrator/src/ci.js'
+import { REVIEW_REQUEST_LOGIN } from '../../orchestrator/src/request-review.js'
 
 const HEAD = 'head-sha-111'
 const OTHER_SHA = 'stale-sha-999'
@@ -265,20 +266,20 @@ describe('classifyPr — the head-binding rule (mandatory rail #1, per the brief
   // that is not the PR's current head. It must never be treated as a live
   // MERGE-worthy verdict — it must read as if fleet/review were simply
   // ABSENT on this head, which (with no "review" label present) makes the
-  // sole open PR a LABEL_FOR_REVIEW candidate, not a merge.
+  // sole open PR a REQUEST_REVIEW candidate, not a merge.
   it('a fleet/review PASS on a stale SHA is treated as ABSENT, not as a live PASS', () => {
     const staleReview = reviewCheck({ sha: OTHER_SHA, state: 'PASS' })
     const result = classify(pr({ checks: [...cheapPassChecks(), staleReview] }))
     expect(result.action).not.toBe('MERGE')
     expect(result.action).not.toBe('APPROVE_THEN_MERGE')
-    expect(result.action).toBe('LABEL_FOR_REVIEW_CANDIDATE')
+    expect(result.action).toBe('REQUEST_REVIEW_CANDIDATE')
   })
 
-  it('the same PR, surfaced through buildBoard as the sole open PR, becomes LABEL_FOR_REVIEW — never MERGE', () => {
+  it('the same PR, surfaced through buildBoard as the sole open PR, becomes REQUEST_REVIEW — never MERGE', () => {
     const staleReview = reviewCheck({ sha: OTHER_SHA, state: 'PASS' })
     const view = buildBoard(facts([pr({ number: 862, checks: [...cheapPassChecks(), staleReview] })]))
     expect(view.rows).toHaveLength(1)
-    expect(view.rows[0]?.action).toBe('LABEL_FOR_REVIEW')
+    expect(view.rows[0]?.action).toBe('REQUEST_REVIEW')
   })
 
   it('a cheap context (ci-status) on a stale SHA is treated as missing, not as a live PASS', () => {
@@ -289,12 +290,50 @@ describe('classifyPr — the head-binding rule (mandatory rail #1, per the brief
   })
 })
 
-describe('buildBoard — LABEL_FOR_REVIEW is capped to one per invocation', () => {
+describe('classifyPr — a PR whose author is also its would-be reviewer (#1158)', () => {
+  // `REQUEST_REVIEW` is now an instruction to REQUEST a review from a
+  // specific login, and GitHub refuses a request naming the PR's own
+  // author. Emitting REQUEST_REVIEW for such a PR would put a row on the
+  // board that every tick retries and nothing can ever satisfy.
+  it('is OPERATOR, never REQUEST_REVIEW — and says why in the reason', () => {
+    const result = classify(pr({ authorLogin: REVIEW_REQUEST_LOGIN, checks: cheapPassChecks() }))
+    expect(result.action).toBe('OPERATOR')
+    expect(result.action).not.toBe('REQUEST_REVIEW_CANDIDATE')
+    expect(result.reason).toContain(REVIEW_REQUEST_LOGIN)
+    expect(result.reason).toContain("own author")
+  })
+
+  it('does not divert the ordinary case — another author is still a candidate', () => {
+    expect(classify(pr({ authorLogin: 'rhonda-rodododo', checks: cheapPassChecks() })).action)
+      .toBe('REQUEST_REVIEW_CANDIDATE')
+  })
+
+  // The release PR is the one llamenos-auto routinely authors (#1161). The
+  // reviewer switches to the operator there (`reviewerFor`), so it is NOT a
+  // self-review and stays actionable — this is the case #1164's workflow
+  // calls out, and the release PR's review must not be diverted to OPERATOR
+  // by the self-review guard.
+  it('the llamenos-auto-authored RELEASE PR is still a candidate — its reviewer is the operator', () => {
+    const result = classify(pr({ authorLogin: REVIEW_REQUEST_LOGIN, headRefName: 'release', checks: cheapPassChecks() }))
+    expect(result.action).toBe('REQUEST_REVIEW_CANDIDATE')
+  })
+
+  // The older release guard is keyed on `isBotAuthor`, which llamenos-auto
+  // is not; a knope-authored release PR must still be OPERATOR for its own,
+  // older reason (cutting a release is a human decision).
+  it('a bot-authored release PR stays OPERATOR for the release reason, not the self-review one', () => {
+    const result = classify(pr({ authorLogin: 'github-actions', headRefName: 'release', checks: cheapPassChecks() }))
+    expect(result.action).toBe('OPERATOR')
+    expect(result.reason).toContain('knope release PR')
+  })
+})
+
+describe('buildBoard — REQUEST_REVIEW is capped to one per invocation', () => {
   it('picks exactly one, the OLDEST eligible by PR number, and defers the rest to WAITING', () => {
     const candidate = (n: number): PrFact => pr({ number: n, checks: cheapPassChecks() })
     const view = buildBoard(facts([candidate(50), candidate(12), candidate(99)]))
 
-    const labelled = view.rows.filter((r) => r.action === 'LABEL_FOR_REVIEW')
+    const labelled = view.rows.filter((r) => r.action === 'REQUEST_REVIEW')
     expect(labelled).toHaveLength(1)
     expect(labelled[0]?.number).toBe(12)
 
@@ -302,9 +341,17 @@ describe('buildBoard — LABEL_FOR_REVIEW is capped to one per invocation', () =
     expect(deferred.every((r) => r.action === 'WAITING')).toBe(true)
   })
 
+  it('says a review is REQUESTED, not labelled, when it defers the rest', () => {
+    const candidate = (n: number): PrFact => pr({ number: n, checks: cheapPassChecks() })
+    const view = buildBoard(facts([candidate(12), candidate(99)]))
+    const deferred = view.rows.find((r) => r.number === 99)
+    expect(deferred?.reason).toContain('only one PR gets a review requested per invocation')
+    expect(deferred?.reason).not.toContain('labelled')
+  })
+
   it('is a no-op cap when only one PR is eligible', () => {
     const view = buildBoard(facts([pr({ number: 7, checks: cheapPassChecks() })]))
-    expect(view.rows.map((r) => r.action)).toEqual(['LABEL_FOR_REVIEW'])
+    expect(view.rows.map((r) => r.action)).toEqual(['REQUEST_REVIEW'])
   })
 })
 
@@ -316,7 +363,7 @@ describe('buildBoard — totality', () => {
       pr({ number: 3, authorLogin: 'a-human', checks: [...cheapPassChecks(), reviewCheck()] }),
     ]))
     expect(view.rows).toHaveLength(3)
-    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'LABEL_FOR_REVIEW', 'RERUN_REVIEW', 'NEEDS_FIX', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
+    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'REQUEST_REVIEW', 'RERUN_REVIEW', 'NEEDS_FIX', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
     for (const row of view.rows) expect(publicActions.has(row.action)).toBe(true)
   })
 

@@ -99,6 +99,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
+| `llamenos-fleet request-review <pr>` | Starts a PR's non-author review: applies the `review` label **and** requests a review from `llamenos-auto` (`rhonda-rodododo` on the knope `release` PR). Both, deliberately — see "Starting a review" below. Each half is remove-then-re-add so it emits a fresh event. Exits non-zero unless BOTH fired. |
 
 ### `attempted` vs `failed` vs `shadowed`
 
@@ -129,6 +130,53 @@ ships in the follow-on plan. Until then:
   is what an operator will actually see.
 - **`shadow` is the only mode with real content today.** `off` does nothing;
   `live` is refused.
+
+## Starting a review (#1158)
+
+The board's `REQUEST_REVIEW` action (called `LABEL_FOR_REVIEW` until #1158)
+says "this PR passed every cheap check and has no `fleet/review` verdict on
+its head — start its review". `llamenos-fleet request-review <pr>` is what
+executes it.
+
+It emits **two** triggers on every invocation, and that duplication is the
+point. `fleet-review.yml` is started by a GitHub event, and which event is
+mid-migration:
+
+- the deployed workflow triggers on `pull_request: types: [labeled]` — the
+  `review` label;
+- #1164 rewrites it to trigger on `pull_request: types: [review_requested]`
+  — a review requested from `llamenos-auto`.
+
+Only one version of that workflow is on `main` at a time, and it listens for
+exactly one of the two events. Emitting only one of them means the fleet
+cannot start a review for as long as the other version is deployed. So this
+command does both until #1164 has merged and the request half is confirmed
+firing; a follow-up then drops the label half. The two cannot double-run the
+engine — the live workflow is subscribed to one event type, so the other is
+never delivered to it.
+
+Each half is a DELETE followed by a POST. Re-applying a label a PR already
+carries emits no `labeled` event, and re-requesting a reviewer already on the
+request list emits no `review_requested` event, so neither would re-trigger
+the workflow on a PR that has been pushed to since.
+
+**Who the request goes to.** `llamenos-auto`, except on the knope `release`
+branch, where `llamenos-auto` is the PR's own AUTHOR — GitHub refuses a
+review request naming a PR's author — so the request goes to the operator,
+`rhonda-rodododo`, who is who actually reads a release PR.
+
+**When the author is also the reviewer.** For any PR where that is still true
+after the rule above (a `llamenos-auto`-authored PR on some other branch),
+the fleet refuses by name rather than picking a third reviewer: a request at
+an account `fleet-review.yml` does not recognise looks sent and starts
+nothing. `board` reports such a PR as `OPERATOR` naming the author, and
+`request-review` reports the request half as `SKIP` (still applying the
+label) and exits non-zero.
+
+**Partial success is loud.** The two halves run independently — a failure of
+one never skips the other — and the command exits non-zero unless both fired,
+naming each half's outcome. A review that did not start is never reported as
+one that did.
 
 ## Specialist reviewers (#1092)
 

@@ -20,6 +20,7 @@ import {
 } from './specialist.js'
 import { artifactReviewCache } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
+import { runRequestReview, defaultRequestReviewDeps } from './request-review.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, VERIFY_JOB, itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1400,6 +1401,27 @@ async function runReviewAndMergeCommand(pr: string | undefined): Promise<number>
   return outcome.kind === 'merged' || outcome.kind === 'already-merged' ? 0 : 1
 }
 
+/**
+ * `llamenos-fleet request-review <pr>` — the executing half of the board's
+ * `REQUEST_REVIEW` action. Applies the `review` label AND requests a review
+ * from `llamenos-auto`, because the two live versions of
+ * `fleet-review.yml` trigger on different events (see request-review.ts's
+ * module comment). Exits non-zero unless BOTH fired.
+ */
+async function runRequestReviewCommand(pr: string | undefined): Promise<number> {
+  return runRequestReview(
+    pr,
+    async (n) => {
+      const view = await ghJson<{ number: number; author: { login: string } | null; headRefName: string }>(
+        ['pr', 'view', n, '--json', 'number,author,headRefName'])
+      if (view === undefined) throw new Error(`gh pr view ${n} returned nothing`)
+      return view
+    },
+    defaultRequestReviewDeps(log),
+    (text) => process.stdout.write(text),
+  )
+}
+
 type CommandHandler = (rest: string[]) => Promise<number> | number
 
 /**
@@ -1459,6 +1481,9 @@ const HANDLERS: Record<string, CommandHandler> = {
   'review-gate': () => runReviewGate(),
   'specialist-review-ci': () => runSpecialistReviewCommand(),
   'review-and-merge': (rest) => runReviewAndMergeCommand(rest[0]),
+  // The board's `REQUEST_REVIEW` action, executed: label + review
+  // request, both, loudly (#1158).
+  'request-review': (rest) => runRequestReviewCommand(rest[0]),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),
   // The deterministic gate decision table (board.ts) — read-only: derives
