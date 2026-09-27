@@ -617,6 +617,7 @@
     "errorBreak": "Ñá ni̱ kúu nasama estado de descanso",
     "errorClockIn": "Ñá ni̱ kúu registrar entrada",
     "errorClockOut": "Ñá ni̱ kúu registrar salida",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Ñá ni̱ kúu actualizar",
     "goOnBreak": "Kuaꞌan descanso",
     "help": "Chindeé",

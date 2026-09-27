@@ -26,6 +26,7 @@ import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
+import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
 
@@ -65,6 +66,7 @@ class DashboardViewModel @Inject constructor(
     private val activeHubState: ActiveHubState,
     private val analyticsRepository: AnalyticsRepository,
     private val shiftClockRepository: ShiftClockRepository,
+    private val sipRegistrar: SipRegistrar,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -223,14 +225,20 @@ class DashboardViewModel @Inject constructor(
      * Quick clock in to the active hub from the dashboard.
      */
     fun clockIn() {
-        clockAction(R.string.dashboard_error_clock_in) { hubId -> shiftClockRepository.clockIn(hubId) }
+        clockAction(R.string.dashboard_error_clock_in) { hubId ->
+            shiftClockRepository.clockIn(hubId)
+            reportCallSetup(sipRegistrar.registerMemberHubs())
+        }
     }
 
     /**
      * Quick clock out of the active hub from the dashboard.
      */
     fun clockOut() {
-        clockAction(R.string.dashboard_error_clock_out) { hubId -> shiftClockRepository.clockOut(hubId) }
+        clockAction(R.string.dashboard_error_clock_out) { hubId ->
+            shiftClockRepository.clockOut(hubId)
+            reportCallSetup(sipRegistrar.syncWithShift(shiftClockRepository.clockedIn.value.isNotEmpty()))
+        }
     }
 
     private fun clockAction(@StringRes failure: Int, action: suspend (hubId: String) -> Unit) {
@@ -248,6 +256,12 @@ class DashboardViewModel @Inject constructor(
                 _uiState.update { it.copy(errorRes = failure) }
             }
             _uiState.update { it.copy(isClockingInOut = false) }
+        }
+    }
+
+    private fun reportCallSetup(result: SipRegistrar.Result?) {
+        if (result is SipRegistrar.Result.Failed) {
+            _uiState.update { it.copy(errorRes = R.string.dashboard_error_in_app_calls_unavailable) }
         }
     }
 

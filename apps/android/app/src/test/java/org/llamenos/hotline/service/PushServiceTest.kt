@@ -18,7 +18,7 @@ class PushServiceTest {
     private val context = mockk<Context>(relaxed = true)
     private val testDispatcher = UnconfinedTestDispatcher()
     private val scope = TestScope(testDispatcher)
-    private val linphoneService = LinphoneService(context, activeHubState, scope)
+    private val linphoneService = LinphoneService(context, activeHubState, mockk(relaxed = true), scope)
 
     @Test
     fun `shift reminder wake payload does NOT register call hub mapping`() = runTest(testDispatcher) {

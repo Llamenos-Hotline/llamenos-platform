@@ -210,7 +210,7 @@ class HubScopedViewModelReloadTest {
         runTest(UnconfinedTestDispatcher()) {
             val (activeHubState, hubFlow) = mockActiveHubState()
             val apiService = makeApiService(activeHubState)
-            val vm = ShiftsViewModel(apiService, activeHubState, ShiftClockRepository(apiService))
+            val vm = ShiftsViewModel(apiService, activeHubState, ShiftClockRepository(apiService), mockk(relaxed = true))
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "ShiftsViewModel")
         }
@@ -327,6 +327,7 @@ class HubScopedViewModelReloadTest {
                 activeHubState,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
+                mockk(relaxed = true),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "DashboardViewModel")

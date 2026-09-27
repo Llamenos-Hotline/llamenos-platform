@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "已签到，但此设备无法在应用内接听电话。请尝试重新签到。",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Go On Break",
     "help": "Help",

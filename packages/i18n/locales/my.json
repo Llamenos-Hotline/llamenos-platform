@@ -617,6 +617,7 @@
     "errorBreak": "နားချိန်အခြေအနေ ပြောင်းလဲမှု မအောင်မြင်ပါ",
     "errorClockIn": "အလှည့်ဝင်မှု မအောင်မြင်ပါ",
     "errorClockOut": "အလှည့်ထွက်မှု မအောင်မြင်ပါ",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "ပြန်လည်ဖွင့်မှု မအောင်မြင်ပါ",
     "goOnBreak": "ခဏနားမည်",
     "help": "အကူအညီ",

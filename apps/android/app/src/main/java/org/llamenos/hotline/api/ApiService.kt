@@ -14,6 +14,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ClearPushTokenRequest
+import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.OkResponse
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.model.RecoveryContributeRequest
@@ -28,6 +29,7 @@ import org.llamenos.hotline.model.RecoverySessionStatus
 import org.llamenos.hotline.model.RecoveryVerifyRequest
 import org.llamenos.hotline.model.RecoveryVerifyResponse
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.telephony.SipConnectionParams
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -350,6 +352,21 @@ class ApiService @Inject constructor(
     suspend fun getHubKey(hubId: String): HubKeyEnvelopeResponse {
         return request("GET", "/api/hubs/$hubId/key")
     }
+
+    /**
+     * Hubs visible to the current user: the hubs they are a member of (a super admin sees
+     * every active hub). This is the member-hub list for multi-hub routing.
+     */
+    suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    // ---- Telephony API ----
+
+    /**
+     * SIP credentials for in-app calling (Linphone). Not hub-scoped: the server derives them
+     * from the platform telephony provider. Responds 400 when the user's call preference is
+     * phone-only or the provider has no SIP endpoint, and 404 when no provider is configured.
+     */
+    suspend fun getSipConnectionParams(): SipConnectionParams = request("GET", "/api/telephony/sip-token")
 
     // ---- Recovery Group API ----
 
