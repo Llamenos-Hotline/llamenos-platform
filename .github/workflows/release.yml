@@ -414,6 +414,18 @@ jobs:
         run: |
           MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
           IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          # OCI registries reject a mixed-case repository path outright
+          # ("repository name must be lowercase"), and `github.repository`
+          # carries the owner's *display* casing — `Llamenos-Hotline/...`
+          # since the org move. Fold the whole reference once, here, and
+          # emit only the folded value: every downstream step reads
+          # `steps.meta.outputs.image` / `.tags`, so there is no second
+          # place that could interpolate the raw mixed-case name. It has to
+          # happen in a `run:` block — neither workflow expressions nor
+          # `with:` inputs have a lowercase function. `${REGISTRY}` is
+          # already lowercase, so folding the joined ref is equivalent to
+          # folding just the name, with one fewer variable to keep in sync.
+          IMAGE="${IMAGE,,}"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
