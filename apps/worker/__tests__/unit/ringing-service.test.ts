@@ -310,7 +310,7 @@ describe('startParallelRinging', () => {
     expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
   })
 
-  it('rings nobody and registers no call when every candidate is on a live call (#1018)', async () => {
+  it('rings nobody when every candidate is on a live call, but still registers the call (#1018)', async () => {
     const services = makeServices({
       onShiftPubkeys: ['pk-busy'],
       busyPubkeys: ['pk-busy'],
@@ -320,7 +320,9 @@ describe('startParallelRinging', () => {
     const result = await startParallelRinging('CA-busy3', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
 
     expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
-    expect(services.calls.addCall).not.toHaveBeenCalled()
+    // Being unroutable never suppresses the call record: the caller is in the queue and
+    // will time out into voicemail, which needs a row to attach to (#1043).
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
     expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
   })
 
