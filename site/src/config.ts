@@ -12,6 +12,14 @@ export const siteConfig = {
     mobileReleasesUrl: 'https://github.com/rhonda-rodododo/llamenos-platform/releases/latest',
   },
 
+  // Deliberately still `rhonda-rodododo`, NOT a missed rename (#1218): the
+  // repository moved to the `Llamenos-Hotline` org but the GHCR package did
+  // not follow the transfer. `ghcr.io/rhonda-rodododo/llamenos-platform`
+  // returns 200 with live tags (`latest`, `0.19.15`); the Llamenos-Hotline
+  // path returns 403 and does not exist yet. This is the address the download
+  // page tells operators to `docker pull`, so moving it before the new
+  // package exists AND is public (GHCR defaults new packages to private)
+  // would break a working install command. Tracked in #1223.
   registry: {
     app: 'ghcr.io/rhonda-rodododo/llamenos-platform',
     signalNotifier: 'ghcr.io/rhonda-rodododo/llamenos-signal-notifier',
