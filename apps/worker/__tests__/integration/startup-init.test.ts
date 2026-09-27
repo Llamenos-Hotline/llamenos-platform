@@ -102,11 +102,16 @@ async function bootServer(databaseUrl: string, adminPubkey: string | undefined):
   if (adminPubkey) env.ADMIN_PUBKEY = adminPubkey
   if (process.env.LLAMENOS_CRYPTO_LIB) env.LLAMENOS_CRYPTO_LIB = process.env.LLAMENOS_CRYPTO_LIB
 
+  // Own process group: `bun` may be a version-manager shim that does not forward
+  // signals to the real server, so shutdown signals the whole group.
   const child = spawn('bun', ['--no-env-file', 'src/server/index.ts'], {
     cwd: REPO_ROOT,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   })
+  const pid = child.pid
+  if (pid === undefined) throw new Error('failed to spawn the server')
   let output = ''
   child.stdout.on('data', (chunk) => { output += chunk })
   child.stderr.on('data', (chunk) => { output += chunk })
@@ -132,9 +137,25 @@ async function bootServer(databaseUrl: string, adminPubkey: string | undefined):
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
   } finally {
-    if (exitCode === undefined) child.kill('SIGTERM')
+    try {
+      process.kill(-pid, 'SIGTERM')
+    } catch {
+      // group already gone
+    }
     await exited
+    await waitForPortClosed(port)
   }
+}
+
+/** The server exits only after its shutdown handler; a reboot must not overlap it. */
+async function waitForPortClosed(port: number): Promise<void> {
+  const deadline = Date.now() + BOOT_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const open = await fetch(`http://127.0.0.1:${port}/api/health/live`).then(() => true, () => false)
+    if (!open) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`server on port ${port} did not shut down`)
 }
 
 async function withDb<T>(databaseUrl: string, fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
