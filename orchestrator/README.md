@@ -158,6 +158,54 @@ code `src/specialist.ts`).
 - **Order:** apply the specialist label, wait for it to pass, then (re-)apply
   `review`. Clearing a specialist FAIL takes a new head.
 
+## Cross-lane PRs: `scope:<lane>` grants (#1115)
+
+A lane's scope is the set of paths its workers may write, parsed from
+`.claude/agents/fragments/<lane>-supervisor.md`. Most work fits one lane.
+Some genuinely does not: a permission-boundary fix spans the shared module,
+the server that enforces it, the client that consumes it and the tests that
+prove it. That is one atomic change — splitting it produces PRs that each go
+green alone and leave `main` red between merges.
+
+Before this existed the author had no legal move: stray and be hard-blocked
+at `fleet/verify` with `scope=fail`, or split and break `main`. Now a PR can
+carry `scope:<lane>` labels, and `fleet/verify` treats a file as in-scope if
+**any** authorised lane owns it — its own, plus each granted one.
+
+```
+# a backend fix that must also update the desktop BDD steps it invalidates
+gh pr edit <N> --add-label scope:desktop
+```
+
+What a grant cannot do:
+
+- **Reach a never-write path.** `NEVER_WRITE_PATHS` is checked first and is
+  absolute. A grant names a lane, and no lane owns a never-write path, so
+  secrets, CI and deploy config stay unreachable no matter how many labels a
+  PR carries.
+- **Be self-issued from the diff.** Labels live outside the commit. A worker
+  cannot widen its own scope by editing a file in its own PR, which is the
+  whole reason the grant is a label and not a trailer in the PR body.
+- **Silently apply when unreadable.** If the labels cannot be read the gate
+  grants nothing and judges the PR on its own lane alone. Not knowing means
+  not granted.
+- **Merge two lanes into one scope.** Each lane is still resolved with its own
+  `owned`/`notOwned` pair and its own longest-match rules. Flattening them
+  would let one lane's grant cancel another's exclusion and make a path
+  writable that neither lane can write by itself.
+
+### Known gap this does not close
+
+`resolveLane` still falls back to `UNSCOPED_LANE` for any branch not named
+`fleet/<lane>/…`, and an unrestricted scope means no ownership check at all.
+So the scope gate is currently **opt-in by branch name** — the one string the
+worker being contained chooses. Closing that requires every path to have an
+owner first: **772 of 4165 tracked files currently have none** (most of
+`docs/`, all of `drizzle/migrations/`, `orchestrator/` itself, and
+`.claude/agents/` — including the lane fragments that define scope). Tracked
+in #1115; `NEVER_WRITE_PATHS` and CODEOWNERS are the defences that do bind
+universally in the meantime.
+
 ## Changing a lane's mode
 
 Lane modes are **runtime state, never source** (rail 8). Never edit

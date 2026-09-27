@@ -45,3 +45,36 @@
 - name: "ci"
   color: "fef2c0"
   description: "Continuous integration / GitHub Actions"
+
+# ── Cross-lane scope grants (#1115) ──────────────────────────────
+# Applied to a PR whose diff legitimately spans more than one lane: a
+# permission fix touching the shared module, the server enforcing it and the
+# client consuming it is one atomic change, not three. `fleet/verify` widens
+# which lane's ownership a file may satisfy for each grant present.
+#
+# These never reach NEVER_WRITE_PATHS — the grant names a lane, and no lane
+# owns a never-write path. They live outside the commit on purpose, so a
+# worker cannot grant itself scope from inside its own diff.
+- name: "scope:backend"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the backend lane's scope"
+
+- name: "scope:desktop"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the desktop lane's scope"
+
+- name: "scope:shared"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the shared lane's scope"
+
+- name: "scope:ios"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the ios lane's scope"
+
+- name: "scope:android"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the android lane's scope"
+
+- name: "scope:infra"
+  color: "5319e7"
+  description: "fleet/verify: also judge this PR against the infra lane's scope"
