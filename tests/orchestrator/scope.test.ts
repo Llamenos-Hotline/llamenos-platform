@@ -893,6 +893,41 @@ describe('checkScopeAcross — cross-lane grants (#1115)', () => {
     expect(r.strayed).toEqual(['src/client/b.ts', 'apps/ios/X.swift'])
   })
 
+  // The second thing the review gate caught: NEVER_WRITE_PATHS is
+  // SECRET_PATH_PATTERNS only, and `deploy/` + `.github/workflows/` are
+  // deliberately NOT in it because lanes own some of them. Without a grant
+  // exclusion, one self-applied `scope:infra` label would extend any worker's
+  // write scope to the supply chain.
+  describe('grant exclusion: a grant may not reach CI or deploy config', () => {
+    const infra: LaneScope = { owned: ['deploy/', '.github/workflows/', 'scripts/'], notOwned: [] }
+    const excluded = ['.github/workflows/', '.github/actions/', 'deploy/', 'Dockerfile*', 'Caddyfile*', 'knope.toml']
+
+    it('refuses CI and deploy paths to a grant even though the granted lane owns them', () => {
+      const r = checkScopeAcross(
+        ['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'],
+        backend, [infra], never, excluded,
+      )
+      expect(r.strayed).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
+    })
+
+    it('still lets a grant reach the granted lane\'s non-supply-chain paths', () => {
+      // scripts/ is infra-owned and NOT excluded — #1060 legitimately needs
+      // scripts/bootstrap-admin.ts from the backend lane.
+      expect(checkScopeAcross(['scripts/bootstrap-admin.ts'], backend, [infra], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    // The exclusion restricts GRANTS, never a lane's own scope.
+    it('does not stop the owning lane writing those paths on its own PR', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, [], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    it('defaults to no exclusion when the list is omitted, so existing callers are unaffected', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml'], backend, [infra], never).strayed).toEqual([])
+    })
+  })
+
   it('an empty granted scope alongside a real one leaves the real grant intact and nothing more', () => {
     const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane, desktop], never)
     expect(r.strayed).toEqual(['apps/ios/X.swift'])

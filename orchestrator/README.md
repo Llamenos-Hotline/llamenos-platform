@@ -179,10 +179,27 @@ gh pr edit <N> --add-label scope:desktop
 
 What a grant cannot do:
 
-- **Reach a never-write path.** `NEVER_WRITE_PATHS` is checked first and is
-  absolute. A grant names a lane, and no lane owns a never-write path, so
-  secrets, CI and deploy config stay unreachable no matter how many labels a
-  PR carries.
+- **Reach a secret.** `NEVER_WRITE_PATHS` is checked first and is absolute.
+  Be precise about what that covers, because an earlier draft of this section
+  overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
+  **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
+  in it, because lanes legitimately own some of them.
+
+- **Reach CI or deploy config via a grant.** That is enforced separately, by
+  `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,
+  `deploy/`, `Dockerfile*`, `Caddyfile*`, `knope.toml`. A grant is refused
+  these even when the granted lane owns them. Without that list, one
+  self-applied `scope:infra` label would extend any worker's write scope to
+  the supply chain that builds, tests, signs and ships the app, and
+  `fleet/verify` would say `scope=pass`.
+
+  The exclusion binds **grants only**. The owning lane still writes these
+  normally on its own PR: infra edits its own workflows, ios edits
+  `.github/workflows/ios*.yml`. And it is deliberately narrow — `scripts/` is
+  infra-owned but *not* excluded, because a cross-lane fix such as #1060
+  genuinely needs `scripts/bootstrap-admin.ts`. `.github/ci/` is likewise
+  absent: those are lint baselines, already shared-write, and not supply
+  chain.
 - **Be self-issued from the diff.** Labels live outside the commit, so a
   worker cannot widen its own scope by editing a file in its own PR. That is
   the whole reason the grant is a label and not a trailer in the PR body.
