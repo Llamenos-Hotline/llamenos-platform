@@ -88,6 +88,58 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'vitest.orchestrator.config.ts',
   'vitest.unit.config.ts',
 
+  // Key generation, release signing, the FDE installer image, build/ISO
+  // verification, the desktop updater manifest and certificate pinning — the
+  // first security-sensitive subset of `scripts/`, which is otherwise
+  // ordinary infra-lane work (the gate scripts follow below). Matching CODEOWNERS entry for entry: a lane may author
+  // these, but one quiet edit here compromises every install, not one build.
+  'scripts/bootstrap-admin.ts',
+  'scripts/release/',
+  'scripts/build-iso.sh',
+  'scripts/iso-builder/',
+  'scripts/verify-build.sh',
+  'scripts/verify-iso.sh',
+  'scripts/generate-update-manifest.sh',
+  'scripts/generate-update-manifest.ts',
+  'scripts/inject-cert-pins.ts',
+  'scripts/extract-cert-pins.sh',
+
+  // The gate scripts under `scripts/`: every script whose exit status is a
+  // check's verdict, so weakening it lets a defect through that check. The
+  // repo checks CI and the git hooks run; the tests/ typecheck baseline gate;
+  // the custom lint rules; the migration-drift baseline writer; the built-
+  // image smoke gate plus the runtime invariant and migration runner that
+  // ship inside the image; and every test runner, with the helpers they all
+  // source. A lane that may quietly weaken the gate judging it can widen its
+  // own authority. CODEOWNERS owns `scripts/check-*` and `scripts/test-*.sh`
+  // as globs; these are exact files because this list is prefix/exact
+  // matching, and guards.test.ts fails if a file those globs match is
+  // missing here.
+  'scripts/check-ecies-active.sh',
+  'scripts/check-ipc-allowlist.sh',
+  'scripts/check-label-count.sh',
+  'scripts/check-migration-drift.sh',
+  'scripts/check-migration-drift.ts',
+  'scripts/typecheck-tests-gate.ts',
+  'scripts/eslint-rules/',
+  'scripts/regenerate-snapshot.ts',
+  'scripts/image-smoke.sh',
+  'scripts/verify-runtime.ts',
+  'scripts/run-migrations.ts',
+  'scripts/test-android.sh',
+  'scripts/test-backend-bdd.sh',
+  'scripts/test-changed.sh',
+  'scripts/test-crypto.sh',
+  'scripts/test-desktop.sh',
+  'scripts/test-feature.sh',
+  'scripts/test-fleet.sh',
+  'scripts/test-integration-full.sh',
+  'scripts/test-ios.sh',
+  'scripts/test-orchestrator.sh',
+  'scripts/test-worker.sh',
+  'scripts/android-parallel-e2e.sh',
+  'scripts/lib/',
+
   // Deanonymization surfaces (PR #794, matching CODEOWNERS): sip-bridge/
   // routes PSTN calls and handles caller phone numbers; signal-notifier/
   // does HMAC-hashed contact resolution. Both are top-level, NOT under

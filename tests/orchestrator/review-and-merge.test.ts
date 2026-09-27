@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   hasSuccessfulReview, checkRunConclusion, evaluateMergeReadiness, describeOutcome,
   runReviewAndMerge, REVIEW_AND_MERGE_MODEL,
-  type CheckRunInfo, type RequiredCheck, type ReviewAndMergeDeps, type PrSnapshotFacts,
+  type CheckRunInfo, type RequiredCheck, type ReviewAndMergeDeps, type PrSnapshotFacts, type SpecialistState,
 } from '../../orchestrator/src/review-and-merge.js'
 import { REVIEW_JOB } from '../../orchestrator/src/ci.js'
 import type { SecondOpinionResult } from '../../orchestrator/src/review.js'
@@ -22,6 +22,10 @@ const requiredChecks = (over: Partial<RequiredCheck>[] = []): RequiredCheck[] =>
   { name: REVIEW_JOB, state: 'SUCCESS', bucket: 'pass' },
   ...over.map((o) => ({ name: 'x', state: 'SUCCESS', bucket: 'pass' as const, ...o })),
 ]
+
+/** No `-reviewer` label and no `fleet/review/*` check on `headSha` — the
+ *  state of every PR that never asked for a specialist (#1092). */
+const noSpecialists = (headSha: string): SpecialistState => ({ headSha, checks: [], labels: [] })
 
 describe('hasSuccessfulReview', () => {
   it('is true only when a check-run explicitly concluded success', () => {
@@ -56,25 +60,25 @@ describe('checkRunConclusion', () => {
 describe('evaluateMergeReadiness', () => {
   it('is ready when the head is unmoved and every required check (including fleet/review) is green', () => {
     expect(evaluateMergeReadiness({
-      currentHeadSha: 'head111', reviewedHeadSha: 'head111', requiredChecks: requiredChecks(),
+      currentHeadSha: 'head111', reviewedHeadSha: 'head111', specialists: noSpecialists('head111'), requiredChecks: requiredChecks(),
     })).toEqual({ ready: true })
   })
 
   it('refuses when the head moved since the review', () => {
-    const r = evaluateMergeReadiness({ currentHeadSha: 'head222', reviewedHeadSha: 'head111', requiredChecks: requiredChecks() })
+    const r = evaluateMergeReadiness({ currentHeadSha: 'head222', reviewedHeadSha: 'head111', specialists: noSpecialists('head111'), requiredChecks: requiredChecks() })
     expect(r.ready).toBe(false)
     expect(!r.ready && r.reason).toMatch(/head moved/)
   })
 
   it('refuses when required checks could not be read at all', () => {
-    const r = evaluateMergeReadiness({ currentHeadSha: 'h', reviewedHeadSha: 'h', requiredChecks: undefined })
+    const r = evaluateMergeReadiness({ currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'), requiredChecks: undefined })
     expect(r.ready).toBe(false)
     expect(!r.ready && r.reason).toMatch(/could not read/)
   })
 
   it('refuses when fleet/review is not itself in the required-checks list', () => {
     const r = evaluateMergeReadiness({
-      currentHeadSha: 'h', reviewedHeadSha: 'h',
+      currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'),
       requiredChecks: [{ name: 'ci-status', state: 'SUCCESS', bucket: 'pass' }],
     })
     expect(r.ready).toBe(false)
@@ -83,7 +87,7 @@ describe('evaluateMergeReadiness', () => {
 
   it('refuses when fleet/review itself is not passing', () => {
     const r = evaluateMergeReadiness({
-      currentHeadSha: 'h', reviewedHeadSha: 'h',
+      currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'),
       requiredChecks: [{ name: REVIEW_JOB, state: 'FAILURE', bucket: 'fail' }],
     })
     expect(r.ready).toBe(false)
@@ -93,7 +97,7 @@ describe('evaluateMergeReadiness', () => {
   // The scenario the spec calls out by name: some OTHER required check is red.
   it('refuses when another required check is red, even though fleet/review passed', () => {
     const r = evaluateMergeReadiness({
-      currentHeadSha: 'h', reviewedHeadSha: 'h',
+      currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'),
       requiredChecks: [
         { name: REVIEW_JOB, state: 'SUCCESS', bucket: 'pass' },
         { name: 'fleet/verify', state: 'FAILURE', bucket: 'fail' },
@@ -105,7 +109,7 @@ describe('evaluateMergeReadiness', () => {
 
   it('refuses on a pending required check rather than merging early', () => {
     const r = evaluateMergeReadiness({
-      currentHeadSha: 'h', reviewedHeadSha: 'h',
+      currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'),
       requiredChecks: [
         { name: REVIEW_JOB, state: 'SUCCESS', bucket: 'pass' },
         { name: 'CodeQL', state: 'PENDING', bucket: 'pending' },
@@ -145,6 +149,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     postCheckRun: vi.fn(async () => {}),
     currentHeadSha: vi.fn(async () => 'head111'),
     requiredChecks: vi.fn(async () => requiredChecks()),
+    specialistState: vi.fn(async () => noSpecialists('head111')),
     merge: vi.fn(async () => {}),
     log: vi.fn(),
     ...over,
@@ -302,9 +307,69 @@ describe('mutation: reusing a FAIL as fresh must fail', () => {
 describe('mutation: merging without the review check present must fail', () => {
   it('evaluateMergeReadiness refuses when fleet/review is simply absent from the required list', () => {
     const r = evaluateMergeReadiness({
-      currentHeadSha: 'h', reviewedHeadSha: 'h',
+      currentHeadSha: 'h', reviewedHeadSha: 'h', specialists: noSpecialists('h'),
       requiredChecks: [{ name: 'ci-status', state: 'SUCCESS', bucket: 'pass' }],
     })
     expect(r.ready).toBe(false)
+  })
+})
+
+// #1092 — label-driven specialists are NOT required contexts, so GitHub will
+// not refuse on them; this command must. Every case below has every REQUIRED
+// check green, so the specialist is the only thing that can refuse.
+describe('evaluateMergeReadiness: a failed specialist review blocks the merge (any FAIL fails)', () => {
+  const ready = (specialists: SpecialistState | undefined) => evaluateMergeReadiness({
+    currentHeadSha: 'h', reviewedHeadSha: 'h', requiredChecks: requiredChecks(), specialists,
+  })
+
+  it('refuses when a fleet/review/<agent> check FAILED, even though fleet/review passed', () => {
+    const r = ready({ headSha: 'h', labels: ['crypto-security-reviewer'],
+      checks: [{ name: 'fleet/review/crypto-security-reviewer', state: 'FAIL' }] })
+    expect(r.ready).toBe(false)
+    expect(!r.ready && r.reason).toContain('specialist review failed: fleet/review/crypto-security-reviewer')
+  })
+
+  it('refuses a specialist FAIL even when its label was since removed — removing the label is not a pass', () => {
+    const r = ready({ headSha: 'h', labels: [], checks: [{ name: 'fleet/review/crypto-security-reviewer', state: 'FAIL' }] })
+    expect(r.ready).toBe(false)
+  })
+
+  it('refuses while a requested specialist is still in flight', () => {
+    const r = ready({ headSha: 'h', labels: ['crypto-security-reviewer'],
+      checks: [{ name: 'fleet/review/crypto-security-reviewer', state: 'PENDING' }] })
+    expect(r.ready).toBe(false)
+    expect(!r.ready && r.reason).toContain('in flight')
+  })
+
+  it('refuses when a specialist is requested by label but has no check on this head (a push since the label)', () => {
+    const r = ready({ headSha: 'h', labels: ['crypto-security-reviewer'], checks: [] })
+    expect(r.ready).toBe(false)
+    expect(!r.ready && r.reason).toContain('re-apply the label')
+  })
+
+  it('refuses when the checks/labels read failed — unknown is never clean', () => {
+    const r = ready(undefined)
+    expect(r.ready).toBe(false)
+    expect(!r.ready && r.reason).toMatch(/could not read/)
+  })
+
+  it('refuses when the specialist read describes a different head than the one reviewed', () => {
+    const r = ready({ headSha: 'other', labels: [], checks: [] })
+    expect(r.ready).toBe(false)
+  })
+
+  it('is ready once the requested specialist PASSED on this head', () => {
+    expect(ready({ headSha: 'h', labels: ['crypto-security-reviewer'],
+      checks: [{ name: 'fleet/review/crypto-security-reviewer', state: 'PASS' }] })).toEqual({ ready: true })
+  })
+
+  it('runReviewAndMerge never merges over a failed specialist', async () => {
+    const deps = baseDeps({
+      specialistState: vi.fn(async (): Promise<SpecialistState> => ({ headSha: 'head111', labels: ['crypto-security-reviewer'],
+        checks: [{ name: 'fleet/review/crypto-security-reviewer', state: 'FAIL' }] })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(deps.merge).not.toHaveBeenCalled()
   })
 })
