@@ -141,6 +141,7 @@ struct CaseDetailView: View {
         }
         .padding()
         .background(Color.brandCard)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-detail-header")
     }
 
@@ -237,6 +238,10 @@ struct CaseDetailView: View {
                 tabButton(for: tab)
             }
         }
+        // A plain stack is not an accessibility element, so SwiftUI pushed this
+        // identifier down onto every child, overwriting theirs (each tab button
+        // reported "case-tabs"). As a container it keeps its children's own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("case-tabs")
     }
 
