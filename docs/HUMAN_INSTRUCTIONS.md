@@ -692,8 +692,15 @@ identifiers, and configuration values are consistent across the project.
       `packages/crypto/` in this monorepo. No external `llamenos-core` checkout
       is needed. `tauri-release.yml` builds from the monorepo directly.
 - [ ] **All GitHub Secrets from Section 7** are set and populated
-- [ ] **CSP `connect-src`** in `apps/desktop/tauri.conf.json` includes the
-      production API domain (currently: `https://app.llamenos-hotline.org`)
+- [ ] **CSP `connect-src`** in `apps/desktop/tauri.conf.json` is
+      `ipc: http://ipc.localhost` — it lists no remote origin, because the desktop
+      app reaches the API through the Rust side over Tauri IPC, not from the webview.
+      If a remote origin is ever added it must be the production API domain,
+      `https://api.<domain>` (`https://api.llamenos-hotline.org` for the reference
+      deployment). `app.<domain>` is **not** the API domain: nothing serves it — no DNS
+      record and no Caddy vhost (see `docs/deployment/first-deploy.md`). It survives only
+      as a default CORS origin in `apps/worker/middleware/cors.ts` and
+      `apps/worker/lib/redirect-guard.ts`.
 - [ ] **Update manifest script** (`scripts/generate-update-manifest.sh`) uses
       the correct repository name in `REPO` variable (currently:
       `Llamenos-Hotline/llamenos-platform`)
