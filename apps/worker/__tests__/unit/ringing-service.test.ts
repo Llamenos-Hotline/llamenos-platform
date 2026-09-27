@@ -83,11 +83,14 @@ function makeServices(overrides: {
   onShiftPubkeys?: string[]
   fallbackPubkeys?: string[]
   allUsers?: ReturnType<typeof makeUser>[]
+  /** Pubkeys answering an in-progress call in any hub. */
+  busyPubkeys?: string[]
 }): Services {
   const {
     onShiftPubkeys = [],
     fallbackPubkeys = [],
     allUsers = [],
+    busyPubkeys = [],
   } = overrides
 
   return {
@@ -103,6 +106,7 @@ function makeServices(overrides: {
     },
     calls: {
       addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
+      getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busyPubkeys)),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
     },
   } as unknown as Services
@@ -270,6 +274,56 @@ describe('startParallelRinging', () => {
 
     expect(services.settings.getFallbackGroup).not.toHaveBeenCalled()
     expect(mockAdapter.ringVolunteers.mock.calls[0][0].volunteers).toHaveLength(1)
+  })
+
+  it('does not ring a volunteer who is on a live call in any hub (#1018)', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-busy', 'pk-free'],
+      busyPubkeys: ['pk-busy'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-busy', phone: '+15550000001' }),
+        makeUser({ pubkey: 'pk-free', phone: '+15550000002' }),
+      ],
+    })
+    ;(services.calls.createCallToken as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ volunteerPubkey }: { volunteerPubkey: string }) => `tok-${volunteerPubkey}`,
+    )
+
+    const result = await startParallelRinging('CA-busy1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
+
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+    const rung = mockAdapter.ringVolunteers.mock.calls[0][0].volunteers.map((v: { callToken: string }) => v.callToken)
+    expect(rung).toEqual(['tok-pk-free'])
+  })
+
+  it('falls back to the fallback group when everyone on shift is on a call (#1018)', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-busy'],
+      fallbackPubkeys: ['pk-fallback'],
+      busyPubkeys: ['pk-busy'],
+      allUsers: [makeUser({ pubkey: 'pk-busy' }), makeUser({ pubkey: 'pk-fallback' })],
+    })
+
+    const result = await startParallelRinging('CA-busy2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
+
+    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-b')
+    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
+  })
+
+  it('rings nobody when every candidate is on a live call, but still registers the call (#1018)', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-busy'],
+      busyPubkeys: ['pk-busy'],
+      allUsers: [makeUser({ pubkey: 'pk-busy' })],
+    })
+
+    const result = await startParallelRinging('CA-busy3', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
+
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
+    // Being unroutable never suppresses the call record: the caller is in the queue and
+    // will time out into voicemail, which needs a row to attach to (#1043).
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
   })
 
   it('filters out inactive volunteers', async () => {
