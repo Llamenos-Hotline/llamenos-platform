@@ -4,6 +4,13 @@
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build app
 #   # Then wait for health: timeout 120 bash -c 'until curl -sf http://localhost:3000/api/health; do sleep 2; done'
 #
+# Host ports: every published port is overridable (APP_PORT, POSTGRES_HOST_PORT,
+# SIGNAL_NOTIFIER_HOST_PORT, SIP_BRIDGE_HOST_PORT, plus the base file's
+# HTTP_PORT/HTTPS_PORT for caddy) and defaults to the fixed port the test suite
+# expects. The CI e2e job runs up to three shards on ONE Docker host (the shared
+# Hetzner runner box), so it gives each runner its own project name and port
+# block — see the "Claim this runner's E2E slot" step in .github/workflows/ci.yml.
+#
 # Changes from production:
 #   - Exposes app port 3000 directly (bypasses Caddy)
 #   - Sets ENVIRONMENT=development (enables /api/test-reset endpoint)
@@ -16,7 +23,7 @@ services:
   # query the database directly from the Playwright test runner.
   postgres:
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     # Base compose puts postgres on `internal` only (internal: true blocks host
     # port exposure). Add `web` so the port mapping actually works in CI.
     networks:
@@ -106,7 +113,7 @@ services:
   # Don't depend on signal-cli being healthy — in CI it has no registered number.
   signal-notifier:
     ports:
-      - "3100:3100"
+      - "${SIGNAL_NOTIFIER_HOST_PORT:-3100}:3100"
     depends_on:
       signal-cli:
         condition: service_started
@@ -127,7 +134,7 @@ services:
   # bridge from the host. Base compose puts sip-bridge on `internal` only.
   sip-bridge:
     ports:
-      - "3001:3000"
+      - "${SIP_BRIDGE_HOST_PORT:-3001}:3000"
     networks:
       - internal
       - web

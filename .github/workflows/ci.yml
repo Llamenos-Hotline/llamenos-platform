@@ -409,12 +409,29 @@ jobs:
           bun audit --audit-level=high "${IGNORE_ARGS[@]}"
 
   # ─── E2E + Backend BDD Tests (Docker Compose) ──────────────
+  #
+  # Runs on the Hetzner self-hosted runners (#1110) because their Docker
+  # daemon survives between jobs: the Postgres / RustFS / signal-cli /
+  # asterisk images and the BuildKit layer cache stay resident, so
+  # `Bootstrap backend` stops paying a cold pull + build on every shard.
+  #
+  # All three runners are on ONE box and share ONE Docker daemon, ONE host
+  # network namespace, ONE $HOME and ONE /tmp. Two shards on that box must not
+  # see each other, so every shard claims a slot keyed on its runner (a runner
+  # runs one job at a time, so a runner-keyed slot can never be held twice):
+  #   - its own compose project name — the base file pins `name: llamenos`,
+  #     which would otherwise make shard B's `up` recreate shard A's
+  #     containers and shard A's `down -v` delete shard B's database;
+  #   - its own block of host ports for every published port (app, postgres,
+  #     signal-notifier, sip-bridge, caddy) and for `vite preview`.
+  # The slot is cleaned at the start of the job as well as the end, so a stack
+  # leaked by a cancelled run on this runner cannot poison the next one.
   e2e:
     needs: [changes, build]
     # Playwright E2E exercises the desktop web frontend against a live
     # backend — relevant if either side changed (#664).
     if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
     permissions:
       contents: read
     timeout-minutes: 30
@@ -428,6 +445,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Claim this runner's E2E slot
+        run: |
+          set -euo pipefail
+          case "$RUNNER_NAME" in
+            hetzner-llamenos) slot=1 ;;
+            hetzner-llamenos-[0-9] | hetzner-llamenos-[0-9][0-9]) slot="${RUNNER_NAME##*-}" ;;
+            *)
+              echo "::error::no E2E slot rule for runner '$RUNNER_NAME' — add it to this step, or two shards on one Docker host will share a compose project and host ports"
+              exit 1
+              ;;
+          esac
+          # 20000-range blocks: below the kernel's ephemeral range (32768+), so
+          # an outbound connection can never be handed one of these ports.
+          base=$((20000 + slot * 100))
+          {
+            echo "COMPOSE_PROJECT_NAME=llamenos-e2e-${slot}"
+            echo "APP_PORT=${base}"
+            echo "POSTGRES_HOST_PORT=$((base + 1))"
+            echo "SIGNAL_NOTIFIER_HOST_PORT=$((base + 2))"
+            echo "SIP_BRIDGE_HOST_PORT=$((base + 3))"
+            echo "HTTP_PORT=$((base + 4))"
+            echo "HTTPS_PORT=$((base + 5))"
+            echo "PREVIEW_PORT=$((base + 6))"
+          } | tee -a "$GITHUB_ENV"
+
+      - name: Remove this slot's leftover stack
+        # A job cancelled or killed before its teardown step leaves its
+        # containers running and its ports bound. Remove everything carrying
+        # this slot's compose project label — by label, not `compose down`,
+        # which needs the compose files and a .env that a fresh checkout has
+        # not written yet.
+        run: |
+          set -euo pipefail
+          label="label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
+          docker ps -aq --filter "$label" | xargs -r docker rm --force --volumes
+          docker network ls -q --filter "$label" | xargs -r docker network rm
+          docker volume ls -q --filter "$label" | xargs -r docker volume rm
+          # Anything else still on the slot's ports is not ours to kill — fail
+          # loudly instead of letting `compose up` / `--strictPort` fail later
+          # with a less obvious error.
+          busy=""
+          for port in "$APP_PORT" "$POSTGRES_HOST_PORT" "$SIGNAL_NOTIFIER_HOST_PORT" \
+                      "$SIP_BRIDGE_HOST_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$PREVIEW_PORT"; do
+            if ss -Htln "sport = :${port}" | grep -q .; then busy="$busy $port"; fi
+          done
+          if [ -n "$busy" ]; then
+            ss -tlnp || true
+            echo "::error::E2E slot ${COMPOSE_PROJECT_NAME} ports still in use after cleanup:${busy}"
+            exit 1
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         with:
@@ -436,26 +504,29 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Get Playwright version
-        id: playwright-version
-        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
+      # No actions/cache and no `--with-deps` here, on purpose:
+      #   - the browsers live in the runner's persistent ~/.cache/ms-playwright,
+      #     so `install` is a no-op once this Playwright version is present,
+      #     and restoring a cache tarball into that directory would overwrite
+      #     binaries another runner on the box may be executing (one $HOME);
+      #     Playwright serialises concurrent installs into it with its own
+      #     directory lock;
+      #   - the runner user has no sudo, so `install-deps` (apt-get) cannot
+      #     run. The Chromium system libraries are provisioned on the box
+      #     once; the next step fails loudly if one goes missing.
       - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
-      - name: Install Playwright deps (cached browsers)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
+      - name: Verify Chromium launches on this runner
+        run: |
+          node -e "
+            const { chromium } = require('@playwright/test');
+            chromium.launch().then((b) => b.close()).catch((e) => {
+              console.error(e.message);
+              console.error('::error::Chromium cannot launch on this runner — on the runner host, as root, run: npx playwright install-deps chromium');
+              process.exit(1);
+            });
+          "
 
       - name: Download build artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -475,12 +546,15 @@ jobs:
         run: bunx bddgen
 
       - name: Start Vite preview server
+        env:
+          # vite.config.ts `preview.proxy` forwards /api and /ws here.
+          API_URL: http://localhost:${{ env.APP_PORT }}
         run: |
-          bunx vite preview --port 8788 --strictPort &
+          bunx vite preview --port "$PREVIEW_PORT" --strictPort &
           PREVIEW_PID=$!
           echo "preview_pid=$PREVIEW_PID" >> "$GITHUB_ENV"
           for _i in $(seq 1 30); do
-            if bun -e "try{await fetch('http://localhost:8788');process.exit(0)}catch{process.exit(1)}" 2>/dev/null; then
+            if bun -e "try{await fetch('http://localhost:${PREVIEW_PORT}');process.exit(0)}catch{process.exit(1)}" 2>/dev/null; then
               echo "Preview server ready"
               break
             fi
@@ -491,16 +565,16 @@ jobs:
         run: bunx playwright test --project=bootstrap --project=bdd --shard=${{ matrix.shard }}/${{ strategy.job-total }} --workers=1
         env:
           CI: "true"
-          PLAYWRIGHT_BASE_URL: "http://localhost:8788"
-          TEST_HUB_URL: http://localhost:3000
-          TEST_RELAY_URL: ws://127.0.0.1:3000/ws
-          SIGNAL_NOTIFIER_URL: http://localhost:3100
+          PLAYWRIGHT_BASE_URL: http://localhost:${{ env.PREVIEW_PORT }}
+          TEST_HUB_URL: http://localhost:${{ env.APP_PORT }}
+          TEST_RELAY_URL: ws://127.0.0.1:${{ env.APP_PORT }}/ws
+          SIGNAL_NOTIFIER_URL: http://localhost:${{ env.SIGNAL_NOTIFIER_HOST_PORT }}
           SIGNAL_NOTIFIER_BEARER_TOKEN: ci-test-notifier-key
           PBX_TYPE: ari
-          SIP_BRIDGE_URL: http://localhost:3001
+          SIP_BRIDGE_URL: http://localhost:${{ env.SIP_BRIDGE_HOST_PORT }}
           DEV_RESET_SECRET: test-reset-secret
           E2E_TEST_SECRET: test-reset-secret
-          DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+          DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:${{ env.POSTGRES_HOST_PORT }}/llamenos
 
       - name: Stop Vite preview server
         if: always()
@@ -509,9 +583,9 @@ jobs:
       - name: Smoke check sidecar health endpoints
         if: always()
         run: |
-          curl -sf http://localhost:3000/api/health/ready || echo "::warning::app health check failed"
-          curl -sf http://localhost:3100/health || echo "::warning::signal-notifier health check failed"
-          curl -sf http://localhost:3001/health || echo "::warning::sip-bridge health check failed"
+          curl -sf "http://localhost:${APP_PORT}/api/health/ready" || echo "::warning::app health check failed"
+          curl -sf "http://localhost:${SIGNAL_NOTIFIER_HOST_PORT}/health" || echo "::warning::signal-notifier health check failed"
+          curl -sf "http://localhost:${SIP_BRIDGE_HOST_PORT}/health" || echo "::warning::sip-bridge health check failed"
 
       - name: Summarize test failures
         if: always()
@@ -540,6 +614,10 @@ jobs:
             -f deploy/docker/docker-compose.test.yml \
             logs app --tail=100 2>&1 || true
 
+      # The daemon outlives the job, so the job has to leave nothing behind:
+      # `--rmi local` drops the images compose built for this slot (the next
+      # run rebuilds them from the resident BuildKit cache anyway) while the
+      # registry images it pulled stay warm — that is the point of #1110.
       - name: Tear down Docker Compose
         if: always()
         run: |
@@ -547,7 +625,15 @@ jobs:
             --profile signal --profile asterisk \
             -f deploy/docker/docker-compose.yml \
             -f deploy/docker/docker-compose.test.yml \
-            down -v || true
+            down -v --remove-orphans --rmi local || true
+
+      # Every e2e run adds the layers of a fresh app / sip-bridge /
+      # signal-notifier build to the shared daemon's BuildKit cache. Keep the
+      # figure in step with BUILDKIT_CACHE_MAX in runner-maintenance.yml;
+      # layers a concurrent build is using are left alone by `builder prune`.
+      - name: Cap BuildKit layer cache
+        if: always()
+        run: docker builder prune --force --max-used-space 10GB
 
       - name: Upload test results
         if: always()
