@@ -2785,7 +2785,8 @@
     "codeSentTo": "Ipapadala ang iyong invite code sa server na ito:",
     "useDifferentServer": "Gumamit ng ibang server",
     "malformedCode": "Mukhang hindi ito invite code. Kopyahin ang buong code mula sa iyong mensahe sa Signal at i-paste itong muli.",
-    "tooManyAttempts": "Masyadong maraming pagsubok. Maghintay ng isang minuto, saka subukang muli."
+    "tooManyAttempts": "Masyadong maraming pagsubok. Maghintay ng isang minuto, saka subukang muli.",
+    "serverUnreachable": "Hindi ligtas na maabot ang server na ito, kaya hindi nasuri ang iyong invite code — maaaring valid pa ito. Suriin ang iyong koneksyon at subukang muli, at kumpirmahin ang address ng server sa taong nag-imbita sa iyo bago ito baguhin."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

@@ -115,8 +115,13 @@ function RootLayout() {
     }
   }, [serverAddressConfigured, isLoading, configLoading, isAuthenticated, location.pathname, navigate, needsBootstrap])
 
+  // Signed-in users are sent on from the signed-out entry points. For /onboarding
+  // this is a security boundary, not a convenience (#1166): redeeming an invite
+  // mints a new device key and stores it over this device's own, and the page can
+  // forget the server — neither is ever offered under a live session. Its route
+  // component also refuses to mount until this navigation lands.
   useEffect(() => {
-    if (!isLoading && isAuthenticated && (location.pathname === '/login')) {
+    if (!isLoading && isAuthenticated && (location.pathname === '/login' || location.pathname === '/onboarding')) {
       navigate({ to: profileCompleted ? '/' : '/profile-setup' })
     }
   }, [isLoading, isAuthenticated, location.pathname, navigate, profileCompleted])

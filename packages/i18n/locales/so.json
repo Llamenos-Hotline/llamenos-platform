@@ -913,7 +913,8 @@
     "codeSentTo": "Koodhkaaga martiqaadda waxaa loo diri doonaa server-kan:",
     "useDifferentServer": "Isticmaal server kale",
     "malformedCode": "Taasi uma eka koodh martiqaad. Koobiyee koodhka oo dhan oo ka yimid fariintaada Signal, kadibna mar kale dheji.",
-    "tooManyAttempts": "Isku day aad u badan. Sug hal daqiiqo, kadibna isku day mar kale."
+    "tooManyAttempts": "Isku day aad u badan. Sug hal daqiiqo, kadibna isku day mar kale.",
+    "serverUnreachable": "Server-kan si ammaan ah looma gaari karin, sidaa darteed koodhkaaga martiqaadka lama hubin — weli wuu ansax noqon karaa. Hubi xiriirkaaga oo isku day mar kale, oo xaqiiji cinwaanka server-ka qofka ku martiqaaday ka hor intaadan beddelin."
   },
   "panicWipe": {
     "confirm": "Tirtir Dhammaan Xogta",

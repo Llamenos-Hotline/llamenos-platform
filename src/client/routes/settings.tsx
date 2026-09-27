@@ -10,14 +10,14 @@ import {
   getMyErasureRequest,
   createMyErasureRequest,
   cancelMyErasureRequest,
-  setActiveHub,
 } from '@/lib/api'
 import type { ErasureRequest } from '@protocol/schemas'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
 import { supportsInAppAudio } from '@/lib/in-app-audio'
 import { Settings2, Mic, Bell, User, Globe, Fingerprint, KeyRound, Trash2, Plus, Phone, Monitor, PhoneCall, Smartphone, Loader2, CheckCircle2, Bug, Send, MessageSquare, LogOut, Lock, AlertTriangle, Clock, Server } from 'lucide-react'
-import { isPackagedTauri, getApiBase, resetApiBase, stagePendingServerAddress } from '@/lib/api-config'
+import { isPackagedTauri, getApiBase } from '@/lib/api-config'
+import { leaveServer } from '@/lib/server-switch'
 import { ServerAddressForm } from '@/components/setup/ServerAddressForm'
 import { isWebAuthnAvailable, registerCredential, listCredentials, deleteCredential } from '@/lib/webauthn'
 import type { WebAuthnCredentialInfo } from '@protocol/schemas/webauthn'
@@ -544,17 +544,12 @@ function SettingsPage() {
             verify={false}
             submitLabel={t('serverAddress.saveAndReconnect')}
             onConfirm={async (origin) => {
-              // Changing servers ends the session bound to the old one and forgets
-              // the old address; the reload lands on the first-run screen, which
-              // verifies the staged address (health probes are refused while any
-              // server is configured) and only then persists it. Every provider
-              // (auth, config, relay) re-inits against the new backend.
-              stagePendingServerAddress(origin)
-              sessionStorage.removeItem('llamenos-session-token')
-              keyManager.lock()
-              setActiveHub(null)
-              await resetApiBase()
-              window.location.reload()
+              // Ends the session bound to the old server and forgets it; the reload
+              // lands on the first-run screen, which verifies this address (health
+              // probes are refused while any server is configured) and only then
+              // persists it. Every provider (auth, config, relay) re-inits against
+              // the new backend.
+              await leaveServer(origin)
             }}
           />
         </SettingsSection>

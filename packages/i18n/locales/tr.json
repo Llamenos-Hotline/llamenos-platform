@@ -913,7 +913,8 @@
     "codeSentTo": "Davet kodunuz bu sunucuya gönderilecek:",
     "useDifferentServer": "Farklı bir sunucu kullan",
     "malformedCode": "Bu bir davet koduna benzemiyor. Kodun tamamını Signal mesajınızdan kopyalayıp yeniden yapıştırın.",
-    "tooManyAttempts": "Çok fazla deneme. Bir dakika bekleyip tekrar deneyin."
+    "tooManyAttempts": "Çok fazla deneme. Bir dakika bekleyip tekrar deneyin.",
+    "serverUnreachable": "Bu sunucuya güvenli şekilde ulaşılamadı, bu yüzden davet kodunuz kontrol edilmedi — hâlâ geçerli olabilir. Bağlantınızı kontrol edip tekrar deneyin ve sunucu adresini değiştirmeden önce sizi davet eden kişiyle doğrulayın."
   },
   "panicWipe": {
     "confirm": "Tüm Verileri Sil",

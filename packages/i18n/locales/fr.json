@@ -2785,7 +2785,8 @@
     "codeSentTo": "Votre code d'invitation sera envoyé à ce serveur :",
     "useDifferentServer": "Utiliser un autre serveur",
     "malformedCode": "Ceci ne ressemble pas à un code d'invitation. Copiez le code complet depuis votre message Signal et collez-le à nouveau.",
-    "tooManyAttempts": "Trop de tentatives. Attendez une minute, puis réessayez."
+    "tooManyAttempts": "Trop de tentatives. Attendez une minute, puis réessayez.",
+    "serverUnreachable": "Impossible de joindre ce serveur de façon sécurisée : votre code d'invitation n'a donc pas été vérifié — il est peut-être toujours valide. Vérifiez votre connexion et réessayez, et confirmez l'adresse du serveur avec la personne qui vous a invité avant de la modifier."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

@@ -2785,7 +2785,8 @@
     "codeSentTo": "Ihr Einladungscode wird an diesen Server gesendet:",
     "useDifferentServer": "Anderen Server verwenden",
     "malformedCode": "Das sieht nicht wie ein Einladungscode aus. Kopieren Sie den vollständigen Code aus Ihrer Signal-Nachricht und fügen Sie ihn erneut ein.",
-    "tooManyAttempts": "Zu viele Versuche. Warten Sie eine Minute und versuchen Sie es dann erneut."
+    "tooManyAttempts": "Zu viele Versuche. Warten Sie eine Minute und versuchen Sie es dann erneut.",
+    "serverUnreachable": "Dieser Server war nicht sicher erreichbar, daher wurde Ihr Einladungscode nicht geprüft – er ist möglicherweise weiterhin gültig. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut, und bestätigen Sie die Serveradresse mit der Person, die Sie eingeladen hat, bevor Sie sie ändern."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

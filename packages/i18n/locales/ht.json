@@ -2785,7 +2785,8 @@
     "codeSentTo": "Kòd envitasyon ou a pral voye bay sèvè sa a:",
     "useDifferentServer": "Sèvi ak yon lòt sèvè",
     "malformedCode": "Sa pa sanble ak yon kòd envitasyon. Kopye tout kòd la nan mesaj Signal ou a epi kole l ankò.",
-    "tooManyAttempts": "Twòp esè. Tann yon minit, epi eseye ankò."
+    "tooManyAttempts": "Twòp esè. Tann yon minit, epi eseye ankò.",
+    "serverUnreachable": "Nou pa t ka jwenn sèvè sa a an sekirite, kidonk kòd envitasyon ou an pa t verifye — li ka toujou valab. Tcheke koneksyon ou epi eseye ankò, epi konfime adrès sèvè a ak moun ki envite w la anvan ou chanje l."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

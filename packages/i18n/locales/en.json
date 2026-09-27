@@ -2721,7 +2721,8 @@
     "codeSentTo": "Your invite code will be sent to this server:",
     "useDifferentServer": "Use a different server",
     "malformedCode": "That doesn't look like an invite code. Copy the whole code from your Signal message and paste it again.",
-    "tooManyAttempts": "Too many attempts. Wait a minute, then try again."
+    "tooManyAttempts": "Too many attempts. Wait a minute, then try again.",
+    "serverUnreachable": "This server could not be reached securely, so your invite code was not checked — it may still be valid. Check your connection and try again, and confirm the server address with the person who invited you before changing it."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

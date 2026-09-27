@@ -913,7 +913,8 @@
     "codeSentTo": "Tu código de invitación se enviará a este servidor:",
     "useDifferentServer": "Usar otro servidor",
     "malformedCode": "Eso no parece un código de invitación. Copia el código completo de tu mensaje de Signal y vuelve a pegarlo.",
-    "tooManyAttempts": "Demasiados intentos. Espera un minuto y vuelve a intentarlo."
+    "tooManyAttempts": "Demasiados intentos. Espera un minuto y vuelve a intentarlo.",
+    "serverUnreachable": "No se pudo conectar de forma segura con este servidor, así que tu código de invitación no se comprobó; puede que siga siendo válido. Revisa tu conexión y vuelve a intentarlo, y confirma la dirección del servidor con la persona que te invitó antes de cambiarla."
   },
   "panicWipe": {
     "confirm": "Keyujux Ronojel Etamab'al",

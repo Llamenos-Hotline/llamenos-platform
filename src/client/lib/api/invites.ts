@@ -30,6 +30,10 @@ export async function validateInvite(code: string) {
     // The route is rate-limited per client to stop code enumeration; its 429
     // body has no `valid` field, and must not read as "invalid code".
     if (res.status === 429) return { valid: false, error: 'rate_limited' } as const
+    // Every answer about a code — `valid: false` included — is a 200. Anything
+    // else means the server never answered the question, which must not read as
+    // "invalid code" either.
+    if (!res.ok) throw new ApiError(res.status, await res.text())
     return res.json() as Promise<
       | { valid: true; name: string; roleIds?: string[] }
       | { valid: false; error?: string }

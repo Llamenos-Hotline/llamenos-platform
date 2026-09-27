@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { validateInvite, redeemInvite } from '@/lib/api'
-import { getApiBase, isAbsoluteUrl, isPackagedTauri, resetApiBase } from '@/lib/api-config'
+import { getApiBase, isAbsoluteUrl, isPackagedTauri } from '@/lib/api-config'
+import { leaveServer } from '@/lib/server-switch'
 import { INVITE_CODE_LENGTH, normalizeInviteCode } from '@/lib/invite-code'
 import { generateKeypairAndLoad, generateBackupFromState, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin } from '@/lib/key-manager'
@@ -21,14 +22,37 @@ import { Globe, KeyRound, ShieldCheck, ArrowRight, ArrowLeft, Check, Copy, Downl
 import { LogoMark } from '@/components/logo-mark'
 
 export const Route = createFileRoute('/onboarding')({
-  component: OnboardingPage,
+  component: OnboardingRoute,
 })
+
+/**
+ * Onboarding is for a device no one is signed in on (#1166): redeeming an invite
+ * mints a brand-new device key and stores it over whatever key this device
+ * holds, and the code screen can forget the server. __root.tsx sends a signed-in
+ * user on; until that navigation lands nothing here mounts, so none of the
+ * page's effects ever run under a live session.
+ */
+function OnboardingRoute() {
+  const { isAuthenticated } = useAuth()
+  return isAuthenticated ? null : <OnboardingPage />
+}
 
 type Step = 'code' | 'loading' | 'error' | 'welcome' | 'pin' | 'keypair' | 'backup' | 'done'
 
+/**
+ * Why the server did not accept a code. `unreachable`: no answer about the code
+ * arrived at all — a refused connection, a TLS pin mismatch or allowlist refusal
+ * in the Rust proxy, a timeout, or a reply that was not one. The code may be
+ * fine, so it is never reported as invalid.
+ */
+type InviteRefusal = 'expired' | 'already_used' | 'rate_limited' | 'invalid' | 'unreachable'
+
 type InviteCheck =
   | { ok: true; name: string; roleIds: string[] }
-  | { ok: false; reason: 'expired' | 'already_used' | 'rate_limited' | 'invalid' }
+  | { ok: false; reason: InviteRefusal }
+
+/** Why the entry screen is not moving on: a refusal, or `malformed` — never sent anywhere. */
+type CodeIssue = InviteRefusal | 'malformed'
 
 function OnboardingPage() {
   const { t, i18n } = useTranslation()
@@ -42,7 +66,7 @@ function OnboardingPage() {
   const [urlCode] = useState(() => new URLSearchParams(window.location.search).get('code'))
   const [inviteCode, setInviteCode] = useState('')
   const [codeInput, setCodeInput] = useState('')
-  const [codeError, setCodeError] = useState('')
+  const [codeIssue, setCodeIssue] = useState<CodeIssue | null>(null)
   const [checkingCode, setCheckingCode] = useState(false)
 
   const [step, setStep] = useState<Step>(() => (urlCode ? 'loading' : 'code'))
@@ -93,16 +117,18 @@ function OnboardingPage() {
       const reason = result.error
       return { ok: false, reason: reason === 'expired' || reason === 'already_used' || reason === 'rate_limited' ? reason : 'invalid' }
     } catch {
-      return { ok: false, reason: 'invalid' }
+      return { ok: false, reason: 'unreachable' }
     }
   }
 
-  function inviteErrorMessage(reason: Extract<InviteCheck, { ok: false }>['reason']): string {
+  function inviteErrorMessage(reason: CodeIssue): string {
     switch (reason) {
       case 'expired': return t('onboarding.expired')
       case 'already_used': return t('onboarding.alreadyUsed')
       case 'rate_limited': return t('onboarding.tooManyAttempts')
       case 'invalid': return t('onboarding.invalidCode')
+      case 'unreachable': return t('onboarding.serverUnreachable')
+      case 'malformed': return t('onboarding.malformedCode')
     }
   }
 
@@ -137,12 +163,12 @@ function OnboardingPage() {
   async function handleCodeSubmit(e: FormEvent) {
     e.preventDefault()
     if (checkingCode) return
-    setCodeError('')
+    setCodeIssue(null)
     // Trimmed and lowercased before anything else: a trailing newline from a
     // Signal copy must never surface as "invalid code".
     const code = normalizeInviteCode(codeInput)
     if (!code) {
-      setCodeError(t('onboarding.malformedCode'))
+      setCodeIssue('malformed')
       return
     }
     setCheckingCode(true)
@@ -151,16 +177,15 @@ function OnboardingPage() {
     if (result.ok) {
       acceptInvite(code, result)
     } else {
-      setCodeError(inviteErrorMessage(result.reason))
+      setCodeIssue(result.reason)
     }
   }
 
   async function handleChangeServer() {
     try {
-      // Same path as Settings → server connection: forget the address (behind
-      // the native confirmation), then reload into the first-run server screen.
-      await resetApiBase()
-      window.location.reload()
+      // The same teardown as Settings → server connection. The volunteer types
+      // the new address on the first-run screen, so none is handed over.
+      await leaveServer(null)
     } catch (err) {
       toast(err instanceof Error ? err.message : t('common.error'), 'error')
     }
@@ -289,7 +314,7 @@ function OnboardingPage() {
                   id="invite-code-input"
                   data-testid="invite-code-input"
                   value={codeInput}
-                  onChange={e => { setCodeInput(e.target.value); setCodeError('') }}
+                  onChange={e => { setCodeInput(e.target.value); setCodeIssue(null) }}
                   placeholder={t('onboarding.codePlaceholder')}
                   size={INVITE_CODE_LENGTH}
                   className="font-mono"
@@ -299,13 +324,13 @@ function OnboardingPage() {
                   autoCorrect="off"
                   spellCheck={false}
                   disabled={checkingCode}
-                  aria-invalid={!!codeError}
-                  aria-describedby={codeError ? 'invite-code-error' : undefined}
+                  aria-invalid={!!codeIssue}
+                  aria-describedby={codeIssue ? 'invite-code-error' : undefined}
                 />
               </div>
-              {codeError && (
-                <p id="invite-code-error" role="alert" data-testid="invite-code-error" className="text-sm text-destructive">
-                  {codeError}
+              {codeIssue && (
+                <p id="invite-code-error" role="alert" data-testid="invite-code-error" data-reason={codeIssue} className="text-sm text-destructive">
+                  {inviteErrorMessage(codeIssue)}
                 </p>
               )}
               <Button

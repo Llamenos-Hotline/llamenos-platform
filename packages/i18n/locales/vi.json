@@ -2785,7 +2785,8 @@
     "codeSentTo": "Mã mời của bạn sẽ được gửi đến máy chủ này:",
     "useDifferentServer": "Dùng máy chủ khác",
     "malformedCode": "Đây có vẻ không phải là mã mời. Hãy sao chép toàn bộ mã từ tin nhắn Signal của bạn và dán lại.",
-    "tooManyAttempts": "Quá nhiều lần thử. Hãy đợi một phút rồi thử lại."
+    "tooManyAttempts": "Quá nhiều lần thử. Hãy đợi một phút rồi thử lại.",
+    "serverUnreachable": "Không thể kết nối an toàn đến máy chủ này, nên mã mời của bạn chưa được kiểm tra — mã có thể vẫn còn hiệu lực. Hãy kiểm tra kết nối và thử lại, và xác nhận địa chỉ máy chủ với người đã mời bạn trước khi thay đổi."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {

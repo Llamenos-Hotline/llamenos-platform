@@ -2785,7 +2785,8 @@
     "codeSentTo": "Seu código de convite será enviado para este servidor:",
     "useDifferentServer": "Usar outro servidor",
     "malformedCode": "Isso não parece um código de convite. Copie o código completo da sua mensagem do Signal e cole novamente.",
-    "tooManyAttempts": "Tentativas demais. Aguarde um minuto e tente novamente."
+    "tooManyAttempts": "Tentativas demais. Aguarde um minuto e tente novamente.",
+    "serverUnreachable": "Não foi possível conectar com segurança a este servidor, então seu código de convite não foi verificado — ele ainda pode ser válido. Verifique sua conexão e tente novamente, e confirme o endereço do servidor com a pessoa que convidou você antes de alterá-lo."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
