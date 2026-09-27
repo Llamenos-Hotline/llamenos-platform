@@ -330,10 +330,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Warm runs measured 2.5-5.6 min on the old self-hosted runners; a cold
-    # hosted run (no rust-cache hit yet) compiles every dependency from
-    # scratch and can pass 15 min, so the ceiling is 30.
-    timeout-minutes: 30
+    # Measured on ubuntu-latest: 3.4 min with no rust-cache hit (the test
+    # run itself is ~2.5 min of that). Self-hosted, warm: 2.5-5.6 min.
+    timeout-minutes: 15
     env:
       # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
       # targets (mobile, wasm, macOS, Windows) that rustup would install on

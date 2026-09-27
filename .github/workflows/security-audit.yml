@@ -242,10 +242,9 @@ jobs:
     # BuildKit's GitHub Actions cache backend (below) via a
     # docker/setup-buildx-action builder.
     runs-on: ubuntu-latest
-    # Warm runs measured 1.7-6.2 min per leg on the old self-hosted runners.
-    # A cold leg (empty gha cache) rebuilds every stage — the `app` target
-    # compiles packages/crypto in release mode — so the ceiling is 30.
-    timeout-minutes: 30
+    # Measured on ubuntu-latest per leg: 4.6-5.7 min with an empty gha
+    # cache, 1.0-1.6 min warm. Self-hosted, warm: 1.7-6.2 min.
+    timeout-minutes: 20
     env:
       SCAN_IMAGE: llamenos-scan:${{ matrix.image.name }}
 
