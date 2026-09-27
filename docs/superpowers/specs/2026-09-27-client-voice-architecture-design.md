@@ -57,14 +57,19 @@ function generateTwilioSipParams(config, _identity): SipConnectionParams {
 This is a live security defect independent of everything else in this document, and it should be
 filed as its own issue rather than waiting on the architecture.
 
-### 1.2 The published contract describes none of the four shapes in use
+### 1.2 Three disagreeing shapes, and an endpoint documented nowhere
 
 | Source | Shape |
 |---|---|
 | `apps/worker/telephony/sip-tokens.ts:7-17` (runtime) | nested `{ provider, sip: { domain, transport, username, password, iceServers: {url, username?, credential?}[], mediaEncryption } }` |
 | `packages/protocol/schemas/webrtc.ts:12-19` (OpenAPI, via `resolver()` at `routes/webrtc.ts:83`) | flat, `iceServers: {urls: string[]}[]`, field named `encryption`, no `provider` |
 | `LinphoneService.kt:21-27` / `.swift:40-46` (clients) | flat, plus a **required** `expiry: Int` the server never sends, no `iceServers`, no `mediaEncryption` |
-| `docs/protocol/PROTOCOL.md:2104` (§4.18) | `{ token, provider, identity }` — a fourth shape entirely |
+
+And `docs/protocol/PROTOCOL.md` **does not document `sip-token` at all** [V]. Its §4.18 covers
+`webrtc-token`, correctly — the shape there matches the schema it was generated against. So the
+credential endpoint that both mobile clients depend on has three disagreeing implementations and
+no entry in the interoperability specification. The deliverable is therefore to **add** a section,
+not to rewrite §4.18.
 
 Even with the path fixed, iOS's `Decodable` decode fails: `expiry` is non-optional and absent. And
 `APIService.swift:180` sets `keyDecodingStrategy = .convertFromSnakeCase` globally against a
@@ -74,24 +79,45 @@ The route is `GET /api/telephony/sip-token` (`app.ts:231` → `routes/webrtc.ts:
 `GET /api/hubs/{hubId}/telephony/sip-token` (`APIService.swift:460`), which does not exist; the 404
 is swallowed by `try?` at `ShiftsViewModel.swift:139`. [V]
 
-### 1.3 The desktop webview path is foreclosed, not merely unfinished
+### 1.3 What the desktop CSP does and does not foreclose
 
-`apps/desktop/tauri.conf.json:15-28` sets `"connect-src": "ipc: http://ipc.localhost"`. Nothing
-else. `apps/desktop/src/net.rs:1-29` states the intent: the webview cannot open a raw `fetch` or
+This needs stating precisely, because an imprecise version of it would justify a much larger
+desktop rewrite than the evidence supports.
+
+`apps/desktop/tauri.conf.json` sets `"connect-src": "ipc: http://ipc.localhost"` and nothing else.
+`apps/desktop/src/net.rs:1-29` states the intent: the webview cannot open a raw `fetch` or
 `WebSocket` to any remote host; every byte of egress goes through `net_fetch` / `net_ws_connect`,
 is checked against exactly one configured origin (`check_http_target`, `net.rs:166`;
 `check_ws_target`, `net.rs:178`), and rides a TLS config whose SPKI pins were captured at
 configuration time (`cert_pin.rs`, `PinningVerifier`). Redirects are never followed. A request with
 no pins installed hard-fails. [V]
 
-A webview-hosted voice SDK — Twilio's or any other — needs its own signalling socket to its own
-host. Under that CSP it cannot have one. **[I, strong]** This hardening (#739, #775) landed
-*after* the Twilio SDK was chosen in Feb 2026, so nobody made a wrong call; the ground moved.
+**What this forecloses:** a third-party voice SDK that opens *its own* signalling socket to *its
+own* host. Twilio's Voice SDK does exactly that **[D]**, so it cannot work in a packaged build.
+**[I, strong — inferred from the CSP and the SDK's documented connectivity requirements, and not
+yet tested against a packaged build.]** This hardening (#739, #775) landed *after* the Twilio SDK
+was chosen in Feb 2026, so nobody made a wrong call; the ground moved. The failure mode is nasty:
+`net.rs` scopes its claim to *a packaged build's CSP*, so an in-webview stack can appear to work
+under `tauri:dev` and be dead in the shipped binary.
 
-The failure mode is nasty: `net.rs` scopes its claim to *a packaged build's CSP*, so an
-in-webview stack can appear to work under `tauri:dev` and be dead in the shipped binary.
+**What this does not foreclose — and this is the correction that sizes the desktop work:**
 
-**Confirmed, and the design follows it: desktop voice lives in the Rust shell.**
+- **Talking to our own backend.** That egress already goes through Rust. `src/client/lib/net.ts`
+  wraps `netWsConnect`, and the app's real-time channel rides it today.
+- **Call signalling, call events and hub attribution.** `src/client/lib/hooks.ts:58` already
+  handles `call:ring` over that channel, and `hooks-multi-hub.test.tsx:98` already asserts that a
+  ring relayed from a **non-active** hub is handled correctly. This works, and it is tested. [V]
+- **Microphone capture.** `getUserMedia` opens a local device, not a network socket. CSP does not
+  apply. The existing client-side transcription pipeline depends on this and keeps working (§10).
+
+**So the desktop change is narrower than "move voice into the Rust shell."** The shell must own
+exactly two things the webview cannot do: **SIP registration** and the **RTP media stream**. It
+must not own call state, signalling, hub attribution or UI — those already work in the webview,
+are already multi-hub correct, and are already covered by tests. The webview gains a narrow IPC
+surface for answer / decline / hang-up / mute plus media and registration state, in the same shape
+`platform.ts` already uses for crypto.
+
+That is a materially smaller change, and it is the one the design takes.
 
 ---
 
@@ -166,10 +192,17 @@ integration, background-execution survival. Desktop has none of those concepts. 
 mobile SDKs with a UniFFI crate means reimplementing the platform glue **and** maintaining an FFI
 surface, for no user-visible gain.
 
-Note honestly: this repo does not currently *use* that glue either — there is no
-`CXProvider`, `PKPushRegistry`, `ConnectionService` or `AudioManager` code on either platform
-**[V]**, and both set `callKitEnabled = true` with nothing behind it. But the glue is the reason to
-keep the SDKs when that work is done, and that work must be done before mobile is shippable.
+Two honest weaknesses in that argument, recorded rather than hidden:
+
+- **The glue does not exist here yet.** There is no `CXProvider`, `PKPushRegistry`,
+  `ConnectionService` or `AudioManager` code on either platform **[V]**, and both set
+  `callKitEnabled = true` with nothing behind it. So the argument is "keep the SDKs because
+  reimplementing glue you have not written would be expensive." That is still true — it is work
+  either way, and the SDK path is the cheaper one — but it is weaker than it sounds, and if Phase 4
+  finds the SDK glue unusable, option (B) should be reconsidered rather than assumed dead.
+- **The prebuilt-binary cost applies to the chosen path too.** Desktop consumes prebuilt
+  liblinphone artifacts (§14), so "it ships as per-platform binaries" is not a cost that separates
+  (A) from (B). What separates them is the UniFFI layer and the platform glue, not the packaging.
 
 **(C) A Rust wrapper generated upstream.** liblinphone's wrappers are generated from doxygen XML by
 `genapixml.py` → `abstractapi.py` → a per-language `genwrapper.py` plus Mustache templates, which
@@ -274,29 +307,42 @@ House mechanics, verified rather than assumed [V]:
   `import * as schemaExports from '../schemas'` and takes every export whose name ends in `Schema`,
   whose value is a `ZodType`, and which is not in `EXCLUDED_SCHEMAS`. Adding a schema file means
   creating it and adding one `export * from './voice'` line to `schemas/index.ts`. Nothing else.
-- **Bare enum exports are excluded by convention.** `EXCLUDED_SCHEMAS` already opts out primitive
-  validators and "bare enum building blocks" because quicktype does not represent them usefully
-  standalone. The four enums below are therefore either inlined at their use sites or added to
-  `EXCLUDED_SCHEMAS` and consumed only through the object schemas that embed them. Decide once,
-  in the plan, and be consistent — this is the kind of detail that produces a confusing Swift
-  diff months later.
+- **Bare enum exports go in `EXCLUDED_SCHEMAS`.** The registry already opts out primitive
+  validators and bare enum building blocks because quicktype renders them poorly standalone.
+  Excluding them does not remove the values from the generated output — they are still emitted as
+  nested enums wherever an object schema embeds them, which is everywhere they are used. This is a
+  decision, not an option; the plan implements it.
 - `.optional().default(v)`, never bare `.default(v)`. IDs are regex-validated strings, not Zod
-  brands — reuse `pubkeySchema` and `uuidSchema` from `schemas/common.ts`.
+  brands — reuse `pubkeySchema` and `uuidSchema` from `schemas/common.ts`. The sketch below is
+  written that way; where it shows `z.string()` for an identifier, read `uuidSchema`.
 - The repo is inconsistent about `from 'zod'` versus `from 'zod/v4'` across schema files. Pick
   `zod/v4` for the new file to match the more recent ones, and do not churn the others.
 - Generated output is gitignored and built as a prerequisite; `bun run codegen:check` gates it.
 
+Three field-level decisions the sketch encodes, called out because each has a plausible wrong
+reading:
+
+- **`expiresAt` is the credential's lifetime, not the SIP binding's.** The binding's expiry is set
+  by the registrar (§8) and negotiated in the REGISTER exchange. A client must not wire `expiresAt`
+  into `AccountParams.expires`; it is when to re-mint over the API.
+- **`transport` is chosen by the server, per deployment**, not by the client per platform. It drops
+  `tcp` and `udp`, which today's runtime type permits — a deliberate narrowing, because an
+  unencrypted SIP transport carrying registration credentials is not a configuration this product
+  should be able to express.
+- **`mediaEncryption` omits `none` and `zrtp`.** §9 rejects both. A value the client must refuse at
+  runtime does not belong in the type; `srtp` remains only for legacy self-hosted trunks.
+
 ```ts
 // Where the client registers. One realm, ours, regardless of hub provider.
 export const voiceRegistrationCredentialSchema = z.object({
-  hubId: z.string(),
+  hubId: uuidSchema,
   realm: z.string(),          // SIP realm — needed for digest auth; absent today
   domain: z.string(),
   transport: z.enum(['tls', 'wss']),
   username: z.string(),       // per-device, not per-hub
   password: z.string(),
-  expiresAt: z.string(),      // RFC 3339. Replaces the dead `expiry: Int`.
-  mediaEncryption: z.enum(['dtls-srtp', 'srtp', 'zrtp', 'none']),
+  expiresAt: z.string(),      // RFC 3339. When to re-mint — not the binding expiry.
+  mediaEncryption: z.enum(['dtls-srtp', 'srtp']),
   iceServers: z.array(z.object({
     urls: z.array(z.string()),
     username: z.string().optional(),
@@ -350,12 +396,12 @@ export const voiceCapabilitiesSchema = z.object({
 // logical fields with two spellings. One schema ends that.
 export const voiceCallHandoffSchema = z.object({
   callId: z.string(),
-  hubId: z.string(),
+  hubId: uuidSchema,
 })
 
 export const voiceCallSnapshotSchema = z.object({
   callId: z.string(),
-  hubId: z.string(),
+  hubId: uuidSchema,
   state: voiceCallStateSchema,
   muted: z.boolean().optional().default(false),
   audioRoute: audioRouteSchema.optional().default('default'),
@@ -368,19 +414,31 @@ foreground-service and background-execution lifecycle, push transport (UnifiedPu
 APNs on iOS, none on desktop), notification channels, permission prompts, and iOS's `#if canImport`
 conditional compilation.
 
-### One route, returning every member hub's registration
+### One route, returning every eligible hub's registration
 
 `/api/telephony/sip-token` is mounted on the authenticated router, not the hub-scoped one, and
 there is no hub-scoped variant [V]. iOS calls a hub-scoped path that does not exist and swallows
 the 404.
 
 **The fix is not to create the hub-scoped route.** It is to keep one instance-level endpoint that
-returns `voiceRegistrationSetSchema` — the array of every member hub's credential — because that is
-what the multi-hub axiom actually requires. A hub-scoped endpoint invites exactly the bug iOS has
-today: fetch for the active hub, register one account, miss calls from every other hub. One call,
-every registration, and a client that registers fewer than it received is visibly wrong.
+returns `voiceRegistrationSetSchema` — an array — because that is what the multi-hub axiom
+requires. A hub-scoped endpoint invites exactly the bug iOS has today: fetch for the active hub,
+register one account, miss calls from every other hub.
 
-**Consequences to carry through:** `docs/protocol/PROTOCOL.md` §4.18 is rewritten to match; the
+**Which hubs are in the array: every hub the volunteer is currently on shift for.** Not every hub
+they are a member of, and emphatically not just the active one. This reconciles two pulls that
+would otherwise contradict — §12's axiom says *all member hubs, never only the active one*, while
+§8 says *minimise the registrar's population*. On-shift membership satisfies both: it is always
+potentially more than one, and it excludes hubs where parallel ringing would not have selected
+them anyway (`ringing.ts` filters to on-shift volunteers before anything else [V]). A volunteer
+clocked in for three hubs holds three registrations simultaneously.
+
+The client re-fetches the whole set whenever shift state changes, and applies it wholesale: the
+returned array is the complete desired state, so an entry disappearing is a deregistration. That
+makes revocation expressible as an empty array and removes the need for a separate teardown call.
+
+**Consequences to carry through:** `docs/protocol/PROTOCOL.md` gains a new section for this
+endpoint, which it has never documented (§1.2) — §4.18 describes `webrtc-token` and stays as it is; the
 hand-written `SipTokenResponse` structs at `LinphoneService.kt:21-27` and `.swift:40-46` are
 deleted in favour of generated types (Android via `ProtocolTypeAliases.kt`, iOS by removing the
 struct); `WebRtcState` in `src/client/lib/webrtc.ts:16` is replaced by the generated
@@ -393,36 +451,44 @@ consumed only by keyboard shortcuts, is folded into the same store.
 
 ### Minting
 
-One credential **per device per hub**, derived from the device identity that already exists — the
-Ed25519 device key authorised through the user's sigchain — not from a separate password the user
-never sees.
+One credential **per device per on-shift hub**. The server **generates** the secret — fresh
+randomness — and **binds** it to the requesting device: the Ed25519 device identity already
+authorised through the user's sigchain.
+
+That word matters, and an earlier draft of this spec got it wrong. The credential is *not derived
+from* the device key: the server does not hold the device private key, and the schema ships
+`password` server → client, which only makes sense for server-generated randomness. Binding, not
+derivation, is also what was actually wanted — the property being bought is *this credential dies
+when that device is revoked*, which is a lifecycle relationship, not a cryptographic one.
+
+**It follows that no new crypto label is needed.** `crypto-labels.json` holds 95 labels and none
+covers SIP or voice transport [V]; under a derivation design that would have been a gap to fill.
+Under this one it is not, and a future reader should not add one reflexively. There is no key
+derivation in this path.
 
 The route already computes an identity and throws it away: `routes/webrtc.ts` builds
 `` `vol_${pubkey.slice(0, 16)}` ``, passes it to `generateSipParams`, and every one of the five
-generators takes it as `_identity` and ignores it [V]. Making that identity real is most of the
-minting work.
+generators takes it as `_identity` and ignores it [V]. Making that identity real, and per-device
+rather than per-hub, is most of the minting work.
 
-Digest authentication needs a `realm` and it needs the server to hold something it can verify
-against. Store **HA1** (a hash of `username:realm:password`, which
-`linphone_factory_compute_ha1_for_algorithm` also computes client-side **[D]**) rather than a
-recoverable password, so reading the registrar's credential store does not yield credentials usable
-elsewhere.
+Digest authentication needs a `realm` and the server must hold something it can verify against.
+Store **HA1** — a hash of `username:realm:password` — rather than the password itself.
 
-**Derivation needs a domain-separation label.** `packages/protocol/crypto-labels.json` holds 95
-labels today and **none of them covers SIP or voice transport** [V]. Deriving a per-device SIP
-secret from device key material without one would be a raw-string crypto context, which this
-codebase forbids. Add one label, in the source of truth, generated to all three platforms, with
-`packages/crypto/src/labels.rs`'s `LABEL_REGISTRY` index order kept in step.
+**Be precise about what that buys, because it is easy to overstate.** HA1 *is* password-equivalent
+for digest authentication **against that realm**, which is the realm that matters here. What it
+buys is narrower and still worth having: the stored value is useless anywhere else, and it is not
+a user-chosen secret that might be reused. It is not a reason to relax anything about where the
+store lives — which is the encrypted tier, and which §8 covers.
 
-Short `expiresAt`. The client re-mints over the authenticated API before expiry — which is the
-re-registration timer that does not exist anywhere today [V].
+Short `expiresAt`. The client re-mints over the authenticated API before expiry — the
+re-registration timer that does not exist anywhere today [V]. Two things can trigger a re-mint:
+expiry approaching, and a shift-state change. **Shift state wins**: a set fetched after a shift
+change is authoritative and replaces whatever the expiry timer would have produced, because it is
+the fresher statement of which hubs are eligible.
 
-**Clock-in is the natural lifecycle hook and it is currently free of this concern.**
-`POST /api/shifts/clock-in` does exactly one upsert into `activeShifts` and emits an audit event;
-`clock-out` does one delete. Nothing SIP-related is minted or torn down at either [V]. Binding
-credential issuance to clock-in and teardown to clock-out keeps the registrar's population equal
-to the population that should be receiving calls, which is the smallest that population can be —
-and §8 is about keeping it small.
+**Clock-in and clock-out are the lifecycle hooks, and they are currently free of this concern.**
+`POST /api/shifts/clock-in` does one upsert into `activeShifts` and emits an audit event;
+`clock-out` does one delete. Nothing SIP-related is minted or torn down at either [V].
 
 ### Revocation — the requirement that decides whether this is safe
 
@@ -445,8 +511,19 @@ existing `PBX_TYPE` switch [V]. Revocation is a new method on an existing client
 an existing channel, not a new integration. This is the single largest piece of unexpected good
 news in the survey.
 
-Triggers: volunteer removed from a hub, volunteer removed entirely, device revoked in the sigchain,
-hub deleted, clock-out. Note the codebase already has a working, atomic **device** revocation path
+**Who performs it: the worker, through `sip-bridge`.** The JSONRPC credentials belong to the
+proxy's management interface, `sip-bridge` already holds a client for them, and keeping that
+credential out of the application server is the same separation the bridge already provides for
+PBX control. The worker issues a revoke command; the bridge translates it.
+
+**Distinguish routine churn from security revocation**, because conflating them produces either
+over-reaction or under-reaction. *Churn* — clock-out, a shift ending — removes the binding and
+lets the credential lapse; it needs no audit alarm and no key rotation. *Security revocation* —
+volunteer removed, device revoked in the sigchain, hub deleted — invalidates the credential
+immediately, deletes every binding for that device, and is audited. Both call the same two
+mechanisms; only the trigger, the urgency and the audit trail differ.
+
+Note the codebase already has a working, atomic **device** revocation path
 (`services/identity.ts`, `routes/devices.ts`) that appends a sigchain link and deletes the device;
 SIP revocation hangs off that rather than becoming a parallel mechanism. There is **no** SIP
 revocation or rotation anywhere today — a grep for it returns zero matches [V].
@@ -486,6 +563,10 @@ Requirements, all of which must be **asserted by a guard, not merely configured*
   tier, are the only safe options.
 - **The registrar and the relay run on the encrypted tier**, with everything else that accumulates
   volunteer metadata.
+- **The credential store lives on the encrypted tier too, and out of the application database.**
+  §7 stores HA1 rather than passwords, but HA1 is realm-equivalent to a password, so it inherits
+  the same placement rule as the location table — and the same reason: the application database is
+  dumped whole, with the exclude list empty and backup encryption unset by default [V].
 - **Source IPs are stripped from logs**, at application level and at the ingress layer. There is a
   precedent in this repo to copy verbatim rather than reinvent, and it has five properties worth
   naming because a guard missing any one of them is decorative [V]:
@@ -537,9 +618,14 @@ Requirements, all of which must be **asserted by a guard, not merely configured*
   handshake." Same claim, fewer moving parts.
 
 `mediaEncryption` is already returned per provider by the server and ignored by both clients, which
-hardcode `MediaEncryption.SRTP` mandatory [V]. The contract keeps the field, the server defaults it
-to `dtls-srtp` for our own realm, and clients **honour it** instead of hardcoding — with `none`
-refused by the client rather than accepted.
+hardcode `MediaEncryption.SRTP` mandatory [V]. Two changes, and they are different things:
+
+- **The value is carried, not hardcoded.** The server states it per credential; clients honour what
+  they are given rather than assuming.
+- **Encryption itself is mandatory, unconditionally.** Whatever value arrives, the client sets the
+  SDK's "media encryption mandatory" flag, so an unencrypted media path is never negotiated as a
+  fallback. §6 makes `none` unrepresentable in the type, so the two statements cannot conflict:
+  the field selects *which* encryption, never *whether*.
 
 `packages/crypto/src/sframe.rs` and the exposed `sframe_derive_key` IPC command stay. They are
 correct code for a volunteer-to-volunteer path where a forwarding intermediary would actually
@@ -614,12 +700,40 @@ not picking up — and that is the failure this design must not ship with, becau
 both sides: the volunteer sees nothing and the caller waits.
 
 An unregistered volunteer must be skipped so the caller reaches someone who can answer, and the
-skip must be visible to admins.
+skip must be recorded — as an audit event on the call (`callRoutingSkippedUnregistered`, carrying
+the call id, the hub and the volunteer, in the admin-only audit log that already exists), and as a
+count on the call record so an admin reviewing an unanswered call can see that three of five
+eligible volunteers had no reachable endpoint. Not a new dashboard; an existing surface told the
+truth.
 
 Where that fact comes from matters for §8: **ask the registrar, do not build a second store.**
 Reachability is a live query against the existing binding table over the JSONRPC channel that
 revocation already uses, not a client-reported presence record accumulated in the application
-database. One metadata store, not two.
+database. One metadata store, not two. **Query once per call, for the whole candidate set** — a
+single batched lookup, not one round trip per volunteer. Ring setup is latency-critical and a
+per-candidate query puts an order of magnitude into the path for no benefit.
+
+### When the reachability query itself fails
+
+This is the part an earlier draft left unsaid, and leaving it unsaid is worse than choosing wrong.
+
+**Reachability fails open: if the query errors or times out, ring every eligible volunteer.**
+
+That looks like it contradicts a section titled "fail-closed", so the distinction has to be
+explicit: **fail-closed governs credentials and media** — never fall back to an unencrypted path,
+never accept a credential that should have been revoked, never silently register somewhere else.
+**Routing fails open** — never drop a caller because an optimisation was unavailable. The cost of
+failing open is some wasted INVITEs to endpoints that will not answer, which is what happens today
+on every call. The cost of failing closed is a crisis call that rings nobody. Those are not
+comparable.
+
+One concrete reason this matters more than it looks: §8 mandates memory-only location storage, so
+**a registrar restart empties the binding table**. Every volunteer reads as unreachable for as long
+as it takes them to re-register. Under fail-closed routing, a registrar restart is a total outage
+of the hotline. Under fail-open it is a brief period of behaving exactly as the system does today.
+
+The query failing must still be loud: an admin alert, and a health-check signal, because a
+persistently failing reachability query means the skip logic has silently stopped working.
 
 One related observation worth carrying into the plan: `startParallelRinging` selects from
 `services.shifts.getCurrentVolunteers(hubId)` — the *schedule* roster — and never consults the
@@ -627,9 +741,14 @@ One related observation worth carrying into the plan: `startParallelRinging` sel
 state and ring eligibility are derived from two different sources, and they can disagree. Decide
 which is authoritative before building either.
 
-**Self-hosters without a relay lose in-app audio, and that is acceptable** — six of eight providers
-have none today — provided it degrades visibly, with `VoiceCapabilities.inAppAudio = false` and UI
-that says why.
+**A deployment with no relay degrades for some volunteers, not all** — and an earlier draft
+overstated this. By §10's own logic the media node terminates every call anyway; a relay only adds
+a hop for clients that cannot reach it directly. So *no relay* means volunteers on networks that
+block outbound UDP lose in-app audio while everyone else keeps it. That is a per-volunteer,
+per-network condition, which means `VoiceCapabilities.inAppAudio` cannot be answered by deployment
+configuration alone — the client discovers it when ICE fails, and reports
+`registrar-unreachable` or a media-path failure with UI that says why. A self-hoster who runs no
+relay should be told, in the admin UI, that some volunteers will be affected.
 
 **Silent-catch removal is part of this work, not a cleanup afterwards.** `LinphoneService.kt`
 swallows every exception in both `initialize()` and `registerHubAccount()`; iOS swallows the throw
@@ -643,9 +762,12 @@ silent catches are the reason nobody noticed that registration has never worked.
 The axiom is non-negotiable: a volunteer in several hubs receives calls from all of them regardless
 of which is active in the UI.
 
-- **Register every member hub, not the active one.** iOS registers only `hubContext.activeHubId`
-  (`ShiftsViewModel.swift:139`) [V]. The contract makes this structural: registrations are an
-  **array**, so a single-hub implementation does not type-check as a complete one.
+- **Register every eligible hub, not the active one.** iOS registers only `hubContext.activeHubId`
+  (`ShiftsViewModel.swift:139`) [V]. The contract makes this *testable*: registrations are an
+  **array**, so "the number of accounts registered equals the number returned" is an assertion a
+  test can make. It does not make a single-hub implementation fail to compile — reading
+  `registrations[0]` type-checks fine — and the spec should not pretend otherwise. The guarantee
+  comes from the test, not the type.
 - **`setActiveHub` moves off the ring event.** Both platforms call it from `IncomingReceived`
   (`LinphoneService.kt:111`, `.swift:160`) — the *ring*, not the answer. `CLAUDE.md` and
   `PROTOCOL.md` §5.5 permit the switch only on an explicit notification tap or the app-unlocked
@@ -676,7 +798,11 @@ catch**, never by reading its configuration.
 | Desktop IPC boundary stays consistent across all four layers | the existing static test already enforces `lib.rs` / `isolation/index.html` / `platform.ts` / `tests/mocks/tauri-core.ts` agreement — new voice commands must be added to all four or it fails | `src/client/lib/desktop-ipc-boundary.test.ts` |
 | Desktop call-state UI | Playwright against the mocked IPC layer, driving emitted voice events the way `emitNetWsEvent` drives `net-ws:<id>` | `tests/` |
 | Contract agreement | codegen + typecheck on all three platforms; the hand-written structs are gone, so drift cannot recur silently | CI |
-| One answered call with real audio | manual, on real hardware, per platform. **There is no substitute and the plan must not pretend otherwise.** | — |
+| Routing fails **open** when reachability is unavailable | backend BDD: with the registrar query erroring, every eligible volunteer is still rung, and an alert is raised | `tests/steps/` |
+| Transcription holds real-time | a benchmark, not a unit test: quantized multilingual tiny, two concurrent telephone-bandwidth streams, on the minimum target hardware. **This is a gate on the approach, not a regression test** — §16 names the fallback if it fails. | `packages/crypto`-style `cargo bench`, run manually before Phase 3 commits |
+| No audio or transcript reaches disk | an integration assertion, not an inspection: run a call in a sandbox with the app data directory watched, and fail if any file appears whose contents correlate with the audio or transcript. Reading the config to check a flag proves the flag, not the property. | Phase 3 |
+| The call workspace survives call-state churn | Playwright: begin editing a note mid-call, drive `ringing → active → ended` through the mocked voice events, assert the edit is intact and unsaved changes are never discarded | `tests/` |
+| One answered call with real audio | manual, on real hardware, per platform. **There is no substitute and the plan must not pretend otherwise.** Acceptance: a five-minute two-way call on residential broadband and again on a mobile network, with no audible dropout, no echo reported by either party, and round-trip latency that does not cause the two speakers to talk over each other. Recorded as a signed-off checklist per platform per release, not a tester's recollection. | — |
 
 **The current e2e suite exercises the call UI, not the media path.** That is why none of this was
 caught. Adding UI tests will not catch it either; the registrar-level assertions above are the ones
@@ -709,85 +835,312 @@ layer, not a member of it, and no adapter gains a method here.
 
 ---
 
-## 14. Desktop integration shape
+## 14. Desktop: what the shell owns, and what the webview keeps
 
-The house patterns are established and the voice layer follows them rather than inventing:
+§1.3 sizes this. The shell owns the two things a webview cannot do; everything else stays where it
+already works.
 
-- **Rust→webview push** uses `AppHandle::emit` on a namespaced channel with a `#[serde(tag =
-  "type")]` enum payload — exactly the `net-ws:<id>` pattern at `net.rs:386-478`. `tauri::ipc::Channel`
-  is used nowhere in this codebase [V]. Tauri's docs warn that `emit` listeners can process out of
-  order when they are async **[D]**; the webview side therefore reduces events into a synchronous
-  store rather than awaiting inside the listener.
-- **Commands** return `Result<T, String>` with the `err_str` helper and a poison-safe `lock_mutex`,
-  as `crypto.rs` does.
-- **State** is a `.manage()`d struct of mutex-guarded fields holding everything secret, with the
-  webview seeing only public projections — as `CryptoState` does.
-- **Every new command lands in four places** — `generate_handler!`, `isolation/index.html`'s
-  `ALLOWED_COMMANDS`, `platform.ts`'s `TauriIpcCommand` union, and the mock's `commands` record.
-  The static boundary test fails otherwise.
-- **`platform.ts` grows a `listenVoice` wrapper** shaped like `listenNetWs`, with a
-  `PLAYWRIGHT_TEST` branch writing to an in-page registry so Playwright can drive call state.
+| Concern | Lives in | Why |
+|---|---|---|
+| SIP registration | **Rust shell** | needs a socket to the registrar that is not the pinned app origin |
+| RTP media, codecs, jitter, echo cancellation, device I/O | **Rust shell** | liblinphone's own media engine; never touches the DOM |
+| Transcription | **Rust shell** | follows the audio (§16) |
+| Call signalling, `call:ring` / `call:answered` / `call:end` | **webview, unchanged** | already works over the Rust-proxied WebSocket; already multi-hub correct; already tested |
+| Hub attribution | **webview, unchanged** | same channel, same tests |
+| Call state, UI, notes, records, transcript display | **webview** | it is a UI |
 
-Two build-level constraints that are easy to violate: `apps/desktop/Cargo.toml` pins `rustls` to the
-`ring` provider deliberately, to avoid a cmake/nasm build dependency, and `tokio` carries only
-`["sync", "net"]`. A voice crate must not drag in a second crypto provider, and will need `rt` and
-`time` added explicitly. [V]
+**Do not move working, tested code into Rust.** `src/client/lib/hooks.ts:58` handles `call:ring`
+today and `hooks-multi-hub.test.tsx:98` asserts a ring from a non-active hub is handled correctly
+[V]. Rewriting that in Rust would trade tested behaviour for untested behaviour and buy nothing:
+the CSP never blocked it, because that traffic goes to our own backend through `net_ws_connect`.
+
+### The IPC surface
+
+Small and closed, in the shape `platform.ts` already uses for crypto.
+
+**Commands** (webview → shell): `voice_register(set)`, `voice_unregister_all()`, `voice_answer(callId)`,
+`voice_decline(callId)`, `voice_hangup(callId)`, `voice_set_muted(callId, muted)`,
+`voice_list_audio_devices()`, `voice_select_audio_device(kind, id)`.
+
+**Events** (shell → webview), over `AppHandle::emit` on a namespaced channel with a
+`#[serde(tag = "type")]` payload — the established `net-ws:<id>` idiom at `net.rs:386-478`:
+`voice:registration` (a `VoiceHubRegistration`), `voice:media` (a `VoiceCallSnapshot`),
+`voice:transcript` (§16), `voice:error`.
+
+`tauri::ipc::Channel` is used nowhere in this codebase [V]. Tauri's docs do warn that `emit`
+listeners can process out of order when they are async **[D]**, so the webview reduces events into
+a synchronous store rather than awaiting inside the listener. That is a two-line discipline, not a
+reason to introduce a second IPC primitive.
+
+**Every new command lands in four places or CI fails**: `generate_handler!` in `lib.rs`,
+`ALLOWED_COMMANDS` in `isolation/index.html`, the `TauriIpcCommand` union in `platform.ts`, and the
+`commands` record in `tests/mocks/tauri-core.ts`. `src/client/lib/desktop-ipc-boundary.test.ts`
+parses all four and fails on disagreement [V]. The mock also needs an event-injection helper
+mirroring `emitNetWsEvent`, so Playwright can drive call state without a Rust process.
+
+### Build constraints that are easy to violate
+
+`apps/desktop/Cargo.toml` pins `rustls` to the `ring` provider deliberately, to avoid a cmake/nasm
+build dependency, and `tokio` carries only `["sync", "net"]` [V]. A voice or transcription crate
+must not drag in a second crypto provider, and will need `rt` and `time` added explicitly.
 
 **Acquire liblinphone as a prebuilt per-platform artifact, pinned by version and checksum. Do not
 build it from source in CI.** That is already this repo's pattern for mobile, and the desktop
-release matrix is three hosted runners (macOS, Windows, Ubuntu) where a CMake/MSYS2/yasm build
-would be a per-OS liability. Note the honest cost: this repo advertises reproducible builds with
-SLSA provenance and an SBOM, and a prebuilt binary dependency makes the build reproducible *given
-those pinned artifacts* — so the pin must be by content hash and must appear in the SBOM. The
-existing iOS download script has **no checksum verification** [V]; the replacement must.
+release matrix is three hosted runners where a CMake/MSYS2/yasm build would be a per-OS liability.
+The honest cost: this repo advertises reproducible builds with SLSA provenance and an SBOM, so a
+prebuilt dependency makes the build reproducible *given those pinned artifacts* — the pin must be
+by content hash and must appear in the SBOM. The existing iOS download script has **no checksum
+verification** [V]; its desktop equivalent must.
 
 ---
 
-## 15. Sequencing
+## 15. The call-centre workspace
 
-Ordered by dependency, and deliberately front-loading the work that is useful whether or not the
-convergence succeeds.
+The operator's requirement: a call held open, the records that matter to it open for editing
+alongside it, and the conversation transcribing in real time as it happens.
 
-**Phase 0 — true regardless of architecture.** Fix the contract (`voice.ts`, generated types
-adopted, hand-written structs deleted, `PROTOCOL.md` §4.18 rewritten). Create `AuthInfo` on both
-mobile platforms. Fix the iOS endpoint path and the `convertFromSnakeCase` mismatch. Wire Android's
-`clockIn()` to registration. Register every member hub. Move `setActiveHub` off the ring event and
-give Android a notification-tap handler. Remove the four silent catches. Bound the iOS pending map.
+This is a UI requirement, and it lands almost entirely in the webview — which is the point of §14's
+split. The shell streams registration state, media state and transcript text; the workspace is
+React.
 
-**Phase 1 — the realm. This is greenfield, and that should be stated plainly rather than discovered.**
+**Shape.** A persistent call surface, not a modal. While `VoiceCallState` is `active` (or `incoming`
+/ `connecting` / `held`), the workspace holds:
+
+- **Call controls** — answer, decline, hang up, mute, hold, DTMF, audio device — each rendered only
+  where `VoiceCapabilities` says the platform supports it. This is why capabilities are a set the
+  UI asks rather than a thing it assumes.
+- **The live transcript**, speaker-attributed (§16), scrolling, with the volunteer able to correct
+  a line.
+- **Records open for editing alongside** — the note being written for this call, and the contact,
+  conversation or event records the call relates to. Editing must survive the call ending and must
+  not be interrupted by call state changes.
+
+**Three constraints this places on the rest of the design:**
+
+1. **Call state must be a store, not a component.** Today there are two disjoint notions —
+   `webrtc.ts`'s state machine and `call-state.ts`'s `CallRef`, the latter consumed only by
+   keyboard shortcuts [V]. A workspace that keeps records open across state transitions needs one
+   store that outlives any component. Unifying them is part of the contract work, not a later
+   tidy-up.
+2. **The workspace is per-call and hub-attributed.** A volunteer in several hubs can be called from
+   any of them, so the workspace reads its hub from the call, never from the active hub. This is
+   the multi-hub axiom arriving in the UI layer, and it is the reason `VoiceCallSnapshot` carries
+   `hubId`.
+3. **Nothing in the workspace may block on the shell.** A hung IPC call must not freeze note-taking
+   during a crisis call. Commands are fire-and-forget with state arriving by event; the UI renders
+   the last known state and an explicit pending affordance.
+
+**Not in scope here:** which record types appear alongside the call, and their layout. That is
+product design against the existing entity-type system, and it deserves its own spec rather than
+being decided in a voice-architecture document.
+
+---
+
+## 16. Transcription moves into the shell
+
+### Why it has to move at all
+
+`src/client/lib/transcription/transcription-manager.ts` runs AudioWorklet capture → Web Worker →
+Whisper ONNX entirely in the webview, and it sources audio from
+`navigator.mediaDevices.getUserMedia({ audio: true })` — **the local microphone** [V]. So today it
+would transcribe the volunteer and not the caller, which for a crisis hotline is the less useful
+half.
+
+Once media lives in the shell, the webview has no access to the remote party's audio at all.
+`getUserMedia` keeps working for the mic — a local device, not a network socket, so the CSP is
+irrelevant — but the caller's stream is in Rust.
+
+### The decision: transcribe in Rust; the webview consumes text
+
+Audio never crosses the IPC boundary. The alternative considered and rejected was piping decoded
+remote PCM to the webview to reuse the working Whisper pipeline: at 16 kHz mono i16 that is
+32 kB/s per leg, about 3.2 kB per 100 ms chunk, which is affordable — the objection is not cost. It
+is that it puts raw call audio on an IPC channel for no benefit once the decision to own media in
+Rust is already made, and it leaves two transcription implementations in the tree.
+
+**Moving transcription to Rust also makes speaker attribution easier, not harder**, which is the
+part that is easy to miss. liblinphone captures the microphone and receives the remote stream, so
+the shell has **both legs separately, before they are mixed**. Transcribing them as two labelled
+streams gives speaker attribution with no diarization model and no guesswork. In the webview design
+this was impossible; in the shell it is nearly free.
+
+### candle, not whisper.cpp — with a measured gate
+
+| Criterion | candle | whisper.cpp via `whisper-rs` |
+|---|---|---|
+| Memory safety | **pure Rust** | C/C++ through FFI, in the audio path |
+| Build | `cargo build` | **needs LLVM, Clang and CMake on Linux; CMake on macOS; MSYS2 on Windows** [D] |
+| Raw CPU speed | slower; ggml has hand-tuned SIMD kernels | **faster**, and the more widely deployed |
+| GPU backends | fewer | CUDA, Metal, Vulkan, hipBLAS [D] |
+| Whisper support | official `whisper` and `whisper-microphone` examples; quantized GGUF tiny at ~41.5 MB [D] | mature |
+
+**Recommendation: candle.** Two criteria decide it and neither is close.
+
+*Safety.* This product's threat model names nation-states, and the audio path is the most exposed
+surface it has: attacker-influenced bytes arriving continuously from an untrusted network. Putting
+a C++ inference engine there, reached through FFI, adds a memory-unsafety class to exactly the
+place it is least acceptable. That argument is strong on its own, and the operator is right to
+weight it — but it would not be decisive if candle could not do the job.
+
+*Build.* `whisper-rs` needs LLVM, Clang and CMake on Linux and **MSYS2 on Windows** [D] — the same
+class of three-OS native build burden this repo has already been bitten by, and which §14 is
+already paying once for liblinphone. Paying it twice, for something a pure-Rust crate can do, is
+the kind of CI liability that quietly costs more than the feature.
+
+*Performance is the real risk, and it is unmeasured.* candle is generally slower than ggml on CPU.
+The bar here is lower than it looks: the existing pipeline already runs a ~40–75 MB `tiny`-class
+model in a browser under a ~96 MB peak budget [V], so this is a small-model real-time design, not a
+large-model batch one, and the input is telephone-bandwidth mono. But "probably fine" is not a
+measurement.
+
+**So the plan must gate on a measurement, not on this recommendation.** Before the transcription
+work is committed: run quantized tiny on the minimum target hardware against a recorded
+telephone-bandwidth sample, with **two concurrent streams**, and confirm it holds real-time with
+headroom. If it does not, `whisper-rs` is the recorded fallback and the safety argument is
+consciously traded — not silently lost.
+
+Two mitigations that buy headroom before that trade is needed: **per-leg voice-activity detection**,
+since in a hotline call the two parties mostly alternate, so both decoders rarely run at once; and
+**transcribing the caller leg by default with the volunteer leg as a toggle**, since the caller is
+the half that matters.
+
+### Model acquisition — a metadata leak to avoid
+
+Today the model downloads from a third-party host on first use. In a product protecting volunteer
+identity that is a leak worth naming: a background fetch to a public model host tells a network
+observer that this deployment is **about to transcribe a call**.
+
+**Ship the quantized model in the release artifact.** At roughly 41.5 MB it is within a desktop
+bundle's budget, it eliminates the leak entirely, and it lets the model be checksum-pinned and
+listed in the SBOM exactly like liblinphone. If bundle size later forces a fetch, it must go
+through the existing pinned-origin proxy — our own backend serving it — and never to a third-party
+host.
+
+**One correction to the existing pipeline while we are here:** it uses `tiny.en`, which is
+English-only, in a product shipping **22 locales** [V]. The multilingual quantized tiny is the same
+size class (~41.5 MB) [D]. Use the multilingual model, and select the language from the hub's
+configured locale rather than detecting it — the hub already knows.
+
+### Remove the old pipeline, do not leave it dormant
+
+`transcription-manager.ts`, its AudioWorklet and its Web Worker are **deleted**, not kept behind a
+flag. There is no non-Tauri context to keep them for: the desktop app is Tauri-only by design and
+there is no browser client (§2). A second transcription path that no longer runs is precisely the
+dead-but-plausible code this repo has been finding repeatedly (#1126, #1153, #1167), and it is
+worse than usual here because a reader would reasonably assume the webview one is live.
+
+Playwright runs in a real browser against mocked IPC, so transcript tests drive the
+`voice:transcript` event through the mock's event-injection helper rather than running a model.
+
+---
+
+## 17. Where audio and transcripts live
+
+The current claim — *audio never leaves the browser* — is true today and is a real privacy property
+of this product. Moving media into the shell changes what it means, so it must be restated
+precisely rather than inherited. Rust has filesystem access the webview does not; "it stayed in
+memory" is now something to design, not something that happens by default.
+
+**The claim becomes: audio never leaves the device, and is never written to disk.**
+
+| Thing | Where it lives | Written to disk? |
+|---|---|---|
+| Caller's decoded audio | shell process memory | **never** |
+| Volunteer's captured audio | shell process memory | **never** |
+| Model weights | read-only file in the app bundle | shipped, not written |
+| Transcript text | shell memory → IPC → webview memory | **never in plaintext** |
+| Transcript, persisted | only through the existing E2EE note path, encrypted client-side before it reaches the server | ciphertext only |
+| SIP credentials | shell memory; the liblinphone config file under the app data directory | see below |
+
+**Four rules the implementation must enforce, each of which liblinphone violates by default:**
+
+1. **Call recording disabled.** liblinphone can record to file. It must not.
+2. **Call-log persistence disabled.** liblinphone writes call history — who, when, how long — into
+   its config by default. That is volunteer metadata on disk.
+3. **The config file lives under the app's own data directory**, is created with restrictive
+   permissions, and is **wiped on sign-out**, matching the lifecycle key material already has.
+4. **No audio buffer is ever spilled to a temp file**, including by the transcription path. A
+   crash dump is the obvious remaining hole; disable core dumps for the process where the platform
+   allows it, and say so rather than pretending the hole is closed.
+
+**What this does not claim.** The caller's audio still traverses the telephone network and our
+media node in the clear at the trunk — §3 is unchanged. This section is about the volunteer's
+device, which is the part that moved.
+
+---
+
+## 18. Sequencing
+
+Each of these is its own spec and its own plan. §18 is a dependency order, not a schedule, and
+nothing below Phase 0 should be started from this document.
+
+**Phase 0 — the contract and client correctness. True regardless of architecture.**
+Fix the contract (`voice.ts`, generated types adopted, hand-written structs deleted). Create
+`AuthInfo` on both mobile platforms. Fix the iOS endpoint path and the snake-case decoding
+mismatch. Wire Android's `clockIn()` to registration. Register every eligible hub. Move
+`setActiveHub` off the ring event and give Android a notification-tap handler. Remove the four
+silent catches. Bound the iOS pending map. Unify the two desktop call-state notions.
+
+> **Phase 0 must not complete the registration path against today's server, and this is a
+> sequencing constraint rather than a preference.** Every fix above makes registration *work*; the
+> credential it would register with is the one §1.1 identifies as defective — the hub's shared
+> trunk credential, pointed at the vendor. Making that path succeed would take a leak that is
+> currently theoretical (nothing registers) and make it real.
+>
+> So Phase 0 ships the clients **capable** of registering and the server **declining** to issue:
+> `/sip-token` returns an empty registration array with `VoiceCapabilities.inAppAudio = false`
+> until Phase 1 provides a home realm. That is strictly better than today, where the same endpoint
+> returns credentials and the UI implies audio that never arrives. Phase 1 flips one server-side
+> switch and the clients, already correct, start working.
+>
+> It follows that **Phase 0 does not fix the §1.1 security defect** — it stops the defect being
+> reachable, and Phase 1 fixes it. Do not claim otherwise in a release note.
+>
+> The alternative — delete `generateSipParams` in Phase 0 — is tempting and worse: it removes the
+> only working description of each provider's SIP endpoint while Phase 1 still needs to know how
+> to trunk to them. Leave the module; stop calling it from the client-credential path.
+
+**Phase 1 — the realm. Greenfield, and larger than everything else here combined.**
 No registrar exists in any configuration: neither the development SIP proxy config nor the
-configuration-management template loads the registrar or user-location modules, neither loads the
-WebSocket modules, neither loads an authentication module, and both explicitly forward REGISTER to
-the PBX backends — one by an explicit branch whose comment says *"We don't handle registrations"*,
-the other by having no REGISTER branch at all, so it falls through to the dispatcher. The
-development config has no TLS listener. The proxy's configuration-management role is disabled by
-default and **is not in the deployment playbook at all** — it appears only in the setup playbook,
-behind an off-by-default flag [V].
+configuration-management template loads the registrar, user-location, WebSocket or authentication
+modules, and both forward REGISTER to the PBX backends — one by an explicit branch whose comment
+says *"We don't handle registrations"*, the other by having no REGISTER branch at all. The
+development config has no TLS listener. The proxy's role is disabled by default and **is not in the
+deployment playbook** [V].
 
-So Phase 1 builds: registrar plus user-location with memory-only storage, WebSocket transport,
-REGISTER authentication (of which there is none today), explicit expiry bounds, per-device
-credential minting replacing `generateSipParams`, ephemeral relay credentials, relay-over-TLS, log
-redaction, the injected-defect guards, and revocation with its two-part test. It also has to bring
-the proxy role into the deployment path, which is a prerequisite nobody has needed until now.
+Phase 1 builds: registrar plus user-location with memory-only storage, WebSocket transport,
+REGISTER authentication, explicit expiry bounds, per-device credential minting replacing the
+client-credential path, log redaction, the injected-defect guards, revocation with its two-part
+test, and bringing the proxy role into the deployment path. **It should be split further when it is
+specced**; it is not one plan.
 
-**Phase 2 — the desktop spike.** bindgen over `linphone/core.h` in a `llamenos-voice` crate,
-registering against the dev-compose PBX, one answered call with audio on Linux. **This is the single
-experiment that de-risks everything else** and it should run in parallel with Phase 1, not after it.
-Everything in Phase 0 and most of Phase 1 is useful even if the spike fails.
+**Phase 1b — the relay.** Ephemeral credential minting, a TLS listener, a published relay port
+range, log redaction, and a configuration-management role where none exists. This is an epic in its
+own right and §10 explains why it is not optional for UDP-blocked volunteers. Independent of
+Phase 1 except that both must land before in-app audio is enabled.
 
-**Phase 3 — desktop.** `voice.rs`, the IPC surface across all four layers, `webrtc.ts` replaced,
-`call-state.ts` folded in, Playwright coverage.
+**Phase 2 — the desktop spike.** bindgen over `linphone/core.h` in a `llamenos-voice` crate, one
+answered call with audio on Linux. **This is the single experiment that de-risks everything else.**
+It can run in parallel with Phase 1 because it registers against the **dev-compose PBX**, which
+*does* own registrations today — the proxy forwards REGISTER to it [V]. It does not need the
+Phase 1 registrar to exist.
 
-**Phase 4 — mobile completion.** Link the iOS XCFramework and call the download script from a
-workflow with checksum verification; CallKit and PushKit on iOS; ConnectionService and audio focus
-on Android; `voip` background mode restored only once PushKit reporting is real.
+**Phase 3 — desktop voice and the workspace.** `voice.rs`, the IPC surface across all four layers,
+the call-centre workspace (§15), transcription in the shell (§16) behind its performance gate, and
+Playwright coverage driven through the mock. Entry criterion: Phase 2 answered its question.
+
+**Phase 4 — mobile platform integration.** Link the iOS XCFramework and call the download script
+from a workflow with checksum verification; CallKit and PushKit on iOS; ConnectionService and audio
+focus on Android; `voip` background mode added only once PushKit reporting is real — it is absent
+today and deliberately so, per a comment in `Info.plist` [V]. Unify the two SDK versions (Android
+5.4.100, iOS 5.3.110) and add a rail test, because a shared contract across divergent SDK versions
+is a contract in name only. Realistically two plans, one per platform.
 
 **Phase 5 — capacity and measurement.** Rewrite the sizing model against 100% media transit. Add
 the address-free ICE candidate-type counters.
 
 ---
-
-## 16. In-flight work this overlaps
+## 19. In-flight work this overlaps
 
 Verified against the 21 open PRs at the time of writing. **No open PR touches `LinphoneService.kt`,
 `LinphoneService.swift`, `PushService.kt`, `PushNotificationRouter.kt`, either `ShiftsViewModel`,
@@ -800,118 +1153,132 @@ not in flight. Adjacent work to rebase onto rather than fight:
 | **#1072** first-pickup-wins | defines the parallel-ringing semantics a multi-hub client must honour. Phase 1's routing changes build on it. |
 | **#1086** Android multi-hub relay events | the event-delivery mechanism §5's hub attribution depends on. |
 | **#1159** sip-bridge reconnect / fail-closed recording | PBX-side reconnect semantics the clients register alongside. |
-| **#1171** desktop honest failure when the SDK is absent | the same failure mode as iOS's unlinked XCFramework; keep its assertion and retarget it at the Rust layer rather than deleting it. |
-| **#1161** release prep | touches `app/build.gradle.kts`, which holds the linphone dependency line. Trivial, but it is the file Phase 4 edits. |
-
-Also: the two SDK versions are not pinned in sync — Android is on 5.4.100, iOS's `LINPHONE_VERSION`
-reads 5.3.110 [V]. Phase 4 unifies them and adds a rail test, because a shared contract across
-divergent SDK versions is a contract in name only.
+| **#1171** desktop honest failure when the SDK is absent | the same failure mode as iOS's unlinked XCFramework. Keep its assertion and retarget it at the shell rather than deleting it. |
+| **#1161** release prep | touches `app/build.gradle.kts`, which holds the linphone dependency line. |
 
 ---
 
-## 17. i18n
+## 20. i18n
 
 Every user-facing string goes through `packages/i18n` and codegen; none is added directly to a
 platform file.
 
-One naming hazard, worth stating because it is not obvious: the existing `voice.*` namespace in
-`packages/i18n/locales/en.json` is **caller-facing IVR prompt text fed to text-to-speech** —
-`voice.greeting`, `voice.pleaseHold`, `voice.voicemailPrompt`. Client-side softphone strings must
-not land there. Use a separate namespace (`softphone.*`), or a TTS engine will eventually read a UI
-error message to a caller in crisis.
+One naming hazard, worth stating because it is not obvious: the existing `voice.*` namespace is
+**caller-facing IVR prompt text fed to text-to-speech** — `voice.greeting`, `voice.pleaseHold`,
+`voice.voicemailPrompt` [V]. Client-side softphone and workspace strings must not land there. Use
+`softphone.*`, or a TTS engine will eventually read a UI error message aloud to a caller in crisis.
+
+The same point applies to transcription: §16 selects the model's language from the hub's configured
+locale, and `packages/i18n/languages.ts` is the authoritative list. Never hardcode a count.
 
 ---
 
-## 18. What is well-grounded, and what is not
+## 21. What is well-grounded, and what is not
 
 **Well-grounded — verified in this repo or documented upstream.**
 
-- Nothing can receive an in-app call today; `AuthInfo` is never created; the iOS SDK is not linked;
-  the endpoint path is wrong; the contract disagrees four ways. All file:line verified.
-- The desktop CSP and the single-origin pinned proxy. Verified in `tauri.conf.json`, `net.rs`,
-  `cert_pin.rs`.
-- The SIP credential is hub-scoped, shared across volunteers, and points at the vendor. Verified in
-  `sip-tokens.ts` and `packages/shared/types.ts`.
-- liblinphone has no Rust binding (crates.io returns zero), has a clean bindgen-able C API, is
-  pump-driven, and supports DTLS-SRTP natively on all three platforms.
-- `usrloc` `db_mode` semantics, the `usrloc.delete_*` RPC surface, `handle_lost_tcp`, and
-  `max_expires` being disabled by default.
-- The desktop IPC four-layer boundary and its static test; the `net-ws:<id>` emit pattern; the mock
-  event-injection pattern.
-- Media transits our infrastructure on 100% of calls once the vendor SDK is gone. This follows from
-  topology, not measurement.
+- Nothing can receive an in-app call today; `AuthInfo` is never created on either mobile platform;
+  the iOS SDK is not linked; the endpoint path is wrong. All file:line verified.
+- The SIP credential is hub-scoped, shared across volunteers, and points at the vendor; `identity`
+  is computed in the route and discarded by every generator.
+- The desktop CSP and the single-origin pinned proxy — **and** that call signalling already works
+  through it, with a multi-hub test to prove it.
 - The registrar is greenfield: no registrar, user-location, WebSocket or authentication module is
   loaded in any configuration, and the proxy's role is absent from the deployment playbook.
 - A JSONRPC management channel to the proxy is already provisioned and already has a client in
   `sip-bridge`, so revocation has a transport.
 - The relay is a STUN server in a TURN server's clothing: static shared credential defaulting to
-  `changeme`, TLS and DTLS off, no relay port range published, no configuration-management role,
-  and no code path that mints credentials for it.
-- No crypto label covers SIP or voice transport; one must be added.
+  `changeme`, TLS and DTLS off, no relay port range published, no configuration-management role.
+- liblinphone has no Rust binding (crates.io returns zero), a clean bindgen-able C API, is
+  pump-driven, and supports DTLS-SRTP natively on all three platforms.
+- `whisper-rs` requires LLVM, Clang and CMake on Linux and MSYS2 on Windows; candle is pure Rust
+  with official Whisper and Whisper-microphone examples and a ~41.5 MB quantized tiny model.
+- The existing transcription pipeline captures the **local microphone** and uses an **English-only**
+  model in a 22-locale product.
+- Media transits our infrastructure on 100% of calls once the vendor SDK is gone. This follows from
+  topology, not measurement.
+
+**Two claims corrected during review, recorded so they are not reintroduced.**
+
+- **`PROTOCOL.md` does not document `sip-token` at all.** §4.18 documents `webrtc-token`, and it
+  documents it *correctly* — the shape there matches the schema it was generated against. So the
+  sip-token contract has three disagreeing shapes plus an **entirely undocumented endpoint**, which
+  is a worse finding than "four shapes", and the deliverable is to *add* a section, not rewrite
+  §4.18.
+- **An array does not make multi-hub failure a compile error.** Reading `registrations[0]` type-checks
+  perfectly. What the array buys is a *testable* assertion — "the number of registrations equals the
+  number of eligible hubs" — which is worth having, and is the reason for the shape. The earlier
+  claim that it "fails to compile" was overstated and is withdrawn.
 
 **Assumptions that need testing before they are load-bearing.**
 
-1. **That the CSP actually forecloses an in-webview SDK in a packaged build.** Strongly inferred,
-   never tested. It is cheap to test and the answer changes nothing about the recommendation — the
-   Rust shell is the better end state regardless — but the spec should not assert it as verified.
+1. **That the CSP forecloses an in-webview third-party SDK in a packaged build.** Strongly inferred,
+   never tested. Cheap to test. It no longer sizes the desktop work — §1.3 does that from what
+   already works — but it should not be asserted as verified.
 2. **That bindgen over liblinphone's C API is a days-not-months job.** The API is clean and the
-   surface is small, but no one has built it. This is exactly what the Phase 2 spike measures, and
-   the phase order exists so that a bad answer costs one spike rather than a quarter.
-3. **That prebuilt desktop liblinphone artifacts are available, current, and checksummable for all
-   three release targets.** Belledonne publishes desktop binaries; whether the packaging suits a
-   pinned, checksummed, three-OS CI matrix has not been checked.
-4. **Relay demand.** Genuinely unknown, and deliberately so: §10 replaces the guess with a
-   measurement rather than importing a number from an unrelated population.
-5. **Whether `handle_lost_tcp` is safe to enable** for a population on flaky consumer networks, or
-   whether it turns a two-second mobile handover into a missed crisis call. This is a real
-   trade-off between revocation tightness and reachability, and it needs measuring, not choosing.
-6. **Codec and transcoding load.** Opus-to-G.711 transcoding CPU per concurrent call on the target
-   hardware is a number this design assumes exists and has not measured.
+   surface is small, but nobody has built it. This is what the Phase 2 spike measures.
+3. **That candle holds real-time for two concurrent telephone-bandwidth streams** on the minimum
+   target hardware. §16 gates on measuring this and names the fallback.
+4. **That prebuilt desktop liblinphone artifacts are available, current, and checksummable** for all
+   three release targets.
+5. **Relay demand.** Deliberately unknown: §10 replaces the guess with a measurement.
+6. **Whether removing a contact when its transport connection drops is safe** for a population on
+   flaky consumer networks, or whether it turns a brief handover into a missed crisis call. A real
+   trade-off between revocation tightness and reachability.
+7. **Transcoding load.** CPU per concurrent call on the target hardware is a number this design
+   assumes exists and has not measured.
 
 ---
 
-## 19. Decisions recorded, with the reasoning in one line each
+## 22. Decisions recorded, with the reasoning in one line each
 
 | # | Decision | Because |
 |---|---|---|
 | 1 | Shared contract in `packages/protocol`; per-platform implementations | one contract with three native implementations is smaller than one implementation with three FFI surfaces |
-| 2 | liblinphone in Rust, desktop only | the CSP forecloses the webview; mobile already has working SDKs that need wiring, and the SDKs carry platform glue a raw link does not |
-| 3 | bindgen over the C API, not an upstream generator | the generator is the better long-term answer and the wrong thing to make a first delivery depend on |
-| 4 | Not a pure-Rust stack | signalling is easy; echo cancellation, jitter buffering and packet-loss concealment are not, and bad audio in a crisis is the worst failure this product has |
+| 2 | The desktop shell owns **only** SIP registration and RTP media | signalling, hub attribution and call state already work in the webview through the Rust-proxied socket, and are tested |
+| 3 | liblinphone via bindgen over the C API, desktop only | the generator upstream is the better long-term answer and the wrong thing to make a first delivery depend on |
+| 4 | Not a pure-Rust SIP+media stack | signalling is easy; echo cancellation, jitter buffering and packet-loss concealment are not, and bad audio in a crisis is the worst failure this product has |
 | 5 | Client speaks SIP only to our own realm | one code path for eight providers, and the vendor stops seeing volunteer IPs |
-| 6 | Hub attribution over the existing app channel, not SIP | it is already authenticated, encrypted and multi-hub aware, and it keeps the registrar ignorant |
-| 7 | DTLS-SRTP, mandatory | ZRTP's SAS needs two humans and the far end is our bridge; SFrame needs an SFU and there is none |
-| 8 | Registrations are an array in the type | the multi-hub axiom should fail to compile, not fail in production |
-| 9 | Reachability is a live registrar query | one metadata store, not two |
+| 6 | Hub attribution over the existing app channel, not SIP | it is already authenticated, encrypted, multi-hub aware and tested, and it keeps the registrar ignorant |
+| 7 | DTLS-SRTP, and `none` is unrepresentable in the credential type | ZRTP's SAS needs two humans and the far end is our bridge; SFrame needs an SFU and there is none; a value you must reject at runtime does not belong in the type |
+| 8 | Registrations are an array | it makes "did you handle all of them?" a length assertion a test can make — not a compile error, see §21 |
+| 9 | Reachability is a live registrar query, and it fails **open** | one metadata store, not two; and the failure mode of fail-closed routing is an unanswered crisis call (§11) |
 | 10 | Size for 100% media transit | there is no peer to be direct with; the far end is a phone |
-| 11 | Prebuilt, checksum-pinned liblinphone artifacts | a three-OS CMake build in CI is a liability the repo's runner fleet cannot absorb |
+| 11 | Prebuilt, checksum-pinned liblinphone artifacts | a three-OS CMake build in CI is a liability this runner fleet cannot absorb |
 | 12 | No browser client | it would contradict the key-isolation, pinning and `platform.ts` invariants simultaneously |
-| 13 | One instance-level credential endpoint returning an array, not a hub-scoped one | a hub-scoped route invites the exact single-hub registration bug iOS has today |
-| 14 | Credential lifecycle binds to clock-in / clock-out | it keeps the registrar's population equal to the population that should be receiving calls |
-| 15 | `TelephonyAdapter` is untouched | the adapter is PSTN/IVR/webhook shaped; the registrar is its peer, not its member |
+| 13 | One instance-level credential endpoint returning an array | a hub-scoped route invites the exact single-hub registration bug iOS has today |
+| 14 | Credentials cover every hub the volunteer is **currently on shift for** — which is more than one, and never just the active one | reconciles §12's axiom with §8's minimisation: all eligible hubs, and no hub where they could not be rung anyway |
+| 15 | `TelephonyAdapter` is untouched | it is PSTN/IVR/webhook shaped; the registrar is its peer, not its member |
+| 16 | The server generates credential randomness; it is **bound to** a device, not derived from its key | the server cannot derive from a private key it does not hold; binding gives revocation, which is what was actually wanted |
+| 17 | Transcription moves into the shell; the webview consumes text | audio never crosses the IPC boundary, and both legs are separately available before mixing, so speaker attribution is nearly free |
+| 18 | candle rather than whisper.cpp, gated on a measurement | pure Rust in the most exposed path, and no LLVM/Clang/CMake/MSYS2 across three OSes — with the fallback named rather than silently lost |
+| 19 | The model ships in the release artifact | a first-use fetch to a public model host announces that this deployment is about to transcribe a call |
+| 20 | Multilingual model, language chosen from the hub locale | the product ships 22 locales and the current pipeline is English-only |
+| 21 | The webview transcription pipeline is deleted, not flagged off | dead-but-plausible code is worse here than usual, because a reader would assume it is the live one |
 
 ---
 
-## 20. Questions the operator should settle before the plan is actionable
+## 23. Questions the operator should settle before the plan is actionable
 
-These are decisions, not research. Each has a default recorded so work is not blocked, but each is
-worth a deliberate answer.
+Each has a default recorded so no work is blocked.
 
 1. **Registration expiry.** What window is acceptable between a seized registrar and stale data?
-   Shorter is safer and costs little over a persistent WSS connection. *Default taken: short, with
-   `max_expires` set explicitly and a 10–20% jitter range.*
-2. **`handle_lost_tcp`.** Turning it on makes a dropped socket an immediate deregistration, which
-   tightens revocation and makes fail-closed detection instant — but a volunteer on a train may
-   deregister and miss a call. *Default taken: on, with the reconnect behaviour measured before it
-   ships.* This is the one setting in this design most likely to be wrong.
-3. **Which roster is authoritative** for ring eligibility — the schedule, or the clock-in table
-   (§11). They can disagree today and nothing notices.
+   *Default taken: 600 seconds, with the maximum set explicitly — it is unbounded by default — and
+   a 10–20% jitter range so re-registrations do not synchronise after a restart.* Over a persistent
+   connection the cost is signalling only.
+2. **Dropping a binding when its transport connection drops.** Tightens revocation and makes
+   unreachability instant; risks deregistering a volunteer during a brief network handover.
+   *Default taken: on, with reconnect behaviour measured before it ships.* This is the single
+   setting most likely to be wrong.
+3. **Does the call-centre workspace need to survive a page reload mid-call?** It changes whether
+   call state is purely in-memory or persisted locally. *Default taken: yes for the records being
+   edited, no for the transcript.*
 4. **Whether recording survives.** DTLS-SRTP terminates at the media node, so recording remains
-   possible. That is a *policy* choice this design does not make; it only notes that choosing
-   SFrame would have removed the option silently.
-5. **Self-hoster expectations.** Is in-app audio a supported configuration for self-hosters
-   without a relay, degraded visibly — or is a relay a documented requirement? *Default taken:
-   degraded visibly.*
-6. **Whether Phase 0 ships on its own.** It is independently valuable, fixes a live security
-   defect, and closes an Internal Availability blocker. *Recommended: yes, as its own tranche,
-   without waiting for the realm.*
+   possible. That is a policy choice this design does not make; it notes only that choosing SFrame
+   would have removed the option silently.
+5. **Self-hoster expectations.** With no relay, UDP-blocked volunteers lose in-app audio while
+   everyone else keeps it (§10). Is that a supported configuration, degraded visibly, or is a relay
+   a documented requirement? *Default taken: supported, degraded visibly.*
+6. **Whether Phase 0 ships on its own.** It is independently valuable and closes an Internal
+   Availability blocker, but it does **not** fix the §1.1 defect — it makes it unreachable.
+   *Recommended: yes, as its own tranche, described accurately.*
