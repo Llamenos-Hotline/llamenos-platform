@@ -10,6 +10,9 @@
  * `resetDemoData` is the full wipe used by the demo-reset endpoint: it clears
  * every table the old dev-only reset cleared, restores the default settings and
  * demo accounts, then seeds.
+ *
+ * Both need the demo identities, which only a development server can produce
+ * (`lib/demo-identities.ts`), so both refuse everywhere else before writing.
  */
 import type { Services } from './index'
 import { ServiceError } from './settings'
@@ -25,7 +28,8 @@ import {
   DEMO_SHIFTS,
 } from '../lib/demo-dataset'
 import { demoReader, sealForReaders, type DemoReader } from '../lib/demo-crypto'
-import { demoIdentities, demoIdentityByName } from '../lib/demo-identities'
+import { demoIdentities, type DemoIdentity } from '../lib/demo-identities'
+import type { DevSurfacesEnv } from '../lib/dev-surfaces'
 import { encryptContactIdentifier, hashPhone } from '../lib/crypto'
 import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import type { Hub } from '@shared/types'
@@ -33,7 +37,7 @@ import type { MessagingChannelType } from '@protocol/schemas/settings'
 
 const HOUR_MS = 3_600_000
 
-export interface DemoSeedEnv {
+export interface DemoSeedEnv extends DevSurfacesEnv {
   ENVIRONMENT: string
   HMAC_SECRET: string
   TWILIO_ACCOUNT_SID?: string
@@ -56,12 +60,13 @@ export interface DemoSeedSummary {
 
 type Cast = { admin: DemoReader; maria: DemoReader; james: DemoReader }
 
-function loadCast(): Cast {
-  return {
-    admin: demoReader(demoIdentityByName(DEMO_CAST.admin)),
-    maria: demoReader(demoIdentityByName(DEMO_CAST.maria)),
-    james: demoReader(demoIdentityByName(DEMO_CAST.james)),
+function loadCast(accounts: readonly DemoIdentity[]): Cast {
+  const byName = (name: string): DemoReader => {
+    const identity = accounts.find(a => a.name === name)
+    if (!identity) throw new Error(`Demo account "${name}" missing from DEMO_ACCOUNTS`)
+    return demoReader(identity)
   }
+  return { admin: byName(DEMO_CAST.admin), maria: byName(DEMO_CAST.maria), james: byName(DEMO_CAST.james) }
 }
 
 function contactLookupKey(phone: string): string {
@@ -77,21 +82,21 @@ function trigrams(name: string): string[] {
 
 /**
  * Seed the fixed demo dataset into the demo hub, replacing any previous copy.
- * The five demo accounts must already exist (`identity.ensureInit(_, true)`).
+ * The five demo accounts must already exist (`identity.ensureDemoAccounts`).
  */
 export async function seedDemoDataset(
   services: Services,
   env: DemoSeedEnv,
   now: Date = new Date(),
 ): Promise<DemoSeedSummary> {
-  const accounts = demoIdentities()
+  const accounts = demoIdentities(env)
   for (const account of accounts) {
     const user = await services.identity.getUserInternal(account.pubkey)
     if (!user) {
       throw new ServiceError(409, `Demo account ${account.name} does not exist — initialise demo accounts before seeding`)
     }
   }
-  const cast = loadCast()
+  const cast = loadCast(accounts)
   const hubId = DEMO_HUB.id
   const ago = (hours: number): Date => new Date(now.getTime() - hours * HOUR_MS)
   const reader = (who: 'maria' | 'james'): DemoReader => cast[who]
@@ -104,7 +109,7 @@ export async function seedDemoDataset(
   await services.settings.ensureInit({ ENVIRONMENT: env.ENVIRONMENT })
   await services.settings.purgeHub(hubId)
   // purgeHub also removes users that belonged only to that hub — put the demo accounts back
-  await services.identity.ensureInit(undefined, true)
+  await services.identity.ensureDemoAccounts(accounts)
 
   // ── Hub + membership ──────────────────────────────────────────────────────
   const hub: Hub = {
@@ -344,13 +349,15 @@ export interface DemoResetEnv extends DemoSeedEnv {
 /**
  * Wipe every table the demo instance writes to, restore defaults and the demo
  * accounts, then seed the fixed dataset. Callers must have passed
- * `assertDemoResetAllowed` first; the per-service resets re-check the demo flags.
+ * `demoResetRefusal` first; the per-service resets re-check the demo flags, and
+ * the demo identities are resolved before anything is wiped.
  */
 export async function resetDemoData(
   services: Services,
   env: DemoResetEnv,
   now: Date = new Date(),
 ): Promise<DemoSeedSummary> {
+  const accounts = demoIdentities(env)
   const resetEnv = {
     DEMO_MODE: env.DEMO_MODE,
     DEMO_MODE_CONFIRM: env.DEMO_MODE_CONFIRM,
@@ -366,7 +373,8 @@ export async function resetDemoData(
   // Settings before identity re-init: the roles table must exist before any user resolves permissions.
   await services.settings.reset(resetEnv)
   await services.settings.ensureInit(resetEnv)
-  await services.identity.ensureInit(env.ADMIN_PUBKEY, true)
+  await services.identity.ensureInit(env.ADMIN_PUBKEY)
+  await services.identity.ensureDemoAccounts(accounts)
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')

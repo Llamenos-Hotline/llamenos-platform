@@ -1430,6 +1430,9 @@ jobs:
       - name: Check ECIES in active sections
         run: bash scripts/check-ecies-active.sh
 
+      - name: Check bddgen warm-up is applied everywhere
+        run: bash scripts/check-bddgen-warmup.sh
+
   docker-canary:
     needs: ci-status
     if: github.ref == 'refs/heads/main' && needs.ci-status.result == 'success'
