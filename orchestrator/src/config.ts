@@ -226,6 +226,27 @@ export async function loadLanes(
  * matches `apps/android/keystore.properties`, and `*.pem`/`id_rsa`/
  * `id_ed25519` catch key material wherever a worker might create it.
  *
+ * The bare-filename entries are PREFIX matches on the basename, so `.env`
+ * also covers `.env.local` and `.env.production` — any environment name,
+ * including one nobody has invented yet. The one thing they do NOT cover is
+ * a committed template: the never-write gate compares with
+ * `matchesSecretPath`, which subtracts `SECRET_TEMPLATE_SUFFIXES`
+ * (`.example`/`.sample`/`.template`) from the match — and does so ONLY for
+ * the patterns in `TEMPLATED_SECRET_PATTERNS` (`.env`,
+ * `keystore.properties`), the two a tracked template actually justifies. A
+ * pattern added below inherits NO carve-out; it gets one only if a tracked
+ * template proves it needs one. `.npmrc.example` and `id_rsa.example` stay
+ * forbidden. This repo tracks five
+ * such files on purpose — `.env.example`, `.env.live.example`,
+ * `apps/ios/fastlane/.env.example`, `deploy/docker/.env.example`,
+ * `apps/android/keystore.properties.example` — and without that subtraction
+ * every one of them is unwritable by every lane forever, which is how a
+ * deploy-enabling PR came to fail `fleet/review` for "touched never-write
+ * paths: deploy/docker/.env.example". A template is exempt from the WRITE
+ * gate only; `classifyImpact` below still rates it high-impact, so it can
+ * never auto-merge unreviewed, and `gitleaks` (a required status check)
+ * remains the gate that reads its CONTENTS.
+ *
  * This list is NOT a mirror of `.claude/settings.json`'s PreToolUse hook —
  * that regex (`\.env$|\.dev\.vars|\.pem$|id_rsa$|id_ed25519$`) is a fast,
  * best-effort bail-out for interactive editing and has already drifted from
