@@ -23,9 +23,20 @@ import { demoIdentities, DemoIdentitiesUnavailableError } from '@worker/lib/demo
 import { resetDemoData, seedDemoDataset } from '@worker/services/demo-seeder'
 import { isRevokedSigningKey, revokedSigningKeys } from '@worker/lib/revoked-signing-keys'
 import { authenticateRequest, validateToken } from '@worker/lib/auth'
-import type { IdentityService } from '@worker/services/identity'
+import { IdentityService } from '@worker/services/identity'
+import { ErasureService } from '@worker/services/erasure'
 import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
+
+// Lets a test stand in for someone holding a published seed: any signature verifies.
+const signatures = vi.hoisted(() => ({ acceptAll: false }))
+vi.mock('@llamenos/crypto/ffi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@llamenos/crypto/ffi')>()
+  return {
+    ...actual,
+    ed25519Verify: (...args: Parameters<typeof actual.ed25519Verify>) => signatures.acceptAll || actual.ed25519Verify(...args),
+  }
+})
 
 const DEMO_FLAGS = { DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA', DEMO_RESET_CRON: 'daily' }
 const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' }
@@ -144,6 +155,24 @@ describe('demo identities on a development server (the control)', () => {
   })
 })
 
+/**
+ * Every 32-byte value on a line that could be a seed, as lowercase hex: hex runs
+ * in 64-character chunks (so a seed‖pubkey secret key is caught too) and
+ * base64 / base64url tokens that decode to 32 bytes.
+ */
+function candidateSeeds(line: string): string[] {
+  const seeds: string[] = []
+  for (const [run] of line.matchAll(/(?<![0-9a-fA-F])[0-9a-fA-F]{64,}(?![0-9a-fA-F])/g)) {
+    for (let at = 0; at + 64 <= run.length; at += 64) seeds.push(run.slice(at, at + 64).toLowerCase())
+    if (run.length % 64 !== 0) seeds.push(run.slice(-64).toLowerCase())
+  }
+  for (const [token] of line.matchAll(/(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_-]{43}=?(?![A-Za-z0-9+/_=-])/g)) {
+    const bytes = Buffer.from(token.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+    if (bytes.length === 32) seeds.push(bytes.toString('hex'))
+  }
+  return seeds
+}
+
 describe('the signing keys whose seeds this repository published', () => {
   const revoked = [...revokedSigningKeys()]
 
@@ -168,6 +197,79 @@ describe('the signing keys whose seeds this repository published', () => {
     expect(getUserInternal).not.toHaveBeenCalled()
   })
 
+  describe('resolve to no user, even where the database still holds a super-admin row for them', () => {
+    const adminRow = (pubkey: string) => ({
+      pubkey, displayName: 'Row', phone: '', roles: ['role-super-admin'], hubRoles: [], active: true,
+      createdAt: new Date(), updatedAt: new Date(), encryptedSecretKey: '', transcriptionEnabled: true,
+      spokenLanguages: ['en'], uiLanguage: 'en', profileCompleted: true, onBreak: false, callPreference: 'phone',
+      supportedMessagingChannels: null, messagingEnabled: null, specializations: [], maxCaseAssignments: null,
+      teamId: null, supervisorPubkey: null,
+    })
+    const LIVE = 'c'.repeat(64)
+    const rows = [...revoked, LIVE].map(adminRow)
+    const deleted = vi.fn()
+    const db = {
+      select: () => ({
+        from: () => Object.assign(Promise.resolve(rows), {
+          where: () => Object.assign(Promise.resolve(rows), {
+            limit: async () => rows.slice(0, 1),
+          }),
+        }),
+      }),
+      delete: () => ({ where: async () => { deleted() } }),
+    }
+    const identity = new IdentityService(db as never)
+
+    it.each(revoked)('%s: getUserInternal', async (pubkey) => {
+      expect(await identity.getUserInternal(pubkey)).toBeNull()
+    })
+
+    it('are never listed as users or super-admin recipients', async () => {
+      expect((await identity.getUsers()).users.map(u => u.pubkey)).toEqual([LIVE])
+      expect(await identity.listActiveSuperAdminPubkeys()).toEqual([LIVE])
+    })
+
+    it('still count as an admin, so first-admin bootstrap stays closed', async () => {
+      const onlyRevoked = new IdentityService({
+        select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ pubkey: revoked[0] }] }) }) }),
+      } as never)
+      expect((await onlyRevoked.hasAdmin()).hasAdmin).toBe(true)
+    })
+
+    it.each(revoked)('%s: cannot be given a user row or a session', async (pubkey) => {
+      const untouched = new IdentityService(untouchableServices().services as never)
+      await expect(untouched.createUser({ pubkey, name: 'x', phone: '', encryptedSecretKey: '' })).rejects.toThrow(/revoked/)
+      await expect(untouched.createSession(pubkey)).rejects.toThrow(/revoked/)
+    })
+
+    it.each(revoked)('%s: an existing session is deleted, not renewed', async (pubkey) => {
+      const sessionDb = {
+        select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ token: 't', pubkey, createdAt: new Date(), expiresAt: new Date(Date.now() + 60_000) }] }) }) }),
+        delete: () => ({ where: async () => { deleted() } }),
+        update: () => { throw new Error('a revoked session must not be renewed') },
+      }
+      deleted.mockClear()
+      await expect(new IdentityService(sessionDb as never).validateSession('t')).rejects.toThrow(/Invalid session/)
+      expect(deleted).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(revoked)('%s: cannot co-approve an emergency erasure, even with a valid signature', async (pubkey) => {
+      const erasure = new ErasureService({} as never, identity)
+      vi.spyOn(erasure, 'getMyRequest').mockResolvedValue(null)
+      vi.spyOn(erasure, 'getConfig').mockResolvedValue({
+        hubId: 'hub-1', delayHours: 72, emergencyOverrideEnabled: true, updatedAt: new Date(), updatedBy: LIVE,
+      })
+      signatures.acceptAll = true
+      try {
+        await expect(erasure.createSelfRequest('d'.repeat(64), 'hub-1', 'rail', {
+          coApproverPubkey: pubkey, coApproverSignature: 'ab'.repeat(64), timestamp: new Date().toISOString(),
+        })).rejects.toThrow(/registered admin/)
+      } finally {
+        signatures.acceptAll = false
+      }
+    })
+  })
+
   it('are not reachable from any seed committed to this repository', () => {
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
     const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean)
@@ -187,12 +289,11 @@ describe('the signing keys whose seeds this repository published', () => {
       scanned++
       const lines = bytes.toString('utf8').split('\n')
       lines.forEach((line, i) => {
-        for (const [literal] of line.matchAll(/\b[0-9a-fA-F]{64}\b/g)) {
-          const hex = literal.toLowerCase()
-          let pubkey = derived.get(hex)
+        for (const seed of candidateSeeds(line)) {
+          let pubkey = derived.get(seed)
           if (pubkey === undefined) {
-            pubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(hex)))
-            derived.set(hex, pubkey)
+            pubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(seed)))
+            derived.set(seed, pubkey)
           }
           // Name the location and the revoked key only — never the seed itself.
           if (revokedSet.has(pubkey)) hits.push(`${file}:${i + 1} holds the seed of revoked key ${pubkey.slice(0, 16)}…`)

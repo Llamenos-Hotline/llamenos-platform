@@ -1,11 +1,11 @@
 /**
- * Ed25519 signing keys whose private halves are public.
+ * Ed25519 signing keys whose private halves are publicly known: the keys the
+ * demo accounts used before demo identities became per-process
+ * (lib/demo-identities.ts).
  *
- * This repository once committed signing seeds for the five demo accounts.
- * The seeds are gone from the tree but remain in git history, so anyone can
- * sign as these keys. A deployment that ran a demo reset before they were
- * removed still holds users under them, one of them a super-admin. No request
- * signed by, and no session belonging to, one of these keys is ever accepted.
+ * They are refused wherever a key is authenticated (lib/auth.ts, the WebSocket
+ * relay) and resolve to no user in IdentityService, so no request, session or
+ * co-signature under one of them carries any authority.
  */
 const REVOKED_SIGNING_PUBKEYS: ReadonlySet<string> = new Set([
   '0d786358b24f0a6eb7905b69649d8789df776144051a28da4f17e08bc716e7c8',

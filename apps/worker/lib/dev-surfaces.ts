@@ -4,9 +4,11 @@
  * (lib/demo-identities.ts).
  *
  * Both inputs are process environment fixed when the server starts. Nothing
- * stored in the database and nothing in a request can satisfy it, and the
- * deploy guard (deploy/ansible/playbooks/tasks/guard-demo-mode.yml) refuses to
- * render DEV_ROUTES_ENABLED into a production host's environment.
+ * stored in the database and nothing in a request can satisfy it. It is not a
+ * build-time exclusion — CI tests the shipped image with exactly this
+ * environment — so a host started with it IS a development server and must
+ * never face the internet. The deploy guard only refuses it for
+ * app_environment=production (deploy/ansible/playbooks/tasks/guard-demo-mode.yml).
  */
 export interface DevSurfacesEnv {
   ENVIRONMENT?: string
