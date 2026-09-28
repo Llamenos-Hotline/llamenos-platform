@@ -10,7 +10,6 @@
  * standing between it and a demo super-admin is the development-server gate.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { execFileSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
@@ -27,6 +26,7 @@ import { IdentityService } from '@worker/services/identity'
 import { ErasureService } from '@worker/services/erasure'
 import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
+import { trackedFiles } from '../../../../tests/orchestrator/codeowners'
 
 // Lets a test stand in for someone holding a published seed: any signature verifies.
 const signatures = vi.hoisted(() => ({ acceptAll: false }))
@@ -270,9 +270,12 @@ describe('the signing keys whose seeds this repository published', () => {
     })
   })
 
+  // `trackedFiles`, never a bare git call: fleet/verify runs this suite in a
+  // `git archive` export with no `.git`, where the helper walks the export
+  // instead — which holds exactly the committed files.
   it('are not reachable from any seed committed to this repository', () => {
-    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
-    const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean)
+    const root = path.resolve(__dirname, '../../../..')
+    const files = trackedFiles(root)
     expect(files.length).toBeGreaterThan(1000)
 
     const revokedSet = revokedSigningKeys()
