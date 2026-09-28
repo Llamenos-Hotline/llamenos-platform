@@ -643,6 +643,7 @@ struct CaseDetailView: View {
             if viewModel.isLoadingContacts {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("case-contacts-loading")
             } else if viewModel.contacts.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "person.2.slash")
@@ -695,6 +696,7 @@ struct CaseDetailView: View {
             if viewModel.isLoadingEvidence {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("case-evidence-loading")
             } else if viewModel.evidence.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.text.magnifyingglass")

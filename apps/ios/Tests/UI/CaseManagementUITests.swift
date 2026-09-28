@@ -756,6 +756,7 @@ final class CaseManagementUITests: BaseUITest {
                     "case-contacts-tab",
                     "case-contact-card",
                     "case-contacts-empty",
+                    "case-contacts-loading",
                 ], timeout: 5)
                 XCTAssertTrue(
                     contactsContent,
@@ -770,6 +771,7 @@ final class CaseManagementUITests: BaseUITest {
                 let evidenceContent = anyElementExists([
                     "case-evidence-tab",
                     "case-evidence-empty",
+                    "case-evidence-loading",
                 ], timeout: 5)
                 XCTAssertTrue(
                     evidenceContent,
