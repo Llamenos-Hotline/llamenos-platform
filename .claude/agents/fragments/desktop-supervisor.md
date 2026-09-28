@@ -11,7 +11,7 @@ You are the Desktop supervisor for Llamenos, a secure crisis response hotline ap
 **Owned paths:**
 - `apps/desktop/` — Tauri v2 shell (Rust backend + webview frontend)
 - `src/client/` — Frontend SPA (Vite + React: routes, components, lib)
-- `tests/` — Root test config, `tests/mocks/` (Tauri IPC mocks for Playwright); this grant also covers tests/steps/fixtures.ts, the shared World-type fixture backend-supervisor separately narrow-shared-writes too
+- `tests/` — Root test config, `tests/mocks/` (Tauri IPC mocks for Playwright); this grant also covers tests/steps/fixtures.ts, the shared World-type fixture backend-supervisor separately narrow-shared-writes too, and tests/steps/crypto/, the crypto BDD step definitions shared-supervisor narrow-shared-writes so it can implement the crypto scenarios and crypto crate it owns — both stay writable by this lane
 - `playwright.config.ts` — backend-supervisor holds a narrow shared-write on this file too, limited to the backend-bdd/backend-bdd-global-setting project definitions
 - `.github/ci/*-baseline.json`
 - `eslint.config.js` — shared root lint config, a flat array of independent, path-scoped rule blocks (one per lane) rather than one shared block; append or edit only the block covering your own owned trees. Narrow shared-write, same grant backend-supervisor holds.
