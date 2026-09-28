@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { classifyImpact, tierFor, TIER1_PATHS, AGENT_INSTRUCTION_PATHS } from '../../orchestrator/src/impact.js'
 import { NEVER_WRITE_PATHS, SECRET_PATH_PATTERNS } from '../../orchestrator/src/config.js'
+import { checkScope } from '../../orchestrator/src/scope.js'
 
 /**
  * Builds a realistic changed-file path for a `matchesPath`/glob pattern so
@@ -224,6 +225,29 @@ describe('classifyImpact — secrets always classify high', () => {
   it.each(NEVER_WRITE_PATHS)('never-write pattern %s is also high-impact (gates must not drift)', (pattern) => {
     const file = realisticPathFor(pattern)
     expect(classifyImpact([file], 5).impact).toBe('high')
+  })
+
+  // The write gate and the merge gate are deliberately ASYMMETRIC about
+  // committed templates (#1253): `deploy/docker/.env.example` must be
+  // WRITABLE, or the deploy template can never be fixed — but it stays
+  // HIGH-IMPACT, because a real credential pasted into a file that is
+  // committed on purpose is the one mistake a revert cannot undo. The
+  // required relation is never-write ⊆ high-impact, so the merge gate being
+  // the broader of the two keeps it intact.
+  it.each([
+    '.env.example',
+    'deploy/docker/.env.example',
+    'apps/android/keystore.properties.example',
+  ])('%s is writable by the never-write gate yet still high-impact at merge', (file) => {
+    expect(checkScope([file], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual([])
+    const result = classifyImpact([file], 5)
+    expect(result.impact).toBe('high')
+    expect(result.reasons.join(' ')).toContain('committed template (writable, still high-impact)')
+  })
+
+  it('does not call a real secret a committed template in its reason', () => {
+    expect(classifyImpact(['deploy/docker/.env'], 5).reasons.join(' '))
+      .toContain('(never-write and high-impact)')
   })
 
   // The twelve-path probe from the security review: every one is a
