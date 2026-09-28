@@ -10,6 +10,8 @@ import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedDemoDataset } from '../services/demo-seeder'
 import { DEMO_HUB } from '../lib/demo-dataset'
 import { demoIdentities } from '../lib/demo-identities'
+import { getDb } from '../db'
+import { sql as rawSql } from 'drizzle-orm'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -47,7 +49,6 @@ dev.post('/test-reset', async (c) => {
   const services = c.get('services')
   const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
   const adminPubkey = c.env.ADMIN_PUBKEY
-  const demoMode = c.env.DEMO_MODE === 'true'
   await services.audit.reset()
   await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
   // Reset settings (including roles table and hubs) BEFORE re-seeding admin.
@@ -62,7 +63,10 @@ dev.post('/test-reset', async (c) => {
   // (concurrent browser requests between reset() and the later ensureInit() would
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
   if (adminPubkey) {
-    await services.identity.ensureInit(adminPubkey, demoMode)
+    await services.identity.ensureInit(adminPubkey)
+    if (c.env.DEMO_MODE === 'true') {
+      await services.identity.ensureDemoAccounts(demoIdentities(c.env))
+    }
   }
   await services.records.reset()
   await services.shifts.reset('')
@@ -295,7 +299,7 @@ dev.post('/test-promote-admin', async (c) => {
   // Use ensureInit which does INSERT ... ON CONFLICT DO UPDATE SET roles = ['role-super-admin'].
   // This is atomic and race-safe — unlike the old updateUser/createUser pattern which could
   // fail if the user was created by a concurrent request between the two calls.
-  await services.identity.ensureInit(pubkey, false)
+  await services.identity.ensureInit(pubkey)
   return c.json({ ok: true, pubkey })
 })
 
@@ -729,9 +733,19 @@ dev.post('/test-seed-demo', async (c) => {
     return c.json({ error: 'Not Found' }, 404)
   }
   const services = c.get('services')
-  await services.identity.ensureInit(undefined, true)
+  await services.identity.ensureDemoAccounts(demoIdentities(c.env))
   const summary = await seedDemoDataset(services, c.env)
   return c.json({ ok: true, summary })
+})
+
+// The demo accounts' signing keys are generated per server process and never
+// committed, so a test signs in as one by asking the process that holds them.
+dev.get('/test-demo-identities', async (c) => {
+  if (c.env.ENVIRONMENT !== 'development' || !checkResetSecret(c)) {
+    return c.json({ error: 'Not Found' }, 404)
+  }
+  const identities = demoIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
+  return c.json({ identities })
 })
 
 dev.delete('/test-seed-demo', async (c) => {
@@ -740,7 +754,7 @@ dev.delete('/test-seed-demo', async (c) => {
   }
   const services = c.get('services')
   await services.settings.purgeHub(DEMO_HUB.id)
-  for (const account of demoIdentities()) {
+  for (const account of demoIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
   return c.json({ ok: true })
@@ -1213,7 +1227,7 @@ dev.post('/test-create-hub', async (c) => {
     // test startup, test-create-hub can race with test-reset/ensureInit — the
     // admin row may not exist yet. ensureInit uses onConflictDoUpdate so it's
     // safe to call concurrently (idempotent, always sets role-super-admin).
-    await services.identity.ensureInit(adminPubkey, false)
+    await services.identity.ensureInit(adminPubkey)
 
     // Retry up to 3 times — even after ensureInit, a concurrent reset could
     // briefly delete the user row between our ensureInit and setHubRole.
@@ -1233,7 +1247,7 @@ dev.post('/test-create-hub', async (c) => {
         if (attempt < 2) {
           await new Promise(r => setTimeout(r, 500))
           // Re-ensure admin exists before retrying
-          await services.identity.ensureInit(adminPubkey, false).catch(() => {})
+          await services.identity.ensureInit(adminPubkey).catch(() => {})
         }
       }
     }
@@ -1243,6 +1257,75 @@ dev.post('/test-create-hub', async (c) => {
   }
 
   return c.json({ id: hub.id, name: hub.name })
+})
+
+// ─── Database identity (test-harness cross-check) ─────────────────────────
+// Proves that a direct-DB test client (tests/db-helpers.ts) is querying the
+// SAME database this server writes to.
+//
+// Why this exists: TestDB bypasses the API to assert persisted state. If it
+// connects to a different database than the server — which used to happen
+// silently, because db-helpers.ts fell back to a hardcoded dev URL — then every
+// direct-DB assertion passes or fails for reasons unrelated to the code under
+// test. That produced three scenarios that looked like regressions and nearly
+// caused a correct fix to be abandoned. This endpoint makes the shared-database
+// invariant checkable instead of assumed.
+//
+// Identity is `current_database()` + the postmaster start time, because that
+// pair is stable no matter which network path a client takes to reach the
+// instance (host vs container, localhost vs 127.0.0.1 vs a service alias).
+// `inet_server_addr()`/`inet_server_port()` and the host/port this server
+// resolved from its own DATABASE_URL are returned as diagnostics only — they
+// legitimately differ between the server and a test runner on the host.
+//
+// Exposes NO credentials: a database name, host and port. Never the connection
+// URL, the user, or the password.
+
+/** Extract host/port from a connection URL, discarding user and password. */
+function describeDbTarget(databaseUrl: string | undefined): { host: string | null; port: number | null } {
+  if (!databaseUrl) return { host: null, port: null }
+  try {
+    const parsed = new URL(databaseUrl)
+    return {
+      host: parsed.hostname || null,
+      port: parsed.port ? Number(parsed.port) : 5432,
+    }
+  } catch {
+    // Never echo the unparseable value back — it may contain a password.
+    return { host: null, port: null }
+  }
+}
+
+dev.get('/test-db-identity', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const rows = await getDb().execute(rawSql`
+    SELECT
+      current_database() AS database,
+      extract(epoch from pg_postmaster_start_time())::text AS instance_id,
+      inet_server_addr()::text AS server_addr,
+      inet_server_port() AS server_port
+  `)
+  const row = rows[0] as {
+    database: string
+    instance_id: string
+    server_addr: string | null
+    server_port: number | null
+  }
+
+  // DATABASE_URL is read from the process env at startup (src/server/index.ts),
+  // not carried on the Hono env — read it from the same place the server did.
+  const target = describeDbTarget(process.env.DATABASE_URL)
+
+  return c.json({
+    database: row.database,
+    instanceId: row.instance_id,
+    serverAddr: row.server_addr,
+    serverPort: row.server_port === null ? null : Number(row.server_port),
+    resolvedHost: target.host,
+    resolvedPort: target.port,
+  })
 })
 
 export default dev

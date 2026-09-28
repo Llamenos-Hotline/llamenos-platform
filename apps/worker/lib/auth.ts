@@ -5,6 +5,7 @@ import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
 import type { IdentityService } from '../services/identity'
 import { createLogger } from './logger'
+import { isRevokedSigningKey } from './revoked-signing-keys'
 
 const logger = createLogger('auth')
 
@@ -26,6 +27,7 @@ export function parseSessionHeader(header: string | null): string | null {
 
 export function validateToken(auth: AuthPayload): boolean {
   if (!auth.pubkey || !auth.timestamp || !auth.token) return false
+  if (typeof auth.pubkey !== 'string' || isRevokedSigningKey(auth.pubkey)) return false
   // Check token freshness
   const age = Date.now() - auth.timestamp
   if (age > TOKEN_MAX_AGE_MS || age < -TOKEN_MAX_AGE_MS) return false
@@ -76,6 +78,7 @@ export async function authenticateRequest(
   if (sessionToken) {
     try {
       const session = await identityService.validateSession(sessionToken)
+      if (isRevokedSigningKey(session.pubkey)) return null
       const user = await identityService.getUserInternal(session.pubkey)
       if (!user) return null
       if (user.active === false) return null
