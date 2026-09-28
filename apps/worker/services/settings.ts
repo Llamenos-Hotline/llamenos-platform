@@ -115,6 +115,17 @@ const log = createLogger('services.settings')
 // ---------------------------------------------------------------------------
 
 /** Thrown by service methods for known error conditions */
+/**
+ * Outcome of resolving the IVR voice catalog for a hub. Three distinct states:
+ * nothing configured yet (no constraint can be applied), a catalog resolved
+ * (constraint applies), or a provider configured whose catalog we do not hold
+ * (speakability unknown — must be refused, never silently permitted).
+ */
+type IvrCatalogResolution =
+  | { state: 'unconfigured' }
+  | { state: 'resolved'; catalog: IvrVoiceCatalog<unknown> }
+  | { state: 'unsupported'; providerType: string }
+
 export class ServiceError extends Error {
   constructor(
     public readonly status: number,
@@ -515,23 +526,28 @@ export class SettingsService {
   }
 
   /**
-   * Resolve the IVR voice catalog for whichever provider will actually
-   * answer this hub's calls — hub-specific config first, then the global
-   * fallback (mirrors `getHubTelephonyFromService`'s resolution order in
-   * lib/service-factories.ts). `undefined` means "no provider configured
-   * yet to check against", not "nothing is speakable" — callers must not
-   * reject on `undefined`.
+   * Resolve the IVR voice catalog for whichever provider will actually answer
+   * this hub's calls — hub-specific config first, then the global fallback
+   * (mirrors `getHubTelephonyFromService`'s resolution order in
+   * lib/service-factories.ts).
+   *
+   * The three outcomes are kept distinct on purpose. The previous version
+   * returned a bare `IvrVoiceCatalog | undefined` behind a blanket
+   * `catch { return undefined }`, which collapsed "no provider configured yet"
+   * (legitimately permissive) together with "a provider IS configured but we
+   * could not read it" and "the lookup threw" (both of which must never be
+   * permissive). That conflation is what silently disabled a security-relevant
+   * constraint. There is deliberately no try/catch here: a failed read is a
+   * real failure and must surface, not be downgraded into "unconstrained".
    */
-  private async getEffectiveIvrVoiceCatalog(
-    hubId?: string,
-  ): Promise<IvrVoiceCatalog<unknown> | undefined> {
-    try {
-      const hubConfig = hubId ? await this.getHubTelephonyProvider(hubId) : null
-      const config = hubConfig ?? (await this.getTelephonyProvider())
-      return getIvrVoiceCatalogForProvider(config?.type)
-    } catch {
-      return undefined
-    }
+  private async resolveIvrVoiceCatalog(hubId?: string): Promise<IvrCatalogResolution> {
+    const hubConfig = hubId ? await this.getHubTelephonyProvider(hubId) : null
+    const config = hubConfig ?? (await this.getTelephonyProvider())
+    const providerType = config?.type
+    if (!providerType) return { state: 'unconfigured' }
+    const catalog = getIvrVoiceCatalogForProvider(providerType)
+    if (!catalog) return { state: 'unsupported', providerType }
+    return { state: 'resolved', catalog }
   }
 
   async updateIvrLanguages(data: {
@@ -555,13 +571,22 @@ export class SettingsService {
     // Constrain to what the active provider can actually speak (#732) —
     // reuses the catalog resolution built for #679 / PR #673 rather than
     // duplicating "which locales does this provider have a voice for".
-    const catalog = await this.getEffectiveIvrVoiceCatalog(hubId)
-    if (catalog) {
-      const unspeakable = valid.filter((code) => !catalog.speaks(code))
+    const resolution = await this.resolveIvrVoiceCatalog(hubId)
+    if (resolution.state === 'unsupported') {
+      // A provider is configured but we hold no voice catalog for it, so
+      // speakability is unknown. Refuse rather than fall through to the
+      // permissive branch reserved for "nothing configured yet".
+      throw new ServiceError(
+        400,
+        `No IVR voice catalog for the configured telephony provider (${resolution.providerType}) — cannot verify that it can speak the requested languages`,
+      )
+    }
+    if (resolution.state === 'resolved') {
+      const unspeakable = valid.filter((code) => !resolution.catalog.speaks(code))
       if (unspeakable.length > 0) {
         throw new ServiceError(
           400,
-          `The active telephony provider (${catalog.provider}) cannot speak: ${unspeakable.join(', ')}`,
+          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}`,
         )
       }
     }
@@ -2285,20 +2310,30 @@ export class SettingsService {
     return currentMonth
   }
 
+  /**
+   * Hub-scoped telephony provider config.
+   *
+   * Delegates to {@link getTelephonyProvider}, which is the established read
+   * path for exactly this row — same table, same hub predicate, same credential
+   * handling. No separate parsing, key handling or decrypt helper here.
+   *
+   * The previous implementation read the row itself and did
+   * `JSON.parse(row.credentials)`. That could never succeed: every writer stores
+   * ciphertext (`provider-setup/index.ts` encrypts via `encryptCredentials`),
+   * and the provider type lives in the `provider_configs.provider_type` COLUMN,
+   * never inside the credentials JSON — so even a successful parse would have
+   * yielded an object with no `type`. It therefore returned null for every
+   * configured hub, which silently
+   *   - disabled the hub-scoped IVR speakability constraint (#1260) by making
+   *     the catalog resolution fall through to the instance-wide provider, and
+   *   - made `getHubTelephonyFromService` fall back to the global provider for
+   *     every hub, so per-hub provider configuration never took effect at all.
+   */
   async getHubTelephonyProvider(
     hubId: string,
+    hmacSecret?: string,
   ): Promise<TelephonyProviderConfig | null> {
-    const [row] = await this.db
-      .select()
-      .from(providerConfigs)
-      .where(eq(providerConfigs.hubId, hubId))
-      .limit(1)
-    if (!row?.credentials) return null
-    try {
-      return JSON.parse(row.credentials) as TelephonyProviderConfig
-    } catch {
-      return null
-    }
+    return this.getTelephonyProvider(hmacSecret, hubId)
   }
 
   async setHubTelephonyProvider(
