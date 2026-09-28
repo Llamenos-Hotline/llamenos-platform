@@ -84,7 +84,12 @@ kamailio_enabled: false
 # ─── Service Images ─────────────────────────────────────────────
 # Docker images for each service
 # Override these to use your own registry or specific versions
-llamenos_app_image: "docker.io/llamenos/llamenos:latest"
+# No default. `docker.io/llamenos/llamenos:latest` used to sit here and has
+# never existed — nothing in this project publishes to Docker Hub. Because
+# preflight only asserts non-empty, that placeholder PASSED validation and
+# then failed ~20 minutes later at the image pull, on the target host. An
+# empty value makes preflight reject it up front instead.
+llamenos_app_image: ""
 llamenos_postgres_image: "postgres:17-alpine"
 llamenos_caddy_image: "caddy:2.9-alpine"
 llamenos_rustfs_image: "rustfs/rustfs:latest"
@@ -101,6 +106,11 @@ app_environment: production
 # Admin public key (hex pubkey for first admin)
 # Leave empty to bootstrap via the Tauri desktop app
 admin_pubkey: ""
+# The admin's X25519 ENCRYPTION public key — a different value from
+# admin_pubkey (which is the Ed25519 SIGNING key). Both are printed by
+# `bun run bootstrap-admin`. Leaving this empty makes the app fall back to
+# admin_pubkey, which seals admin envelopes to a key that cannot open them.
+admin_decryption_pubkey: ""
 
 # HMAC secret for hashing phone numbers and IPs
 # Generate with: openssl rand -hex 32

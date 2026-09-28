@@ -2,79 +2,144 @@
 /**
  * Bootstrap the first admin user (CLI method).
  *
- * Generates TWO keypairs:
- *   1. Identity keypair — for authentication (Schnorr signatures, login)
- *   2. Decryption keypair — for note/message encryption (ECIES wrapping)
+ * Generates ONE 32-byte Ed25519 signing seed and derives BOTH public keys the
+ * server needs from it — exactly the way the desktop client derives them when
+ * the operator imports that seed (`device_import_and_load`,
+ * apps/desktop/src/crypto.rs:1011-1038):
  *
- * Separating identity from decryption means revoking the identity key
- * (e.g., after a session compromise) does NOT require re-encrypting all
- * stored notes. Conversely, rotating the decryption key does not invalidate
- * active sessions.
+ *   identityPubkey   = Ed25519(seed)
+ *   encryptionSeed   = HKDF-SHA256(ikm = seed, salt = none,
+ *                                  info = LABEL_DEVICE_ENCRYPTION_SEED)
+ *   decryptionPubkey = X25519(encryptionSeed)
  *
- * NOTE: The recommended approach is in-browser bootstrap — simply visit
- * your deployed app and the setup wizard will generate a keypair for you.
- * This CLI script is useful for headless/CI setups where browser access
- * is not available.
+ * There is exactly ONE secret: the signing seed. The identity key authenticates
+ * requests (Ed25519 signatures, `apps/worker/lib/auth.ts`); the derived X25519
+ * key is the HPKE recipient that note/message/hub-key envelopes are sealed to.
+ * Deriving the second key rather than generating it independently is not a
+ * convenience — the client has no way to import a second, unrelated seed, so an
+ * independently generated decryption key produces envelopes nobody can open.
+ *
+ * NOTE: The recommended approach is in-app bootstrap — open the deployed app
+ * and the setup wizard generates the keypair for you. This CLI script is for
+ * headless/CI setups where that is not available.
  *
  * Usage:
  *   bun run scripts/bootstrap-admin.ts
  */
 
+import { ed25519, x25519 } from '@noble/curves/ed25519.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 
-function generateEd25519Keypair(): { seed: Uint8Array; pubkeyHex: string } {
-  const seed = crypto.getRandomValues(new Uint8Array(32))
-  // For bootstrap, we just need the seed and pubkey hex
-  // The actual Ed25519 pubkey derivation would be done by the crypto library
-  // For now, return the seed as hex which can be imported
-  return { seed, pubkeyHex: bytesToHex(seed) }
+/** The one secret and the two public values the server is configured with. */
+export interface AdminBootstrapKeys {
+  /** The ONLY secret. 32-byte Ed25519 signing seed, hex. Never leaves the operator. */
+  seedHex: string
+  /** `ADMIN_PUBKEY` — Ed25519 verifying key, hex. Safe to put in server config. */
+  identityPubkey: string
+  /** `ADMIN_DECRYPTION_PUBKEY` — X25519 HPKE recipient key, hex. Safe to put in server config. */
+  decryptionPubkey: string
 }
 
-// --- Identity Keypair (auth/login) ---
-const identityKeypair = generateEd25519Keypair()
-const identityPubkey = identityKeypair.pubkeyHex
+/**
+ * Derive the admin's public keys from a signing seed.
+ *
+ * Kept separate from generation so the derivation can be tested against known
+ * vectors: the bug this replaces returned the SEED as the public key, which no
+ * test could catch while generation and derivation were the same step.
+ */
+export function deriveAdminKeys(seed: Uint8Array): AdminBootstrapKeys {
+  if (seed.length !== 32) {
+    throw new Error(`signing seed must be 32 bytes, got ${seed.length}`)
+  }
+  const encryptionSeed = hkdf(
+    sha256,
+    seed,
+    new Uint8Array(0),
+    new TextEncoder().encode(LABEL_DEVICE_ENCRYPTION_SEED),
+    32,
+  )
+  return {
+    seedHex: bytesToHex(seed),
+    identityPubkey: bytesToHex(ed25519.getPublicKey(seed)),
+    decryptionPubkey: bytesToHex(x25519.getPublicKey(encryptionSeed)),
+  }
+}
 
-// --- Decryption Keypair (note/message encryption) ---
-const decryptionKeypair = generateEd25519Keypair()
-const decryptionPubkey = decryptionKeypair.pubkeyHex
+/** Generate a fresh admin signing seed and derive its public keys. */
+export function generateAdminKeys(): AdminBootstrapKeys {
+  return deriveAdminKeys(crypto.getRandomValues(new Uint8Array(32)))
+}
 
-console.log('=== Llámenos Admin Bootstrap ===\n')
-console.log('Two keypairs have been generated:\n')
+/**
+ * Render the operator-facing output.
+ *
+ * Returned as a string rather than printed so a test can assert on exactly what
+ * an operator is told to copy — in particular that the secret seed is never
+ * offered as a value to put in server config.
+ */
+export function formatBootstrapOutput(keys: AdminBootstrapKeys, serverSecret: string): string {
+  return `=== Llámenos Admin Bootstrap ===
 
-console.log('--- Identity Keypair (authentication) ---\n')
-console.log('PUBLIC KEY (hex):')
-console.log(`  ${identityPubkey}\n`)
-console.log('SECRET KEY (seed hex) — admin uses this to log in:')
-console.log(`  ${bytesToHex(identityKeypair.seed)}\n`)
+Generated one admin signing seed and derived the public keys from it.
 
-console.log('--- Decryption Keypair (note/message encryption) ---\n')
-console.log('PUBLIC KEY (hex):')
-console.log(`  ${decryptionPubkey}\n`)
-console.log('SECRET KEY (seed hex) — admin needs this to decrypt notes:')
-console.log(`  ${bytesToHex(decryptionKeypair.seed)}\n`)
+--- SECRET — keep on this machine only ---
 
-// --- Server Secret (relay event signing) ---
-const serverSecret = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+ADMIN SIGNING SEED (hex) — the admin logs in and decrypts with THIS:
+  ${keys.seedHex}
 
-console.log('--- Server Secret (WebSocket relay event signing) ---\n')
-console.log('SERVER_SECRET (hex):')
-console.log(`  ${serverSecret}\n`)
-console.log('This secret is used to derive the server\'s Ed25519 keypair for')
-console.log('signing real-time events (call notifications, presence, etc.).\n')
+  This is the ONLY secret. Do NOT put it in the server's environment, the
+  Ansible vault, a .env file, CI, or a ticket. The server never needs it, and
+  anything holding it can impersonate the admin and read every note.
+  Store it in the operator's password manager. It cannot be recovered.
 
-console.log('--- Next Steps ---\n')
-console.log('1. Set secrets for Cloudflare deployment:')
-console.log(`   echo "${identityPubkey}" | bunx wrangler secret put ADMIN_PUBKEY`)
-console.log(`   echo "${decryptionPubkey}" | bunx wrangler secret put ADMIN_DECRYPTION_PUBKEY`)
-console.log(`   echo "${serverSecret}" | bunx wrangler secret put SERVER_SECRET\n`)
-console.log('2. For local development, add to .env:')
-console.log(`   ADMIN_PUBKEY=${identityPubkey}`)
-console.log(`   ADMIN_DECRYPTION_PUBKEY=${decryptionPubkey}`)
-console.log(`   SERVER_SECRET=${serverSecret}\n`)
-console.log('3. For Docker deployment, also add to .env:')
-console.log(`   ADMIN_PUBKEY=${identityPubkey}`)
-console.log(`   SERVER_SECRET=${serverSecret}\n`)
-console.log('4. The admin logs in with the IDENTITY seed hex.')
-console.log('5. The admin imports the DECRYPTION seed hex to decrypt notes.')
-console.log('   (In the current single-admin setup, both seeds are entered during onboarding.)\n')
-console.log('   IMPORTANT: Store both seeds securely. They cannot be recovered.\n')
+--- PUBLIC — these go in the server config ---
+
+ADMIN_PUBKEY (Ed25519 identity, hex):
+  ${keys.identityPubkey}
+
+ADMIN_DECRYPTION_PUBKEY (X25519 HPKE recipient, hex):
+  ${keys.decryptionPubkey}
+
+SERVER_SECRET (hex) — server-side only; signs WebSocket relay events:
+  ${serverSecret}
+
+  SERVER_SECRET is a server secret, not an operator secret: the server derives
+  its own Ed25519 event-signing keypair from it. It belongs in the vault.
+
+--- Next Steps ---
+
+1. Ansible-managed deploy — set these in the host vars / vault
+   (deploy/ansible/templates/env/_worker-required-env.j2 renders them into the
+   worker container's .env):
+
+     admin_pubkey: ${keys.identityPubkey}
+     server_secret: ${serverSecret}          # vault-encrypt this
+
+   ADMIN_DECRYPTION_PUBKEY is not rendered by that template today; set it on the
+   container directly (step 2) if you need a decryption key distinct from
+   ADMIN_PUBKEY.
+
+2. Plain Docker Compose deploy — add to the worker container's .env:
+
+     ADMIN_PUBKEY=${keys.identityPubkey}
+     ADMIN_DECRYPTION_PUBKEY=${keys.decryptionPubkey}
+     SERVER_SECRET=${serverSecret}
+
+3. Local development — the same three lines in the repo's .env (gitignored).
+
+4. Log in: open the app and import the ADMIN SIGNING SEED above. The client
+   re-derives both public keys from it, so they will match the server config.
+
+This backend is Bun + PostgreSQL. It is not a Cloudflare Worker, there is no
+wrangler config under apps/worker, and no secrets are pushed with wrangler.
+`
+}
+
+if (import.meta.main) {
+  const keys = generateAdminKeys()
+  const serverSecret = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  console.log(formatBootstrapOutput(keys, serverSecret))
+}

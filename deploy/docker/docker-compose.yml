@@ -56,6 +56,11 @@ services:
       - ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      # Required by the app whenever ENVIRONMENT is production (the default above).
+      # validateConfig() throws without it rather than fall back to the spoofable
+      # Host header for webhook signature validation — so the container would
+      # crash-loop with no compose-level explanation. Fail at `up` instead.
+      - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:?WEBHOOK_BASE_URL is required — the public https:// base URL webhooks are delivered to, e.g. https://api.example.org}"
       - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required — generate with openssl rand -hex 32}"
       - STORAGE_ENDPOINT=http://rustfs:9000
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
@@ -73,7 +78,14 @@ services:
       - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)
-      - NTFY_URL=${NTFY_URL:-http://ntfy:80}
+      # No default. The `ntfy` service below sits behind the `push` profile, so
+      # defaulting this to a hostname that usually is not running made the app
+      # advertise a broker that does not exist. That was invisible while this
+      # variable never reached the routes (the `c.env` literal in
+      # src/server/index.ts omitted it, so push was inert everywhere); now that
+      # it does, an unset value must mean "no ntfy", not "a dead one".
+      # Set NTFY_URL explicitly when you run `--profile push`.
+      - NTFY_URL=${NTFY_URL:-}
       - NTFY_AUTH_TOKEN=${NTFY_AUTH_TOKEN:-}
     networks:
       - web

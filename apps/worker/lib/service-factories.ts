@@ -27,11 +27,17 @@ const logger = createLogger('service-factories')
  */
 export async function getTelephonyFromService(
   env: Env,
-  settingsService: { getTelephonyProvider(): Promise<TelephonyProviderConfig | null> },
+  settingsService: {
+    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+  },
 ): Promise<TelephonyAdapter | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
   try {
-    const config = await settingsService.getTelephonyProvider()
+    // Without the secret the stored credentials are never decrypted, so the
+    // adapter is built from ciphertext and every provider call fails. The
+    // structural type used to omit this parameter entirely, which made the
+    // omission unrepresentable at the call site rather than merely missed.
+    const config = await settingsService.getTelephonyProvider(env.HMAC_SECRET)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
@@ -57,14 +63,17 @@ export async function getTelephonyFromService(
 export async function getHubTelephonyFromService(
   env: Env,
   settingsService: {
-    getHubTelephonyProvider(hubId: string): Promise<TelephonyProviderConfig | null>
-    getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
+    getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+    getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
   },
   hubId: string,
 ): Promise<TelephonyAdapter | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
   try {
-    const config = await settingsService.getHubTelephonyProvider(hubId)
+    // This is the path real call handling uses (services/ringing.ts:172),
+    // so a per-hub provider that resolves but never decrypts is the same
+    // silent fallback as not resolving at all.
+    const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
     if (config) return createAdapterFromConfig(config, webhookBaseUrl, env)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {

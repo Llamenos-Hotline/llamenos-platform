@@ -20,20 +20,33 @@ import {
  *   "ghcr.io/Llamenos-Hotline/llamenos-platform:buildcache":
  *   repository name must be lowercase
  *
- * Scope note. This rail covers the addresses this project DERIVES from
- * `github.repository` — the build caches — where folding to lowercase is
- * safe because we own the address and nothing external is promised it.
+ * Scope note. This rail covers every address this project DERIVES from
+ * `github.repository` and hands to a registry: the two build caches
+ * (docker-buildcache.yml, image-smoke.yml) and the release publish
+ * (release.yml's `docker-stable`).
  *
- * `release.yml`'s `docker-stable` is deliberately NOT covered, and is
- * deliberately not fixed in the same change. Its publish address is a
- * published contract (`registry.app` in site/src/config.ts, what
- * self-hosters `docker pull` and what cosign signs), and there is currently
- * no address that is both advertised and writable: the advertised namespace
- * cannot be written by this repo's GITHUB_TOKEN (`denied:
- * permission_denied`, observed on ci-base-image-nightly run 36309067787),
- * and the writable one is unadvertised, nonexistent, and private on
- * creation. Folding the case there would make an unwritable push
- * *look* fixed. That is an operator decision, tracked separately.
+ * `docker-stable` used to be excluded here on the theory that folding its
+ * case "would make an unwritable push *look* fixed". That reasoning was
+ * backwards and is retired. The address this repo's GITHUB_TOKEN cannot
+ * write is the *advertised* one — `ghcr.io/rhonda-rodododo/...`, still the
+ * value of `registry.app` in site/src/config.ts, whose package lives under
+ * an owner this repository has no `packages: write` on (`denied:
+ * permission_denied`, ci-base-image-nightly run 36309067787). The address
+ * the fold produces is this repository's OWN namespace, which the job's
+ * `packages: write` token can write. So folding does not mask an unwritable
+ * push — without it the push is unwritable *and* malformed, rejected by the
+ * registry before a permission is ever consulted. With it, `docker-stable`
+ * has the only publishable address available to it.
+ *
+ * The consequence is a knowing, tracked divergence: the address computed
+ * and pushed here (`ghcr.io/llamenos-hotline/llamenos-platform`) is NOT the
+ * address site/src/config.ts advertises. #1223 is the follow-up that moves
+ * the advertised one onto the pushed one, once the new package exists and
+ * is public. That divergence is pinned from both ends — and made to fail
+ * loudly the moment either end moves — in
+ * tests/orchestrator/release-ghcr-publish.test.ts. This file only asserts
+ * the narrower property: whatever address is computed, it is lowercase and
+ * therefore legal for a registry to accept.
  *
  * Why a rail and not a code read. GitHub Actions has no lowercase function
  * in `${{ }}` expressions, and `with:` inputs are not shell — so `${VAR,,}`
@@ -117,6 +130,27 @@ const CASES: ReadonlyArray<{
     foldedOutput: 'image',
     expectedFolded: FOLDED_REPOSITORY,
     consumers: (j) => [String(getStep(j, 'Build app image').with?.['cache-from'])],
+  },
+  {
+    // The release publish itself. Unlike the two cache refreshes above, this
+    // step reads its `REGISTRY`/`IMAGE_NAME` from JOB-level env, not
+    // workflow-level — so the inherited env comes off the job.
+    file: 'release.yml',
+    job: 'docker-stable',
+    step: 'Compute stable tags',
+    inheritedEnv: (_doc, j) => resolveEnv(j.env, EXPRESSIONS),
+    foldedOutput: 'image',
+    expectedFolded: FOLDED_REPOSITORY,
+    consumers: (j) => {
+      const smoke = getStep(j, 'Build image for the pre-publish smoke')
+      const push = getStep(j, 'Build and push stable image')
+      return [
+        String(smoke.with?.['cache-from']),
+        String(push.with?.['tags']),
+        String(push.with?.['cache-from']),
+        String(push.with?.['cache-to']),
+      ]
+    },
   },
 ]
 
