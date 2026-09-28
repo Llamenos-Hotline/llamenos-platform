@@ -71,11 +71,11 @@ worktree_db_export() {
     return 0
   fi
 
-  if [[ "$flag" == "--ensure" ]]; then
-    bun "$root/scripts/worktree-db.ts" ensure || return 1
-  fi
   line="$(bun "$root/scripts/worktree-db.ts" resolve)" || return 1
   read -r mode db user host port <<<"$line"
+  if [[ "$flag" == "--ensure" && "$mode" == "isolated" ]]; then
+    bun "$root/scripts/worktree-db.ts" ensure || return 1
+  fi
   if [[ "$flag" == "--shared" ]]; then
     mode=shared
     db=llamenos
