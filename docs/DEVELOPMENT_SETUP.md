@@ -59,6 +59,7 @@ create (e.g. hand-made `llamenos_<name>` scratch databases).
 volume is first created. If `.env`'s `PG_PASSWORD` has changed since, everything that
 connects (`ensure`, `sweep`, `dev:server`) stops with an explicit authentication error,
 never printing either password. Set `PG_PASSWORD` in `.env` to the one the volume was
-created with (the compose default is `dev`) — `scripts/dev-bun.sh` loads `.env` over the
+created with (for a volume created without one, the default in `docker-compose.dev.yml`) —
+`scripts/dev-bun.sh` loads `.env` over the
 environment, so exporting it is not enough — or change the role's password in the
 container.
