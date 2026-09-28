@@ -10,6 +10,8 @@ import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedDemoDataset } from '../services/demo-seeder'
 import { DEMO_HUB } from '../lib/demo-dataset'
 import { demoIdentities } from '../lib/demo-identities'
+import { getDb } from '../db'
+import { sql as rawSql } from 'drizzle-orm'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -1255,6 +1257,75 @@ dev.post('/test-create-hub', async (c) => {
   }
 
   return c.json({ id: hub.id, name: hub.name })
+})
+
+// ─── Database identity (test-harness cross-check) ─────────────────────────
+// Proves that a direct-DB test client (tests/db-helpers.ts) is querying the
+// SAME database this server writes to.
+//
+// Why this exists: TestDB bypasses the API to assert persisted state. If it
+// connects to a different database than the server — which used to happen
+// silently, because db-helpers.ts fell back to a hardcoded dev URL — then every
+// direct-DB assertion passes or fails for reasons unrelated to the code under
+// test. That produced three scenarios that looked like regressions and nearly
+// caused a correct fix to be abandoned. This endpoint makes the shared-database
+// invariant checkable instead of assumed.
+//
+// Identity is `current_database()` + the postmaster start time, because that
+// pair is stable no matter which network path a client takes to reach the
+// instance (host vs container, localhost vs 127.0.0.1 vs a service alias).
+// `inet_server_addr()`/`inet_server_port()` and the host/port this server
+// resolved from its own DATABASE_URL are returned as diagnostics only — they
+// legitimately differ between the server and a test runner on the host.
+//
+// Exposes NO credentials: a database name, host and port. Never the connection
+// URL, the user, or the password.
+
+/** Extract host/port from a connection URL, discarding user and password. */
+function describeDbTarget(databaseUrl: string | undefined): { host: string | null; port: number | null } {
+  if (!databaseUrl) return { host: null, port: null }
+  try {
+    const parsed = new URL(databaseUrl)
+    return {
+      host: parsed.hostname || null,
+      port: parsed.port ? Number(parsed.port) : 5432,
+    }
+  } catch {
+    // Never echo the unparseable value back — it may contain a password.
+    return { host: null, port: null }
+  }
+}
+
+dev.get('/test-db-identity', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const rows = await getDb().execute(rawSql`
+    SELECT
+      current_database() AS database,
+      extract(epoch from pg_postmaster_start_time())::text AS instance_id,
+      inet_server_addr()::text AS server_addr,
+      inet_server_port() AS server_port
+  `)
+  const row = rows[0] as {
+    database: string
+    instance_id: string
+    server_addr: string | null
+    server_port: number | null
+  }
+
+  // DATABASE_URL is read from the process env at startup (src/server/index.ts),
+  // not carried on the Hono env — read it from the same place the server did.
+  const target = describeDbTarget(process.env.DATABASE_URL)
+
+  return c.json({
+    database: row.database,
+    instanceId: row.instance_id,
+    serverAddr: row.server_addr,
+    serverPort: row.server_port === null ? null : Number(row.server_port),
+    resolvedHost: target.host,
+    resolvedPort: target.port,
+  })
 })
 
 export default dev
