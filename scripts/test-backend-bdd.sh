@@ -30,6 +30,12 @@ export VERBOSE JSON_OUTPUT REPORTER_TIMEOUT
 
 cd "$PROJECT_ROOT"
 
+# TestDB (tests/db-helpers.ts) asserts persisted state straight from Postgres, so
+# it must query the database the server writes to. Resolve it exactly as
+# scripts/dev-bun.sh did for the server; an explicit DATABASE_URL (CI) wins.
+source "$SCRIPT_DIR/lib/worktree-db.sh"
+worktree_db_export
+
 reporter_init "backend-bdd"
 
 overall_result="pass"
