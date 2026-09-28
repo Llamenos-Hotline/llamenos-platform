@@ -167,6 +167,11 @@ async function withDb<T>(databaseUrl: string, fn: (sql: postgres.Sql) => Promise
   }
 }
 
+// Teardown gets an explicit budget rather than vitest's 10s default: vitest
+// runs test FILES in parallel, so this DROP DATABASE competes with whatever
+// other integration file is hammering the same Postgres, and a forced drop
+// there routinely takes longer than 10s. The tests themselves already pass —
+// only the cleanup was timing out, turning a green run red.
 afterEach(async () => {
   const admin = postgres(DATABASE_URL, { max: 1 })
   try {
@@ -176,7 +181,7 @@ afterEach(async () => {
   } finally {
     await admin.end()
   }
-})
+}, BOOT_TIMEOUT_MS)
 
 const DEFAULT_ROLE_IDS = DEFAULT_ROLES.map((r) => r.id).sort()
 

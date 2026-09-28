@@ -17,6 +17,10 @@ app:
   env:
     HOTLINE_NAME: "Hotline"
     ENVIRONMENT: "production"
+    # Required while ENVIRONMENT is "production" — the public https:// base URL
+    # telephony/messaging webhooks are delivered to. The app refuses to boot
+    # without it rather than trust the spoofable Host header.
+    WEBHOOK_BASE_URL: ""
 
 # PostgreSQL connection
 postgres:
