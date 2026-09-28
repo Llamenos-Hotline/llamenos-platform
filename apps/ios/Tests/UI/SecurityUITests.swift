@@ -329,8 +329,11 @@ final class SecurityUITests: BaseUITest {
         when("I open the Device Link view") {
             navigateToAccountSettings()
             scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
+            XCTAssertTrue(
+                find("device-link-view").waitForExistence(timeout: 5),
+                "The Device Link view should open from Account settings"
+            )
+            app.answerSystemPromptOnce(.camera)
         }
         then("the SAS confirm and reject buttons should be defined in the app") {
             // The verifying step is only rendered when a SAS code is received.
@@ -365,8 +368,11 @@ final class SecurityUITests: BaseUITest {
         when("I open the Device Link view") {
             navigateToAccountSettings()
             scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
+            XCTAssertTrue(
+                find("device-link-view").waitForExistence(timeout: 5),
+                "The Device Link view should open from Account settings"
+            )
+            app.answerSystemPromptOnce(.camera)
         }
         then("the error step UI elements should be properly defined") {
             // The error step ("device-link-error") is shown when processQRCode

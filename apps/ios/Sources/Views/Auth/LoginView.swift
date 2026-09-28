@@ -8,7 +8,7 @@ import SwiftUI
 struct LoginView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
-    @State private var viewModel: AuthViewModel?
+    @State private var viewModelBox = ViewModelBox<AuthViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -139,13 +139,11 @@ struct LoginView: View {
 
     /// Lazily creates the AuthViewModel using the AppState services.
     private var resolvedViewModel: AuthViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = AuthViewModel(authService: appState.authService, apiService: appState.apiService)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

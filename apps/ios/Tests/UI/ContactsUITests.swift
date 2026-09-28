@@ -10,7 +10,7 @@ final class ContactsUITests: BaseUITest {
 
     func testContactsQuickActionVisibleForAdmin() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         then("the dashboard should show a contacts quick action") {
             let contactsAction = scrollToFind("dashboard-contacts-action")
@@ -40,7 +40,7 @@ final class ContactsUITests: BaseUITest {
 
     func testContactsActionIsTappable() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         then("the contacts action should exist and be accessible") {
             let contactsAction = scrollToFind("dashboard-contacts-action")

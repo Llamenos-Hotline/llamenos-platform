@@ -84,9 +84,16 @@ targets:
         UITesting:
           CODE_SIGN_ENTITLEMENTS: Sources/App/Llamenos.Debug.entitlements
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) UI_TESTING
+    # Both test targets must be members of the scheme's test action. #168
+    # dropped LlamenosUITests from this list to speed up the unit job, which
+    # left `build-for-testing` producing no UI test bundle and every
+    # `-only-testing:LlamenosUITests/...` selecting nothing — the UI suite
+    # could not run anywhere, CI or local. The unit job opts out with
+    # `-skip-testing:LlamenosUITests` instead.
     scheme:
       testTargets:
         - LlamenosTests
+        - LlamenosUITests
       gatherCoverageData: true
       coverageTargets:
         - Llamenos
@@ -112,6 +119,10 @@ targets:
     platform: iOS
     sources:
       - path: Tests/UI
+      # TestAdminAPI signs real API requests; the auth-message label comes from
+      # codegen like everywhere else (never a raw "llamenos:" literal).
+      - path: ../../packages/protocol/generated/swift/CryptoLabels.swift
+        name: Generated
     dependencies:
       - target: Llamenos
     settings:

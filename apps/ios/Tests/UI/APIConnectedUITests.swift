@@ -71,18 +71,19 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
-    func testDashboardShowsNpubWithAPI() {
+    func testDashboardShowsIdentityWithAPI() {
         given("I am connected to the API") {
             launchWithAPI()
         }
-        then("I should see my npub on the dashboard") {
+        then("I should see my identity on the dashboard") {
             let dashboard = find("dashboard-title")
             XCTAssertTrue(dashboard.waitForExistence(timeout: 15))
 
-            let npubDisplay = find("dashboard-npub")
+            // v3 device keys: the identity is the signing pubkey (hex), not a Bech32 npub.
+            let identity = find("dashboard-identity")
             XCTAssertTrue(
-                npubDisplay.waitForExistence(timeout: 5),
-                "Dashboard should display the user's npub with API connection"
+                identity.waitForExistence(timeout: 5),
+                "Dashboard should display the user's identity with API connection"
             )
         }
     }
@@ -348,7 +349,7 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
-    func testSettingsShowsNpubWithAPI() {
+    func testSettingsShowsSigningPubkeyWithAPI() {
         given("I am connected to the API") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -357,11 +358,12 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to settings") {
             navigateToSettings()
         }
-        then("I should see my npub") {
-            let npubRow = find("settings-npub")
+        then("I should see my signing pubkey") {
+            // v3 device keys: the identity is the signing pubkey (hex), not a Bech32 npub.
+            let pubkeyRow = find("settings-signing-pubkey")
             XCTAssertTrue(
-                npubRow.waitForExistence(timeout: 10),
-                "Settings should display the npub with API connection"
+                pubkeyRow.waitForExistence(timeout: 10),
+                "Settings should display the signing pubkey with API connection"
             )
         }
     }

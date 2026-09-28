@@ -8,7 +8,7 @@ struct ContactDetailView: View {
     @Environment(AppState.self) private var appState
     let contactHash: String
     let displayIdentifier: String
-    @State private var viewModel: ContactDetailViewModel?
+    @State private var viewModelBox = ViewModelBox<ContactDetailViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -391,9 +391,9 @@ struct ContactDetailView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ContactDetailViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = ContactDetailViewModel(apiService: appState.apiService, contactHash: contactHash)
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

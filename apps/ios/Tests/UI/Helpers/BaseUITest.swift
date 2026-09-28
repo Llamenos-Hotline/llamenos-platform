@@ -38,6 +38,8 @@ class BaseUITest: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         app = XCUIApplication()
+        // Tab titles and system labels ("More") are matched by text; pin the language.
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
     }
 
     override func tearDown() {
@@ -85,7 +87,9 @@ class BaseUITest: XCTestCase {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(secret, forHTTPHeaderField: "X-Test-Secret")
-        request.timeoutInterval = 15
+        // Setup, not an assertion: the first request on a freshly booted CI runner has
+        // taken 30-49s, and a class without a hub fails every connected test in it.
+        request.timeoutInterval = 60
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": hubName])
 
         var hubId = ""
@@ -107,7 +111,7 @@ class BaseUITest: XCTestCase {
                 hubId = id
             }
         }.resume()
-        _ = semaphore.wait(timeout: .now() + 15)
+        _ = semaphore.wait(timeout: .now() + 65)
         if hubId.isEmpty {
             print("Warning: createClassHub(\(className)) returned empty hub ID — is the backend running?")
         }
@@ -119,66 +123,70 @@ class BaseUITest: XCTestCase {
     /// Launch the app with a clean keychain (login screen).
     func launchClean() {
         app.launchArguments.append("--reset-keychain")
-        app.launch()
+        app.launchAnsweringSystemPrompts()
     }
 
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
+        waitForMainScreen()
     }
 
-    /// Launch the app in a pre-authenticated admin state (no API connection).
-    func launchAsAdmin() {
+    /// An authenticated launch is done when the main tab view is up. A cold first
+    /// launch on a busy CI runner has taken ~50s (run 36352561511), so a test's own
+    /// short waits started before anything had rendered. Failing here also makes a
+    /// launch that never reaches the main screen say so, instead of surfacing as a
+    /// missing element further down.
+    private func waitForMainScreen(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(
+            find("main-tab-view").waitForExistence(timeout: 60),
+            "The app should reach its main screen after an authenticated launch",
+            file: file, line: line
+        )
+    }
+
+    /// Launch the app against the live backend with a freshly registered device
+    /// identity, member of this class's hub, which becomes the active hub.
+    ///
+    /// Fails the test before launching when the class hub could not be created —
+    /// a backend that is not reachable must not turn into assertions about
+    /// connection-error screens.
+    private func launchConnected(_ identityArgs: [String]) {
+        guard !testHubId.isEmpty else {
+            XCTFail("No test hub for \(type(of: self)) — is the backend running at \(testHubURL)?")
+            return
+        }
+        // The app registers its own fresh device key through the real admin API,
+        // signed as the test admin (UI_TESTING builds only — AppState).
+        app.launchEnvironment["XCTEST_ADMIN_SECRET"] = TestAdminAPI.seedHex
         app.launchArguments.append(contentsOf: [
             "--reset-keychain",
             "--test-authenticated",
-            "--test-admin",
+        ] + identityArgs + [
+            "--test-hub-url", testHubURL,
+            "--test-hub-id", testHubId,
+            "--test-register",
         ])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
+        waitForMainScreen()
     }
 
-    /// Launch the app connected to the live Docker API as admin.
-    /// Uses the admin mock identity (matches ADMIN_PUBKEY in Docker .env)
-    /// and registers via /api/auth/bootstrap.
+    /// Launch connected to the live backend as a super-admin (hub admin of this
+    /// class's hub).
     func launchWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected([])
     }
 
-    /// Launch the app connected to the live Docker API as a volunteer.
-    /// Uses a separate volunteer keypair. The admin is bootstrapped first,
-    /// then the user is created via POST /api/users.
+    /// Launch connected to the live backend as a volunteer of this class's hub.
     func launchAsVolunteerWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-volunteer-identity",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected(["--test-volunteer-identity"])
     }
 
-    /// Launch the app connected to the live Docker API as an admin.
-    /// The identity is bootstrapped as admin on the server.
+    /// Launch connected to the live backend as a super-admin, with the admin UI
+    /// role set before the server's `/api/auth/me` answer arrives.
     func launchAsAdminWithAPI() {
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-            "--test-hub-url", testHubURL,
-            "--test-hub-id", testHubId,
-            "--test-register",
-        ])
-        app.launch()
+        launchConnected(["--test-admin"])
     }
 
     // MARK: - Server State (deprecated)
@@ -338,24 +346,47 @@ class BaseUITest: XCTestCase {
 
     // MARK: - Navigation
 
-    /// Tab indices: 0=Dashboard, 1=Notes, 2=Cases, 3=Conversations, 4=Shifts, 5=Settings
+    /// MainTabView's tabs, in order, by their English titles (setUp pins English).
+    private static let mainTabTitles = ["Dashboard", "Notes", "Cases", "Messages", "Shifts", "Settings"]
+
+    /// Select a main tab the way a user does. Indices follow `mainTabTitles`.
+    ///
+    /// An iPhone tab bar shows at most five items, so with six tabs Shifts and
+    /// Settings are reached through "More". This helper used to tap the button at
+    /// `index` if one existed and silently do nothing otherwise — so every test that
+    /// opened Shifts or Settings on an iPhone was asserting against the dashboard.
     func navigateToTab(index: Int) {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
+        guard find("main-tab-view").waitForExistence(timeout: 10) else {
             XCTFail("Main tab view should be visible")
             return
         }
-
         let tabBar = app.tabBars.firstMatch
         guard tabBar.waitForExistence(timeout: 5) else {
             XCTFail("Tab bar should exist")
             return
         }
-
-        let button = tabBar.buttons.element(boundBy: index)
-        if button.exists {
-            button.tap()
+        let title = Self.mainTabTitles[index]
+        let direct = tabBar.buttons[title]
+        if direct.exists {
+            direct.tap()
+            return
         }
+        let more = tabBar.buttons["More"]
+        guard more.exists else {
+            XCTFail("Tab '\(title)' is neither in the tab bar nor behind More")
+            return
+        }
+        more.tap()
+        let row = app.tables.cells.staticTexts[title]
+        if !row.waitForExistence(timeout: 2) {
+            // More re-opens the overflow tab shown last; tapping it again pops to its list.
+            more.tap()
+        }
+        guard row.waitForExistence(timeout: 5) else {
+            XCTFail("Tab '\(title)' should be listed under More")
+            return
+        }
+        row.tap()
     }
 
     func navigateToDashboard() { navigateToTab(index: 0) }
@@ -365,6 +396,7 @@ class BaseUITest: XCTestCase {
     func navigateToShifts() { navigateToTab(index: 4) }
     func navigateToSettings() { navigateToTab(index: 5) }
 
+    /// Open the admin panel from Settings, failing the test if it does not open.
     func navigateToAdminPanel() {
         navigateToSettings()
 
@@ -375,8 +407,22 @@ class BaseUITest: XCTestCase {
         }
         adminLink.tap()
 
-        let adminTabView = find("admin-tab-view")
-        _ = adminTabView.waitForExistence(timeout: 5)
+        guard anyElementExists(["admin-sidebar-list", "admin-tab-view"]) else {
+            XCTFail("Admin panel should appear after tapping the admin link")
+            return
+        }
+    }
+
+    /// Open one admin settings screen from the admin panel.
+    func navigateToAdminSettingsScreen(_ linkIdentifier: String) {
+        navigateToAdminPanel()
+
+        let link = scrollToFind(linkIdentifier)
+        guard link.exists else {
+            XCTFail("\(linkIdentifier) should exist in admin panel")
+            return
+        }
+        link.tap()
     }
 
     func navigateToAccountSettings() {
