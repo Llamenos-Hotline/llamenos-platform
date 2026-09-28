@@ -589,18 +589,22 @@ async function sealTemplate(sql: SQL, name: string): Promise<void> {
 }
 
 /**
- * Run `body`, which needs `name` to have no sessions. PostgreSQL answers
- * 55006 (object_in_use) otherwise, so rather than fail intermittently:
- * retry with backoff (~8s) for a session that is on its way out; then
- * terminate what is still connected — nothing may legitimately sit in a
- * template (it is sealed with ALLOW_CONNECTIONS false, so any session predates
- * the seal or bypassed it); then retry briefly while the terminated backends
- * exit; then fail naming every session still there.
+ * Run `body`, which needs `name` to have no sessions, and never fail
+ * intermittently because one is there.
+ *
+ * PostgreSQL already waits up to 5s inside each CREATE / RENAME / DROP
+ * DATABASE for other sessions to exit (CountOtherDBBackends), so a session on
+ * its way out never surfaces at all; only one still there after that answers
+ * 55006 (object_in_use). Then: pause and try once more (~11s of waiting in
+ * all); then terminate what is still connected — nothing may legitimately sit
+ * in a template (it is sealed with ALLOW_CONNECTIONS false, so any session
+ * predates the seal or bypassed it) — and retry, PostgreSQL again waiting for
+ * the terminated backends to exit; then fail, naming every session still there.
  */
 async function withoutSessions(sql: SQL, name: string, what: string, body: () => Promise<void>): Promise<void> {
-  const backoffMs = [250, 500, 1000, 2000, 4000]
-  const afterTerminateMs = [250, 500, 1000, 2000]
-  let terminated = false
+  const RETRIES_BEFORE_TERMINATING = 1
+  const RETRIES_AFTER_TERMINATING = 2
+  const PAUSE_MS = 1000
   for (let attempt = 0; ; attempt++) {
     try {
       await body()
@@ -608,25 +612,18 @@ async function withoutSessions(sql: SQL, name: string, what: string, body: () =>
     } catch (err) {
       if (sqlState(err) !== '55006') throw err
       const sessions = await sessionsOn(sql, name)
-      if (attempt < backoffMs.length) {
-        log(`${name} is in use by ${sessions.length} session(s) (${describeSessions(sessions)}); retrying ${what} in ${backoffMs[attempt]}ms`)
-        await sleep(backoffMs[attempt])
-        continue
-      }
-      if (!terminated) {
+      if (attempt < RETRIES_BEFORE_TERMINATING) {
+        log(`${name} is in use by ${sessions.length} session(s) (${describeSessions(sessions)}); retrying ${what}`)
+      } else if (attempt === RETRIES_BEFORE_TERMINATING) {
         log(`${name} still has ${sessions.length} session(s) after waiting — terminating them: ${describeSessions(sessions)}`)
         for (const s of sessions) await sql.unsafe('SELECT pg_terminate_backend($1)', [s.pid])
-        terminated = true
+      } else if (attempt >= RETRIES_BEFORE_TERMINATING + RETRIES_AFTER_TERMINATING) {
+        throw new Error(
+          `cannot ${what}: ${name} is still in use after waiting and terminating sessions — ${describeSessions(sessions)}. ` +
+            `Close whatever is connected to it and re-run.`,
+        )
       }
-      const step = attempt - backoffMs.length
-      if (step < afterTerminateMs.length) {
-        await sleep(afterTerminateMs[step])
-        continue
-      }
-      throw new Error(
-        `cannot ${what}: ${name} is still in use after waiting and terminating sessions — ${describeSessions(sessions)}. ` +
-          `Close whatever is connected to it and re-run.`,
-      )
+      await sleep(PAUSE_MS)
     }
   }
 }
