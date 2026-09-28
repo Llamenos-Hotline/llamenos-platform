@@ -96,9 +96,18 @@ native_smoke() {
       # if it printed the line and died in the gap between the grep above and
       # this check, the loop concluded "never started" while the very logs it
       # then dumped contained the line. Observed on at least four unrelated
-      # branches. A stopped container still has logs, so re-read them once
-      # before concluding; exiting is not by itself a failure.
-      docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application' && started=1
+      # branches. A stopped container still has logs, so re-read them before
+      # concluding; exiting is not by itself a failure.
+      # `.State.Running` flips false before the log driver has necessarily
+      # flushed the container's last lines — on the CPUID-masked guest (1 vCPU,
+      # emulated) that lag is visible, and reading immediately here saw an
+      # incomplete log while the post-loop dump showed the marker. Wait for the
+      # container to be fully reaped, then re-read with a bounded retry.
+      docker wait "$app" >/dev/null 2>&1 || true
+      for _ in 1 2 3 4 5; do
+        if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
+        sleep 1
+      done
       stopped=1
       break
     fi
