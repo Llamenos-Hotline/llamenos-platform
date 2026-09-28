@@ -85,11 +85,22 @@ final class AdminSettingsUITests: BaseUITest {
     func testTelephonySettingsHasCredentialFields() {
         navigateToAdminSettingsScreen("admin-telephony-settings")
 
-        // Wait for form to load
+        // `telephony-settings-view` is on the Form itself, so it exists while
+        // `isLoadingTelephony` is still true and the Form is showing only a
+        // ProgressView — waiting on it does NOT mean the fields have rendered.
+        // A missing view must fail here, not return: an early `return` would
+        // report this test as passing without checking a single field.
         let view = find("telephony-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(
+            view.waitForExistence(timeout: 10),
+            "Telephony settings view should appear"
+        )
 
-        let accountSid = scrollToFind("telephony-account-sid")
+        // `credentialsSection` renders only once loadTelephonySettings() has
+        // returned, so the first field needs the same 10s budget the sibling
+        // tests give the provider picker. scrollToFind's 2s default expires
+        // mid-load and then swipes a still-loading Form.
+        let accountSid = scrollToFind("telephony-account-sid", timeout: 10)
         XCTAssertTrue(accountSid.exists, "Account SID field should exist")
 
         let authToken = scrollToFind("telephony-auth-token")
