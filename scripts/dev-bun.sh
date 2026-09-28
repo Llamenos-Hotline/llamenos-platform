@@ -55,7 +55,9 @@ cmd_start() {
 
   # Set environment variables for local development
   export PLATFORM=bun
-  export PORT=3000
+  # Overridable so worktrees can each run a server against their own database
+  # (then point the tests at it: TEST_HUB_URL and TEST_RELAY_URL).
+  export PORT="${PORT:-3000}"
   # This worktree's own database (created / migrated here if needed), or an
   # explicit DATABASE_URL. scripts/test-backend-bdd.sh resolves it through the
   # same function, so the server and TestDB cannot end up on different databases.
