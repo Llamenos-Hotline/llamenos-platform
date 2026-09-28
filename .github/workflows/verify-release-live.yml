@@ -452,6 +452,11 @@ jobs:
             sleep 0.25
           done
 
+      # demoMode here is the deployment's DEMO_MODE: it drives the
+      # test-environment banner testers must see. It does not mean demo accounts
+      # exist — those are only ever generated on a development server
+      # (apps/worker/lib/demo-identities.ts), and the setup wizard's stored flag
+      # no longer counts anywhere else.
       - name: Verify /health/ready, /health/live, and /api/config demoMode
         env:
           STAGING_BASE_URL: ${{ inputs.staging_base_url || vars.STAGING_BASE_URL }}

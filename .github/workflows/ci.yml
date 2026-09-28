@@ -1211,6 +1211,17 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # iOS UI tests (LlamenosUITests) against a native backend — see
+  # ios-e2e.yml's header for why this was dark from May to September 2026.
+  # In ci-status's needs, so a failing UI test blocks the merge; the result of
+  # this job is the aggregate of every job in the called workflow.
+  ios-e2e:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ios-e2e.yml
+
   # ─── Crypto Guardrails ───────────────────────────────────────
   crypto-guardrails:
     needs: changes
@@ -1419,6 +1430,9 @@ jobs:
       - name: Check ECIES in active sections
         run: bash scripts/check-ecies-active.sh
 
+      - name: Check bddgen warm-up is applied everywhere
+        run: bash scripts/check-bddgen-warmup.sh
+
   docker-canary:
     needs: ci-status
     if: github.ref == 'refs/heads/main' && needs.ci-status.result == 'success'
@@ -1527,7 +1541,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1556,6 +1570,7 @@ jobs:
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
           check_job "android-e2e" "${{ needs.android-e2e.result }}"
           check_job "ios-build-test" "${{ needs.ios-build-test.result }}"
+          check_job "ios-e2e" "${{ needs.ios-e2e.result }}"
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"
