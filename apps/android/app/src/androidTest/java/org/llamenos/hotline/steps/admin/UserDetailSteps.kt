@@ -58,7 +58,7 @@ class UserDetailSteps : BaseSteps() {
 
     @Then("I should see the volunteer detail screen")
     fun iShouldSeeTheVolunteerDetailScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "volunteer-detail-title",
             "volunteer-detail-loading",
             "volunteer-detail-not-found",
@@ -67,32 +67,32 @@ class UserDetailSteps : BaseSteps() {
 
     @Then("I should see the volunteer name")
     fun iShouldSeeTheVolunteerName() {
-        val found = assertAnyTagDisplayed("volunteer-name", "volunteer-detail-not-found")
+        assertAnyTagDisplayed("volunteer-name", "volunteer-detail-not-found")
     }
 
     @Then("I should see the volunteer pubkey")
     fun iShouldSeeTheVolunteerPubkey() {
-        val found = assertAnyTagDisplayed("volunteer-pubkey", "volunteer-detail-not-found")
+        assertAnyTagDisplayed("volunteer-pubkey", "volunteer-detail-not-found")
     }
 
     @Then("I should see the volunteer role badge")
     fun iShouldSeeTheVolunteerRoleBadge() {
-        val found = assertAnyTagDisplayed("volunteer-role-badge", "volunteer-detail-not-found")
+        assertAnyTagDisplayed("volunteer-role-badge", "volunteer-detail-not-found")
     }
 
     @Then("I should see the volunteer status badge")
     fun iShouldSeeTheVolunteerStatusBadge() {
-        val found = assertAnyTagDisplayed("volunteer-status-badge", "volunteer-detail-not-found")
+        assertAnyTagDisplayed("volunteer-status-badge", "volunteer-detail-not-found")
     }
 
     @Then("I should see the volunteer join date")
     fun iShouldSeeTheVolunteerJoinDate() {
-        val found = assertAnyTagDisplayed("volunteer-joined", "volunteer-detail-not-found")
+        assertAnyTagDisplayed("volunteer-joined", "volunteer-detail-not-found")
     }
 
     @Then("I should see the recent activity card")
     fun iShouldSeeTheRecentActivityCard() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "volunteer-activity-card",
             "volunteer-detail-not-found",
         )

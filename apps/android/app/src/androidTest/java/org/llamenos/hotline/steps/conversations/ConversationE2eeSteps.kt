@@ -16,7 +16,7 @@ class ConversationE2eeSteps : BaseSteps() {
     @Then("I should see the E2EE encryption indicator")
     fun iShouldSeeTheE2eeEncryptionIndicator() {
         // E2EE indicator requires conversation detail — may not be available
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "e2ee-indicator", "conversation-detail-title", "conversations-empty",
             "conversations-list", "dashboard-title",
         )
