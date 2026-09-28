@@ -86,10 +86,22 @@ native_smoke() {
     -e DATABASE_URL="postgresql://llamenos:${PG_PASSWORD}@${pg}:5432/llamenos" \
     "$IMAGE" >/dev/null
 
-  local deadline=$(( $(date +%s) + SMOKE_TIMEOUT_SEC )) started=0
+  local deadline=$(( $(date +%s) + SMOKE_TIMEOUT_SEC )) started=0 stopped=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
-    if [ "$(docker inspect -f '{{.State.Running}}' "$app")" != "true" ]; then break; fi
+    if [ "$(docker inspect -f '{{.State.Running}}' "$app")" != "true" ]; then
+      # The container is EXPECTED to exit here: it is started with only
+      # DATABASE_URL, so validateConfig() throws on HMAC_SECRET milliseconds
+      # after the entrypoint prints "Starting application". That left a race —
+      # if it printed the line and died in the gap between the grep above and
+      # this check, the loop concluded "never started" while the very logs it
+      # then dumped contained the line. Observed on at least four unrelated
+      # branches. A stopped container still has logs, so re-read them once
+      # before concluding; exiting is not by itself a failure.
+      docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application' && started=1
+      stopped=1
+      break
+    fi
     sleep 2
   done
 
@@ -97,7 +109,11 @@ native_smoke() {
   logs="$(docker logs "$app" 2>&1 || true)"
   echo "$logs" | grep -E '^\[(entrypoint|verify-runtime|migrate)\]|All migrations applied|FAILED' | sed 's/^/[image-smoke]   app: /' || true
   if [ "$started" != 1 ]; then
-    log "FAIL: the entrypoint did not reach 'Starting application' within ${SMOKE_TIMEOUT_SEC}s (running=$(docker inspect -f '{{.State.Running}}' "$app"))"
+    if [ "$stopped" = 1 ]; then
+      log "FAIL: the container exited before the entrypoint reached 'Starting application' (exit=$(docker inspect -f '{{.State.ExitCode}}' "$app"))"
+    else
+      log "FAIL: the entrypoint did not reach 'Starting application' within ${SMOKE_TIMEOUT_SEC}s (still running)"
+    fi
     echo "$logs" | tail -30 | sed 's/^/[image-smoke]   app: /'
     docker logs "$pg" 2>&1 | grep -E 'FATAL|DETAIL' | sed 's/^.* UTC \[[0-9]*\] //' | sort | uniq -c | sort -rn | head -6 \
       | sed 's/^/[image-smoke]   postgres: /' || true
