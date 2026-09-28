@@ -29,7 +29,7 @@ class BanSteps : BaseSteps() {
 
     @Then("I should see bans or the {string} message")
     fun iShouldSeeBansOrTheMessage(emptyMessage: String) {
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty", "bans-loading")
+        assertAnyTagDisplayed("bans-list", "bans-empty", "bans-loading")
     }
 
     // ---- Add ban ----
@@ -61,7 +61,7 @@ class BanSteps : BaseSteps() {
     @Then("the phone number should appear in the ban list")
     fun thePhoneNumberShouldAppearInTheBanList() {
         composeRule.waitForIdle()
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty", "bans-loading")
+        assertAnyTagDisplayed("bans-list", "bans-empty", "bans-loading")
     }
 
     @When("I add a ban with reason {string}")
@@ -87,7 +87,7 @@ class BanSteps : BaseSteps() {
             onAllNodesWithText(year, substring = true).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
             // Year text may not be visible if ban list shows hashed identifiers only
-            val found = assertAnyTagDisplayed("bans-list", "bans-empty")
+            assertAnyTagDisplayed("bans-list", "bans-empty")
         }
     }
 
@@ -127,19 +127,19 @@ class BanSteps : BaseSteps() {
     fun theBanShouldNoLongerAppearInTheList() {
         composeRule.waitForIdle()
         // After removal, either the list has fewer items or shows empty state
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty")
+        assertAnyTagDisplayed("bans-list", "bans-empty")
     }
 
     @Then("the ban should still appear in the list")
     fun theBanShouldStillAppearInTheList() {
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty")
+        assertAnyTagDisplayed("bans-list", "bans-empty")
     }
 
     // ---- Cancel add ban ----
 
     @Then("the phone number input should be visible")
     fun thePhoneNumberInputShouldBeVisible() {
-        val found = assertAnyTagDisplayed("ban-identifier-input", "add-ban-dialog", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("ban-identifier-input", "add-ban-dialog", "admin-tabs", "dashboard-title")
     }
 
     @Then("the phone number input should not be visible")
@@ -182,12 +182,12 @@ class BanSteps : BaseSteps() {
     @Then("both phone numbers should appear in the ban list")
     fun bothPhoneNumbersShouldAppearInTheBanList() {
         // Bans may not persist without backend — accept list or empty state
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty")
+        assertAnyTagDisplayed("bans-list", "bans-empty")
     }
 
     @Then("both ban reasons should be visible")
     fun bothBanReasonsShouldBeVisible() {
-        val found = assertAnyTagDisplayed("bans-list", "bans-empty")
+        assertAnyTagDisplayed("bans-list", "bans-empty")
     }
 
     // ---- Bulk import ----
