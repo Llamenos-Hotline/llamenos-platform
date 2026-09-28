@@ -71,8 +71,18 @@ export interface PushDispatcher {
 /**
  * Create a PushDispatcher from services (no DO stubs).
  * Returns a no-op dispatcher if push credentials aren't configured.
- * In ENVIRONMENT=development, always returns a logging dispatcher so BDD tests
- * can verify push payload structure without real APNs/FCM credentials.
+ *
+ * In ENVIRONMENT=development the selected dispatcher is wrapped in
+ * {@link RecordingPushDispatcher} so every dispatched WakePayload is written to
+ * the in-memory test push log — whichever transport is (or isn't) configured.
+ * The recording used to live inside a dev-only dispatcher that was reachable
+ * only when BOTH transports were unconfigured, which meant the hubId contract
+ * was observed exclusively on a path that never ships: as soon as a single
+ * transport variable was set, `getTestPushLog()` went permanently empty even
+ * though dispatch was still happening. The invariant it guards (every wake
+ * payload names the hub that triggered it — the multi-hub routing axiom) is a
+ * property of payload construction, not of a transport, so its observation
+ * point must not depend on transport configuration or reachability either.
  */
 export function createPushDispatcherFromService(
   env: Env,
@@ -83,15 +93,11 @@ export function createPushDispatcherFromService(
   const hasNtfy = !!env.NTFY_URL
   const isDev = env.ENVIRONMENT === 'development'
 
-  if (!hasApns && !hasNtfy) {
-    // In development, return a logging-only dispatcher so push payloads are recorded
-    if (isDev) {
-      return new LoggingPushDispatcher(identityService, shiftsService)
-    }
-    return new NoopPushDispatcher()
-  }
+  const dispatcher: PushDispatcher = !hasApns && !hasNtfy
+    ? new NoopPushDispatcher()
+    : new ServicePushDispatcher(env, identityService, shiftsService, hasApns, hasNtfy)
 
-  return new ServicePushDispatcher(env, identityService, shiftsService, hasApns, hasNtfy)
+  return isDev ? new RecordingPushDispatcher(dispatcher, shiftsService) : dispatcher
 }
 
 class NoopPushDispatcher implements PushDispatcher {
@@ -100,30 +106,40 @@ class NoopPushDispatcher implements PushDispatcher {
 }
 
 /**
- * Development-only dispatcher that records payloads in the in-memory log
- * without attempting real APNs/FCM delivery.
- * Used when ENVIRONMENT=development but no push credentials are configured.
+ * Development-only decorator that records each dispatched WakePayload in the
+ * in-memory test log, then delegates to the real dispatcher. Records what the
+ * dispatcher was asked to send, before any transport is attempted, so the BDD
+ * assertion on payload shape cannot be silenced by an unconfigured, misconfigured
+ * or unreachable APNs/ntfy endpoint. Never constructed outside
+ * ENVIRONMENT=development.
  */
-class LoggingPushDispatcher implements PushDispatcher {
+class RecordingPushDispatcher implements PushDispatcher {
   constructor(
-    private identityService: IdentityService,
+    private inner: PushDispatcher,
     private shiftsService: ShiftsService,
   ) {}
 
   async sendToVolunteer(
     userPubkey: string,
     wakePayload: WakePayload,
+    fullPayload: FullPushPayload,
   ): Promise<void> {
     recordTestPushPayload(wakePayload, userPubkey)
+    await this.inner.sendToVolunteer(userPubkey, wakePayload, fullPayload)
   }
 
   async sendToAllOnShift(
     wakePayload: WakePayload,
+    fullPayload: FullPushPayload,
   ): Promise<void> {
+    // Resolves the on-shift set a second time (the inner dispatcher resolves it
+    // again to deliver) so the log carries one entry per recipient. Only ever in
+    // development; not worth threading a recipient list through the interface.
     const pubkeys = await this.shiftsService.getCurrentVolunteers('')
     for (const pk of pubkeys) {
       recordTestPushPayload(wakePayload, pk)
     }
+    await this.inner.sendToAllOnShift(wakePayload, fullPayload)
   }
 }
 
