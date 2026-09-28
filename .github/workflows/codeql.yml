@@ -8,23 +8,39 @@
 # so the required `CodeQL` context never reported there and the queue ejected
 # every entry for "timed out awaiting a successful CI result".
 #
-# ─── What the required `CodeQL` context actually is ─────────────────────────
-# It was never a job. Under default setup — and under this file — the
-# `CodeQL` check-run on a pull request is created by the
-# github-advanced-security app once the analyses below upload: the alert gate,
-# "Code scanning results / CodeQL" ("No new alerts in code changed by this
-# pull request"). The `Analyze (<lang>)` jobs feed it; they are not it.
+# ─── The required `CodeQL` context: two check-runs, and both must pass ──────
+# The ruleset requires the name `CodeQL` and pins no app, so every check-run
+# of that name on the commit counts. Two sources emit one:
+#   - the `codeql` rollup at the bottom (app github-actions), on EVERY event.
+#     On `merge_group` it is the only `CodeQL` there is — what makes the
+#     required context report on the queue's ref at all.
+#   - on pull requests, GHAS's alert gate (app github-advanced-security,
+#     "No new alerts in code changed by this pull request"), created once the
+#     legs below upload. The legs feed it; they are not it.
+# Same-named check-runs from different check suites stand side by side: the
+# check-runs API's default `filter=latest` returns both, and GitHub accepts a
+# required name only when every check-run under it is success, neutral or
+# skipped (documented for a check-run and a commit status sharing a name).
+# So the rollup adds a requirement; it cannot stand in for the alert gate.
 #
-# The `codeql` rollup job at the bottom is named for the event:
-#   - pull_request → `CodeQL analysis`. Deliberately NOT `CodeQL`, so it
-#     never sits beside the GHAS alert gate under the same name. The ruleset
-#     pins no app for this context, and GitHub documents what happens when a
-#     check-run and a commit status share a required name (both must pass)
-#     but not when two check-runs from different apps do. A green rollup that
-#     might stand in for a red alert gate is not a risk worth one check name.
-#   - every other event → `CodeQL`. On `merge_group` that is what makes the
-#     required context report on the queue's ref at all — independently of
-#     whether GHAS also creates its results check there.
+# Why the rollup carries the name on pull requests too, not a name of its
+# own: the alert gate goes `neutral` — which a required check accepts —
+# whenever it cannot judge. "Error when processing the SARIF file" after a
+# refused upload (#1244's own runs, while default setup was enabled); "N
+# configurations not found" when nothing was analysed (every Dependabot PR
+# under default setup). Under a separate name, `CodeQL` stayed satisfied by
+# that neutral while the analysis itself had failed. Under `CodeQL`, a failed,
+# refused or missing leg is a red required check.
+#
+# The legs are `Analyze advanced (<lang>)`, never default setup's
+# `Analyze (<lang>)`: one check name, one source.
+#
+# ─── Cutover: red until default setup is disabled — fail-closed ─────────────
+# Code scanning refuses every upload from this file while default setup is
+# enabled: "CodeQL analyses from advanced configurations cannot be processed
+# when the default setup is enabled". Every leg fails at `Perform CodeQL
+# analysis`, the rollup fails, and `CodeQL` blocks. Default setup has to be
+# disabled before this file can go green; #1244 records the order.
 #
 # ─── merge_group runs the full matrix ───────────────────────────────────────
 # The queue's commit (main + the queued PRs) is exactly what lands on main,
@@ -118,7 +134,7 @@ env:
 jobs:
   # ─── Required legs: exact parity with default setup ───────────────────
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: Analyze advanced (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -220,11 +236,16 @@ jobs:
           if-no-files-found: error
 
   # ─── Staged, not required: swift (#1243) ──────────────────────────────
-  # Swift analysis needs macOS. The minutes are free on this public repo, but
-  # the Free plan allows only 5 concurrent macOS jobs across every workflow,
-  # shared with ci.yml's ios-build-test and ios-e2e.yml. A 30-45 minute build
-  # on every push to main would hold one of those slots for most of the day,
-  # so this runs weekly and on demand only.
+  # Swift analysis needs macOS, priced as multiplier x minutes x frequency:
+  # macOS bills at 10x Linux; a run is ~45 min (a clean, traced build plus
+  # analysis — ci.yml's cached, untraced ios-build-test takes 5-10); weekly is
+  # ~4.3 runs a month. So ~195 macOS minutes = ~1,950 Linux-equivalent
+  # minutes a month, which would be nearly all of a private repo's 2,000
+  # included. This repo is public, so standard runners cost $0, and the real
+  # price is a slot: the Free plan allows 5 concurrent macOS jobs across every
+  # workflow, shared with ci.yml's ios-build-test and ios-e2e.yml. On every
+  # push to main (142 in the week to 2026-09-27) it would be ~20 runs a day,
+  # ~15 slot-hours, so this runs weekly and on demand only.
   analyze-swift:
     name: Analyze staged (swift)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -331,13 +352,13 @@ jobs:
           path: ${{ runner.temp }}/codeql-results
           if-no-files-found: error
 
-  # ─── Rollup (see the header for why the name depends on the event) ────
+  # ─── Rollup: the `CodeQL` check-run on every event (see the header) ───
   # Needs ONLY the required matrix. `needs.analyze.result` is `success` only
   # if every leg succeeded; a failed, cancelled or skipped leg fails this job
   # — unlike ci-status, `skipped` is not accepted, because `analyze` has no
   # condition under which skipping it would be legitimate.
   codeql:
-    name: ${{ github.event_name == 'pull_request' && 'CodeQL analysis' || 'CodeQL' }}
+    name: CodeQL
     needs: [analyze]
     if: always()
     runs-on: ubuntu-latest
@@ -350,7 +371,7 @@ jobs:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
         run: |
           if [[ "$ANALYZE_RESULT" != "success" ]]; then
-            echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage — see the Analyze (<language>) jobs."
+            echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage — see the Analyze advanced (<language>) jobs."
             exit 1
           fi
           echo "All required CodeQL legs analysed and uploaded."

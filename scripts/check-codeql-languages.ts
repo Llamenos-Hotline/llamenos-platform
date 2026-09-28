@@ -18,9 +18,15 @@
  *      extra — and `init` analyses `${{ matrix.language }}`, not a literal.
  *   2. `analyze` has no `if:`, and the workflow triggers on push,
  *      pull_request, merge_group and schedule, so no event quietly skips it.
- *   3. The `codeql` rollup needs `analyze`, runs `if: always()`, is named
- *      `CodeQL` on merge_group (the queue's required context) and NOT
- *      `CodeQL` on pull_request (where GHAS's alert gate owns that name).
+ *   3. The `codeql` rollup needs `analyze`, runs `if: always()`, and is named
+ *      literally `CodeQL` — the required context — on every event. On
+ *      merge_group it is the only `CodeQL` check-run; on pull_request it sits
+ *      beside GHAS's alert gate, and both must pass. A rollup under any other
+ *      name leaves `CodeQL` to the alert gate alone, which goes `neutral`
+ *      (accepted) when an upload is refused — so a failed analysis would pass.
+ *   3a. No other job claims a name the required context could resolve to:
+ *      none but the rollup is named `CodeQL`, and none uses default setup's
+ *      `Analyze (<language>)` names, which its own check-runs carry.
  *   4. STAGED legs (any other job running codeql-action/init — java-kotlin
  *      and swift today, #1243) are tolerated but never counted as required
  *      coverage: they must not overlap the required extractors, must not be
@@ -54,6 +60,8 @@ const ROLLUP_JOB = 'codeql'
 const REQUIRED_CONTEXT = 'CodeQL'
 const REQUIRED_TRIGGERS = ['push', 'pull_request', 'merge_group', 'schedule'] as const
 const MERGE_BLOCKING_EVENTS = ['pull_request', 'merge_group'] as const
+/** Default setup's check-runs are `Analyze (<language>)`; ours must never share one. */
+const DEFAULT_SETUP_JOB_NAME_PREFIX = 'analyze ('
 
 /**
  * The identifiers default setup analysed, exactly as
@@ -194,20 +202,9 @@ function allowListedEvents(condition: string): string[] | undefined {
   return events
 }
 
-/**
- * The rollup's check-run name for an event. Accepts a literal name, or the
- * one shape codeql.yml uses:
- * `${{ github.event_name == '<event>' && '<then>' || '<else>' }}`.
- */
-function rollupNameFor(name: unknown, event: string): string | undefined {
-  if (typeof name !== 'string') return undefined
-  if (!name.includes('${{')) return name
-  const m = normalizeExpression(name).match(
-    /^\$\{\{ github\.event_name == '([a-z_]+)' && '([^']+)' \|\| '([^']+)' \}\}$/,
-  )
-  if (!m) return undefined
-  const [, when, then, otherwise] = m
-  return event === when ? then : otherwise
+/** The check-run name a job reports under: its `name:`, else its id. */
+function checkName(id: string, job: Job): string {
+  return (typeof job.name === 'string' ? job.name : id).trim()
 }
 
 function main(): void {
@@ -316,10 +313,6 @@ function main(): void {
         }
       }
     }
-    if (typeof job.name === 'string' && job.name.trim() === REQUIRED_CONTEXT) {
-      violations.push(`staged job \`${id}\` is named \`${REQUIRED_CONTEXT}\`, the required context`)
-    }
-
     // No route to code scanning: a staged configuration on main neutralises
     // the required gate on every PR (see header, point 5).
     const analyzeSteps = stepsUsing(job, 'github/codeql-action/analyze')
@@ -360,24 +353,27 @@ function main(): void {
     if (typeof rollup.if !== 'string' || normalizeExpression(rollup.if) !== 'always()') {
       violations.push(`\`${ROLLUP_JOB}\` must be \`if: always()\` — otherwise a failed leg skips it, and skipped counts as passing`)
     }
-    const onQueue = rollupNameFor(rollup.name, 'merge_group')
-    const onPr = rollupNameFor(rollup.name, 'pull_request')
-    if (onQueue === undefined || onPr === undefined) {
-      violations.push(`\`${ROLLUP_JOB}\`'s name is not a form this rail can evaluate: ${String(rollup.name)}`)
-    } else {
-      if (onQueue !== REQUIRED_CONTEXT) {
-        violations.push(`\`${ROLLUP_JOB}\` is named \`${onQueue}\` on merge_group — the queue's ref needs a \`${REQUIRED_CONTEXT}\` check-run`)
-      }
-      if (onPr === REQUIRED_CONTEXT) {
-        violations.push(
-          `\`${ROLLUP_JOB}\` is named \`${REQUIRED_CONTEXT}\` on pull_request — that name belongs to GHAS's alert gate there, and a green rollup must not be able to stand in for it`,
-        )
-      }
+    // Literal, not an expression: the name must be `CodeQL` on every event.
+    if (rollup.name !== REQUIRED_CONTEXT) {
+      violations.push(
+        `\`${ROLLUP_JOB}\` must be named literally \`${REQUIRED_CONTEXT}\` (found ${String(rollup.name)}) — anything else leaves the required context to GHAS's alert gate alone, which goes neutral (accepted) when an upload is refused, and reports nothing at all on the merge queue's ref`,
+      )
+    }
+  }
+
+  // ── Names: one check name, one source ──
+  for (const [id, job] of Object.entries(jobs)) {
+    const name = checkName(id, job)
+    if (id !== ROLLUP_JOB && name.toLowerCase() === REQUIRED_CONTEXT.toLowerCase()) {
+      violations.push(`job \`${id}\` is named \`${name}\` — only the \`${ROLLUP_JOB}\` rollup may report the required context`)
+    }
+    if (name.toLowerCase().startsWith(DEFAULT_SETUP_JOB_NAME_PREFIX)) {
+      violations.push(`job \`${id}\` is named \`${name}\` — default setup's own check-runs are \`Analyze (<language>)\`, so two sources would report one name`)
     }
   }
 
   if (violations.length > 0) {
-    console.error(`❌ ${path}: CodeQL required coverage has diverged from default setup's languages:`)
+    console.error(`❌ ${path}: the CodeQL workflow breaks its required-coverage contract:`)
     console.error('')
     for (const v of violations) console.error(`  - ${v}`)
     console.error('')
