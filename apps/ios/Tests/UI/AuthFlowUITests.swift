@@ -15,7 +15,7 @@ final class AuthFlowUITests: XCTestCase {
         app = XCUIApplication()
         // Reset state for clean test runs; skip hub validation for fake URLs
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-skip-hub-validation"])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
     }
 
     override func tearDown() {

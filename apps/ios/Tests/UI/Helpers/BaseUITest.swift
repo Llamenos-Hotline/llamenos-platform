@@ -123,13 +123,13 @@ class BaseUITest: XCTestCase {
     /// Launch the app with a clean keychain (login screen).
     func launchClean() {
         app.launchArguments.append("--reset-keychain")
-        app.launch()
+        app.launchAnsweringSystemPrompts()
     }
 
     /// Launch the app in a pre-authenticated volunteer state (no API connection).
     func launchAuthenticated() {
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
         waitForMainScreen()
     }
 
@@ -168,7 +168,7 @@ class BaseUITest: XCTestCase {
             "--test-hub-id", testHubId,
             "--test-register",
         ])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
         waitForMainScreen()
     }
 
