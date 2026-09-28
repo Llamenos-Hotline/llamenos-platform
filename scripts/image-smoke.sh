@@ -95,7 +95,7 @@ native_smoke() {
 
   local logs
   logs="$(docker logs "$app" 2>&1 || true)"
-  echo "$logs" | grep -E '^\[(entrypoint|verify-runtime)\]|All migrations applied|FAILED' | sed 's/^/[image-smoke]   app: /' || true
+  echo "$logs" | grep -E '^\[(entrypoint|verify-runtime|migrate)\]|All migrations applied|FAILED' | sed 's/^/[image-smoke]   app: /' || true
   if [ "$started" != 1 ]; then
     log "FAIL: the entrypoint did not reach 'Starting application' within ${SMOKE_TIMEOUT_SEC}s (running=$(docker inspect -f '{{.State.Running}}' "$app"))"
     echo "$logs" | tail -30 | sed 's/^/[image-smoke]   app: /'
@@ -104,6 +104,8 @@ native_smoke() {
     return 1
   fi
   echo "$logs" | grep -q '^\[verify-runtime\] text layer OK' || { log "FAIL: verify-runtime did not report OK"; return 1; }
+  # Paired with the CONTRACT comment in scripts/run-migrations.ts, which
+  # prints this as its final line on success.
   echo "$logs" | grep -q 'All migrations applied successfully' || { log "FAIL: migrations did not report success"; return 1; }
 
   local tables

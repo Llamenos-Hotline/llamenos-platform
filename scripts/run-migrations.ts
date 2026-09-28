@@ -473,6 +473,13 @@ try {
         `destructive statements that were skipped are stored in ${LEDGER_TABLE}.skipped_sql.`,
     )
   }
+
+  // CONTRACT: this exact string is the success marker `scripts/image-smoke.sh`
+  // greps for (and the release pipeline gates the published image on it). It
+  // must remain the last line this script prints on a successful run. The
+  // summary above is for humans; this line is for the harness. Do not reword
+  // either one without updating scripts/image-smoke.sh in the same change.
+  console.log('[migrate] All migrations applied successfully')
 } finally {
   if (lockHeld) {
     await sql.unsafe(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_KEY})`).catch(() => {})
