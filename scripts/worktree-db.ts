@@ -447,8 +447,9 @@ async function connect(root: string, database: string): Promise<SQL> {
         `password authentication failed for role "${PG_USER}" at ${PG_HOST}:${PG_PORT}. ` +
           'PG_PASSWORD (environment, else .env, else "dev") is not the password the dev ' +
           "Postgres volume was initialised with — the image only reads POSTGRES_PASSWORD when the " +
-          'volume is first created. Export the PG_PASSWORD that volume was created with, or change ' +
-          `the role's password inside the container (ALTER ROLE ${PG_USER} PASSWORD ...).`,
+          'volume is first created. Set PG_PASSWORD in .env to the password that volume was created ' +
+          "with (scripts/dev-bun.sh loads .env over the environment), or change the role's password " +
+          `inside the container (ALTER ROLE ${PG_USER} PASSWORD ...).`,
       )
     }
     throw new Unreachable(
