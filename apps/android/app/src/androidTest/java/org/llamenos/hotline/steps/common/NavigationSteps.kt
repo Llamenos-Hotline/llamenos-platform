@@ -1,17 +1,12 @@
 package org.llamenos.hotline.steps.common
 
-import android.util.Log
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import dagger.hilt.android.EntryPointAccessors
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
-import org.llamenos.hotline.LlamenosApp
-import org.llamenos.hotline.di.CryptoEntryPoint
-import org.llamenos.hotline.helpers.SimulationClient
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
@@ -55,14 +50,18 @@ class NavigationSteps : BaseSteps() {
         navigateToMainScreen()
     }
 
+    // "Authenticated" means the backend accepts this identity — the same admin
+    // login the desktop steps (tests/steps/common/auth-steps.ts) perform.
     @Given("I am authenticated and on the dashboard")
     fun iAmAuthenticatedAndOnTheDashboard() {
         navigateToMainScreen()
+        promoteCurrentIdentityToAdmin()
     }
 
     @Given("I am authenticated and on the main screen")
     fun iAmAuthenticatedAndOnTheMainScreen() {
         navigateToMainScreen()
+        promoteCurrentIdentityToAdmin()
     }
 
     @Given("I am authenticated")
@@ -127,12 +126,12 @@ class NavigationSteps : BaseSteps() {
 
     @Then("I should see the dashboard")
     fun iShouldSeeTheDashboard() {
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
     }
 
     @Then("the bottom navigation should be visible")
     fun theBottomNavigationShouldBeVisible() {
-        val found = assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
+        assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
     }
 
     @Then("the bottom navigation should not be visible")
@@ -150,17 +149,7 @@ class NavigationSteps : BaseSteps() {
     @Given("I am logged in as an admin")
     fun iAmLoggedInAsAnAdmin() {
         navigateToMainScreen()
-
-        // Promote to admin so admin-only UI is accessible
-        val signingPubkey = readSigningPubkey()
-        if (signingPubkey != null) {
-            try {
-                SimulationClient.promoteToAdmin(signingPubkey)
-                Log.d("NavigationSteps", "Promoted to admin: ${signingPubkey.take(16)}...")
-            } catch (e: Throwable) {
-                Log.w("NavigationSteps", "Admin promotion failed: ${e.message}")
-            }
-        }
+        promoteCurrentIdentityToAdmin()
     }
 
     @Given("I am logged in as a volunteer")
@@ -241,20 +230,6 @@ class NavigationSteps : BaseSteps() {
         }
     }
 
-    // ---- Helpers ----
-
-    private fun readSigningPubkey(): String? {
-        return try {
-            val entryPoint = EntryPointAccessors.fromApplication(
-                LlamenosApp.instance,
-                CryptoEntryPoint::class.java,
-            )
-            entryPoint.cryptoService().signingPubkeyHex
-        } catch (e: Throwable) {
-            Log.w("NavigationSteps", "readSigningPubkey failed: ${e.message}")
-            null
-        }
-    }
 
     @When("I log out")
     fun iLogOut() {

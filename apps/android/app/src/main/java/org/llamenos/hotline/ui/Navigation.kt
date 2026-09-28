@@ -28,6 +28,8 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.ui.admin.AdminScreen
+import org.llamenos.hotline.ui.admin.AdminSettingsScreenWithSidebar
+import org.llamenos.hotline.ui.admin.AdminViewModel
 import org.llamenos.hotline.ui.admin.SchemaBrowserScreen
 import org.llamenos.hotline.ui.admin.ShiftDetailScreen
 import org.llamenos.hotline.ui.admin.UserDetailScreen
@@ -199,6 +201,15 @@ sealed interface LlamenosRoute {
     /** Admin panel. */
     data object Admin : LlamenosRoute {
         override val route = "admin"
+    }
+
+    /** One admin section, opened from the admin sidebar drawer. */
+    data class AdminSection(val section: String) : LlamenosRoute {
+        override val route = "admin/section/$section"
+
+        companion object {
+            const val ROUTE_PATTERN = "admin/section/{${AdminViewModel.SECTION_ARG}}"
+        }
     }
 
     /** Blasts (broadcast messages). */
@@ -680,6 +691,14 @@ fun LlamenosNavigation(
             )
         }
 
+        // Sections replace one another above the admin panel, so back from any
+        // section returns to the panel.
+        val navigateToAdminSection: (String) -> Unit = { section ->
+            navController.navigate(LlamenosRoute.AdminSection(section).route) {
+                popUpTo(LlamenosRoute.Admin.route)
+            }
+        }
+
         composable(LlamenosRoute.Admin.route) {
             AdminScreen(
                 onNavigateBack = { navController.popBackStack() },
@@ -692,6 +711,14 @@ fun LlamenosNavigation(
                 onNavigateToSchemaBrowser = {
                     navController.navigate(LlamenosRoute.SchemaBrowser.route)
                 },
+                onNavigateToAdminSection = navigateToAdminSection,
+            )
+        }
+
+        composable(LlamenosRoute.AdminSection.ROUTE_PATTERN) {
+            AdminSettingsScreenWithSidebar(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToAdminSection = navigateToAdminSection,
             )
         }
 

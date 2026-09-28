@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.llamenos.hotline.api.HubOnboardApi
 import org.llamenos.protocol.ChannelConfig
 import org.llamenos.hotline.model.ChannelConfigClass
@@ -73,6 +75,9 @@ class HubCommunicationsViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HubCommunicationsUiState())
+
+    /** Serializes onboarding start/step calls — the server rejects out-of-order steps. */
+    private val onboardingSteps = Mutex()
     val uiState: StateFlow<HubCommunicationsUiState> = _uiState.asStateFlow()
 
     init {
@@ -126,13 +131,8 @@ class HubCommunicationsViewModel @Inject constructor(
 
                 val usageResult = usageDeferred.await()
                 usageResult.fold(
-                    onSuccess = { response ->
-                        _uiState.update {
-                            it.copy(
-                                currentUsage = response.usage.firstOrNull(),
-                                quotas = response.quotas,
-                            )
-                        }
+                    onSuccess = { usage ->
+                        _uiState.update { it.copy(currentUsage = usage) }
                     },
                     onFailure = { /* Usage is optional — don't fail the whole screen */ },
                 )
@@ -172,6 +172,9 @@ class HubCommunicationsViewModel @Inject constructor(
 
     /**
      * Start onboarding with an optional template.
+     *
+     * Choosing a template (or starting from scratch) is the server's first step,
+     * `template_selection`, so it is completed in the same serialized block.
      */
     fun startOnboarding(templateId: String? = null) {
         viewModelScope.launch {
@@ -179,7 +182,11 @@ class HubCommunicationsViewModel @Inject constructor(
             // step-advance buttons (e.g. "Next: Provider") remain enabled
             // while the initial onboarding API call completes in the background.
             _uiState.update { it.copy(isStartingOnboarding = true, saveError = null) }
-            val result = hubOnboardApi.startOnboarding(templateId = templateId)
+            val result = onboardingSteps.withLock {
+                hubOnboardApi.startOnboarding(templateId = templateId).mapCatching {
+                    hubOnboardApi.completeStep(step = TEMPLATE_SELECTION_STEP).getOrThrow()
+                }
+            }
             result.fold(
                 onSuccess = { state ->
                     _uiState.update {
@@ -204,17 +211,23 @@ class HubCommunicationsViewModel @Inject constructor(
 
     /**
      * Complete a step in the onboarding flow.
+     *
+     * The server only accepts the current step, and the sheet advances locally
+     * before each response arrives, so completions run one at a time in order.
      */
-    fun completeStep(step: String, data: Map<String, String> = emptyMap()) {
+    fun completeStep(step: String, channelConfig: ChannelConfig? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isCompletingStep = true, saveError = null) }
-            val result = hubOnboardApi.completeStep(step = step, data = data)
+            val result = onboardingSteps.withLock {
+                hubOnboardApi.completeStep(step = step, channelConfig = channelConfig)
+            }
             result.fold(
                 onSuccess = { state ->
                     _uiState.update {
                         it.copy(
                             onboardingState = state,
                             isCompletingStep = false,
+                            showOnboarding = !state.isComplete && it.showOnboarding,
                         )
                     }
                     if (state.isComplete) {
@@ -251,7 +264,7 @@ class HubCommunicationsViewModel @Inject constructor(
         }
 
         _uiState.update { it.copy(channels = updated) }
-        saveChannels(updated)
+        saveChannel(channel, enabled, previous = current)
     }
 
     /**
@@ -289,19 +302,21 @@ class HubCommunicationsViewModel @Inject constructor(
 
     // ── Private helpers ─────────────────────────────────────────────────────
 
-    private fun saveChannels(channels: ChannelConfig) {
+    private fun saveChannel(channel: String, enabled: Boolean, previous: ChannelConfig) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSavingChannels = true, saveError = null) }
-            val result = hubOnboardApi.updateChannels(channels)
+            val result = hubOnboardApi.updateChannel(channel = channel, enabled = enabled)
             result.fold(
-                onSuccess = {
+                onSuccess = { saved ->
                     _uiState.update {
-                        it.copy(isSavingChannels = false, channelsSaved = true)
+                        it.copy(channels = saved, isSavingChannels = false, channelsSaved = true)
                     }
                 },
                 onFailure = { e ->
+                    // Roll the optimistic toggle back so the switch reflects the server.
                     _uiState.update {
                         it.copy(
+                            channels = previous,
                             isSavingChannels = false,
                             saveError = e.message ?: "Failed to save channel settings",
                         )
@@ -335,3 +350,6 @@ private fun ChannelConfigClass.toChannelConfig(): ChannelConfig = ChannelConfig(
     telegram = telegram,
     rcs = rcs,
 )
+
+/** The server's first onboarding step (apps/worker/services/provider-setup/hub-onboard.ts). */
+private const val TEMPLATE_SELECTION_STEP = "template_selection"

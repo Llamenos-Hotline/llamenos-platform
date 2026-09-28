@@ -46,9 +46,7 @@ class HubManagementSteps : BaseSteps() {
 
     @Then("I should see the hubs screen")
     fun iShouldSeeTheHubsScreen() {
-        val found = assertAnyTagDisplayed(
-            "hubs-title", "hubs-list", "hubs-loading", "hubs-empty", "hubs-error",
-        )
+        assertAnyTagDisplayed("hubs-title")
     }
 
     @Then("I should see hub cards or the empty state")
@@ -90,8 +88,6 @@ class HubManagementSteps : BaseSteps() {
 
     @Then("the create hub button should be visible")
     fun theCreateHubButtonShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
-            "hub-create-fab", "hubs-title", "hubs-list", "hubs-empty",
-        )
+        assertAnyTagDisplayed("hub-create-fab")
     }
 }
