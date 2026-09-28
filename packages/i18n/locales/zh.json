@@ -2134,6 +2134,7 @@
     "noFields": "无自定义字段。",
     "noLinkedCases": "无关联案件。",
     "noLinkedReports": "无关联报告。",
+    "noSubEvents": "无子事件。",
     "noTimeline": "No timeline entries yet.",
     "reports": "Reports",
     "searchCases": "搜索案件...",

@@ -134,7 +134,8 @@ fun HubCommunicationsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
+                .padding(paddingValues)
+                .testTag("hub-communications-list"),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -252,8 +253,8 @@ fun HubCommunicationsScreen(
                 onToggleChannel = { channel, enabled ->
                     viewModel.toggleChannel(channel, enabled)
                 },
-                onCompleteStep = { step, data ->
-                    viewModel.completeStep(step, data)
+                onCompleteStep = { step, channelConfig ->
+                    viewModel.completeStep(step, channelConfig)
                 },
                 onNavigateToProviderSetup = {
                     viewModel.dismissOnboarding()
