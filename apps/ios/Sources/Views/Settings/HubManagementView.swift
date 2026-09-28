@@ -201,6 +201,9 @@ private struct HubRow: View {
             .padding(.vertical, 4)
         }
         .accessibilityIdentifier("hub-row-\(hub.slug)")
+        // The checkmark's "Active" label is indistinguishable from the status badge's
+        // "Active"; the selected trait is what says which hub is the active one.
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     private var statusColor: Color {

@@ -82,9 +82,18 @@ final class HubSwitchUITests: BaseUITest {
             )
         }
 
+        // The form sets the slug to test-<n>; if it only auto-fills from the name it is
+        // test-hub-<n>. Either way the row is the one this test created: a super-admin
+        // lists every hub on the server, including other test classes' hubs, so "the
+        // second row" is whichever hub happens to sort there — in runs 36352561511,
+        // 36359693222 and 36364790578 it was AdminSidebarUITests' hub.
+        var createdRow = NSPredicate(value: false)
         when("I create a second hub via the creation form") {
             let uniqueSlug = "\(Int(Date().timeIntervalSince1970) % 100000)"
             createSecondHubViaForm(slug: uniqueSlug)
+            createdRow = NSPredicate(
+                format: "identifier BEGINSWITH 'hub-row-test-' AND identifier ENDSWITH %@", "-\(uniqueSlug)"
+            )
         }
 
         then("at least two hub rows are visible") {
@@ -101,32 +110,22 @@ final class HubSwitchUITests: BaseUITest {
             )
         }
 
-        when("I tap the second hub row to switch") {
-            let hubRows = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'hub-row-'"))
-            let secondRow = hubRows.element(boundBy: 1)
-            XCTAssertTrue(
-                secondRow.waitForExistence(timeout: 5),
-                "Second hub row must exist to tap"
-            )
-            secondRow.tap()
+        when("I tap the new hub's row to switch") {
+            let row = app.descendants(matching: .any).matching(createdRow).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "The hub this test created must be listed")
+            row.tap()
         }
 
-        then("the active hub indicator appears on the second row") {
-            // After switching, the row should re-render. Allow time for async hub switch.
-            // The active hub checkmark is inside a hub-row-{slug} button — any row
-            // showing an active indicator (checkmark.circle.fill) confirms the switch.
-            let hubRows = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'hub-row-'"))
-
-            // Wait briefly for the switch to complete
-            _ = hubRows.firstMatch.waitForExistence(timeout: 3)
-
-            // At least one hub row must still be visible (list didn't crash)
-            XCTAssertGreaterThanOrEqual(
-                hubRows.count, 1,
-                "Hub list must remain visible after switching hubs"
-            )
+        then("the active hub indicator moves to that row") {
+            let row = app.descendants(matching: .any).matching(createdRow).firstMatch
+            let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: row)
+            let switched = XCTWaiter().wait(for: [selected], timeout: 10) == .completed
+            let alert = app.alerts.firstMatch
+            let shown = alert.exists
+                ? " The app showed \"\(alert.label)\": "
+                    + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " ")
+                : ""
+            XCTAssertTrue(switched, "The tapped hub must become the active hub.\(shown)")
         }
 
         and("the notes screen loads without an error state after the hub switch") {
