@@ -18,10 +18,12 @@
 #     "No new alerts in code changed by this pull request"), created once the
 #     legs below upload. The legs feed it; they are not it.
 # Same-named check-runs from different check suites stand side by side: the
-# check-runs API's default `filter=latest` returns both, and GitHub accepts a
-# required name only when every check-run under it is success, neutral or
-# skipped (documented for a check-run and a commit status sharing a name).
-# So the rollup adds a requirement; it cannot stand in for the alert gate.
+# check-runs API's default `filter=latest` returns both, GraphQL marks both
+# `isRequired` (both observed on #1244), and GitHub documents that a required
+# name shared by a check-run and a commit status needs both to pass. So the
+# rollup adds a requirement; it cannot stand in for the alert gate. (#1244
+# records the one case not demonstrated live: a green rollup beside a red
+# gate.)
 #
 # Why the rollup carries the name on pull requests too, not a name of its
 # own: the alert gate goes `neutral` — which a required check accepts —
