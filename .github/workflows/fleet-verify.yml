@@ -232,6 +232,12 @@ jobs:
       # job's `pull-requests: read` is all that read needs. A rail
       # (tests/orchestrator/fleet-verify-token.test.ts) fails any step here
       # that reaches `gh` without one.
+      #
+      # That read is NOT a review lookup. This job has no review stage — its
+      # trace's `review=not-run` is printed on every run — and the review is
+      # the separate required `fleet/review`, which reads the PR itself and
+      # fails closed on an unreadable read. The same rail file pins both
+      # jobs' behaviour when the read fails.
       - name: Verify
         env:
           GH_TOKEN: ${{ github.token }}

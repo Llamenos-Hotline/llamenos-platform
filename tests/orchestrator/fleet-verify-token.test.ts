@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { runVerifyCi, decideReviewGate, decideReviewSet, type VerifyCiDeps } from '../../orchestrator/src/ci.js'
+import { GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS, type Lane } from '../../orchestrator/src/config.js'
+import { classifyImpact, tierFor } from '../../orchestrator/src/impact.js'
+import { requiredAdditionalReviewers } from '../../orchestrator/src/review.js'
+import { checkScopeAcross } from '../../orchestrator/src/scope.js'
+import type { VerifyInput, VerifyReport } from '../../orchestrator/src/verify.js'
 
 /**
  * Rail for fleet-verify.yml running `gh` without a token.
@@ -32,6 +38,10 @@ import { parse as parseYaml } from 'yaml'
  *
  * Per "audit gates by breaking them", each property has a MUTATION below
  * that reintroduces the defect in memory and asserts the rail reports it.
+ *
+ * The token being present does not say what the gates DO when the read
+ * fails anyway (an API outage, a narrowed permission). The second half of
+ * this file pins that as behaviour — see its own comment.
  */
 
 const FLEET_VERIFY_YML = join(process.cwd(), '.github', 'workflows', 'fleet-verify.yml')
@@ -202,5 +212,138 @@ describe('rail: every fleet-verify step that reaches gh has the workflow token',
     perms['pull-requests'] = 'write'
     const violations = permissionViolations(doc)
     expect(violations).toContainEqual(expect.stringContaining('pull-requests: write'))
+  })
+})
+
+/**
+ * Behaviour rails: with the PR read FAILED, neither fleet gate can go green
+ * on a high-impact diff it should not pass.
+ *
+ * This PR was opened on the premise that `fleet/verify` fails OPEN on a
+ * review check: run 36359612153 logged "reading PR #1256 failed — the
+ * reviews it asks for are unknown, which fails closed" and then
+ * `fleet/verify: PASS … impact=high … review=not-run`. Measured, that is
+ * not what happened:
+ *
+ *   - `fleet/verify` has no review stage. `runVerifyCi` never hands a review
+ *     verdict to `buildGateTrace`, so EVERY one of its traces reads
+ *     `review=not-run` — 57 of 57 runs inspected, PASS and FAIL, low- and
+ *     high-impact, and this PR's own run 36359884331, whose label read
+ *     SUCCEEDED. The label read feeds `scope:<lane>` grants and nothing else.
+ *   - The review half of the merge gate is `fleet/review`, a separate
+ *     required check that reads the PR itself and refuses on an unreadable
+ *     read before anything else (`decideReviewGate`'s first branch).
+ *
+ * The misleading part was the log line: `readPrFacts` printed the REVIEW
+ * path's consequence from inside `verify-ci`. It now states each caller's
+ * own. These rails pin each gate's closed direction, wired as cli.ts wires
+ * them, and each was break-tested by reintroducing the fail-open in the
+ * gate's own source (PR #1258's body carries the outputs).
+ */
+describe('behaviour: an unreadable PR read never turns either fleet gate green', () => {
+  const laneOf = (id: string, owned: string[]): Lane => ({
+    id, mode: 'off', cap: 1, engine: 'claude',
+    requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
+    scope: { owned, notOwned: [] },
+  })
+  const OWN = laneOf('orch', ['orchestrator/'])
+  const GRANTABLE = laneOf('backend', ['apps/worker/'])
+  /** High-impact for `fleet/verify`, Tier 2 for `fleet/review`. */
+  const HIGH_IMPACT = 'orchestrator/src/ci.ts'
+  /** Outside `OWN`, inside `GRANTABLE`, and not grant-excluded. */
+  const NEEDS_GRANT = 'apps/worker/routes/notes.ts'
+
+  it('precondition: the fixture diff is what the rails below claim it is', () => {
+    expect(classifyImpact([HIGH_IMPACT], 1).impact).toBe('high')
+    expect(tierFor([HIGH_IMPACT]).tier).toBe(2)
+    // No content-derived reviewer profile: otherwise an unresolvable profile
+    // would refuse the review set on its own, and the review rail below
+    // could pass without the unreadable-labels branch ever deciding it.
+    expect(requiredAdditionalReviewers([HIGH_IMPACT, NEEDS_GRANT], '')).toEqual([])
+  })
+
+  describe('fleet/review — the review half of the gate', () => {
+    // Every other input says green: a cached PASS for this exact diff, and
+    // this event IS the review request. Only the failed read stands between
+    // the diff and a green check.
+    const gateWith = (labels: string[] | undefined) => decideReviewGate({
+      ctx: { branch: 'fleet/orch/1', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '42' },
+      prDiff: async () => `diff --git a/${HIGH_IMPACT} b/${HIGH_IMPACT}\n+x\n`,
+      changedFiles: async () => [HIGH_IMPACT],
+      cacheFor: () => ({ async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }),
+      requested: true,
+      // Wired exactly as `runReviewGate` (cli.ts) wires it: `facts?.labels`
+      // and `facts?.description ?? ''`, where `facts` is `readPrFacts`'s
+      // result — `undefined` when the read failed.
+      reviewSet: (changedFiles) => decideReviewSet({
+        labels, changedFiles, description: '',
+        resolve: async (name) => ({ ok: false, reason: `no profile "${name}" in this test` }),
+      }),
+      log: () => {},
+    })
+
+    it('unreadable labels on a high-impact diff FAIL the check — ahead of a cached PASS and a live request', async () => {
+      const o = await gateWith(undefined)
+      // `review-set-unresolved` is `runReviewGate`'s exit 1: a red fleet/review.
+      expect(o.kind).toBe('review-set-unresolved')
+    })
+
+    it('the same diff with its labels READ reaches the cached PASS — the failed read alone decides the rail above', async () => {
+      expect((await gateWith([])).kind).toBe('cache-hit')
+    })
+  })
+
+  describe('fleet/verify — scope, impact and tests; no review stage', () => {
+    /**
+     * `verifyMechanical`'s scope half over the real `checkScopeAcross` and
+     * the real never-write / grant-excluded lists, so what a grant does here
+     * is what it does in CI. The rest of the report is fixed.
+     */
+    const scopeVerify = (changed: string[]) => vi.fn(async (input: VerifyInput): Promise<VerifyReport> => {
+      const { forbidden, strayed } = checkScopeAcross(
+        changed, input.lane.scope, (input.grantedLanes ?? []).map((l) => l.scope),
+        [...NEVER_WRITE_PATHS], [...GRANT_EXCLUDED_PATHS],
+      )
+      const reasons = [
+        ...(forbidden.length > 0 ? [`touched never-write paths: ${forbidden.join(', ')}`] : []),
+        ...(strayed.length > 0 ? [`touched files outside lane "${input.lane.id}"'s scope: ${strayed.join(', ')}`] : []),
+      ]
+      const { impact, reasons: impactReasons } = classifyImpact(changed, 1)
+      return {
+        passed: reasons.length === 0, reasons, changedFiles: changed, addedLines: 1, impact, impactReasons,
+        ...(input.skipTests === true ? {} : { testsRun: ['orchestrator'], testsPassed: true }),
+        verifiedCommit: 'c0ffee',
+      }
+    })
+    const verifyWith = (labels: string[] | undefined, changed: string[]): VerifyCiDeps => ({
+      ctx: { branch: 'fleet/orch/1', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '42' },
+      lanes: async () => [OWN, GRANTABLE],
+      verify: scopeVerify(changed),
+      pathExists: (p) => !p.endsWith('/.git'),
+      log: () => {},
+      prLabels: async () => labels,
+    })
+
+    it('unreadable labels grant nothing: a high-impact diff that needs its scope: grant FAILS', async () => {
+      const v = await runVerifyCi(verifyWith(undefined, [HIGH_IMPACT, NEEDS_GRANT]))
+      expect(v.ok).toBe(false)
+      expect(v.summary).toContain(`touched files outside lane "orch"'s scope: ${NEEDS_GRANT}`)
+    })
+
+    it('the same diff with its scope:backend label READ passes — the failed read alone decides the rail above', async () => {
+      expect((await runVerifyCi(verifyWith(['scope:backend'], [HIGH_IMPACT, NEEDS_GRANT]))).ok).toBe(true)
+    })
+
+    // Pinned deliberately, because the opposite was proposed on this PR:
+    // making fleet/verify ALSO fail whenever the read fails would add no
+    // safety — a grant only widens scope, and the review is fleet/review's,
+    // which already refuses on the same failed read (rail above) — but it
+    // would turn every GitHub API hiccup into a red check on every PR.
+    it('has no review stage: on a diff needing no grant, an unreadable read does not change the verdict', async () => {
+      const unreadable = await runVerifyCi(verifyWith(undefined, [HIGH_IMPACT]))
+      const readable = await runVerifyCi(verifyWith(['review'], [HIGH_IMPACT]))
+      expect(unreadable.ok).toBe(true)
+      expect(unreadable.ok).toBe(readable.ok)
+    })
   })
 })
