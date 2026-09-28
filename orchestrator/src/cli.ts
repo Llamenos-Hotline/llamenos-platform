@@ -25,7 +25,7 @@ import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins,
   ciContextFromEnv, ciDiff, ciChangedFiles,
-  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
@@ -1432,13 +1432,24 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
  *  could not be read (or the PR number is not a number) — never an empty
  *  list standing in for "could not look", which is what `decideReviewSet`
  *  refuses on. One read, so the labels and the description always describe
- *  the same PR. Needs only `pull-requests: read`. */
-async function readPrFacts(pr: string): Promise<{ labels: string[]; description: string } | undefined> {
+ *  the same PR. Needs only `pull-requests: read`.
+ *
+ *  `consequence` is what a failed read costs THIS caller, and the log line
+ *  states it. The same failed read means different things to the two gates,
+ *  and a line naming the wrong one is a false statement in the durable
+ *  record: `verify-ci` once logged "the reviews it asks for are unknown,
+ *  which fails closed" on every run, although it has no review stage, and
+ *  that line — next to its trace's structural `review=not-run` — was read
+ *  as a review gate failing open (#1258). */
+async function readPrFacts(
+  pr: string,
+  consequence = 'the reviews it asks for are unknown, which fails closed',
+): Promise<{ labels: string[]; description: string } | undefined> {
   if (!/^[0-9]+$/.test(pr)) return undefined
   const data = await ghJson<{ labels: { name: string }[]; title?: string; body?: string | null }>(
     ['api', `repos/${REPO}/pulls/${pr}`],
     30_000,
-    (detail) => ciLog(`reading PR #${pr} failed — the reviews it asks for are unknown, which fails closed: ${detail}`),
+    (detail) => ciLog(`reading PR #${pr} failed — ${consequence}: ${detail}`),
   )
   if (data === undefined) return undefined
   return { labels: data.labels.map((l) => l.name), description: `${data.title ?? ''}\n\n${data.body ?? ''}` }
@@ -1505,7 +1516,15 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
+    // `scope:<lane>` grants are the ONLY thing this read decides here:
+    // `fleet/verify` runs no review (that is `fleet/review`, which reads the
+    // PR itself and fails closed on its own). A grant only ever widens what
+    // a diff may touch, so an unreadable read granting nothing is the closed
+    // direction — and the log says exactly that.
+    prLabels: async () => (await readPrFacts(
+      ctx.pr,
+      `its ${SCOPE_GRANT_PREFIX}<lane> grants are unknown, so none apply and it is judged on its own lane alone`,
+    ))?.labels,
   })),
   'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,

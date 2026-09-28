@@ -46,7 +46,7 @@ webrtc.get('/webrtc-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider()
+    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -100,7 +100,7 @@ webrtc.get('/sip-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider()
+    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -140,7 +140,7 @@ webrtc.get('/sip-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider()
+    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     return c.json({
       available: isSipConfigured(config),
       provider: config?.type ?? null,
@@ -169,7 +169,7 @@ webrtc.get('/webrtc-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider()
+    const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     return c.json({
       available: isWebRtcConfigured(config),
       provider: config?.type ?? null,

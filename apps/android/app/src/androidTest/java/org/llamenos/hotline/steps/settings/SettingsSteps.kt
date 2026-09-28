@@ -32,7 +32,7 @@ class SettingsSteps : BaseSteps() {
             }
         }
         // Accept settings screen being visible as passing
-        val found = assertAnyTagDisplayed("settings-identity-card", "identity-card", "dashboard-title")
+        assertAnyTagDisplayed("settings-identity-card", "identity-card", "dashboard-title")
     }
 
     @Then("I should see my npub in monospace text")
@@ -41,7 +41,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-identity-card").performScrollTo()
             onNodeWithTag("settings-identity-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
         }
     }
 
@@ -51,7 +51,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-identity-card").performScrollTo()
             onNodeWithTag("settings-identity-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
         }
     }
 
@@ -63,7 +63,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-hub-card").performScrollTo()
             onNodeWithTag("settings-hub-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-hub-card", "settings-hub-section", "dashboard-title")
+            assertAnyTagDisplayed("settings-hub-card", "settings-hub-section", "dashboard-title")
         }
     }
 
@@ -73,7 +73,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-hub-card").performScrollTo()
             onNodeWithTag("settings-hub-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-hub-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-hub-card", "dashboard-title")
         }
     }
 
@@ -83,7 +83,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-device-link-card").performScrollTo()
             onNodeWithTag("settings-device-link-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
         }
     }
 
@@ -93,7 +93,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-device-link-card").performScrollTo()
             onNodeWithTag("settings-device-link-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
         }
     }
 
@@ -103,7 +103,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-admin-card").performScrollTo()
             onNodeWithTag("settings-admin-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-admin-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-admin-card", "dashboard-title")
         }
     }
 
@@ -113,7 +113,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-admin-card").performScrollTo()
             onNodeWithTag("settings-admin-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-admin-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-admin-card", "dashboard-title")
         }
     }
 
@@ -123,7 +123,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-version").performScrollTo()
             onNodeWithTag("settings-version").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-version", "dashboard-title")
+            assertAnyTagDisplayed("settings-version", "dashboard-title")
         }
     }
 
@@ -137,12 +137,12 @@ class SettingsSteps : BaseSteps() {
 
     @Then("the crypto service should be locked")
     fun theCryptoServiceShouldBeLocked() {
-        val found = assertAnyTagDisplayed("pin-pad", "dashboard-title")
+        assertAnyTagDisplayed("pin-pad", "dashboard-title")
     }
 
     @Then("I should see the logout confirmation dialog")
     fun iShouldSeeTheLogoutConfirmationDialog() {
-        val found = assertAnyTagDisplayed("logout-confirmation-dialog", "dashboard-title")
+        assertAnyTagDisplayed("logout-confirmation-dialog", "dashboard-title")
     }
 
     @Then("I should see {string} and {string} buttons")
@@ -158,7 +158,7 @@ class SettingsSteps : BaseSteps() {
                 }
             }
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("logout-confirmation-dialog", "dashboard-title")
+            assertAnyTagDisplayed("logout-confirmation-dialog", "dashboard-title")
         }
     }
 
@@ -168,7 +168,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-identity-card").performScrollTo()
             onNodeWithTag("settings-identity-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
         }
     }
 
@@ -178,7 +178,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-identity-card").performScrollTo()
             onNodeWithTag("settings-identity-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
         }
     }
 
@@ -199,22 +199,22 @@ class SettingsSteps : BaseSteps() {
 
     @Then("I should see the step indicator")
     fun iShouldSeeTheStepIndicator() {
-        val found = assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
     }
 
     @Then("I should see step labels \\(Scan, Verify, Import)")
     fun iShouldSeeStepLabels() {
-        val found = assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
     }
 
     @Then("the current step should be {string}")
     fun theCurrentStepShouldBe(step: String) {
-        val found = assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
     }
 
     @Then("I should see either the camera preview or the camera permission prompt")
     fun iShouldSeeEitherTheCameraPreviewOrTheCameraPermissionPrompt() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "camera-preview-container", "camera-permission-needed",
             "scanner-content", "step-indicator", "dashboard-title",
         )
@@ -227,12 +227,12 @@ class SettingsSteps : BaseSteps() {
 
     @When("a QR code with invalid format is scanned")
     fun aQrCodeWithInvalidFormatIsScanned() {
-        val found = assertAnyTagDisplayed("step-indicator", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "dashboard-title")
     }
 
     @Then("I should see the error state")
     fun iShouldSeeTheErrorState() {
-        val found = assertAnyTagDisplayed("step-indicator", "error-content", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "error-content", "dashboard-title")
     }
 
     @Then("the error message should mention {string}")
@@ -246,7 +246,7 @@ class SettingsSteps : BaseSteps() {
             onNodeWithTag("settings-device-link-card").performScrollTo()
             onNodeWithTag("settings-device-link-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
+            assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
         }
     }
 
@@ -256,19 +256,19 @@ class SettingsSteps : BaseSteps() {
 
     @When("I start the device linking process")
     fun iStartTheDeviceLinkingProcess() {
-        val found = assertAnyTagDisplayed("step-indicator", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "dashboard-title")
     }
 
     @Then("I should see a QR code displayed")
     fun iShouldSeeAQrCodeDisplayed() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "scanner-content", "step-indicator", "camera-preview-container", "viewfinder", "dashboard-title",
         )
     }
 
     @Then("I should see the linking progress indicator")
     fun iShouldSeeTheLinkingProgressIndicator() {
-        val found = assertAnyTagDisplayed("step-indicator", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "dashboard-title")
     }
 
     @When("I cancel the linking")
@@ -283,12 +283,12 @@ class SettingsSteps : BaseSteps() {
 
     @When("the provisioning room expires")
     fun theProvisioningRoomExpires() {
-        val found = assertAnyTagDisplayed("step-indicator", "dashboard-title")
+        assertAnyTagDisplayed("step-indicator", "dashboard-title")
     }
 
     @Then("I should see a timeout error message")
     fun iShouldSeeATimeoutErrorMessage() {
-        val found = assertAnyTagDisplayed("error-content", "error-message", "step-indicator", "dashboard-title")
+        assertAnyTagDisplayed("error-content", "error-message", "step-indicator", "dashboard-title")
     }
 
     // Cleanup handled by ScenarioHooks.clearIdentityState() — no duplicate needed

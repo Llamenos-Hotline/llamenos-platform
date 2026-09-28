@@ -36,13 +36,13 @@ class CustomFieldSteps : BaseSteps() {
 
     @Then("the field name should auto-generate as {string}")
     fun theFieldNameShouldAutoGenerateAs(name: String) {
-        val found = assertAnyTagDisplayed("field-label-input", "fields-list", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("field-label-input", "fields-list", "admin-tabs", "dashboard-title")
     }
 
     @Then("I should see a success message")
     fun iShouldSeeASuccessMessage() {
         // After save, the dialog dismisses and we return to the list
-        val found = assertAnyTagDisplayed("fields-list", "fields-empty")
+        assertAnyTagDisplayed("fields-list", "fields-empty")
     }
 
     @Then("{string} should appear in the field list")
@@ -52,7 +52,7 @@ class CustomFieldSteps : BaseSteps() {
             composeRule.onAllNodesWithText(fieldName, substring = true).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
             // Field may not persist without backend — accept fields area being visible
-            val found = assertAnyTagDisplayed("fields-list", "fields-empty")
+            assertAnyTagDisplayed("fields-list", "fields-empty")
         }
     }
 
@@ -119,7 +119,7 @@ class CustomFieldSteps : BaseSteps() {
     @Then("{string} should no longer appear in the field list")
     fun shouldNoLongerAppearInTheFieldList(fieldName: String) {
         composeRule.waitForIdle()
-        val found = assertAnyTagDisplayed("fields-list", "fields-empty")
+        assertAnyTagDisplayed("fields-list", "fields-empty")
     }
 
     // ---- Notes with custom fields (requires note form integration — Epic 230) ----

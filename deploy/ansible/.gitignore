@@ -7,3 +7,10 @@ inventory-production.yml
 .vault-pass
 vars-production.yml.*
 inventory-production.yml.*
+# The demo workflow writes these two into the checkout on a SELF-HOSTED
+# runner and only removes them in an `if: always()` step. A killed job left
+# an untracked, un-ignored vault file and a real inventory in the worktree.
+demo_vars.yml
+inventory-demo.yml
+demo_vars.yml.*
+inventory-demo.yml.*
