@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   getTelephonyFromService,
   getHubTelephonyFromService,
@@ -72,9 +72,17 @@ describe('getHubTelephonyFromService', () => {
       getTelephonyProvider: vi.fn(),
     }
 
-    const adapter = await getHubTelephonyFromService({} as any, settings, 'hub-123')
+    // The HMAC secret is what decrypts the stored credentials. This assertion
+    // used to pin `('hub-123')` with no second argument, which is precisely
+    // the defect: the hub's provider resolved and its credentials stayed
+    // ciphertext. Strengthened to require the secret rather than forbid it.
+    const adapter = await getHubTelephonyFromService(
+      { HMAC_SECRET: 'a'.repeat(64) } as any,
+      settings,
+      'hub-123',
+    )
     expect(adapter).not.toBeNull()
-    expect(settings.getHubTelephonyProvider).toHaveBeenCalledWith('hub-123')
+    expect(settings.getHubTelephonyProvider).toHaveBeenCalledWith('hub-123', 'a'.repeat(64))
     expect(settings.getTelephonyProvider).not.toHaveBeenCalled()
   })
 
@@ -111,15 +119,6 @@ describe('getHubTelephonyFromService', () => {
 })
 
 describe('getMessagingAdapterFromService', () => {
-  const baseConfig = {
-    enabledChannels: ['sms', 'whatsapp', 'signal', 'rcs', 'telegram'] as string[],
-    sms: { enabled: true },
-    whatsapp: { provider: 'twilio', accountSid: 'AC', authToken: 'tk', whatsappNumber: '+1' },
-    signal: { bridgeUrl: 'http://signal-cli:8080' },
-    rcs: { agentId: 'agent', serviceAccountKey: {} },
-    telegram: { botToken: 'bot:token' },
-  }
-
   it('throws when channel is not enabled', async () => {
     const settings = {
       getMessagingConfig: vi.fn().mockResolvedValue({
