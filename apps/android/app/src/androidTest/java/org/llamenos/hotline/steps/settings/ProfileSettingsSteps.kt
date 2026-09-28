@@ -34,7 +34,7 @@ class ProfileSettingsSteps : BaseSteps() {
 
     @Then("the new display name should persist")
     fun theNewDisplayNameShouldPersist() {
-        val found = assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
     }
 
     @When("I reload and re-authenticate")
@@ -98,7 +98,7 @@ class ProfileSettingsSteps : BaseSteps() {
             onNodeWithTag(tag).performScrollTo()
             onNodeWithTag(tag).assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed(tag, "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed(tag, "settings-profile-section", "dashboard-title")
         }
     }
 
@@ -108,7 +108,7 @@ class ProfileSettingsSteps : BaseSteps() {
             ensureProfileExpanded()
             onNodeWithTag("settings-display-name-input").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
         }
     }
 
@@ -118,7 +118,7 @@ class ProfileSettingsSteps : BaseSteps() {
             ensureProfileExpanded()
             onNodeWithTag("settings-phone-input").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-phone-input", "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed("settings-phone-input", "settings-profile-section", "dashboard-title")
         }
     }
 
@@ -133,7 +133,7 @@ class ProfileSettingsSteps : BaseSteps() {
                 continue
             }
         }
-        val found = assertAnyTagDisplayed("settings-npub", "settings-identity-card", "dashboard-title")
+        assertAnyTagDisplayed("settings-npub", "settings-identity-card", "dashboard-title")
     }
 
     @Then("they should not see a {string} link")
@@ -198,17 +198,17 @@ class ProfileSettingsSteps : BaseSteps() {
 
     @Then("the profile section should be expanded")
     fun theProfileSectionShouldBeExpanded() {
-        val found = assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
     }
 
     @Then("the profile section should collapse")
     fun theProfileSectionShouldCollapse() {
-        val found = assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
     }
 
     @Then("the profile section should expand")
     fun theProfileSectionShouldExpand() {
-        val found = assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-display-name-input", "settings-profile-section", "dashboard-title")
     }
 
     @Then("the transcription section should be expanded")
@@ -217,7 +217,7 @@ class ProfileSettingsSteps : BaseSteps() {
             onNodeWithTag("settings-transcription-section").performScrollTo()
             onNodeWithTag("settings-transcription-section").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("settings-transcription-section", "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed("settings-transcription-section", "settings-profile-section", "dashboard-title")
         }
     }
 
@@ -241,18 +241,18 @@ class ProfileSettingsSteps : BaseSteps() {
             onNodeWithTag(tag2).performScrollTo()
             onNodeWithTag(tag2).assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed(tag1, tag2, "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed(tag1, tag2, "settings-profile-section", "dashboard-title")
         }
     }
 
     @Then("each settings section should have a {string} button")
     fun eachSettingsSectionShouldHaveAButton(buttonText: String) {
-        val found = assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
     }
 
     @When("I toggle a language option")
     fun iToggleALanguageOption() {
-        val found = assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
+        assertAnyTagDisplayed("settings-profile-section", "dashboard-title")
     }
 
     // ---- Theme ----
@@ -302,7 +302,7 @@ class ProfileSettingsSteps : BaseSteps() {
     @Then("the page should render without errors")
     fun thePageShouldRenderWithoutErrors() {
         // Verify app hasn't crashed — any visible settings element is fine
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "settings-profile-section", "settings-identity-card", "settings-version",
         )
     }
@@ -310,17 +310,17 @@ class ProfileSettingsSteps : BaseSteps() {
     @Then("I should see the dark theme button on the login page")
     fun iShouldSeeTheDarkThemeButtonOnTheLoginPage() {
         // Theme buttons on login are not implemented on Android — login has demo buttons
-        val found = assertAnyTagDisplayed("app-title", "demo-admin-button")
+        assertAnyTagDisplayed("app-title", "demo-admin-button")
     }
 
     @Then("I should see the light theme button on the login page")
     fun iShouldSeeTheLightThemeButtonOnTheLoginPage() {
-        val found = assertAnyTagDisplayed("app-title", "demo-volunteer-button")
+        assertAnyTagDisplayed("app-title", "demo-volunteer-button")
     }
 
     @Then("I should see the system theme button on the login page")
     fun iShouldSeeTheSystemThemeButtonOnTheLoginPage() {
-        val found = assertAnyTagDisplayed("app-title", "demo-admin-button")
+        assertAnyTagDisplayed("app-title", "demo-admin-button")
     }
 
     private fun ensureProfileExpanded() {

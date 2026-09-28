@@ -49,17 +49,17 @@ class AdminSteps : BaseSteps() {
 
     @Then("I should see the admin screen")
     fun iShouldSeeTheAdminScreen() {
-        val found = assertAnyTagDisplayed("admin-title", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("admin-title", "admin-tabs", "dashboard-title")
     }
 
     @Then("the admin title should be displayed")
     fun theAdminTitleShouldBeDisplayed() {
-        val found = assertAnyTagDisplayed("admin-title", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("admin-title", "admin-tabs", "dashboard-title")
     }
 
     @Then("the admin tabs should be visible")
     fun theAdminTabsShouldBeVisible() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
     }
 
     @When("I navigate to the admin panel")
@@ -88,7 +88,7 @@ class AdminSteps : BaseSteps() {
 
     @Then("the settings identity card should be visible")
     fun theSettingsIdentityCardShouldBeVisible() {
-        val found = assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
+        assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
     }
 
     // ---- Admin tabs ----
@@ -97,7 +97,7 @@ class AdminSteps : BaseSteps() {
     fun iShouldSeeTheFollowingTabs(dataTable: DataTable) {
         val tabs = dataTable.asList().filter { it.lowercase() != "tab" }
         // Verify at least the admin tabs container is visible
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
     }
 
     @Then("the {string} tab should be selected by default")
@@ -106,12 +106,12 @@ class AdminSteps : BaseSteps() {
             "Volunteers" -> "admin-tab-volunteers"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed(tag, "admin-tabs", "dashboard-title")
     }
 
     @Then("{word} content should be displayed \\(loading, empty, or list)")
     fun contentShouldBeDisplayed(tabContent: String) {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "${tabContent}-loading", "${tabContent}-empty", "${tabContent}-list",
             "admin-tabs", "dashboard-title",
         )
@@ -120,12 +120,12 @@ class AdminSteps : BaseSteps() {
     @Then("I should be on the Volunteers tab")
     fun iShouldBeOnTheVolunteersTab() {
         composeRule.waitForIdle()
-        val found = assertAnyTagDisplayed("admin-tab-volunteers", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("admin-tab-volunteers", "admin-tabs", "dashboard-title")
     }
 
     @Then("no crashes should occur")
     fun noCrashesShouldOccur() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title", "dashboard-title")
     }
 
     // ---- Access control ----
@@ -143,7 +143,7 @@ class AdminSteps : BaseSteps() {
 
     @Then("I should not be able to access any tab")
     fun iShouldNotBeAbleToAccessAnyTab() {
-        val found = assertAnyTagDisplayed("pin-pad", "dashboard-title")
+        assertAnyTagDisplayed("pin-pad", "dashboard-title")
     }
 
     @Then("I should be able to navigate to all tabs:")
@@ -158,7 +158,7 @@ class AdminSteps : BaseSteps() {
                 "Settings" -> NAV_SETTINGS
                 else -> return
             }
-            val found = assertAnyTagDisplayed(tag, "dashboard-title")
+            assertAnyTagDisplayed(tag, "dashboard-title")
         }
     }
 
@@ -197,17 +197,17 @@ class AdminSteps : BaseSteps() {
 
     @Then("audit entries should be visible with date information")
     fun auditEntriesShouldBeVisibleWithDateInformation() {
-        val found = assertAnyTagDisplayed("audit-list", "audit-empty", "audit-loading")
+        assertAnyTagDisplayed("audit-list", "audit-empty", "audit-loading")
     }
 
     @Then("audit entries should show actor links pointing to volunteer profiles")
     fun auditEntriesShouldShowActorLinksPointingToVolunteerProfiles() {
-        val found = assertAnyTagDisplayed("audit-list", "audit-empty")
+        assertAnyTagDisplayed("audit-list", "audit-empty")
     }
 
     @Then("the {string} badge should have the purple color class")
     fun theBadgeShouldHaveThePurpleColorClass(badgeText: String) {
-        val found = assertAnyTagDisplayed("audit-list", "audit-empty")
+        assertAnyTagDisplayed("audit-list", "audit-empty")
     }
 
     // ---- Audit log filters ----

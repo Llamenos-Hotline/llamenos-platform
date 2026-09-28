@@ -31,7 +31,7 @@ class CallHistorySteps : BaseSteps() {
 
     @Then("I should see the call history screen")
     fun iShouldSeeTheCallHistoryScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "call-history-title", "call-history-list", "call-history-empty",
             "call-history-loading", "dashboard-title",
         )
@@ -39,7 +39,7 @@ class CallHistorySteps : BaseSteps() {
 
     @Then("I should see the call history title")
     fun iShouldSeeTheCallHistoryTitle() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "call-history-title", "call-history-list", "call-history-empty",
             "dashboard-title",
         )
@@ -65,7 +65,7 @@ class CallHistorySteps : BaseSteps() {
             "Unanswered" -> "call-filter-unanswered"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "call-history-title", "dashboard-title")
+        assertAnyTagDisplayed(tag, "call-history-title", "dashboard-title")
     }
 
     @When("I tap the {string} call filter chip")
@@ -92,25 +92,25 @@ class CallHistorySteps : BaseSteps() {
             "Unanswered" -> "call-filter-unanswered"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "call-history-title", "dashboard-title")
+        assertAnyTagDisplayed(tag, "call-history-title", "dashboard-title")
     }
 
     // ---- Content state ----
 
     @Then("I should see the call history content or empty state")
     fun iShouldSeeTheCallHistoryContentOrEmptyState() {
-        val found = assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading", "dashboard-title")
+        assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading", "dashboard-title")
     }
 
     @Then("the call history screen should support pull to refresh")
     fun theCallHistoryScreenShouldSupportPullToRefresh() {
-        val found = assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading", "dashboard-title")
+        assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading", "dashboard-title")
     }
 
     // ---- Search ----
 
     @Then("I should see the call history search field")
     fun iShouldSeeTheCallHistorySearchField() {
-        val found = assertAnyTagDisplayed("call-history-search", "call-history-title", "dashboard-title")
+        assertAnyTagDisplayed("call-history-search", "call-history-title", "dashboard-title")
     }
 }

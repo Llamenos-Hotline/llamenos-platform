@@ -38,7 +38,7 @@ class UserSteps : BaseSteps() {
 
     @Then("they should see the dashboard or profile setup")
     fun theyShouldSeeTheDashboardOrProfileSetup() {
-        val found = assertAnyTagDisplayed("dashboard-title", "profile-setup", "pin-title")
+        assertAnyTagDisplayed("dashboard-title", "profile-setup", "pin-title")
     }
 
     // ---- Volunteer login states ----
@@ -62,7 +62,7 @@ class UserSteps : BaseSteps() {
 
     @Then("they should see the dashboard")
     fun theyShouldSeeTheDashboard() {
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
     }
 
     @Given("a volunteer is logged in and on the dashboard")
