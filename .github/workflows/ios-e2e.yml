@@ -236,7 +236,7 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
-    timeout-minutes: 60
+    timeout-minutes: 65
 
     strategy:
       fail-fast: false
@@ -314,9 +314,13 @@ jobs:
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee /tmp/shard-args.txt
           test -s /tmp/shard-args.txt || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
-      # Inside the job's 60: leaves room for the always() report/upload steps.
+      # Inside the job's 65: leaves room for setup (5-7 min) and the always()
+      # report/upload steps. Shards are balanced by measured time (ui-tests.py
+      # shard) at ~37 min per-PR; the nightly adds the quarantined tests. At 45 the
+      # heaviest count-balanced shard timed out after its last test had passed
+      # (43.2 min of test time, run 36368999711).
       - name: Run XCUITests (shard ${{ matrix.shard }})
-        timeout-minutes: 45
+        timeout-minutes: 50
         run: |
           set -o pipefail
           XCTESTRUN=$(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)

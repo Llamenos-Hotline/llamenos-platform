@@ -4,10 +4,16 @@
     ui-tests.py shard --index I --total N [--include-quarantined]
         Print the xcodebuild selection arguments for shard I of N, one per line.
         Every XCTestCase subclass under Tests/UI is assigned to exactly one
-        shard; shards are balanced by test-method count (largest class first,
-        into the lightest shard), so the assignment is deterministic and a new
-        class can never fall through the cracks between shards. Tests listed in
+        shard, so a new class can never fall through the cracks between shards.
+        Shards are balanced by expected test time (costliest class first, into
+        the lightest shard): the tests the shard will actually run times the
+        class's measured seconds per test from Tests/UI/ci-timings.json (the
+        median class for a class with no measurement). Tests listed in
         Tests/UI/ci-quarantine.txt are skipped unless --include-quarantined.
+
+    ui-tests.py timings REPORT.json...
+        Rewrite Tests/UI/ci-timings.json from `report --json` outputs: each
+        class's mean seconds per executed test.
 
     ui-tests.py check-quarantine
         Fail unless every quarantine entry names an existing test method and
@@ -35,6 +41,7 @@ TARGET = "LlamenosUITests"
 CLASS_RE = re.compile(r"^\s*(?:final\s+)?class\s+(\w+)\s*:\s*(\w+)", re.MULTILINE)
 TEST_RE = re.compile(r"^\s*func\s+(test\w+)\s*\(", re.MULTILINE)
 QUARANTINE_FILE = UI_TESTS_DIR / "ci-quarantine.txt"
+TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
 QUARANTINE_RE = re.compile(r"^(?P<cls>\w+)/(?P<test>test\w+)\s+#\s*(?P<why>.*\S)\s*$")
 ISSUE_RE = re.compile(r"(?:^|[^\w&/])#\d+\b")
 CASE_RE = re.compile(
@@ -108,19 +115,47 @@ def check_quarantine() -> int:
 
 
 def shard(index: int, total: int, include_quarantined: bool) -> list[str]:
+    """Balanced by expected seconds, not test count: the admin classes cost ~50s a
+    test and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
+    36368999711, and the 43-min shard hit the 45-min step timeout after its last
+    test had passed."""
     if not 0 <= index < total:
         raise SystemExit(f"shard index {index} out of range for {total} shards")
+    skipped: dict[str, int] = defaultdict(int)
+    if not include_quarantined:
+        for cls, _, _ in quarantine():
+            skipped[cls] += 1
+    per_test = json.loads(TIMINGS_FILE.read_text(encoding="utf-8")) if TIMINGS_FILE.is_file() else {}
+    known = sorted(per_test.values())
+    default = known[len(known) // 2] if known else 1.0
+    cost = {cls: (n - skipped[cls]) * per_test.get(cls, default) for cls, n in test_classes().items()}
+
     bins: list[list[str]] = [[] for _ in range(total)]
-    loads = [0] * total
-    for cls, n in sorted(test_classes().items(), key=lambda kv: (-kv[1], kv[0])):
+    loads = [0.0] * total
+    for cls, secs in sorted(cost.items(), key=lambda kv: (-kv[1], kv[0])):
         lightest = loads.index(min(loads))
         bins[lightest].append(cls)
-        loads[lightest] += n
+        loads[lightest] += secs
     mine = sorted(bins[index])
     args = [f"-only-testing:{TARGET}/{cls}" for cls in mine]
     if not include_quarantined:
         args += [f"-skip-testing:{TARGET}/{cls}/{test}" for cls, test, _ in quarantine() if cls in mine]
     return args
+
+
+def timings(reports: list[Path]) -> int:
+    secs: dict[str, float] = defaultdict(float)
+    runs: dict[str, int] = defaultdict(int)
+    for path in reports:
+        for case in json.loads(path.read_text(encoding="utf-8")):
+            secs[case["class"]] += case["seconds"]
+            runs[case["class"]] += 1
+    if not runs:
+        raise SystemExit("no executed test cases in the given reports")
+    per_test = {cls: round(secs[cls] / runs[cls], 1) for cls in sorted(runs)}
+    TIMINGS_FILE.write_text(json.dumps(per_test, indent=2) + "\n", encoding="utf-8")
+    print(f"{TIMINGS_FILE.name}: {len(per_test)} classes from {sum(runs.values())} test cases")
+    return 0
 
 
 def report(log_path: Path, json_out: Path | None) -> int:
@@ -188,6 +223,8 @@ def main() -> int:
     s.add_argument("--total", type=int, required=True)
     s.add_argument("--include-quarantined", action="store_true")
     sub.add_parser("check-quarantine")
+    t = sub.add_parser("timings")
+    t.add_argument("reports", type=Path, nargs="+")
     r = sub.add_parser("report")
     r.add_argument("log", type=Path)
     r.add_argument("--json", type=Path)
@@ -198,6 +235,8 @@ def main() -> int:
         return 0
     if args.cmd == "check-quarantine":
         return check_quarantine()
+    if args.cmd == "timings":
+        return timings(args.reports)
     return report(args.log, args.json)
 
 
