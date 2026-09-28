@@ -137,6 +137,7 @@ final class AuthFlowUITests: XCTestCase {
             deviceLinkView.waitForExistence(timeout: 5),
             "Device link view should appear after tapping Link from Another Device"
         )
+        app.answerSystemPromptOnce(.camera)
 
         // Cancel should return to login
         let cancelButton = find("cancel-device-link")

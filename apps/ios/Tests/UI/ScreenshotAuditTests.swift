@@ -514,6 +514,7 @@ final class ScreenshotAuditTests: BaseUITest {
         _ = anyElementExists([
             "device-link-view", "qr-scanner", "device-link-connecting", "device-link-error"
         ], timeout: 8)
+        app.answerSystemPromptOnce(.camera)
         screenshot("16-device-link")
     }
 

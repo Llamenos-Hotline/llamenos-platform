@@ -1,47 +1,60 @@
 import XCTest
 
-/// The app asks for notification permission on every launch until it is answered
-/// (`LlamenosApp.requestPushNotificationPermission`, from the root view's `onAppear`),
-/// so a fresh CI simulator shows the springboard alert once per shard, at the first
-/// launch, some seconds after the app goes idle.
+/// The springboard permission alerts the app raises, answered explicitly.
 ///
-/// Left to XCTest's implicit interruption handler, the alert was answered whenever the
-/// test first tapped something, racing a busy springboard. In run 36359693222 the handler
-/// tapped Allow, still saw the alert a second later, then found it gone and failed the
-/// test with "Failed to get matching snapshot: No matches found for Descendants matching
-/// type Alert" (1 of the 16 shard-first launches in runs 36343743065–36359693222). Here
-/// it is answered explicitly, before the test touches the app, and the test waits until
-/// the alert has closed.
+/// Each is asked once per simulator: the app asks for notifications on every launch
+/// until answered (`LlamenosApp.requestPushNotificationPermission`, from the root
+/// view's `onAppear`), and for the camera when the device-link view opens
+/// (`DeviceLinkViewModel`). A fresh CI simulator therefore shows each once per shard.
+///
+/// Left to XCTest's implicit interruption handler, an alert was answered whenever the
+/// test next tapped something, racing a busy springboard. In run 36359693222 the handler
+/// tapped Allow on the notification alert, still saw the alert a second later, then
+/// found it gone and failed the test with "Failed to get matching snapshot: No matches
+/// found for Descendants matching type Alert" (1 of the 16 shard-first launches in runs
+/// 36343743065–36359693222; the camera alert went through the same handler 10 times).
+/// Here each is answered at the step that raises it, before the test touches the app
+/// again, and the test waits until the alert has closed.
 extension XCUIApplication {
-    /// Launch the app, then answer the system prompt it raises on a fresh simulator.
+    enum SystemPrompt: String {
+        case notifications = "Would Like to Send You Notifications"
+        case camera = "would like to access the Camera"
+    }
+
+    /// Launch the app, then answer the notification prompt it raises on a fresh simulator.
     /// Every UI test launches through this, never through `launch()` directly.
     func launchAnsweringSystemPrompts(file: StaticString = #filePath, line: UInt = #line) {
         launch()
-        Self.answerNotificationPermissionOnce(file: file, line: line)
+        answerSystemPromptOnce(.notifications, file: file, line: line)
     }
 
-    /// Once per test process: after the first launch the question has been answered and
-    /// the simulator keeps the answer for every later launch in the shard.
-    private static var notificationPermissionAnswered = false
-
-    private static func answerNotificationPermissionOnce(file: StaticString, line: UInt) {
-        guard !notificationPermissionAnswered else { return }
-        notificationPermissionAnswered = true
+    /// Allow `prompt`, unless this test process already has. Call it right after the
+    /// step that raises it.
+    func answerSystemPromptOnce(_ prompt: SystemPrompt, file: StaticString = #filePath, line: UInt = #line) {
+        guard !Self.answeredPrompts.contains(prompt) else { return }
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts
-            .matching(NSPredicate(format: "label CONTAINS %@", "Would Like to Send You Notifications"))
+            .matching(NSPredicate(format: "label CONTAINS %@", prompt.rawValue))
             .firstMatch
-        // A simulator that already answered (a local re-run) never shows it.
-        guard alert.waitForExistence(timeout: 30) else { return }
+        guard alert.waitForExistence(timeout: 30) else {
+            // Not raised: this simulator answered it before (a local re-run). An app
+            // that is no longer running never got as far as asking (it crashed on
+            // launch, run 36364790578), so the next launch still has to answer it.
+            if state == .runningForeground { Self.answeredPrompts.insert(prompt) }
+            return
+        }
+        Self.answeredPrompts.insert(prompt)
 
         let allow = alert.buttons["Allow"]
-        XCTAssertTrue(allow.exists, "The notification permission alert should offer Allow", file: file, line: line)
+        XCTAssertTrue(allow.exists, "The \(prompt) permission alert should offer Allow", file: file, line: line)
         allow.tap()
         XCTAssertTrue(
             alert.waitForNonExistence(timeout: 30),
-            "The notification permission alert should close after Allow",
+            "The \(prompt) permission alert should close after Allow",
             file: file, line: line
         )
     }
+
+    private static var answeredPrompts: Set<SystemPrompt> = []
 }
