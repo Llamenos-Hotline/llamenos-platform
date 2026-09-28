@@ -41,8 +41,10 @@ TARGET = "LlamenosUITests"
 CLASS_RE = re.compile(r"^\s*(?:final\s+)?class\s+(\w+)\s*:\s*(\w+)", re.MULTILINE)
 TEST_RE = re.compile(r"^\s*func\s+(test\w+)\s*\(", re.MULTILINE)
 QUARANTINE_FILE = UI_TESTS_DIR / "ci-quarantine.txt"
+SMOKE_FILE = UI_TESTS_DIR / "ci-smoke.txt"
 TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
 QUARANTINE_RE = re.compile(r"^(?P<cls>\w+)/(?P<test>test\w+)\s+#\s*(?P<why>.*\S)\s*$")
+SMOKE_RE = re.compile(r"^(?P<cls>\w+)\s+#\s*(?P<why>.*\S)\s*$")
 ISSUE_RE = re.compile(r"(?:^|[^\w&/])#\d+\b")
 CASE_RE = re.compile(
     r"Test Case '-\[(?P<target>\w+)\.(?P<cls>\w+) (?P<test>\w+)\]' "
@@ -114,7 +116,40 @@ def check_quarantine() -> int:
     return 1 if problems else 0
 
 
-def shard(index: int, total: int, include_quarantined: bool) -> list[str]:
+def smoke_classes() -> dict[str, str]:
+    """{class: why} for every entry in ci-smoke.txt — the SMOKE tier's whitelist."""
+    if not SMOKE_FILE.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for n, line in enumerate(SMOKE_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = SMOKE_RE.match(line)
+        if not m:
+            raise SystemExit(f"{SMOKE_FILE.name}:{n}: expected '<Class>  # <why it is day-one critical>'")
+        out[m["cls"]] = m["why"]
+    return out
+
+
+def check_smoke() -> int:
+    """A smoke entry naming a class that no longer exists would shrink the tier
+    silently — the same failure mode `check-quarantine` exists to prevent."""
+    known = test_classes()
+    entries = smoke_classes()
+    problems = [f"{cls}: no such XCUITest class — remove the entry" for cls in entries if cls not in known]
+    if not entries:
+        problems.append("ci-smoke.txt lists no classes — the smoke tier would run nothing")
+    for p in problems:
+        print(p)
+    covered = sum(known.get(c, 0) for c in entries)
+    total = sum(known.values())
+    pct = (100 * covered / total) if total else 0
+    print(f"{len(entries)} smoke class(es), {covered}/{total} tests ({pct:.0f}%), {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False) -> list[str]:
     """Balanced by expected seconds, not test count: the admin classes cost ~50s a
     test and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
     36368999711, and the 43-min shard hit the 45-min step timeout after its last
@@ -128,7 +163,16 @@ def shard(index: int, total: int, include_quarantined: bool) -> list[str]:
     per_test = json.loads(TIMINGS_FILE.read_text(encoding="utf-8")) if TIMINGS_FILE.is_file() else {}
     known = sorted(per_test.values())
     default = known[len(known) // 2] if known else 1.0
-    cost = {cls: (n - skipped[cls]) * per_test.get(cls, default) for cls, n in test_classes().items()}
+    selected = test_classes()
+    if only_smoke:
+        smoke = smoke_classes()
+        missing = [c for c in smoke if c not in selected]
+        if missing:
+            raise SystemExit(f"ci-smoke.txt names unknown class(es): {', '.join(sorted(missing))}")
+        selected = {c: n for c, n in selected.items() if c in smoke}
+        if not selected:
+            raise SystemExit("smoke tier selected no classes — refusing to report a vacuous pass")
+    cost = {cls: (n - skipped[cls]) * per_test.get(cls, default) for cls, n in selected.items()}
 
     bins: list[list[str]] = [[] for _ in range(total)]
     loads = [0.0] * total
@@ -222,7 +266,10 @@ def main() -> int:
     s.add_argument("--index", type=int, required=True)
     s.add_argument("--total", type=int, required=True)
     s.add_argument("--include-quarantined", action="store_true")
+    s.add_argument("--only-smoke", action="store_true",
+                   help="restrict selection to the classes in ci-smoke.txt (SMOKE tier)")
     sub.add_parser("check-quarantine")
+    sub.add_parser("check-smoke")
     t = sub.add_parser("timings")
     t.add_argument("reports", type=Path, nargs="+")
     r = sub.add_parser("report")
@@ -231,10 +278,12 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.cmd == "shard":
-        print("\n".join(shard(args.index, args.total, args.include_quarantined)))
+        print("\n".join(shard(args.index, args.total, args.include_quarantined, args.only_smoke)))
         return 0
     if args.cmd == "check-quarantine":
         return check_quarantine()
+    if args.cmd == "check-smoke":
+        return check_smoke()
     if args.cmd == "timings":
         return timings(args.reports)
     return report(args.log, args.json)
