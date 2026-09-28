@@ -31,7 +31,7 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './settings'
-import { demoIdentities } from '../lib/demo-identities'
+import type { DemoIdentity } from '../lib/demo-identities'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
@@ -279,42 +279,45 @@ export class IdentityService {
   }
 
   /**
-   * Ensure default admin is seeded (called on startup).
-   * Also seeds demo accounts when DEMO_MODE is true.
+   * Seed (or restore) the given admin as an active super-admin. Used by the
+   * dev and demo resets; server startup uses ensurePlatformAdmin, which does
+   * not overwrite an existing row.
    */
-  async ensureInit(adminPubkey?: string, demoMode = false): Promise<void> {
-    if (adminPubkey) {
-      // Use onConflictDoUpdate to ensure admin always has role-super-admin.
-      // A race condition in test-add-hub-member can create the admin user
-      // with role-volunteer; this corrects that on the next ensureInit call
-      // (e.g., during test-reset). Server startup uses ensurePlatformAdmin,
-      // which does not overwrite an existing row.
-      await this.db.insert(users).values(platformAdminRow(adminPubkey)).onConflictDoUpdate({
-        target: users.pubkey,
-        set: {
-          roles: ['role-super-admin'],
-          active: true,
-        },
-      })
-    }
+  async ensureInit(adminPubkey?: string): Promise<void> {
+    if (!adminPubkey) return
+    // Use onConflictDoUpdate to ensure admin always has role-super-admin.
+    // A race condition in test-add-hub-member can create the admin user
+    // with role-volunteer; this corrects that on the next ensureInit call
+    // (e.g., during test-reset).
+    await this.db.insert(users).values(platformAdminRow(adminPubkey)).onConflictDoUpdate({
+      target: users.pubkey,
+      set: {
+        roles: ['role-super-admin'],
+        active: true,
+      },
+    })
+  }
 
-    if (demoMode) {
-      for (const account of demoIdentities()) {
-        await this.db.insert(users).values({
-          pubkey: account.pubkey,
-          displayName: account.name,
-          phone: account.phone,
-          roles: account.roleIds,
-          active: account.name !== 'Fatima Al-Rashid',
-          encryptedSecretKey: '',
-          transcriptionEnabled: true,
-          spokenLanguages: account.spokenLanguages,
-          uiLanguage: 'en',
-          profileCompleted: true,
-          onBreak: false,
-          callPreference: 'phone',
-        }).onConflictDoNothing()
-      }
+  /**
+   * Register the demo accounts. The identities can only come from
+   * `demoIdentities(env)`, which refuses anywhere but a development server.
+   */
+  async ensureDemoAccounts(identities: readonly DemoIdentity[]): Promise<void> {
+    for (const account of identities) {
+      await this.db.insert(users).values({
+        pubkey: account.pubkey,
+        displayName: account.name,
+        phone: account.phone,
+        roles: account.roleIds,
+        active: account.name !== 'Fatima Al-Rashid',
+        encryptedSecretKey: '',
+        transcriptionEnabled: true,
+        spokenLanguages: account.spokenLanguages,
+        uiLanguage: 'en',
+        profileCompleted: true,
+        onBreak: false,
+        callPreference: 'phone',
+      }).onConflictDoNothing()
     }
   }
 

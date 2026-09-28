@@ -1,10 +1,17 @@
 /**
  * Demo account metadata — shared between worker (seeding) and client (login page).
- * nsec values are only in the client-side demo-accounts.ts.
+ *
+ * Carries no key material. The accounts' signing keys are generated per process
+ * on a development server (apps/worker/lib/demo-identities.ts) and exist nowhere
+ * else.
  */
 export interface DemoAccount {
   name: string
   roleIds: string[]
+  /**
+   * Stable handle for the account in the login picker. A legacy secp256k1
+   * x-only key, not the account's Ed25519 signing key.
+   */
   pubkey: string
   phone: string
   description: string
@@ -53,5 +60,3 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     spokenLanguages: ['en'],
   },
 ]
-
-export const DEMO_ADMIN_PUBKEY = DEMO_ACCOUNTS[0].pubkey
