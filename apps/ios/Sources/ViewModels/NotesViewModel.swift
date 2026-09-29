@@ -40,7 +40,7 @@ final class NotesViewModel {
 
     private var currentPage: Int = 1
     private let pageSize: Int = 50
-    private var encryptedNotes: [NoteResponse] = []
+    private var encryptedNotes: [SharedNote] = []
 
     // MARK: - Initialization
 
@@ -91,20 +91,20 @@ final class NotesViewModel {
     /// - Parameters:
     ///   - text: The note body text.
     ///   - fields: Custom field values keyed by field name.
-    ///   - callId: Optional associated call ID.
-    ///   - conversationId: Optional associated conversation ID.
+    ///   - callId: The call the note is about. The server requires a note to belong to
+    ///     a call or a conversation; this sheet files notes against a call.
+    ///   - transcript: Optional call transcript, appended to the note text.
     ///   - adminPubkeys: Admin encryption public keys (X25519) for envelope encryption.
     func createNote(
         text: String,
         fields: [String: AnyCodableValue]?,
-        callId: String?,
-        conversationId: String?,
+        callId: String,
+        transcript: String?,
         adminPubkeys: [String]
     ) async throws {
-        let payload = NotePayload(text: text, fields: fields)
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        let payloadJSON = String(data: try encoder.encode(payload), encoding: .utf8) ?? "{}"
+        let noteText = transcript.map { "\(text)\n\n--- Transcript ---\n\($0)" } ?? text
+        let payload = NotePayload(text: noteText, fields: fields)
+        let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) ?? "{}"
 
         // Build full recipient list: our encryption key + admin encryption keys
         var recipientPubkeys: [String] = []
@@ -118,41 +118,29 @@ final class NotesViewModel {
         let result = try cryptoService.encryptNote(payload: payloadJSON, recipientPubkeys: recipientPubkeys)
 
         // Map HPKE envelopes to the protocol wire format
-        let authorEnvelope: ProtocolKeyEnvelope?
-        let adminEnvelopes: [RecipientEnvelope]?
+        let authorEnvelope = cryptoService.encryptionPubkeyHex
+            .flatMap { ourPubkey in result.envelopes.first(where: { $0.pubkey == ourPubkey }) }
+            .map { SharedAuthorEnvelope(ct: $0.envelope.ct, enc: $0.envelope.enc) }
 
-        if let ourPubkey = cryptoService.encryptionPubkeyHex,
-           let ours = result.envelopes.first(where: { $0.pubkey == ourPubkey }) {
-            authorEnvelope = ProtocolKeyEnvelope(
-                ct: ours.envelope.ct,
-                enc: ours.envelope.enc
-            )
-        } else {
-            authorEnvelope = nil
-        }
-
-        adminEnvelopes = result.envelopes
+        let adminEnvelopes = result.envelopes
             .filter { $0.pubkey != cryptoService.encryptionPubkeyHex }
-            .map { env in
-                RecipientEnvelope(
-                    ct: env.envelope.ct,
-                    enc: env.envelope.enc,
-                    pubkey: env.pubkey
-                )
-            }
+            .map { SharedAdminEnvelope(ct: $0.envelope.ct, enc: $0.envelope.enc, pubkey: $0.pubkey) }
 
-        let request = CreateNoteRequest(
-            callId: callId,
-            conversationId: conversationId,
-            encryptedContent: result.ciphertextHex,
+        let body = CreateNoteBody(
+            adminEnvelopes: adminEnvelopes,
             authorEnvelope: authorEnvelope,
-            adminEnvelopes: adminEnvelopes
+            callID: callId,
+            caseID: nil,
+            contactHash: nil,
+            conversationID: nil,
+            encryptedContent: result.ciphertextHex,
+            interactionTypeHash: nil
         )
 
-        let _: NoteResponse = try await apiService.request(
+        let _: NoteDetailResponse = try await apiService.request(
             method: "POST",
             path: apiService.hp("/api/notes"),
-            body: request
+            body: body
         )
 
         // Haptic feedback on success
@@ -166,7 +154,7 @@ final class NotesViewModel {
     // MARK: - Note Decryption
 
     /// Find the matching envelope for our pubkey and decrypt the note using HPKE.
-    func decryptNote(_ encrypted: NoteResponse) -> DecryptedNote? {
+    func decryptNote(_ encrypted: SharedNote) -> DecryptedNote? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
         // Find our envelope — check author envelope first (volunteer's own note)
@@ -203,9 +191,7 @@ final class NotesViewModel {
                 envelope: hpkeEnvelope
             )
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let payload = try decoder.decode(NotePayload.self, from: Data(decryptedJSON.utf8))
+            let payload = try JSONDecoder().decode(NotePayload.self, from: Data(decryptedJSON.utf8))
 
             return DecryptedNote(
                 id: encrypted.id,
@@ -225,7 +211,7 @@ final class NotesViewModel {
 
     private func fetchNotesPage(page: Int, replacing: Bool) async {
         do {
-            let response: NotesListResponse = try await apiService.request(
+            let response: NoteListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/notes?page=\(page)&limit=\(pageSize)")
             )
@@ -236,9 +222,9 @@ final class NotesViewModel {
                 encryptedNotes.append(contentsOf: response.notes)
             }
 
-            totalCount = response.total
+            totalCount = Int(response.total)
             currentPage = page
-            hasMore = encryptedNotes.count < response.total
+            hasMore = encryptedNotes.count < totalCount
 
             // Decrypt all notes
             notes = encryptedNotes.compactMap(decryptNote)

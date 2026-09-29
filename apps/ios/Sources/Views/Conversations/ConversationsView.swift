@@ -172,16 +172,16 @@ struct ConversationsView: View {
 // MARK: - ConversationRowView
 
 /// A single conversation row in the list, showing channel badge, contact hash,
-/// unread count, status, and last message time.
+/// status, and last message time.
 struct ConversationRowView: View {
-    let conversation: AppConversation
+    let conversation: ConversationListResponseConversation
     @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
         HStack(spacing: 12) {
             // Avatar with channel overlay
             ZStack(alignment: .bottomTrailing) {
-                GeneratedAvatar(hash: conversation.contactHash, size: 36)
+                GeneratedAvatar(hash: conversation.contactIdentifierHash, size: 36)
 
                 Image(systemName: conversation.channel.iconName)
                     .font(.system(size: 10, weight: .bold))
@@ -197,7 +197,6 @@ struct ConversationRowView: View {
                 HStack {
                     Text(conversation.contactDisplayHash)
                         .font(.brandMono(.body))
-                        .fontWeight(conversation.unreadCount > 0 ? .semibold : .regular)
                         .foregroundStyle(Color.brandForeground)
                         .lineLimit(1)
 
@@ -212,10 +211,6 @@ struct ConversationRowView: View {
                     statusBadge
 
                     Spacer()
-
-                    if conversation.unreadCount > 0 {
-                        unreadBadge
-                    }
                 }
             }
         }
@@ -254,25 +249,6 @@ struct ConversationRowView: View {
         case .waiting: return .orange
         case .closed: return .brandMutedForeground
         }
-    }
-
-    // MARK: - Unread Badge
-
-    private var unreadBadge: some View {
-        Text("\(conversation.unreadCount)")
-            .font(.brand(.caption))
-            .fontWeight(.bold)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(Color.brandDestructive)
-            )
-            .accessibilityLabel(String(format: NSLocalizedString(
-                "conversations_unread_count",
-                comment: "%d unread messages"
-            ), conversation.unreadCount))
     }
 }
 

@@ -59,36 +59,25 @@ extension SharedReportResponseStatus: CaseIterable {
     }
 }
 
-// MARK: - AppConversation
-// Client-only: generated `ConversationListResponseConversation` has different fields
-// (contactIdentifierHash, messageCount, metadata, etc.) and uses Double for counts.
+// MARK: - ConversationListResponseConversation UI Extensions
+// The list decodes into the generated `ConversationListResponse`; these are display
+// helpers only. There is no unread count on the wire (`messageCount` is the total).
 
-/// A messaging conversation (SMS/WhatsApp/Signal) from the API.
-/// Named `AppConversation` to avoid conflict with generated `Conversation` from protocol codegen.
-struct AppConversation: Codable, Identifiable, Sendable {
-    let id: String
-    let channelType: String
-    let contactHash: String
-    let assignedVolunteerPubkey: String?
-    let status: String
-    let lastMessageAt: String?
-    let unreadCount: Int
-    let createdAt: String
-
+extension ConversationListResponseConversation: Identifiable {
     /// Parsed channel type enum.
     var channel: ClientChannelType {
         ClientChannelType(rawValue: channelType) ?? .sms
     }
 
-    /// Parsed conversation status enum.
+    /// Conversation status; the server stores `waiting` until someone claims it.
     var conversationStatus: ConversationStatus {
-        ConversationStatus(rawValue: status) ?? .active
+        status ?? .waiting
     }
 
     /// Truncated contact hash for display.
     var contactDisplayHash: String {
-        guard contactHash.count > 12 else { return contactHash }
-        return "\(contactHash.prefix(6))...\(contactHash.suffix(4))"
+        guard contactIdentifierHash.count > 12 else { return contactIdentifierHash }
+        return "\(contactIdentifierHash.prefix(6))...\(contactIdentifierHash.suffix(4))"
     }
 
     /// Parsed last message date.
@@ -109,7 +98,6 @@ struct AppConversation: Codable, Identifiable, Sendable {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
-
 }
 
 // MARK: - ConversationMessage
@@ -137,13 +125,6 @@ struct ConversationMessage: Codable, Identifiable, Sendable {
     var channel: ClientChannelType {
         ClientChannelType(rawValue: channelType) ?? .sms
     }
-}
-
-// MARK: - ConversationsListResponse
-
-/// API response wrapper for the conversations list.
-struct ConversationsListResponse: Codable, Sendable {
-    let conversations: [AppConversation]
 }
 
 // MARK: - ConversationMessagesResponse

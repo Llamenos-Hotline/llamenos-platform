@@ -16,15 +16,10 @@ final class ConversationsViewModel {
     // MARK: - Public State
 
     /// All conversations from the server, filtered by current status filter.
-    var filteredConversations: [AppConversation] = []
+    var filteredConversations: [ConversationListResponseConversation] = []
 
     /// All conversations (unfiltered), used for badge count calculations.
-    var allConversations: [AppConversation] = []
-
-    /// Total unread message count across all conversations.
-    var totalUnreadCount: Int {
-        allConversations.reduce(0) { $0 + $1.unreadCount }
-    }
+    var allConversations: [ConversationListResponseConversation] = []
 
     /// Current status filter.
     var statusFilter: ConversationStatusFilter = .active {
@@ -75,9 +70,9 @@ final class ConversationsViewModel {
         errorMessage = nil
 
         do {
-            let response: ConversationsListResponse = try await apiService.request(
+            let response: ConversationListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations"
+                path: apiService.hp("/api/conversations")
             )
             allConversations = response.conversations.sorted { lhs, rhs in
                 // Sort by last message time, newest first
@@ -114,7 +109,7 @@ final class ConversationsViewModel {
         do {
             let response: ConversationMessagesResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations/\(conversationId)/messages"
+                path: apiService.hp("/api/conversations/\(conversationId)/messages")
             )
 
             currentMessages = response.messages.compactMap { decryptConversationMessage($0) }
@@ -150,7 +145,7 @@ final class ConversationsViewModel {
             }
 
             // Include assigned volunteer (may be us or someone else)
-            if let assignedPubkey = conversation?.assignedVolunteerPubkey,
+            if let assignedPubkey = conversation?.assignedTo,
                !readerPubkeys.contains(assignedPubkey) {
                 readerPubkeys.append(assignedPubkey)
             }
@@ -172,7 +167,7 @@ final class ConversationsViewModel {
 
             let _: ConversationMessage = try await apiService.request(
                 method: "POST",
-                path: "/api/conversations/\(conversationId)/messages",
+                path: apiService.hp("/api/conversations/\(conversationId)/messages"),
                 body: request
             )
 
@@ -197,7 +192,7 @@ final class ConversationsViewModel {
         do {
             let _: MarkReadResponse = try await apiService.request(
                 method: "POST",
-                path: "/api/conversations/\(conversationId)/read"
+                path: apiService.hp("/api/conversations/\(conversationId)/read")
             )
 
             // Update the local unread count
@@ -298,7 +293,8 @@ final class ConversationsViewModel {
         case .all:
             filteredConversations = allConversations
         case .active:
-            filteredConversations = allConversations.filter { $0.conversationStatus == .active }
+            // Open conversations: in progress, or waiting for someone to claim them.
+            filteredConversations = allConversations.filter { $0.conversationStatus != .closed }
         case .closed:
             filteredConversations = allConversations.filter { $0.conversationStatus == .closed }
         }

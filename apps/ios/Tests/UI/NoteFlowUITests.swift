@@ -115,10 +115,17 @@ final class NoteFlowUITests: BaseUITest {
         textEditor.tap()
         textEditor.typeText("Test note from UI test - \(Date().timeIntervalSince1970)")
 
-        // Save button should be enabled now
+        // A note belongs to a call: the server rejects one with neither a call nor a
+        // conversation (createNoteBodySchema), so text alone must not enable Save.
         let saveButton = find("save-note")
         XCTAssertTrue(saveButton.exists, "Save button should exist")
-        XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text")
+        XCTAssertFalse(saveButton.isEnabled, "Save button should stay disabled until a call is entered")
+
+        let callIdField = scrollToVisible("note-call-id-input")
+        XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
+        callIdField.tap()
+        callIdField.typeText("call-ui-test")
+        XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text and a call ID")
     }
 
     // MARK: - Empty State
@@ -149,11 +156,15 @@ final class NoteFlowUITests: BaseUITest {
 
         openNote(containing: noteText)
 
-        // Note text should be visible
+        // The detail shows the text decrypted from what the server stored.
         let noteTextElement = find("note-detail-text")
         XCTAssertTrue(
             noteTextElement.waitForExistence(timeout: 3),
             "Note detail should display the note text"
+        )
+        XCTAssertEqual(
+            noteTextElement.label, noteText,
+            "The saved note should read back from the server with the text that was typed"
         )
     }
 
@@ -179,7 +190,8 @@ final class NoteFlowUITests: BaseUITest {
     }
 
     /// Create a note through the Notes tab's create sheet (client-side E2EE included)
-    /// and wait for the sheet to close.
+    /// and wait for the sheet to close. The server stores it against a call ID; it
+    /// does not require that call to exist.
     private func createNote(text: String) {
         navigateToNotes()
         let createButton = find("create-note-button")
@@ -190,6 +202,11 @@ final class NoteFlowUITests: BaseUITest {
         XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "Note text editor should appear in the create sheet")
         textEditor.tap()
         textEditor.typeText(text)
+
+        let callIdField = scrollToVisible("note-call-id-input")
+        XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
+        callIdField.tap()
+        callIdField.typeText("call-\(UUID().uuidString.prefix(8))")
 
         find("save-note").tap()
         XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")

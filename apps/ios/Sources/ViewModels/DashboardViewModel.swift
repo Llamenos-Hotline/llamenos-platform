@@ -333,12 +333,12 @@ final class DashboardViewModel {
 
     private func fetchRecentNotes() async {
         do {
-            let response: NotesListResponse = try await apiService.request(
+            let response: NoteListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/notes") + "?page=1&limit=3"
             )
 
-            recentNoteCount = response.total
+            recentNoteCount = Int(response.total)
 
             // Decrypt the recent notes for preview using HPKE envelopes
             recentNotes = response.notes.prefix(3).compactMap { encrypted -> RecentNotePreview? in
@@ -363,9 +363,7 @@ final class DashboardViewModel {
                         ciphertextHex: encrypted.encryptedContent,
                         envelope: envelope
                     )
-                    let decoder = JSONDecoder()
-                    decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    let payload = try decoder.decode(NotePayload.self, from: Data(json.utf8))
+                    let payload = try JSONDecoder().decode(NotePayload.self, from: Data(json.utf8))
 
                     let previewText = payload.text.count > 80
                         ? String(payload.text.prefix(80)) + "..."

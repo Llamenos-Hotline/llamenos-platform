@@ -281,6 +281,19 @@ final class AdminSettingsUITests: BaseUITest {
             let element = scrollToFind(card)
             XCTAssertTrue(element.exists, "\(card) should be visible in system health dashboard")
         }
+
+        // The cards carry the server's values, not placeholders: the server reports its
+        // own status, and the connected test admin is an active user.
+        let serverStatus = scrollToFind("health-status-server")
+        XCTAssertTrue(
+            ["Ok", "Degraded", "Down"].contains(serverStatus.label),
+            "Server card should show the status /api/system/health reported, got '\(serverStatus.label)'"
+        )
+        let totalActive = scrollToFind("health-value-volunteers-0")
+        XCTAssertGreaterThan(
+            Int(totalActive.label) ?? 0, 0,
+            "Volunteers card should count the connected admin as active, got '\(totalActive.label)'"
+        )
     }
 
     func testSystemHealthHasRefreshButton() {

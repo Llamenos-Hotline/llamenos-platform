@@ -71,18 +71,6 @@ ActiveCallUITests/testQuickNoteButtonVisibleDuringCall  # active call never deco
 ActiveCallUITests/testReportSpamButtonVisible  # active call never decodes — #1129
 ScreenshotAuditTests/testScreenshot_03_ActiveCall  # active call never decodes — #1129
 
-# The notes POST body is snake_cased by APIService; the server answers 400.
-NoteFlowUITests/testNoteDetailShowsContent  # no note can be saved — #1293
-NoteFlowUITests/testNoteDetailMenuExists  # no note can be saved — #1293
-
-# The Messages tab decodes a hand-written AppConversation the server does not send.
-ConversationFlowUITests/testConversationDetailOpens  # conversation list fails to decode — #1294
-ConversationFlowUITests/testSendMessageButton  # conversation list fails to decode — #1294
-ConversationFlowUITests/testChannelHeaderVisible  # conversation list fails to decode — #1294
-
-# The hand-written SystemHealth model does not match /api/system/health.
-AdminSettingsUITests/testSystemHealthShowsCards  # system health fails to decode — #1304
-
 # No Given creates the conversion-enabled report the triage queue lists.
 TriageUITests/testTriageDetailShowsInfo  # no triage report fixture — #1314
 TriageUITests/testConvertToCaseButtonVisible  # no triage report fixture — #1314

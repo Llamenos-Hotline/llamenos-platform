@@ -9,6 +9,10 @@ import SwiftUI
 
 /// Decrypted note content matching the protocol spec (Appendix B).
 /// The plaintext JSON inside every encrypted note envelope.
+///
+/// Encode and decode it with no key strategy: `fields` is keyed by custom field
+/// `name`, which may contain underscores, and desktop and Android read those keys
+/// verbatim.
 struct NotePayload: Codable, Equatable, Sendable {
     /// The note body text.
     let text: String
@@ -44,25 +48,6 @@ struct DecryptedNote: Identifiable, Sendable {
         guard pk.count > 16 else { return pk }
         return "\(pk.prefix(8))...\(pk.suffix(6))"
     }
-}
-
-// MARK: - NotesListResponse
-
-/// API response wrapper for the paginated notes list.
-struct NotesListResponse: Codable, Sendable {
-    let notes: [NoteResponse]
-    let total: Int
-}
-
-// MARK: - CreateNoteRequest
-
-/// Request body for `POST /api/notes`.
-struct CreateNoteRequest: Encodable, Sendable {
-    let callId: String?
-    let conversationId: String?
-    let encryptedContent: String
-    let authorEnvelope: ProtocolKeyEnvelope?
-    let adminEnvelopes: [RecipientEnvelope]?
 }
 
 // MARK: - AnyCodableValue
@@ -117,10 +102,6 @@ enum AnyCodableValue: Codable, Equatable, Sendable {
         }
     }
 }
-
-// MARK: - NoteResponse Extensions
-
-extension NoteResponse: Identifiable {}
 
 // MARK: - DecryptedMessage
 
