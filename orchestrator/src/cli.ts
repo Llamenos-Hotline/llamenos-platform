@@ -23,7 +23,7 @@ import { artifactReviewCache, diffHash } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
-  reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins,
+  reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1307,6 +1307,10 @@ async function runReviewGate(): Promise<number> {
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
     requested: request.requested,
+    // A push may republish a verdict but never start one (#1284). Passed as
+    // its own fact, not inferred from `requested` being false, so the gate
+    // enforces it structurally — see `ReviewGateDeps.republishOnly`.
+    republishOnly: isRepublishOnlyEvent(event),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
@@ -1348,6 +1352,14 @@ async function runReviewGate(): Promise<number> {
     // fixed "request `llamenos-auto`" this used to print sent #1183's author
     // to request itself, which GitHub refuses (#1232).
     if (!request.requested) process.stderr.write(`${REVIEW_JOB}: ${request.reason}\n`)
+    // On a push the gate got this far only because there was no cached
+    // verdict for the diff the push produced — say that, rather than leaving
+    // "request a review" to imply the previous one was somehow lost.
+    if (isRepublishOnlyEvent(event)) {
+      process.stderr.write(
+        `${REVIEW_JOB}: this push changed the diff, so no verdict this PR has already earned covers the new head\n`,
+      )
+    }
     const [ask] = reviewTriggerLogins(event)
     process.stderr.write(ask === REVIEW_REQUEST_LOGIN
       ? `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`

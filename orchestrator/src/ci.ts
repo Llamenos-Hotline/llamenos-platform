@@ -109,9 +109,32 @@ export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
  */
 export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'dependabot']
 
+/**
+ * The `pull_request` ACTION that means "the head moved" — a push, a
+ * force-push, a rebase, or the "Update branch" button.
+ *
+ * `fleet-review.yml` triggers on it (#1284) for ONE reason: `fleet/review`
+ * is a required context under `strict_required_status_checks_policy`, and a
+ * check run attaches to the commit it ran on. A rebase moves the head, the
+ * earned verdict stays on the OLD sha, and the new head carries no
+ * `fleet/review` at all — a permanent block that only a manual
+ * remove-then-re-add of the reviewer could clear.
+ *
+ * It may REPUBLISH a verdict the PR already earned; it may never START one.
+ * `isRepublishOnlyEvent` is that rule, and `decideReviewGate` enforces it
+ * structurally rather than relying on a synchronize payload happening to
+ * carry no `requested_reviewer`.
+ */
+export const REVIEW_REPUBLISH_ACTION = 'synchronize'
+
 export interface ReviewRequestEvent {
   /** `github.event_name`. */
   eventName: string
+  /** `github.event.action` — which `pull_request` action fired. The event
+   *  NAME alone cannot tell `review_requested` from `synchronize`, and the
+   *  two mean opposite things here: one asks for a review, the other only
+   *  moves the head under one already given. */
+  action?: string | undefined
   /** `github.event.requested_reviewer.login` — `undefined` when the request
    *  named a TEAM (`requested_team`) rather than a user, and on every event
    *  that is not `review_requested`. */
@@ -165,6 +188,24 @@ export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'b
   return [REVIEW_REQUEST_LOGIN]
 }
 
+/**
+ * Whether this event may only REPUBLISH an existing verdict — never start a
+ * new review. True for exactly one thing: a `pull_request` whose action is
+ * `synchronize` (#1284).
+ *
+ * This is the whole of what makes adding `synchronize` to `fleet-review.yml`
+ * safe against the quota burn its absence originally prevented. A push is
+ * not a request, so `reviewRequestFor` already refuses it — but that refusal
+ * rests on a `synchronize` payload happening to carry no
+ * `requested_reviewer`, which is GitHub's schema, not this repo's rule.
+ * `decideReviewGate` therefore asks THIS question directly and refuses
+ * `run-engine` outright, so no future change to who counts as a trigger can
+ * quietly turn every push into a model call.
+ */
+export function isRepublishOnlyEvent(e: Pick<ReviewRequestEvent, 'eventName' | 'action'>): boolean {
+  return e.eventName === 'pull_request' && (e.action ?? '').trim() === REVIEW_REPUBLISH_ACTION
+}
+
 /** `reviewRequestFor`'s answer: a request, or the reason this event is not one. */
 export type ReviewRequestDecision =
   | { requested: true }
@@ -193,6 +234,17 @@ export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
   if (e.eventName === 'workflow_dispatch') return { requested: true }
   if (e.eventName !== 'pull_request') {
     return { requested: false, reason: `\`${e.eventName || '(no event)'}\` is not a review request` }
+  }
+  // Stated explicitly, ahead of the reviewer check, so the red check a push
+  // produces says what actually happened. Without this the refusal would
+  // read "this review request named no user" — true of the payload, and
+  // useless to the human looking at it, who did not request anything.
+  if (isRepublishOnlyEvent(e)) {
+    return {
+      requested: false,
+      reason: 'this is a push, not a review request — `fleet/review` republishes a verdict this PR has already ' +
+        'earned for this exact diff, but never starts a new review on a push',
+    }
   }
   const login = loginOf(e.requestedReviewer)
   if (login === undefined) {
@@ -227,6 +279,7 @@ export function reviewIsRequested(e: ReviewRequestEvent): boolean {
 export function reviewRequestEventFromEnv(env: NodeJS.ProcessEnv, branch: string): ReviewRequestEvent {
   return {
     eventName: env['FLEET_REVIEW_EVENT_NAME'] ?? '',
+    action: env['FLEET_REVIEW_EVENT_ACTION'],
     requestedReviewer: env['FLEET_REVIEW_REQUESTED_REVIEWER'],
     requestedTeam: env['FLEET_REVIEW_REQUESTED_TEAM'],
     prAuthor: env['FLEET_REVIEW_PR_AUTHOR'],
@@ -900,15 +953,28 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
  *    the check's own output, not just from reading this file's source.
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
- *    this event did not ask us for one: the review was requested from
+ *    either this event did not ask us for one (the review was requested from
  *    somebody else, from a team, or this is not a review-request event at
- *    all (`reviewRequestFor`). Fails the job outright. A `fleet/review`
- *    nobody has asked for is not a passing review, and the old design's
- *    mistake was ever treating "not asked for" as anything other than a
- *    fail-closed red check.
- *  - `run-engine` — no cached PASS, Tier 2, and the review WAS requested of
- *    us. Carries the resolved review set (`profiles`) into `review-ci`, and
- *    the labels to clear once it passes (`clearLabels`).
+ *    all — `reviewRequestFor`) or it is a PUSH, which may never start a
+ *    review whatever else is true (`republishOnly`, #1284). Fails the job
+ *    outright. A `fleet/review` nobody has asked for is not a passing
+ *    review, and the old design's mistake was ever treating "not asked for"
+ *    as anything other than a fail-closed red check.
+ *  - `run-engine` — no cached PASS, Tier 2, the review WAS requested of us,
+ *    and this is not a republish-only event. Carries the resolved review set
+ *    (`profiles`) into `review-ci`, and the labels to clear once it passes
+ *    (`clearLabels`).
+ *
+ * WHY A PUSH REACHES THIS FUNCTION AT ALL (#1284). `fleet/review` is a
+ * required context under `strict_required_status_checks_policy`, so the
+ * check has to EXIST on the current head; a rebase moves the head and
+ * strands the earned verdict on the old sha. That is a different question
+ * from whether a review is WARRANTED, which only a changed diff makes true.
+ * Every branch above answers the first question on a push without answering
+ * the second: `cache-hit` republishes the verdict this exact diff already
+ * earned, `low-tier` and `bot-authored` conclude green on their own terms,
+ * and everything else goes red. `run-engine` is unreachable on a push by
+ * construction.
  *
  * `runReviewCi` itself resolves the same set and opens with the identical
  * cache lookup — so a direct call to it from anywhere else stays correct on
@@ -941,6 +1007,19 @@ export interface ReviewGateDeps {
    * exactly one job: set first, cache second, tier third, request fourth.
    */
   requested: boolean
+  /**
+   * Whether this event may only REPUBLISH a verdict, never start one —
+   * `isRepublishOnlyEvent` over the workflow's own event fields (#1284).
+   *
+   * `true` makes `run-engine` UNREACHABLE: a push that reaches the bottom of
+   * this function gets `not-requested` (a red check saying the diff changed
+   * and a review must be requested), never a model call. That is the
+   * structural half of the guarantee fleet-review.yml's invariant 2 now
+   * states — `requested` being false on a push is the incidental half, true
+   * only because GitHub's `synchronize` payload carries no
+   * `requested_reviewer`.
+   */
+  republishOnly: boolean
   /** The PR's author login — `FLEET_REVIEW_PR_AUTHOR`, the same field
    *  `reviewRequestFor` already consumes. Present so the gate can recognise
    *  an automated dependency PR by IDENTITY rather than by branch name. */
@@ -1030,11 +1109,22 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
     return { kind: 'low-tier', cacheKey, tier, reasons }
   }
 
-  if (!deps.requested) {
+  // A push reaching this line is a head that MOVED and a diff that CHANGED
+  // (an unchanged diff hit the cache above; a Dependabot bump or a docs-only
+  // push concluded green above too). There is nothing to republish, so the
+  // check goes red exactly as an unreviewed Tier 2 diff always has — and,
+  // crucially, `run-engine` is out of reach from here, whatever `requested`
+  // says. This is the structural guarantee that adding `synchronize` to
+  // `fleet-review.yml` (#1284) can never become the every-push model call
+  // that trigger was originally banned for.
+  if (deps.republishOnly || !deps.requested) {
     // Whom to ask instead depends on who wrote the PR (`reviewTriggerLogins`)
     // — the caller has the event and says so; naming one fixed login here
     // told #1183's author to request itself (#1232).
-    deps.log(`review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
+    deps.log(deps.republishOnly
+      ? `the head of pr=${cacheKey.pr} moved and its diff changed (sha256:${cacheKey.diffHash.slice(0, 12)}…) — ` +
+        'nothing cached to republish, and a push never starts a review'
+      : `review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
     return { kind: 'not-requested', cacheKey }
   }
 

@@ -46,12 +46,41 @@
 #    `if:`, and its `not-requested` branch FAILS rather than skipping. A
 #    review requested from somebody else is a red check, never a green skip.
 #    Pinned by a rail in tests/orchestrator/guards.test.ts.
-# 2. NEVER TRIGGER ON `synchronize` (or `opened`, or `push`). Every run is a
-#    real model call; running one on every push is the provider-quota burn
-#    #812 already fixed once, and `quotaBreaker` (orchestrator/src/circuit.ts)
-#    halts the WHOLE fleet at two QUOTA outcomes. `review_requested` fires on
-#    both the first request and every re-request, which is the entire signal
-#    needed — re-requesting a review is how you re-run this.
+# 2. A PUSH MAY REPUBLISH A VERDICT; IT MAY NEVER START ONE (#1284).
+#    `synchronize` IS a trigger now — this invariant used to forbid it
+#    outright, and that wording is retired, not weakened. Read both halves.
+#
+#    WHY IT IS A TRIGGER. `fleet/review` is a required context under
+#    `strict_required_status_checks_policy`, and a check run attaches to the
+#    commit it ran on. A rebase moves the head, the earned verdict stays on
+#    the OLD sha, and the new head carries NO `fleet/review` at all — a
+#    permanent block that nothing but a manual remove-then-re-add of the
+#    reviewer could clear (ten of them in one morning, once per open PR).
+#    "The check must EXIST on this head" and "a review is WARRANTED" are two
+#    different questions; a rebase changes only the first.
+#
+#    WHY IT IS NOT THE QUOTA BURN #812 FIXED. That fix predates #1158's
+#    verdict cache, which is keyed on the DIFF HASH (`review-cache.ts`), so a
+#    rebase with an unchanged diff is a `cache-hit` — no model call, the
+#    stored verdict republished on the new head. A push that DID change the
+#    diff has nothing cached, and the gate concludes `not-requested`: a red
+#    check saying so, still no model call. `run-engine` is unreachable on a
+#    push, and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
+#    `decideReviewGate` as `republishOnly`, which refuses `run-engine`
+#    outright rather than resting on a `synchronize` payload happening to
+#    carry no `requested_reviewer`. Pinned by rails in
+#    tests/orchestrator/guards.test.ts.
+#
+#    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
+#    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
+#    and a `push` event carries no PR to attach a check to.
+#    `review_requested` remains the ONLY thing that starts a review, and it
+#    fires on both the first request and every re-request.
+#
+#    The republish arm never runs on `llamenos-review-box` — see `runs-on`
+#    below. It cannot reach the engine, so it must not queue in front of a
+#    review that can, and it must not add PR-triggered runs to the machine
+#    holding the operator's logged-in `claude` session.
 # 3. THE GATE RUNS FROM THE BASE REF; THE HEAD IS DATA (#665). This job
 #    checks out the PR's BASE commit, installs from the BASE lockfile with
 #    `--ignore-scripts`, and runs the orchestrator from that trusted tree.
@@ -102,8 +131,11 @@
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
 #                             check so a docs-only PR never sits red.
-#   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
-#                             request was not for us.
+#   `not-requested`         → FAIL. Tier 2, no cached PASS, and either this
+#                             review request was not for us, or this was a
+#                             PUSH (#1284) — which changed the diff, so
+#                             nothing the PR already earned covers the new
+#                             head. Still no model call either way.
 #   `run-engine`            → the real review, then the label clear.
 #
 # Workflow-file honesty: on a `pull_request` event the workflow definition is
@@ -134,16 +166,27 @@
 name: Fleet Review
 
 on:
-  # The one real trigger (see the file header): a review being REQUESTED, or
-  # re-requested, from `llamenos-auto` (or `rhonda-rodododo` where
-  # `llamenos-auto` cannot be asked). `review_requested` fires on both, which
-  # is the whole signal needed.
-  # NEVER add `synchronize`/`opened`/`labeled`/`push` — see invariant 2.
+  # TWO actions, doing two different jobs — see invariant 2 in the header.
+  #
+  # `review_requested` is the only one that can START a review: a review
+  # being requested, or re-requested, from `llamenos-auto` (or
+  # `rhonda-rodododo` where `llamenos-auto` cannot be asked). It fires on
+  # both the first request and every re-request, which is the whole signal.
+  #
+  # `synchronize` (#1284) exists so the required context REAPPEARS on a head
+  # that moved. It can only republish what the PR already earned for this
+  # exact diff (`cache-hit`), conclude on its own terms (`low-tier`,
+  # `bot-authored`), or go red — never a model call, structurally
+  # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
+  # `fleet/review` at all and the PR unmergeable until a human removes and
+  # re-adds the reviewer by hand.
+  #
+  # NEVER add `opened`/`labeled`/`push` — see invariant 2.
   # GitHub cannot filter this trigger by WHO was requested, so the job runs
   # on every review request and the gate step decides; it must never become
   # a job-level `if:` (invariant 1).
   pull_request:
-    types: [review_requested]
+    types: [review_requested, synchronize]
   # Manual escape hatch only — local debugging, or forcing a re-review after
   # a provider-variable change (see "Switching the review engine provider" in
   # docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md).
@@ -181,9 +224,12 @@ concurrency:
   # Distinct group names from ci.yml's and fleet-verify.yml's own groups —
   # concurrency groups are repo-scoped, not per-file, so reusing either of
   # their names here would cancel or queue against unrelated runs sharing the
-  # same SHA/run id. `pull_request` groups by PR NUMBER, so re-labeling the
-  # same PR while a run is still in flight queues behind it instead of racing
-  # two reviews of the same diff; `workflow_dispatch` groups by `run_id`
+  # same SHA/run id. `pull_request` groups by PR NUMBER, so a second event on
+  # the same PR while a run is still in flight queues behind it instead of
+  # racing two runs to publish the same context — which is exactly what
+  # #1284's `synchronize` arm needs, since a push and a review request on one
+  # PR are now two events that both conclude `fleet/review`;
+  # `workflow_dispatch` groups by `run_id`
   # because two manual dispatches can target two different PRs at once and
   # must never collide.
   # `merge_group` groups by the queue commit: two entries in the queue are
@@ -226,15 +272,37 @@ jobs:
     # the file header). GitHub cannot filter a `pull_request` trigger by WHO
     # a review was requested from, only by `types:`, so this job IS
     # instantiated on every review request, including ones aimed at a human
-    # colleague. The "Decide whether to run the review engine" step is what
-    # used to be this `if:`; the difference is that its `not-requested`
-    # branch FAILS the job instead of skipping it, and its `cache-hit` and
-    # `low-tier` branches SUCCEED the job instead of skipping it — either way
-    # the job reaches a real, reported conclusion, which a job-level `if:`
-    # can never guarantee once GitHub decides the job merely "didn't run".
-    # #812: a dedicated self-hosted runner, never a GitHub-hosted one — see
-    # the file header, and the "Refuse to run on a fork PR" step below.
-    runs-on: [self-hosted, fleet-review]
+    # colleague — and, since #1284, on every push too. The "Decide whether to
+    # run the review engine" step is what used to be this `if:`; the
+    # difference is that its `not-requested` branch FAILS the job instead of
+    # skipping it, and its `cache-hit`, `low-tier` and `bot-authored`
+    # branches SUCCEED the job instead of skipping it — either way the job
+    # reaches a real, reported conclusion, which a job-level `if:` can never
+    # guarantee once GitHub decides the job merely "didn't run". That is also
+    # why the push arm is not an `if:` on this job: a skipped `fleet/review`
+    # on a pushed head would satisfy the ruleset exactly like a green one.
+    # #812: a dedicated self-hosted runner for every event that CAN reach the
+    # review engine — see the file header, and the "Refuse to run on a fork
+    # PR" step below.
+    #
+    # The ONE exception (#1284) is the republish arm: a `pull_request` whose
+    # action is `synchronize`. That arm provably cannot reach the engine
+    # (`republishOnly` in ci.ts refuses `run-engine` on it), so it needs
+    # nothing `llamenos-review-box` has — and putting it there would be
+    # actively wrong twice over. `llamenos-review-box` is ONE machine that
+    # every merge in this repo waits on, and `cancel-in-progress` is
+    # deliberately `false`, so a push storm would queue in front of the real
+    # reviews it exists to run. It is also the machine holding the operator's
+    # logged-in `claude` session under `HOME`, which is why a fork guard is
+    # this job's literal first step; multiplying the PR-triggered runs that
+    # land on it, for an arm that needs none of that, buys exposure for
+    # nothing.
+    #
+    # Decided from the event payload alone, so it resolves before the job
+    # starts and can never disagree with the gate's own later decision.
+    # Pinned by a rail in tests/orchestrator/guards.test.ts, which also
+    # asserts `ubuntu-latest` appears here ONLY under that condition.
+    runs-on: ${{ github.event.action == 'synchronize' && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
     # Read by the label-clearing job below. `outcome` and `clear_labels` are
     # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
     # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
@@ -315,7 +383,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
-            echo "::error::fleet/review FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            echo "::error::fleet/review FAILED: fork-pr-guard — this gate must never process a fork PR, on either arm: the review arm runs on a self-hosted runner, and the republish arm would republish a verdict onto a head this repository does not control (head repo '$HEAD_REPO' != '$THIS_REPO')"
             exit 1
           fi
 
@@ -673,7 +741,10 @@ jobs:
       #     read, or a review it asks for (by label or by its own content)
       #     does not resolve to a known agent. Fail closed — "we could not
       #     work out what to review" never becomes "nothing needed it".
-      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts), which
+      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts). Either
+      #     the review was requested from somebody else, or this was a PUSH
+      #     that changed the diff (#1284), which can never start a review
+      #     whatever else is true (`republishOnly`, ci.ts). Exiting 1
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
       #     `if: always()`/`if: failure()` — none of the engine steps do)
@@ -704,6 +775,11 @@ jobs:
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
           FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
+          # WHICH `pull_request` action fired. The event NAME cannot tell
+          # `review_requested` from `synchronize`, and the two mean opposite
+          # things here — one asks for a review, the other only moves the
+          # head under one already given (`isRepublishOnlyEvent`, ci.ts).
+          FLEET_REVIEW_EVENT_ACTION: ${{ github.event.action }}
           FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
           FLEET_REVIEW_REQUESTED_TEAM: ${{ github.event.requested_team.slug }}
           FLEET_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
