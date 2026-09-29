@@ -2257,6 +2257,76 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     }
   })
 
+  /**
+   * Dependabot auto-approval. The approval itself merges nothing — all five
+   * required contexts and strict-up-to-date still gate the merge — so these
+   * rails guard the two things that WOULD matter: that the approver cannot be
+   * rewritten by the PR it is approving, and that it waits for `fleet/review`
+   * (which is what keeps a `.github/workflows/` bump, Tier 2 via
+   * HIGH_IMPACT_PATHS, from sailing through unreviewed).
+   */
+  const autoApproveYaml = (): string =>
+    readFileSync(join(process.cwd(), '.github', 'workflows', 'dependabot-auto-approve.yml'), 'utf8')
+
+  it('the Dependabot approver runs from the base branch, never the PR it is approving', () => {
+    const yaml = autoApproveYaml()
+    const onBlock = yaml.split(/\njobs:\n/)[0] ?? ''
+    expect(onBlock, 'must trigger on workflow_run — every open Dependabot PR edits .github/workflows/, so a pull_request trigger would let a bump rewrite its own approver')
+      .toContain('workflow_run:')
+    expect(onBlock, 'a pull_request trigger would run the PR\'s own copy of this file')
+      .not.toMatch(/\n {2}pull_request(_target)?:/)
+  })
+
+  it('the Dependabot approver approves only Dependabot PRs', () => {
+    expect(autoApproveYaml(), 'missing the author guard').toContain('dependabot[bot]')
+  })
+
+  it('the Dependabot approver judges the LATEST COMPLETED fleet/review, not an arbitrary one', () => {
+    // A head commit routinely carries several fleet/review runs (every
+    // re-request adds one). Taking [0] can read a stale PASS that a later
+    // FAIL supersedes — the same hazard fleet-review.yml's queue check
+    // already guards with sort_by(.completed_at)|last.
+    const yaml = autoApproveYaml()
+    expect(yaml, 'must sort by completed_at and take the last, not index [0]')
+      .toMatch(/sort_by\(\.completed_at\)/)
+    expect(yaml, 'must filter to completed runs before judging').toMatch(/status == "completed"/)
+    const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
+    expect(runLines.join('\n'), 'indexing [0] into the check-run list is the stale-verdict bug')
+      .not.toMatch(/select\(\.name == "fleet\/review"\)\]\[0\]/)
+  })
+
+  it('the Dependabot approver waits for a green fleet/review', () => {
+    const yaml = autoApproveYaml()
+    expect(yaml, 'must read the fleet/review check').toContain('fleet/review')
+    // The guard must compare against success specifically — "not failure"
+    // would treat an ABSENT review (the normal state of an unreviewed Tier 2
+    // bump) as permission to approve.
+    expect(yaml, 'must require fleet/review == success, not merely "not failed"')
+      .toMatch(/"\$review" != "success"/)
+  })
+
+  it('the Dependabot approver never merges — a human lands the supply-chain update', () => {
+    // fleet/review refused the auto-merging version twice. The second refusal
+    // was the substantive one: every Dependabot bump IS Tier 2 and does get a
+    // model review, but a model reading a lockfile diff sees version numbers
+    // and hashes, never the code the registry publishes. Diff-level review is
+    // structurally blind to supply-chain payloads, so the human Merge press is
+    // the real checkpoint. Re-adding auto-merge re-opens that.
+    const yaml = autoApproveYaml()
+    const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
+    expect(runLines.join('\n'), 'auto-merge must not come back — approve only')
+      .not.toMatch(/gh pr merge/)
+    expect(runLines.join('\n'), '--auto would let a bump land with no human decision')
+      .not.toMatch(/--auto\b/)
+  })
+
+  it('the Dependabot approver uses the collaborator PAT — github-actions[bot] cannot satisfy the unattributed-changes rule', () => {
+    const yaml = autoApproveYaml()
+    expect(yaml).toContain('secrets.RELEASE_BOT_TOKEN')
+    expect(yaml, 'GITHUB_TOKEN as GH_TOKEN would post an approval that does not count')
+      .not.toMatch(/GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN/)
+  })
+
   it('desktop-e2e.yml carries no workflow-level pull_request paths: filter — that shape breaks a future required check', () => {
     const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'desktop-e2e.yml'), 'utf8')
     const onBlock = yaml.split(/\njobs:\n/)[0] ?? ''
