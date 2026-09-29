@@ -40,23 +40,32 @@ const userListRouter = createEntityRouter({
 })
 users.route('/', userListRouter)
 
-// GET /:targetPubkey via factory. Permission first, so the 404 is no membership
-// oracle for a hub user who may not read users at all.
-users.get('/:targetPubkey', requirePermission('users:read'), targetInHub)
-const userGetRouter = createEntityRouter({
-  tag: 'Users',
-  domain: 'users',
-  service: 'identity',
-  listResponseSchema: userListResponseSchema,
-  itemResponseSchema: userResponseSchema,
-  disableList: true,
-  disableDelete: true,
-  idParam: 'targetPubkey',
-  methods: {
-    get: 'getUser',
+// Permission first, so the 404 is no membership oracle for a hub user who may
+// not read users at all. Under a hub, getUser both 404s a non-member and shows
+// only the target's role assignment in this hub.
+users.get('/:targetPubkey',
+  describeRoute({
+    tags: ['Users'],
+    summary: 'Get a user by pubkey',
+    responses: {
+      200: {
+        description: 'User details',
+        content: {
+          'application/json': {
+            schema: resolver(userResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('users:read'),
+  async (c) => {
+    const user = await c.get('services').identity.getUser(c.req.param('targetPubkey'), c.get('hubId'))
+    return c.json(user)
   },
-})
-users.route('/', userGetRouter)
+)
 
 users.post('/',
   describeRoute({
@@ -127,7 +136,7 @@ users.patch('/:targetPubkey',
     const targetPubkey = c.req.param('targetPubkey')
     const body = c.req.valid('json')
 
-    const result = await services.identity.updateUser(targetPubkey, body, true)
+    const result = await services.identity.updateUser(targetPubkey, body, true, c.get('hubId'))
 
     const hubId = c.get('hubId') || null
     if (body.roles) await audit(services.audit, 'rolesChanged', pubkey, { target: targetPubkey, roles: body.roles }, undefined, hubId)

@@ -79,6 +79,20 @@ Feature: Multi-Hub Isolation
     Then the user list contains "mira"
     And "mira" is listed with role assignments for hub "hub-a" only
 
+  Scenario: A member of several hubs, read by pubkey, shows only this hub's role assignment
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "mira" is a member of hubs "hub-a" and "hub-b"
+    When "admin-a" gets user "mira" through hub "hub-a"
+    Then the response is 200
+    And the returned user has role assignments for hub "hub-a" only
+
+  Scenario: Updating a member of several hubs returns only this hub's role assignment
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "mira" is a member of hubs "hub-a" and "hub-b"
+    When "admin-a" renames user "mira" through hub "hub-a"
+    Then the response is 200
+    And the returned user has role assignments for hub "hub-a" only
+
   Scenario: Hub admin cannot update or delete another hub's user
     Given "admin-a" is a hub admin of hub "hub-a"
     And user "hugo" is a member of hub "hub-b" only

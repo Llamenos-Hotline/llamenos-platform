@@ -465,11 +465,13 @@ export class IdentityService {
 
   /**
    * Update a volunteer's fields. Non-admin callers are restricted to safe fields.
+   * With a hubId, the returned volunteer shows only their role assignment in it.
    */
   async updateUser(
     pubkey: string,
     data: Partial<User>,
     isAdmin: boolean,
+    hubId?: string,
   ): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     // RACE-11: Removed redundant SELECT — the UPDATE...RETURNING below handles
     // the "not found" case. The old SELECT was a read-before-write pattern that
@@ -519,7 +521,7 @@ export class IdentityService {
       .returning()
 
     if (!row) throw new ServiceError(404, 'Not found')
-    return { volunteer: sanitizeUser(rowToUser(row)) }
+    return { volunteer: sanitizeUser(scopeToHub(rowToUser(row), hubId)) }
   }
 
   /**

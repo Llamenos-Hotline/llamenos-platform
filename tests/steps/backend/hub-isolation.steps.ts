@@ -480,6 +480,14 @@ Then(
   },
 )
 
+Then('the returned user has role assignments for hub {string} only', async ({ world }, hubName: string) => {
+  const state = getIS(world)
+  expect(state.lastRes).toBeDefined()
+  expect(state.lastRes!.status).toBe(200)
+  const returned = state.lastRes!.data as ListedUser
+  expect((returned.hubRoles ?? []).map(hr => hr.hubId)).toEqual([hubOf(state, hubName).hubId])
+})
+
 Then('user {string} still exists with their original name', async ({ request, world }, label: string) => {
   const target = namedUser(getIS(world), label)
   const res = await apiGet<{ pubkey: string; name: string }>(request, `/users/${target.pubkey}`, ADMIN_SEED)
