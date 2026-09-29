@@ -805,6 +805,43 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     cacheFor: () => cache, requested, reviewSet, log: () => {},
   })
 
+  // Automated dependency PRs skip the MODEL, never the CHECK. `fleet/review`
+  // is a required context with strict_required_status_checks_policy, so a
+  // check that never appears blocks the merge forever — which is the state
+  // six Dependabot bumps sat in for a day.
+  const botGate = (author: string | undefined, profiles: string[] = [], branch = 'fleet/ios/123') =>
+    decideReviewGate({
+      ctx: ctx({ branch }), prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
+      cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
+      requested: false, prAuthor: author,
+      reviewSet: async () => ({ ok: true, profiles, fromLabels: profiles, reasons: [] }),
+      log: () => {},
+    })
+
+  it('concludes a Dependabot PR green with no model call, even unrequested', async () => {
+    const o = await botGate('dependabot[bot]')
+    expect(o.kind).toBe('bot-authored')
+    expect(o.kind === 'bot-authored' && o.reason).toContain('dependabot[bot]')
+  })
+
+  it('matches the bot on AUTHOR, not branch name — a human on a dependabot/* branch earns no skip', async () => {
+    // The spoofing case that matters: branch LOOKS like Dependabot's, author
+    // is a human with push access. Keying the skip on the branch would hand
+    // that person a free review bypass.
+    const o = await botGate('rhonda-rodododo', [], 'dependabot/npm_and_yarn/evil')
+    expect(o.kind).not.toBe('bot-authored')
+  })
+
+  it('a real Dependabot PR on its own branch still skips', async () => {
+    const o = await botGate('dependabot[bot]', [], 'dependabot/npm_and_yarn/left-pad-1.3.0')
+    expect(o.kind).toBe('bot-authored')
+  })
+
+  it('a named reviewer on a Dependabot PR outranks the skip', async () => {
+    const o = await botGate('dependabot[bot]', ['crypto-security-reviewer'])
+    expect(o.kind).not.toBe('bot-authored')
+  })
+
   it('fails closed ahead of a cached PASS when the review set cannot be resolved', async () => {
     const o = await gate(async () => ({ ok: false, reason: 'the PR\'s labels could not be read' }))
     expect(o.kind).toBe('review-set-unresolved')
