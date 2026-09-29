@@ -84,8 +84,6 @@ deploy-caddy *ARGS:
 deploy-rustfs *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags rustfs {{ARGS}}
 
-# Deploy only strfry Nostr relay
-
 # Deploy only Whisper transcription
 deploy-whisper *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags whisper {{ARGS}}

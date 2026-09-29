@@ -105,6 +105,42 @@ storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
 
 # ─── Backups (playbooks/backup.yml) ──────────────────────────────
 # age PUBLIC key only. Keep the private key OFF the server (age-keygen -o key.txt).
-backup_age_public_key: ""        # age1...  (59 chars)
+# Length is 62 characters: the literal "age1" prefix plus 58 bech32 characters.
+# playbooks/preflight.yml asserts exactly that (^age1[0-9a-z]{58}$).
+backup_age_public_key: ""        # age1...  (62 chars)
+
+# Path ON THE TARGET HOST to the matching age PRIVATE key. Consumed by:
+#   playbooks/restore.yml     — via restore_age_key_path, which defaults to
+#                               this var. With backup_age_public_key set and
+#                               this unset, restore.yml aborts: "Backups are
+#                               encrypted with age but no private key path
+#                               was provided."
+#   playbooks/test-restore.yml — used directly, with NO default, so an unset
+#                               value is an undefined-variable error.
+#   playbooks/dr-test.yml     — does NOT read this var; it has its own
+#                               `age_identity_file`, defaulting to
+#                               /root/backup-key.txt. Set that one separately
+#                               (or point it here) if you run DR drills.
+#
+# DECIDE THIS BEFORE YOUR FIRST BACKUP — the repo genuinely pulls both ways
+# and cannot pick for you:
+#   * The comment above, and standard practice, say keep the private key off
+#     the server: an attacker who owns the box then cannot decrypt the
+#     backups they can already read.
+#   * restore.yml / test-restore.yml / dr-test.yml are host-side playbooks.
+#     They run ON the server and shell out to `age -d -i <path>`, so an
+#     automated restore drill needs the key present on that same box.
+# Pick one:
+#   (a) Highest confidentiality — leave this unset. Accept that restores and
+#       DR drills are manual: copy the key to the host for the duration of
+#       the restore, then shred it. Do not schedule dr-test.yml.
+#   (b) Automated restore verification — store the key on the host at a path
+#       only the deploy user can read (chmod 0400) and set it here. Your
+#       backups are then only as confidential as the host is. Only do this
+#       if the host has full-disk encryption.
+# Either way this is a path, never the key material itself; never commit the
+# key, and never put it in this file.
+# backup_age_private_key_path: "/home/llamenos/.config/age/backup-key.txt"
+
 # Off-site copy (rclone remote you configured on the server). Empty = local only.
 backup_rclone_remote: ""
