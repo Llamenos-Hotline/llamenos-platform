@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   runReviewCi, decideReviewGate,
+  isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
 import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS } from '../../orchestrator/src/review.js'
@@ -477,10 +478,27 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     expect(fleetReviewJobText().length).toBeGreaterThan(500)
   })
 
-  it('runs on the self-hosted fleet-review runner, never a GitHub-hosted one', () => {
+  // #1284 made `runs-on` conditional, and this rail is the reason it can be
+  // trusted. EVERY event that can reach the review engine still lands on
+  // `llamenos-review-box`; the ONE hosted arm is the republish-only
+  // `synchronize` event, which `decideReviewGate` refuses `run-engine` on
+  // (pinned separately, below). The assertion is on the exact expression,
+  // not on "ubuntu-latest appears somewhere": an unconditional hosted
+  // `runs-on` would move the reviewer — and the operator's logged-in claude
+  // session — onto a GitHub runner, which is what the original rail existed
+  // to prevent, and that is what the second assertion here still catches.
+  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on the republish-only push arm', () => {
     const block = fleetReviewJobText()
-    expect(block).toMatch(/\n {4}runs-on:\s*\[\s*self-hosted\s*,\s*fleet-review\s*\]/)
-    expect(block).not.toMatch(/\n {4}runs-on:\s*ubuntu-latest/)
+    const runsOn = block.match(/\n {4}runs-on:.*/)?.[0] ?? ''
+    expect(runsOn.length, 'runs-on: not found in the fleet-review job').toBeGreaterThan(0)
+    expect(runsOn, 'the self-hosted fleet-review labels must still be the default arm')
+      .toMatch(/fromJSON\('\["self-hosted","fleet-review"\]'\)/)
+    // `ubuntu-latest` may appear here, but ONLY as the value guarded by the
+    // synchronize condition — never as the fallback, and never alone.
+    expect(runsOn, 'a hosted runner is only ever the synchronize arm')
+      .toMatch(/github\.event\.action == 'synchronize' && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
+    expect(block, 'runs-on must never be an unconditional GitHub-hosted runner')
+      .not.toMatch(/\n {4}runs-on:\s*ubuntu-latest\s*$/m)
   })
 
   it('reads FLEET_REVIEW_MODEL from vars with a sonnet default', () => {
@@ -803,12 +821,23 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   })
 
   // The load-bearing assertion for fleet-review.yml's own trigger list:
-  // `pull_request` scoped to `types: [review_requested]` ONLY (never
-  // `synchronize`, which would reopen the every-push bug #812 fixed the
-  // first time, and never `labeled`, which #1158 retired), plus
-  // `workflow_dispatch` for manual debugging, plus `merge_group` (#1187 —
-  // see fleet-review-merge-group.test.ts for the arm that makes it safe),
-  // and specifically never `push`.
+  // `pull_request` scoped to EXACTLY `types: [review_requested, synchronize]`
+  // — never `labeled` (which #1158 retired) and never `opened` (which
+  // re-enters through CODEOWNERS requesting the operator on almost every PR)
+  // — plus `workflow_dispatch` for manual debugging, plus `merge_group`
+  // (#1187 — see fleet-review-merge-group.test.ts for the arm that makes it
+  // safe), and specifically never `push`.
+  //
+  // `synchronize` used to be forbidden here for the same reason `labeled`
+  // and `opened` still are: every run was a model call, so one per push was
+  // the quota burn #812 fixed. #1284 added it, and the reason it is safe is
+  // NOT that the assertion was loosened — it is that a `synchronize` run
+  // cannot reach the engine at all. That half is pinned by the
+  // `republishOnly` rails further down this file, which assert
+  // `decideReviewGate` refuses `run-engine` on such an event even when
+  // `requested` is true. Both halves have to hold: this rail says the
+  // trigger list is exactly these two actions, those rails say the second
+  // one can only republish.
   //
   // `merge_group` used to be forbidden here, because a trigger with no
   // matching arm inside the job is the fail-open shape this whole rail
@@ -817,9 +846,9 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // REQUIRED instead: without it `fleet/review` cannot report on the queue's
   // synthetic commit at all, and a required context that never reports
   // leaves every entry at `AWAITING_CHECKS` forever.
-  it('fleet-review.yml triggers on pull_request (review_requested only), workflow_dispatch AND merge_group, and NEVER push', () => {
+  it('fleet-review.yml triggers on pull_request (review_requested + synchronize), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
@@ -829,8 +858,14 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     // `types:` entry.
     const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?:\n| {4,}.*\n)*)/)?.[0] ?? ''
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
-    for (const forbiddenType of ['synchronize', 'labeled', 'opened']) {
-      expect(pullRequestBlock, `fleet-review.yml pull_request trigger must be review_requested-only — adding ${forbiddenType} reopens the every-push/every-label bug`)
+    // Scoped to the `types:` LINE itself, not the trigger sub-block: the
+    // block's own prose legitimately explains why `synchronize` is there and
+    // why `opened`/`labeled` are not, and a substring check over the whole
+    // block would trip on that explanation rather than on a real entry.
+    const typesLine = pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? ''
+    expect(typesLine.length, 'pull_request types: line not found').toBeGreaterThan(0)
+    for (const forbiddenType of ['labeled', 'opened']) {
+      expect(typesLine, `fleet-review.yml pull_request trigger must be review_requested + synchronize only — adding ${forbiddenType} reopens the every-label/CODEOWNERS bug`)
         .not.toContain(forbiddenType)
     }
     expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
@@ -1692,7 +1727,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1702,7 +1737,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1712,7 +1747,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1726,12 +1761,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -1745,7 +1780,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1761,7 +1796,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') {
@@ -1774,7 +1809,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') expect(outcome.tier).toBe(1)
@@ -1794,7 +1829,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1811,7 +1846,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1828,7 +1863,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => [f],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1840,7 +1875,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
   })
@@ -1855,7 +1890,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     })
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1868,9 +1903,179 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
+  })
+
+  // ── #1284: the republish arm ───────────────────────────────────────────
+  //
+  // `fleet-review.yml` now also triggers on `pull_request: synchronize`, so
+  // that a rebase — which moves the head SHA and strands the earned verdict
+  // on the old one — gets the required `fleet/review` context back on the
+  // new head without a human removing and re-adding the reviewer.
+  //
+  // The whole safety of that trigger is this: such an event may REPUBLISH a
+  // verdict, and may never START one. The rails below are the enforcement.
+  // They deliberately pass `requested: true` — the case a mutation would
+  // reach — so that deleting `deps.republishOnly ||` from the gate's
+  // not-requested branch (which is exactly the mutation that reopens the
+  // every-push quota burn #812 fixed) fails here rather than in production.
+
+  it('a push with an unchanged diff republishes the cached PASS — the whole point of the trigger', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('cache-hit')
+  })
+
+  it('a push with an unchanged diff republishes a cached FAIL too — republishing is not synthesising a green', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'FAIL', text: 'VERDICT: FAIL — unsafe unwrap' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('cache-hit')
+    if (outcome.kind !== 'cache-hit') throw new Error('unreachable')
+    expect(outcome.verdict.verdict).toBe('FAIL')
+  })
+
+  // The load-bearing one. A push that CHANGED the diff has nothing to
+  // republish, and must never spend a model call — no matter what
+  // `requested` says. Without the `republishOnly ||` guard in the gate this
+  // returns `run-engine`, which is one model review per push on every open
+  // PR.
+  it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('not-requested')
+  })
+
+  // A named reviewer profile must not be the loophole either: a labelled PR
+  // outranks the tier heuristic, but it still cannot make a PUSH start a
+  // review.
+  it('a push never reaches run-engine even with a reviewer profile in the set', async () => {
+    const cache = fakeCache()
+    const withProfile = async (): Promise<ReviewSetDecision> => ({
+      ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: ['label'],
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
+    })
+    expect(outcome.kind).toBe('not-requested')
+  })
+
+  // A docs-only push still concludes green on its own terms — the tier
+  // branch sits ahead of the request/republish branch and must stay there,
+  // or an ordinary push to a docs PR would go red for no reason.
+  it('a docs-only push still concludes low-tier, not not-requested', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('low-tier')
+  })
+
+  // #1275's short-circuit survives the new arm, and this is the case it was
+  // written for: Dependabot force-pushes on every rebase, which is precisely
+  // a `synchronize`. Before #1284 that push orphaned the verdict and GitHub
+  // emitted no new event, so the required context stayed absent forever.
+  it('a Dependabot force-push still takes the bot-authored short-circuit', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, prAuthor: 'dependabot[bot]',
+      reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('bot-authored')
+  })
+
+  // An unresolvable review set still fails closed ahead of everything, on a
+  // push exactly as on a review request — "we could not work out what to
+  // review" never becomes "nothing needed reviewing", and never becomes a
+  // republished green either.
+  it('a push with an unresolvable review set still concludes review-set-unresolved', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
+      requested: false, republishOnly: true,
+      reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }),
+      log: () => {},
+    })
+    expect(outcome.kind).toBe('review-set-unresolved')
+  })
+})
+
+/**
+ * `isRepublishOnlyEvent` and `reviewRequestFor` over a `synchronize` event
+ * (#1284) — the two functions that decide, from the raw workflow event
+ * fields alone, that a push may republish but never start a review.
+ *
+ * Asserted directly rather than only through `decideReviewGate` because the
+ * workflow hands these fields over as opaque `env:` strings: a rename of
+ * `FLEET_REVIEW_EVENT_ACTION`, or a `reviewRequestFor` that stops noticing
+ * the action, would leave the gate deciding a push was an ordinary
+ * `pull_request` event with no reviewer named — the same red check, for the
+ * wrong reason, and one `requested_reviewer` away from a model call.
+ */
+describe('rail: a push republishes a verdict and never starts one (#1284)', () => {
+  const push = { eventName: 'pull_request', action: 'synchronize', requestedReviewer: undefined, branch: 'fleet/ios/1' }
+
+  it('recognises a pull_request/synchronize as republish-only', () => {
+    expect(isRepublishOnlyEvent(push)).toBe(true)
+  })
+
+  it('does not treat a review request, a dispatch or a merge_group as republish-only', () => {
+    expect(isRepublishOnlyEvent({ eventName: 'pull_request', action: 'review_requested' })).toBe(false)
+    expect(isRepublishOnlyEvent({ eventName: 'workflow_dispatch', action: undefined })).toBe(false)
+    expect(isRepublishOnlyEvent({ eventName: 'merge_group', action: 'checks_requested' })).toBe(false)
+    // The ACTION alone is never enough — a same-named action on another
+    // event must not turn that event into a push.
+    expect(isRepublishOnlyEvent({ eventName: 'merge_group', action: 'synchronize' })).toBe(false)
+  })
+
+  it('reviewRequestFor refuses a push, and says it is a push rather than blaming a missing reviewer', () => {
+    const decision = reviewRequestFor(push)
+    expect(decision.requested).toBe(false)
+    if (decision.requested) throw new Error('unreachable')
+    expect(decision.reason).toContain('push')
+    expect(decision.reason).not.toContain('named no user')
+  })
+
+  // Even if GitHub ever put a `requested_reviewer` on a synchronize payload,
+  // a push is still not a request. The action is checked BEFORE the login.
+  it('a push naming a real trigger login is still not a review request', () => {
+    const decision = reviewRequestFor({ ...push, requestedReviewer: REVIEW_REQUEST_LOGIN })
+    expect(decision.requested).toBe(false)
+  })
+
+  it('reads the action from FLEET_REVIEW_EVENT_ACTION — the name fleet-review.yml sets', () => {
+    const event = reviewRequestEventFromEnv(
+      { FLEET_REVIEW_EVENT_NAME: 'pull_request', FLEET_REVIEW_EVENT_ACTION: 'synchronize' },
+      'fleet/ios/1',
+    )
+    expect(isRepublishOnlyEvent(event)).toBe(true)
+  })
+
+  it('fleet-review.yml passes FLEET_REVIEW_EVENT_ACTION from github.event.action', () => {
+    const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'fleet-review.yml'), 'utf8')
+    expect(yaml).toMatch(/FLEET_REVIEW_EVENT_ACTION:\s*\$\{\{\s*github\.event\.action\s*\}\}/)
   })
 })
 

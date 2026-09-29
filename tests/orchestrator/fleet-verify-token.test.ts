@@ -271,7 +271,7 @@ describe('behaviour: an unreadable PR read never turns either fleet gate green',
       prDiff: async () => `diff --git a/${HIGH_IMPACT} b/${HIGH_IMPACT}\n+x\n`,
       changedFiles: async () => [HIGH_IMPACT],
       cacheFor: () => ({ async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }),
-      requested: true,
+      requested: true, republishOnly: false,
       // Wired exactly as `runReviewGate` (cli.ts) wires it: `facts?.labels`
       // and `facts?.description ?? ''`, where `facts` is `readPrFacts`'s
       // result — `undefined` when the read failed.
