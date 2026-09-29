@@ -281,6 +281,21 @@ describe('CommandHandler', () => {
       ])
     })
 
+    it('a new gather replaces a pending one: the old timeout never fires', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'gather', numDigits: 1, timeout: 5, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },
+      ])
+      await handler.handleEvent(incoming())
+      await handler.executeCommands(CALLER, [
+        { action: 'gather', numDigits: 4, timeout: 10, callbackEvent: 'captcha_response', metadata: CONTEXT },
+      ])
+
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(worker.sent.map((s) => s.path)).toEqual(['/api/telephony/incoming'])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(worker.sent.map((s) => s.path)).toEqual(['/api/telephony/incoming', '/api/telephony/captcha'])
+    })
+
     it('ignores digits when nothing is being gathered', async () => {
       await handler.handleEvent(incoming())
       await handler.handleEvent(dtmf('1'))

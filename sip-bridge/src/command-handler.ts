@@ -450,6 +450,8 @@ export class CommandHandler {
     const call = this.calls.get(channelId)
     if (!call) return
 
+    // A new gather replaces any pending one — and its timer.
+    if (call.activeGather?.timeoutTimer) clearTimeout(call.activeGather.timeoutTimer)
     call.dtmfBuffer = ''
     call.activeGather = {
       numDigits: cmd.numDigits,
