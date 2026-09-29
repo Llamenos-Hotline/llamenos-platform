@@ -125,6 +125,47 @@ async function postSimulation<T>(
   return res.json() as Promise<T>
 }
 
+/** Raw HTTP outcome of a simulation call, for steps that must inspect a refusal. */
+export interface SimulationResponse<T> {
+  status: number
+  ok: boolean
+  /** Parsed JSON body: the success payload, or the endpoint's error object. */
+  data: Partial<T> & { error?: string; banned?: boolean; status?: string }
+}
+
+/**
+ * Simulate an incoming call and return the raw HTTP outcome instead of throwing.
+ *
+ * `simulateIncomingCall` collapses every non-2xx into one thrown Error, which
+ * makes "the endpoint refused this caller because they are on the ban list"
+ * (403 `{ banned: true }`) indistinguishable from "the endpoint threw". A ban
+ * assertion has to tell those apart, so it uses this instead.
+ */
+export async function simulateIncomingCallResponse(
+  request: APIRequestContext,
+  options: SimulateIncomingCallOptions,
+): Promise<SimulationResponse<SimulateIncomingCallResult>> {
+  const res = await request.post(`${HUB_BASE_URL}/api/test-simulate/incoming-call`, {
+    headers: simulationHeaders(),
+    data: {
+      callerNumber: options.callerNumber,
+      ...(options.language ? { language: options.language } : {}),
+      ...(options.hubId ? { hubId: options.hubId } : {}),
+      ...(options.checkVolunteers ? { checkVolunteers: true } : {}),
+    },
+  })
+  const text = await res.text()
+  let data: Record<string, unknown>
+  try {
+    data = text ? JSON.parse(text) as Record<string, unknown> : {}
+  } catch {
+    // A non-JSON body is never a routing decision — surface it verbatim so the
+    // step's assertion message names what the server actually returned.
+    data = { error: text }
+  }
+  return { status: res.status(), ok: res.ok(), data: data as SimulationResponse<SimulateIncomingCallResult>['data'] }
+}
+
 /**
  * Simulate an incoming call to the hotline.
  *

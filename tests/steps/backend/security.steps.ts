@@ -12,6 +12,7 @@ import {
   apiDelete,
   apiPatch,
   generateTestKeypair,
+  createUserViaApi,
   createVolunteerViaApi,
   getMeViaApi,
   testEndpointAccess,
@@ -25,7 +26,7 @@ import {
   unwrapKey,
   x25519PubkeyFromSeed,
 } from '../../crypto-helpers'
-import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 
 // ── Local security test state ────────────────────────────────────
 
@@ -42,6 +43,12 @@ interface SecurityTestState {
   contentKey?: Uint8Array
   /** Per-recipient HPKE envelopes keyed by x25519 pubkey */
   envelopes?: Map<string, { ct: string; enc: string }>
+  /** Plaintext of the note under test, so decryption is compared against it. */
+  notePlaintext?: string
+  /** callId the note was filed under — used to fetch exactly that note back. */
+  noteCallId?: string
+  /** Admin envelopes as the SERVER returned them, one per admin, in read order. */
+  serverAdminEnvelopes?: Array<{ pubkey: string; ct: string; enc: string }>
   decryptedText?: string | null
   sessionToken?: string
   sessionResult?: { status: number; data: unknown }
@@ -78,11 +85,19 @@ Given('a third party with a different keypair', async ({ world }) => {
   getSecTestState(world).thirdPartyKeypair = generateTestKeypair()
 })
 
-Given('a hub with {int} admins with known keypairs', async ({world}, count: number) => {
-  getSecTestState(world).adminKeypairs = []
+Given('a hub with {int} admins with known keypairs', async ({request, world}, count: number) => {
+  const state = getSecTestState(world)
+  state.adminKeypairs = []
+  // Register each admin as a real user. Keypairs conjured locally and never
+  // shown to the server would only prove that HPKE wraps for several recipients
+  // — it would never reach the note storage and admin-read path this scenario
+  // is about.
   for (let i = 0; i < count; i++) {
-    const kp = generateTestKeypair()
-    getSecTestState(world).adminKeypairs.push(kp)
+    const admin = await createUserViaApi(request, {
+      name: `E2EE Admin ${Date.now()}-${i}`,
+      roleIds: ['role-hub-admin'],
+    })
+    state.adminKeypairs.push({ seedHex: admin.seedHex, pubkey: admin.pubkey })
   }
 })
 
@@ -199,15 +214,84 @@ Then('decryption should fail', async ({ world }) => {
   }
 })
 
+/** A stored message as the conversations API returns it. */
+interface StoredMessage {
+  id: string
+  encryptedContent?: string
+  readerEnvelopes?: Array<{ pubkey: string; ct: string; enc: string }>
+}
+
+/**
+ * Fetch the stored message back as `readerSeedHex`, open the reader envelope
+ * addressed to that reader's X25519 key, and return the plaintext.
+ *
+ * The server seals inbound messages itself, so this is the only way to assert
+ * that a reader can actually read one. Asserting HTTP 200 on the conversation
+ * says nothing about whether the envelope opens.
+ */
+async function decryptStoredMessageAs(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  readerSeedHex: string,
+  readerLabel: string,
+): Promise<string> {
+  const scenario = getScenarioState(world)
+  expect(scenario.conversationId, 'no conversation was created').toBeDefined()
+  expect(scenario.messageId, 'no message was recorded').toBeDefined()
+
+  const { status, data } = await apiGet<{ messages: StoredMessage[] }>(
+    request,
+    `/conversations/${scenario.conversationId}/messages`,
+    readerSeedHex,
+  )
+  expect(status, `${readerLabel} could not list the conversation's messages`).toBe(200)
+
+  const message = data.messages.find(m => m.id === scenario.messageId)
+  expect(message, `${readerLabel} cannot see message ${scenario.messageId}`).toBeTruthy()
+  expect(message!.encryptedContent, 'message has no ciphertext').toBeTruthy()
+
+  const readerX25519 = x25519PubkeyFromSeed(readerSeedHex)
+  const envelope = message!.readerEnvelopes?.find(e => e.pubkey === readerX25519)
+  expect(
+    envelope,
+    `no reader envelope addressed to ${readerLabel}'s X25519 key ${readerX25519}; ` +
+      `the server sealed to ${JSON.stringify(message!.readerEnvelopes?.map(e => e.pubkey))}`,
+  ).toBeTruthy()
+
+  const messageKey = await unwrapKey(envelope!.ct, envelope!.enc, readerSeedHex, LABEL_MESSAGE)
+  return decryptContent(message!.encryptedContent!, messageKey, LABEL_MESSAGE)
+}
+
 When('a message {string} is encrypted for volunteer and admin', async ({ request, world }, messageText: string) => {
-  // Create a conversation message via simulation, then verify the envelope
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair, 'the scenario needs a registered volunteer first').toBeDefined()
+
   const { simulateIncomingMessage, uniqueCallerNumber } = await import('../../simulation-helpers')
   const sender = uniqueCallerNumber()
+
+  // The server seals an inbound message for the admin and for whoever the
+  // conversation is assigned to, so the conversation has to be assigned to the
+  // volunteer BEFORE the message under test arrives — otherwise "encrypted for
+  // volunteer and admin" is not what actually happened.
+  const opening = await simulateIncomingMessage(request, {
+    senderNumber: sender,
+    body: 'opening contact',
+    channel: 'sms',
+  })
+  const assigned = await apiPatch(
+    request,
+    `/conversations/${opening.conversationId}`,
+    { assignedTo: state.volunteerKeypair!.pubkey },
+  )
+  expect(assigned.status, `could not assign the conversation: ${JSON.stringify(assigned.data)}`).toBe(200)
+
   const result = await simulateIncomingMessage(request, {
     senderNumber: sender,
     body: messageText,
     channel: 'sms',
   })
+  expect(result.conversationId).toBe(opening.conversationId)
+
   getScenarioState(world).conversationId = result.conversationId
   getScenarioState(world).messageId = result.messageId
 })
@@ -216,30 +300,39 @@ When('the encrypted message is stored on the server', async ({ world }) => {
   expect(getScenarioState(world).conversationId).toBeDefined()
 })
 
-Then('the volunteer can decrypt the message to {string}', async ({ request, world }, _expectedText: string) => {
-  // Verify the message exists and is accessible
-  expect(getScenarioState(world).conversationId).toBeDefined()
-  const { status } = await apiGet(request, `/conversations/${getScenarioState(world).conversationId}`)
-  expect(status).toBe(200)
+Then('the volunteer can decrypt the message to {string}', async ({ request, world }, expectedText: string) => {
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair).toBeDefined()
+  const plaintext = await decryptStoredMessageAs(request, world, state.volunteerKeypair!.seedHex, 'the volunteer')
+  expect(plaintext).toBe(expectedText)
 })
 
-Then('the admin can decrypt the message to {string}', async ({ request, world }, _expectedText: string) => {
-  expect(getScenarioState(world).conversationId).toBeDefined()
-  const { status } = await apiGet(request, `/conversations/${getScenarioState(world).conversationId}`)
-  expect(status).toBe(200)
+Then('the admin can decrypt the message to {string}', async ({ request, world }, expectedText: string) => {
+  const plaintext = await decryptStoredMessageAs(request, world, ADMIN_SEED, 'the admin')
+  expect(plaintext).toBe(expectedText)
 })
 
 When('a volunteer encrypts a note {string}', async ({request, world}, noteText: string) => {
   const state = getSecTestState(world)
+  expect(state.adminKeypairs.length).toBeGreaterThan(0)
 
-  // Real encryption with per-admin HPKE envelopes
+  // A registered volunteer authors the note, so the server authorises the write
+  // against a real identity rather than the suite's admin credentials.
+  const vol = await createUserViaApi(request, { name: `Multi-admin Vol ${Date.now()}` })
+  state.volunteerKeypair = { seedHex: vol.seedHex, pubkey: vol.pubkey }
+
   const contentKey = generateContentKey()
   const ciphertextHex = encryptContent(noteText, contentKey, LABEL_NOTE_KEY)
   state.contentKey = contentKey
   state.ciphertextHex = ciphertextHex
+  state.notePlaintext = noteText
+  state.noteCallId = `multi-admin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   state.envelopes = new Map()
 
-  // Wrap for each admin keypair
+  const volX25519 = x25519PubkeyFromSeed(vol.seedHex)
+  const authorEnvelope = await wrapKeyForRecipient(contentKey, volX25519, vol.seedHex, LABEL_NOTE_KEY)
+
+  // Wrap the content key for each registered admin's X25519 key.
   const adminEnvelopes = await Promise.all(
     state.adminKeypairs.map(async kp => {
       const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
@@ -254,37 +347,68 @@ When('a volunteer encrypts a note {string}', async ({request, world}, noteText: 
     '/notes',
     {
       encryptedContent: ciphertextHex,
-      callId: `multi-admin-${Date.now()}`,
+      callId: state.noteCallId,
+      authorEnvelope,
       adminEnvelopes,
     },
+    vol.seedHex,
   )
-  if (status === 200 || status === 201) {
-    state.noteId = data.note?.id
-  }
+  expect(status, `POST /notes failed: ${JSON.stringify(data)}`).toBe(201)
+  state.noteId = data.note?.id
+  expect(state.noteId, 'server returned no note id').toBeTruthy()
 })
 
-Then('all {int} admins can decrypt the note independently', async ({ world }, count: number) => {
+Then('all {int} admins can decrypt the note independently', async ({ request, world }, count: number) => {
   const state = getSecTestState(world)
   expect(state.noteId).toBeTruthy()
   expect(state.adminKeypairs.length).toBe(count)
+  state.serverAdminEnvelopes = []
 
-  // Actually decrypt with each admin's key to verify real E2EE works
-  for (const kp of state.adminKeypairs) {
-    const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
-    const envelope = state.envelopes!.get(x25519Pub)
-    expect(envelope).toBeDefined()
-    const recoveredKey = await unwrapKey(envelope!.ct, envelope!.enc, kp.seedHex, LABEL_NOTE_KEY)
-    const plaintext = decryptContent(state.ciphertextHex!, recoveredKey, LABEL_NOTE_KEY)
-    expect(plaintext).toBeTruthy()
+  interface StoredNote {
+    id: string
+    encryptedContent?: string
+    adminEnvelopes?: Array<{ pubkey: string; ct: string; enc: string }>
   }
+
+  for (const kp of state.adminKeypairs) {
+    // Read the note back over the API authenticated as THIS admin. That is the
+    // path under test: the server must authorise this admin to read another
+    // user's note and return the envelope it stored for them. Decrypting the
+    // copy the step kept in memory would exercise nothing but hpke-js.
+    const { status, data } = await apiGet<{ notes: StoredNote[] }>(
+      request,
+      `/notes?callId=${encodeURIComponent(state.noteCallId!)}`,
+      kp.seedHex,
+    )
+    expect(status, `admin ${kp.pubkey} could not list notes`).toBe(200)
+
+    const note = data.notes.find(n => n.id === state.noteId)
+    expect(note, `admin ${kp.pubkey} cannot see the note the volunteer filed`).toBeTruthy()
+    expect(note!.encryptedContent).toBe(state.ciphertextHex)
+
+    const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
+    const envelope = note!.adminEnvelopes?.find(e => e.pubkey === x25519Pub)
+    expect(
+      envelope,
+      `server returned no admin envelope for ${x25519Pub}; got ${JSON.stringify(note!.adminEnvelopes)}`,
+    ).toBeTruthy()
+    state.serverAdminEnvelopes.push(envelope!)
+
+    const recoveredKey = await unwrapKey(envelope!.ct, envelope!.enc, kp.seedHex, LABEL_NOTE_KEY)
+    expect(decryptContent(note!.encryptedContent!, recoveredKey, LABEL_NOTE_KEY)).toBe(state.notePlaintext)
+  }
+
+  expect(state.serverAdminEnvelopes.length).toBe(count)
 })
 
 Then("each admin's key wrap is unique", async ({ world }) => {
   const state = getSecTestState(world)
-  expect(state.envelopes).toBeDefined()
-  const ctValues = [...state.envelopes!.values()].map(e => e.ct)
-  const uniqueCts = new Set(ctValues)
-  expect(uniqueCts.size).toBe(ctValues.length)
+  // Compare what the server stored and served, not what the step wrapped.
+  expect(state.serverAdminEnvelopes, 'no server-returned envelopes were collected').toBeDefined()
+  const ctValues = state.serverAdminEnvelopes!.map(e => e.ct)
+  expect(new Set(ctValues).size).toBe(ctValues.length)
+  const encValues = state.serverAdminEnvelopes!.map(e => e.enc)
+  expect(new Set(encValues).size).toBe(encValues.length)
 })
 
 // ── Session Management Steps ─────────────────────────────────────

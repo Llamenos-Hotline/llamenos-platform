@@ -25,6 +25,10 @@ export interface ScenarioState {
   shiftIds: string[]
   callId?: string
   callStatus?: string
+  /** HTTP status the incoming-call simulation returned (undefined until a call arrives). */
+  callHttpStatus?: number
+  /** Parsed body of that response — carries `banned: true` when the server refused a banned caller. */
+  callResponseBody?: { error?: string; banned?: boolean; status?: string; callId?: string }
   conversationId?: string
   messageId?: string
   lastApiResponse?: { status: number; data: unknown }
