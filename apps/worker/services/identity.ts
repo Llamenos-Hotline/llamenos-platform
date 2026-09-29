@@ -31,7 +31,8 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './settings'
-import { demoIdentities } from '../lib/demo-identities'
+import type { DemoIdentity } from '../lib/demo-identities'
+import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
@@ -212,6 +213,10 @@ export class IdentityService {
 
   /**
    * Check whether any active super-admin volunteer exists.
+   *
+   * Counts rows under revoked signing keys too: treating them as absent would
+   * reopen first-admin bootstrap to anyone on a deployment whose only admin
+   * row is revoked.
    */
   async hasAdmin(): Promise<{ hasAdmin: boolean }> {
     const rows = await this.db
@@ -241,7 +246,7 @@ export class IdentityService {
           sql`${users.roles} @> ARRAY['role-super-admin']::text[]`,
         ),
       )
-    return rows.map((r) => r.pubkey)
+    return rows.map((r) => r.pubkey).filter(pubkey => !isRevokedSigningKey(pubkey))
   }
 
   /**
@@ -279,42 +284,45 @@ export class IdentityService {
   }
 
   /**
-   * Ensure default admin is seeded (called on startup).
-   * Also seeds demo accounts when DEMO_MODE is true.
+   * Seed (or restore) the given admin as an active super-admin. Used by the
+   * dev and demo resets; server startup uses ensurePlatformAdmin, which does
+   * not overwrite an existing row.
    */
-  async ensureInit(adminPubkey?: string, demoMode = false): Promise<void> {
-    if (adminPubkey) {
-      // Use onConflictDoUpdate to ensure admin always has role-super-admin.
-      // A race condition in test-add-hub-member can create the admin user
-      // with role-volunteer; this corrects that on the next ensureInit call
-      // (e.g., during test-reset). Server startup uses ensurePlatformAdmin,
-      // which does not overwrite an existing row.
-      await this.db.insert(users).values(platformAdminRow(adminPubkey)).onConflictDoUpdate({
-        target: users.pubkey,
-        set: {
-          roles: ['role-super-admin'],
-          active: true,
-        },
-      })
-    }
+  async ensureInit(adminPubkey?: string): Promise<void> {
+    if (!adminPubkey) return
+    // Use onConflictDoUpdate to ensure admin always has role-super-admin.
+    // A race condition in test-add-hub-member can create the admin user
+    // with role-volunteer; this corrects that on the next ensureInit call
+    // (e.g., during test-reset).
+    await this.db.insert(users).values(platformAdminRow(adminPubkey)).onConflictDoUpdate({
+      target: users.pubkey,
+      set: {
+        roles: ['role-super-admin'],
+        active: true,
+      },
+    })
+  }
 
-    if (demoMode) {
-      for (const account of demoIdentities()) {
-        await this.db.insert(users).values({
-          pubkey: account.pubkey,
-          displayName: account.name,
-          phone: account.phone,
-          roles: account.roleIds,
-          active: account.name !== 'Fatima Al-Rashid',
-          encryptedSecretKey: '',
-          transcriptionEnabled: true,
-          spokenLanguages: account.spokenLanguages,
-          uiLanguage: 'en',
-          profileCompleted: true,
-          onBreak: false,
-          callPreference: 'phone',
-        }).onConflictDoNothing()
-      }
+  /**
+   * Register the demo accounts. The identities can only come from
+   * `demoIdentities(env)`, which refuses anywhere but a development server.
+   */
+  async ensureDemoAccounts(identities: readonly DemoIdentity[]): Promise<void> {
+    for (const account of identities) {
+      await this.db.insert(users).values({
+        pubkey: account.pubkey,
+        displayName: account.name,
+        phone: account.phone,
+        roles: account.roleIds,
+        active: account.name !== 'Fatima Al-Rashid',
+        encryptedSecretKey: '',
+        transcriptionEnabled: true,
+        spokenLanguages: account.spokenLanguages,
+        uiLanguage: 'en',
+        profileCompleted: true,
+        onBreak: false,
+        callPreference: 'phone',
+      }).onConflictDoNothing()
     }
   }
 
@@ -343,12 +351,13 @@ export class IdentityService {
   // =========================================================================
 
   /**
-   * List all users (encryptedSecretKey stripped).
+   * List all users (encryptedSecretKey stripped). Users under revoked signing
+   * keys are not members of anything — never listed, never an envelope recipient.
    */
   async getUsers(): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
     const rows = await this.db.select().from(users)
     return {
-      users: rows.map(r => sanitizeUser(rowToUser(r))),
+      users: rows.filter(r => !isRevokedSigningKey(r.pubkey)).map(r => sanitizeUser(rowToUser(r))),
     }
   }
 
@@ -367,8 +376,11 @@ export class IdentityService {
 
   /**
    * Get a volunteer's full record (including encryptedSecretKey) — internal use only.
+   * Every authority decision resolves the acting key here, so a revoked signing
+   * key resolves to no user at all.
    */
   async getUserInternal(pubkey: string): Promise<User | null> {
+    if (isRevokedSigningKey(pubkey)) return null
     const rows = await this.db
       .select()
       .from(users)
@@ -391,6 +403,7 @@ export class IdentityService {
     maxCaseAssignments?: number
     supervisorPubkey?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
+    if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
     const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
     const [row] = await this.db.insert(users).values({
       pubkey: data.pubkey,
@@ -675,6 +688,7 @@ export class IdentityService {
     pubkey: string,
     opts?: { deviceId?: string; platform?: string; userAgent?: string; ipHash?: string },
   ): Promise<ServerSession> {
+    if (isRevokedSigningKey(pubkey)) throw new ServiceError(403, 'This signing key is revoked')
     const token = randomHexToken(32)
     const now = new Date()
     const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS)
@@ -712,6 +726,12 @@ export class IdentityService {
     // B-M15: Constant-time verification of the token after DB retrieval
     // prevents timing oracle attacks even if SQL comparison leaks timing
     if (!timingSafeCompare(row.token, token)) {
+      throw new ServiceError(401, 'Invalid session')
+    }
+
+    // Checked before any renewal: a session under a revoked key is removed, never extended.
+    if (isRevokedSigningKey(row.pubkey)) {
+      await this.db.delete(sessions).where(eq(sessions.token, token))
       throw new ServiceError(401, 'Invalid session')
     }
 

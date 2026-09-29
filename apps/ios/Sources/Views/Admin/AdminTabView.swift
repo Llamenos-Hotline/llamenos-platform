@@ -7,7 +7,7 @@ import SwiftUI
 /// Invites, and Custom Fields.
 struct AdminTabView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: AdminViewModel?
+    @State private var viewModelBox = ViewModelBox<AdminViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -254,16 +254,14 @@ struct AdminTabView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: AdminViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = AdminViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService
         )
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

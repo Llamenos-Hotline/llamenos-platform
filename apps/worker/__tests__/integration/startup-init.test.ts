@@ -16,7 +16,10 @@ import { createServer } from 'node:net'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { DEFAULT_ROLES } from '@shared/permissions'
+import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { bytesToHex, utf8ToBytes } from '@shared/encoding'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 
@@ -80,9 +83,14 @@ async function freePort(): Promise<number> {
  *
  * Serving begins only after the module's top-level awaits resolve, so a
  * response proves the whole startup sequence has run. `--no-env-file` keeps the
- * repo's `.env` out: the server sees exactly the environment given here.
+ * repo's `.env` out: the server sees exactly the environment given here, plus
+ * `extraEnv`. `whileServing` runs against the live server before shutdown.
  */
-async function bootServer(databaseUrl: string, adminPubkey: string | undefined): Promise<void> {
+async function bootServer(
+  databaseUrl: string,
+  adminPubkey: string | undefined,
+  opts: { extraEnv?: Record<string, string>; whileServing?: (base: string) => Promise<void> } = {},
+): Promise<void> {
   const port = await freePort()
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '',
@@ -100,6 +108,7 @@ async function bootServer(databaseUrl: string, adminPubkey: string | undefined):
     STORAGE_SECRET_KEY: 'boot-test',
   }
   if (adminPubkey) env.ADMIN_PUBKEY = adminPubkey
+  Object.assign(env, opts.extraEnv)
   if (process.env.LLAMENOS_CRYPTO_LIB) env.LLAMENOS_CRYPTO_LIB = process.env.LLAMENOS_CRYPTO_LIB
 
   // Own process group: `bun` may be a version-manager shim that does not forward
@@ -133,7 +142,10 @@ async function bootServer(databaseUrl: string, adminPubkey: string | undefined):
         throw new Error(`server did not start serving within ${BOOT_TIMEOUT_MS}ms:\n${output}`)
       }
       const live = await fetch(`http://127.0.0.1:${port}/api/health/live`).catch(() => null)
-      if (live?.ok) return
+      if (live?.ok) {
+        await opts.whileServing?.(`http://127.0.0.1:${port}`)
+        return
+      }
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
   } finally {
@@ -269,6 +281,68 @@ describe('server startup initialisation', () => {
     await withDb(url, async (sql) => {
       const [admin] = await sql<{ roles: string[] }[]>`SELECT roles FROM users WHERE pubkey = ${ADMIN_PUBKEY}`
       expect(admin.roles).toEqual(['role-volunteer', 'role-super-admin'])
+    })
+  }, BOOT_TIMEOUT_MS * 4)
+})
+
+/**
+ * The shipped entry point, configured the way a demo/staging host is and then
+ * some: every demo and dev flag set, and the setup-state row claiming demo
+ * mode. None of it is a development server, so no demo identity may be
+ * generated, revealed or registered.
+ */
+describe('demo identities on the shipped entry point', () => {
+  const RESET_SECRET = 'boot-test-reset-secret'
+  const adminSecret = ed25519.utils.randomSecretKey()
+  const adminPubkey = bytesToHex(ed25519.getPublicKey(adminSecret))
+
+  function signedBy(method: string, path: string): string {
+    const timestamp = Date.now()
+    const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${adminPubkey}:${timestamp}:${method}:${path}`)
+    const token = bytesToHex(ed25519.sign(message, adminSecret))
+    return `Bearer ${JSON.stringify({ pubkey: adminPubkey, timestamp, token })}`
+  }
+
+  it('a demo deployment with every flag set and a demo-claiming database registers and reveals nothing', async () => {
+    const url = await freshMigratedDatabase()
+    const extraEnv = {
+      ENVIRONMENT: 'demo',
+      DEMO_MODE: 'true',
+      DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA',
+      DEV_ROUTES_ENABLED: 'true',
+      DEV_RESET_SECRET: RESET_SECRET,
+    }
+    await bootServer(url, adminPubkey, { extraEnv })
+    await withDb(url, async (sql) => {
+      const setupState = { setupCompleted: true, completedSteps: [], pendingChannels: [], selectedChannels: [], demoMode: true }
+      await sql`UPDATE system_settings SET setup_state = ${sql.json(setupState)}`
+    })
+
+    await bootServer(url, adminPubkey, {
+      extraEnv,
+      whileServing: async (base) => {
+        const credentials = await fetch(`${base}/api/config/demo/credentials`)
+        expect(credentials.status).toBe(404)
+        expect(await credentials.text()).not.toMatch(/seed/i)
+
+        const reset = await fetch(`${base}/api/demo/reset`, {
+          method: 'POST',
+          headers: { Authorization: signedBy('POST', '/api/demo/reset'), 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+        expect(reset.status).toBe(403)
+        expect((await reset.json() as { error: string }).error).toMatch(/development server/)
+
+        const devHeaders = { 'X-Test-Secret': RESET_SECRET, 'Content-Type': 'application/json' }
+        expect((await fetch(`${base}/api/test-seed-demo`, { method: 'POST', headers: devHeaders, body: '{}' })).status).toBe(404)
+        expect((await fetch(`${base}/api/test-demo-identities`, { headers: devHeaders })).status).toBe(404)
+        expect((await fetch(`${base}/api/test-reset`, { method: 'POST', headers: devHeaders })).status).toBe(404)
+      },
+    })
+
+    await withDb(url, async (sql) => {
+      const users = await sql<{ pubkey: string }[]>`SELECT pubkey FROM users`
+      expect(users.map((u) => u.pubkey)).toEqual([adminPubkey])
     })
   }, BOOT_TIMEOUT_MS * 4)
 })

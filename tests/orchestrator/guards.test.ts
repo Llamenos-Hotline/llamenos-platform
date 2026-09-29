@@ -2186,6 +2186,77 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     }
   })
 
+  /**
+   * The iOS TIER (#1225 made ios-e2e a required check; the tier landed after).
+   * `ios` stays a blast-radius flag — true for every SHARED_DEPS_RE hit — and
+   * the tier only decides HOW MUCH of the suite runs. These rails exist because
+   * the failure mode is silent: a tier that wrongly says `smoke`, or a default
+   * that resolves to `smoke`, shrinks a merge gate without turning it red.
+   */
+  it.each([
+    ['apps/ios/Sources/App.swift', 'full'],
+    ['apps/ios/Tests/UI/AuthFlowUITests.swift', 'full'],
+    ['packages/crypto/src/lib.rs', 'full'],
+    ['packages/protocol/schemas/foo.ts', 'full'],
+    ['packages/i18n/locales/en.json', 'full'],
+    ['.github/workflows/ci.yml', 'full'],
+    ['.github/workflows/ios-e2e.yml', 'full'],
+    ['.github/scripts/detect-changed-platforms.sh', 'full'],
+    ['scripts/dev-bun.sh', 'smoke'],
+    ['package.json', 'smoke'],
+    ['tsconfig.json', 'smoke'],
+    ['apps/worker/routes/foo.ts', 'none'],
+    ['README.md', 'none'],
+  ])('"%s" alone earns iOS tier "%s"', (file, tier) => {
+    const outputs = classify([file as string])
+    expect(outputs['ios_tier'], `outputs=${JSON.stringify(outputs)}`).toBe(tier)
+    // The tier never contradicts the flag the job's `if:` actually gates on.
+    expect(outputs['ios']).toBe(tier === 'none' ? 'false' : 'true')
+  })
+
+  it('a full-tier file anywhere in the diff wins over smoke-tier files', () => {
+    expect(classify(['scripts/dev-bun.sh', 'apps/ios/Sources/App.swift'])['ios_tier']).toBe('full')
+    expect(classify(['apps/ios/Sources/App.swift', 'scripts/dev-bun.sh'])['ios_tier']).toBe('full')
+  })
+
+  it('ci.yml hands ios-e2e.yml the tier the script chose, and gates on `ios`, not on the tier', () => {
+    const block = jobBlock(ciYaml(), 'ios-e2e')
+    expect(block, 'ci.yml does not pass ios_tier through').toContain('needs.changes.outputs.ios_tier')
+    expect(jobLevelIf(block), 'ios-e2e must run whenever iOS is reachable at all')
+      .toContain("needs.changes.outputs.ios == 'true'")
+  })
+
+  it('ios-e2e.yml defaults its tier to full — an unset or unknown tier must never narrow the gate', () => {
+    const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+    // Assert the default on the `workflow_call` input SPECIFICALLY — that is
+    // the one ci.yml uses. A bare `toContain('default: full')` is satisfied by
+    // the unrelated workflow_dispatch input and passes while workflow_call
+    // silently defaults to smoke (verified: that injection went undetected).
+    // Same string-slicing convention the rails above use, rather than pulling
+    // in a YAML parser: take the `  workflow_call:` block up to the next
+    // two-space key, then that block's `tier:` input up to the next input.
+    const callBlock = yaml.match(/\n {2}workflow_call:\n((?: {4,}.*\n|\n)*)/)?.[1] ?? ''
+    expect(callBlock, 'ios-e2e.yml has no workflow_call block').not.toBe('')
+    const tierBlock = callBlock.match(/\n? {6}tier:\n((?: {8,}.*\n|\n)*)/)?.[1] ?? ''
+    expect(tierBlock, 'workflow_call declares no `tier` input').not.toBe('')
+    expect(tierBlock, 'the workflow_call tier default must be full').toMatch(/^ {8}default: full$/m)
+    // Only the literal string `smoke` may select the reduced matrix or --only-smoke.
+    expect(yaml).toMatch(/inputs\.tier == 'smoke'/)
+    expect(yaml).toContain('if [ "$IOS_TIER" = "smoke" ]; then extra+=(--only-smoke); fi')
+  })
+
+  it('the smoke tier is a declared whitelist that still covers the day-one flows', () => {
+    const list = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-smoke.txt'), 'utf8')
+    const classes = list.split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#'))
+      .map((l) => l.split(/\s+/)[0])
+    for (const required of ['AuthFlowUITests', 'ActiveCallUITests', 'NoteFlowUITests', 'ShiftFlowUITests']) {
+      expect(classes, `smoke tier must cover ${required} — onboarding, calls, notes and shifts are the day-one flows`)
+        .toContain(required)
+    }
+  })
+
   it('desktop-e2e.yml carries no workflow-level pull_request paths: filter — that shape breaks a future required check', () => {
     const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'desktop-e2e.yml'), 'utf8')
     const onBlock = yaml.split(/\njobs:\n/)[0] ?? ''

@@ -3,15 +3,25 @@ import { describeRoute, resolver } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { deriveServerKeypair } from '../lib/server-identity'
 import { CURRENT_API_VERSION, MIN_API_VERSION } from '../lib/api-versions'
-import type { Hub, SetupState } from '@shared/types'
+import type { Hub } from '@shared/types'
 import { configResponseSchema, configVerifyResponseSchema, configPinsResponseSchema } from '@protocol/schemas/config'
 import { publicErrors } from '../openapi/helpers'
 import { ed25519Sign } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
-import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
-import { DEMO_SEEDS } from '../lib/demo-seeds'
+import { demoIdentities } from '../lib/demo-identities'
+import { devSurfacesEnabled } from '../lib/dev-surfaces'
 
 const config = new Hono<AppEnv>()
+
+/**
+ * Whether the deployment presents itself as a demo/test environment. DEMO_MODE
+ * is deployment configuration. The `demoMode` flag the setup wizard stores in the
+ * database only counts on a development server — everywhere else no database
+ * row can put a deployment into demo mode.
+ */
+function effectiveDemoMode(env: AppEnv['Bindings'], storedDemoMode: boolean): boolean {
+  return env.DEMO_MODE === 'true' || (devSurfacesEnabled(env) && storedDemoMode)
+}
 
 config.get('/',
   describeRoute({
@@ -49,16 +59,13 @@ config.get('/',
 
     // Fetch setup state
     let setupCompleted = true
-    let demoMode = false
-    const envDemoMode = c.env.DEMO_MODE === 'true'
+    let storedDemoMode = false
     try {
       const setupState = await services.settings.getSetupState()
       setupCompleted = setupState.setupCompleted
-      demoMode = envDemoMode || ((setupState as SetupState & { demoMode?: boolean }).demoMode ?? false)
-    } catch {
-      // If env var forces demo mode, still set it even on fetch failure
-      demoMode = envDemoMode
-    }
+      storedDemoMode = setupState.demoMode ?? false
+    } catch { /* setup state unreadable — DEMO_MODE alone decides demo mode */ }
+    const demoMode = effectiveDemoMode(c.env, storedDemoMode)
 
     // Check if bootstrap is needed (no admin exists)
     let needsBootstrap = false
@@ -98,7 +105,7 @@ config.get('/',
       channels,
       setupCompleted,
       demoMode,
-      demoResetSchedule: envDemoMode ? (c.env.DEMO_RESET_CRON || null) : null,
+      demoResetSchedule: c.env.DEMO_MODE === 'true' ? (c.env.DEMO_RESET_CRON || null) : null,
       needsBootstrap,
       hubs,
       defaultHubId,
@@ -218,30 +225,28 @@ config.get('/pins',
 /**
  * GET /api/config/demo/credentials
  *
- * Returns demo account seed material so the login page can authenticate as a
- * demo account without any prior session. Only available when DEMO_MODE=true.
- *
- * Private key seeds are stored server-side (this file) and MUST NOT appear in
- * client bundles. This endpoint is the single fetch point.
+ * Hands the login page's demo picker the demo accounts' signing seeds, keyed by
+ * their listed handle, on a development server in demo mode. The seeds are
+ * generated per server process (lib/demo-identities.ts) and never appear in any
+ * client bundle or image. Everywhere else this is a 404 decided before the
+ * database is read, so no stored setup state can open it.
  */
 config.get('/demo/credentials', async (c) => {
-  const services = c.get('services')
-  let demoMode = c.env.DEMO_MODE === 'true'
-  if (!demoMode) {
-    try {
-      const setupState = await services.settings.getSetupState()
-      demoMode = (setupState as SetupState & { demoMode?: boolean }).demoMode ?? false
-    } catch { /* default to false */ }
+  if (!devSurfacesEnabled(c.env)) {
+    return c.json({ error: 'Not Found' }, 404)
   }
-  if (!demoMode) {
+  let storedDemoMode = false
+  try {
+    storedDemoMode = (await c.get('services').settings.getSetupState()).demoMode ?? false
+  } catch { /* default to false */ }
+  if (!effectiveDemoMode(c.env, storedDemoMode)) {
     return c.json({ error: 'Not Found' }, 404)
   }
 
-  const credentials = DEMO_ACCOUNTS.map(account => ({
-    pubkey: account.pubkey,
-    seedHex: DEMO_SEEDS[account.pubkey] ?? null,
-  })).filter(a => a.seedHex !== null)
-
+  const credentials = demoIdentities(c.env).map(identity => ({
+    pubkey: identity.listedPubkey,
+    seedHex: identity.seedHex,
+  }))
   return c.json({ credentials })
 })
 

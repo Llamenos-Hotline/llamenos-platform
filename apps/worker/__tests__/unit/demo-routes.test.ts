@@ -28,7 +28,7 @@ function createTestApp(opts: {
   return { app, audit }
 }
 
-const DEMO_ENV = { ENVIRONMENT: 'demo', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }
+const DEMO_ENV = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }
 
 describe('POST /demo/reset', () => {
   beforeEach(() => {
@@ -57,10 +57,13 @@ describe('POST /demo/reset', () => {
   })
 
   it.each([
-    ['DEMO_MODE unset', { ENVIRONMENT: 'demo', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }],
-    ['confirmation unset', { ENVIRONMENT: 'demo', DEMO_MODE: 'true' }],
-    ['wrong confirmation', { ENVIRONMENT: 'demo', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'yes' }],
-    ['production with every flag set', { ...DEMO_ENV, ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true' }],
+    ['DEMO_MODE unset', { ...DEMO_ENV, DEMO_MODE: undefined }],
+    ['confirmation unset', { ...DEMO_ENV, DEMO_MODE_CONFIRM: undefined }],
+    ['wrong confirmation', { ...DEMO_ENV, DEMO_MODE_CONFIRM: 'yes' }],
+    ['production with every flag set', { ...DEMO_ENV, ENVIRONMENT: 'production' }],
+    ['a demo deployment with every demo flag set', { ...DEMO_ENV, ENVIRONMENT: 'demo', DEV_ROUTES_ENABLED: undefined }],
+    ['a staging deployment with every flag set', { ...DEMO_ENV, ENVIRONMENT: 'staging' }],
+    ['a development server without dev routes', { ...DEMO_ENV, DEV_ROUTES_ENABLED: undefined }],
   ])('refuses an admin when %s', async (_label, env) => {
     const { app, audit } = createTestApp({ permissions: ['*'], env })
     const res = await app.request('/demo/reset', { method: 'POST' })

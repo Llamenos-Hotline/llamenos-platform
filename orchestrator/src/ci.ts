@@ -87,6 +87,29 @@ export const REVIEW_REQUEST_LOGIN = 'llamenos-auto'
  *  `REVIEW_REQUEST_LOGIN` itself authored — see `reviewTriggerLogins`. */
 export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
 
+/**
+ * PR authors whose diffs get a real `fleet/review` CHECK but never a model
+ * call — it concludes green immediately (`bot-authored` below).
+ *
+ * Matched on AUTHOR, never on branch name. `dependabot/**` is a convention
+ * anyone with push access can imitate, so keying the skip on the branch would
+ * hand a free review bypass to any human who names a branch `dependabot/x`.
+ * The author of a Dependabot PR is set by GitHub and cannot be spoofed that
+ * way.
+ *
+ * WHY SKIPPING IS DEFENSIBLE HERE, when a review normally is not optional:
+ * the reviewer that refused #1273 made the argument itself — a model reading
+ * a `bun.lock`/`Cargo.lock`/action-pin diff sees version numbers and hashes,
+ * never the code the registry actually publishes. Supply-chain compromises
+ * put the payload in the package, not the diff. So the model review buys
+ * almost nothing on precisely this class of change, while costing a full
+ * review cycle each time Dependabot force-pushes. The checkpoint that does
+ * carry weight is a human pressing Merge, and that is untouched:
+ * `require_extra_approval_for_unattributed_changes` still applies and
+ * dependabot-auto-approve.yml deliberately does not auto-merge.
+ */
+export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'dependabot']
+
 export interface ReviewRequestEvent {
   /** `github.event_name`. */
   eventName: string
@@ -1036,6 +1059,7 @@ export type ReviewGateOutcome =
   | { kind: 'review-set-unresolved'; cacheKey: ReviewCacheKey; reason: string }
   | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict; profiles: string[] }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
+  | { kind: 'bot-authored'; cacheKey: ReviewCacheKey; author: string; reason: string }
   | { kind: 'not-requested'; cacheKey: ReviewCacheKey }
   | { kind: 'run-engine'; cacheKey: ReviewCacheKey; profiles: string[]; clearLabels: string[] }
 
@@ -1056,6 +1080,10 @@ export interface ReviewGateDeps {
    * exactly one job: set first, cache second, tier third, request fourth.
    */
   requested: boolean
+  /** The PR's author login — `FLEET_REVIEW_PR_AUTHOR`, the same field
+   *  `reviewRequestFor` already consumes. Present so the gate can recognise
+   *  an automated dependency PR by IDENTITY rather than by branch name. */
+  prAuthor?: string | undefined
   /** `decideReviewSet` with its live PR read already wired — injected so
    *  this function needs no `gh` and no filesystem of its own. */
   reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
@@ -1093,6 +1121,27 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   if (cached !== undefined) {
     deps.log(`reused ${cached.verdict} verdict for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
     return { kind: 'cache-hit', cacheKey, verdict: cached, profiles: set.profiles }
+  }
+
+  // Automated dependency PRs: a real check, concluded green, with no model
+  // call — placed AFTER the review-set resolution above so that a profile
+  // somebody deliberately put on the PR still wins, exactly as it outranks
+  // the tier heuristic below. An unlabelled Dependabot bump skips; one a
+  // human labelled `review:crypto` does not.
+  //
+  // This exists because the review was not merely expensive on these PRs, it
+  // was unreachable: `fleet-review.yml` fires only on `review_requested`, and
+  // Dependabot force-pushes on every rebase. The push orphans the verdict,
+  // GitHub emits no new event because the reviewer is ALREADY requested, and
+  // the required `fleet/review` context stays absent forever. Six bumps sat
+  // unmergeable for a day in exactly that state, each showing an "active"
+  // review that could never complete.
+  const skipAuthor = loginOf(deps.prAuthor)
+  if (skipAuthor !== undefined && set.profiles.length === 0 &&
+      REVIEW_SKIP_AUTHORS.some((a) => a.toLowerCase() === skipAuthor)) {
+    const reason = `authored by ${skipAuthor} — automated dependency update, no model review`
+    deps.log(`pr=${cacheKey.pr} ${reason} (a human still merges it)`)
+    return { kind: 'bot-authored', cacheKey, author: skipAuthor, reason }
   }
 
   // Ordered here — after the cache check, before the request check — per

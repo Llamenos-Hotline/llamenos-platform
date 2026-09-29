@@ -5,31 +5,13 @@ import XCTest
 /// Transcription, Spam Settings, and System Health.
 ///
 /// These tests verify navigation and basic UI rendering for each screen.
-/// They use the `--test-authenticated` and `--test-admin` launch arguments.
-final class AdminSettingsUITests: XCTestCase {
-
-    private var app: XCUIApplication!
+/// They run as a super-admin registered with the live backend (`launchAsAdminWithAPI`):
+/// admin UI is gated on server-granted permissions, which an offline launch never has.
+final class AdminSettingsUITests: BaseUITest {
 
     override func setUp() {
         super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-        ])
-        app.launch()
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
+        launchAsAdminWithAPI()
     }
 
     // MARK: - Admin Settings Navigation Links
@@ -103,11 +85,22 @@ final class AdminSettingsUITests: XCTestCase {
     func testTelephonySettingsHasCredentialFields() {
         navigateToAdminSettingsScreen("admin-telephony-settings")
 
-        // Wait for form to load
+        // `telephony-settings-view` is on the Form itself, so it exists while
+        // `isLoadingTelephony` is still true and the Form is showing only a
+        // ProgressView — waiting on it does NOT mean the fields have rendered.
+        // A missing view must fail here, not return: an early `return` would
+        // report this test as passing without checking a single field.
         let view = find("telephony-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(
+            view.waitForExistence(timeout: 10),
+            "Telephony settings view should appear"
+        )
 
-        let accountSid = scrollToFind("telephony-account-sid")
+        // `credentialsSection` renders only once loadTelephonySettings() has
+        // returned, so the first field needs the same 10s budget the sibling
+        // tests give the provider picker. scrollToFind's 2s default expires
+        // mid-load and then swipes a still-loading Form.
+        let accountSid = scrollToFind("telephony-account-sid", timeout: 10)
         XCTAssertTrue(accountSid.exists, "Account SID field should exist")
 
         let authToken = scrollToFind("telephony-auth-token")
@@ -306,72 +299,5 @@ final class AdminSettingsUITests: XCTestCase {
             "health-loading",
         ])
         XCTAssertTrue(found, "System health should have refresh, retry, or loading indicator")
-    }
-
-    // MARK: - Helpers
-
-    @discardableResult
-    private func scrollToFind(_ identifier: String, maxSwipes: Int = 5, timeout: TimeInterval = 2) -> XCUIElement {
-        let element = find(identifier)
-        if element.waitForExistence(timeout: timeout) {
-            return element
-        }
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) {
-                return element
-            }
-        }
-        return element
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
-    }
-
-    // MARK: - Navigation Helpers
-
-    private func navigateToSettingsTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
-        }
-
-        let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else { return }
-        let settingsTabButton = tabBar.buttons.element(boundBy: 4)
-        if settingsTabButton.exists {
-            settingsTabButton.tap()
-        }
-    }
-
-    private func navigateToAdminPanel() {
-        navigateToSettingsTab()
-
-        let adminLink = scrollToFind("settings-admin-link", timeout: 10)
-        guard adminLink.exists else { return }
-        adminLink.tap()
-
-        let adminTabView = find("admin-tab-view")
-        _ = adminTabView.waitForExistence(timeout: 5)
-    }
-
-    private func navigateToAdminSettingsScreen(_ linkIdentifier: String) {
-        navigateToAdminPanel()
-
-        let link = scrollToFind(linkIdentifier)
-        guard link.exists else {
-            XCTFail("\(linkIdentifier) should exist in admin panel")
-            return
-        }
-        link.tap()
     }
 }
