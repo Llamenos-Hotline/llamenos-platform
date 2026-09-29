@@ -198,11 +198,15 @@
 
           Current value: {{ llamenos_app_image | default('NOT SET') }}
 
-          Example: llamenos_app_image: docker.io/llamenos/llamenos:latest
+          Example: llamenos_app_image: ghcr.io/<owner>/llamenos-platform:<version>
+
+          There is deliberately no default. Set it to an image that actually
+          exists and that this host can pull (if the package is private, the
+          host needs a `docker login` first — no playbook performs one).
 
           To fix:
-            1. Edit vars.yml
-            2. Set llamenos_app_image to a valid image reference
+            1. Set llamenos_app_image in your vars file (vars-production.yml)
+            2. Use a fully-qualified reference including an explicit tag
         success_msg: "llamenos_app_image: {{ llamenos_app_image }}"
 
     # apps/worker/lib/config.ts hard-fails at startup if ENVIRONMENT=production
@@ -257,20 +261,28 @@
         success_msg: "admin_pubkey: {{ admin_pubkey[:8] }}... (64 chars)"
       when: admin_pubkey is defined and admin_pubkey | length > 0
 
-    - name: Assert hmac_secret meets minimum length
+    # The app demands EXACTLY 64 lowercase hex characters (assertHex64 in
+    # apps/worker/lib/config.ts). This used to accept any 32+ characters, so a
+    # 32- or 40-char secret passed preflight and then hard-failed at container
+    # boot, long after Ansible reported success. The old fail_msg also echoed
+    # the secret's value into the Ansible log; it now reports only its length.
+    - name: Assert hmac_secret is a valid 64-character lowercase hex string
       ansible.builtin.assert:
         that:
           - hmac_secret is defined
-          - hmac_secret | length >= 32
+          - hmac_secret | length == 64
+          - hmac_secret is match('^[0-9a-f]{64}$')
         fail_msg: |
-          REQUIRED: 'hmac_secret' must be at least 32 characters long.
+          REQUIRED: 'hmac_secret' must be exactly 64 lowercase hex characters.
 
-          Current value: {{ hmac_secret | default('NOT SET') }}
-          Length: {{ hmac_secret | default('') | length }} chars (expected: >= 32)
+          Length seen: {{ hmac_secret | default('') | length }} (expected: 64)
+
+          The application rejects anything else at startup, so a value that is
+          merely "long enough" here will crash-loop the container later.
 
           To generate:
             openssl rand -hex 32
-        success_msg: "hmac_secret: [set, {{ hmac_secret | length }} chars]"
+        success_msg: "hmac_secret: [set, 64 hex chars]"
 
     - name: Assert server_secret is a valid 64-character hex string
       ansible.builtin.assert:

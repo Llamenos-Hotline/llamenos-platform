@@ -82,7 +82,7 @@ final class EventsViewModel {
         // Check CMS enabled
         do {
             let enabled: CaseManagementEnabledResponse = try await apiService.request(
-                method: "GET", path: "/api/settings/cms/case-management"
+                method: "GET", path: apiService.hp("/api/settings/cms/case-management")
             )
             cmsEnabled = enabled.enabled
         } catch {
@@ -94,7 +94,7 @@ final class EventsViewModel {
         // Load entity types
         do {
             let response: EntityTypesResponse = try await apiService.request(
-                method: "GET", path: "/api/settings/cms/entity-types"
+                method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
             )
             allEntityTypes = response.entityTypes.filter { $0.isArchived != true }
             eventEntityTypes = allEntityTypes.filter { $0.category == "event" }

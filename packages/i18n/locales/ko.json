@@ -2134,6 +2134,7 @@
     "noFields": "맞춤 필드 없음.",
     "noLinkedCases": "연결된 사건 없음.",
     "noLinkedReports": "연결된 보고서 없음.",
+    "noSubEvents": "하위 이벤트 없음.",
     "noTimeline": "No timeline entries yet.",
     "reports": "Reports",
     "searchCases": "사건 검색...",

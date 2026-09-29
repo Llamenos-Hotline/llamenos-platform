@@ -106,6 +106,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "llamenos.secretName" . }}
                   key: server-secret
+            - name: HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llamenos.secretName" . }}
+                  key: hmac-secret
+            {{- /* Required by the app whenever ENVIRONMENT is production, which is this
+                   chart's default. Without it the app refuses to boot rather than fall back
+                   to the spoofable Host header for webhook signature validation. */}}
+            - name: WEBHOOK_BASE_URL
+              value: {{ if eq .Values.app.env.ENVIRONMENT "production" }}{{ required "app.env.WEBHOOK_BASE_URL is required when ENVIRONMENT is production" .Values.app.env.WEBHOOK_BASE_URL | quote }}{{ else }}{{ .Values.app.env.WEBHOOK_BASE_URL | default "" | quote }}{{ end }}
           livenessProbe:
             httpGet:
               path: /api/health/live

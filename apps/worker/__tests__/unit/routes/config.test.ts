@@ -282,7 +282,7 @@ describe('config route', () => {
       deriveSpy.mockRestore()
     })
 
-    it('uses demoMode from setupState when env does not force it', async () => {
+    it('honours the stored setup-wizard demoMode flag on a development server', async () => {
       const services = createMockServices({
         settings: {
           getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: true }),
@@ -290,13 +290,30 @@ describe('config route', () => {
       })
       const app = createTestApp({
         services,
-        env: { DEMO_MODE: 'false' },
+        env: { DEMO_MODE: 'false', ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' },
       })
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.demoMode).toBe(true)
+    })
+
+    it.each(['production', 'staging', 'demo'])('ignores the stored demoMode flag on ENVIRONMENT=%s', async (environment) => {
+      const services = createMockServices({
+        settings: {
+          getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: true }),
+        },
+      })
+      const app = createTestApp({
+        services,
+        env: { DEMO_MODE: 'false', ENVIRONMENT: environment, DEV_ROUTES_ENABLED: 'true' },
+      })
+
+      const res = await app.request('/')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.demoMode).toBe(false)
     })
   })
 

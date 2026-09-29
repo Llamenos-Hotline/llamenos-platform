@@ -22,6 +22,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   set +a
 fi
 
+source "$PROJECT_DIR/scripts/lib/worktree-db.sh"
+
 COMPOSE="docker compose --project-directory $PROJECT_DIR -f $COMPOSE_FILE"
 
 GREEN='\033[0;32m'
@@ -53,9 +55,17 @@ cmd_start() {
 
   # Set environment variables for local development
   export PLATFORM=bun
-  export PORT=3000
-  export DATABASE_URL="${DATABASE_URL:-postgresql://llamenos:${PG_PASSWORD:-dev}@localhost:5432/llamenos}"
-  export PG_POOL_SIZE=5
+  # Overridable so worktrees can each run a server against their own database
+  # (then point the tests at it: TEST_HUB_URL and TEST_RELAY_URL).
+  export PORT="${PORT:-3000}"
+  # This worktree's own database (created / migrated here if needed), or an
+  # explicit DATABASE_URL. scripts/test-backend-bdd.sh resolves it through the
+  # same function, so the server and TestDB cannot end up on different databases.
+  worktree_db_export --ensure
+  # 10 = the app's own default (apps/worker/db/index.ts) and production's.
+  # Not CI's 40: CI's Postgres serves one server, while this one serves every
+  # worktree's server within max_connections=100. 5 wedged full BDD runs (#1264).
+  export PG_POOL_SIZE="${PG_POOL_SIZE:-10}"
   # ADMIN_PUBKEY: use .env value if set (skips setup wizard); otherwise leave unset
   # so the admin bootstrap / setup wizard is exercisable in dev.
   [ -n "${ADMIN_PUBKEY:-}" ] && export ADMIN_PUBKEY

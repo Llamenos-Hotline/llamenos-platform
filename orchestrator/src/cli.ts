@@ -25,7 +25,7 @@ import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins,
   ciContextFromEnv, ciDiff, ciChangedFiles,
-  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
@@ -1307,6 +1307,9 @@ async function runReviewGate(): Promise<number> {
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
     requested: request.requested,
+    // Same field `reviewRequestFor` consumed above — the gate uses it to
+    // recognise an automated dependency PR by identity, not by branch name.
+    prAuthor: event.prAuthor,
     reviewSet: (changedFiles) => decideReviewSet({
       labels: facts?.labels,
       changedFiles,
@@ -1382,6 +1385,19 @@ async function runReviewGate(): Promise<number> {
       (outcome.reasons.length > 0 ? `${outcome.reasons.map((r) => `  - ${r}`).join('\n')}\n` : '  (no changed files)\n'),
     )
   }
+  // Automated dependency PR: an explicit green with its reason printed, for
+  // the same rule the low-tier branch states — a required check that passes
+  // silently is the fail-open shape this file exists to prevent. The reason
+  // names the author, so "why did nothing review this?" is answerable from
+  // the check's own output.
+  if (outcome.kind === 'bot-authored') {
+    process.stdout.write(
+      `${REVIEW_JOB}: ${outcome.reason}\n` +
+      `  - a diff-level review of a lockfile or action pin cannot see the code the registry publishes,\n` +
+      `    so the model adds little here; the human who presses Merge is the checkpoint.\n` +
+      `  - label the PR for a named reviewer to force a real review anyway.\n`,
+    )
+  }
   ciLog(`${REVIEW_JOB}: gate outcome = ${outcome.kind}`)
   return 0
 }
@@ -1432,13 +1448,24 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
  *  could not be read (or the PR number is not a number) — never an empty
  *  list standing in for "could not look", which is what `decideReviewSet`
  *  refuses on. One read, so the labels and the description always describe
- *  the same PR. Needs only `pull-requests: read`. */
-async function readPrFacts(pr: string): Promise<{ labels: string[]; description: string } | undefined> {
+ *  the same PR. Needs only `pull-requests: read`.
+ *
+ *  `consequence` is what a failed read costs THIS caller, and the log line
+ *  states it. The same failed read means different things to the two gates,
+ *  and a line naming the wrong one is a false statement in the durable
+ *  record: `verify-ci` once logged "the reviews it asks for are unknown,
+ *  which fails closed" on every run, although it has no review stage, and
+ *  that line — next to its trace's structural `review=not-run` — was read
+ *  as a review gate failing open (#1258). */
+async function readPrFacts(
+  pr: string,
+  consequence = 'the reviews it asks for are unknown, which fails closed',
+): Promise<{ labels: string[]; description: string } | undefined> {
   if (!/^[0-9]+$/.test(pr)) return undefined
   const data = await ghJson<{ labels: { name: string }[]; title?: string; body?: string | null }>(
     ['api', `repos/${REPO}/pulls/${pr}`],
     30_000,
-    (detail) => ciLog(`reading PR #${pr} failed — the reviews it asks for are unknown, which fails closed: ${detail}`),
+    (detail) => ciLog(`reading PR #${pr} failed — ${consequence}: ${detail}`),
   )
   if (data === undefined) return undefined
   return { labels: data.labels.map((l) => l.name), description: `${data.title ?? ''}\n\n${data.body ?? ''}` }
@@ -1505,7 +1532,15 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
+    // `scope:<lane>` grants are the ONLY thing this read decides here:
+    // `fleet/verify` runs no review (that is `fleet/review`, which reads the
+    // PR itself and fails closed on its own). A grant only ever widens what
+    // a diff may touch, so an unreadable read granting nothing is the closed
+    // direction — and the log says exactly that.
+    prLabels: async () => (await readPrFacts(
+      ctx.pr,
+      `its ${SCOPE_GRANT_PREFIX}<lane> grants are unknown, so none apply and it is judged on its own lane alone`,
+    ))?.labels,
   })),
   'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
