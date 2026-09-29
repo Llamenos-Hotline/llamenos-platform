@@ -282,7 +282,7 @@ jobs:
       # DB from the Actions cache into trivy-action's default cache dir; the
       # later scans read the same dir, so they set `cache: false`.
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.70.0
 
