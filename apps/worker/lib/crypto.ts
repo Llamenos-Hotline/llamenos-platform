@@ -124,6 +124,19 @@ export function encryptMessageForStorage(
   readerPubkeys: string[],
   label: string = LABEL_MESSAGE,
 ): { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] } {
+  // A record with no envelopes is ciphertext nobody will ever open — the same
+  // unreadable-forever outcome as sealing to an Ed25519 key (#1021/#1283), just
+  // arrived at by a different route. Refuse loudly rather than persist it: the
+  // content is equally lost either way, and a thrown error is recoverable
+  // operator feedback where a silent write is not.
+  if (readerPubkeys.length === 0) {
+    throw new Error(
+      'encryptMessageForStorage: refusing to encrypt with an empty reader list — ' +
+      'the result would be undecryptable by everyone. Ensure ADMIN_DECRYPTION_PUBKEY ' +
+      'is configured and/or the reader has a registered X25519 device key.'
+    )
+  }
+
   const messageKey = randomBytes(32)
   const labelBytes = utf8ToBytes(label)
   const aadKeyWrap = utf8ToBytes(`${label}:key-wrap`)

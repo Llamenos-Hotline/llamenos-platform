@@ -7,6 +7,7 @@ describe('validateConfig', () => {
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
     ADMIN_PUBKEY: 'c'.repeat(64),
+    ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
   }
@@ -53,6 +54,43 @@ describe('validateConfig', () => {
 
   it('warns if ADMIN_PUBKEY is missing but does not throw', () => {
     expect(() => validateConfig({ ...validEnv, ADMIN_PUBKEY: '' })).not.toThrow()
+  })
+
+  // #1283 — the server used to boot happily with ADMIN_DECRYPTION_PUBKEY unset and
+  // silently alias the Ed25519 ADMIN_PUBKEY as the HPKE recipient for every admin
+  // envelope, producing ciphertext nobody could decrypt. It must fail closed instead.
+  describe('ADMIN_DECRYPTION_PUBKEY (#1283)', () => {
+    it('throws when ADMIN_PUBKEY is set but ADMIN_DECRYPTION_PUBKEY is not', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: '' }))
+        .toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+    })
+
+    it('throws when ADMIN_DECRYPTION_PUBKEY is whitespace only', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: '   ' }))
+        .toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+    })
+
+    it('throws when ADMIN_DECRYPTION_PUBKEY equals ADMIN_PUBKEY', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: validEnv.ADMIN_PUBKEY }))
+        .toThrow(/must not equal ADMIN_PUBKEY/)
+    })
+
+    it('throws when ADMIN_DECRYPTION_PUBKEY is not 64 hex chars', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(32) }))
+        .toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+      expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: 'z'.repeat(64) }))
+        .toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+    })
+
+    it('does not require it when no admin identity is configured at all', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_PUBKEY: '', ADMIN_DECRYPTION_PUBKEY: '' }))
+        .not.toThrow()
+    })
+
+    it('still validates its format when set without ADMIN_PUBKEY', () => {
+      expect(() => validateConfig({ ...validEnv, ADMIN_PUBKEY: '', ADMIN_DECRYPTION_PUBKEY: 'nope' }))
+        .toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+    })
   })
 
   it('throws if ADMIN_PUBKEY is wrong length', () => {

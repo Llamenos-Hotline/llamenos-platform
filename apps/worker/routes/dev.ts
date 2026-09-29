@@ -962,7 +962,8 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   const senderHash = hashPhone(body.senderNumber, c.env.HMAC_SECRET)
 
   const services = c.get('services')
-  const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY
+  // #1283: no `|| c.env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing key.
+  const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY
   const result = await services.conversations.handleIncoming({
     channelType: channel,
     externalId: crypto.randomUUID(),

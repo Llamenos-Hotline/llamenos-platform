@@ -116,11 +116,12 @@ SERVER_SECRET (hex) — server-side only; signs WebSocket relay events:
    worker container's .env):
 
      admin_pubkey: ${keys.identityPubkey}
+     admin_decryption_pubkey: ${keys.decryptionPubkey}
      server_secret: ${serverSecret}          # vault-encrypt this
 
-   ADMIN_DECRYPTION_PUBKEY is not rendered by that template today; set it on the
-   container directly (step 2) if you need a decryption key distinct from
-   ADMIN_PUBKEY.
+   Both public keys are required: the server refuses to start with admin_pubkey
+   set and admin_decryption_pubkey missing, rather than seal admin envelopes to
+   the Ed25519 signing key and produce ciphertext nobody can decrypt (#1283).
 
 2. Plain Docker Compose deploy — add to the worker container's .env:
 

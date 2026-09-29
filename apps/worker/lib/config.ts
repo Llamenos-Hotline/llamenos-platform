@@ -83,6 +83,42 @@ export function validateConfig(env: ConfigInput = process.env): void {
     logger.warn('ADMIN_PUBKEY not set — first admin must be bootstrapped via the Tauri desktop app')
   }
 
+  // ADMIN_DECRYPTION_PUBKEY: the admin's X25519 HPKE recipient key.
+  //
+  // Whenever an admin identity is configured, the server WILL seal admin
+  // envelopes — inbound messages, outbound messages, call transcriptions,
+  // voicemail transcriptions. Sealing needs an X25519 recipient key.
+  // ADMIN_PUBKEY is an Ed25519 signing key: a different key type derived from
+  // the same seed, and not a valid HPKE recipient. Code used to alias the two
+  // with `ADMIN_DECRYPTION_PUBKEY || ADMIN_PUBKEY`, which produced envelopes
+  // nobody — not the admin, not the volunteer, not the server — could open,
+  // silently and by default (#1283).
+  //
+  // A server that cannot seal correctly must not start and write unopenable
+  // ciphertext. Fail closed here instead, exactly as for HMAC_SECRET.
+  const adminDecryptionPubkey = env['ADMIN_DECRYPTION_PUBKEY']?.trim() ?? ''
+  if (adminPubkey.length > 0) {
+    if (adminDecryptionPubkey.length === 0) {
+      throw new Error(
+        '[llamenos] ADMIN_DECRYPTION_PUBKEY is required whenever ADMIN_PUBKEY is set. ' +
+        'It is the admin\'s X25519 HPKE recipient key — a different key from the Ed25519 ' +
+        'ADMIN_PUBKEY, derived from the same seed. Without it the server would seal admin ' +
+        'envelopes to a key that cannot open them. Generate both with: bun run bootstrap-admin'
+      )
+    }
+    assertHex64(env, 'ADMIN_DECRYPTION_PUBKEY')
+    if (adminDecryptionPubkey === adminPubkey) {
+      throw new Error(
+        '[llamenos] ADMIN_DECRYPTION_PUBKEY must not equal ADMIN_PUBKEY. ' +
+        'They are different key types — X25519 key agreement vs Ed25519 signing — and an ' +
+        'Ed25519 point used as an HPKE recipient produces ciphertext nobody can decrypt. ' +
+        'Generate both with: bun run bootstrap-admin'
+      )
+    }
+  } else if (adminDecryptionPubkey.length > 0) {
+    assertHex64(env, 'ADMIN_DECRYPTION_PUBKEY')
+  }
+
   assertNonEmpty(env, 'HOTLINE_NAME')
   assertNonEmpty(env, 'ENVIRONMENT')
 

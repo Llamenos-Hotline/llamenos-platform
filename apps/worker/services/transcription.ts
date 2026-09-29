@@ -38,10 +38,17 @@ export async function maybeTranscribe(
     })
 
     if (result.text) {
-      // Envelope encryption: single ciphertext, wrapped key for user + admin
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
-      const readerPubkeys = [userPubkey]
-      if (adminPubkey !== userPubkey) readerPubkeys.push(adminPubkey)
+      // Envelope encryption: single ciphertext, wrapped key for user + admin.
+      //
+      // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
+      // key, not an HPKE recipient. #1021: `userPubkey` is the answering
+      // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
+      // is resolved to their devices' X25519 encryption keys rather than
+      // sealed to directly.
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [userPubkey],
+      )
 
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
@@ -89,9 +96,13 @@ export async function transcribeVoicemail(
     })
 
     if (result.text) {
-      // Voicemails: envelope encryption for admin only
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
-      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, [adminPubkey])
+      // Voicemails: envelope encryption for admin only.
+      // #1283: no `|| env.ADMIN_PUBKEY` fallback — see above.
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [],
+      )
+      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
         callId: callSid,
         authorPubkey: 'system:voicemail',

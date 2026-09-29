@@ -7,6 +7,7 @@
  */
 import { eq, and, lt, sql, inArray } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
@@ -168,6 +169,7 @@ function rowToDevice(row: typeof devices.$inferSelect): DeviceRecord {
     platform: row.platform as DeviceRecord['platform'],
     pushToken: row.pushToken ?? '',
     wakeKeyPublic: row.wakeKeyPublic ?? '',
+    x25519Pubkey: row.x25519Pubkey ?? null,
     registeredAt: row.registeredAt.toISOString(),
     lastSeenAt: row.lastSeenAt?.toISOString() ?? row.registeredAt.toISOString(),
   }
@@ -230,6 +232,21 @@ export class IdentityService {
       )
       .limit(1)
     return { hasAdmin: rows.length > 0 }
+  }
+
+  /**
+   * Build the HPKE recipient list for a record the SERVER seals: the admin's
+   * X25519 recipient key plus the device encryption keys of the given users.
+   *
+   * Never pass a `users.pubkey` / `c.get('pubkey')` / `conversations.assignedTo`
+   * value straight to `hpkeSeal` — those are Ed25519 auth keys and sealing to
+   * one silently produces an envelope nobody holds the secret for (#1021).
+   */
+  async buildReaderPubkeys(
+    adminDecryptionPubkey: string | undefined,
+    userPubkeys: string[],
+  ): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, userPubkeys)
   }
 
   /**

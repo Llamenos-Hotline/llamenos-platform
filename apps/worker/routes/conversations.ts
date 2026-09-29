@@ -323,10 +323,13 @@ conversations.post('/:id/messages',
     if (body.encryptedContent) {
       encryptedContent = body.encryptedContent
     } else if (plaintextForSending) {
-      const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY
-      const readerPubkeys: string[] = []
-      if (adminDecryptionPubkey) readerPubkeys.push(adminDecryptionPubkey)
-      if (pubkey !== adminDecryptionPubkey) readerPubkeys.push(pubkey)
+      // #1283: no `|| c.env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
+      // key. #1021: `pubkey` is the sender's Ed25519 auth key, not an HPKE
+      // recipient; resolve it to their devices' X25519 encryption keys.
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        c.env.ADMIN_DECRYPTION_PUBKEY,
+        [pubkey],
+      )
       const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
       encryptedContent = encrypted.encryptedContent
       readerEnvelopes = encrypted.readerEnvelopes

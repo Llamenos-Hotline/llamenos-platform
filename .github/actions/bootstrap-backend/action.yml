@@ -3,7 +3,14 @@ description: 'Shared composite action to bootstrap the Llámenos backend for E2E
 
 inputs:
   admin_pubkey:
-    description: 'Admin public key for the test backend'
+    description: 'Admin Ed25519 signing/identity public key for the test backend (ADMIN_PUBKEY)'
+    required: true
+  admin_decryption_pubkey:
+    description: >-
+      Admin X25519 HPKE recipient public key (ADMIN_DECRYPTION_PUBKEY), derived from the
+      same admin seed as admin_pubkey. Required: the server refuses to boot with
+      ADMIN_PUBKEY set but this unset, because it would otherwise seal admin envelopes
+      to the Ed25519 signing key and produce ciphertext nobody can decrypt (#1283).
     required: true
   with_sidecars:
     description: 'Start signal-notifier and sip-bridge sidecars (true/false)'
@@ -40,6 +47,7 @@ runs:
       run: |
         printf '%s\n' \
           "ADMIN_PUBKEY=${{ inputs.admin_pubkey }}" \
+          "ADMIN_DECRYPTION_PUBKEY=${{ inputs.admin_decryption_pubkey }}" \
           "DOMAIN=localhost" \
           "PG_POOL_SIZE=40" \
           "PG_PASSWORD=ci-test-password" \

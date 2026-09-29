@@ -128,6 +128,10 @@
                 STORAGE_SECRET_KEY: dr-test-secret-key
                 HMAC_SECRET: "{{ 'dr-test-hmac-secret-for-validation-only' | hash('sha256') }}"
                 ADMIN_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000000"
+                # Distinct placeholder: validateConfig() rejects an ADMIN_DECRYPTION_PUBKEY
+                # equal to ADMIN_PUBKEY, because the two are different key types and
+                # aliasing them yields undecryptable admin envelopes (#1283).
+                ADMIN_DECRYPTION_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000001"
                 SERVER_SECRET: "{{ 'dr-test-server-secret-for-validation-only' | hash('sha256') }}"
                 PORT: "3000"
               ports:

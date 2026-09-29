@@ -31,10 +31,12 @@ ADMIN_PUBKEY={{ admin_pubkey }}
 {% endif %}
 {# ADMIN_PUBKEY is an Ed25519 SIGNING key. Admin envelopes need the admin's
    X25519 ENCRYPTION key, which is a different value derived from the same
-   seed. The app falls back to ADMIN_PUBKEY when this is unset, which wraps
-   envelopes to a key that cannot decrypt them — so set it. `bun run
-   bootstrap-admin` prints both. #}
-{% if (admin_decryption_pubkey | default('')) | length > 0 %}
+   seed. The app no longer falls back to ADMIN_PUBKEY (#1283) — it refuses to
+   start when ADMIN_PUBKEY is set and this is not, rather than write envelopes
+   nobody can open. `bun run bootstrap-admin` prints both. #}
+{% if (admin_pubkey | default('')) | length > 0 %}
+ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey | mandatory('admin_decryption_pubkey is required whenever admin_pubkey is set — the admin X25519 HPKE recipient key; run: bun run bootstrap-admin') }}
+{% elif (admin_decryption_pubkey | default('')) | length > 0 %}
 ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey }}
 {% endif %}
 {% if (ntfy_allowed_origins | default('')) | length > 0 %}

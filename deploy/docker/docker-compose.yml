@@ -54,6 +54,11 @@ services:
       - DATABASE_URL=postgresql://llamenos:${PG_PASSWORD:?PG_PASSWORD is required}@postgres:5432/llamenos
       - PG_POOL_SIZE=${PG_POOL_SIZE:-10}
       - ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}
+      # The admin's X25519 HPKE recipient key. Required alongside ADMIN_PUBKEY:
+      # validateConfig() refuses to boot without it rather than seal admin
+      # envelopes to the Ed25519 ADMIN_PUBKEY, which nothing can decrypt (#1283).
+      # `bun run bootstrap-admin` prints both from one seed.
+      - "ADMIN_DECRYPTION_PUBKEY=${ADMIN_DECRYPTION_PUBKEY:?ADMIN_DECRYPTION_PUBKEY is required — the admin's X25519 key; run bun run bootstrap-admin}"
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       # Required by the app whenever ENVIRONMENT is production (the default above).

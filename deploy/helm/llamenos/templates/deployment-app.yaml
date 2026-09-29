@@ -63,6 +63,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "llamenos.secretName" . }}
                   key: admin-pubkey
+            # The admin's X25519 HPKE recipient key. The app refuses to start when
+            # ADMIN_PUBKEY is set and this is not: aliasing the Ed25519 signing key
+            # as an HPKE recipient yields undecryptable admin envelopes (#1283).
+            - name: ADMIN_DECRYPTION_PUBKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llamenos.secretName" . }}
+                  key: admin-decryption-pubkey
             - name: TWILIO_ACCOUNT_SID
               valueFrom:
                 secretKeyRef:

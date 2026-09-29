@@ -18,6 +18,7 @@ import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
 import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 import { ServiceError } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -413,7 +414,12 @@ export class ConversationsService {
 
   async handleIncoming(
     incoming: IncomingMessage,
-    adminDecryptionPubkey: string,
+    /**
+     * The admin's X25519 HPKE recipient key (`ADMIN_DECRYPTION_PUBKEY`).
+     * Optional only because a server may be running before an admin is
+     * bootstrapped; it is never the Ed25519 `ADMIN_PUBKEY` (#1283).
+     */
+    adminDecryptionPubkey: string | undefined,
     hubId?: string,
   ): Promise<{
     conversationId: string
@@ -486,11 +492,17 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern
-    const readerPubkeys = [adminDecryptionPubkey]
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
-    }
+    // Encrypt the message content using envelope pattern.
+    //
+    // #1021: `conv.assignedTo` is the volunteer's Ed25519 AUTH pubkey, not an
+    // HPKE recipient key. Sealing to it produced an envelope the volunteer
+    // could not open. Resolve the assigned volunteer to the X25519 encryption
+    // keys of their registered devices instead — one envelope per device.
+    const readerPubkeys = await buildReaderPubkeys(
+      this.db,
+      adminDecryptionPubkey,
+      conv.assignedTo ? [conv.assignedTo] : [],
+    )
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 

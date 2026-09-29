@@ -403,14 +403,22 @@ export class FirehoseAgentService {
       extractedAt: new Date().toISOString(),
     })
 
-    // Get admin pubkeys for envelope encryption
+    // Get admin pubkeys for envelope encryption.
+    //
+    // ADMIN_PUBKEY is deliberately NOT included: it is the Ed25519 signing key,
+    // and sealing to it yields an envelope no one can open (#1283). Only the
+    // X25519 ADMIN_DECRYPTION_PUBKEY is a valid HPKE recipient.
     const adminPubkeys: string[] = []
-    if (this.env.ADMIN_PUBKEY && /^[0-9a-f]{64}$/i.test(this.env.ADMIN_PUBKEY)) {
-      adminPubkeys.push(this.env.ADMIN_PUBKEY)
-    }
     if (this.env.ADMIN_DECRYPTION_PUBKEY && /^[0-9a-f]{64}$/i.test(this.env.ADMIN_DECRYPTION_PUBKEY)) {
       adminPubkeys.push(this.env.ADMIN_DECRYPTION_PUBKEY)
     }
+    // KNOWN DEFECT, tracked separately: `conn.agentPubkey` is an **Ed25519** key
+    // (`lib/agent-identity.ts` generates it with `ed25519.getPublicKey`), and the
+    // matching open path (`hpkeOpen` below) uses the raw Ed25519 secret as an
+    // X25519 scalar — the two do not correspond, so the agent's own envelope is
+    // no more openable than the ADMIN_PUBKEY one removed above. Fixing it means
+    // changing the agent identity's key type, which is a self-contained change to
+    // this subsystem and deliberately out of scope for #1021/#1283.
     const recipientPubkeys = [
       ...new Set([conn.agentPubkey, ...adminPubkeys]),
     ]

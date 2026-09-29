@@ -446,8 +446,67 @@ export async function createUserViaApi(
   return { pubkey, seedHex, nsec: seedHex, deviceKey: seedHex, name, phone }
 }
 
-/** @deprecated Use createUserViaApi instead */
-export const createVolunteerViaApi = createUserViaApi
+/**
+ * Register a device carrying this identity's X25519 encryption key.
+ *
+ * Uses the real `POST /devices/register` route — no test-only backdoor. The
+ * X25519 key is `x25519PubkeyFromSeed(seedHex)`, matching the convention every
+ * backend BDD helper uses to unwrap envelopes (`unwrapKey` treats the seed as
+ * the X25519 secret scalar).
+ */
+export async function registerDeviceKeyViaApi(
+  request: APIRequestContext,
+  seedHex: string,
+): Promise<string> {
+  const x25519Pubkey = x25519PubkeyFromSeed(seedHex)
+  const { status, data } = await apiPost(
+    request,
+    '/devices/register',
+    {
+      platform: 'ios',
+      // Opaque per-identity token: `registerDevice` keys devices by pushToken,
+      // so a unique one keeps repeat registrations idempotent per identity.
+      pushToken: `test-device-${seedHex.slice(0, 16)}`,
+      wakeKeyPublic: x25519Pubkey,
+      ed25519Pubkey: seedHexToPubkey(seedHex),
+      x25519Pubkey,
+      deviceName: 'backend-bdd',
+    },
+    seedHex,
+  )
+
+  if (status !== 204 && status !== 200) {
+    throw new Error(
+      `Failed to register device encryption key: ${status} ${JSON.stringify(data)}`,
+    )
+  }
+
+  return x25519Pubkey
+}
+
+/**
+ * Create a user who can actually READ their own encrypted data.
+ *
+ * `createUserViaApi` registers an identity: `pubkey` is the Ed25519 AUTH key,
+ * which is NOT an HPKE recipient and which the server must never seal to
+ * (#1021). Server-sealed records — inbound/outbound messages, transcriptions —
+ * resolve their readers through `devices.x25519Pubkey`, so a user with no
+ * device key on file gets no envelope at all.
+ *
+ * This helper adds that missing half, the way a real client does at device
+ * registration. Use it for any role that reads encrypted content (volunteers,
+ * assignees, message authors). Use plain `createUserViaApi` when the scenario
+ * is ABOUT devices and asserts exact device counts — device-lifecycle, PUK
+ * envelope distribution, MLS key packages, the device-cap race.
+ */
+export async function createVolunteerViaApi(
+  request: APIRequestContext,
+  options?: { name?: string; phone?: string; roleIds?: string[] },
+): Promise<CreateUserResult> {
+  const user = await createUserViaApi(request, options)
+  await registerDeviceKeyViaApi(request, user.seedHex)
+  return user
+}
 
 export async function deleteUserViaApi(
   request: APIRequestContext,

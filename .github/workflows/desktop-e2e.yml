@@ -34,6 +34,11 @@ permissions:
 env:
   BUN_VERSION: "1.3.5"
   TEST_ADMIN_PUBKEY: "79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
+  # The admin's X25519 HPKE recipient key, derived from the same test seed as
+  # TEST_ADMIN_PUBKEY's Ed25519 key but a different key type — never aliased (#1283).
+  # This is the CLIENT derivation, X25519(HKDF-SHA256(seed, LABEL_DEVICE_ENCRYPTION_SEED)),
+  # which is what the desktop client holds after importing the signing seed.
+  TEST_ADMIN_DECRYPTION_PUBKEY: "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
 
 jobs:
   # ─── Detect Changed Files ─────────────────────────────────────
@@ -177,6 +182,7 @@ jobs:
         uses: ./.github/actions/bootstrap-backend
         with:
           admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
+          admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
 
       # ── WASM build (required for crypto-interop-wasm.spec.ts) ──
       - name: Install Rust stable

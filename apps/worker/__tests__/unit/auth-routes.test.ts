@@ -304,7 +304,7 @@ describe('auth routes', () => {
       expect(body.webauthnRegistered).toBe(false)
     })
 
-    it('returns adminDecryptionPubkey preferring ADMIN_DECRYPTION_PUBKEY', async () => {
+    it('returns ADMIN_DECRYPTION_PUBKEY as adminDecryptionPubkey', async () => {
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
@@ -317,13 +317,20 @@ describe('auth routes', () => {
       expect(body.adminDecryptionPubkey).toBe('decrypt-pk')
     })
 
-    it('falls back to ADMIN_PUBKEY when ADMIN_DECRYPTION_PUBKEY not set', async () => {
+    // #1283: /auth/me used to fall back to ADMIN_PUBKEY here. That is the admin's
+    // Ed25519 SIGNING key, and every client takes adminDecryptionPubkey as the
+    // HPKE recipient for note/message/file envelopes — so the fallback told every
+    // client to seal to a key that cannot open the result. The server now refuses
+    // to boot in that configuration (lib/config.ts); the route must never
+    // substitute the signing key, and reports nothing rather than something wrong.
+    it('never substitutes ADMIN_PUBKEY when ADMIN_DECRYPTION_PUBKEY is unset', async () => {
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, defaultEnv)
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.adminDecryptionPubkey).toBe('admin-pk')
+      expect(body.adminDecryptionPubkey).not.toBe('admin-pk')
+      expect(body.adminDecryptionPubkey).toBeUndefined()
     })
   })
 

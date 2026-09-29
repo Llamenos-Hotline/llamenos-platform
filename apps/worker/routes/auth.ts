@@ -193,8 +193,11 @@ auth.get('/me',
       callPreference: user.callPreference ?? 'phone',
       webauthnRequired,
       webauthnRegistered: webauthnCreds.length > 0,
-      // H17: Removed adminPubkey (signing key identity) — only decryption pubkey needed
-      adminDecryptionPubkey: c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY,
+      // H17: Removed adminPubkey (signing key identity) — only decryption pubkey needed.
+      // #1283: never fall back to ADMIN_PUBKEY. That is the Ed25519 signing key;
+      // handing it to clients as a decryption pubkey tells every client to seal
+      // note/message/file envelopes to a key that cannot open them.
+      adminDecryptionPubkey: c.env.ADMIN_DECRYPTION_PUBKEY,
       serverEventKeyHex,
       serverEventKeyPrevHex,
       eventKeyEpoch,

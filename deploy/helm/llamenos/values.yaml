@@ -165,10 +165,11 @@ ingress:
 # Secrets (reference existing K8s secrets)
 secrets:
   # Create a secret named "llamenos-secrets" with these keys:
-  #   admin-pubkey, postgres-password, twilio-account-sid, twilio-auth-token, twilio-phone-number
+  #   admin-pubkey, admin-decryption-pubkey, postgres-password, twilio-account-sid, twilio-auth-token, twilio-phone-number
   existingSecret: ""
   # Or provide values directly (will be base64-encoded into a Secret)
-  adminPubkey: ""
+  adminPubkey: ""          # Ed25519 signing/identity key
+  adminDecryptionPubkey: ""  # Required when adminPubkey is set: X25519 HPKE recipient key
   postgresPassword: ""  # Required
   hmacSecret: ""         # Required: 64-char hex, generate with: openssl rand -hex 32
   twilioAccountSid: ""
