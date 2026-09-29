@@ -820,6 +820,37 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     }
   })
 
+  /**
+   * #1124: a bare `pull_request:` means `[opened, synchronize, reopened]`,
+   * and `fleet/verify` is where a `scope:<lane>` grant is actually read
+   * (`resolveGrantedLanes` in ci.ts reads the PR's labels inside this gate,
+   * #1117). Applying a grant is none of those three events, so before this
+   * fix nothing re-evaluated the PR afterwards and the pre-grant
+   * `scope=fail` verdict simply stood — observed live on #1060, #1064 and
+   * #1072, all three carrying their grants and all three still red.
+   *
+   * Pinned as a rail because the regression is invisible: dropping
+   * `review_requested` (or reverting to a bare `pull_request:`) breaks
+   * nothing that any other test or any workflow run would notice — the
+   * gate keeps working perfectly, on stale input. The `types:` list must
+   * also stay EXPLICIT: re-bare-ing the trigger silently drops
+   * `review_requested` along with the explicitness.
+   */
+  it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+    const onBlock = fleetVerifyYaml().split(/\njobs:\n/)[0] ?? ''
+    // Scoped to the literal `pull_request:` trigger sub-block, not the whole
+    // pre-`jobs:` text: this file's `on:` block carries prose comments that
+    // legitimately name these events while explaining them, and a
+    // whole-text match would pass on the explanation alone.
+    const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?: {4,}.*\n|\n)*)/)?.[0] ?? ''
+    expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
+    expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
+      .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
+    for (const type of ['opened', 'synchronize', 'reopened', 'review_requested']) {
+      expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
+    }
+  })
+
   // The load-bearing assertion for fleet-review.yml's own trigger list:
   // `pull_request` scoped to EXACTLY `types: [review_requested, synchronize]`
   // — never `labeled` (which #1158 retired) and never `opened` (which
