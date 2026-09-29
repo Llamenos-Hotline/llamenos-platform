@@ -46,6 +46,8 @@ export type CasesWorld = {
   // Triage
   triageReportTypeId: string
   triageReportId: string
+  // Smart assignment: suggestions returned for lastRecordId
+  lastSuggestions: Array<Record<string, unknown>>
 }
 
 export type ConversationWorld = {
@@ -169,6 +171,7 @@ export const test = base.extend<
       eventEntityTypeId: '', lastEventId: '', lastEventName: '',
       contactCarlosId: '', contactMariaId: '', contactWithDataId: '', contactWithDataName: '',
       triageReportTypeId: '', triageReportId: '',
+      lastSuggestions: [],
     })
   },
   conversationWorld: async ({}, use) => {

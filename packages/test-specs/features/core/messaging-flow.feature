@@ -245,7 +245,8 @@ Feature: Messaging Flow
     When I assign it to a volunteer
     Then the volunteer name should appear on the conversation
 
-  @desktop @ios @android
+  # @wip: the desktop steps were empty and never seeded, sent or checked anything — #1301
+  @desktop @ios @android @wip
   Scenario: Auto-assign balances load across volunteers via UI
     Given I am logged in as an admin
     And multiple volunteers are available

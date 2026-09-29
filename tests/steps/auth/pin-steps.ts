@@ -96,9 +96,8 @@ When('I press {string}, {string}, {string}', async ({ page }, k1: string, k2: st
 })
 
 Then('{int} digits should be entered', async ({ page }, count: number) => {
-  // Verify the expected number of characters are entered
-  // This is implicit — if 4 digits are entered, we advance to confirmation
-  // No explicit assertion needed beyond the title change
+  // The old body was empty ("implicit"). Check the PIN field's value length.
+  await expect(page.getByTestId(TestIds.PIN_INPUT).locator('input')).toHaveValue(new RegExp(`^\\d{${count}}$`))
 })
 
 Then('the PIN dots should be cleared', async ({ page }) => {
@@ -135,7 +134,9 @@ Then('the PIN pad should be displayed', async ({ page }) => {
 // NOTE: 'the crypto service should be locked' is defined in crypto-steps.ts — do NOT duplicate here.
 
 When('I see the error', async ({ page }) => {
-  // Wait for any error message to appear and then clear
+  // The wrong-PIN alert. Waiting on it also paces the next attempt behind the
+  // previous one's response.
+  await expect(page.getByRole('alert').first()).toBeVisible({ timeout: Timeouts.AUTH })
 })
 
 Then('the encrypted key data should be stored', async ({ page }) => {

@@ -111,19 +111,14 @@ Then('the empty state card should be visible', async ({ page }) => {
 })
 
 Then('no stored keys should remain', async ({ page }) => {
-  // After factory reset, stored keys should be removed.
-  // In test env, the reset may not execute fully — verify we're on login page instead.
-  const onLoginPage = page.url().includes('/login')
-  if (onLoginPage) return // Reset redirected to login — acceptable
-  const hasKey = await page.evaluate(() => {
-    return (
+  // Poll storage until the encrypted device keys are gone. The old version
+  // returned early on /login and, when a key was still stored, asserted only
+  // that a page title rendered — it passed whether or not anything was wiped.
+  await expect.poll(
+    () => page.evaluate(() =>
       localStorage.getItem('stronghold:llamenos:llamenos-encrypted-device-keys') !== null ||
-      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null
-    )
-  }).catch(() => false)
-  // If key still exists, the reset step may not have executed — cascading failure
-  if (hasKey) {
-    // At minimum verify the page rendered
-    await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  }
+      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null,
+    ),
+    { message: 'encrypted device keys still stored', timeout: Timeouts.ELEMENT },
+  ).toBe(false)
 })
