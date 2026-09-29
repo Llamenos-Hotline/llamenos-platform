@@ -6,7 +6,10 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import {
   apiPost,
+  ADMIN_SEED,
 } from '../../api-helpers'
+import { decryptContent, unwrapKey, x25519PubkeyFromSeed } from '../../crypto-helpers'
+import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import {
   simulateIncomingMessage,
   uniqueCallerNumber,
@@ -117,18 +120,22 @@ Then('the stored message should have reader envelopes with HPKE fields', async (
 Then('the stored message should have an envelope for the admin decryption pubkey', async ({ world }) => {
   const state = getOEState(world)
   expect(state.outboundMessageId).toBeDefined()
+  expect(state.plaintextSent).toBeDefined()
 
   const row = await TestDB.getRow('messages', state.outboundMessageId!)
   expect(row).toBeTruthy()
 
   const envelopes = row!.reader_envelopes as Array<{ pubkey: string; enc: string; ct: string }>
 
-  // The admin decryption pubkey should be present in at least one envelope.
-  // We don't know the exact pubkey here, but we verify at least one envelope exists
-  // (the admin is always included by the encryptMessageForStorage call).
-  expect(envelopes.length).toBeGreaterThanOrEqual(1)
-  // Verify envelope pubkeys are valid 64-char hex strings (X25519 pubkeys)
-  for (const env of envelopes) {
-    expect(env.pubkey).toMatch(/^[0-9a-f]{64}$/i)
-  }
+  // The admin reads through the X25519 key their device registered — find the
+  // envelope addressed to it and prove it opens to what was sent. An envelope
+  // merely existing says nothing about whether the admin can read it.
+  const adminX25519 = x25519PubkeyFromSeed(ADMIN_SEED)
+  const adminEnvelope = envelopes.find(e => e.pubkey === adminX25519)
+  expect(
+    adminEnvelope,
+    `no envelope for the admin's device key ${adminX25519}; sealed to ${JSON.stringify(envelopes.map(e => e.pubkey))}`,
+  ).toBeTruthy()
+  const messageKey = await unwrapKey(adminEnvelope!.ct, adminEnvelope!.enc, ADMIN_SEED, LABEL_MESSAGE)
+  expect(decryptContent(row!.encrypted_content as string, messageKey, LABEL_MESSAGE)).toBe(state.plaintextSent)
 })

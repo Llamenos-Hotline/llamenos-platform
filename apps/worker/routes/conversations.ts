@@ -329,6 +329,11 @@ conversations.post('/:id/messages',
         c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY,
         pubkey,
       ])
+      if (readerPubkeys.length === 0) {
+        logger.warn('Outbound message sealed for no reader: set ADMIN_DECRYPTION_PUBKEY or register a device X25519 key', {
+          conversationId: id,
+        })
+      }
       const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
       encryptedContent = encrypted.encryptedContent
       readerEnvelopes = encrypted.readerEnvelopes
