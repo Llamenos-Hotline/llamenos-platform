@@ -5,11 +5,12 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray } from 'drizzle-orm'
+import { eq, and, lt, sql, inArray, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import type { Database } from '../db'
 import {
   users,
+  roles as roleDefinitions,
   sessions,
   inviteCodes,
   webauthnCredentials,
@@ -121,6 +122,31 @@ function platformAdminRow(pubkey: string): typeof users.$inferInsert {
 /** Strip encryptedSecretKey from volunteer for external responses */
 function sanitizeUser(vol: User): Omit<User, 'encryptedSecretKey'> & { encryptedSecretKey?: undefined } {
   return { ...vol, encryptedSecretKey: undefined }
+}
+
+/**
+ * SQL predicate: the user is a member of `hubId`. A user can belong to several
+ * hubs at once, so this matches any `hub_roles` entry for the hub. Super-admins
+ * (a global role granting `*`) reach every hub through hubContext, so they count
+ * as members of each; role-super-admin is also matched by id because
+ * resolvePermissions falls back to DEFAULT_ROLES when the roles table lacks it.
+ */
+function hubMember(hubId: string): SQL {
+  return sql`(
+    ${users.hubRoles} @> jsonb_build_array(jsonb_build_object('hubId', ${hubId}::text))
+    OR ${users.roles} @> ARRAY['role-super-admin']::text[]
+    OR EXISTS (
+      SELECT 1 FROM ${roleDefinitions}
+      WHERE ${roleDefinitions.id} = ANY(${users.roles})
+        AND ${roleDefinitions.permissions} @> ARRAY['*']::text[]
+    )
+  )`
+}
+
+/** A user as seen from inside one hub: their role assignments in other hubs are not its business */
+function scopeToHub(user: User, hubId: string | undefined): User {
+  if (!hubId) return user
+  return { ...user, hubRoles: (user.hubRoles ?? []).filter(hr => hr.hubId === hubId) }
 }
 
 /** Map a DB invite row to InviteCode interface */
@@ -351,27 +377,35 @@ export class IdentityService {
   // =========================================================================
 
   /**
-   * List all users (encryptedSecretKey stripped). Users under revoked signing
+   * List users (encryptedSecretKey stripped). Users under revoked signing
    * keys are not members of anything — never listed, never an envelope recipient.
+   *
+   * With a hubId: only that hub's members (see `hubMember`), each showing only
+   * their role assignment in that hub. Without one: every user on the instance.
    */
-  async getUsers(): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
-    const rows = await this.db.select().from(users)
+  async getUsers(hubId?: string): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
+    const rows = hubId
+      ? await this.db.select().from(users).where(hubMember(hubId))
+      : await this.db.select().from(users)
     return {
-      users: rows.filter(r => !isRevokedSigningKey(r.pubkey)).map(r => sanitizeUser(rowToUser(r))),
+      users: rows
+        .filter(r => !isRevokedSigningKey(r.pubkey))
+        .map(r => sanitizeUser(scopeToHub(rowToUser(r), hubId))),
     }
   }
 
   /**
-   * Get a single volunteer by pubkey.
+   * Get a single volunteer by pubkey. With a hubId, 404 unless they are a
+   * member of that hub, and only their role assignment in it.
    */
-  async getUser(pubkey: string): Promise<ReturnType<typeof sanitizeUser>> {
+  async getUser(pubkey: string, hubId?: string): Promise<ReturnType<typeof sanitizeUser>> {
     const rows = await this.db
       .select()
       .from(users)
-      .where(eq(users.pubkey, pubkey))
+      .where(and(eq(users.pubkey, pubkey), hubId ? hubMember(hubId) : undefined))
       .limit(1)
     if (rows.length === 0) throw new ServiceError(404, 'Not found')
-    return sanitizeUser(rowToUser(rows[0]))
+    return sanitizeUser(scopeToHub(rowToUser(rows[0]), hubId))
   }
 
   /**
@@ -390,7 +424,8 @@ export class IdentityService {
   }
 
   /**
-   * Create a new volunteer.
+   * Create a new volunteer. With a hubId, they are created as a member of that
+   * hub, holding the same roles there.
    */
   async createUser(data: {
     pubkey: string
@@ -402,6 +437,7 @@ export class IdentityService {
     specializations?: string[]
     maxCaseAssignments?: number
     supervisorPubkey?: string
+    hubId?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
     const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
@@ -410,6 +446,7 @@ export class IdentityService {
       displayName: data.name,
       phone: data.phone,
       roles,
+      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: roles }] }),
       active: true,
       encryptedSecretKey: data.encryptedSecretKey,
       transcriptionEnabled: true,
