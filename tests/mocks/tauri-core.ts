@@ -24,6 +24,18 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { randomBytes } from '@noble/hashes/utils.js'
 import { argon2id } from '@noble/hashes/argon2.js'
 import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
+import {
+  LABEL_DEVICE_PROVISION,
+  LABEL_DEVICE_PROVISION_BUNDLE,
+  LABEL_PROVISIONING_SALT,
+  SAS_INFO,
+  SAS_SALT,
+} from '@shared/crypto-labels'
+
+/** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
+const PROVISIONING_BUNDLE_VERSION = 1
+/** version(1) + signing seed(32) + encryption seed(32). */
+const PROVISIONING_BUNDLE_LEN = 65
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1154,25 +1166,30 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive symmetric key (matches Rust provisioning::derive_provisioning_key)
     const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:provisioning:v1'),
-      utf8ToBytes('llamenos:device-provision'), 32)
+      utf8ToBytes(LABEL_PROVISIONING_SALT),
+      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
 
     // Compute SAS (matches Rust provisioning::compute_sas)
     const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:sas'),
-      utf8ToBytes('llamenos:provisioning-sas'), 4)
+      utf8ToBytes(SAS_SALT),
+      utf8ToBytes(SAS_INFO), 4)
     const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
     const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
     const sasCode = `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
 
-    // Encrypt signing seed as bech32 nsec (matches Rust provisioning.rs)
-    // For the mock, we encode the signing seed hex as plaintext (simplified bech32 mock)
-    const nsecPayload = utf8ToBytes(`nsec1${bytesToHex(secrets.signingSeed)}`)
+    // Key bundle: version || signing seed || encryption seed — byte-identical to
+    // packages/crypto/src/provisioning.rs::encrypt_device_bundle_for_provisioning.
+    // BOTH seeds travel: they are independently random (PROTOCOL.md 2.11), so a
+    // linked device that receives only one cannot reconstruct the other.
+    const bundle = new Uint8Array(PROVISIONING_BUNDLE_LEN)
+    bundle[0] = PROVISIONING_BUNDLE_VERSION
+    bundle.set(secrets.signingSeed, 1)
+    bundle.set(secrets.encryptionSeed, 33)
 
     const nonce = randomBytes(12)
-    const aad = utf8ToBytes('llamenos:device-provision')
+    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
     const cipher = gcm(symmetricKey, nonce, aad)
-    const ciphertext = cipher.encrypt(nsecPayload)
+    const ciphertext = cipher.encrypt(bundle)
 
     const packed = new Uint8Array(12 + ciphertext.length)
     packed.set(nonce)
@@ -1201,8 +1218,8 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const sharedSecret = x25519.getSharedSecret(mockProvisioningEphemeral, hexToBytes(primaryEncPubkeyHex))
 
     const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:sas'),
-      utf8ToBytes('llamenos:provisioning-sas'), 4)
+      utf8ToBytes(SAS_SALT),
+      utf8ToBytes(SAS_INFO), 4)
     const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
     const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
     return `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
@@ -1220,26 +1237,29 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive symmetric key
     const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes('llamenos:provisioning:v1'),
-      utf8ToBytes('llamenos:device-provision'), 32)
+      utf8ToBytes(LABEL_PROVISIONING_SALT),
+      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
 
     // Decrypt
     const data = hexToBytes(encryptedHex)
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
-    const aad = utf8ToBytes('llamenos:device-provision')
+    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
     const cipher = gcm(symmetricKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
 
-    // Parse the nsec payload — extract signing seed
-    const nsecStr = new TextDecoder().decode(plaintext)
-    // Mock format: "nsec1" + hex signing seed
-    const signingSeedHex = nsecStr.slice(5) // Remove "nsec1" prefix
-    const signingSeed = hexToBytes(signingSeedHex)
-
-    // Derive encryption seed from signing seed (matches Rust)
-    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+    // Parse the key bundle — matches Rust decrypt_provisioned_bundle.
+    // Both seeds are used exactly as transported; deriving the encryption seed
+    // from the signing seed would give this device a different X25519 key than
+    // the one existing ciphertext was wrapped to.
+    if (plaintext.length !== PROVISIONING_BUNDLE_LEN) {
+      throw new Error(`provisioning bundle must be ${PROVISIONING_BUNDLE_LEN} bytes, got ${plaintext.length}`)
+    }
+    if (plaintext[0] !== PROVISIONING_BUNDLE_VERSION) {
+      throw new Error(`unsupported provisioning bundle version: ${plaintext[0]}`)
+    }
+    const signingSeed = plaintext.slice(1, 33)
+    const encryptionSeed = plaintext.slice(33, PROVISIONING_BUNDLE_LEN)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)

@@ -420,8 +420,26 @@ final class DeviceLinkViewModel {
     // MARK: - Device Provisioning Import
 
     /// Decrypt and process provisioning data received from the desktop.
-    /// In the v3 model, this contains the PUK seed and user metadata needed
-    /// to create a new device identity linked to the same user.
+    ///
+    /// NOT IMPLEMENTED: this verifies signatures over the payload and then
+    /// discards it — no key material is imported and no device is linked, so
+    /// reaching `.completed` here does not mean this device can decrypt
+    /// anything. Two things are missing:
+    ///
+    /// 1. `cryptoService.decryptWithSharedSecret` maps to
+    ///    `decrypt_with_shared_key_hex`, whose associated data is
+    ///    `LABEL_DEVICE_PROVISION`. The desktop primary sends a device key
+    ///    bundle under `LABEL_DEVICE_PROVISION_BUNDLE` (PROTOCOL.md §6.1.1),
+    ///    which fails the tag check here by design. Mobile needs a binding for
+    ///    `provisioning::decrypt_provisioned_bundle` that keeps both seeds
+    ///    inside Rust.
+    /// 2. This view model speaks to a Nostr-style relay (kind 20001 events);
+    ///    the desktop primary posts to `POST /api/provision/rooms/:id/payload`.
+    ///    The two sides never meet on the wire.
+    ///
+    /// Until both are fixed, mobile device linking does not work. Do not wire
+    /// an import here without the bundle path — adopting one seed and deriving
+    /// the other produces a device that authenticates and decrypts nothing.
     ///
     /// SECURITY: If the provisioning payload contains a sigchain link, we verify
     /// its Ed25519 signature before trusting the key material. This prevents a

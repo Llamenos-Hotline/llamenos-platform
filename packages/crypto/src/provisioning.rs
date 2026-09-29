@@ -1,12 +1,49 @@
 //! Device provisioning encryption — X25519 ECDH + HKDF + AES-256-GCM.
 //!
-//! The signing seed NEVER leaves the Rust process. The primary device performs:
-//!   1. X25519(primarySK, ephemeralPK) → shared_secret
+//! Secret seeds NEVER leave the Rust process: the primary device builds the key
+//! bundle, encrypts it, and hands the caller only ciphertext; the new device
+//! decrypts straight into a [`DeviceSecrets`] that zeroizes on drop.
+//!
+//! The primary device performs:
+//!   1. X25519(primary_encryption_sk, ephemeralPK) → shared_secret
 //!   2. HKDF(shared_secret, LABEL_DEVICE_PROVISION) → symmetric key
-//!   3. AES-256-GCM(seed_bytes, symmetric_key, aad=LABEL_DEVICE_PROVISION) → ciphertext
+//!   3. AES-256-GCM(bundle, symmetric_key, aad=LABEL_DEVICE_PROVISION_BUNDLE) → ciphertext
 //!   4. SAS = HKDF(shared_secret, SAS_SALT, SAS_INFO) → 6-digit code
 //!
 //! The new device performs the inverse using its ephemeral SK and the primary's PK.
+//!
+//! ## The key bundle
+//!
+//! ```text
+//! byte  0      : bundle version (PROVISIONING_BUNDLE_VERSION)
+//! bytes 1..33  : Ed25519 signing seed
+//! bytes 33..65 : X25519 encryption seed
+//! ```
+//!
+//! BOTH seeds travel. The two device seeds are independently random
+//! (PROTOCOL.md §2.11) and neither is derivable from the other, so a linked
+//! device that receives only one of them cannot reconstruct the other: it would
+//! hold a different X25519 key than the one existing ciphertext was wrapped to
+//! and would silently decrypt nothing. Any future change that transports one
+//! seed and re-derives the other re-introduces exactly that bug *and* collapses
+//! §2.11's independence guarantee — whoever held the signing seed would hold the
+//! decryption key. `linked_device_decrypts_ciphertext_wrapped_to_primary` below
+//! is the regression test for this.
+//!
+//! Every byte of the bundle travels inside the AEAD: nothing about the payload
+//! is carried in the clear. The AEAD key is derived from the same ECDH shared
+//! secret the SAS attests, so a party that fails SAS comparison cannot produce a
+//! payload the receiver will accept. The associated data is a bundle-format
+//! specific label, so a payload built for one bundle format can never
+//! authenticate under another (no silent downgrade to an older format).
+//!
+//! ## Scope (interim — see PROTOCOL.md §6.1.1)
+//!
+//! This is seed-transport linking: the linked device receives the primary's
+//! device identity rather than generating its own and being authorized by a
+//! sigchain entry with an HPKE-wrapped PUK (PROTOCOL.md §6.1). It is correct as
+//! specified here, but it does not deliver §6.1's per-device identity,
+//! per-device revocation, or forward secrecy across device compromise.
 //!
 //! Wire format: hex(nonce_12 + ciphertext + tag_16)
 //! SAS format: "XXX XXX" (6 digits, space-separated)
@@ -20,8 +57,18 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::device_keys::DeviceSecrets;
 use crate::errors::CryptoError;
-use crate::labels::{LABEL_DEVICE_PROVISION, LABEL_PROVISIONING_SALT, SAS_INFO, SAS_SALT};
+use crate::labels::{
+    LABEL_DEVICE_PROVISION, LABEL_DEVICE_PROVISION_BUNDLE, LABEL_PROVISIONING_SALT, SAS_INFO,
+    SAS_SALT,
+};
+
+/// Version byte prefixing the provisioning key bundle plaintext.
+pub const PROVISIONING_BUNDLE_VERSION: u8 = 1;
+
+/// Bundle length: version(1) + signing seed(32) + encryption seed(32).
+const BUNDLE_LEN: usize = 1 + 32 + 32;
 
 /// Result of encrypting the signing seed for device provisioning.
 /// Contains the encrypted payload and the SAS code for verification.
@@ -33,12 +80,14 @@ pub struct ProvisioningResult {
     pub sas_code: String,
 }
 
-/// Result of decrypting a provisioned signing seed.
-/// Contains the raw seed bytes and the SAS code for verification.
-#[derive(Debug)]
-pub struct DecryptionResult {
-    /// The decrypted signing seed (32 raw bytes)
-    pub seed: Zeroizing<Vec<u8>>,
+/// Result of decrypting a provisioning key bundle.
+///
+/// Deliberately does not implement `Debug`: `DeviceSecrets` holds raw seeds and
+/// must never reach a log line.
+pub struct BundleDecryptionResult {
+    /// Both device seeds, zeroized on drop. Use as-is — never re-derive one
+    /// seed from the other (see the module docs).
+    pub secrets: DeviceSecrets,
     /// "XXX XXX" format 6-digit SAS code
     pub sas_code: String,
 }
@@ -121,30 +170,35 @@ fn compute_sas(shared_secret: &[u8]) -> String {
     format!("{} {}", &code[..3], &code[3..])
 }
 
-/// Encrypt the signing seed for a provisioning room. The seed never leaves Rust.
+/// Encrypt the primary device's key bundle for a provisioning room.
+///
+/// The seeds never leave Rust — the caller receives only ciphertext and the SAS.
 ///
 /// Performs:
-///   1. X25519(primarySK, ephemeralPK) → shared_secret
+///   1. X25519(primary_encryption_sk, ephemeralPK) → shared_secret
 ///   2. HKDF(shared_secret, info=LABEL_DEVICE_PROVISION) → symmetric key
-///   3. AES-256-GCM(seed_bytes, symmetric_key, aad=LABEL_DEVICE_PROVISION) → ciphertext
+///   3. AES-256-GCM(bundle, symmetric_key, aad=LABEL_DEVICE_PROVISION_BUNDLE)
 ///   4. SAS from shared_secret
 ///
+/// The ECDH uses the device's long-term X25519 encryption key (PROTOCOL.md
+/// §6.1 step 6) so the new device can compute the same SAS from the primary's
+/// published encryption pubkey.
+///
 /// Returns (encrypted_hex, sas_code).
-pub fn encrypt_seed_for_provisioning(
-    sk_bytes: &[u8],
+pub fn encrypt_device_bundle_for_provisioning(
+    secrets: &DeviceSecrets,
     ephemeral_pubkey_hex: &str,
 ) -> Result<ProvisioningResult, CryptoError> {
-    if sk_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
-
-    let mut sk_arr = [0u8; 32];
-    sk_arr.copy_from_slice(sk_bytes);
-    let secret = X25519StaticSecret::from(sk_arr);
+    // Validate the peer key before copying any secret material out.
     let ephemeral_pk = parse_x25519_pubkey(ephemeral_pubkey_hex)?;
 
+    let mut sk_arr = secrets.encryption_seed;
+    let secret = X25519StaticSecret::from(sk_arr);
+
     // X25519 shared secret
-    let mut shared = compute_shared_secret(&secret, &ephemeral_pk)?;
+    let mut shared = compute_shared_secret(&secret, &ephemeral_pk).inspect_err(|_| {
+        sk_arr.zeroize();
+    })?;
 
     // Derive symmetric key using HKDF
     let mut symmetric_key = derive_provisioning_key(&shared);
@@ -152,21 +206,39 @@ pub fn encrypt_seed_for_provisioning(
     // Compute SAS before zeroing shared secret
     let sas_code = compute_sas(&shared);
 
-    // Encrypt raw seed bytes with AES-256-GCM
+    // Build the bundle: version || signing_seed || encryption_seed.
+    // Both seeds are carried because they are independently random (§2.11);
+    // neither can be derived from the other.
+    let mut bundle = Zeroizing::new(Vec::with_capacity(BUNDLE_LEN));
+    bundle.push(PROVISIONING_BUNDLE_VERSION);
+    bundle.extend_from_slice(&secrets.signing_seed);
+    bundle.extend_from_slice(&secrets.encryption_seed);
+
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
     let nonce = Nonce::from_slice(&nonce_bytes);
+    let zero_all = |symmetric_key: &mut [u8; 32], shared: &mut [u8; 32], sk: &mut [u8; 32]| {
+        symmetric_key.zeroize();
+        shared.zeroize();
+        sk.zeroize();
+    };
     let cipher = Aes256Gcm::new_from_slice(&symmetric_key)
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
+        .inspect_err(|_| {
+            zero_all(&mut symmetric_key, &mut shared, &mut sk_arr);
+        })?;
     let ciphertext = cipher
         .encrypt(
             nonce,
             Payload {
-                msg: sk_bytes,
-                aad: LABEL_DEVICE_PROVISION.as_bytes(),
+                msg: bundle.as_slice(),
+                aad: LABEL_DEVICE_PROVISION_BUNDLE.as_bytes(),
             },
         )
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
+        .inspect_err(|_| {
+            zero_all(&mut symmetric_key, &mut shared, &mut sk_arr);
+        })?;
 
     // Zero sensitive material
     symmetric_key.zeroize();
@@ -184,31 +256,48 @@ pub fn encrypt_seed_for_provisioning(
     })
 }
 
-/// Decrypt a provisioned signing seed received from the primary device.
+/// Decrypt a provisioning key bundle received from the primary device.
 ///
 /// Performs:
 ///   1. X25519(ephemeralSK, primaryPK) → shared_secret
 ///   2. HKDF(shared_secret, info=LABEL_DEVICE_PROVISION) → symmetric key
-///   3. Decrypt AES-256-GCM → raw seed bytes
+///   3. Decrypt AES-256-GCM (aad=LABEL_DEVICE_PROVISION_BUNDLE) → bundle
 ///   4. SAS from shared_secret (for verification display)
 ///
-/// Returns (seed_bytes, sas_code).
-pub fn decrypt_provisioned_seed(
+/// Returns both device seeds as a [`DeviceSecrets`] plus the SAS code. The
+/// caller MUST use both seeds as returned; re-deriving either from the other
+/// produces a device that cannot decrypt anything wrapped to the primary.
+///
+/// Structural errors (short/long bundle, unknown bundle version) are only
+/// reachable after the GCM tag has already verified, i.e. only for a payload
+/// the authenticated peer actually produced, so distinguishing them leaks
+/// nothing to an attacker.
+pub fn decrypt_provisioned_bundle(
     encrypted_hex: &str,
     primary_pubkey_hex: &str,
     ephemeral_sk_bytes: &[u8],
-) -> Result<DecryptionResult, CryptoError> {
+) -> Result<BundleDecryptionResult, CryptoError> {
     if ephemeral_sk_bytes.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
+    }
+
+    // Parse and size-check the untrusted inputs first, so these error paths
+    // cannot return while secret material is live on the stack.
+    let primary_pk = parse_x25519_pubkey(primary_pubkey_hex)?;
+    let data = hex::decode(encrypted_hex).map_err(CryptoError::HexError)?;
+    if data.len() < 28 {
+        // 12 nonce + 16 tag minimum
+        return Err(CryptoError::InvalidCiphertext);
     }
 
     let mut sk_arr = [0u8; 32];
     sk_arr.copy_from_slice(ephemeral_sk_bytes);
     let ephemeral_secret = X25519StaticSecret::from(sk_arr);
-    let primary_pk = parse_x25519_pubkey(primary_pubkey_hex)?;
 
     // X25519 shared secret
-    let mut shared = compute_shared_secret(&ephemeral_secret, &primary_pk)?;
+    let mut shared = compute_shared_secret(&ephemeral_secret, &primary_pk).inspect_err(|_| {
+        sk_arr.zeroize();
+    })?;
 
     // Derive symmetric key using HKDF
     let mut symmetric_key = derive_provisioning_key(&shared);
@@ -217,39 +306,62 @@ pub fn decrypt_provisioned_seed(
     let sas_code = compute_sas(&shared);
 
     // Decrypt
-    let data = hex::decode(encrypted_hex).map_err(CryptoError::HexError)?;
-    if data.len() < 28 {
-        // 12 nonce + 16 tag minimum
-        symmetric_key.zeroize();
-        shared.zeroize();
-        sk_arr.zeroize();
-        return Err(CryptoError::InvalidCiphertext);
-    }
     let nonce = Nonce::from_slice(&data[..12]);
 
     let cipher = Aes256Gcm::new_from_slice(&symmetric_key)
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: LABEL_DEVICE_PROVISION.as_bytes(),
-            },
-        )
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
+        .inspect_err(|_| {
+            symmetric_key.zeroize();
+            shared.zeroize();
+            sk_arr.zeroize();
+        })?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &data[12..],
+                    aad: LABEL_DEVICE_PROVISION_BUNDLE.as_bytes(),
+                },
+            )
+            .map_err(|_| CryptoError::DecryptionFailed)
+            .inspect_err(|_| {
+                symmetric_key.zeroize();
+                shared.zeroize();
+                sk_arr.zeroize();
+            })?,
+    );
 
     // Zero sensitive material
     symmetric_key.zeroize();
     shared.zeroize();
     sk_arr.zeroize();
 
-    if plaintext.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
+    if plaintext.len() != BUNDLE_LEN {
+        return Err(CryptoError::InvalidFormat(format!(
+            "provisioning bundle must be {BUNDLE_LEN} bytes, got {}",
+            plaintext.len()
+        )));
+    }
+    if plaintext[0] != PROVISIONING_BUNDLE_VERSION {
+        return Err(CryptoError::InvalidFormat(format!(
+            "unsupported provisioning bundle version: {} (expected {PROVISIONING_BUNDLE_VERSION})",
+            plaintext[0]
+        )));
     }
 
-    Ok(DecryptionResult {
-        seed: Zeroizing::new(plaintext),
+    let mut signing_seed = [0u8; 32];
+    let mut encryption_seed = [0u8; 32];
+    signing_seed.copy_from_slice(&plaintext[1..33]);
+    encryption_seed.copy_from_slice(&plaintext[33..BUNDLE_LEN]);
+
+    // DeviceSecrets zeroizes both seeds on drop; the stack copies above are
+    // moved into it, and `plaintext` is Zeroizing.
+    Ok(BundleDecryptionResult {
+        secrets: DeviceSecrets {
+            signing_seed,
+            encryption_seed,
+        },
         sas_code,
     })
 }
@@ -257,29 +369,44 @@ pub fn decrypt_provisioned_seed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hpke_envelope::generate_x25519_keypair;
+    use crate::device_keys::{generate_device_keys, unlock_device_keys};
+    use crate::hpke_envelope::{generate_x25519_keypair, hpke_open_key, hpke_seal_key};
+    use crate::labels::LABEL_NOTE_KEY;
+
+    /// Build a device with two independently random seeds (PROTOCOL.md §2.11).
+    fn primary_device() -> (DeviceSecrets, String, String) {
+        let encrypted = generate_device_keys("primary-device", "12345678").unwrap();
+        let secrets = unlock_device_keys(&encrypted, "12345678").unwrap();
+        (
+            secrets,
+            encrypted.state.signing_pubkey_hex,
+            encrypted.state.encryption_pubkey_hex,
+        )
+    }
 
     #[test]
     fn provisioning_round_trip() {
-        let (primary_sk, primary_pk) = generate_x25519_keypair();
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
         let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
 
-        let primary_sk_bytes = hex::decode(primary_sk.as_str()).unwrap();
-
-        // Primary encrypts seed for provisioning
-        let result = encrypt_seed_for_provisioning(&primary_sk_bytes, &ephemeral_pk).unwrap();
+        // Primary encrypts its key bundle for provisioning
+        let result = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
 
         // New device decrypts
         let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
         let decrypted =
-            decrypt_provisioned_seed(&result.encrypted_hex, &primary_pk, &ephemeral_sk_bytes)
+            decrypt_provisioned_bundle(&result.encrypted_hex, &primary_enc_pk, &ephemeral_sk_bytes)
                 .unwrap();
 
-        // Verify the raw seed bytes round-trip
+        // BOTH seeds must round-trip — the encryption seed is not derivable
+        // from the signing seed, so transporting only one breaks decryption.
         assert_eq!(
-            decrypted.seed.as_slice(),
-            primary_sk_bytes.as_slice(),
-            "Recovered seed must match original"
+            decrypted.secrets.signing_seed, primary.signing_seed,
+            "Recovered signing seed must match original"
+        );
+        assert_eq!(
+            decrypted.secrets.encryption_seed, primary.encryption_seed,
+            "Recovered encryption seed must match original"
         );
 
         // SAS codes must match
@@ -289,35 +416,152 @@ mod tests {
         assert_eq!(&decrypted.sas_code[3..4], " ");
     }
 
+    /// The regression test for the defect this module's docs describe: a linked
+    /// device must be able to read ciphertext that was HPKE-wrapped to the
+    /// ORIGINAL device's X25519 public key before the link happened.
+    ///
+    /// Transporting only the signing seed and re-deriving the encryption seed
+    /// (HKDF over the signing seed) fails here with `DecryptionFailed`, because
+    /// the linked device ends up holding a different X25519 key.
+    #[test]
+    fn linked_device_decrypts_ciphertext_wrapped_to_primary() {
+        let (primary, primary_signing_pk, primary_enc_pk) = primary_device();
+
+        // A per-note key is wrapped to the primary device, before linking.
+        let note_key = [7u8; 32];
+        let envelope = hpke_seal_key(&note_key, &primary_enc_pk, LABEL_NOTE_KEY, &[]).unwrap();
+
+        // Link a new device.
+        let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
+        let result = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
+        let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
+        let linked =
+            decrypt_provisioned_bundle(&result.encrypted_hex, &primary_enc_pk, &ephemeral_sk_bytes)
+                .unwrap()
+                .secrets;
+
+        // The linked device carries the primary's identity...
+        assert_eq!(
+            hex::encode(linked.signing_pubkey().to_bytes()),
+            primary_signing_pk,
+            "linked device must hold the primary's Ed25519 identity"
+        );
+        assert_eq!(
+            hex::encode(linked.encryption_pubkey().to_bytes()),
+            primary_enc_pk,
+            "linked device must hold the primary's X25519 encryption key"
+        );
+
+        // ...and can therefore decrypt what was encrypted to the primary.
+        let opened = hpke_open_key(
+            &envelope,
+            &hex::encode(linked.encryption_seed),
+            LABEL_NOTE_KEY,
+            &[],
+        )
+        .expect("linked device must decrypt a note key wrapped to the primary");
+        assert_eq!(opened.as_slice(), &note_key);
+    }
+
+    /// A bundle built for a different AEAD associated data (for example the
+    /// pre-bundle 32-byte payload, which used LABEL_DEVICE_PROVISION as AAD)
+    /// must not authenticate — no silent downgrade to an older payload format.
+    #[test]
+    fn payload_with_wrong_aad_is_rejected() {
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
+        let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
+
+        // Hand-build a payload the old way: raw 32-byte seed, old AAD.
+        let secret = X25519StaticSecret::from(primary.encryption_seed);
+        let eph_pk_parsed = parse_x25519_pubkey(&ephemeral_pk).unwrap();
+        let shared = compute_shared_secret(&secret, &eph_pk_parsed).unwrap();
+        let symmetric_key = derive_provisioning_key(&shared);
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&symmetric_key).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: &primary.signing_seed,
+                    aad: LABEL_DEVICE_PROVISION.as_bytes(),
+                },
+            )
+            .unwrap();
+        let mut packed = Vec::with_capacity(12 + ciphertext.len());
+        packed.extend_from_slice(&nonce_bytes);
+        packed.extend_from_slice(&ciphertext);
+
+        let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
+        let result =
+            decrypt_provisioned_bundle(&hex::encode(&packed), &primary_enc_pk, &ephemeral_sk_bytes);
+        assert!(
+            matches!(result, Err(CryptoError::DecryptionFailed)),
+            "old-format payload must fail the AEAD tag check, got {result:?}",
+            result = result.map(|r| r.sas_code)
+        );
+    }
+
+    #[test]
+    fn wrong_bundle_version_is_rejected() {
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
+        let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
+
+        // Build a well-formed, correctly-AAD'd bundle with a bogus version byte.
+        let secret = X25519StaticSecret::from(primary.encryption_seed);
+        let eph_pk_parsed = parse_x25519_pubkey(&ephemeral_pk).unwrap();
+        let shared = compute_shared_secret(&secret, &eph_pk_parsed).unwrap();
+        let symmetric_key = derive_provisioning_key(&shared);
+        let mut bundle = Vec::with_capacity(BUNDLE_LEN);
+        bundle.push(PROVISIONING_BUNDLE_VERSION.wrapping_add(1));
+        bundle.extend_from_slice(&primary.signing_seed);
+        bundle.extend_from_slice(&primary.encryption_seed);
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&symmetric_key).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: bundle.as_slice(),
+                    aad: LABEL_DEVICE_PROVISION_BUNDLE.as_bytes(),
+                },
+            )
+            .unwrap();
+        let mut packed = Vec::with_capacity(12 + ciphertext.len());
+        packed.extend_from_slice(&nonce_bytes);
+        packed.extend_from_slice(&ciphertext);
+
+        let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
+        let result =
+            decrypt_provisioned_bundle(&hex::encode(&packed), &primary_enc_pk, &ephemeral_sk_bytes);
+        assert!(
+            matches!(result, Err(CryptoError::InvalidFormat(_))),
+            "unknown bundle version must be rejected"
+        );
+    }
+
     #[test]
     fn wrong_ephemeral_key_fails() {
-        let (primary_sk, _primary_pk) = generate_x25519_keypair();
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
         let (_ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
         let (wrong_sk, _wrong_pk) = generate_x25519_keypair();
 
-        let primary_sk_bytes = hex::decode(primary_sk.as_str()).unwrap();
-        let result = encrypt_seed_for_provisioning(&primary_sk_bytes, &ephemeral_pk).unwrap();
-
-        // Derive primary pubkey for the decrypt side
-        let primary_secret =
-            X25519StaticSecret::from(<[u8; 32]>::try_from(primary_sk_bytes.as_slice()).unwrap());
-        let primary_pubkey = X25519PublicKey::from(&primary_secret);
-        let primary_pk_hex = hex::encode(primary_pubkey.as_bytes());
+        let result = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
 
         // Try decrypting with wrong ephemeral key
         let wrong_sk_bytes = hex::decode(wrong_sk.as_str()).unwrap();
         let decrypted =
-            decrypt_provisioned_seed(&result.encrypted_hex, &primary_pk_hex, &wrong_sk_bytes);
+            decrypt_provisioned_bundle(&result.encrypted_hex, &primary_enc_pk, &wrong_sk_bytes);
         assert!(decrypted.is_err());
     }
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let (primary_sk, _primary_pk) = generate_x25519_keypair();
+        let (primary, _signing_pk, primary_enc_pk) = primary_device();
         let (ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
 
-        let primary_sk_bytes = hex::decode(primary_sk.as_str()).unwrap();
-        let result = encrypt_seed_for_provisioning(&primary_sk_bytes, &ephemeral_pk).unwrap();
+        let result = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
 
         // Tamper with the ciphertext
         let mut bytes = hex::decode(&result.encrypted_hex).unwrap();
@@ -326,26 +570,19 @@ mod tests {
         }
         let tampered = hex::encode(&bytes);
 
-        let primary_secret =
-            X25519StaticSecret::from(<[u8; 32]>::try_from(primary_sk_bytes.as_slice()).unwrap());
-        let primary_pubkey = X25519PublicKey::from(&primary_secret);
-        let primary_pk_hex = hex::encode(primary_pubkey.as_bytes());
-
         let ephemeral_sk_bytes = hex::decode(ephemeral_sk.as_str()).unwrap();
-        let decrypted = decrypt_provisioned_seed(&tampered, &primary_pk_hex, &ephemeral_sk_bytes);
+        let decrypted = decrypt_provisioned_bundle(&tampered, &primary_enc_pk, &ephemeral_sk_bytes);
         assert!(decrypted.is_err());
     }
 
     #[test]
     fn sas_is_deterministic() {
-        let (primary_sk, _primary_pk) = generate_x25519_keypair();
+        let (primary, _signing_pk, _primary_enc_pk) = primary_device();
         let (_ephemeral_sk, ephemeral_pk) = generate_x25519_keypair();
 
-        let primary_sk_bytes = hex::decode(primary_sk.as_str()).unwrap();
-
         // Encrypt twice — SAS should be the same (deterministic from X25519)
-        let r1 = encrypt_seed_for_provisioning(&primary_sk_bytes, &ephemeral_pk).unwrap();
-        let r2 = encrypt_seed_for_provisioning(&primary_sk_bytes, &ephemeral_pk).unwrap();
+        let r1 = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
+        let r2 = encrypt_device_bundle_for_provisioning(&primary, &ephemeral_pk).unwrap();
 
         assert_eq!(r1.sas_code, r2.sas_code);
         // But encrypted payloads differ (different random nonces)

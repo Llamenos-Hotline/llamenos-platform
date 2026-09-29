@@ -4455,6 +4455,70 @@ Cross-reference: `apps/worker/routes/provisioning.ts`, `apps/worker/services/ide
 
 The server stores only the ephemeral pubkey and encrypted payload — it cannot decrypt the payload. The `encryptedNsec` field in the server API carries the Phase 6 device key bundle described above.
 
+### 6.1.1 Interim Implementation: Seed-Transport Linking
+
+> **Status:** This is what the code does today (`packages/crypto/src/provisioning.rs`, `apps/desktop/src/crypto.rs`). Section 6.1 above describes the target. The difference is not cosmetic — see "What this does not deliver".
+
+Section 6.1 requires a PUK and a sigchain: the new device generates its own keypairs, and the primary wraps the PUK to the new device's X25519 key and authorizes it with a signed sigchain entry. The PUK and sigchain modules exist (`packages/crypto/src/puk.rs`, `packages/crypto/src/sigchain.rs`) but have no application call sites yet, so there is no PUK to wrap and no chain to append to.
+
+Until they are wired, linking transports the primary device's seeds. Steps 1–10 and 13–16 of §6.1 are unchanged (ephemeral X25519 ECDH, SAS, `LABEL_PROVISIONING_SALT`/`LABEL_DEVICE_PROVISION` HKDF, `hex(iv || ct_with_tag)` wire format). Steps 11–12 and 17–18 are replaced by:
+
+```
+11'. Build the device key bundle (65 bytes, binary):
+     byte  0      : bundle version = 0x01
+     bytes 1..33  : primary Ed25519 signing seed
+     bytes 33..65 : primary X25519 encryption seed
+
+     BOTH seeds are carried. They are independently random (Section 2.11) and
+     neither is derivable from the other, so a device that receives only one
+     cannot reconstruct the other: it would hold a different X25519 key than the
+     one existing ciphertext was wrapped to, and would decrypt nothing — with no
+     error raised on either side.
+
+12'. Encrypt the bundle:
+     iv  = random(12)
+     ct_with_tag = AES-256-GCM.encrypt(
+       key = prov_key,             // as in step 10, unchanged
+       iv  = iv,
+       message = bundle,
+       aad = UTF-8("llamenos:device-provision-bundle:v1")   // LABEL_DEVICE_PROVISION_BUNDLE
+     )
+     encryptedPayload = hex(iv || ct_with_tag)
+
+     The AAD is specific to this bundle format, so a payload built for any other
+     provisioning format fails the GCM tag check rather than being accepted:
+     format changes cannot be silently downgraded.
+
+     Every byte of the payload is inside the AEAD — nothing travels in the clear.
+     The AEAD key comes from the same ECDH shared secret the SAS attests, so a
+     party that fails SAS comparison cannot produce a payload the new device
+     accepts.
+
+17'. The new device checks the bundle version, then adopts BOTH seeds exactly as
+     transported and stores them PIN-encrypted (Section 2.11). It does not
+     re-derive either seed from the other.
+
+18'. The linked device shares the primary's device identity. It does not
+     generate its own keypairs and there is no sigchain entry.
+```
+
+#### What this does not deliver
+
+Relative to §6.1, seed-transport linking gives up:
+
+| §6.1 property | Status under §6.1.1 |
+|---|---|
+| New device has its own Ed25519/X25519 identity | **Not delivered** — it adopts the primary's |
+| Sigchain entry authorizing the new device | **Not delivered** — no chain is written, so a linked device is invisible to device-level authorization and audit |
+| Per-device revocation | **Not delivered** — revoking a linked device means rotating the user's keys, because it holds the same ones |
+| PUK wrapped per device (`LABEL_PUK_WRAP_TO_DEVICE`) | **Not delivered** — no PUK is in use |
+| Long-term secrets never transported | **Not delivered** — both seeds cross the wire (AEAD-protected, SAS-verified) |
+| Compromise of one device does not expose others | **Not delivered** — all linked devices share one keypair |
+
+What it does deliver, and §6.1 also requires: a linked device can actually read the user's existing data, and Section 2.11's independence of the signing and encryption seeds is preserved end to end — the encryption key is never a function of the signing key.
+
+Wiring the PUK and sigchain layers, and then implementing §6.1 as written, is the remaining work.
+
 ### 6.2 QR Code Format
 
 ```json

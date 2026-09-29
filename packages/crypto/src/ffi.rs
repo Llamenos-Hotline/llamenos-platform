@@ -198,10 +198,18 @@ pub fn compute_shared_x_hex(
     Ok(hex_out)
 }
 
-/// Decrypt data that was encrypted with a provisioning shared key.
+/// Decrypt a UTF-8 payload that was encrypted with a provisioning shared key.
 ///
 /// `ciphertext_hex`: hex(nonce_12 + ciphertext + tag_16) — AES-256-GCM (provisioning protocol)
 /// `shared_x_hex`: 64-char hex shared secret from `compute_shared_x_hex`
+///
+/// NOT a device-linking import path. This uses `LABEL_DEVICE_PROVISION` as
+/// associated data, so it cannot open a device key bundle
+/// (`LABEL_DEVICE_PROVISION_BUNDLE`, PROTOCOL.md §6.1.1) — a bundle fails the
+/// tag check here rather than decoding. Device linking must go through
+/// `provisioning::decrypt_provisioned_bundle`, which returns both seeds as a
+/// `DeviceSecrets` that zeroizes on drop; mobile has no such path yet, so
+/// mobile device linking is not implemented.
 #[uniffi::export]
 pub fn decrypt_with_shared_key_hex(
     ciphertext_hex: &str,
