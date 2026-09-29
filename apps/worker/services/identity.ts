@@ -49,6 +49,7 @@ import {
   decideSessionRenewal,
 } from '../lib/session-renewal'
 import { decideDeviceRegistration } from '../lib/device-eviction'
+import { resolveHpkeRecipients } from './reader-keys'
 const INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 const CHALLENGE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 const PROVISION_ROOM_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -1108,6 +1109,11 @@ export class IdentityService {
       })
       .from(devices)
       .where(eq(devices.pubkey, pubkey))
+  }
+
+  /** HPKE recipient keys for a server-sealed envelope — see `resolveHpkeRecipients`. */
+  async resolveHpkeRecipients(readers: ReadonlyArray<string | null | undefined>): Promise<string[]> {
+    return resolveHpkeRecipients(this.db, readers)
   }
 
   async deleteDeviceById(pubkey: string, deviceId: string): Promise<boolean> {

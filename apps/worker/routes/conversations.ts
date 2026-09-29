@@ -323,10 +323,12 @@ conversations.post('/:id/messages',
     if (body.encryptedContent) {
       encryptedContent = body.encryptedContent
     } else if (plaintextForSending) {
-      const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY
-      const readerPubkeys: string[] = []
-      if (adminDecryptionPubkey) readerPubkeys.push(adminDecryptionPubkey)
-      if (pubkey !== adminDecryptionPubkey) readerPubkeys.push(pubkey)
+      // Admin and sender, each resolved to X25519 recipient keys — `pubkey` is
+      // the sender's Ed25519 auth key, not an HPKE recipient.
+      const readerPubkeys = await services.identity.resolveHpkeRecipients([
+        c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY,
+        pubkey,
+      ])
       const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
       encryptedContent = encrypted.encryptedContent
       readerEnvelopes = encrypted.readerEnvelopes

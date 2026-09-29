@@ -19,6 +19,7 @@ import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import { ServiceError } from './settings'
+import { resolveHpkeRecipients } from './reader-keys'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -486,11 +487,9 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern
-    const readerPubkeys = [adminDecryptionPubkey]
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
-    }
+    // Encrypt the message content using envelope pattern — for the admin and
+    // the assignee, each resolved to X25519 recipient keys (never an auth key).
+    const readerPubkeys = await resolveHpkeRecipients(this.db, [adminDecryptionPubkey, conv.assignedTo])
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 
