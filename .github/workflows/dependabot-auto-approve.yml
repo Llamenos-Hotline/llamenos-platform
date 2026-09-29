@@ -9,21 +9,34 @@
 # `require_extra_approval_for_unattributed_changes` demands. Everything that
 # actually decides mergeability is untouched.
 #
-# WHY `fleet/review` IS THE ONLY GUARD IT NEEDS. That one condition already
-# encodes the policy "review the dangerous ones, wave the rest through":
+# WHY `fleet/review` IS THE ONLY GUARD IT NEEDS. For a Dependabot PR that
+# condition is never satisfiable without a real model review, because every
+# shape Dependabot can produce is Tier 2 under `tierFor` (impact.ts) —
+# measured, not assumed:
 #
-#   - A bump touching `.github/workflows/` is Tier 2 (HIGH_IMPACT_PATHS,
-#     impact.ts) — the model review runs, and this workflow waits for it.
-#     Those paths are `deploy-prod.yml`, `release.yml`, `secret-scan.yml`,
-#     and fleet-review.yml itself; a compromised action version there runs
-#     with real secrets, which is exactly what a review is for.
-#   - Anything Tier 0/1 takes review-gate's existing `low-tier` path, which
-#     concludes green with NO model call. No review tokens are spent on a
-#     lockfile bump, and none ever were.
+#   package.json + bun.lock                  Tier 2 (always — high-impact path)
+#   packages/crypto/Cargo.toml + Cargo.lock  Tier 2 (always)
+#   apps/android/gradle/libs.versions.toml   Tier 2 (default — product code)
+#   .github/workflows/*.yml                  Tier 2 (always)
+#   deploy/docker/Dockerfile                 Tier 2 (default — product code)
 #
-# So this file adds no new judgement of its own. Re-deriving "is this PR
-# safe" here would be a second copy of impact.ts's tier map, free to drift
-# from the one the gate actually enforces.
+# Tier 2 is the DEFAULT; Tier 0/1 is a narrow allowlist that in practice only
+# documentation reaches. So review-gate's `low-tier` short-circuit — the one
+# path that concludes green with no model call — is unreachable for a
+# dependency bump. `fleet/review == success` on a bot PR therefore ALWAYS
+# means a model read this diff and passed it.
+#
+# That is the whole safety argument, and it is why this file needs no
+# judgement of its own. Re-deriving "is this bump safe" here would be a
+# second copy of impact.ts's tier map, free to drift from the one the gate
+# actually enforces. What this workflow removes is the human *clicking*
+# approve, never the review itself.
+#
+# (An earlier draft of this comment claimed lockfile bumps took the low-tier
+# path and skipped the model. That was wrong, and it is the kind of wrong
+# that matters: a reviewer reading it correctly concluded the workflow would
+# auto-merge unreviewed dependency updates. Verified with `tierFor` directly
+# rather than by reading the tier map.)
 #
 # WHY `workflow_run`. It runs the version of this file on the BASE branch,
 # never the PR's. Every open Dependabot PR edits `.github/workflows/` — under
