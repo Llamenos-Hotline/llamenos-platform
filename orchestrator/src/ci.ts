@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
@@ -290,6 +291,104 @@ export const REVIEW_KEY_ENV = 'FLEET_REVIEW_API_KEY'
 export interface CiVerdict { ok: boolean; summary: string }
 
 /**
+ * What `runReviewCi` concluded, as ONE token rather than as prose (#1230).
+ *
+ * The job's exit code carries only pass/fail, and `summary` is prose written
+ * for a human — so before this existed, `fleet-review.yml` could not tell a
+ * reviewer rejecting the diff from a scope refusal or an unparseable verdict
+ * without reading its own log, and the "Assert this run reached a real
+ * verdict" step reported every real FAIL as `review-did-not-run`. Every
+ * return path of `runReviewCi` names exactly one of these; the workflow's
+ * "Name this run's outcome" step maps each to its title.
+ *
+ *  - `pass` / `fail`: every reviewer produced a parsed verdict; `fail` if
+ *    any of them rejected the diff. A FAIL alongside an UNREADABLE is still
+ *    `fail` — a reviewer DID read the diff and reject it, so re-running it
+ *    unchanged is not the fix.
+ *  - `unreadable`: no reviewer rejected the diff, but at least one produced
+ *    no verdict that could be read (or never ran).
+ *  - `cache-pass` / `cache-fail`: a prior substantive verdict for this exact
+ *    diff and review set, restated.
+ *  - `scope`: the mechanical pre-check (lane scope, never-write paths)
+ *    refused the diff, so no reviewer was asked.
+ *  - `review-set-unresolved`, `unknown-lane`, `review-disabled`,
+ *    `export-unsafe`: refused before any reviewer ran, for the reason named.
+ */
+export const REVIEW_CI_RESULTS = [
+  'pass', 'fail', 'unreadable', 'cache-pass', 'cache-fail',
+  'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
+] as const
+export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
+
+export interface ReviewCiVerdict extends CiVerdict { result: ReviewCiResult }
+
+/**
+ * Where `runReviewCi` writes its `ReviewCiResult` when no `recordResult` is
+ * injected — set by `fleet-review.yml`'s "Review" step. A FILE named by an
+ * explicit variable, not `$GITHUB_OUTPUT`: every test in this repository also
+ * runs inside an Actions step where `GITHUB_OUTPUT` is always set, and a
+ * write keyed on that would leak into whichever CI step ran the tests.
+ */
+export const REVIEW_RESULT_FILE_ENV = 'FLEET_REVIEW_RESULT_FILE'
+
+export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiResult) => Promise<void> {
+  const file = env[REVIEW_RESULT_FILE_ENV] ?? ''
+  return async (result) => {
+    if (file.length === 0) return
+    await writeFile(file, `${result}\n`)
+  }
+}
+
+/**
+ * The machine-readable half of every outcome title `fleet-review.yml`'s
+ * "Name this run's outcome" step produces (#1230) — an INTERFACE: tooling
+ * matches on these, so renaming one is a breaking change.
+ *
+ * A title is `<TOKEN> — <human detail>`. The token is everything before the
+ * first space; the detail is prose and may change freely. The class before
+ * the colon says what a reader should do:
+ *
+ *  - `PASS:` — the check concluded success.
+ *  - `REJECTED:` — a reviewer read this diff and rejected it. Fix the code.
+ *  - `NO-VERDICT:` — the check is red because the gate fails closed, and
+ *    NOTHING judged the diff. Act on the named cause; do not edit the code
+ *    on review grounds, and do not read it as a rejection.
+ *
+ * No token is a prefix or a substring of another (pinned in
+ * tests/orchestrator/review-outcome-titles.test.ts), so a grep for one never
+ * matches a different outcome. The two `unclassified` tokens are the
+ * catch-alls for facts the naming step does not recognise; seeing one means
+ * the vocabulary needs a new entry, not that anything was judged.
+ */
+export const REVIEW_OUTCOME_TOKENS = [
+  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:unclassified',
+  'REJECTED:reviewed', 'REJECTED:cached',
+  'NO-VERDICT:not-requested', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
+  'NO-VERDICT:unreadable', 'NO-VERDICT:did-not-run',
+  'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
+  'NO-VERDICT:engine-unavailable',
+  'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
+  'NO-VERDICT:gate-error', 'NO-VERDICT:base-predates-gate', 'NO-VERDICT:setup-failed',
+  'NO-VERDICT:unclassified',
+] as const
+export type ReviewOutcomeToken = (typeof REVIEW_OUTCOME_TOKENS)[number]
+
+function isReviewOutcomeToken(s: string): s is ReviewOutcomeToken {
+  return (REVIEW_OUTCOME_TOKENS as readonly string[]).includes(s)
+}
+
+/**
+ * The token a `fleet/review` outcome title leads with, or `undefined` when
+ * there is no title or it does not start with a known token. `undefined`
+ * means UNKNOWN — never a verdict of any kind; read the check's conclusion
+ * and its log instead.
+ */
+export function reviewOutcomeToken(title: string | null | undefined): ReviewOutcomeToken | undefined {
+  const token = (title ?? '').split(' ', 1)[0] ?? ''
+  return isReviewOutcomeToken(token) ? token : undefined
+}
+
+/**
  * `realDispatch` (cli.ts) builds every fleet branch as `fleet/<lane>/<item>`.
  * ONE regex for that grammar, used by everything that reads a fleet branch —
  * deriving the lane (CI, to load its real scope) and the item (cli.ts, to
@@ -452,6 +551,14 @@ export interface ReviewCiDeps extends CiDeps {
    * never heard of a review cache is unaffected.
    */
   cacheFor?(scope: string | undefined): ReviewCache
+  /**
+   * Where this run's `ReviewCiResult` is written for the workflow to read
+   * (#1230). Omitted means `reviewResultRecorder(process.env)`, which writes
+   * only when `FLEET_REVIEW_RESULT_FILE` is set — i.e. inside the "Review"
+   * step and nowhere else. Never fatal: the result only NAMES the outcome,
+   * and a run that could not record it must still conclude on its verdict.
+   */
+  recordResult?(result: ReviewCiResult): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -666,16 +773,38 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
  * re-check is the invariant `secondOpinion` already enforces by throwing — a
  * review may only downgrade a mechanical pass, never rescue a failure — so a
  * diff that failed scope gets no review at all.
+ *
+ * Every return names its `ReviewCiResult`, recorded for the workflow before
+ * this returns (#1230) — see `ReviewCiDeps.recordResult`. A run that THROWS
+ * records nothing, which the workflow reads as "no result": the review did
+ * not run to a conclusion, which is exactly what a throw means.
  */
-export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
+export async function runReviewCi(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
+  const verdict = await reviewCiVerdict(deps)
+  try {
+    await (deps.recordResult ?? reviewResultRecorder(process.env))(verdict.result)
+  } catch (e) {
+    deps.log(
+      `could not record the review result "${verdict.result}" (non-fatal — this run's own verdict still stands; ` +
+      `its outcome title will say no result was produced): ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+  return verdict
+}
+
+async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   const refusal = headDirRefusal(deps)
-  if (refusal !== undefined) return refusal
+  if (refusal !== undefined) return { ...refusal, result: 'export-unsafe' }
 
   if (deps.apiKey === undefined || deps.apiKey.length === 0) {
-    return { ok: false, summary: `review unavailable: ${REVIEW_KEY_ENV} is not configured on this repository` }
+    return {
+      ok: false,
+      summary: `review unavailable: ${REVIEW_KEY_ENV} is not configured on this repository`,
+      result: 'review-disabled',
+    }
   }
   const lane = await resolveLane(deps)
-  if (lane === undefined) return { ok: false, summary: `unknown lane in branch ${deps.ctx.branch}` }
+  if (lane === undefined) return { ok: false, summary: `unknown lane in branch ${deps.ctx.branch}`, result: 'unknown-lane' }
 
   const report = await deps.verify({
     ...rangeFor(deps.ctx),
@@ -687,6 +816,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     return {
       ok: false,
       summary: `no review requested: ${report.reasons.join('; ') || 'mechanical verification failed'}`,
+      result: 'scope',
     }
   }
 
@@ -696,11 +826,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
   // choose whether to spend a review at all; neither trusts the other.
   // Fails CLOSED both times.
   const set = await deps.reviewSet(report.changedFiles)
-  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}` }
+  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}`, result: 'review-set-unresolved' }
   const profiles: ReviewerProfile[] = []
   for (const name of set.profiles) {
     const resolved = await deps.resolveProfile(name)
-    if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}` }
+    if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}`, result: 'review-set-unresolved' }
     profiles.push(resolved.profile)
   }
 
@@ -739,7 +869,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
       // Re-published verdicts still reach the PR: a cached result must read
       // as a review, not as a bare status (see `publishReport`).
       await deps.publishReport([{ reviewer: GENERAL_REVIEWER, verdict: cached.verdict, body: cached.text }])
-      return { ok: cached.verdict === 'PASS', summary: cached.text }
+      return {
+        ok: cached.verdict === 'PASS',
+        summary: cached.text,
+        result: cached.verdict === 'PASS' ? 'cache-pass' : 'cache-fail',
+      }
     }
   }
 
@@ -754,6 +888,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
       ok: false,
       summary: 'review unavailable: could not strip agent configuration from the PR head export — ' +
         `refusing to hand any reviewer an unstripped tree: ${e instanceof Error ? e.message : String(e)}`,
+      result: 'export-unsafe',
     }
   }
 
@@ -807,7 +942,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
     : `${results.length} reviews — ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
       results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
-  const verdict: CiVerdict = { ok, summary }
+  // A substantive rejection outranks an UNREADABLE beside it: somebody DID
+  // read this diff and reject it, so the outcome to report is "fix the
+  // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
+  const result: ReviewCiResult = ok ? 'pass' : results.some((r) => r.verdict === 'FAIL') ? 'fail' : 'unreadable'
+  const verdict: ReviewCiVerdict = { ok, summary, result }
 
   // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
   // ever recorded — never a cache hit being re-published (that would just
