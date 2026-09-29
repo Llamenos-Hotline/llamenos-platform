@@ -1307,6 +1307,9 @@ async function runReviewGate(): Promise<number> {
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
     requested: request.requested,
+    // Same field `reviewRequestFor` consumed above — the gate uses it to
+    // recognise an automated dependency PR by identity, not by branch name.
+    prAuthor: event.prAuthor,
     reviewSet: (changedFiles) => decideReviewSet({
       labels: facts?.labels,
       changedFiles,
@@ -1380,6 +1383,19 @@ async function runReviewGate(): Promise<number> {
     process.stdout.write(
       `${REVIEW_JOB}: no reviewable content (tier ${outcome.tier}) — skipping the non-author review\n` +
       (outcome.reasons.length > 0 ? `${outcome.reasons.map((r) => `  - ${r}`).join('\n')}\n` : '  (no changed files)\n'),
+    )
+  }
+  // Automated dependency PR: an explicit green with its reason printed, for
+  // the same rule the low-tier branch states — a required check that passes
+  // silently is the fail-open shape this file exists to prevent. The reason
+  // names the author, so "why did nothing review this?" is answerable from
+  // the check's own output.
+  if (outcome.kind === 'bot-authored') {
+    process.stdout.write(
+      `${REVIEW_JOB}: ${outcome.reason}\n` +
+      `  - a diff-level review of a lockfile or action pin cannot see the code the registry publishes,\n` +
+      `    so the model adds little here; the human who presses Merge is the checkpoint.\n` +
+      `  - label the PR for a named reviewer to force a real review anyway.\n`,
     )
   }
   ciLog(`${REVIEW_JOB}: gate outcome = ${outcome.kind}`)
