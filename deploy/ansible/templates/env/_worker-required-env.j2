@@ -33,11 +33,19 @@ ADMIN_PUBKEY={{ admin_pubkey }}
    X25519 ENCRYPTION key, which is a different value derived from the same
    seed. The app no longer falls back to ADMIN_PUBKEY (#1283) — it refuses to
    start when ADMIN_PUBKEY is set and this is not, rather than write envelopes
-   nobody can open. `bun run bootstrap-admin` prints both. #}
+   nobody can open. `bun run bootstrap-admin` prints both.
+
+   `or undef(...)` rather than `| mandatory`: vars.example.yml ships
+   `admin_decryption_pubkey: ""`, so the var is DEFINED on every real deploy
+   and `mandatory` — which only rejects an undefined var — would pass straight
+   through and emit an empty value. That renders a .env the app then refuses
+   to boot on, turning a clear render-time error into a container crash loop.
+   Failing on empty as well as undefined keeps the error where the operator
+   can act on it. #}
 {% if (admin_pubkey | default('')) | length > 0 %}
-ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey | mandatory('admin_decryption_pubkey is required whenever admin_pubkey is set — the admin X25519 HPKE recipient key; run: bun run bootstrap-admin') }}
-{% elif (admin_decryption_pubkey | default('')) | length > 0 %}
-ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey }}
+ADMIN_DECRYPTION_PUBKEY={{ (admin_decryption_pubkey | default('')) | trim or undef(hint='admin_decryption_pubkey is required whenever admin_pubkey is set — the admin X25519 HPKE recipient key, distinct from the Ed25519 admin_pubkey; run: bun run bootstrap-admin') }}
+{% elif (admin_decryption_pubkey | default('')) | trim | length > 0 %}
+ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey | trim }}
 {% endif %}
 {% if (ntfy_allowed_origins | default('')) | length > 0 %}
 NTFY_ALLOWED_ORIGINS={{ ntfy_allowed_origins }}
