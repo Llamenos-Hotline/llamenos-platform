@@ -72,6 +72,7 @@ import { Scalar } from '@scalar/hono-api-reference'
 import { openAPIConfig } from './openapi/config'
 import { ServiceError } from './services/settings'
 import { createLogger } from './lib/logger'
+import { devSurfacesEnabled } from './lib/dev-surfaces'
 
 const logger = createLogger('app')
 
@@ -123,7 +124,7 @@ api.use('*', apiVersion)
 
 // Dev route guard — only available when ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true (H04)
 const devGuard = createMiddleware<AppEnv>(async (c, next) => {
-  if (c.env.ENVIRONMENT !== 'development' || c.env.DEV_ROUTES_ENABLED !== 'true') {
+  if (!devSurfacesEnabled(c.env)) {
     return c.json({ error: 'Not Found' }, 404)
   }
   return next()

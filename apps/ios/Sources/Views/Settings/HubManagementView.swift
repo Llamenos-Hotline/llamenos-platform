@@ -6,17 +6,17 @@ import SwiftUI
 /// Admins can create new hubs. Tapping a hub switches the active context.
 struct HubManagementView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: HubManagementViewModel?
+    @State private var viewModelBox = ViewModelBox<HubManagementViewModel>()
     @State private var showCreateHub: Bool = false
 
     private var vm: HubManagementViewModel {
-        if let viewModel { return viewModel }
+        if let existing = viewModelBox.value { return existing }
         let vm = HubManagementViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService,
             hubContext: appState.hubContext
         )
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 
@@ -201,6 +201,9 @@ private struct HubRow: View {
             .padding(.vertical, 4)
         }
         .accessibilityIdentifier("hub-row-\(hub.slug)")
+        // The checkmark's "Active" label is indistinguishable from the status badge's
+        // "Active"; the selected trait is what says which hub is the active one.
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     private var statusColor: Color {

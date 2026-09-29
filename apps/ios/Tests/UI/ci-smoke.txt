@@ -1,0 +1,36 @@
+# The XCUITest classes the SMOKE tier runs — the critical flows a volunteer or
+# admin touches on day one.
+#
+# WHY A TIER EXISTS AT ALL. `ios-e2e` became a required check in #1225, and
+# `detect-changed-platforms.sh`'s SHARED_DEPS_RE deliberately sets `ios=true`
+# for `scripts/`, `package.json`, `tsconfig*.json` and friends — a change
+# there cannot be proven harmless to iOS, so it must not silently gate iOS to
+# `false`. But the full suite is 326 tests / ~161 min of device time, which on
+# four macOS runners put ~40-50 min on the critical path of PRs that never
+# touched a line of Swift. The tier keeps iOS genuinely gated on every such PR
+# while spending 2 runners for ~24 min instead of 4 for ~40.
+#
+# WHEN EACH TIER RUNS (see .github/scripts/detect-changed-platforms.sh):
+#   full  — apps/ios/ changed, or something that rebuilds the iOS binary:
+#           packages/crypto (UniFFI XCFramework), packages/protocol (Swift
+#           codegen), packages/i18n (.strings codegen), or the CI wiring
+#           itself (ci.yml, ios-e2e.yml, detect-changed-platforms.sh).
+#   smoke — only blast-radius shared deps changed (scripts/, package.json,
+#           bun.lock, .mise.toml, tsconfig*.json, vitest*.config.ts).
+#   none  — iOS unreachable from the diff.
+#
+# A class listed here runs in BOTH tiers. Classes not listed run only in full.
+# This is a whitelist, never a partition: `ui-tests.py shard` still spreads
+# whatever it is given across the shards, so no test falls between shards in
+# either tier.
+#
+# Format:  <Class>  # <why it is day-one critical>
+# Checked by: python3 apps/ios/scripts/ui-tests.py check-smoke
+
+AuthFlowUITests        # onboarding: hub join, device key setup, sign-in
+ActiveCallUITests      # answering a call — the product's reason to exist
+NoteFlowUITests        # writing an encrypted note during a call
+ShiftFlowUITests       # clock in/out; a volunteer off-shift receives nothing
+APIConnectedUITests    # the live-backend contract behind every flow above
+SecurityUITests        # PIN/lock and identity protection
+PanicWipeUITests       # duress wipe — a safety feature, not a nicety

@@ -6,7 +6,7 @@ import SwiftUI
 /// Admins use this queue to review incoming reports and convert them to case records.
 struct TriageListView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: TriageViewModel?
+    @State private var viewModelBox = ViewModelBox<TriageViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -155,12 +155,12 @@ struct TriageListView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: TriageViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = TriageViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService
         )
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

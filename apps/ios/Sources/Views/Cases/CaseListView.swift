@@ -7,15 +7,15 @@ import SwiftUI
 struct CaseListView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: CaseManagementViewModel?
+    @State private var viewModelBox = ViewModelBox<CaseManagementViewModel>()
 
     private var vm: CaseManagementViewModel {
-        if let viewModel { return viewModel }
+        if let existing = viewModelBox.value { return existing }
         let vm = CaseManagementViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService
         )
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 
@@ -235,6 +235,9 @@ struct CaseListView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .accessibilityIdentifier("case-tab-all")
+                // Selection is otherwise conveyed only by fill colour — VoiceOver
+                // users (and UI tests) could not tell which tab is active.
+                .accessibilityAddTraits(vm.entityTypeFilter == nil ? .isSelected : [])
 
                 // Per-type tabs
                 ForEach(vm.entityTypes) { et in
@@ -266,6 +269,7 @@ struct CaseListView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .accessibilityIdentifier("case-tab-\(et.name)")
+                    .accessibilityAddTraits(vm.entityTypeFilter == et.id ? .isSelected : [])
                 }
             }
             .padding(.horizontal, 16)

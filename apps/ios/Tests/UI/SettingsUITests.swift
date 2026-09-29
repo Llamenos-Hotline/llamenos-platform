@@ -17,11 +17,12 @@ final class SettingsUITests: BaseUITest {
         given("I am on the settings screen") {
             // Already navigated in setUp
         }
-        then("I should see my npub") {
-            let npubRow = find("settings-npub")
+        then("I should see my signing pubkey") {
+            // v3 device keys: the identity is the signing pubkey (hex), not a Bech32 npub.
+            let pubkeyRow = find("settings-signing-pubkey")
             XCTAssertTrue(
-                npubRow.waitForExistence(timeout: 10),
-                "Settings should display the npub"
+                pubkeyRow.waitForExistence(timeout: 10),
+                "Settings should display the signing pubkey"
             )
         }
     }
@@ -94,35 +95,8 @@ final class SettingsUITests: BaseUITest {
 
     // MARK: - Profile (profile-settings.feature)
 
-    func testCopyNpubButton() {
-        given("I am on the settings screen") {
-            // Already navigated
-        }
-        when("I tap the copy npub button") {
-            let copyButton = find("copy-npub")
-            guard copyButton.waitForExistence(timeout: 10) else {
-                // Button may be inside a combined List cell — try tapping the npub row instead
-                let npubRow = find("settings-npub")
-                guard npubRow.waitForExistence(timeout: 3) else {
-                    XCTFail("Copy npub button should exist")
-                    return
-                }
-                // Npub row exists but copy button doesn't — acceptable for List cell accessibility
-                return
-            }
-            copyButton.tap()
-        }
-        then("I should see a copy confirmation") {
-            let confirmation = find("copy-confirmation")
-            if confirmation.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Copy confirmation appeared")
-            }
-        }
-    }
-
-    func testCopyPubkeyButton() {
-        given("I am on the settings screen") {
-            // Pubkey is now in Account Settings sub-page
+    func testCopySigningPubkeyShowsConfirmation() {
+        given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
             guard accountLink.waitForExistence(timeout: 5) else {
                 XCTFail("Account settings link should exist")
@@ -130,13 +104,37 @@ final class SettingsUITests: BaseUITest {
             }
             accountLink.tap()
         }
-        then("I should see the pubkey row") {
-            // Copy button may be inside a combined List cell
-            let pubkeyRow = find("settings-pubkey")
-            let copyButton = find("copy-pubkey")
-            let found = pubkeyRow.waitForExistence(timeout: 10)
-                || copyButton.waitForExistence(timeout: 2)
-            XCTAssertTrue(found, "Pubkey row or copy button should exist")
+        when("I tap the copy button next to my signing pubkey") {
+            let copyButton = find("copy-signing-pubkey")
+            guard copyButton.waitForExistence(timeout: 10) else {
+                XCTFail("Copy signing pubkey button should exist")
+                return
+            }
+            copyButton.tap()
+        }
+        then("I should see a copy confirmation") {
+            XCTAssertTrue(
+                find("copy-confirmation").waitForExistence(timeout: 5),
+                "Copying the signing pubkey should show a confirmation"
+            )
+        }
+    }
+
+    func testAccountSettingsShowsSigningPubkey() {
+        given("I am on the account settings screen") {
+            let accountLink = find("settings-account-link")
+            guard accountLink.waitForExistence(timeout: 5) else {
+                XCTFail("Account settings link should exist")
+                return
+            }
+            accountLink.tap()
+        }
+        then("I should see my signing pubkey and its copy button") {
+            XCTAssertTrue(
+                find("settings-signing-pubkey").waitForExistence(timeout: 10),
+                "The signing pubkey row should exist"
+            )
+            XCTAssertTrue(find("copy-signing-pubkey").exists, "The signing pubkey copy button should exist")
         }
     }
 

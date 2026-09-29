@@ -49,7 +49,6 @@ dev.post('/test-reset', async (c) => {
   const services = c.get('services')
   const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
   const adminPubkey = c.env.ADMIN_PUBKEY
-  const demoMode = c.env.DEMO_MODE === 'true'
   await services.audit.reset()
   await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
   // Reset settings (including roles table and hubs) BEFORE re-seeding admin.
@@ -64,7 +63,10 @@ dev.post('/test-reset', async (c) => {
   // (concurrent browser requests between reset() and the later ensureInit() would
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
   if (adminPubkey) {
-    await services.identity.ensureInit(adminPubkey, demoMode)
+    await services.identity.ensureInit(adminPubkey)
+    if (c.env.DEMO_MODE === 'true') {
+      await services.identity.ensureDemoAccounts(demoIdentities(c.env))
+    }
   }
   await services.records.reset()
   await services.shifts.reset('')
@@ -297,7 +299,7 @@ dev.post('/test-promote-admin', async (c) => {
   // Use ensureInit which does INSERT ... ON CONFLICT DO UPDATE SET roles = ['role-super-admin'].
   // This is atomic and race-safe — unlike the old updateUser/createUser pattern which could
   // fail if the user was created by a concurrent request between the two calls.
-  await services.identity.ensureInit(pubkey, false)
+  await services.identity.ensureInit(pubkey)
   return c.json({ ok: true, pubkey })
 })
 
@@ -731,9 +733,19 @@ dev.post('/test-seed-demo', async (c) => {
     return c.json({ error: 'Not Found' }, 404)
   }
   const services = c.get('services')
-  await services.identity.ensureInit(undefined, true)
+  await services.identity.ensureDemoAccounts(demoIdentities(c.env))
   const summary = await seedDemoDataset(services, c.env)
   return c.json({ ok: true, summary })
+})
+
+// The demo accounts' signing keys are generated per server process and never
+// committed, so a test signs in as one by asking the process that holds them.
+dev.get('/test-demo-identities', async (c) => {
+  if (c.env.ENVIRONMENT !== 'development' || !checkResetSecret(c)) {
+    return c.json({ error: 'Not Found' }, 404)
+  }
+  const identities = demoIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
+  return c.json({ identities })
 })
 
 dev.delete('/test-seed-demo', async (c) => {
@@ -742,7 +754,7 @@ dev.delete('/test-seed-demo', async (c) => {
   }
   const services = c.get('services')
   await services.settings.purgeHub(DEMO_HUB.id)
-  for (const account of demoIdentities()) {
+  for (const account of demoIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
   return c.json({ ok: true })
@@ -1215,7 +1227,7 @@ dev.post('/test-create-hub', async (c) => {
     // test startup, test-create-hub can race with test-reset/ensureInit — the
     // admin row may not exist yet. ensureInit uses onConflictDoUpdate so it's
     // safe to call concurrently (idempotent, always sets role-super-admin).
-    await services.identity.ensureInit(adminPubkey, false)
+    await services.identity.ensureInit(adminPubkey)
 
     // Retry up to 3 times — even after ensureInit, a concurrent reset could
     // briefly delete the user row between our ensureInit and setHubRole.
@@ -1235,7 +1247,7 @@ dev.post('/test-create-hub', async (c) => {
         if (attempt < 2) {
           await new Promise(r => setTimeout(r, 500))
           // Re-ensure admin exists before retrying
-          await services.identity.ensureInit(adminPubkey, false).catch(() => {})
+          await services.identity.ensureInit(adminPubkey).catch(() => {})
         }
       }
     }

@@ -219,6 +219,32 @@ final class APIService: @unchecked Sendable {
         self.baseURL = url
     }
 
+    /// Resolve an API `path` against the hub URL, and the path its auth token signs.
+    ///
+    /// Callers pass paths that may carry a query ("/api/notes?page=1&limit=20").
+    /// `URL.appendingPathComponent` percent-encodes that "?" into the path, so such a
+    /// request went to `/api/notes%3Fpage=1&limit=20` — and the server verifies the
+    /// Ed25519 token against the URL's path alone (`url.pathname`,
+    /// apps/worker/lib/auth.ts), never its query. Every iOS request with a query
+    /// string failed with 401: the notes list, cases, contacts, reports, events,
+    /// call history, audit log, security events. The query now goes into the URL's
+    /// query component and the token signs the path without it.
+    static func resolve(path: String, against baseURL: URL) throws -> (url: URL, signedPath: String) {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = String(parts[0])
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent(pathOnly),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw APIError.invalidURL(path)
+        }
+        if parts.count == 2 {
+            components.query = String(parts[1])
+        }
+        guard let url = components.url else { throw APIError.invalidURL(path) }
+        return (url, pathOnly)
+    }
+
     /// Scope an `/api/...` path to the active hub (`/api/hubs/{activeHubId}/...`).
     /// Falls back to the bare path if no hub is selected.
     ///
@@ -271,14 +297,14 @@ final class APIService: @unchecked Sendable {
     ) async throws -> T {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
 
         // Attach Ed25519 auth token as Bearer header
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -356,14 +382,14 @@ final class APIService: @unchecked Sendable {
     ) async throws -> T {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
 
         // Attach Ed25519 auth token as Bearer header
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -519,15 +545,15 @@ final class APIService: @unchecked Sendable {
     func rawRequest(method: String, path: String, body: String?) async throws -> (Int, String) {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -646,16 +672,15 @@ extension APIService {
         body.append(encryptedData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
-        let path = hp("/api/uploads/entity-file")
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: hp("/api/uploads/entity-file"), against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         urlRequest.httpBody = body
 
         if cryptoService.isUnlocked {
-            let token = try cryptoService.createAuthToken(method: "POST", path: path)
+            let token = try cryptoService.createAuthToken(method: "POST", path: target.signedPath)
             let authJSON = """
             {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"}
             """
