@@ -1,6 +1,23 @@
 # Approve Dependabot PRs once `fleet/review` is green, and let branch
 # protection merge them.
 #
+# WHY THIS DOES NOT MERGE. `fleet/review` refused an earlier version of this
+# file twice, and the second refusal was right on a point the first had not
+# reached: every Dependabot shape is Tier 2, so a model DOES review each bump
+# — but a model reading a `bun.lock`/`Cargo.lock` diff sees version numbers
+# and hashes, never the code the registry actually publishes. Supply-chain
+# compromises put the payload in the package, not in the diff, so a
+# diff-level review is structurally blind to exactly the risk that matters
+# here. "A model reviewed it" is therefore not a substitute for a human
+# deciding to land a dependency update on a hotline whose threat model names
+# well-funded adversaries.
+#
+# So this workflow approves and stops. It removes the clicking, not the
+# judgement: a person still presses Merge, and that press is where the
+# supply-chain decision actually gets made. Anything that re-adds
+# `--auto`/auto-merge here re-opens the hole the review identified, and
+# guards.test.ts fails the build if it comes back.
+#
 # WHY THIS IS SAFE. An approval merges nothing. The ruleset (15885614) still
 # requires all five contexts — `ci-status`, `gitleaks`, `CodeQL`,
 # `fleet/verify`, `fleet/review` — and `strict_required_status_checks_policy`
@@ -117,6 +134,5 @@ jobs:
             echo "Approved PR #$pr."
           fi
 
-          # Branch protection decides when this actually merges.
-          gh pr merge "$pr" --repo "$REPO" --squash --auto || \
-            echo "Could not enable auto-merge (already enabled, or not yet mergeable) — approval stands."
+          # DELIBERATELY NOT `gh pr merge --auto`. See "WHY THIS DOES NOT MERGE".
+          echo "Approval posted. A human still lands this PR."
