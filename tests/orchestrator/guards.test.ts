@@ -6,7 +6,7 @@ import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   runReviewCi, decideReviewGate,
@@ -2210,6 +2210,10 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     return readFileSync(CI_YAML_PATH, 'utf8')
   }
 
+  function workflowText(file: string): string {
+    return readFileSync(join(process.cwd(), '.github', 'workflows', file), 'utf8')
+  }
+
   /** Same job-block-slicing convention as the rail above — from a job's own
    *  `  <name>:` line up to (but not including) the next job at the same
    *  two-space indentation. */
@@ -2311,6 +2315,23 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // dependency manifests.
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
+    [
+      // PR #1284's real diff (#1170): 32 jobs ran on it, including all four
+      // `e2e` shards and desktop-e2e.yml's E2E (Linux), because DESKTOP_RE's
+      // blanket `tests/` prefix set `desktop` for tests/orchestrator/. The
+      // fleet's own tests run in backend-unit and nowhere else.
+      "PR #1284's shape (orchestrator/, tests/orchestrator/, one non-ci.yml workflow, a doc)",
+      [
+        '.github/workflows/fleet-review.yml',
+        'docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md',
+        'orchestrator/src/ci.ts',
+        'orchestrator/src/cli.ts',
+        'tests/orchestrator/ci.test.ts',
+        'tests/orchestrator/guards.test.ts',
+      ],
+      ['backend-unit'],
+      ALL_GATED_JOBS.filter((j) => j !== 'backend-unit'),
+    ],
   ])('%s: the right ci.yml jobs run and skip', (_name, files, expectRun, expectSkip) => {
     const outputs = classify(files as string[])
     const yaml = ciYaml()
@@ -2378,6 +2399,167 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(runs, `expected "${job}" to RUN when only "${file}" changes; outputs=${JSON.stringify(outputs)}`).toBe(true)
   })
 
+  /**
+   * #1170: the NEGATIVE direction. The rails above prove a job runs when its
+   * own input changes; nothing proved a job does NOT run when only something it
+   * cannot observe changes. That gap let DESKTOP_RE's blanket `tests/` prefix
+   * send every orchestrator-only PR through four `e2e` shards and E2E (Linux)
+   * — five Docker Compose stacks for a change no Playwright project loads.
+   *
+   * Every job gated on `desktop`: ci.yml's `e2e` (bootstrap + bdd projects;
+   * also runs on `backend`) and `desktop-unit`, and desktop-e2e.yml's `build`
+   * and `test` — the latter is E2E (Linux) (bootstrap + chromium projects).
+   */
+  const DESKTOP_GATED: Array<[string, string]> = [
+    ['ci.yml', 'e2e'],
+    ['ci.yml', 'desktop-unit'],
+    ['desktop-e2e.yml', 'build'],
+    ['desktop-e2e.yml', 'test'],
+  ]
+
+  function runsIn(file: string, job: string, outputs: Record<string, string>): boolean {
+    return evalJobIf(jobLevelIf(jobBlock(workflowText(file), job)), outputs)
+  }
+
+  it.each([
+    ['tests/orchestrator/guards.test.ts'],
+    ['tests/live/telephony.spec.ts'],
+    ['tests/load/burst.js'],
+    ['tests/iso-builder/build-iso.bats'],
+    ['tests/eslint/no-inline-api-shape.test.ts'],
+  ])('"%s" alone runs no desktop-gated job — no Playwright project or desktop-unit loads it', (file) => {
+    const outputs = classify([file])
+    for (const [wf, job] of DESKTOP_GATED) {
+      expect(runsIn(wf, job, outputs), `${wf} "${job}" ran for ${file}; outputs=${JSON.stringify(outputs)}`).toBe(false)
+    }
+  })
+
+  // The other half of the same carve-out: DESKTOP_EXCLUDE_RE is an exclude
+  // list precisely so it cannot swallow real e2e input. Widening it to all of
+  // tests/, or to any of these, must fail here.
+  it.each([
+    ['tests/steps/fixtures.ts'],
+    ['tests/steps/auth/login.steps.ts'],
+    ['tests/mocks/tauri-core.ts'],
+    ['tests/pages/index.ts'],
+    ['tests/fixtures/auth.ts'],
+    ['tests/helpers/relay-capture.ts'],
+    ['tests/e2e/recovery-group.spec.ts'],
+    ['tests/smoke.spec.ts'],
+    ['tests/bootstrap.spec.ts'],
+    ['tests/global-setup.ts'],
+    ['tests/desktop/specs/launch.wdio.ts'],
+  ])('"%s" alone still runs every desktop-gated job', (file) => {
+    const outputs = classify([file])
+    for (const [wf, job] of DESKTOP_GATED) {
+      expect(runsIn(wf, job, outputs), `${wf} "${job}" skipped for ${file}; outputs=${JSON.stringify(outputs)}`).toBe(true)
+    }
+  })
+
+  /**
+   * The script's own comment names the evidence for each carved-out directory.
+   * This makes that evidence load-bearing: a directory stays excluded only while
+   * Playwright's chromium project ignores every spec/test file in it, no path in
+   * playwright.config.ts points into it, and nothing an e2e run loads imports
+   * from it. Change any of those and this fails, rather than the exclusion
+   * silently hiding a directory that became e2e.
+   */
+  it('every directory DESKTOP_EXCLUDE_RE carves out of tests/ is one no Playwright project collects and no e2e code imports', () => {
+    const listed = readFileSync(SCRIPT_PATH, 'utf8').match(/^DESKTOP_EXCLUDE_RE='\^tests\/\(([a-z0-9|-]+)\)\/'$/m)?.[1]
+    expect(listed, 'DESKTOP_EXCLUDE_RE is no longer a single ^tests/(a|b|…)/ alternation — this rail cannot read it').toBeDefined()
+    const prefixes = (listed as string).split('|').map((d) => `tests/${d}/`)
+
+    const pw = readFileSync(join(process.cwd(), 'playwright.config.ts'), 'utf8')
+    const chromiumIgnore = pw.match(/name: "chromium",[\s\S]*?testIgnore: \[([^\]]*)\]/)?.[1]
+    expect(chromiumIgnore, 'playwright.config.ts has no chromium testIgnore to check against').toBeDefined()
+    const ignored = [...(chromiumIgnore as string).matchAll(/"([^"]+)"/g)].map((m) => m[1] as string)
+    // Step globs, feature roots, globalSetup — every tests/ path the config loads.
+    const configPaths = [...pw.matchAll(/["'`](?:\.\/)?(tests\/[^"'`]*)["'`]/g)].map((m) => m[1] as string)
+    expect(configPaths.length, 'found no tests/ paths in playwright.config.ts — this rail would pass vacuously').toBeGreaterThan(0)
+
+    const files = trackedFiles()
+    for (const prefix of prefixes) {
+      const dir = prefix.slice('tests/'.length, -1)
+      const under = files.filter((f) => f.startsWith(prefix))
+      expect(under.length, `${prefix} tracks no files — a stale exclusion; drop it from DESKTOP_EXCLUDE_RE`).toBeGreaterThan(0)
+      // Playwright's default testMatch, which the chromium project keeps.
+      for (const f of under.filter((x) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(x))) {
+        const isIgnored = ignored.includes(`**/${dir}/**`) || (/\.test\.ts$/.test(f) && ignored.includes('**/*.test.ts'))
+        expect(isIgnored, `${f} is collected by Playwright's chromium project (E2E (Linux)) — ${prefix} is e2e and must not be excluded`).toBe(true)
+      }
+      for (const p of configPaths) {
+        expect(p.startsWith(prefix), `playwright.config.ts loads "${p}" — ${prefix} is e2e and must not be excluded`).toBe(false)
+      }
+    }
+
+    // What an e2e run loads: the rest of tests/, the app under test, and the
+    // configs that assemble them (vite.config.ts aliases tests/mocks/ in).
+    const e2eSources = files
+      .filter((f) => /\.(ts|tsx|js|mjs)$/.test(f) && (f.startsWith('tests/') || f.startsWith('src/')))
+      .filter((f) => !prefixes.some((p) => f.startsWith(p)))
+      .concat(['playwright.config.ts', 'vite.config.ts'])
+    expect(e2eSources.length).toBeGreaterThan(100)
+    for (const src of e2eSources) {
+      const text = readFileSync(join(process.cwd(), src), 'utf8')
+      const specifiers = [...text.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*)["'`]([^"'`]+)["'`]/g)].map((m) => m[1] as string)
+      for (const spec of specifiers) {
+        const target = spec.startsWith('.') ? posix.normalize(posix.join(posix.dirname(src), spec)) : spec
+        for (const prefix of prefixes) {
+          expect(`${target}/`.startsWith(prefix), `${src} imports "${spec}" from ${prefix} — an e2e run loads it`).toBe(false)
+        }
+      }
+      for (const prefix of prefixes) {
+        expect(new RegExp(`["'\`](?:\\./)?${prefix}`).test(text), `${src} names a path under ${prefix} — an e2e run loads it`).toBe(false)
+      }
+    }
+  })
+
+  // vitest files map to the one job that loads them, not to SHARED_DEPS_RE's
+  // whole matrix. Derived from ci.yml, not listed here: whatever config a job
+  // passes to `--config`, and whatever that config lists in `setupFiles`, must
+  // run that job when changed alone — and must not run a platform that never
+  // loads a vitest file.
+  it('every vitest config a ci.yml job runs, and each of its setupFiles, runs that job when changed alone — and no iOS/Android/crypto job', () => {
+    const yaml = ciYaml()
+    const bound: Array<[string, string]> = []
+    for (const job of ALL_GATED_JOBS) {
+      for (const m of jobBlock(yaml, job).matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) bound.push([job, m[1] as string])
+    }
+    // Pinned so a renamed job or a moved step cannot make the loop vacuous.
+    expect(bound).toEqual(expect.arrayContaining([
+      ['backend-unit', 'vitest.unit.config.ts'],
+      ['backend-unit', 'vitest.orchestrator.config.ts'],
+      ['desktop-unit', 'vitest.desktop.config.ts'],
+    ]))
+    for (const [job, config] of bound) {
+      const setupList = readFileSync(join(process.cwd(), config), 'utf8').match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''
+      const setups = [...setupList.matchAll(/["']([^"']+)["']/g)].map((m) => (m[1] as string).replace(/^\.\//, ''))
+      for (const file of [config, ...setups]) {
+        const outputs = classify([file])
+        expect(evalJobIf(jobLevelIf(jobBlock(yaml, job)), outputs),
+          `"${job}" loads ${file} but does not run when it changes alone; outputs=${JSON.stringify(outputs)}`).toBe(true)
+        for (const other of ['ios-build-test', 'android-build-test', 'android-e2e', 'crypto-tests']) {
+          expect(evalJobIf(jobLevelIf(jobBlock(yaml, other)), outputs),
+            `"${other}" never loads ${file} but runs when it changes alone; outputs=${JSON.stringify(outputs)}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it.each([['vitest.newsuite.config.ts'], ['vitest.newsuite.setup.ts']])(
+    'an unrecognised vitest file "%s" still runs every platform — the carve-out is a named list, never a prefix',
+    (file) => {
+      const outputs = classify([file])
+      for (const flag of ['ios', 'android', 'desktop', 'backend', 'crypto']) {
+        expect(outputs[flag], `${flag} for ${file}; outputs=${JSON.stringify(outputs)}`).toBe('true')
+      }
+    },
+  )
+
+  it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop gate — removing it must fail this test', (job) => {
+    expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
+  })
+
   it('the changes job diffs against the PR/merge-group base sha, not HEAD^', () => {
     const block = jobBlock(ciYaml(), 'changes')
     expect(block).toContain('github.event.pull_request.base.sha')
@@ -2410,6 +2592,8 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['scripts/dev-bun.sh', 'smoke'],
     ['package.json', 'smoke'],
     ['tsconfig.json', 'smoke'],
+    ['vitest.newsuite.config.ts', 'smoke'],
+    ['vitest.orchestrator.config.ts', 'none'],
     ['apps/worker/routes/foo.ts', 'none'],
     ['README.md', 'none'],
   ])('"%s" alone earns iOS tier "%s"', (file, tier) => {
