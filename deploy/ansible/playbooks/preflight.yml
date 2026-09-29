@@ -481,7 +481,7 @@
         fail_msg: |
           INVALID: 'backup_age_public_key' does not appear to be a valid age public key.
 
-          Expected format: age1... (59 characters starting with 'age1')
+          Expected format: age1... (62 characters: 'age1' + 58 bech32 chars)
           Current value: {{ backup_age_public_key[:20] | default('NOT SET') }}...
 
           To generate a keypair:

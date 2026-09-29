@@ -8,6 +8,15 @@
 # environment variable apps/worker/lib/config.ts requires at startup is
 # present in BOTH renders. See PR #771 review round 2 / issue #716.
 #
+# `env_check_dest_dir` is MANDATORY and deliberately has no default. The
+# renders used to land on fixed /tmp paths, which made the checker satisfiable
+# by a *previous* run's output on any machine where /tmp persists between runs
+# (i.e. the self-hosted runner fleet, where three runners share one box): the
+# gate could pass green against stale files while the live templates were
+# missing a required var. The caller now owns a fresh directory per run, so a
+# stale render can never be read. A fixed default here would quietly reopen
+# that hole for anyone who forgot to pass the var.
+#
 # `env_check_suffix` lets the same playbook be run twice for two different
 # scenarios without one run's output clobbering the other's:
 #   - "required vars" scenario (production, no optional features) -> default
@@ -18,14 +27,21 @@
 #     DEMO_RESET_CRON actually reach a rendered .env and aren't dead
 #     plumbing (the "also fix" #2 finding in review round 2).
 #
-# Usage:
+# Usage (normally you just run the checker, which drives this playbook itself
+# with a per-run temporary directory):
+#
+#   cd deploy/ansible && python3 scripts/check-required-env.py
+#
+# To render by hand, supply your own empty directory:
+#
 #   cd deploy/ansible
+#   d="$(mktemp -d)"
 #   ansible-playbook playbooks/check-env-templates.yml \
 #     -e @vars.example.yml -e app_environment=production \
-#     -e webhook_base_url=https://example.org
+#     -e webhook_base_url=https://example.org -e env_check_dest_dir="$d"
 #   ansible-playbook playbooks/check-env-templates.yml \
-#     -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json
-#   python3 scripts/check-required-env.py
+#     -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json \
+#     -e env_check_dest_dir="$d"
 
 - name: Render both .env templates for completeness verification
   hosts: localhost
@@ -33,14 +49,26 @@
   gather_facts: false
   become: false
   tasks:
+    - name: Require an explicit, caller-owned destination directory
+      ansible.builtin.assert:
+        that:
+          - env_check_dest_dir is defined
+          - env_check_dest_dir | default('') | length > 0
+        fail_msg: >-
+          env_check_dest_dir is required. Pass a fresh, empty directory
+          (e.g. -e env_check_dest_dir="$(mktemp -d)"). There is no default on
+          purpose: a fixed path lets a stale render from an earlier run satisfy
+          scripts/check-required-env.py.
+        quiet: true
+
     - name: Render monolithic role env template (roles/llamenos/templates/env.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos/templates/env.j2"
-        dest: "/tmp/llamenos-check-env-monolithic{{ env_check_suffix | default('') }}.env"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-env-monolithic{{ env_check_suffix | default('') }}.env"
         mode: "0600"
 
     - name: Render per-service app role env template (roles/llamenos-app/templates/env/app.j2)
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-app/templates/env/app.j2"
-        dest: "/tmp/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
+        dest: "{{ env_check_dest_dir }}/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
         mode: "0600"

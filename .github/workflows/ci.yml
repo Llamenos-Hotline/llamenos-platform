@@ -740,13 +740,43 @@ jobs:
       - name: Run ansible-lint
         run: cd deploy/ansible && ansible-lint --profile min .
 
-      - name: Syntax check
+      # Every playbook, discovered by glob — not a hand-maintained list.
+      # Until now this step checked setup.yml and nothing else, so backup,
+      # restore, update, rollback, dr-test, test-restore, security-scan,
+      # migrate-to-multi-host, backup-status, deploy-demo and reset-demo were
+      # covered by no workflow at all. A hardcoded list here would be the same
+      # drift bug one level up: a new playbook would silently go unchecked.
+      # `set -u` + an explicit count guard means an empty glob (a moved
+      # directory, a bad path) fails loudly instead of passing vacuously.
+      - name: Syntax check every playbook
         run: |
+          set -euo pipefail
           cd deploy/ansible
           cp vars.example.yml vars.yml
-          ansible-playbook setup.yml --syntax-check \
-            -i inventory.example.yml \
-            --extra-vars "@vars.example.yml"
+          mapfile -t playbooks < <(find . -maxdepth 2 \
+            \( -path ./playbooks/tasks -o -path ./roles \) -prune -o \
+            \( -path ./setup.yml -o -path './playbooks/*.yml' \) -print | sort)
+          if [ "${#playbooks[@]}" -lt 15 ]; then
+            echo "::error::Found only ${#playbooks[@]} playbooks to syntax-check." \
+                 "Expected the full deploy/ansible/playbooks/ set — the glob is wrong," \
+                 "so this gate would have passed without checking anything."
+            printf '  %s\n' "${playbooks[@]}"
+            exit 1
+          fi
+          echo "Syntax-checking ${#playbooks[@]} playbooks:"
+          printf '  %s\n' "${playbooks[@]}"
+          failed=0
+          for pb in "${playbooks[@]}"; do
+            echo "::group::ansible-playbook --syntax-check $pb"
+            if ! ansible-playbook "$pb" --syntax-check \
+                 -i inventory.example.yml \
+                 --extra-vars "@vars.example.yml"; then
+              echo "::error file=deploy/ansible/${pb#./}::Syntax check failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
 
       # Parses the required-env-var list straight out of
       # apps/worker/lib/config.ts and asserts every Ansible template that
