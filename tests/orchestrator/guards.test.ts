@@ -2281,6 +2281,20 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(autoApproveYaml(), 'missing the author guard').toContain('dependabot[bot]')
   })
 
+  it('the Dependabot approver judges the LATEST COMPLETED fleet/review, not an arbitrary one', () => {
+    // A head commit routinely carries several fleet/review runs (every
+    // re-request adds one). Taking [0] can read a stale PASS that a later
+    // FAIL supersedes — the same hazard fleet-review.yml's queue check
+    // already guards with sort_by(.completed_at)|last.
+    const yaml = autoApproveYaml()
+    expect(yaml, 'must sort by completed_at and take the last, not index [0]')
+      .toMatch(/sort_by\(\.completed_at\)/)
+    expect(yaml, 'must filter to completed runs before judging').toMatch(/status == "completed"/)
+    const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
+    expect(runLines.join('\n'), 'indexing [0] into the check-run list is the stale-verdict bug')
+      .not.toMatch(/select\(\.name == "fleet\/review"\)\]\[0\]/)
+  })
+
   it('the Dependabot approver waits for a green fleet/review', () => {
     const yaml = autoApproveYaml()
     expect(yaml, 'must read the fleet/review check').toContain('fleet/review')

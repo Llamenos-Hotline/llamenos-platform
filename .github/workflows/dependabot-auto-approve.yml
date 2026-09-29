@@ -112,8 +112,25 @@ jobs:
           # reviewed this diff and passed, or review-gate classified it
           # low-tier and concluded without a model call. Both are a real,
           # auditable verdict; absent or failing is neither.
-          review=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs" --paginate \
-                     --jq '[.check_runs[] | select(.name == "fleet/review")][0].conclusion // "absent"')
+          # The LATEST COMPLETED run, never `[0]` and never "any of them
+          # passed". A head commit routinely carries several fleet/review
+          # runs — every re-request adds one — and `[0]` is whichever the API
+          # happened to list first, which can be a stale PASS that an later
+          # FAIL supersedes. Same guard, same reason, as the queue check in
+          # fleet-review.yml: "a re-requested review that found a problem
+          # after an earlier pass must block, not be outvoted by the run it
+          # supersedes."
+          runs=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+                   --jq '.check_runs[] | select(.name == "fleet/review")' | jq -s -c '.')
+          completed=$(printf '%s' "$runs" | jq -c '[.[] | select(.status == "completed")] | sort_by(.completed_at)')
+          in_flight=$(printf '%s' "$runs" | jq -r '[.[] | select(.status != "completed")] | length')
+          if [ "$in_flight" != "0" ]; then
+            echo "PR #$pr has $in_flight fleet/review run(s) still in flight; judging the latest COMPLETED one."
+          fi
+          if [ "$(printf '%s' "$completed" | jq -r 'length')" = "0" ]; then
+            echo "PR #$pr has no completed fleet/review on $HEAD_SHA — not approving."; exit 0
+          fi
+          review=$(printf '%s' "$completed" | jq -r 'last | .conclusion')
           if [ "$review" != "success" ]; then
             echo "fleet/review on $HEAD_SHA is '$review', not success — not approving."
             echo "A Tier 2 bump (anything touching .github/workflows/) waits here until it is reviewed."
