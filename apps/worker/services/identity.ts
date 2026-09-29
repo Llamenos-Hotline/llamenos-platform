@@ -5,7 +5,7 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray } from 'drizzle-orm'
+import { eq, and, lt, sql, inArray, asc } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
@@ -1125,6 +1125,14 @@ export class IdentityService {
       })
       .from(devices)
       .where(eq(devices.pubkey, pubkey))
+      // Deterministic order, oldest first. Without it Postgres returns rows in
+      // whatever order it likes, so callers that index into the list — "the
+      // device I just registered is the last one" — silently get a different
+      // device on some runs. That non-determinism made `PUK Rotation >
+      // Distribute envelopes for multiple devices` flake: it picked the same
+      // device twice and the multi-row upsert hit "ON CONFLICT DO UPDATE
+      // cannot affect row a second time", surfacing as a 500.
+      .orderBy(asc(devices.registeredAt), asc(devices.id))
   }
 
   async deleteDeviceById(pubkey: string, deviceId: string): Promise<boolean> {
