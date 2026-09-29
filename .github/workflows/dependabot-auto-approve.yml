@@ -1,0 +1,155 @@
+# Approve Dependabot PRs once `fleet/review` is green, and let branch
+# protection merge them.
+#
+# WHY THIS DOES NOT MERGE. `fleet/review` refused an earlier version of this
+# file twice, and the second refusal was right on a point the first had not
+# reached: every Dependabot shape is Tier 2, so a model DOES review each bump
+# — but a model reading a `bun.lock`/`Cargo.lock` diff sees version numbers
+# and hashes, never the code the registry actually publishes. Supply-chain
+# compromises put the payload in the package, not in the diff, so a
+# diff-level review is structurally blind to exactly the risk that matters
+# here. "A model reviewed it" is therefore not a substitute for a human
+# deciding to land a dependency update on a hotline whose threat model names
+# well-funded adversaries.
+#
+# So this workflow approves and stops. It removes the clicking, not the
+# judgement: a person still presses Merge, and that press is where the
+# supply-chain decision actually gets made. Anything that re-adds
+# `--auto`/auto-merge here re-opens the hole the review identified, and
+# guards.test.ts fails the build if it comes back.
+#
+# WHY THIS IS SAFE. An approval merges nothing. The ruleset (15885614) still
+# requires all five contexts — `ci-status`, `gitleaks`, `CodeQL`,
+# `fleet/verify`, `fleet/review` — and `strict_required_status_checks_policy`
+# still requires the branch to be current. This workflow only supplies the
+# one thing a bot PR can never supply for itself: the approving review that
+# `require_extra_approval_for_unattributed_changes` demands. Everything that
+# actually decides mergeability is untouched.
+#
+# WHY `fleet/review` IS THE ONLY GUARD IT NEEDS. For a Dependabot PR that
+# condition is never satisfiable without a real model review, because every
+# shape Dependabot can produce is Tier 2 under `tierFor` (impact.ts) —
+# measured, not assumed:
+#
+#   package.json + bun.lock                  Tier 2 (always — high-impact path)
+#   packages/crypto/Cargo.toml + Cargo.lock  Tier 2 (always)
+#   apps/android/gradle/libs.versions.toml   Tier 2 (default — product code)
+#   .github/workflows/*.yml                  Tier 2 (always)
+#   deploy/docker/Dockerfile                 Tier 2 (default — product code)
+#
+# Tier 2 is the DEFAULT; Tier 0/1 is a narrow allowlist that in practice only
+# documentation reaches. So review-gate's `low-tier` short-circuit — the one
+# path that concludes green with no model call — is unreachable for a
+# dependency bump. `fleet/review == success` on a bot PR therefore ALWAYS
+# means a model read this diff and passed it.
+#
+# That is the whole safety argument, and it is why this file needs no
+# judgement of its own. Re-deriving "is this bump safe" here would be a
+# second copy of impact.ts's tier map, free to drift from the one the gate
+# actually enforces. What this workflow removes is the human *clicking*
+# approve, never the review itself.
+#
+# (An earlier draft of this comment claimed lockfile bumps took the low-tier
+# path and skipped the model. That was wrong, and it is the kind of wrong
+# that matters: a reviewer reading it correctly concluded the workflow would
+# auto-merge unreviewed dependency updates. Verified with `tierFor` directly
+# rather than by reading the tier map.)
+#
+# WHY `workflow_run`. It runs the version of this file on the BASE branch,
+# never the PR's. Every open Dependabot PR edits `.github/workflows/` — under
+# `pull_request` a bump could rewrite its own approver in the same diff that
+# the approver is deciding on. `workflow_run` closes that. It also means
+# `GITHUB_TOKEN` here is not the PR's restricted Dependabot token.
+#
+# WHY A PAT. `require_extra_approval_for_unattributed_changes` is not
+# satisfied by a review from `github-actions[bot]`. RELEASE_BOT_TOKEN is the
+# `llamenos-auto` machine user (#773) that already authors release PRs.
+
+name: Dependabot Auto-Approve
+
+on:
+  workflow_run:
+    # Every workflow that owns a required context. `fleet/review` is the gate
+    # this waits on; the others are listed so a late-finishing check still
+    # wakes this workflow rather than leaving an approvable PR sitting.
+    workflows: [CI, Fleet Review, Fleet Verify, Secret Scanning]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    # `workflow_run` fires for every PR and every push. Cheap bail-out before
+    # the job even starts; the real author check is below, against the API.
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - name: Approve if Dependabot and fleet/review is green
+        env:
+          # Not GITHUB_TOKEN: see "WHY A PAT" above.
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # The triggering run names its head SHA but not its PR. Resolve by
+          # SHA so this stays correct when several PRs share a branch name.
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
+                 --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open PR for $HEAD_SHA — nothing to approve."; exit 0
+          fi
+
+          author=$(gh api "repos/$REPO/pulls/$pr" --jq '.user.login')
+          if [ "$author" != "dependabot[bot]" ]; then
+            echo "PR #$pr is authored by $author, not Dependabot — out of scope."; exit 0
+          fi
+
+          # The single guard. `fleet/review` green means either the model
+          # reviewed this diff and passed, or review-gate classified it
+          # low-tier and concluded without a model call. Both are a real,
+          # auditable verdict; absent or failing is neither.
+          # The LATEST COMPLETED run, never `[0]` and never "any of them
+          # passed". A head commit routinely carries several fleet/review
+          # runs — every re-request adds one — and `[0]` is whichever the API
+          # happened to list first, which can be a stale PASS that an later
+          # FAIL supersedes. Same guard, same reason, as the queue check in
+          # fleet-review.yml: "a re-requested review that found a problem
+          # after an earlier pass must block, not be outvoted by the run it
+          # supersedes."
+          runs=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+                   --jq '.check_runs[] | select(.name == "fleet/review")' | jq -s -c '.')
+          completed=$(printf '%s' "$runs" | jq -c '[.[] | select(.status == "completed")] | sort_by(.completed_at)')
+          in_flight=$(printf '%s' "$runs" | jq -r '[.[] | select(.status != "completed")] | length')
+          if [ "$in_flight" != "0" ]; then
+            echo "PR #$pr has $in_flight fleet/review run(s) still in flight; judging the latest COMPLETED one."
+          fi
+          if [ "$(printf '%s' "$completed" | jq -r 'length')" = "0" ]; then
+            echo "PR #$pr has no completed fleet/review on $HEAD_SHA — not approving."; exit 0
+          fi
+          review=$(printf '%s' "$completed" | jq -r 'last | .conclusion')
+          if [ "$review" != "success" ]; then
+            echo "fleet/review on $HEAD_SHA is '$review', not success — not approving."
+            echo "A Tier 2 bump (anything touching .github/workflows/) waits here until it is reviewed."
+            exit 0
+          fi
+
+          # Idempotent: workflow_run fires once per completing workflow, so
+          # this step runs several times for one PR. Re-approving each time
+          # would spam the PR's timeline.
+          if gh api "repos/$REPO/pulls/$pr/reviews" --paginate \
+               --jq '.[] | select(.state == "APPROVED") | .user.login' | grep -qx 'llamenos-auto'; then
+            echo "PR #$pr already approved by llamenos-auto."
+          else
+            gh pr review "$pr" --repo "$REPO" --approve --body \
+              "Auto-approved: Dependabot bump with \`fleet/review\` green on \`$HEAD_SHA\`.
+
+            This approval satisfies \`require_extra_approval_for_unattributed_changes\` and nothing else — all five required contexts still gate the merge. A bump touching \`.github/workflows/\` is Tier 2 and reaches this point only after a real model review."
+            echo "Approved PR #$pr."
+          fi
+
+          # DELIBERATELY NOT `gh pr merge --auto`. See "WHY THIS DOES NOT MERGE".
+          echo "Approval posted. A human still lands this PR."

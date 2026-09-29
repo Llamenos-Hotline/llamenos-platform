@@ -73,10 +73,28 @@ if ! reporter_run_step "bddgen" bash -c 'bunx bddgen export > /dev/null && bunx 
 fi
 reporter_record_suite "bddgen" 1 0 0
 
-# Step 3: Check backend is reachable
+# Step 3: Check the backend can actually SERVE, not merely that it is alive.
+#
+# This gated on /api/health/live, a LIVENESS probe: it reports that the process
+# is up and says nothing about its dependencies. A dev server whose database had
+# been dropped from under it (a per-worktree test DB removed by teardown, the
+# process left running) answered that probe 200 OK indefinitely — so this gate
+# went green and the run died two steps later at `api-bootstrap` with "cannot
+# run BDD tests without admin account", blaming the admin account when the real
+# fault was `database "tel_594161" does not exist`.
+#
+# /api/health/ready is the READINESS probe and does query PostgreSQL. On that
+# same server it correctly returned 503:
+#   {"status":"degraded","checks":{"postgres":{"status":"failing",...}}}
+# Gating on it turns a misleading later failure into an accurate immediate one,
+# and the body is printed so the cause is in the output rather than in a log
+# nobody reads.
 HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
-if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/live" >/dev/null 2>&1; then
-  echo "Backend not reachable at ${HUB_URL}. Start it with:"
+if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/ready" >/dev/null 2>&1; then
+  echo "Backend at ${HUB_URL} is not READY (liveness can still pass — readiness queries PostgreSQL):"
+  curl -s --max-time 10 "${HUB_URL}/api/health/ready" 2>/dev/null | head -c 500
+  echo
+  echo "Start it with:"
   echo "  docker compose -f deploy/docker/docker-compose.dev.yml up -d && bun run dev:server"
   overall_result="fail"
   reporter_record_suite "health-check" 0 1 0
