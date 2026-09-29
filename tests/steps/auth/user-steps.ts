@@ -202,7 +202,7 @@ When('I paste two phone numbers in the textarea', async ({ page }) => {
   await bulkPhones.fill(`${phone1}\n${phone2}`)
   await page.evaluate(
     ({ p1, p2 }) => {
-      (window as unknown as Record<string, unknown>).__test_bulk_phones = [p1, p2]
+      (window as unknown as Record<string, unknown>).__test_ban_phones = [p1, p2]
     },
     { p1: phone1, p2: phone2 },
   )

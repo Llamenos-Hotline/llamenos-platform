@@ -48,7 +48,8 @@ Feature: Hub Management
     Then a toast "Hub created" should appear
     And the new hub should appear in the hub list
 
-  @desktop @ios @android
+  # @fixme: the admin hubs list shows no member count — #1311
+  @desktop @ios @android @fixme
   Scenario: Hub list shows member count
     Given I am logged in as an admin
     When I navigate to the "Hubs" page

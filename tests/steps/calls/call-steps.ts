@@ -186,6 +186,11 @@ Given('a date range is selected', async ({ page }) => {
   await dateFrom.fill('2024-01-01')
   await expect(dateTo).toBeVisible({ timeout: Timeouts.ELEMENT })
   await dateTo.fill('2024-12-31')
+  // The filter form applies on submit: filling the inputs alone changes neither
+  // the URL search nor `hasFilters`, which is why the clear-button check used to
+  // need a page-title fallback. Submit it, as a user would.
+  await page.getByTestId(TestIds.CALL_SEARCH_BTN).click()
+  await expect(page).toHaveURL(/[?&]dateFrom=2024-01-01/, { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the date range clear button', async ({ page }) => {

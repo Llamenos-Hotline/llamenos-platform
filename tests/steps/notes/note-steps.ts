@@ -73,7 +73,10 @@ When('I tap the create note FAB', async ({ page }) => {
 })
 
 Then('I should see the note creation screen', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Two desktop entry points: the notes page's inline form (note-form), and the
+  // note sheet that a conversation's "Add Note" opens (note-sheet).
+  const creation = page.getByTestId(TestIds.NOTE_FORM).or(page.getByTestId(TestIds.NOTE_SHEET))
+  await expect(creation).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the note text input should be visible', async ({ page }) => {
