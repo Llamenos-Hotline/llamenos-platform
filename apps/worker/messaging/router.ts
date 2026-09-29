@@ -254,8 +254,10 @@ messaging.post('/:channel/webhook',
     }
   }
 
-  // Forward to ConversationsService for processing
-  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_PUBKEY)
+  // Forward to ConversationsService for processing. The admin copy is sealed to
+  // the X25519 ADMIN_DECRYPTION_PUBKEY — never the Ed25519 ADMIN_PUBKEY, which
+  // no admin can open an HPKE envelope with (#1283).
+  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_DECRYPTION_PUBKEY)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -267,7 +269,7 @@ messaging.post('/:channel/webhook',
   // Auto-assignment for new conversations
   if (convResult.isNew && convResult.status === 'waiting') {
     backgroundTask(c,
-      tryAutoAssign(services, c.env, convResult.conversationId, channel, c.env.ADMIN_PUBKEY, hubId)
+      tryAutoAssign(services, c.env, convResult.conversationId, channel, hubId)
     )
   }
 
@@ -319,7 +321,6 @@ async function tryAutoAssign(
   env: Env,
   conversationId: string,
   channelType: MessagingChannelType,
-  adminPubkey: string,
   hubId: string | undefined,
 ): Promise<void> {
   try {

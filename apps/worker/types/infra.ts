@@ -50,7 +50,7 @@ export interface Env {
   TWILIO_AUTH_TOKEN: string
   TWILIO_PHONE_NUMBER: string
   ADMIN_PUBKEY: string
-  ADMIN_DECRYPTION_PUBKEY?: string // Separate pubkey for note/hub key encryption (falls back to ADMIN_PUBKEY)
+  ADMIN_DECRYPTION_PUBKEY?: string // X25519 HPKE recipient for every server-sealed admin envelope; independent of ADMIN_PUBKEY, never falls back to it (#1283)
   HOTLINE_NAME: string
   ENVIRONMENT: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
