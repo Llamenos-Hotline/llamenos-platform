@@ -333,7 +333,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14e_TranscriptionSettings() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let transcriptionLink = scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 5)
+        let transcriptionLink = scrollToVisible("settings-transcription-link", maxSwipes: 5)
         XCTAssertTrue(transcriptionLink.exists && transcriptionLink.isHittable, "'settings-transcription-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         transcriptionLink.tap()
         _ = anyElementExists(["transcription-enable-toggle", "transcription-language-picker"], timeout: 5)
@@ -343,7 +343,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14f_Diagnostics() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let diagLink = scrollToFind("settings-diagnostics-link", maxSwipes: 5, timeout: 5)
+        let diagLink = scrollToVisible("settings-diagnostics-link", maxSwipes: 5)
         XCTAssertTrue(diagLink.exists && diagLink.isHittable, "'settings-diagnostics-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         diagLink.tap()
         _ = anyElementExists(["crash-reporting-toggle", "send-crash-reports"], timeout: 5)
@@ -353,7 +353,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14g_HubManagement() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let hubsLink = scrollToFind("settings-hubs-link", maxSwipes: 5, timeout: 5)
+        let hubsLink = scrollToVisible("settings-hubs-link", maxSwipes: 5)
         XCTAssertTrue(hubsLink.exists && hubsLink.isHittable, "'settings-hubs-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         hubsLink.tap()
         _ = anyElementExists(["hubs-list", "hubs-loading"], timeout: 8)
@@ -363,7 +363,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_14h_PanicWipe() {
         launchAsAdminWithAPI()
         navigateToSettings()
-        let panicLink = scrollToFind("settings-panic-wipe", maxSwipes: 5, timeout: 5)
+        let panicLink = scrollToVisible("settings-panic-wipe", maxSwipes: 5)
         XCTAssertTrue(panicLink.exists && panicLink.isHittable, "'settings-panic-wipe' should be reachable by scrolling — refusing to screenshot the wrong screen")
         panicLink.tap()
         // Sheet appears — capture it
@@ -387,7 +387,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15c_AdminVolunteers() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-volunteers", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-volunteers", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-volunteers' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["volunteers-list", "volunteers-empty-state"], timeout: 8)
@@ -397,7 +397,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15d_AdminBanList() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-bans", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-bans", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-bans' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
@@ -407,7 +407,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15e_AdminAuditLog() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-audit-log", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-audit-log", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-audit-log' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
@@ -417,7 +417,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15f_AdminInvites() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-invites", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-invites", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-invites' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
@@ -427,7 +427,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15g_AdminCustomFields() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-custom-fields", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-custom-fields", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-custom-fields' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["custom-fields-list", "custom-fields-empty-state", "custom-fields-loading"], timeout: 8)
@@ -437,7 +437,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15h_AdminSchemaBrowser() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-schema-browser", maxSwipes: 3, timeout: 5)
+        let link = scrollToVisible("admin-schema-browser", maxSwipes: 3)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-schema-browser' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
@@ -447,7 +447,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15i_AdminTelephony() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-telephony-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-telephony-settings", maxSwipes: 5)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-telephony-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["telephony-settings-view", "telephony-provider-picker"], timeout: 8)
@@ -457,7 +457,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15j_AdminSpam() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-spam-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-spam-settings", maxSwipes: 5)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-spam-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = find("spam-settings-view").waitForExistence(timeout: 8)
@@ -467,7 +467,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15k_AdminSystemHealth() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-system-health", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-system-health", maxSwipes: 5)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-system-health' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["system-health-view", "health-loading", "health-error-state"], timeout: 10)
@@ -477,7 +477,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15l_AdminIVR() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-ivr-settings", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-ivr-settings", maxSwipes: 5)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-ivr-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["ivr-settings-view", "ivr-save-button"], timeout: 8)
@@ -487,7 +487,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_15m_AdminReportCategories() {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
-        let link = scrollToFind("admin-report-categories", maxSwipes: 5, timeout: 5)
+        let link = scrollToVisible("admin-report-categories", maxSwipes: 5)
         XCTAssertTrue(link.exists && link.isHittable, "'admin-report-categories' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
@@ -501,7 +501,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_16_DeviceLink() {
         launchAsAdminWithAPI()
         navigateToAccountSettings()
-        let linkBtn = scrollToFind("settings-link-device", maxSwipes: 5, timeout: 5)
+        let linkBtn = scrollToVisible("settings-link-device", maxSwipes: 5)
         XCTAssertTrue(linkBtn.exists && linkBtn.isHittable, "'settings-link-device' should be reachable by scrolling — refusing to screenshot the wrong screen")
         linkBtn.tap()
         _ = anyElementExists([

@@ -112,7 +112,11 @@ final class CaseManagementUITests: BaseUITest {
         let picker = find("case-type-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "A case type picker should be shown for two entity types")
         picker.tap()
-        let option = app.buttons[typeLabel]
+        // Once a case exists the list behind the sheet shows entity-type tabs with the
+        // same labels ("case-tab-<name>"), so match the picker's option, not the tab.
+        let option = app.buttons
+            .matching(NSPredicate(format: "label == %@ AND NOT (identifier BEGINSWITH 'case-tab-')", typeLabel))
+            .firstMatch
         XCTAssertTrue(option.waitForExistence(timeout: 5), "Case type '\(typeLabel)' should be selectable")
         option.tap()
 
@@ -299,7 +303,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I navigate to Cases and tap the case card") {
             navigateToCases()
-            tapCaseCard(titled: caseTitle)
+            openCase()
         }
         then("I should see the case detail header") {
             XCTAssertTrue(
@@ -317,7 +321,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
         }
         then("I should see the status pill") {
             let statusPill = find("case-status-pill")
@@ -338,7 +342,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
         }
         then("I should see all 4 detail tabs") {
             XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
@@ -375,7 +379,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail on the Details tab") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
         }
         then("the details tab should show field content or metadata") {
             let detailsTab = find("case-details-tab")
@@ -405,7 +409,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail and tap the Timeline tab") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let timelineTab = find("case-tab-timeline")
             if timelineTab.waitForExistence(timeout: 5) {
                 timelineTab.tap()
@@ -435,7 +439,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail and tap the Contacts tab") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let contactsTab = find("case-tab-contacts")
             if contactsTab.waitForExistence(timeout: 5) {
                 contactsTab.tap()
@@ -474,7 +478,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail and tap the Evidence tab") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let evidenceTab = find("case-tab-evidence")
             if evidenceTab.waitForExistence(timeout: 5) {
                 evidenceTab.tap()
@@ -515,7 +519,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail and tap the status pill") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let statusPill = find("case-status-pill")
             if statusPill.waitForExistence(timeout: 5) {
                 statusPill.tap()
@@ -548,7 +552,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open status sheet and select a different status") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let statusPill = find("case-status-pill")
             XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be shown in the case detail header for an admin")
             statusPill.tap()
@@ -590,7 +594,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail, navigate to timeline, and open the comment sheet") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
 
             // Switch to Timeline tab
             let timelineTab = find("case-tab-timeline")
@@ -652,7 +656,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
         }
         then("I should see the assign button if the case is unassigned to me") {
             XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
@@ -684,7 +688,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail and tap the close button") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
 
             let closeButton = find("case-detail-close")
             if closeButton.waitForExistence(timeout: 5) {
@@ -716,7 +720,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open a case detail") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
         }
         then("switching between tabs should render the correct content areas") {
             XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
@@ -791,7 +795,7 @@ final class CaseManagementUITests: BaseUITest {
         }
         when("I open the status sheet and cancel") {
             navigateToCases()
-            openCase(titled: caseTitle)
+            openCase()
             let statusPill = find("case-status-pill")
             XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be shown in the case detail header for an admin")
             statusPill.tap()
@@ -854,22 +858,22 @@ final class CaseManagementUITests: BaseUITest {
         createCase(title: title, typeLabel: "Arrest Case")
     }
 
-    /// Tap the case-list card whose decrypted title is `title`.
-    private func tapCaseCard(titled title: String) {
-        let card = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+    /// Open a case from the list and wait for its detail view. The scenario's Given
+    /// created one, so the list cannot be empty. Cards are matched by identifier, not
+    /// by title: a card shows its title only when the app can decrypt the case
+    /// summary, which iOS currently cannot (#1025).
+    private func openCase() {
+        let card = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
+            .firstMatch
         XCTAssertTrue(
             card.waitForExistence(timeout: 15),
-            "The case list should show the card for '\(title)', created in this scenario's Given"
+            "The case list should show the case created in this scenario's Given"
         )
         card.tap()
-    }
-
-    /// Open the case titled `title` and wait for its detail view.
-    private func openCase(titled title: String) {
-        tapCaseCard(titled: title)
         XCTAssertTrue(
             find("case-detail-header").waitForExistence(timeout: 10),
-            "Case detail should open after tapping the card for '\(title)'"
+            "Case detail should open after tapping a case card"
         )
     }
 
