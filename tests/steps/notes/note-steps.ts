@@ -10,7 +10,7 @@
  * Behavioral depth: Note creation verified via API, edit persistence verified,
  * no .or() fallbacks, no empty bodies, no expect(true).toBe(true).
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts, fillCallId } from '../../helpers'
@@ -85,13 +85,10 @@ Then('the save button should be visible', async ({ page }) => {
 })
 
 Then('the back button should be visible', async ({ page }) => {
-  // Notes page uses cancel button on forms or back button
-  const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const cancelBtn = page.getByTestId(TestIds.FORM_CANCEL_BTN)
-  // Check sequentially to avoid strict mode — at least one must be visible
-  const hasBack = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (hasBack) return
-  await expect(cancelBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The desktop note form is inline on the notes page: its way back is the form's
+  // cancel button (there is no back-btn on this route).
+  const form = page.getByTestId(TestIds.NOTE_FORM)
+  await expect(form.getByTestId(TestIds.FORM_CANCEL_BTN)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 // --- Note detail steps ---
@@ -134,19 +131,11 @@ When('I navigate to a note\'s detail view', async ({ page }) => {
 })
 
 Then('I should see the full note text', async ({ page }) => {
-  // Note sheet or note card should show actual text content
-  const noteSheet = page.getByTestId(TestIds.NOTE_SHEET)
-  const isSheet = await noteSheet.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isSheet) {
-    const text = await noteSheet.textContent()
-    expect(text!.length).toBeGreaterThan(0)
-  } else {
-    // Verify at least one note card has text
-    const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
-    await expect(noteCard).toBeVisible({ timeout: Timeouts.ELEMENT })
-    const text = await noteCard.textContent()
-    expect(text!.length).toBeGreaterThan(0)
-  }
+  // On desktop the note card is the detail view; its decrypted body renders in
+  // note-detail-text. Asserting the card's whole textContent would pass on the
+  // timestamp alone, so the body itself must carry text.
+  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
+  await expect(noteCard.getByTestId(TestIds.NOTE_DETAIL_TEXT)).toHaveText(/\S/, { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the creation date', async ({ page }) => {
@@ -166,16 +155,10 @@ When('I am on a note detail view', async ({ page }) => {
   await expect(page.getByTestId(TestIds.NOTE_CARD).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('a copy button should be visible in the top bar', async ({ page }) => {
-  // Verify the detail view is showing — note sheet or note card must be visible
-  const noteSheet = page.getByTestId(TestIds.NOTE_SHEET)
-  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
-  const isSheet = await noteSheet.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isSheet) {
-    // Copy button may be within the sheet
-    return
-  }
-  await expect(noteCard).toBeVisible({ timeout: Timeouts.ELEMENT })
+Then('a copy button should be visible in the top bar', async () => {
+  // The desktop note card has no copy control, so the scenario's claim is false
+  // on desktop. The previous body passed on the mere presence of a note card.
+  throw new Error('The desktop note view has no copy button')
 })
 
 // --- Note edit steps (note-edit.feature) ---
@@ -221,31 +204,23 @@ When('I tap the note edit button', async ({ page }) => {
 })
 
 Then('I should see the note edit input', async ({ page }) => {
-  // Check for edit input first, fall back to content field (both are valid edit modes)
-  const editInput = page.getByTestId(TestIds.NOTE_EDIT_INPUT)
-  const isEdit = await editInput.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isEdit) return
-  await expect(page.getByTestId(TestIds.NOTE_CONTENT)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Editing is inline: the edited card swaps its body for NoteEditForm.
+  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
+  await expect(noteCard.getByTestId(TestIds.NOTE_EDIT_INPUT)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('I cancel editing', async ({ page }) => {
-  // Try back button first, then cancel button
-  const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const hasBack = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (hasBack) {
-    await backBtn.click()
-    return
-  }
-  await page.getByTestId(TestIds.FORM_CANCEL_BTN).click()
+  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
+  const cancelBtn = noteCard.getByTestId(TestIds.FORM_CANCEL_BTN)
+  await expect(cancelBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await cancelBtn.click()
 })
 
 Then('I should see the note detail text', async ({ page }) => {
-  // After canceling edit, note detail text should be visible
-  const detailText = page.getByTestId(TestIds.NOTE_DETAIL_TEXT)
-  const isDetail = await detailText.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isDetail) return
-  // Fall back to note card being visible (may return to list)
-  await expect(page.getByTestId(TestIds.NOTE_CARD).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Back in read mode: the same card shows its body again and the edit input is gone.
+  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
+  await expect(noteCard.getByTestId(TestIds.NOTE_EDIT_INPUT)).toHaveCount(0, { timeout: Timeouts.ELEMENT })
+  await expect(noteCard.getByTestId(TestIds.NOTE_DETAIL_TEXT)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 // --- Notes search steps (notes-search.feature) ---
@@ -254,35 +229,52 @@ Then('I should see the notes search input', async ({ page }) => {
   await expect(page.getByTestId(TestIds.NOTE_SEARCH)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
+const NOTE_SEARCH_TERM = 'test'
+
 When('I type in the notes search input', async ({ page }) => {
   const searchInput = page.getByTestId(TestIds.NOTE_SEARCH)
   await expect(searchInput).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await searchInput.fill('test')
+  await searchInput.fill(NOTE_SEARCH_TERM)
+  // The search is a form: it applies on submit (Enter), not per keystroke. Filling
+  // the box alone changes nothing, which is what the old version of this step did.
+  await searchInput.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`[?&]search=${NOTE_SEARCH_TERM}\\b`), { timeout: Timeouts.ELEMENT })
 })
 
+/** The notes page once loading is over: the list, or the empty state (never the skeleton). */
+function settledNotes(page: Page) {
+  return page.getByTestId(TestIds.NOTE_LIST).or(page.getByTestId(TestIds.EMPTY_STATE))
+}
+
 Then('the notes list should update', async ({ page }) => {
-  // Verify the list has responded to the search — wait for network to settle
-  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-  // The note list or empty state should be visible after search
-  const anyContent = page.locator(
-    `[data-testid="${TestIds.NOTE_LIST}"], [data-testid="${TestIds.NOTE_CARD}"], [data-testid="${TestIds.EMPTY_STATE}"]`,
-  )
-  await expect(anyContent.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(settledNotes(page)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Every note still shown must match the search term (the filter runs on the
+  // decrypted body). An empty result is legitimate; an unfiltered list is not.
+  const bodies = await page.getByTestId(TestIds.NOTE_DETAIL_TEXT).allTextContents()
+  for (const body of bodies) {
+    expect(body.toLowerCase(), 'a note that does not match the search is still listed').toContain(NOTE_SEARCH_TERM)
+  }
 })
 
 When('I clear the notes search', async ({ page }) => {
   const searchInput = page.getByTestId(TestIds.NOTE_SEARCH)
   await expect(searchInput).toBeVisible({ timeout: Timeouts.ELEMENT })
   await searchInput.clear()
+  await searchInput.press('Enter')
+  await expect(page).not.toHaveURL(/[?&]search=[^&]/, { timeout: Timeouts.ELEMENT })
 })
 
-Then('I should see the full notes list', async ({ page }) => {
-  // After clearing search, the note list or empty state should be visible
-  const noteList = page.getByTestId(TestIds.NOTE_LIST)
-  const emptyState = page.getByTestId(TestIds.EMPTY_STATE)
-  const isList = await noteList.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isList) return
-  await expect(emptyState).toBeVisible({ timeout: Timeouts.ELEMENT })
+Then('I should see the full notes list', async ({ page, backendRequest: request, workerHub }) => {
+  await expect(settledNotes(page)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Which branch is correct is decided by the server, not by whichever element
+  // happened to render: if the hub has notes, the unfiltered list must show them.
+  const { total } = await listNotesViaApi(request, { hubId: workerHub })
+  if (total > 0) {
+    await expect(page.getByTestId(TestIds.NOTE_LIST)).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await expect(page.getByTestId(TestIds.NOTE_CARD).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  } else {
+    await expect(page.getByTestId(TestIds.EMPTY_STATE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  }
 })
 
 // --- Save and verify note creation via API ---
