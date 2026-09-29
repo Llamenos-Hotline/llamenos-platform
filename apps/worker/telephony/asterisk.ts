@@ -12,7 +12,14 @@ import { getPrompt } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
 /**
- * ARI command types — JSON commands sent to the sip-bridge sidecar.
+ * ARI command types — JSON commands sent to the sip-bridge sidecar
+ * (executed by sip-bridge/src/command-handler.ts; the two vocabularies are held
+ * together by deploy/docker/tests/telephony/asterisk-bridge-contract.test.ts).
+ *
+ * Every command acts on the channel of the webhook it answers. `metadata` is
+ * the query string of the callback the command triggers — the same context a
+ * Twilio action URL carries (hub, callSid, lang), which the telephony routes
+ * read from `url.searchParams`.
  */
 interface AriCommandBase {
   action: string
@@ -33,15 +40,16 @@ interface AriGatherCommand extends AriCommandBase {
   action: 'gather'
   numDigits: number
   timeout: number
-  callbackEvent: string
+  callbackEvent: 'language_selected' | 'captcha_response'
   metadata?: Record<string, string>
 }
 
 interface AriQueueCommand extends AriCommandBase {
   action: 'queue'
   queueName: string
-  waitMusicEvent: string
-  exitEvent: string
+  waitMusicEvent: 'wait_music'
+  exitEvent: 'queue_exit'
+  metadata: Record<string, string>
 }
 
 interface AriBridgeCommand extends AriCommandBase {
@@ -54,7 +62,8 @@ interface AriRecordCommand extends AriCommandBase {
   action: 'record'
   maxDuration: number
   finishOnKey: string
-  callbackEvent: string
+  callbackEvent: 'recording_complete'
+  metadata: Record<string, string>
 }
 
 interface AriHangupCommand extends AriCommandBase {
@@ -128,6 +137,17 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     return this.ariSpeak(content, lang)
   }
 
+  /** Hold the caller; wait-music and queue-exit callbacks carry the call's context */
+  private ariQueue(callSid: string, lang: string, hubId?: string): AriQueueCommand {
+    return {
+      action: 'queue',
+      queueName: callSid,
+      waitMusicEvent: 'wait_music',
+      exitEvent: 'queue_exit',
+      metadata: callContext(callSid, lang, hubId),
+    }
+  }
+
   // --- IVR / Call flow ---
 
   async handleLanguageMenu(params: LanguageMenuParams): Promise<TelephonyResponse> {
@@ -141,7 +161,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
           numDigits: 0,
           timeout: 0,
           callbackEvent: 'language_selected',
-          metadata: { auto: '1', forceLang: menu.language },
+          metadata: { auto: '1', forceLang: menu.language, ...hubParam(params.hubId) },
         },
       ])
     }
@@ -153,12 +173,13 @@ export class AsteriskAdapter extends SipBridgeAdapter {
         numDigits: 1,
         timeout: 8,
         callbackEvent: 'language_selected',
+        metadata: hubParam(params.hubId),
       },
     ])
   }
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
-    const { rateLimited, voiceCaptchaEnabled, callerLanguage: lang, callSid, audioUrls } = params
+    const { rateLimited, voiceCaptchaEnabled, callerLanguage: lang, callSid, audioUrls, hubId } = params
 
     if (rateLimited) {
       return this.ariJson([
@@ -181,34 +202,24 @@ export class AsteriskAdapter extends SipBridgeAdapter {
           numDigits: 4,
           timeout: 10,
           callbackEvent: 'captcha_response',
-          metadata: { callSid },
+          metadata: callContext(callSid, lang, hubId),
         },
       ])
     }
 
     return this.ariJson([
       this.ariSpeakOrPlay('connecting', lang, audioUrls),
-      {
-        action: 'queue',
-        queueName: callSid,
-        waitMusicEvent: 'wait_music',
-        exitEvent: 'queue_exit',
-      },
+      this.ariQueue(callSid, lang, hubId),
     ])
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    const { digits, expectedDigits, callerLanguage: lang, callSid } = params
+    const { digits, expectedDigits, callerLanguage: lang, callSid, hubId } = params
 
     if (digits === expectedDigits) {
       return this.ariJson([
         this.ariSpeak(getPrompt('captchaSuccess', lang), lang),
-        {
-          action: 'queue',
-          queueName: callSid,
-          waitMusicEvent: 'wait_music',
-          exitEvent: 'queue_exit',
-        },
+        this.ariQueue(callSid, lang, hubId),
       ])
     }
 
@@ -230,7 +241,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
   }
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
-    const { callerLanguage: lang, audioUrls, maxRecordingSeconds } = params
+    const { callerLanguage: lang, audioUrls, maxRecordingSeconds, callSid, hubId } = params
     return this.ariJson([
       this.ariSpeakOrPlay('voicemailPrompt', lang, audioUrls),
       {
@@ -238,6 +249,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
         maxDuration: maxRecordingSeconds || 120,
         finishOnKey: '#',
         callbackEvent: 'recording_complete',
+        metadata: callContext(callSid, lang, hubId),
       },
     ])
   }
@@ -290,6 +302,16 @@ export const ASTERISK_VOICES = new IvrVoiceCatalog<string>('asterisk', [
   ['hi', 'hi'],
   ['pt', 'pt-BR'],
 ])
+
+/** Query params the hub-scoped telephony routes resolve the hub from */
+function hubParam(hubId: string | undefined): Record<string, string> {
+  return hubId ? { hub: hubId } : {}
+}
+
+/** Callback context for a caller leg: the routes read callSid, lang (the caller's, not the TTS voice) and hub */
+function callContext(callSid: string, lang: string, hubId: string | undefined): Record<string, string> {
+  return { callSid, lang, ...hubParam(hubId) }
+}
 
 function getAsteriskLang(lang: string): string {
   return ASTERISK_VOICES.voiceForPrompt(lang)
