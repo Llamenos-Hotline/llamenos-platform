@@ -14,6 +14,8 @@ export type AdminWorld = {
   lastPhone: string
   lastHubId: string
   lastHubName: string
+  /** Display name set by 'I change my display name', checked after a reload. */
+  lastDisplayName: string
 }
 
 export type RolesWorld = {
@@ -155,7 +157,7 @@ export const test = base.extend<
   }, { auto: true }],
   // Scenario-scoped world objects — fresh per test, no cross-scenario leakage.
   adminWorld: async ({}, use) => {
-    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastHubId: '', lastHubName: '' })
+    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastHubId: '', lastHubName: '', lastDisplayName: '' })
   },
   rolesWorld: async ({}, use) => {
     await use({ cachedRoles: [], lastCreatedRoleId: '', volunteerNsec: '', reporterNsec: '' })
