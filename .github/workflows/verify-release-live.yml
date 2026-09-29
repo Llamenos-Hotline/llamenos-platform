@@ -127,7 +127,7 @@ jobs:
       platforms: ${{ steps.resolve.outputs.platforms }}
     steps:
       - name: Checkout (surfaces config only)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github/workflows/verify-release-live.surfaces.json
@@ -534,7 +534,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (package name only)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             apps/android/fastlane/Appfile
@@ -714,7 +714,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (bundle identifier only)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             apps/ios/fastlane/Appfile
@@ -919,7 +919,7 @@ jobs:
     if: always()
     steps:
       - name: Checkout (surfaces config, for the exclusion reasons)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github/workflows/verify-release-live.surfaces.json
