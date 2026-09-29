@@ -64,7 +64,11 @@ IOS_RE='^apps/ios/'
 # tier: still a real iOS gate, 2 runners instead of 4.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
-DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$)'
+# desktop-e2e.yml is here for the same reason ios-e2e.yml is in IOS_FULL_RE:
+# its `build` and `test` (E2E (Linux)) jobs gate on this flag, so without it a
+# PR that edits only that workflow skips the very jobs it changes. #910 (the
+# E2E (Linux) Rust cache) merged that way, never having run E2E (Linux).
+DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$|\.github/workflows/desktop-e2e\.yml$)'
 # Carved out of DESKTOP_RE's blanket `tests/` prefix: directories under tests/
 # that are NOT desktop e2e. Without this, `ci.yml`'s `e2e` job
 # (`if: desktop == 'true' || backend == 'true'`) runs four Playwright shards,
@@ -127,7 +131,15 @@ AUDIT_RE='^(package\.json$|bun\.lock)'
 # tests run inside the backend-unit job (see that job's own comment in
 # ci.yml) — its own source and tests must gate that job too, independent of
 # the `backend` flag.
-ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$)'
+#
+# .claude/agents/ is orchestrator INPUT, not documentation: loadLanes() and
+# loadLaneScopes() parse fragments/*.md into lane briefs and the scope gate,
+# and tests/orchestrator/{scope,fragments,shared-fragment}.test.ts read the
+# real files — including the rail that fails when an assembled
+# <lane>-supervisor.md is stale against its fragment. Its `.md` files match
+# DOCS_ONLY_EXEMPT_RE, so before this an agents-only PR (#981) set no flag and
+# skipped backend-unit, the one job that checks them.
+ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$|\.claude/agents/)'
 # The cross-platform BDD feature corpus (packages/test-specs/features/**)
 # and the one composite action every backend-bootstrapping job shares
 # (.github/actions/bootstrap-backend) — both are read directly by ci.yml's
