@@ -28,12 +28,25 @@ on:
         description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
         type: boolean
         default: false
+      tier:
+        description: >-
+          full (all 326 tests, 4 shards) or smoke (the ci-smoke.txt classes,
+          2 shards). ci.yml passes the tier detect-changed-platforms.sh chose;
+          anything that can rebuild the iOS binary gets full. Defaults to full,
+          so an unset or unrecognised value never silently narrows the gate.
+        type: string
+        default: full
   workflow_dispatch:
     inputs:
       include-quarantined:
         description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
         type: boolean
         default: true
+      tier:
+        description: full (all tests) or smoke (ci-smoke.txt classes only)
+        type: choice
+        options: [full, smoke]
+        default: full
   # ci.yml's `ios` flag is set by apps/ios/ and shared dependencies, not by
   # apps/worker/ or src/server/ — so a backend-only PR that breaks the iOS
   # client's API contract never runs this suite. The nightly run on main
@@ -122,6 +135,11 @@ jobs:
       # Every test the merge gate skips must exist and name the issue that owns it.
       - name: Check the UI test quarantine
         run: python3 apps/ios/scripts/ui-tests.py check-quarantine
+
+      # A smoke entry naming a deleted class would shrink the smoke tier
+      # silently — the tier must fail loudly instead, like the quarantine does.
+      - name: Check the UI smoke tier
+        run: python3 apps/ios/scripts/ui-tests.py check-smoke
 
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
@@ -241,7 +259,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # `--total` below is `strategy.job-total`, so the shard count follows
+        # this list automatically — the smoke tier partitions its own classes
+        # across 2 shards rather than running a fraction of the full 4.
+        shard: ${{ fromJSON(inputs.tier == 'smoke' && '[0, 1]' || '[0, 1, 2, 3]') }}
 
     steps:
       - name: Checkout
@@ -308,9 +329,13 @@ jobs:
         id: shard
         env:
           INCLUDE_QUARANTINED: ${{ github.event_name == 'schedule' || inputs.include-quarantined }}
+          # Only the literal string `smoke` narrows the selection. The nightly
+          # schedule and push runs pass no tier at all and so run full.
+          IOS_TIER: ${{ inputs.tier }}
         run: |
           extra=()
           if [ "$INCLUDE_QUARANTINED" = "true" ]; then extra=(--include-quarantined); fi
+          if [ "$IOS_TIER" = "smoke" ]; then extra+=(--only-smoke); fi
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee /tmp/shard-args.txt
           test -s /tmp/shard-args.txt || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 

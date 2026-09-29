@@ -34,6 +34,16 @@ CHANGED_FILES=$(cat)
 SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/i18n/|package\.json$|bun\.lock|\.mise\.toml$|tsconfig[^/]*\.json$|vitest[^/]*\.config\.ts$|scripts/|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 
 IOS_RE='^apps/ios/'
+# Which iOS TIER a diff earns (see apps/ios/Tests/UI/ci-smoke.txt for the full
+# rationale). `ios` above stays a blast-radius flag — it is `true` for every
+# SHARED_DEPS_RE hit, because a change under scripts/ or package.json cannot be
+# proven harmless to iOS and must never gate iOS to `false`. But only a diff
+# that can actually change the iOS BINARY deserves all 326 tests: apps/ios/
+# itself, the three packages whose codegen/FFI output is compiled into the app
+# (crypto -> UniFFI XCFramework, protocol -> Swift types, i18n -> .strings),
+# and the CI wiring that decides any of this. Everything else runs the smoke
+# tier: still a real iOS gate, 2 runners instead of 4.
+IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 DESKTOP_RE='^(apps/desktop/|src/client/|tests/)'
 # src/server/ is the actual Bun server entry point (`bun run build:server`,
@@ -80,6 +90,7 @@ DOCS_ONLY_EXEMPT_RE='\.md$|^site/'
 
 docs_only=true
 ios=false
+ios_full=false
 android=false
 desktop=false
 backend=false
@@ -101,6 +112,7 @@ while IFS= read -r file; do
   fi
 
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
+  echo "$file" | grep -qE "$IOS_FULL_RE" && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
   echo "$file" | grep -qE "$DESKTOP_RE" && { desktop=true; echo "Desktop file changed: $file" >&2; }
   echo "$file" | grep -qE "$BACKEND_RE" && { backend=true; echo "Backend file changed: $file" >&2; }
@@ -114,10 +126,18 @@ done <<< "$CHANGED_FILES"
 
 app=$([ "$docs_only" = "false" ] && echo true || echo false)
 
+# full > smoke > none. `ios=true` with `ios_full=false` is the blast-radius
+# case: iOS is reachable from the diff but cannot have changed the binary.
+if [ "$ios_full" = "true" ]; then ios_tier=full
+elif [ "$ios" = "true" ]; then ios_tier=smoke
+else ios_tier=none
+fi
+
 cat <<EOF
 docs_only=$docs_only
 app=$app
 ios=$ios
+ios_tier=$ios_tier
 android=$android
 desktop=$desktop
 backend=$backend
