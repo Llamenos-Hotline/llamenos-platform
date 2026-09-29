@@ -2406,9 +2406,10 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    * send every orchestrator-only PR through four `e2e` shards and E2E (Linux)
    * — five Docker Compose stacks for a change no Playwright project loads.
    *
-   * Every job gated on `desktop`: ci.yml's `e2e` (bootstrap + bdd projects;
-   * also runs on `backend`) and `desktop-unit`, and desktop-e2e.yml's `build`
-   * and `test` — the latter is E2E (Linux) (bootstrap + chromium projects).
+   * Every job gated on `desktop`: ci.yml's `e2e` (bootstrap + bdd projects)
+   * and `desktop-unit`, and desktop-e2e.yml's `build` and `test` — the latter
+   * is E2E (Linux) (bootstrap + chromium projects). All but `desktop-unit`
+   * also run on `backend`: they drive the app against a PR-built server.
    */
   const DESKTOP_GATED: Array<[string, string]> = [
     ['ci.yml', 'e2e'],
@@ -2417,8 +2418,22 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['desktop-e2e.yml', 'test'],
   ]
 
+  /** The flags a workflow's `changes` job actually exports. A job can only
+   *  observe these: `needs.changes.outputs.<flag>` for any other flag is ''
+   *  at runtime, even when the script printed `<flag>=true`. */
+  function declaredOutputs(text: string): Set<string> {
+    const block = jobBlock(text, 'changes')
+    const outputsBlock = block.match(/\n {4}outputs:\n((?: {6}.*\n| *#.*\n)+)/)?.[1] ?? ''
+    return new Set([...outputsBlock.matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1] as string))
+  }
+
+  /** Evaluates `job` in `file` the way Actions does: against only the flags
+   *  that workflow's `changes` job declares, not everything the script printed. */
   function runsIn(file: string, job: string, outputs: Record<string, string>): boolean {
-    return evalJobIf(jobLevelIf(jobBlock(workflowText(file), job)), outputs)
+    const text = workflowText(file)
+    const declared = declaredOutputs(text)
+    const visible = Object.fromEntries(Object.entries(outputs).filter(([k]) => declared.has(k)))
+    return evalJobIf(jobLevelIf(jobBlock(text, job)), visible)
   }
 
   it.each([
@@ -2556,8 +2571,68 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     },
   )
 
-  it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop gate — removing it must fail this test', (job) => {
-    expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
+  // E2E (Linux) and ci.yml's `e2e` both run Playwright against a backend built
+  // from the PR (`bootstrap-backend` runs `up --build`), so both gate on
+  // `desktop` OR `backend`. Before this, a server-only PR (#1160) skipped E2E
+  // (Linux) while ci.yml's `e2e` ran. Pinned verbatim: dropping either term,
+  // or the whole `if:`, must fail here.
+  it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop-or-backend gate — removing either term must fail this test', (job) => {
+    const gate = jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))
+    expect(gate).toBe("needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'")
+    expect(gate, 'E2E (Linux) and ci.yml e2e drive the same app against the same PR-built backend').toBe(jobLevelIf(jobBlock(ciYaml(), 'e2e')))
+  })
+
+  /**
+   * The same property as the ci.yml table above, for jobs in any workflow —
+   * evaluated through `runsIn`, so a flag the workflow's `changes` job never
+   * exports reads as '' exactly as it does on a runner.
+   *  (a) a server-only change runs E2E (Linux) — #1160 changed only
+   *      apps/worker/** and src/server/index.ts and it skipped;
+   *  (b) editing desktop-e2e.yml runs the jobs it defines — #910 changed only
+   *      that file and merged without ever running them;
+   *  (c) a .claude/agents/** change runs backend-unit, where the fleet tests
+   *      that parse the agent fragments live — #981 changed only
+   *      .claude/agents/*.md and backend-unit skipped.
+   */
+  it.each([
+    ['desktop-e2e.yml', 'build', 'apps/worker/app.ts'],
+    ['desktop-e2e.yml', 'test', 'apps/worker/app.ts'],
+    ['desktop-e2e.yml', 'build', 'src/server/index.ts'],
+    ['desktop-e2e.yml', 'test', 'src/server/index.ts'],
+    ['desktop-e2e.yml', 'build', '.github/workflows/desktop-e2e.yml'],
+    ['desktop-e2e.yml', 'test', '.github/workflows/desktop-e2e.yml'],
+    ['ci.yml', 'backend-unit', '.claude/agents/fragments/backend-supervisor.md'],
+    ['ci.yml', 'backend-unit', '.claude/agents/backend-supervisor.md'],
+    ['ci.yml', 'backend-unit', '.claude/agents/build-agents.sh'],
+  ])('%s "%s" runs when "%s" changes alone', (wf, job, file) => {
+    const outputs = classify([file])
+    expect(runsIn(wf, job, outputs), `expected ${wf} "${job}" to RUN when only "${file}" changes; outputs=${JSON.stringify(outputs)}`).toBe(true)
+  })
+
+  // (c)'s mechanism, stated directly: an agents change is fleet input, so it
+  // sets `orchestrator`. `docs_only` deliberately stays true for the .md files
+  // — its one consumer, crypto-guardrails, cannot observe them — so the job
+  // decision rests on `orchestrator` alone and must not regress to "no flag".
+  it.each([
+    ['.claude/agents/fragments/backend-supervisor.md'],
+    ['.claude/agents/backend-supervisor.md'],
+  ])('"%s" alone sets orchestrator', (file) => {
+    expect(classify([file]).orchestrator, file).toBe('true')
+  })
+
+  // An `if:` that names a flag its own `changes` job does not export compares
+  // '' to 'true' and skips forever, while every script-level check stays green.
+  // desktop-e2e.yml exported only `desktop`, so gating it on `backend` alone
+  // would have shipped as a silent no-op.
+  it.each([['ci.yml'], ['desktop-e2e.yml'], ['ios-e2e.yml']])('every needs.changes.outputs.* flag %s references is declared by its changes job', (wf) => {
+    const text = workflowText(wf)
+    const declared = declaredOutputs(text)
+    expect(declared.size, `${wf}: found no declared changes outputs — this rail would pass vacuously`).toBeGreaterThan(0)
+    const referenced = new Set([...text.matchAll(/needs\.changes\.outputs\.([a-z_]+)/g)].map((m) => m[1] as string))
+    expect(referenced.size).toBeGreaterThan(0)
+    for (const flag of referenced) {
+      expect(declared.has(flag), `${wf} gates on needs.changes.outputs.${flag}, which its changes job never exports`).toBe(true)
+    }
   })
 
   it('the changes job diffs against the PR/merge-group base sha, not HEAD^', () => {
