@@ -38,7 +38,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_01b_Onboarding() {
         launchClean()
         let createBtn = find("create-identity")
-        guard createBtn.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(createBtn.waitForExistence(timeout: 10), "Login screen should offer 'create-identity' — refusing to screenshot the wrong screen")
         createBtn.tap()
         let pinInput = find("pin-input")
         _ = pinInput.waitForExistence(timeout: 5)
@@ -52,7 +52,7 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_01c_PINSet() {
         launchClean()
         let createBtn = find("create-identity")
-        guard createBtn.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(createBtn.waitForExistence(timeout: 10), "Login screen should offer 'create-identity' — refusing to screenshot the wrong screen")
         createBtn.tap()
         let pinInput = find("pin-input")
         _ = pinInput.waitForExistence(timeout: 5)
@@ -64,7 +64,7 @@ final class ScreenshotAuditTests: BaseUITest {
         // Launch authenticated so there IS an identity, then lock immediately.
         launchAuthenticated()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         // Lock the app via the lock button on the dashboard.
         let lockBtn = find("lock-app")
         if lockBtn.waitForExistence(timeout: 3) {
@@ -88,10 +88,9 @@ final class ScreenshotAuditTests: BaseUITest {
 
     /// Dashboard with an active call card (requires backend simulation).
     func testScreenshot_02b_DashboardActiveCall() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         simulateIncomingCall()
         let callCard = find("active-call-card")
         _ = callCard.waitForExistence(timeout: 8)
@@ -103,13 +102,12 @@ final class ScreenshotAuditTests: BaseUITest {
     // ──────────────────────────────────────────────────────────────────────────────
 
     func testScreenshot_03_ActiveCall() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         simulateIncomingCall()
         let callCard = find("active-call-card")
-        guard callCard.waitForExistence(timeout: 8) else { return }
+        XCTAssertTrue(callCard.waitForExistence(timeout: 8), "Active call card should render after a simulated incoming call to this class's hub — refusing to screenshot the wrong screen")
         screenshot("03-active-call")
     }
 
@@ -128,7 +126,6 @@ final class ScreenshotAuditTests: BaseUITest {
 
     /// Notes list with data — requires backend.
     func testScreenshot_04b_NotesListWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         navigateToNotes()
         _ = anyElementExists(["notes-list", "notes-empty-state"], timeout: 12)
@@ -147,7 +144,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_05b_CasesListWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         navigateToCases()
         _ = anyElementExists(["case-list", "case-empty-state", "cms-not-enabled"], timeout: 12)
@@ -166,7 +162,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_06b_ConversationsWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         simulateIncomingMessage(body: "Hi, I need some help please.")
         navigateToConversations()
@@ -175,10 +170,9 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     func testScreenshot_06c_ConversationDetail() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let (convId, _) = simulateIncomingMessage(body: "Hello, I need help.")
-        guard !convId.isEmpty else { return }
+        XCTAssertFalse(convId.isEmpty, "POST /api/test-simulate/incoming-message should return a conversationId")
         navigateToConversations()
         let row = find("conversation-row-\(convId)")
         if row.waitForExistence(timeout: 10) && row.isHittable {
@@ -212,21 +206,20 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_08a_Reports() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let reportsBtn = find("dashboard-reports-action")
-        guard reportsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(reportsBtn.waitForExistence(timeout: 5), "Dashboard should offer the Reports quick action ('dashboard-reports-action') — refusing to screenshot the wrong screen")
         reportsBtn.tap()
         _ = anyElementExists(["reports-list", "reports-empty-state", "reports-loading"], timeout: 10)
         screenshot("08a-reports-list")
     }
 
     func testScreenshot_08b_ReportsWithData() {
-        guard !testHubId.isEmpty else { return }
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 15) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 15), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let reportsBtn = find("dashboard-reports-action")
-        guard reportsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(reportsBtn.waitForExistence(timeout: 5), "Dashboard should offer the Reports quick action ('dashboard-reports-action') — refusing to screenshot the wrong screen")
         reportsBtn.tap()
         _ = anyElementExists(["reports-list", "reports-empty-state"], timeout: 12)
         screenshot("08b-reports-data")
@@ -239,9 +232,9 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_09_Contacts() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let contactsBtn = find("dashboard-contacts-action")
-        guard contactsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(contactsBtn.waitForExistence(timeout: 5), "Dashboard should offer the Contacts quick action ('dashboard-contacts-action') — refusing to screenshot the wrong screen")
         contactsBtn.tap()
         _ = anyElementExists(["contacts-list", "contacts-empty-state", "contacts-loading"], timeout: 10)
         screenshot("09-contacts-list")
@@ -254,9 +247,9 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_10_Blasts() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let blastsBtn = find("dashboard-blasts-action")
-        guard blastsBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(blastsBtn.waitForExistence(timeout: 5), "Dashboard should offer the Blasts quick action ('dashboard-blasts-action') — refusing to screenshot the wrong screen")
         blastsBtn.tap()
         _ = anyElementExists(["blasts-list", "blasts-empty-state", "blasts-loading"], timeout: 10)
         screenshot("10-blasts-list")
@@ -269,9 +262,9 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_11_Triage() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let triageBtn = find("dashboard-triage-action")
-        guard triageBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(triageBtn.waitForExistence(timeout: 5), "Dashboard should offer the Triage quick action ('dashboard-triage-action') — refusing to screenshot the wrong screen")
         triageBtn.tap()
         _ = anyElementExists(["triage-list", "triage-empty-state", "triage-loading"], timeout: 10)
         screenshot("11-triage-list")
@@ -284,9 +277,9 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_12_CallHistory() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let historyBtn = find("dashboard-call-history-action")
-        guard historyBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(historyBtn.waitForExistence(timeout: 5), "Dashboard should offer the Call History quick action ('dashboard-call-history-action') — refusing to screenshot the wrong screen")
         historyBtn.tap()
         _ = anyElementExists(["call-history-list", "call-history-empty", "call-history-loading"], timeout: 10)
         screenshot("12-call-history")
@@ -299,9 +292,9 @@ final class ScreenshotAuditTests: BaseUITest {
     func testScreenshot_13_Help() {
         launchAsAdminWithAPI()
         let dashboard = find("dashboard-title")
-        guard dashboard.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10), "Dashboard should be on screen after launch — refusing to screenshot the wrong screen")
         let helpBtn = find("dashboard-help-action")
-        guard helpBtn.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(helpBtn.waitForExistence(timeout: 5), "Dashboard should offer the Help quick action ('dashboard-help-action') — refusing to screenshot the wrong screen")
         helpBtn.tap()
         let helpScreen = find("help-screen")
         _ = helpScreen.waitForExistence(timeout: 5)
@@ -341,7 +334,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let transcriptionLink = scrollToFind("settings-transcription-link", maxSwipes: 5, timeout: 5)
-        guard transcriptionLink.exists && transcriptionLink.isHittable else { return }
+        XCTAssertTrue(transcriptionLink.exists && transcriptionLink.isHittable, "'settings-transcription-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         transcriptionLink.tap()
         _ = anyElementExists(["transcription-enable-toggle", "transcription-language-picker"], timeout: 5)
         screenshot("14e-transcription-settings")
@@ -351,7 +344,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let diagLink = scrollToFind("settings-diagnostics-link", maxSwipes: 5, timeout: 5)
-        guard diagLink.exists && diagLink.isHittable else { return }
+        XCTAssertTrue(diagLink.exists && diagLink.isHittable, "'settings-diagnostics-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         diagLink.tap()
         _ = anyElementExists(["crash-reporting-toggle", "send-crash-reports"], timeout: 5)
         screenshot("14f-diagnostics")
@@ -361,7 +354,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let hubsLink = scrollToFind("settings-hubs-link", maxSwipes: 5, timeout: 5)
-        guard hubsLink.exists && hubsLink.isHittable else { return }
+        XCTAssertTrue(hubsLink.exists && hubsLink.isHittable, "'settings-hubs-link' should be reachable by scrolling — refusing to screenshot the wrong screen")
         hubsLink.tap()
         _ = anyElementExists(["hubs-list", "hubs-loading"], timeout: 8)
         screenshot("14g-hub-management")
@@ -371,7 +364,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToSettings()
         let panicLink = scrollToFind("settings-panic-wipe", maxSwipes: 5, timeout: 5)
-        guard panicLink.exists && panicLink.isHittable else { return }
+        XCTAssertTrue(panicLink.exists && panicLink.isHittable, "'settings-panic-wipe' should be reachable by scrolling — refusing to screenshot the wrong screen")
         panicLink.tap()
         // Sheet appears — capture it
         _ = find("pin-pad").waitForExistence(timeout: 3)
@@ -395,7 +388,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-volunteers", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-volunteers' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["volunteers-list", "volunteers-empty-state"], timeout: 8)
         screenshot("15c-admin-volunteers")
@@ -405,7 +398,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-bans", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-bans' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
         screenshot("15d-admin-ban-list")
@@ -415,7 +408,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-audit-log", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-audit-log' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
         screenshot("15e-admin-audit-log")
@@ -425,7 +418,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-invites", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-invites' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
         screenshot("15f-admin-invites")
@@ -435,7 +428,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-custom-fields", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-custom-fields' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["custom-fields-list", "custom-fields-empty-state", "custom-fields-loading"], timeout: 8)
         screenshot("15g-admin-custom-fields")
@@ -445,7 +438,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-schema-browser", maxSwipes: 3, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-schema-browser' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
         screenshot("15h-admin-schema-browser")
@@ -455,7 +448,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-telephony-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-telephony-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["telephony-settings-view", "telephony-provider-picker"], timeout: 8)
         screenshot("15i-admin-telephony")
@@ -465,7 +458,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-spam-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-spam-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = find("spam-settings-view").waitForExistence(timeout: 8)
         screenshot("15j-admin-spam")
@@ -475,7 +468,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-system-health", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-system-health' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["system-health-view", "health-loading", "health-error-state"], timeout: 10)
         screenshot("15k-admin-system-health")
@@ -485,7 +478,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-ivr-settings", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-ivr-settings' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         _ = anyElementExists(["ivr-settings-view", "ivr-save-button"], timeout: 8)
         screenshot("15l-admin-ivr")
@@ -495,7 +488,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAdminPanel()
         let link = scrollToFind("admin-report-categories", maxSwipes: 5, timeout: 5)
-        guard link.exists && link.isHittable else { return }
+        XCTAssertTrue(link.exists && link.isHittable, "'admin-report-categories' should be reachable by scrolling — refusing to screenshot the wrong screen")
         link.tap()
         sleep(2)
         screenshot("15m-admin-report-categories")
@@ -509,7 +502,7 @@ final class ScreenshotAuditTests: BaseUITest {
         launchAsAdminWithAPI()
         navigateToAccountSettings()
         let linkBtn = scrollToFind("settings-link-device", maxSwipes: 5, timeout: 5)
-        guard linkBtn.exists && linkBtn.isHittable else { return }
+        XCTAssertTrue(linkBtn.exists && linkBtn.isHittable, "'settings-link-device' should be reachable by scrolling — refusing to screenshot the wrong screen")
         linkBtn.tap()
         _ = anyElementExists([
             "device-link-view", "qr-scanner", "device-link-connecting", "device-link-error"

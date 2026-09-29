@@ -3,52 +3,25 @@ import XCTest
 /// XCUITest suite for the notes workflow: creating notes, viewing the notes list,
 /// tapping into note detail, and verifying custom field display.
 ///
-/// These tests require the app to be in an authenticated state with a valid hub connection.
-/// They use the `--test-authenticated` launch argument to skip auth flow.
-final class NoteFlowUITests: XCTestCase {
-
-    private var app: XCUIApplication!
-
-    override func setUp() {
-        super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        // Launch with pre-authenticated state and reset note data
-        app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchAnsweringSystemPrompts()
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
-    }
+/// The create-sheet scenarios run pre-authenticated without a backend
+/// (`launchAuthenticated`). The note-detail scenarios need a note to open, so they
+/// connect to the live backend and create one through the app's own create sheet —
+/// a fresh class hub holds no notes, and a detail test that opened "whatever is
+/// there" used to pass without asserting anything.
+final class NoteFlowUITests: BaseUITest {
 
     // MARK: - Tab Navigation
 
     func testNotesTabExists() {
+        launchAuthenticated()
+
         let tabView = find("main-tab-view")
         XCTAssertTrue(
             tabView.waitForExistence(timeout: 10),
             "Main tab view should be visible after authentication"
         )
 
-        navigateToNotesTab()
+        navigateToNotes()
 
         // Notes list, empty state, loading, or error should appear
         let found = anyElementExists([
@@ -60,7 +33,9 @@ final class NoteFlowUITests: XCTestCase {
     // MARK: - Create Note
 
     func testCreateNoteFlowOpensSheet() {
-        navigateToNotesTab()
+        launchAuthenticated()
+
+        navigateToNotes()
 
         // Wait for notes content to load
         _ = anyElementExists([
@@ -92,7 +67,9 @@ final class NoteFlowUITests: XCTestCase {
     }
 
     func testCreateNoteCancel() {
-        navigateToNotesTab()
+        launchAuthenticated()
+
+        navigateToNotes()
 
         // Wait for content
         _ = anyElementExists([
@@ -119,7 +96,9 @@ final class NoteFlowUITests: XCTestCase {
     }
 
     func testCreateNoteWithText() {
-        navigateToNotesTab()
+        launchAuthenticated()
+
+        navigateToNotes()
 
         // Wait for content
         _ = anyElementExists([
@@ -145,7 +124,9 @@ final class NoteFlowUITests: XCTestCase {
     // MARK: - Empty State
 
     func testEmptyStateShowsCreateButton() {
-        navigateToNotesTab()
+        launchAuthenticated()
+
+        navigateToNotes()
 
         // If there are no notes, the empty state should have a create button
         let emptyState = find("notes-empty-state")
@@ -162,47 +143,26 @@ final class NoteFlowUITests: XCTestCase {
     // MARK: - Note Detail
 
     func testNoteDetailShowsContent() {
-        navigateToNotesTab()
+        launchWithAPI()
+        let noteText = uniqueNoteText()
+        createNote(text: noteText)
 
-        // Wait for the notes list to load
-        let notesList = find("notes-list")
-        guard notesList.waitForExistence(timeout: 10) else {
-            // No notes to test detail on — skip
-            return
-        }
-
-        // Tap the first note row
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        // Detail view should appear
-        let detailView = find("note-detail-view")
-        XCTAssertTrue(
-            detailView.waitForExistence(timeout: 5),
-            "Note detail view should appear when tapping a note"
-        )
+        openNote(containing: noteText)
 
         // Note text should be visible
-        let noteText = find("note-detail-text")
+        let noteTextElement = find("note-detail-text")
         XCTAssertTrue(
-            noteText.waitForExistence(timeout: 3),
+            noteTextElement.waitForExistence(timeout: 3),
             "Note detail should display the note text"
         )
     }
 
     func testNoteDetailMenuExists() {
-        navigateToNotesTab()
+        launchWithAPI()
+        let noteText = uniqueNoteText()
+        createNote(text: noteText)
 
-        let notesList = find("notes-list")
-        guard notesList.waitForExistence(timeout: 10) else { return }
-
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        let detailView = find("note-detail-view")
-        guard detailView.waitForExistence(timeout: 5) else { return }
+        openNote(containing: noteText)
 
         // Menu button should exist
         let menuButton = find("note-detail-menu")
@@ -212,22 +172,43 @@ final class NoteFlowUITests: XCTestCase {
         )
     }
 
-    // MARK: - Navigation Helpers
+    // MARK: - Fixtures
 
-    private func navigateToNotesTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
-        }
-
-        // Try tapping the Notes tab
-        let tabBar = app.tabBars.firstMatch
-        if tabBar.waitForExistence(timeout: 5) {
-            let notesTabButton = tabBar.buttons.element(boundBy: 1)  // Second tab = Notes
-            if notesTabButton.exists {
-                notesTabButton.tap()
-            }
-        }
+    private func uniqueNoteText() -> String {
+        "UI test note \(UUID().uuidString.prefix(8))"
     }
+
+    /// Create a note through the Notes tab's create sheet (client-side E2EE included)
+    /// and wait for the sheet to close.
+    private func createNote(text: String) {
+        navigateToNotes()
+        let createButton = find("create-note-button")
+        XCTAssertTrue(createButton.waitForExistence(timeout: 10), "Create note button should exist in the Notes toolbar")
+        createButton.tap()
+
+        let textEditor = find("note-text-editor")
+        XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "Note text editor should appear in the create sheet")
+        textEditor.tap()
+        textEditor.typeText(text)
+
+        find("save-note").tap()
+        XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")
+        XCTAssertFalse(find("note-create-error").exists, "Saving the note should not report an error")
+    }
+
+    /// Tap the notes-list row showing `text` and wait for the note detail.
+    private func openNote(containing text: String) {
+        let row = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        XCTAssertTrue(
+            row.waitForExistence(timeout: 15),
+            "The notes list should show the note created in this scenario ('\(text)')"
+        )
+        row.tap()
+
+        XCTAssertTrue(
+            find("note-detail-view").waitForExistence(timeout: 5),
+            "Note detail view should appear when tapping a note"
+        )
+    }
+
 }

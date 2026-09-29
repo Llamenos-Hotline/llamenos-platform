@@ -232,13 +232,19 @@ final class AuthFlowUITests: XCTestCase {
     /// Navigate from login to the onboarding screen.
     private func navigateToOnboarding() {
         let hubURLInput = find("hub-url-input")
-        guard hubURLInput.waitForExistence(timeout: 20) else { return }
+        XCTAssertTrue(
+            hubURLInput.waitForExistence(timeout: 20),
+            "Login screen should show the hub URL input within 20s of a clean launch"
+        )
         hubURLInput.tap()
         hubURLInput.typeText("https://test.example.org")
         dismissKeyboard()
 
         let createButton = find("create-identity")
-        guard createButton.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(
+            createButton.waitForExistence(timeout: 5),
+            "Create-identity button should appear on the login screen after entering a hub URL"
+        )
         createButton.tap()
     }
 
