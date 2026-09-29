@@ -393,6 +393,36 @@ review from `llamenos-auto` is the trigger**, and `rhonda-rodododo` counts on
 the `release` PR. A `pull_request`-triggered run's check result attaches to
 the PR's head SHA automatically, the same mechanism `fleet/verify` relies on.
 
+**`synchronize` was added alongside it at #1284, and it starts nothing.**
+That trigger was forbidden outright until then, for a reason that was true
+when it was written: every run was a model call, so running one per push is
+the provider-quota burn #812 fixed. What changed is that the check run
+attaches to a *commit*. `fleet/review` is required under
+`strict_required_status_checks_policy`, so a rebase moved the head, stranded
+the earned verdict on the old SHA, and left the new head with no
+`fleet/review` at all — a permanent block nothing could clear but removing
+and re-adding the reviewer by hand, ten times in one morning. **"The check
+must EXIST on this head" and "a review is WARRANTED" are two different
+questions, and a rebase changes only the first.**
+
+#1158's verdict cache is what makes answering the first one free: it is keyed
+on the DIFF HASH, so a rebase whose diff is unchanged is a `cache-hit` —
+the stored verdict republished on the new head, with no engine call. A push
+that *did* change the diff has nothing cached and concludes `not-requested`:
+a red check saying so, still no engine call. `run-engine` is unreachable on a
+push, and structurally so rather than incidentally:
+`isRepublishOnlyEvent` (`orchestrator/src/ci.ts`) is passed to
+`decideReviewGate` as `republishOnly`, which refuses `run-engine` outright
+instead of resting on a `synchronize` payload happening to carry no
+`requested_reviewer`. `opened`, `labeled` and `push` remain forbidden.
+
+The republish arm also does not run on `llamenos-review-box`. It cannot reach
+the engine, so it must not queue in front of the reviews that can (one
+machine, `cancel-in-progress: false`), and it must not add PR-triggered runs
+to the host holding the operator's logged-in `claude` session. `runs-on`
+picks the hosted runner from `github.event.action` alone, so it resolves
+before the job starts.
+
 That trigger was `types: [labeled]` until #1158, on the `review` label. Two
 things were wrong with it. Requesting a review is a real, human-meaningful
 act that already means "look at this now"; a label never meant that. And a
@@ -505,8 +535,11 @@ a job-level `if:`, which can make the whole job report "skipped" and pass
 branch protection regardless (invariant #1, §11). `tests/orchestrator/guards.test.ts`
 pins that no job-level `if:` exists on this job again.
 
-With no review ever requested, the trigger never fires and the `fleet/review`
-context stays ABSENT — fail closed, same semantics as before.
+With no review ever requested, no `review_requested` event fires. A push may
+still instantiate the job (above), but with nothing cached it concludes
+`not-requested` — red, fail closed — and on a PR that has never been pushed
+since it opened the `fleet/review` context stays ABSENT, which blocks a merge
+exactly as a red check does.
 `workflow_dispatch` remains a manual escape hatch but cannot satisfy a
 required context on its own. `merge_group` is dropped as a trigger entirely:
 this repo's GitHub merge queue is unavailable today (owner type `User` — the
@@ -760,7 +793,7 @@ via `.claude/agents/fragments/_worker-rules.md`.
 
 **Gating and merges**
 1. A skipped required check counts as SATISFIED — never gate with a job-level `if:` inside a workflow that also triggers on `pull_request` (#844 merged with `fleet/review` reporting "skipping" and no review ever run; §5.5).
-2. Freshness is keyed to the head SHA, never a time window (a clock lets a push slip past a stale PASS).
+2. Freshness is keyed to CONTENT, never a time window (a clock lets a push slip past a stale PASS). A required check must also EXIST on the current head — two different questions, and a rebase changes only the second: `fleet/review` republishes a diff-hash-keyed verdict onto a moved head (#1284) and starts a new review only when the diff itself changed.
 3. Anything a gate calls must already exist on `main` — gate jobs run base-ref code (a PR adding the CLI subcommand a gate invokes would break the gate on itself if not landed first, additively).
 4. Re-run policy is exhaustive, not ad hoc: UNREADABLE verdicts and named Playwright probe-races get one re-run each; infra/network errors get one; a substantive FAIL, lint, typecheck, backend, or build failure never does (re-running is not a bypass; merging past red is).
 5. Never `--admin`, `--force`, `--approve`, `--no-verify`, or a ruleset edit to land a PR (bot-authored PRs need a code-owner approval, given only after the gate passes).

@@ -46,12 +46,41 @@
 #    `if:`, and its `not-requested` branch FAILS rather than skipping. A
 #    review requested from somebody else is a red check, never a green skip.
 #    Pinned by a rail in tests/orchestrator/guards.test.ts.
-# 2. NEVER TRIGGER ON `synchronize` (or `opened`, or `push`). Every run is a
-#    real model call; running one on every push is the provider-quota burn
-#    #812 already fixed once, and `quotaBreaker` (orchestrator/src/circuit.ts)
-#    halts the WHOLE fleet at two QUOTA outcomes. `review_requested` fires on
-#    both the first request and every re-request, which is the entire signal
-#    needed — re-requesting a review is how you re-run this.
+# 2. A PUSH MAY REPUBLISH A VERDICT; IT MAY NEVER START ONE (#1284).
+#    `synchronize` IS a trigger now — this invariant used to forbid it
+#    outright, and that wording is retired, not weakened. Read both halves.
+#
+#    WHY IT IS A TRIGGER. `fleet/review` is a required context under
+#    `strict_required_status_checks_policy`, and a check run attaches to the
+#    commit it ran on. A rebase moves the head, the earned verdict stays on
+#    the OLD sha, and the new head carries NO `fleet/review` at all — a
+#    permanent block that nothing but a manual remove-then-re-add of the
+#    reviewer could clear (ten of them in one morning, once per open PR).
+#    "The check must EXIST on this head" and "a review is WARRANTED" are two
+#    different questions; a rebase changes only the first.
+#
+#    WHY IT IS NOT THE QUOTA BURN #812 FIXED. That fix predates #1158's
+#    verdict cache, which is keyed on the DIFF HASH (`review-cache.ts`), so a
+#    rebase with an unchanged diff is a `cache-hit` — no model call, the
+#    stored verdict republished on the new head. A push that DID change the
+#    diff has nothing cached, and the gate concludes `not-requested`: a red
+#    check saying so, still no model call. `run-engine` is unreachable on a
+#    push, and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
+#    `decideReviewGate` as `republishOnly`, which refuses `run-engine`
+#    outright rather than resting on a `synchronize` payload happening to
+#    carry no `requested_reviewer`. Pinned by rails in
+#    tests/orchestrator/guards.test.ts.
+#
+#    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
+#    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
+#    and a `push` event carries no PR to attach a check to.
+#    `review_requested` remains the ONLY thing that starts a review, and it
+#    fires on both the first request and every re-request.
+#
+#    The republish arm never runs on `llamenos-review-box` — see `runs-on`
+#    below. It cannot reach the engine, so it must not queue in front of a
+#    review that can, and it must not add PR-triggered runs to the machine
+#    holding the operator's logged-in `claude` session.
 # 3. THE GATE RUNS FROM THE BASE REF; THE HEAD IS DATA (#665). This job
 #    checks out the PR's BASE commit, installs from the BASE lockfile with
 #    `--ignore-scripts`, and runs the orchestrator from that trusted tree.
@@ -102,9 +131,18 @@
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
 #                             check so a docs-only PR never sits red.
-#   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
-#                             request was not for us.
+#   `not-requested`         → FAIL. Tier 2, no cached PASS, and either this
+#                             review request was not for us, or this was a
+#                             PUSH (#1284) — which changed the diff, so
+#                             nothing the PR already earned covers the new
+#                             head. Still no model call either way.
 #   `run-engine`            → the real review, then the label clear.
+#
+# Every run's outcome — each of those, and every way the review itself can
+# end — is then NAMED on the check by the job's last step, "Name this run's
+# outcome" (#1230): `PASS:…`, `REJECTED:…` (a reviewer rejected the diff) or
+# `NO-VERDICT:…` (red because the gate fails closed; nothing judged the diff).
+# The conclusion never changes: every non-PASS outcome is still `failure`.
 #
 # Workflow-file honesty: on a `pull_request` event the workflow definition is
 # read from the PR's OWN head, so a PR can edit this file and have the edited
@@ -134,16 +172,27 @@
 name: Fleet Review
 
 on:
-  # The one real trigger (see the file header): a review being REQUESTED, or
-  # re-requested, from `llamenos-auto` (or `rhonda-rodododo` where
-  # `llamenos-auto` cannot be asked). `review_requested` fires on both, which
-  # is the whole signal needed.
-  # NEVER add `synchronize`/`opened`/`labeled`/`push` — see invariant 2.
+  # TWO actions, doing two different jobs — see invariant 2 in the header.
+  #
+  # `review_requested` is the only one that can START a review: a review
+  # being requested, or re-requested, from `llamenos-auto` (or
+  # `rhonda-rodododo` where `llamenos-auto` cannot be asked). It fires on
+  # both the first request and every re-request, which is the whole signal.
+  #
+  # `synchronize` (#1284) exists so the required context REAPPEARS on a head
+  # that moved. It can only republish what the PR already earned for this
+  # exact diff (`cache-hit`), conclude on its own terms (`low-tier`,
+  # `bot-authored`), or go red — never a model call, structurally
+  # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
+  # `fleet/review` at all and the PR unmergeable until a human removes and
+  # re-adds the reviewer by hand.
+  #
+  # NEVER add `opened`/`labeled`/`push` — see invariant 2.
   # GitHub cannot filter this trigger by WHO was requested, so the job runs
   # on every review request and the gate step decides; it must never become
   # a job-level `if:` (invariant 1).
   pull_request:
-    types: [review_requested]
+    types: [review_requested, synchronize]
   # Manual escape hatch only — local debugging, or forcing a re-review after
   # a provider-variable change (see "Switching the review engine provider" in
   # docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md).
@@ -181,9 +230,12 @@ concurrency:
   # Distinct group names from ci.yml's and fleet-verify.yml's own groups —
   # concurrency groups are repo-scoped, not per-file, so reusing either of
   # their names here would cancel or queue against unrelated runs sharing the
-  # same SHA/run id. `pull_request` groups by PR NUMBER, so re-labeling the
-  # same PR while a run is still in flight queues behind it instead of racing
-  # two reviews of the same diff; `workflow_dispatch` groups by `run_id`
+  # same SHA/run id. `pull_request` groups by PR NUMBER, so a second event on
+  # the same PR while a run is still in flight queues behind it instead of
+  # racing two runs to publish the same context — which is exactly what
+  # #1284's `synchronize` arm needs, since a push and a review request on one
+  # PR are now two events that both conclude `fleet/review`;
+  # `workflow_dispatch` groups by `run_id`
   # because two manual dispatches can target two different PRs at once and
   # must never collide.
   # `merge_group` groups by the queue commit: two entries in the queue are
@@ -226,15 +278,37 @@ jobs:
     # the file header). GitHub cannot filter a `pull_request` trigger by WHO
     # a review was requested from, only by `types:`, so this job IS
     # instantiated on every review request, including ones aimed at a human
-    # colleague. The "Decide whether to run the review engine" step is what
-    # used to be this `if:`; the difference is that its `not-requested`
-    # branch FAILS the job instead of skipping it, and its `cache-hit` and
-    # `low-tier` branches SUCCEED the job instead of skipping it — either way
-    # the job reaches a real, reported conclusion, which a job-level `if:`
-    # can never guarantee once GitHub decides the job merely "didn't run".
-    # #812: a dedicated self-hosted runner, never a GitHub-hosted one — see
-    # the file header, and the "Refuse to run on a fork PR" step below.
-    runs-on: [self-hosted, fleet-review]
+    # colleague — and, since #1284, on every push too. The "Decide whether to
+    # run the review engine" step is what used to be this `if:`; the
+    # difference is that its `not-requested` branch FAILS the job instead of
+    # skipping it, and its `cache-hit`, `low-tier` and `bot-authored`
+    # branches SUCCEED the job instead of skipping it — either way the job
+    # reaches a real, reported conclusion, which a job-level `if:` can never
+    # guarantee once GitHub decides the job merely "didn't run". That is also
+    # why the push arm is not an `if:` on this job: a skipped `fleet/review`
+    # on a pushed head would satisfy the ruleset exactly like a green one.
+    # #812: a dedicated self-hosted runner for every event that CAN reach the
+    # review engine — see the file header, and the "Refuse to run on a fork
+    # PR" step below.
+    #
+    # The ONE exception (#1284) is the republish arm: a `pull_request` whose
+    # action is `synchronize`. That arm provably cannot reach the engine
+    # (`republishOnly` in ci.ts refuses `run-engine` on it), so it needs
+    # nothing `llamenos-review-box` has — and putting it there would be
+    # actively wrong twice over. `llamenos-review-box` is ONE machine that
+    # every merge in this repo waits on, and `cancel-in-progress` is
+    # deliberately `false`, so a push storm would queue in front of the real
+    # reviews it exists to run. It is also the machine holding the operator's
+    # logged-in `claude` session under `HOME`, which is why a fork guard is
+    # this job's literal first step; multiplying the PR-triggered runs that
+    # land on it, for an arm that needs none of that, buys exposure for
+    # nothing.
+    #
+    # Decided from the event payload alone, so it resolves before the job
+    # starts and can never disagree with the gate's own later decision.
+    # Pinned by a rail in tests/orchestrator/guards.test.ts, which also
+    # asserts `ubuntu-latest` appears here ONLY under that condition.
+    runs-on: ${{ github.event.action == 'synchronize' && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
     # Read by the label-clearing job below. `outcome` and `clear_labels` are
     # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
     # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
@@ -242,6 +316,11 @@ jobs:
     outputs:
       outcome: ${{ steps.gate.outputs.outcome }}
       clear_labels: ${{ steps.gate.outputs.clear_labels }}
+      # The commit this run judged, so every comment the publishing job
+      # posts can NAME it (#1230): a verdict comment outlives its head, and
+      # one that says which head it judged is visibly stale once the PR
+      # moves on, rather than merely old.
+      head_sha: ${{ steps.ctx.outputs.head_sha }}
     permissions:
       # contents: read — the reviewer runs inside this job, so the
       # containment that matters is that NOTHING from the commit under
@@ -315,7 +394,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
-            echo "::error::fleet/review FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            echo "::error::fleet/review FAILED: fork-pr-guard — this gate must never process a fork PR, on either arm: the review arm runs on a self-hosted runner, and the republish arm would republish a verdict onto a head this repository does not control (head repo '$HEAD_REPO' != '$THIS_REPO')"
             exit 1
           fi
 
@@ -628,6 +707,7 @@ jobs:
       # opaque crash: update or rebase the PR against a newer main to pick up
       # `review-gate`, then re-request the review.
       - name: Check the base provides the review gate itself
+        id: base_gate
         if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
@@ -673,7 +753,10 @@ jobs:
       #     read, or a review it asks for (by label or by its own content)
       #     does not resolve to a known agent. Fail closed — "we could not
       #     work out what to review" never becomes "nothing needed it".
-      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts), which
+      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts). Either
+      #     the review was requested from somebody else, or this was a PUSH
+      #     that changed the diff (#1284), which can never start a review
+      #     whatever else is true (`republishOnly`, ci.ts). Exiting 1
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
       #     `if: always()`/`if: failure()` — none of the engine steps do)
@@ -704,6 +787,11 @@ jobs:
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
           FLEET_REVIEW_EVENT_NAME: ${{ github.event_name }}
+          # WHICH `pull_request` action fired. The event NAME cannot tell
+          # `review_requested` from `synchronize`, and the two mean opposite
+          # things here — one asks for a review, the other only moves the
+          # head under one already given (`isRepublishOnlyEvent`, ci.ts).
+          FLEET_REVIEW_EVENT_ACTION: ${{ github.event.action }}
           FLEET_REVIEW_REQUESTED_REVIEWER: ${{ github.event.requested_reviewer.login }}
           FLEET_REVIEW_REQUESTED_TEAM: ${{ github.event.requested_team.slug }}
           FLEET_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -790,6 +878,7 @@ jobs:
       # everything else (`engine-unavailable` — a bad model id, a missing
       # binary, or the engine running but never producing a valid verdict).
       - name: Smoke-test the review engine
+        id: smoke
         if: steps.gate.outputs.outcome == 'run-engine'
         run: |
           # Deliberately without -e (and with `set +e` below to make sure of
@@ -822,10 +911,14 @@ jobs:
           # $1: engine-misconfigured | engine-quota | engine-auth |
           # engine-unavailable. $2: the raw engine text to print for a
           # human, then always exits 1 — this function is the only way the
-          # step fails, and it always fails.
+          # step fails, and it always fails. The class is also written where
+          # "Name this run's outcome" reads it (#1230), so a usage limit is
+          # named `NO-VERDICT:engine-quota` on the check itself and is never
+          # again confused with a reviewer rejecting the diff — or the reverse.
           fail() {
             echo "fleet/review FAILED: review engine smoke test FAILED: $1 (engine=${rev_binary:-unresolved} model=${rev_model:-unresolved})"
             printf '%s\n' "$2"
+            printf '%s\n' "$1" > "$RUNNER_TEMP/fleet-review-engine-failure"
             exit 1
           }
 
@@ -973,6 +1066,12 @@ jobs:
           # one it just produced) gets written for the upload step below.
           GH_TOKEN: ${{ github.token }}
           FLEET_REVIEW_CACHE_DIR: ${{ runner.temp }}/review-cache
+          # Where `runReviewCi` (ci.ts) records WHICH outcome it reached —
+          # `REVIEW_CI_RESULTS`: a verdict, or the refusal it stopped at
+          # (#1230). The exit code says only pass/fail; this is what lets the
+          # two steps below tell a reviewer rejecting the diff from a review
+          # that never produced anything. Absent means no result.
+          FLEET_REVIEW_RESULT_FILE: ${{ runner.temp }}/fleet-review-result
         run: bun orchestrator/src/cli.ts review-ci
 
       # Invariant 5 again, at the STEP level this time. Every reviewing step
@@ -999,6 +1098,7 @@ jobs:
           GATE_CONCLUSION: ${{ steps.gate.conclusion }}
           OUTCOME: ${{ steps.gate.outputs.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          RESULT_FILE: ${{ runner.temp }}/fleet-review-result
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
@@ -1018,8 +1118,24 @@ jobs:
             exit 1
           fi
           if [ "$OUTCOME" = "run-engine" ] && [ "$REVIEW_OUTCOME" != "success" ]; then
-            echo "::error::fleet/review FAILED: review-did-not-run — the gate decided to review (outcome=$OUTCOME) but the Review step reported '$REVIEW_OUTCOME'"
-            exit 1
+            # #1230: the Review step also exits 1 on a FAIL VERDICT, so its
+            # failure alone never meant "the review did not run" — yet every
+            # real rejection used to be reported here as exactly that, with
+            # the verdict sitting in a PR comment disagreeing with it. A
+            # Review step that FAILED having recorded a result ran to a
+            # conclusion, and its own failure is already this job's red: the
+            # job cannot conclude green from here either way. Only a Review
+            # step that never ran, or ran and recorded nothing, did not run.
+            result=""
+            if [ "$REVIEW_OUTCOME" = "failure" ] && [ -f "$RESULT_FILE" ]; then
+              result="$(cat "$RESULT_FILE")"
+            fi
+            if [ -z "$result" ]; then
+              echo "::error::fleet/review FAILED: review-did-not-run — the gate decided to review (outcome=$OUTCOME) but the Review step reported '$REVIEW_OUTCOME' and recorded no result"
+              exit 1
+            fi
+            echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME, result=$result — the review reached a result; the Review step's own failure is this job's red"
+            exit 0
           fi
           echo "gate outcome=$OUTCOME, review step=$REVIEW_OUTCOME"
 
@@ -1059,6 +1175,178 @@ jobs:
           # its own storage-cost concern.
           retention-days: 30
           if-no-files-found: ignore
+
+      # ── Name this run's outcome (#1230) ─────────────────────────────────
+      # `fleet/review` has well over a dozen distinct outcomes and used to
+      # render every red one identically — `fleet/review: fail`, with the
+      # reason only in the log. One operator session read six consecutive
+      # reds as a dead review engine (five were Dependabot PRs correctly
+      # refused as `not-requested`), and a helper refused a legitimate retry
+      # on #1263 because an unparseable verdict and a real rejection looked
+      # the same. Every fact needed was already decided by an earlier step;
+      # this step only NAMES it, as ONE title:
+      #
+      #   <TOKEN> — <human detail>
+      #
+      # The token is everything before the first space and is an INTERFACE:
+      # tooling matches on it, and the full list is `REVIEW_OUTCOME_TOKENS`
+      # (orchestrator/src/ci.ts). The detail is prose and may change. The
+      # class before the colon says what to do:
+      #   PASS:        the check concluded success.
+      #   REJECTED:    a reviewer read this diff and rejected it — fix the code.
+      #   NO-VERDICT:  red because the gate fails closed; NOTHING judged the
+      #                diff. Act on the named cause — it is not a rejection.
+      # tests/orchestrator/review-outcome-titles.test.ts runs THIS script for
+      # every outcome and pins it against that list: each outcome, its own
+      # distinct title, no token a prefix or substring of another.
+      #
+      # Where the title goes: an annotation titled `fleet/review outcome` on
+      # this job's own check run — readable with no log download via
+      # `gh api repos/<R>/check-runs/<id>/annotations`, and shown on the PR's
+      # Checks tab — and this run's summary page. It is not written into the
+      # check run's `output.title`: that takes `checks: write`, which this job
+      # must never hold (see its `permissions:` block).
+      #
+      # It cannot change the verdict. It runs last, reads what the steps above
+      # already decided, and changes none of it: a step that only prints
+      # cannot turn a red job green, and a crash in it could only add red.
+      # The merge-queue arm is not named here: it republishes the PR head's
+      # own verdict, and that run is the one carrying the name.
+      - name: Name this run's outcome
+        if: always() && github.event_name != 'merge_group'
+        env:
+          JOB_STATUS: ${{ job.status }}
+          BASE_GATE_OUTCOME: ${{ steps.base_gate.outcome }}
+          GATE_CONCLUSION: ${{ steps.gate.conclusion }}
+          OUTCOME: ${{ steps.gate.outputs.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          RESULT_FILE: ${{ runner.temp }}/fleet-review-result
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          engine_failure=""
+          if [ -f "$RUNNER_TEMP/fleet-review-engine-failure" ]; then
+            engine_failure="$(cat "$RUNNER_TEMP/fleet-review-engine-failure")"
+          fi
+          # Only a Review step that actually ran in THIS job can have
+          # recorded a result.
+          result=""
+          if { [ "$REVIEW_OUTCOME" = "success" ] || [ "$REVIEW_OUTCOME" = "failure" ]; } && [ -f "$RESULT_FILE" ]; then
+            result="$(cat "$RESULT_FILE")"
+          fi
+
+          if [ "$JOB_STATUS" = "success" ]; then
+            case "$OUTCOME" in
+              low-tier) token="PASS:low-tier" ;;
+              cache-hit) token="PASS:cached" ;;
+              run-engine)
+                case "$result" in
+                  pass) token="PASS:reviewed" ;;
+                  cache-pass) token="PASS:cached" ;;
+                  *) token="PASS:unclassified" ;;
+                esac
+                ;;
+              *) token="PASS:unclassified" ;;
+            esac
+          elif [ "$GATE_CONCLUSION" != "success" ] && [ "$GATE_CONCLUSION" != "failure" ]; then
+            # The gate never ran: the job failed before reaching it.
+            if [ "$BASE_GATE_OUTCOME" = "failure" ]; then
+              token="NO-VERDICT:base-predates-gate"
+            else
+              token="NO-VERDICT:setup-failed"
+            fi
+          else
+            case "$OUTCOME" in
+              '') token="NO-VERDICT:gate-error" ;;
+              not-requested) token="NO-VERDICT:not-requested" ;;
+              review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
+              cache-hit)
+                # The gate exits 1 on a cached FAIL and 0 on a cached PASS.
+                if [ "$GATE_CONCLUSION" = "failure" ]; then
+                  token="REJECTED:cached"
+                else
+                  token="NO-VERDICT:unclassified"
+                fi
+                ;;
+              run-engine)
+                case "$result" in
+                  fail) token="REJECTED:reviewed" ;;
+                  cache-fail) token="REJECTED:cached" ;;
+                  unreadable) token="NO-VERDICT:unreadable" ;;
+                  scope) token="NO-VERDICT:scope" ;;
+                  review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
+                  unknown-lane) token="NO-VERDICT:unknown-lane" ;;
+                  review-disabled) token="NO-VERDICT:review-disabled" ;;
+                  export-unsafe) token="NO-VERDICT:export-unsafe" ;;
+                  '')
+                    # No result: the review never reached a conclusion. The
+                    # smoke test names the engine's failure when it was the
+                    # reason; anything else did not run for a reason only
+                    # the log has.
+                    case "$SMOKE_OUTCOME:$engine_failure" in
+                      failure:engine-quota) token="NO-VERDICT:engine-quota" ;;
+                      failure:engine-auth) token="NO-VERDICT:engine-auth" ;;
+                      failure:engine-misconfigured) token="NO-VERDICT:engine-misconfigured" ;;
+                      failure:engine-unavailable) token="NO-VERDICT:engine-unavailable" ;;
+                      *) token="NO-VERDICT:did-not-run" ;;
+                    esac
+                    ;;
+                  *) token="NO-VERDICT:unclassified" ;;
+                esac
+                ;;
+              *) token="NO-VERDICT:unclassified" ;;
+            esac
+          fi
+
+          case "$token" in
+            PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
+            PASS:cached) detail="this exact diff and review set already passed; not reviewed again" ;;
+            PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
+            PASS:unclassified) detail="passed by a path this step has no name for; read the log" ;;
+            REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
+            REJECTED:cached) detail="this exact diff was already rejected; push a fix" ;;
+            NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
+            NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
+            NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
+            NO-VERDICT:unreadable) detail="a reviewer ran but left no readable verdict; re-request the review" ;;
+            NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
+            NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
+            NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
+            NO-VERDICT:engine-misconfigured) detail="the review engine or its model id is misconfigured" ;;
+            NO-VERDICT:engine-unavailable) detail="the review engine could not be run" ;;
+            NO-VERDICT:unknown-lane) detail="the branch names a fleet lane that does not exist" ;;
+            NO-VERDICT:review-disabled) detail="FLEET_REVIEW_API_KEY is not configured on this repository" ;;
+            NO-VERDICT:export-unsafe) detail="the PR head export could not be made safe for a reviewer to read" ;;
+            NO-VERDICT:gate-error) detail="the review gate itself failed before deciding anything" ;;
+            NO-VERDICT:base-predates-gate) detail="the PR's base predates the review gate; update the branch and re-request" ;;
+            NO-VERDICT:setup-failed) detail="the job failed before the review gate ran" ;;
+            NO-VERDICT:unclassified) detail="failed by a path this step has no name for; read the log" ;;
+          esac
+          title="$token — $detail"
+
+          case "$token" in
+            PASS:*)
+              level="notice"
+              meaning="The check concluded success."
+              ;;
+            REJECTED:*)
+              level="error"
+              meaning="A reviewer read this diff and rejected it. Its findings are on the PR as a comment naming the head it judged. Change the code: re-requesting a review of an unchanged diff restates the same verdict."
+              ;;
+            *)
+              level="error"
+              meaning="Nothing judged this diff. The check is red because the gate fails closed, not because the code was rejected: act on the cause named above, and do not edit the code on review grounds."
+              ;;
+          esac
+          echo "::$level title=fleet/review outcome::$title"
+          {
+            echo "### \`fleet/review\` outcome: $title"
+            echo
+            echo "$meaning"
+            echo
+            echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Publishing the reviews, then clearing the worklist (#1158).
@@ -1164,6 +1452,7 @@ jobs:
           PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event.inputs.pr_number }}
           REVIEW_RESULT: ${{ needs.fleet-review.result }}
           CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}
+          HEAD_SHA: ${{ needs.fleet-review.outputs.head_sha }}
         run: |
           set -euo pipefail
           if [[ ! "$PR" =~ ^[0-9]+$ ]]; then
@@ -1236,9 +1525,22 @@ jobs:
               echo "already posted: $reviewer ($verdict)"
               continue
             fi
+            # Every comment names the head it judged (#1230). On #1217 a PASS
+            # on a new head left the superseded head's FAIL comment as the
+            # newest thing on the thread, and "rejected" was the natural —
+            # wrong — reading of a green PR. Named, a stale verdict is
+            # self-evidently about another commit. A report can only exist
+            # once the job resolved its head, so an unparseable one here is a
+            # broken run, and posting a verdict about an unknown commit is
+            # refused rather than guessed at.
+            if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::report entry $f has no judged head to name (got '$HEAD_SHA') — refusing to post a verdict that cannot say which commit it is about"
+              exit 1
+            fi
             {
               printf '%s\n\n' "$marker"
-              printf '### `fleet/review` — %s: **%s**\n\n' "$reviewer" "$verdict"
+              printf "### \`fleet/review\` — %s: **%s** on \`%s\`\n\n" "$reviewer" "$verdict" "${HEAD_SHA:0:12}"
+              printf "Judged head \`%s\`. The \`fleet/review\` check on the PR's current head is the verdict of record: if the head has moved since, this comment is about an older commit.\n\n" "$HEAD_SHA"
               jq -r '.body' "$f"
             } > "$RUNNER_TEMP/comment.md"
             post_comment "$RUNNER_TEMP/comment.md" "$marker"
