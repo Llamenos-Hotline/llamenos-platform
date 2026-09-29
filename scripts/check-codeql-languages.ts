@@ -42,17 +42,24 @@
  *      accepts. A staged upload would silently take the verdict out of the
  *      required gate.
  *
+ *   6. Every identifier default setup's configuration listed is accounted
+ *      for exactly once: REQUIRED (a leg of `analyze`), STAGED (some staged
+ *      job analyses it) or NOT_ANALYSED — and a NOT_ANALYSED language must
+ *      still have no source in the tree, so the day one appears the rail
+ *      demands a leg for it instead of carrying a stale exemption.
+ *
  * Promoting a staged language to required means moving it into `analyze` AND
- * adding its identifier to REQUIRED_IDENTIFIERS below — a deliberate edit to
- * a code-owned file, which is the point.
+ * moving its identifier from STAGED_IDENTIFIERS to REQUIRED_IDENTIFIERS below
+ * — a deliberate edit to a code-owned file, which is the point.
  *
  * Usage:
- *   bun scripts/check-codeql-languages.ts [path/to/codeql.yml]
+ *   bun scripts/check-codeql-languages.ts [path/to/codeql.yml] [source-root]
  *
  * Exit code: 0 = pass, 1 = violations found, 2 = the rail itself failed
  */
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
 
 const DEFAULT_WORKFLOW = '.github/workflows/codeql.yml'
 const REQUIRED_JOB = 'analyze'
@@ -64,10 +71,32 @@ const MERGE_BLOCKING_EVENTS = ['pull_request', 'merge_group'] as const
 const DEFAULT_SETUP_JOB_NAME_PREFIX = 'analyze ('
 
 /**
- * The identifiers default setup analysed, exactly as
+ * Every identifier default setup's configuration listed, exactly as
  * `GET /repos/Llamenos-Hotline/llamenos-platform/code-scanning/default-setup`
- * listed them on 2026-09-27 (query_suite "default", threat_model "remote").
- * Seven identifiers, five analyses: see ALIASES.
+ * returned them on 2026-09-29, once default setup was disabled (state
+ * "not-configured", query_suite "default", threat_model "remote"). Each one
+ * is partitioned below into REQUIRED, STAGED or NOT_ANALYSED; one in none of
+ * them, or in more than one, fails the rail.
+ */
+const DEFAULT_SETUP_IDENTIFIERS = [
+  'actions',
+  'c-cpp',
+  'java-kotlin',
+  'javascript',
+  'javascript-typescript',
+  'python',
+  'ruby',
+  'rust',
+  'swift',
+  'typescript',
+] as const
+
+type DefaultSetupIdentifier = (typeof DEFAULT_SETUP_IDENTIFIERS)[number]
+
+/**
+ * The identifiers default setup actually analysed: the code-scanning analyses
+ * API holds thousands of successful `/language:<id>` analyses on main for
+ * each of these five. Seven identifiers, five analyses: see ALIASES.
  */
 const REQUIRED_IDENTIFIERS = [
   'actions',
@@ -77,7 +106,35 @@ const REQUIRED_IDENTIFIERS = [
   'ruby',
   'rust',
   'typescript',
-] as const
+] as const satisfies readonly DefaultSetupIdentifier[]
+
+/**
+ * Listed, but never successfully analysed: default setup's only run of each
+ * (2026-09-27, main at f98844021) ended "unsuccessful execution" with 0
+ * results — Kotlin and Swift need a traced build, which default setup cannot
+ * do. Each must be analysed by a staged job (#1243) until it is promoted.
+ */
+const STAGED_IDENTIFIERS = ['java-kotlin', 'swift'] as const satisfies readonly DefaultSetupIdentifier[]
+
+/**
+ * Listed, never successfully analysed, and deliberately given no leg. The
+ * `sourceExtensions` are what the extractor would need to analyse anything;
+ * the rail fails if a tracked file with one of them appears.
+ */
+const NOT_ANALYSED: Readonly<Partial<Record<DefaultSetupIdentifier, { reason: string; sourceExtensions: readonly string[] }>>> = {
+  'c-cpp': {
+    reason:
+      'the tree has no C/C++ translation unit — its only C-family file is packages/crypto/bindings/swift/LlamenosCoreFFI.h, ' +
+      "a UniFFI-generated header for the Rust crate (a required leg). Default setup's one c-cpp run (2026-09-27, f98844021) " +
+      'ended "unsuccessful execution" with 0 results.',
+    sourceExtensions: ['.c', '.cc', '.cpp', '.cxx', '.c++'],
+  },
+}
+
+/** Never walked for NOT_ANALYSED sources: untracked build output and dependencies. */
+const SOURCE_SCAN_SKIP_DIRS = new Set([
+  '.git', 'node_modules', 'target', 'dist', 'build', '.build', '.gradle', 'DerivedData', 'vendor', '.bun',
+])
 
 /**
  * CodeQL language identifier → the extractor that analyses it. Copied from
@@ -203,6 +260,58 @@ function allowListedEvents(condition: string): string[] | undefined {
 }
 
 /** The check-run name a job reports under: its `name:`, else its id. */
+/** Files under `root` whose extension is in `extensions`, skipping SOURCE_SCAN_SKIP_DIRS. */
+function sourcesWithExtensions(root: string, extensions: readonly string[]): string[] {
+  const found: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!SOURCE_SCAN_SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name))
+      } else if (entry.isFile() && extensions.includes(extname(entry.name).toLowerCase())) {
+        found.push(join(dir, entry.name))
+      }
+    }
+  }
+  walk(root)
+  return found
+}
+
+/**
+ * Point 6: every default-setup identifier is REQUIRED, STAGED or NOT_ANALYSED
+ * exactly once; STAGED ones have a staged job; NOT_ANALYSED ones still have
+ * nothing to analyse.
+ */
+function checkDefaultSetupPartition(stagedExtractors: ReadonlySet<string>, sourceRoot: string): void {
+  const partitions: [string, readonly string[]][] = [
+    ['REQUIRED_IDENTIFIERS', REQUIRED_IDENTIFIERS],
+    ['STAGED_IDENTIFIERS', STAGED_IDENTIFIERS],
+    ['NOT_ANALYSED', Object.keys(NOT_ANALYSED)],
+  ]
+  for (const id of DEFAULT_SETUP_IDENTIFIERS) {
+    const homes = partitions.filter(([, ids]) => ids.includes(id)).map(([name]) => name)
+    if (homes.length !== 1) {
+      violations.push(
+        `default-setup identifier \`${id}\` must be in exactly one of REQUIRED_IDENTIFIERS, STAGED_IDENTIFIERS, NOT_ANALYSED (found ${homes.length === 0 ? 'none' : homes.join(', ')}) — otherwise it is dropped silently`,
+      )
+    }
+  }
+  for (const id of STAGED_IDENTIFIERS) {
+    const extractor = resolve(id)
+    if (extractor === undefined || !stagedExtractors.has(extractor)) {
+      violations.push(`\`${id}\` is in STAGED_IDENTIFIERS but no staged job analyses it — default setup listed it, so dropping its leg drops it`)
+    }
+  }
+  for (const [id, entry] of Object.entries(NOT_ANALYSED)) {
+    if (!entry) continue
+    const sources = sourcesWithExtensions(sourceRoot, entry.sourceExtensions)
+    if (sources.length > 0) {
+      violations.push(
+        `\`${id}\` is in NOT_ANALYSED ("no source to analyse") but the tree now has ${sources.length} ${id} source file(s), e.g. ${sources.slice(0, 3).join(', ')} — give it a CodeQL leg`,
+      )
+    }
+  }
+}
+
 function checkName(id: string, job: Job): string {
   return (typeof job.name === 'string' ? job.name : id).trim()
 }
@@ -336,6 +445,15 @@ function main(): void {
     staged.push({ job: id, languages })
   }
 
+  const stagedExtractors = new Set<string>()
+  for (const { languages } of staged) {
+    for (const language of languages) {
+      const extractor = resolve(language)
+      if (extractor !== undefined) stagedExtractors.add(extractor)
+    }
+  }
+  checkDefaultSetupPartition(stagedExtractors, process.argv[3] ?? '.')
+
   // ── Rollup ──
   const rollup = jobs[ROLLUP_JOB]
   if (!rollup) {
@@ -386,11 +504,14 @@ function main(): void {
     const extractor = resolve(id) as string
     byExtractor.set(extractor, [...(byExtractor.get(extractor) ?? []), id])
   }
-  console.log(`✅ ${path}: required CodeQL legs cover exactly the ${REQUIRED_IDENTIFIERS.length} default-setup identifiers (${byExtractor.size} analyses):`)
+  console.log(`✅ ${path}: all ${DEFAULT_SETUP_IDENTIFIERS.length} default-setup identifiers accounted for; required legs cover exactly the ${REQUIRED_IDENTIFIERS.length} it analysed (${byExtractor.size} analyses):`)
   for (const [extractor, ids] of byExtractor) console.log(`   ${ids.join(', ')} → ${extractor}`)
   if (staged.length > 0) {
     console.log(`   Staged, not required (outside the ${REQUIRED_CONTEXT} rollup, never on ${MERGE_BLOCKING_EVENTS.join('/')}, never uploaded to code scanning):`)
     for (const { job, languages } of staged) console.log(`   ${languages.join(', ')} (${job})`)
+  }
+  for (const [id, entry] of Object.entries(NOT_ANALYSED)) {
+    if (entry) console.log(`   Not analysed: ${id} — ${entry.reason}`)
   }
 }
 

@@ -54,7 +54,7 @@
 # public repository.
 #
 # ─── Languages: exact parity with default setup ─────────────────────────────
-# Default setup's API listed seven identifiers: actions, javascript,
+# Default setup analysed seven identifiers: actions, javascript,
 # javascript-typescript, python, ruby, rust, typescript. Three of them are ONE
 # analysis — GitHub's CodeQL language-identifier table lists `javascript` and
 # `typescript` as alternative identifiers for `javascript-typescript`, and
@@ -73,10 +73,18 @@
 # aliases; `rust` is packages/crypto, the most security-critical code in the
 # repo.
 #
-# scripts/check-codeql-languages.ts commits the seven identifiers and the
-# alias table, and fails CI (ci.yml `docs-guard`, inside the required
-# `ci-status`) if this matrix stops covering exactly them. Dropping a leg is
-# a red check, not a silent loss of coverage.
+# By the time default setup was disabled (2026-09-29) its configuration also
+# listed c-cpp, java-kotlin and swift. None was ever analysed: default setup's
+# single run of each (2026-09-27) ended "unsuccessful execution" with 0
+# results. java-kotlin and swift are the staged jobs below; c-cpp has nothing
+# to analyse — the tree's only C-family file is the UniFFI-generated
+# packages/crypto/bindings/swift/LlamenosCoreFFI.h, whose code is the rust leg.
+#
+# scripts/check-codeql-languages.ts commits all ten identifiers and the alias
+# table, and fails CI (ci.yml `docs-guard`, inside the required `ci-status`)
+# if this matrix stops covering exactly the seven, if a staged language loses
+# its job, or if a C/C++ source file appears with no c-cpp leg. Dropping a
+# language is a red check, not a silent loss of coverage.
 #
 # Query suite and threat model match default setup: no `queries:` input means
 # the `default` suite, and no `threat-models` configuration means `remote`.
