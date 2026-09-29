@@ -6,7 +6,7 @@ struct ContactTimelineView: View {
     @Environment(AppState.self) private var appState
     let contactHash: String
     let displayIdentifier: String
-    @State private var viewModel: ContactTimelineViewModel?
+    @State private var viewModelBox = ViewModelBox<ContactTimelineViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -125,9 +125,9 @@ struct ContactTimelineView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ContactTimelineViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = ContactTimelineViewModel(apiService: appState.apiService, contactHash: contactHash)
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

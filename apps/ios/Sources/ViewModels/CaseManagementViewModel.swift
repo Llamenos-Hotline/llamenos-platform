@@ -153,7 +153,7 @@ final class CaseManagementViewModel {
     func loadInitial() async {
         do {
             let enabled: CaseManagementEnabledResponse = try await apiService.request(
-                method: "GET", path: "/api/settings/cms/case-management"
+                method: "GET", path: apiService.hp("/api/settings/cms/case-management")
             )
             cmsEnabled = enabled.enabled
         } catch {
@@ -164,7 +164,7 @@ final class CaseManagementViewModel {
 
         do {
             let response: EntityTypesResponse = try await apiService.request(
-                method: "GET", path: "/api/settings/cms/entity-types"
+                method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
             )
             entityTypes = response.entityTypes.filter { $0.isArchived != true }
         } catch {

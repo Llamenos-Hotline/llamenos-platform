@@ -25,9 +25,19 @@ Feature: Per-hub IVR language menu override
     Then the response status should be 200
     And the hub's IVR languages should equal the instance-wide IVR languages
 
+  # The language here is chosen so the assertion can only pass via the HUB's
+  # provider. Telnyx has no Vietnamese voice; Twilio and Vonage both do. If the
+  # constraint ever resolves the instance-wide provider instead of this hub's
+  # (as it silently did until #1260 — `getHubTelephonyProvider` returned null
+  # for every hub), "vi" becomes speakable and this scenario goes green while
+  # the hub-scoped constraint is dead. A language no provider speaks — the
+  # previous "ht" — cannot tell those two worlds apart, which is exactly how
+  # that bug stayed hidden.
   @backend
-  Scenario: A hub override naming a language the active provider cannot speak is rejected
-    Given the hub's telephony provider is configured as "vonage"
-    When the admin sets the hub's IVR languages to "en,ht"
+  Scenario: A hub override naming a language the hub's own provider cannot speak is rejected
+    Given the hub's telephony provider is configured as "telnyx"
+    When the admin sets the hub's IVR languages to "en,vi"
     Then the response status should be 400
-    And the error message contains "ht"
+    # Substring must be specific: a bare "vi" also matches the word "provider".
+    And the error message contains "cannot speak: vi"
+    And the error message contains "telnyx"

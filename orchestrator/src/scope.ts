@@ -1,4 +1,4 @@
-import { matchesPath, type LaneScope } from './fragments.js'
+import { matchesPath, matchesSecretPath, type LaneScope } from './fragments.js'
 
 function longestMatch(file: string, patterns: string[]): string | undefined {
   let best: string | undefined
@@ -39,6 +39,14 @@ function longestMatch(file: string, patterns: string[]): string | undefined {
  * whose `owned` list is empty — an unrestricted lane still cannot touch
  * secrets, deploy config, or CI. `strayed` is everything else that falls
  * outside the lane once neverWrite is out of the way.
+ *
+ * The neverWrite comparison is `matchesSecretPath`, not `matchesPath`: a
+ * committed template (`deploy/docker/.env.example`) is not the secret it is
+ * a template of, and the prefix match that makes `.env` catch
+ * `.env.production` had been making all five of this repo's tracked
+ * `*.example` secret templates permanently unwritable. Ownership still uses
+ * plain `matchesPath` — a template is owned by whichever lane owns its
+ * directory, exactly as before. See `SECRET_TEMPLATE_SUFFIXES`.
  */
 export function checkScope(
   changed: string[],
@@ -48,7 +56,7 @@ export function checkScope(
   const forbidden: string[] = []
   const strayed: string[] = []
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesPath(f, p))) {
+    if (neverWrite.some((p) => matchesSecretPath(f, p))) {
       forbidden.push(f)
       continue
     }
@@ -115,7 +123,7 @@ export function checkScopeAcross(
   const unrestricted = ownScope.owned.length === 0
   const granted = grantedScopes.filter((s) => s.owned.length > 0)
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesPath(f, p))) {
+    if (neverWrite.some((p) => matchesSecretPath(f, p))) {
       forbidden.push(f)
       continue
     }

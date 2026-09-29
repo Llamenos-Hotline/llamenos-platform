@@ -5,14 +5,168 @@
  * Uses postgres.js (works in both Node.js/Playwright and Bun contexts).
  *
  * Column names use snake_case (matching PostgreSQL conventions).
+ *
+ * The connection is verified against the server under test on first use: these
+ * helpers only mean anything if they query the SAME database the server writes
+ * to. See assertSharedDatabase() below, and the rail in
+ * tests/db-helpers-identity-rail.spec.ts.
  */
 import postgres from 'postgres'
 
-const databaseUrl = process.env.DATABASE_URL || 'postgres://llamenos:dev@localhost:5432/llamenos'
-const sql = postgres(databaseUrl, {
-  connect_timeout: 10,
-  onnotice: () => {},
-})
+/**
+ * Resolve the test database URL.
+ *
+ * There is deliberately NO fallback. A default silently connected TestDB to the
+ * shared dev database whenever DATABASE_URL was unset, while the server under
+ * test could be pointed somewhere else entirely — both sides then "worked" and
+ * asserted against different data. It was also redundant: scripts/dev-bun.sh
+ * already exports DATABASE_URL with its own default, so the fallback never
+ * helped local dev; it only fired when something had already gone wrong.
+ */
+function requireDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL
+  if (!url) {
+    throw new Error(
+      '[db-helpers] DATABASE_URL is required.\n' +
+        'TestDB bypasses the API to assert persisted state, so it MUST query the same\n' +
+        'database the server under test writes to. There is no default on purpose: a\n' +
+        'fallback would connect TestDB to the shared dev database while the server used\n' +
+        'another, and every direct-DB assertion would then pass or fail for reasons\n' +
+        'unrelated to the code under test.\n' +
+        'Export DATABASE_URL pointing at the server\'s database and re-run\n' +
+        '(scripts/dev-bun.sh exports one for local dev).',
+    )
+  }
+  return url
+}
+
+// Lazy: the URL is read at FIRST USE, not at import. Creating the client at
+// import time froze whatever DATABASE_URL happened to be set the moment any
+// step file imported this module, so a harness that sets it later (e.g. a
+// Playwright global setup) was silently ignored.
+let client: postgres.Sql | null = null
+
+function rawSql(): postgres.Sql {
+  if (!client) {
+    client = postgres(requireDatabaseUrl(), {
+      connect_timeout: 10,
+      onnotice: () => {},
+    })
+  }
+  return client
+}
+
+interface DbIdentity {
+  database: string
+  instanceId: string
+}
+
+/**
+ * The server's dev-only identity endpoint. Gated by ENVIRONMENT=development +
+ * DEV_ROUTES_ENABLED=true (router-level `/test-*` guard in apps/worker/app.ts)
+ * + an X-Test-Secret header, exactly like the other /test-* routes.
+ */
+const IDENTITY_PATH = '/api/test-db-identity'
+
+function serverBaseUrl(): string {
+  return (process.env.TEST_HUB_URL || 'http://localhost:3000').replace(/\/+$/, '')
+}
+
+function testSecret(): string {
+  return process.env.DEV_RESET_SECRET || process.env.E2E_TEST_SECRET || 'test-reset-secret'
+}
+
+function formatIdentity(id: DbIdentity, extra: Record<string, unknown> = {}): string {
+  const parts = [`database=${id.database}`, `instance=${id.instanceId}`]
+  for (const [k, v] of Object.entries(extra)) {
+    if (v !== null && v !== undefined) parts.push(`${k}=${v}`)
+  }
+  return parts.join(' ')
+}
+
+let identityCheck: Promise<void> | null = null
+
+/**
+ * Verify — once, on first query — that TestDB and the server under test are
+ * looking at the same PostgreSQL database.
+ *
+ * Identity is `current_database()` + the postmaster start time. That pair is
+ * stable regardless of the network path taken to reach the instance, so a
+ * server inside Docker (postgres:5432) and a test runner on the host
+ * (localhost:5432) correctly compare equal when they share a database, and
+ * correctly compare unequal when they do not.
+ *
+ * An unreachable server is a HARD failure, not a skip: a check that quietly
+ * passes when its dependency is down is exactly the false signal this replaces.
+ */
+function assertSharedDatabase(): Promise<void> {
+  if (!identityCheck) identityCheck = runIdentityCheck()
+  return identityCheck
+}
+
+async function runIdentityCheck(): Promise<void> {
+  const endpoint = `${serverBaseUrl()}${IDENTITY_PATH}`
+
+  let res: Response
+  try {
+    res = await fetch(endpoint, { headers: { 'X-Test-Secret': testSecret() } })
+  } catch (err) {
+    throw new Error(
+      `[db-helpers] Could not reach the server's database-identity endpoint at ${endpoint}.\n` +
+        'TestDB cannot prove it is querying the same database as the server, so its\n' +
+        'assertions would be meaningless. Start the server under test (bun run dev:server)\n' +
+        'or set TEST_HUB_URL to its base URL.\n' +
+        `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `[db-helpers] ${endpoint} returned ${res.status}.\n` +
+        'That endpoint is dev-only: it requires ENVIRONMENT=development,\n' +
+        'DEV_ROUTES_ENABLED=true and a matching X-Test-Secret (DEV_RESET_SECRET /\n' +
+        'E2E_TEST_SECRET). Without it TestDB cannot verify it is querying the same\n' +
+        'database as the server.',
+    )
+  }
+
+  const server = (await res.json()) as DbIdentity & {
+    serverAddr: string | null
+    serverPort: number | null
+    resolvedHost: string | null
+    resolvedPort: number | null
+  }
+
+  const rows = await rawSql()`
+    SELECT current_database() AS database,
+           extract(epoch from pg_postmaster_start_time())::text AS instance_id
+  `
+  const row = rows[0] as { database: string; instance_id: string }
+  const local: DbIdentity = { database: row.database, instanceId: row.instance_id }
+
+  if (local.database !== server.database || local.instanceId !== server.instanceId) {
+    throw new Error(
+      '[db-helpers] DATABASE MISMATCH — TestDB and the server under test are using\n' +
+        'DIFFERENT databases. Any direct-DB assertion from here would pass or fail for\n' +
+        'reasons unrelated to the code under test.\n' +
+        `  TestDB  (DATABASE_URL):   ${formatIdentity(local)}\n` +
+        `  Server  (${endpoint}): ${formatIdentity(server, {
+          serverAddr: server.serverAddr,
+          serverPort: server.serverPort,
+          resolvedHost: server.resolvedHost,
+          resolvedPort: server.resolvedPort,
+        })}\n` +
+        'Point DATABASE_URL at the same database the server writes to, or restart the\n' +
+        "server against TestDB's database.",
+    )
+  }
+}
+
+/** The verified connection. Every query path goes through here. */
+async function sql(): Promise<postgres.Sql> {
+  await assertSharedDatabase()
+  return rawSql()
+}
 
 /** Validate a SQL identifier (table/column name) to prevent injection. */
 function validateIdentifier(name: string): void {
@@ -28,7 +182,7 @@ export class TestDB {
    */
   static async getRow(table: string, id: string): Promise<Record<string, unknown> | null> {
     validateIdentifier(table)
-    const rows = await sql.unsafe(
+    const rows = await (await sql()).unsafe(
       `SELECT * FROM ${table} WHERE id = $1 LIMIT 1`,
       [id],
     )
@@ -56,7 +210,7 @@ export class TestDB {
       validateIdentifier(name)
     }
 
-    const rows = await sql.unsafe(
+    const rows = await (await sql()).unsafe(
       `SELECT jsonb_typeof(${jsonbColumn}) as pg_type, ${jsonbColumn} as val FROM ${table} WHERE ${idColumn} = $1 LIMIT 1`,
       [id],
     )
@@ -87,29 +241,11 @@ export class TestDB {
   }
 
   /**
-   * Check if a phone is in the bans table.
-   */
-  static async isBanned(phone: string): Promise<boolean> {
-    const rows = await sql`SELECT 1 FROM bans WHERE phone = ${phone} LIMIT 1`
-    return rows.length > 0
-  }
-
-  /**
    * Get conversation metadata directly from DB.
    */
   static async getConversationMetadata(id: string): Promise<unknown> {
-    const rows = await sql`SELECT * FROM conversations WHERE id = ${id} LIMIT 1`
+    const rows = await (await sql())`SELECT * FROM conversations WHERE id = ${id} LIMIT 1`
     return rows.length > 0 ? rows[0] : null
-  }
-
-  /**
-   * Get volunteer roles from the volunteers table.
-   */
-  static async getVolunteerRoles(pubkey: string): Promise<string[]> {
-    const rows = await sql`SELECT roles FROM volunteers WHERE pubkey = ${pubkey} LIMIT 1`
-    if (rows.length === 0) return []
-    const row = rows[0] as { roles: string[] }
-    return row.roles ?? []
   }
 
   /**
@@ -131,21 +267,21 @@ export class TestDB {
     let rows
     if (hubId) {
       rows = limit !== undefined
-        ? await sql`
+        ? await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             FROM audit_log WHERE hub_id = ${hubId} ORDER BY created_at ASC LIMIT ${limit}`
-        : await sql`
+        : await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             FROM audit_log WHERE hub_id = ${hubId} ORDER BY created_at ASC`
     } else {
       rows = limit !== undefined
-        ? await sql`
+        ? await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             FROM audit_log WHERE hub_id IS NULL ORDER BY created_at ASC LIMIT ${limit}`
-        : await sql`
+        : await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             FROM audit_log WHERE hub_id IS NULL ORDER BY created_at ASC`
@@ -201,7 +337,7 @@ export class TestDB {
   static async updateColumn(table: string, id: string, column: string, value: postgres.Serializable): Promise<void> {
     validateIdentifier(table)
     validateIdentifier(column)
-    await sql.unsafe(
+    await (await sql()).unsafe(
       `UPDATE ${table} SET ${column} = $1 WHERE id = $2`,
       [value, id],
     )
@@ -209,6 +345,12 @@ export class TestDB {
 
   /** Close the database connection pool. */
   static async close(): Promise<void> {
-    await sql.end()
+    // Deliberately does NOT go through sql(): closing a connection that was
+    // never opened must not trigger the identity check (and must not fail).
+    if (!client) return
+    const open = client
+    client = null
+    identityCheck = null
+    await open.end()
   }
 }

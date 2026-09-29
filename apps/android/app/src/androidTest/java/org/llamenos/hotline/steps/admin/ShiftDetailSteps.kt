@@ -51,7 +51,7 @@ class ShiftDetailSteps : BaseSteps() {
 
     @Then("I should see the shift detail screen")
     fun iShouldSeeTheShiftDetailScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "shift-detail-title",
             "shift-detail-loading",
             "shift-detail-not-found",
@@ -60,12 +60,12 @@ class ShiftDetailSteps : BaseSteps() {
 
     @Then("I should see the shift info card")
     fun iShouldSeeTheShiftInfoCard() {
-        val found = assertAnyTagDisplayed("shift-info-card", "shift-detail-not-found")
+        assertAnyTagDisplayed("shift-info-card", "shift-detail-not-found")
     }
 
     @Then("I should see the volunteer assignment section")
     fun iShouldSeeTheVolunteerAssignmentSection() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "shift-assigned-count",
             "shift-detail-not-found",
         )
@@ -86,7 +86,7 @@ class ShiftDetailSteps : BaseSteps() {
     @Then("the volunteer assignment should toggle")
     fun theVolunteerAssignmentShouldToggle() {
         // If we got here without crashing, the toggle worked
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "shift-assigned-count",
             "shift-detail-not-found",
         )

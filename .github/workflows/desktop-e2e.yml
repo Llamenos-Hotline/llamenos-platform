@@ -221,7 +221,8 @@ jobs:
 
       # ── Generate BDD test files from Gherkin features ───────────
       - name: Generate BDD test files
-        run: bunx bddgen
+        # export warms the transform cache single-threaded first — see the build job in ci.yml
+        run: bunx bddgen export > /dev/null && bunx bddgen
 
       # ── Start preview server and run Playwright ─────────────────
       - name: Start Vite preview server

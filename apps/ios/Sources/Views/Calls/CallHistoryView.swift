@@ -137,8 +137,7 @@ final class CallHistoryViewModel {
 struct CallHistoryView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
-    @Environment(CryptoService.self) private var cryptoService
-    @State private var viewModel: CallHistoryViewModel?
+    @State private var viewModelBox = ViewModelBox<CallHistoryViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -298,13 +297,14 @@ struct CallHistoryView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: CallHistoryViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
-        let vm = CallHistoryViewModel(apiService: appState.apiService, cryptoService: cryptoService)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        // AppState owns the one CryptoService. This view used to read it from the
+        // SwiftUI environment, where nothing ever injected it: opening Call History
+        // trapped with "No Observable object of type CryptoService found".
+        let vm = CallHistoryViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService)
+        viewModelBox.value = vm
         return vm
     }
 }
@@ -316,7 +316,6 @@ struct CallHistoryView: View {
     CallHistoryView()
         .environment(AppState(hubContext: HubContext()))
         .environment(HubContext())
-        .environment(CryptoService())
         .environment(Router())
 }
 #endif

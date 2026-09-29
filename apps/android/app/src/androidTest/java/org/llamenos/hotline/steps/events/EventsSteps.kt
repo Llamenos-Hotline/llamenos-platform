@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import io.cucumber.java.en.And
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
@@ -104,10 +105,7 @@ class EventsSteps : BaseSteps() {
 
     @Then("I should see the events list or empty state")
     fun iShouldSeeTheEventsListOrEmptyState() {
-        val found = assertAnyTagDisplayed(
-            "events-list", "events-empty", "events-loading",
-            "events-error", "events-cms-disabled", "events-title",
-        )
+        assertAnyTagDisplayed("events-list", "events-empty", timeoutMillis = 10_000)
     }
 
     @Then("I should see event cards or the empty state")
@@ -133,48 +131,43 @@ class EventsSteps : BaseSteps() {
 
     @Then("the events search field should be visible")
     fun theEventsSearchFieldShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
-            "events-search", "events-title", "events-list", "events-empty",
-        )
+        assertAnyTagDisplayed("events-search")
     }
 
     @Then("I should see the event detail tabs")
     fun iShouldSeeTheEventDetailTabs() {
-        composeRule.waitUntil(10_000) {
-            composeRule.onAllNodesWithTag("event-detail-tabs").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("event-detail-title").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("event-detail-error").fetchSemanticsNodes().isNotEmpty()
-        }
-        val found = assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title", "event-detail-error",
-        )
+        assertAnyTagDisplayed("event-detail-tabs", timeoutMillis = 10_000)
     }
 
     @Then("I should see the details tab in event detail")
     fun iShouldSeeTheDetailsTabInEventDetail() {
-        val found = assertAnyTagDisplayed(
-            "event-details-tab", "event-detail-tabs", "event-detail-title",
-        )
+        assertEventTabReachable("details", timeoutMillis = 10_000)
     }
 
     @And("I should see the sub-events tab")
     fun iShouldSeeTheSubEventsTab() {
-        val found = assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertEventTabReachable("sub_events")
     }
 
     @And("I should see the linked cases tab")
     fun iShouldSeeTheLinkedCasesTab() {
-        val found = assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertEventTabReachable("linked_cases")
     }
 
     @And("I should see the linked reports tab")
     fun iShouldSeeTheLinkedReportsTab() {
-        val found = assertAnyTagDisplayed(
-            "event-detail-tabs", "event-detail-title",
-        )
+        assertEventTabReachable("linked_reports")
+    }
+
+    /**
+     * The event detail tabs sit in a horizontally scrolling tab row that is wider
+     * than a phone screen, so later tabs start off-screen. Scroll the tab into
+     * view the way a user swipes the row, then require it to be displayed.
+     */
+    private fun assertEventTabReachable(slug: String, timeoutMillis: Long = 5_000) {
+        val tag = "event-tab-$slug"
+        waitForNode(tag, timeoutMillis)
+        onNodeWithTag(tag).performScrollTo()
+        onNodeWithTag(tag).assertIsDisplayed()
     }
 }

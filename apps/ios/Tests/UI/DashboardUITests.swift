@@ -128,50 +128,72 @@ final class DashboardUITests: BaseUITest {
         }
     }
 
+    /// Scenario: Navigate to notes tab (core/note-encryption.feature)
     func testNavigateToNotesTab() {
-        given("I am authenticated and on the dashboard") {
+        given("I am authenticated and on the main screen") {
             // Already on dashboard
         }
-        when("I tap the Notes tab") {
+        when("I tap the \"Notes\" tab") {
             navigateToNotes()
         }
-        then("I should see notes content") {
+        then("I should see the notes screen") {
             let found = anyElementExists([
                 "notes-list", "notes-empty-state", "notes-loading", "notes-error",
             ])
             XCTAssertTrue(found, "Notes view should show content after tab navigation")
         }
+        and("the create note FAB should be visible") {
+            // iOS places the create action in the navigation bar, not a floating button.
+            XCTAssertTrue(
+                find("create-note-button").waitForExistence(timeout: 5),
+                "The create-note action should be visible on the notes screen"
+            )
+        }
     }
 
+    /// Scenario: Navigate to conversations tab (core/messaging-flow.feature)
     func testNavigateToConversationsTab() {
-        given("I am authenticated and on the dashboard") {
+        given("I am authenticated and on the main screen") {
             // Already on dashboard
         }
-        when("I tap the Conversations tab") {
+        when("I tap the \"Conversations\" tab") {
             navigateToConversations()
         }
-        then("I should see conversations content") {
+        then("I should see the conversations screen") {
             let found = anyElementExists([
                 "conversations-list", "conversations-empty-state", "conversations-loading",
                 "conversations-error",
             ])
             XCTAssertTrue(found, "Conversations view should show content")
         }
+        and("the filter chips should be visible") {
+            // iOS renders the status filters as a menu behind one toolbar control.
+            XCTAssertTrue(
+                find("conversations-filter-button").waitForExistence(timeout: 5),
+                "The conversation status filter control should be visible"
+            )
+        }
     }
 
+    /// Scenario: Navigate to shifts tab (admin/shift-management.feature)
     func testNavigateToShiftsTab() {
-        given("I am authenticated and on the dashboard") {
+        given("I am authenticated and on the main screen") {
             // Already on dashboard
         }
-        when("I tap the Shifts tab") {
+        when("I tap the \"Shifts\" tab") {
             navigateToShifts()
         }
-        then("I should see shifts content") {
-            let found = anyElementExists([
-                "clock-in-button", "clock-out-button",
-                "shifts-empty-state", "shifts-loading",
-            ])
-            XCTAssertTrue(found, "Shifts view should show content")
+        then("I should see the clock in/out card") {
+            XCTAssertTrue(
+                anyElementExists(["clock-in-button", "clock-out-button"]),
+                "The clock in/out control should be visible on the shifts screen"
+            )
+        }
+        and("the clock status text should be displayed") {
+            XCTAssertTrue(
+                find("shift-status-label").waitForExistence(timeout: 5),
+                "The On Shift / Off Shift status text should be displayed"
+            )
         }
     }
 
