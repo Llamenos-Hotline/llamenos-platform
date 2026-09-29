@@ -19,15 +19,6 @@ Given('I have created a new identity', async ({ page }) => {
   await page.waitForURL(/\/login/, { timeout: Timeouts.ELEMENT })
 })
 
-Given('I have confirmed my key backup', async ({ page }) => {
-  // Click the backup confirmation button
-  const backupBtn = page.getByRole('button', { name: /backed up|confirm|continue/i })
-  const backupVisible = await backupBtn.isVisible({ timeout: 5000 }).catch(() => false)
-  if (backupVisible) {
-    await backupBtn.click()
-  }
-})
-
 Given('I am on the PIN setup screen', async ({ page }) => {
   const pinInput = page.getByTestId(TestIds.PIN_INPUT).first()
   await expect(pinInput).toBeVisible({ timeout: Timeouts.AUTH })
@@ -67,11 +58,9 @@ Then('I should arrive at the dashboard', async ({ page }) => {
 
   if (page.url().includes('/profile-setup')) {
     const completeBtn = page.getByRole('button', { name: /complete setup|get started|comenzar/i })
-    const hasBtnVisible = await completeBtn.isVisible({ timeout: 5000 }).catch(() => false)
-    if (hasBtnVisible) {
-      await completeBtn.click()
-      await page.waitForURL(url => !url.toString().includes('/profile-setup'), { timeout: Timeouts.AUTH })
-    }
+    await expect(completeBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await completeBtn.click()
+    await page.waitForURL(url => !url.toString().includes('/profile-setup'), { timeout: Timeouts.AUTH })
   }
 
   const pageTitle = page.getByTestId(TestIds.PAGE_TITLE)
