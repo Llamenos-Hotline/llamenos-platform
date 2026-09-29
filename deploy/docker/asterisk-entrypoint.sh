@@ -19,10 +19,13 @@ trunk_conf=/var/lib/asterisk/pjsip-trunk.conf
 : "${SIP_USERNAME:=}"
 : "${SIP_PASSWORD:=}"
 
+has_user=$([ -n "$SIP_USERNAME" ] && echo yes || echo no)
+has_pass=$([ -n "$SIP_PASSWORD" ] && echo yes || echo no)
+
 if [ -z "$SIP_PROVIDER" ]; then
   echo "WARNING: SIP_PROVIDER is not set — Asterisk has no SIP trunk. No inbound call can reach the hotline and no volunteer phone can be rung." >&2
   : > "$trunk_conf"
-elif [ -n "$SIP_USERNAME" ] && [ -z "$SIP_PASSWORD" ] || [ -z "$SIP_USERNAME" ] && [ -n "$SIP_PASSWORD" ]; then
+elif [ "$has_user" != "$has_pass" ]; then
   echo "FATAL: set both SIP_USERNAME and SIP_PASSWORD (registration trunk) or neither (IP-authenticated trunk)." >&2
   exit 1
 else
