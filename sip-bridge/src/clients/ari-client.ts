@@ -370,9 +370,16 @@ export class AriClient implements BridgeClient {
     channelId2: string,
     options?: BridgeOptions
   ): Promise<string> {
-    const bridgeType =
-      options?.type === 'passthrough' ? 'simple_bridge' : 'mixing'
-    const ariBridge = await this.createBridge({ type: bridgeType })
+    // ARI has no passthrough bridge type — `simple_bridge` is a bridge
+    // *technology*, and asking for it as a type fails with a 500, so every
+    // SFrame call's bridge used to fail. A two-channel `mixing` bridge already
+    // relays frames untouched (Asterisk picks the native_rtp / simple_bridge
+    // technology, not softmix); what would force decoding is a third party
+    // such as a recorder, which the Tier 5 guard keeps off SFrame calls.
+    if (options?.type === 'passthrough' && options.record) {
+      throw new Error('A passthrough (SFrame) bridge must not be recorded')
+    }
+    const ariBridge = await this.createBridge({ type: 'mixing' })
     await this.addChannelToBridge(ariBridge.id, channelId1)
     await this.addChannelToBridge(ariBridge.id, channelId2)
     if (options?.record) {

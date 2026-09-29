@@ -1,79 +1,94 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { CommandHandler } from './command-handler'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CommandHandler, legStatusFromCause } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
-import type { BridgeConfig, BridgeCommand } from './types'
+import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
+import { formatMediaPath } from './tts-engine'
 
-// ---- Mock BridgeClient ----
-
-function createMockClient(): BridgeClient & {
-  calls: Array<{ method: string; args: unknown[] }>
-} {
-  const calls: Array<{ method: string; args: unknown[] }> = []
-  const track = (method: string) => (...args: unknown[]) => {
-    calls.push({ method, args })
-    return Promise.resolve()
-  }
-
+vi.mock('./tts-engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tts-engine')>()
   return {
-    calls,
+    ...actual,
+    createTtsEngine: (config: { engine: string }) =>
+      config.engine === 'none' ? null : { synthesize: async (text: string) => `/tts/${text.length}.wav` },
+  }
+})
+
+// ---- Fake BridgeClient: records every call, hands out predictable IDs ----
+
+interface Call {
+  method: string
+  args: unknown[]
+}
+
+function fakeClient() {
+  const calls: Call[] = []
+  let seq = 0
+  const track =
+    (method: string, result?: () => unknown) =>
+    async (...args: unknown[]) => {
+      calls.push({ method, args })
+      return result?.()
+    }
+  const client: BridgeClient = {
     connect: track('connect') as BridgeClient['connect'],
-    disconnect: () => calls.push({ method: 'disconnect', args: [] }),
+    disconnect: () => {},
     isConnected: () => true,
     onEvent: () => {},
     offEvent: () => {},
-    originate: (async (params: unknown) => {
-      calls.push({ method: 'originate', args: [params] })
-      return { id: `ch-${Date.now()}` }
-    }) as BridgeClient['originate'],
+    originate: track('originate', () => ({ id: `leg-${++seq}` })) as BridgeClient['originate'],
     hangup: track('hangup') as BridgeClient['hangup'],
     answer: track('answer') as BridgeClient['answer'],
-    bridge: (async (...args: unknown[]) => {
-      calls.push({ method: 'bridge', args })
-      return `bridge-${Date.now()}`
-    }) as BridgeClient['bridge'],
+    bridge: track('bridge', () => 'bridge-1') as BridgeClient['bridge'],
     destroyBridge: track('destroyBridge') as BridgeClient['destroyBridge'],
-    playMedia: (async (...args: unknown[]) => {
-      calls.push({ method: 'playMedia', args })
-      return `pb-${Date.now()}`
-    }) as BridgeClient['playMedia'],
+    playMedia: track('playMedia', () => `pb-${++seq}`) as BridgeClient['playMedia'],
     stopPlayback: track('stopPlayback') as BridgeClient['stopPlayback'],
     startMoh: track('startMoh') as BridgeClient['startMoh'],
     stopMoh: track('stopMoh') as BridgeClient['stopMoh'],
     recordChannel: track('recordChannel') as BridgeClient['recordChannel'],
     recordBridge: track('recordBridge') as BridgeClient['recordBridge'],
     stopRecording: track('stopRecording') as BridgeClient['stopRecording'],
-    getRecordingFile: (async () => null) as BridgeClient['getRecordingFile'],
+    getRecordingFile: track('getRecordingFile', () => null) as BridgeClient['getRecordingFile'],
     deleteRecording: track('deleteRecording') as BridgeClient['deleteRecording'],
     setChannelVar: track('setChannelVar') as BridgeClient['setChannelVar'],
-    getChannelVar: (async () => '') as BridgeClient['getChannelVar'],
-    healthCheck: (async () => ({
-      ok: true,
-      latencyMs: 5,
-    })) as BridgeClient['healthCheck'],
-    listChannels: (async () => []) as BridgeClient['listChannels'],
-    listBridges: (async () => []) as BridgeClient['listBridges'],
+    getChannelVar: track('getChannelVar', () => '') as BridgeClient['getChannelVar'],
+    healthCheck: track('healthCheck', () => ({ ok: true, latencyMs: 1 })) as BridgeClient['healthCheck'],
+    listChannels: track('listChannels', () => []) as BridgeClient['listChannels'],
+    listBridges: track('listBridges', () => []) as BridgeClient['listBridges'],
+  }
+  const of = (method: string) => calls.filter((c) => c.method === method).map((c) => c.args)
+  return { client, calls, of }
+}
+
+// ---- Fake worker: answers each route with scripted commands (null = refuse) ----
+
+interface Sent {
+  path: string
+  payload: WebhookPayload
+  query?: Record<string, string>
+}
+
+function fakeWorker() {
+  const sent: Sent[] = []
+  const replies = new Map<string, BridgeCommand[] | null>()
+  const webhook = {
+    sendWebhookForCommands: async (path: string, payload: WebhookPayload, query?: Record<string, string>) => {
+      sent.push({ path, payload, query })
+      const reply = replies.get(path)
+      return reply === undefined ? [] : reply
+    },
+  } as unknown as WebhookSender
+  return {
+    webhook,
+    sent,
+    reply(path: string, commands: BridgeCommand[] | null) {
+      replies.set(path, commands)
+    },
+    to: (path: string) => sent.filter((s) => s.path === path),
   }
 }
 
-// ---- Mock WebhookSender ----
-
-function createMockWebhook(
-  responseCommands?: BridgeCommand[] | null
-): WebhookSender & { sentWebhooks: Array<{ path: string; payload: unknown }> } {
-  const sentWebhooks: Array<{ path: string; payload: unknown }> = []
-  return {
-    sentWebhooks,
-    sendWebhookForCommands: async (path: string, payload: unknown) => {
-      sentWebhooks.push({ path, payload })
-      return responseCommands ?? null
-    },
-    sendWebhook: async () => new Response('OK', { status: 200 }),
-    verifySignature: () => true,
-  } as unknown as WebhookSender & { sentWebhooks: Array<{ path: string; payload: unknown }> }
-}
-
-const baseConfig: BridgeConfig = {
+const config: BridgeConfig = {
   pbxType: 'asterisk',
   ariUrl: '',
   ariRestUrl: '',
@@ -84,407 +99,482 @@ const baseConfig: BridgeConfig = {
   eslPassword: '',
   kamailioJsonrpcUrl: '',
   workerWebhookUrl: 'http://worker:3000',
-  bridgeSecret: 'test-secret',
+  bridgeSecret: 'secret',
   bridgePort: 3000,
   bridgeHost: '0.0.0.0',
   stasisApp: 'llamenos',
-  connectionTimeoutMs: 300000,
+  connectionTimeoutMs: 300_000,
+  ttsConfig: { engine: 'espeak', cacheDir: '/tmp/tts' },
 }
 
+const CALLER = 'caller-1'
+const ts = '2026-09-29T00:00:00.000Z'
+const CONTEXT = { callSid: CALLER, lang: 'es', hub: 'hub-1' }
+
+const incoming = (channelId = CALLER, args: string[] = []): BridgeEvent => ({
+  type: 'channel_create',
+  channelId,
+  callerNumber: '+15557770001',
+  calledNumber: '+15550100',
+  args,
+  timestamp: ts,
+})
+const answered = (legId: string, token: string, parent = CALLER): BridgeEvent => ({
+  type: 'channel_create',
+  channelId: legId,
+  callerNumber: '+15557770001',
+  calledNumber: 's',
+  args: ['dialed', parent, token],
+  timestamp: ts,
+})
+const hangup = (channelId: string, cause = 16): BridgeEvent => ({ type: 'channel_hangup', channelId, cause, causeText: '', timestamp: ts })
+const dtmf = (digit: string, channelId = CALLER): BridgeEvent => ({ type: 'dtmf_received', channelId, digit, durationMs: 100, timestamp: ts })
+const playbackDone = (playbackId: string, channelId = CALLER): BridgeEvent => ({ type: 'playback_finished', channelId, playbackId, timestamp: ts })
+
+const queueCmd: BridgeCommand = { action: 'queue', queueName: CALLER, waitMusicEvent: 'wait_music', exitEvent: 'queue_exit', metadata: CONTEXT }
+
 describe('CommandHandler', () => {
-  let client: ReturnType<typeof createMockClient>
-  let webhook: ReturnType<typeof createMockWebhook>
+  let pbx: ReturnType<typeof fakeClient>
+  let worker: ReturnType<typeof fakeWorker>
   let handler: CommandHandler
 
   beforeEach(() => {
-    client = createMockClient()
-    webhook = createMockWebhook()
-    handler = new CommandHandler(client, webhook, baseConfig)
-    handler.setHotlineNumber('+15551234567')
+    vi.useFakeTimers()
+    pbx = fakeClient()
+    worker = fakeWorker()
+    handler = new CommandHandler(pbx.client, worker.webhook, config)
   })
 
-  // ================================================================
-  // Gather digit buffering
-  // ================================================================
-
-  describe('gather digit buffering', () => {
-    it('collects DTMF digits up to numDigits and sends result', async () => {
-      // Create an incoming call
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-1',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Execute a gather command
-      await handler.executeCommands([
-        {
-          action: 'gather',
-          channelId: 'ch-1',
-          numDigits: 3,
-          timeout: 10,
-          callbackPath: '/api/telephony/language',
-          callbackParams: { hubId: 'hub-1' },
-        },
-      ])
-
-      // Send DTMF digits one at a time
-      await handler.handleEvent({
-        type: 'dtmf_received',
-        channelId: 'ch-1',
-        digit: '1',
-        durationMs: 100,
-        timestamp: new Date().toISOString(),
-      })
-
-      // Not enough digits yet — no webhook sent beyond the initial incoming
-      expect(webhook.sentWebhooks.length).toBe(1) // only the incoming webhook
-
-      await handler.handleEvent({
-        type: 'dtmf_received',
-        channelId: 'ch-1',
-        digit: '2',
-        durationMs: 100,
-        timestamp: new Date().toISOString(),
-      })
-
-      expect(webhook.sentWebhooks.length).toBe(1) // still waiting
-
-      await handler.handleEvent({
-        type: 'dtmf_received',
-        channelId: 'ch-1',
-        digit: '3',
-        durationMs: 100,
-        timestamp: new Date().toISOString(),
-      })
-
-      // Now we should have the gather result webhook
-      expect(webhook.sentWebhooks.length).toBe(2)
-      const gatherWebhook = webhook.sentWebhooks[1]
-      expect(gatherWebhook.path).toBe('/api/telephony/language')
-      expect((gatherWebhook.payload as { digits: string }).digits).toBe('123')
-    })
-
-    it('does not send gather result for digits without active gather', async () => {
-      // Create call
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-2',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Send DTMF without a gather — should be ignored
-      await handler.handleEvent({
-        type: 'dtmf_received',
-        channelId: 'ch-2',
-        digit: '5',
-        durationMs: 100,
-        timestamp: new Date().toISOString(),
-      })
-
-      // Only the incoming webhook, no gather result
-      expect(webhook.sentWebhooks.length).toBe(1)
-    })
+  afterEach(() => {
+    handler.dispose()
+    vi.useRealTimers()
   })
 
-  // ================================================================
-  // Tier 5 recording guard in execBridge
-  // ================================================================
+  /** A caller whose incoming webhook answered with a queue: they are holding, volunteers can be rung */
+  async function queuedCaller(): Promise<void> {
+    worker.reply('/api/telephony/incoming', [queueCmd])
+    await handler.handleEvent(incoming())
+  }
 
-  describe('Tier 5 SFrame recording guard', () => {
-    it('blocks recording for sframe mode calls', async () => {
-      // Create an SFrame call (enters via sframe dialplan context)
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-sframe',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: ['sframe'],
-        timestamp: new Date().toISOString(),
-      })
+  describe('an incoming call', () => {
+    it('is answered and announced to the worker, whose commands run on that channel', async () => {
+      worker.reply('/api/telephony/incoming', [{ action: 'play', url: 'https://hub/audio/greeting.mp3' }])
 
-      // Create a volunteer channel
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-vol',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: ['dialed', 'ch-sframe', 'pubkey123'],
-        timestamp: new Date().toISOString(),
-      })
+      await handler.handleEvent(incoming())
 
-      // Try to bridge with recording enabled
-      await handler.executeCommands([
+      expect(pbx.of('answer')).toEqual([[CALLER]])
+      expect(worker.to('/api/telephony/incoming')).toEqual([
         {
-          action: 'bridge',
-          callerChannelId: 'ch-sframe',
-          volunteerChannelId: 'ch-vol',
-          record: true,
-          recordingCallbackPath: '/api/telephony/recording',
+          path: '/api/telephony/incoming',
+          payload: { event: 'incoming', channelId: CALLER, callerNumber: '+15557770001', calledNumber: '+15550100' },
+          query: undefined,
         },
       ])
-
-      // Bridge should be created
-      const bridgeCalls = client.calls.filter((c) => c.method === 'bridge')
-      expect(bridgeCalls.length).toBe(1)
-
-      // But recording should NOT be started (SFrame guard blocks it)
-      const recordCalls = client.calls.filter((c) => c.method === 'recordBridge')
-      expect(recordCalls.length).toBe(0)
+      // Remote audio is a `sound:` URI with the URL; a bare URL is not a valid ARI media URI.
+      expect(pbx.of('playMedia')).toEqual([[CALLER, 'sound:https://hub/audio/greeting.mp3']])
     })
 
-    it('allows recording for pstn mode calls', async () => {
-      // Create a PSTN call (no sframe arg)
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-pstn',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Create a volunteer channel (originated by us)
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-vol2',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: ['dialed', 'ch-pstn', 'pubkey456'],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Bridge with recording
-      await handler.executeCommands([
-        {
-          action: 'bridge',
-          callerChannelId: 'ch-pstn',
-          volunteerChannelId: 'ch-vol2',
-          record: true,
-          recordingCallbackPath: '/api/telephony/recording',
-        },
-      ])
-
-      // Both bridge and recording should happen
-      const bridgeCalls = client.calls.filter((c) => c.method === 'bridge')
-      expect(bridgeCalls.length).toBe(1)
-
-      const recordCalls = client.calls.filter((c) => c.method === 'recordBridge')
-      expect(recordCalls.length).toBe(1)
-    })
-  })
-
-  // ================================================================
-  // Cleanup on hangup
-  // ================================================================
-
-  describe('cleanup on hangup', () => {
-    it('removes call state and sends status webhook on hangup', async () => {
-      // Create a call
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-cleanup',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Verify call is tracked
-      const statusBefore = handler.getStatus()
-      expect(statusBefore.activeCalls).toBe(1)
-
-      // Hang up
-      await handler.handleEvent({
-        type: 'channel_hangup',
-        channelId: 'ch-cleanup',
-        cause: 16, // NORMAL_CLEARING
-        causeText: 'Normal Clearing',
-        timestamp: new Date().toISOString(),
-      })
-
-      // Call should be cleaned up
-      const statusAfter = handler.getStatus()
-      expect(statusAfter.activeCalls).toBe(0)
-    })
-
-    it('clears gather timeout on hangup', async () => {
-      // Create a call
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-gather-cleanup',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      // Start a gather
-      await handler.executeCommands([
-        {
-          action: 'gather',
-          channelId: 'ch-gather-cleanup',
-          numDigits: 1,
-          timeout: 30,
-          callbackPath: '/api/telephony/language',
-        },
-      ])
-
-      // Hang up while gather is active — should not throw
-      await handler.handleEvent({
-        type: 'channel_hangup',
-        channelId: 'ch-gather-cleanup',
-        cause: 16,
-        causeText: 'Normal Clearing',
-        timestamp: new Date().toISOString(),
-      })
-
+    it('is hung up when the worker refuses or cannot be reached — never left in silence', async () => {
+      worker.reply('/api/telephony/incoming', null)
+      await handler.handleEvent(incoming())
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+      expect(handler.getStatus().activeCalls).toBe(1) // until its hangup event arrives
+      await handler.handleEvent(hangup(CALLER))
       expect(handler.getStatus().activeCalls).toBe(0)
     })
 
-    it('clears queue state on hangup and sends queue-exit webhook', async () => {
-      // Use a webhook mock that returns a queue command
-      const queueWebhook = createMockWebhook([
-        {
-          action: 'queue',
-          channelId: 'ch-queue',
-          musicOnHold: 'default',
-          exitCallbackPath: '/api/telephony/queue-exit',
-        },
-      ])
-      const queueHandler = new CommandHandler(client, queueWebhook, baseConfig)
-      queueHandler.setHotlineNumber('+15551234567')
-
-      // Create a call — the incoming webhook response will queue it
-      await queueHandler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-queue',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
-
-      expect(queueHandler.getStatus().activeQueues).toBe(1)
-
-      // Hang up — should send queue-exit webhook with 'hangup' result
-      await queueHandler.handleEvent({
-        type: 'channel_hangup',
-        channelId: 'ch-queue',
-        cause: 16,
-        causeText: 'Normal Clearing',
-        timestamp: new Date().toISOString(),
-      })
-
-      expect(queueHandler.getStatus().activeCalls).toBe(0)
-      expect(queueHandler.getStatus().activeQueues).toBe(0)
-
-      // Check that queue-exit webhook was sent
-      const exitWebhook = queueWebhook.sentWebhooks.find(
-        (w) => w.path === '/api/telephony/queue-exit'
-      )
-      expect(exitWebhook).toBeTruthy()
-      expect((exitWebhook!.payload as { queueResult: string }).queueResult).toBe('hangup')
-
-      queueHandler.dispose()
+    it('speaks prompts through the TTS engine', async () => {
+      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Hola', language: 'es' }])
+      await handler.handleEvent(incoming())
+      expect(pbx.of('playMedia')).toEqual([[CALLER, formatMediaPath('/tts/4.wav', 'asterisk')]])
     })
 
-    it('cancels ringing channels when caller hangs up', async () => {
-      // Create a caller
-      await handler.handleEvent({
-        type: 'channel_create',
-        channelId: 'ch-caller',
-        callerNumber: '+15559876543',
-        calledNumber: '+15551234567',
-        args: [],
-        timestamp: new Date().toISOString(),
-      })
+    it('skips a spoken prompt when no TTS engine is configured', async () => {
+      const silent = new CommandHandler(pbx.client, worker.webhook, { ...config, ttsConfig: { engine: 'none', cacheDir: '' } })
+      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Hola', language: 'es' }])
+      await silent.handleEvent(incoming())
+      expect(pbx.of('playMedia')).toEqual([])
+      silent.dispose()
+    })
 
-      // Simulate ringing volunteers by executing a ring command
-      await handler.executeCommands([
-        {
-          action: 'ring',
-          endpoint: 'PJSIP/100@trunk',
-          callerId: '+15559876543',
-          timeout: 30,
-          answerCallbackPath: '/api/telephony/volunteer-answer',
-          answerCallbackParams: { parentCallSid: 'ch-caller', pubkey: 'pk1' },
-          statusCallbackPath: '/api/telephony/call-status',
-        },
+    it('logs and skips a command it does not understand instead of dropping it silently', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'playback', channelId: CALLER, media: 'x' } as unknown as BridgeCommand,
+        { action: 'hangup' },
       ])
-
-      // Caller hangs up — should trigger cleanup of ringing channels
-      await handler.handleEvent({
-        type: 'channel_hangup',
-        channelId: 'ch-caller',
-        cause: 16,
-        causeText: 'Normal Clearing',
-        timestamp: new Date().toISOString(),
-      })
-
-      expect(handler.getStatus().activeCalls).toBe(0)
-      expect(handler.getStatus().ringingChannels).toBe(0)
+      await handler.handleEvent(incoming())
+      // The command after the unknown one still runs.
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
     })
   })
 
-  // ================================================================
-  // TTS playback
-  // ================================================================
+  describe('gathering digits', () => {
+    it('starts the input timeout only after the menu prompts finish, then posts no digits', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'speak', text: 'Para español, marque uno', language: 'es' },
+        { action: 'speak', text: 'For English, press two', language: 'en-US' },
+        { action: 'gather', numDigits: 1, timeout: 8, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },
+      ])
+      await handler.handleEvent(incoming())
+      expect(pbx.of('playMedia')).toHaveLength(2)
 
-  describe('TTS playback', () => {
-    it('plays synthesized audio when TTS engine is configured', async () => {
-      const ttsConfig = {
-        engine: 'espeak' as const,
-        cacheDir: '/tmp/tts-test-cache',
-      }
-      const ttsHandler = new CommandHandler(client, webhook, { ...baseConfig, ttsConfig })
+      // Prompts take a while: the 8 s have not started yet.
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(worker.to('/api/telephony/language-selected')).toEqual([])
 
-      await ttsHandler.executeCommands([
+      await handler.handleEvent(playbackDone('pb-1'))
+      await handler.handleEvent(playbackDone('pb-2'))
+      await vi.advanceTimersByTimeAsync(7_999)
+      expect(worker.to('/api/telephony/language-selected')).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(worker.to('/api/telephony/language-selected')).toEqual([
         {
-          action: 'playback',
-          channelId: 'ch-tts',
-          media: '',
-          text: 'Hello world',
-          language: 'en',
+          path: '/api/telephony/language-selected',
+          payload: { event: 'language-selected', channelId: CALLER, callerNumber: '+15557770001', calledNumber: '+15550100', digits: '' },
+          query: { hub: 'hub-1' },
         },
       ])
-
-      // Should attempt playback (either TTS file or beep fallback)
-      const playCalls = client.calls.filter((c) => c.method === 'playMedia')
-      expect(playCalls.length).toBeGreaterThanOrEqual(1)
-      ttsHandler.dispose()
     })
 
-    it('falls back to beep when TTS is not configured', async () => {
-      await handler.executeCommands([
+    it('lets the caller barge in: the first digit stops the prompts and a full entry posts at once', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'speak', text: 'Menu', language: 'en-US' },
+        { action: 'gather', numDigits: 1, timeout: 8, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },
+      ])
+      worker.reply('/api/telephony/language-selected', [queueCmd])
+      await handler.handleEvent(incoming())
+
+      await handler.handleEvent(dtmf('2'))
+
+      expect(pbx.of('stopPlayback')).toEqual([['pb-1']])
+      expect(worker.to('/api/telephony/language-selected')[0].payload.digits).toBe('2')
+      // …and the worker's answer runs on the caller's channel.
+      expect(pbx.of('startMoh')).toEqual([[CALLER]])
+    })
+
+    it('posts at once when there is nothing to collect (single-language hotline)', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'speak', text: ' ', language: 'es' },
+        { action: 'gather', numDigits: 0, timeout: 0, callbackEvent: 'language_selected', metadata: { auto: '1', forceLang: 'es' } },
+      ])
+      await handler.handleEvent(incoming())
+      expect(worker.to('/api/telephony/language-selected')).toMatchObject([{ payload: { digits: '' }, query: { auto: '1', forceLang: 'es' } }])
+    })
+
+    it('collects all four captcha digits and posts them with the call context', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'gather', numDigits: 4, timeout: 10, callbackEvent: 'captcha_response', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming())
+
+      for (const d of '483') await handler.handleEvent(dtmf(d))
+      expect(worker.to('/api/telephony/captcha')).toEqual([])
+      await handler.handleEvent(dtmf('7'))
+
+      expect(worker.to('/api/telephony/captcha')).toEqual([
         {
-          action: 'playback',
-          channelId: 'ch-no-tts',
-          media: '',
-          text: 'Hello world',
-          language: 'en',
+          path: '/api/telephony/captcha',
+          payload: { event: 'captcha', channelId: CALLER, callerNumber: '+15557770001', calledNumber: '+15550100', digits: '4837' },
+          query: CONTEXT,
         },
       ])
+    })
 
-      const playCalls = client.calls.filter((c) => c.method === 'playMedia' && c.args[1] === 'sound:beep')
-      expect(playCalls.length).toBe(1)
+    it('ignores digits when nothing is being gathered', async () => {
+      await handler.handleEvent(incoming())
+      await handler.handleEvent(dtmf('1'))
+      expect(worker.sent.map((s) => s.path)).toEqual(['/api/telephony/incoming'])
     })
   })
 
-  // ================================================================
-  // dispose
-  // ================================================================
+  describe('the queue', () => {
+    it('holds the caller on music and polls wait-music with the time waited', async () => {
+      await queuedCaller()
 
-  describe('dispose', () => {
-    it('cleans up background timers', () => {
-      // Should not throw
-      handler.dispose()
+      expect(pbx.of('startMoh')).toEqual([[CALLER]])
+      expect(worker.to('/api/telephony/wait-music')).toMatchObject([{ payload: { event: 'wait-music', queueTime: 0 }, query: CONTEXT }])
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(worker.to('/api/telephony/wait-music')).toHaveLength(2)
+      expect(worker.to('/api/telephony/wait-music')[1].payload.queueTime).toBe(10)
     })
+
+    it('leaves the queue for voicemail when the worker says so', async () => {
+      worker.reply('/api/telephony/queue-exit', [
+        { action: 'record', maxDuration: 120, finishOnKey: '#', callbackEvent: 'recording_complete', metadata: CONTEXT },
+      ])
+      await queuedCaller()
+      const legs = await handler.ringVolunteers({ parentCallSid: CALLER, callerNumber: '+15557770001', volunteers: [{ pubkey: 'tok-a', phone: '+15550200' }] })
+
+      worker.reply('/api/telephony/wait-music', [{ action: 'leave_queue' }])
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(pbx.of('stopMoh')).toEqual([[CALLER]])
+      expect(pbx.of('hangup')).toEqual([[legs[0]]]) // nobody keeps ringing for a caller in voicemail
+      expect(worker.to('/api/telephony/queue-exit')).toMatchObject([{ payload: { event: 'queue-exit', result: 'leave' }, query: CONTEXT }])
+      expect(pbx.of('recordChannel')).toEqual([
+        [CALLER, { name: `voicemail-${CALLER}`, format: 'wav', maxDurationSeconds: 120, beep: true, terminateOn: '#' }],
+      ])
+
+      // No more wait-music polls once the caller has left the queue.
+      const polls = worker.to('/api/telephony/wait-music').length
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(worker.to('/api/telephony/wait-music')).toHaveLength(polls)
+    })
+
+    it('a caller hanging up in the queue is reported as a hangup and their ringing stops', async () => {
+      await queuedCaller()
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      await handler.handleEvent(hangup(CALLER))
+
+      expect(worker.to('/api/telephony/queue-exit')).toMatchObject([{ payload: { result: 'hangup' }, query: CONTEXT }])
+      expect(pbx.of('hangup')).toEqual(legs.map((id) => [id]))
+      // The cancelled legs' own hangups report nothing to the worker.
+      for (const id of legs) await handler.handleEvent(hangup(id))
+      expect(worker.to('/api/telephony/call-status')).toEqual([])
+      expect(handler.getStatus()).toMatchObject({ activeCalls: 0, activeQueues: 0, ringingChannels: 0 })
+    })
+  })
+
+  describe('ringing volunteers', () => {
+    it('originates one leg per volunteer phone through the trunk, carrying the parent call and token', async () => {
+      await queuedCaller()
+      const legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      expect(legs).toHaveLength(2)
+      expect(pbx.of('originate')).toEqual([
+        [{ endpoint: 'PJSIP/+15550200@trunk', callerId: '+15557770001', timeout: 30, appArgs: `dialed,${CALLER},tok-a` }],
+        [{ endpoint: 'PJSIP/+15550201@trunk', callerId: '+15557770001', timeout: 30, appArgs: `dialed,${CALLER},tok-b` }],
+      ])
+      expect(handler.getStatus().ringingChannels).toBe(2)
+    })
+
+    it('rings nobody for a caller who already hung up', async () => {
+      expect(await handler.ringVolunteers({ parentCallSid: 'gone', callerNumber: '+1', volunteers: [{ pubkey: 't', phone: '+2' }] })).toEqual([])
+      expect(pbx.of('originate')).toEqual([])
+    })
+
+    it('reports an unanswered leg with the status its hangup cause means', async () => {
+      await queuedCaller()
+      const [busy, noAnswer] = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+
+      await handler.handleEvent(hangup(busy, 17))
+      await handler.handleEvent(hangup(noAnswer, 19))
+
+      expect(worker.to('/api/telephony/call-status')).toMatchObject([
+        { payload: { event: 'call-status', channelId: busy, status: 'busy' }, query: { callToken: 'tok-a' } },
+        { payload: { event: 'call-status', channelId: noAnswer, status: 'no-answer' }, query: { callToken: 'tok-b' } },
+      ])
+    })
+
+    it('cancelRinging hangs up every leg but the one kept', async () => {
+      await queuedCaller()
+      const [a, b, c] = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+1',
+        volunteers: ['a', 'b', 'c'].map((t) => ({ pubkey: t, phone: `+1555020${t}` })),
+      })
+      handler.cancelRinging([a, b, c], b)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(pbx.of('hangup')).toEqual([[a], [c]])
+    })
+  })
+
+  describe('a volunteer answering', () => {
+    let legs: string[]
+
+    beforeEach(async () => {
+      await queuedCaller()
+      legs = await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [
+          { pubkey: 'tok-a', phone: '+15550200' },
+          { pubkey: 'tok-b', phone: '+15550201' },
+        ],
+      })
+    })
+
+    it('is accepted by the worker, bridged with the caller, recorded, and every other phone stops ringing', async () => {
+      worker.reply('/api/telephony/user-answer', [{ action: 'bridge', queueName: CALLER, record: true }])
+      const [winner, other] = legs
+
+      await handler.handleEvent(answered(winner, 'tok-a'))
+
+      expect(worker.to('/api/telephony/user-answer')).toMatchObject([
+        { payload: { event: 'volunteer-answer', channelId: winner, callerNumber: '+15557770001' }, query: { callToken: 'tok-a' } },
+      ])
+      expect(pbx.of('stopMoh')).toEqual([[CALLER]])
+      expect(pbx.of('hangup')).toEqual([[other]])
+      expect(pbx.of('bridge')).toEqual([[CALLER, winner, { type: 'mixing', record: false }]])
+      expect(pbx.of('recordBridge')).toEqual([['bridge-1', { name: `call-${CALLER}`, format: 'wav' }]])
+      expect(handler.getStatus()).toMatchObject({ activeQueues: 0, activeBridges: 1 })
+
+      // Bridged callers are no longer polled for wait music.
+      const polls = worker.to('/api/telephony/wait-music').length
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(worker.to('/api/telephony/wait-music')).toHaveLength(polls)
+    })
+
+    it('hangs up the leg when the worker refuses the answer (someone else got the call)', async () => {
+      worker.reply('/api/telephony/user-answer', null)
+      await handler.handleEvent(answered(legs[0], 'tok-a'))
+      expect(pbx.of('hangup')).toEqual([[legs[0]]])
+      expect(pbx.of('bridge')).toEqual([])
+    })
+
+    it('hangs up the volunteer if the caller left before the bridge', async () => {
+      worker.reply('/api/telephony/user-answer', [{ action: 'bridge', queueName: 'someone-else', record: true }])
+      await handler.handleEvent(answered(legs[0], 'tok-a'))
+      expect(pbx.of('hangup')).toEqual([[legs[0]]])
+      expect(pbx.of('bridge')).toEqual([])
+    })
+
+    describe('once bridged', () => {
+      beforeEach(async () => {
+        worker.reply('/api/telephony/user-answer', [{ action: 'bridge', queueName: CALLER, record: true }])
+        await handler.handleEvent(answered(legs[0], 'tok-a'))
+        pbx.calls.length = 0
+      })
+
+      it('the volunteer hanging up releases the caller and reports the leg completed', async () => {
+        await handler.handleEvent(hangup(legs[0]))
+
+        // The recording is stopped while the bridge still exists — its finish
+        // event is published on the bridge and is lost once it is destroyed.
+        expect(pbx.calls.map((c) => c.method)).toEqual(['stopRecording', 'hangup', 'destroyBridge'])
+        expect(pbx.of('hangup')).toEqual([[CALLER]])
+        expect(worker.to('/api/telephony/call-status')).toMatchObject([
+          { payload: { channelId: legs[0], status: 'completed' }, query: { callToken: 'tok-a' } },
+        ])
+      })
+
+      it('the caller hanging up takes the volunteer down, whose hangup then reports completed', async () => {
+        await handler.handleEvent(hangup(CALLER))
+        expect(pbx.of('hangup')).toEqual([[legs[0]]])
+        expect(pbx.of('destroyBridge')).toEqual([['bridge-1']])
+        expect(worker.to('/api/telephony/queue-exit')).toEqual([]) // they had left the queue
+
+        await handler.handleEvent(hangup(legs[0]))
+        expect(worker.to('/api/telephony/call-status')).toMatchObject([{ payload: { status: 'completed' }, query: { callToken: 'tok-a' } }])
+        expect(handler.getStatus()).toMatchObject({ activeCalls: 0, activeBridges: 0 })
+      })
+
+      it('reports the finished call recording to call-recording', async () => {
+        await handler.handleEvent(hangup(legs[0]))
+        await handler.handleEvent({ type: 'recording_complete', channelId: 'bridge-1', recordingName: `call-${CALLER}`, timestamp: ts })
+
+        expect(worker.to('/api/telephony/call-recording')).toMatchObject([
+          {
+            payload: { event: 'call-recording', channelId: CALLER, recordingStatus: 'done', recordingName: `call-${CALLER}` },
+            query: { parentCallSid: CALLER },
+          },
+        ])
+        expect(handler.getStatus().pendingRecordings).toBe(0)
+      })
+    })
+  })
+
+  describe('voicemail', () => {
+    beforeEach(async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'record', maxDuration: 60, finishOnKey: '#', callbackEvent: 'recording_complete', metadata: CONTEXT },
+      ])
+      await handler.handleEvent(incoming())
+    })
+
+    it('a finished voicemail is reported, then the closing prompt plays and the call ends', async () => {
+      worker.reply('/api/telephony/voicemail-complete', [
+        { action: 'speak', text: 'Gracias', language: 'es' },
+        { action: 'hangup' },
+      ])
+
+      await handler.handleEvent({ type: 'recording_complete', channelId: CALLER, recordingName: `voicemail-${CALLER}`, timestamp: ts })
+
+      expect(worker.to('/api/telephony/voicemail-recording')).toMatchObject([
+        { payload: { event: 'voicemail-recording', recordingStatus: 'done', recordingName: `voicemail-${CALLER}` }, query: CONTEXT },
+      ])
+      expect(worker.to('/api/telephony/voicemail-complete')).toMatchObject([{ query: CONTEXT }])
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+    })
+
+    it('still reports the voicemail when the caller hung up to finish it', async () => {
+      await handler.handleEvent(hangup(CALLER))
+      await handler.handleEvent({ type: 'recording_complete', channelId: CALLER, recordingName: `voicemail-${CALLER}`, timestamp: ts })
+
+      expect(worker.to('/api/telephony/voicemail-recording')).toMatchObject([{ payload: { recordingStatus: 'done' }, query: CONTEXT }])
+      expect(worker.to('/api/telephony/voicemail-complete')).toEqual([]) // nobody left to thank
+    })
+
+    it('reports a failed recording as failed', async () => {
+      await handler.handleEvent({ type: 'recording_failed', channelId: CALLER, recordingName: `voicemail-${CALLER}`, timestamp: ts })
+      expect(worker.to('/api/telephony/voicemail-recording')).toMatchObject([{ payload: { recordingStatus: 'failed' } }])
+    })
+  })
+
+  describe('Tier 5 SFrame calls', () => {
+    beforeEach(async () => {
+      worker.reply('/api/telephony/incoming', [queueCmd])
+      await handler.handleEvent(incoming(CALLER, ['sframe']))
+    })
+
+    it('are bridged passthrough and never recorded, even when the worker asks', async () => {
+      const [leg] = await handler.ringVolunteers({ parentCallSid: CALLER, callerNumber: '+1', volunteers: [{ pubkey: 'tok', phone: '+2' }] })
+      worker.reply('/api/telephony/user-answer', [{ action: 'bridge', queueName: CALLER, record: true }])
+
+      await handler.handleEvent(answered(leg, 'tok'))
+
+      expect(pbx.of('bridge')).toEqual([[CALLER, leg, { type: 'passthrough', record: false }]])
+      expect(pbx.of('recordBridge')).toEqual([])
+    })
+
+    it('refuse voicemail recording', async () => {
+      await handler.executeCommands(CALLER, [{ action: 'record', maxDuration: 60, finishOnKey: '#', callbackEvent: 'recording_complete' }])
+      expect(pbx.of('recordChannel')).toEqual([])
+    })
+  })
+
+  it('an unknown channel is never recorded (fails closed)', async () => {
+    await handler.executeCommands('unknown', [{ action: 'record', maxDuration: 60, finishOnKey: '#', callbackEvent: 'recording_complete' }])
+    expect(pbx.of('recordChannel')).toEqual([])
+  })
+
+  it('an answered leg without its parent call and token is hung up', async () => {
+    await handler.handleEvent(answered('leg-x', ''))
+    expect(pbx.of('hangup')).toEqual([['leg-x']])
+    expect(worker.sent).toEqual([])
+  })
+})
+
+describe('legStatusFromCause', () => {
+  it('maps Q.850 causes of unanswered legs', () => {
+    expect(legStatusFromCause(17)).toBe('busy')
+    expect(legStatusFromCause(18)).toBe('no-answer')
+    expect(legStatusFromCause(19)).toBe('no-answer')
+    expect(legStatusFromCause(21)).toBe('failed')
+    expect(legStatusFromCause(34)).toBe('failed')
   })
 })
