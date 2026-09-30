@@ -141,10 +141,13 @@ class M1CapabilityProbe {
         probe("invite", "RESULT unknown invite refused before any key was created")
     }
 
-    /** Log out from Settings: must land back on the login screen. */
+    /**
+     * Enrol by pasting the whole invite link (which also names the hub), then log out from
+     * Settings: must land back on the login screen.
+     */
     @Test
     fun logout() {
-        enrolViaInvite("logout", "probe-logout")
+        enrolViaInvite("logout", "probe-logout", asLink = true)
         tapTab("nav-settings")
         scrollClick("logout", "settings-logout-button")
         waitForTag("logout", "confirm-logout-button", 5_000)
@@ -446,8 +449,11 @@ class M1CapabilityProbe {
      * Enrolment as a volunteer does it (#1345): an admin creates an invite for [role], the
      * volunteer redeems it on a fresh install (hub URL + invite code → PIN twice), and the
      * admin then adds them to a new hub. Returns the signing pubkey and the hub.
+     *
+     * [asLink]: paste the invite link instead, leaving the hub URL empty — the app must
+     * take both the code and the hub from the link.
      */
-    private fun enrolViaInvite(flow: String, hubName: String): Pair<String, String> {
+    private fun enrolViaInvite(flow: String, hubName: String, asLink: Boolean = false): Pair<String, String> {
         val hub = createHub(hubName)
         val invite = adminApi(
             flow, "POST", "/api/invites",
@@ -456,8 +462,12 @@ class M1CapabilityProbe {
         val code = json.parseToJsonElement(invite).jsonObject["invite"]!!.jsonObject["code"]!!.jsonPrimitive.content
         launch()
         waitForTag(flow, "create-identity", 20_000)
-        compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
-        compose.onNodeWithTag("invite-code-input").performTextReplacement(code)
+        if (asLink) {
+            compose.onNodeWithTag("invite-code-input").performTextReplacement("$hubUrl/onboarding?code=$code")
+        } else {
+            compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
+            compose.onNodeWithTag("invite-code-input").performTextReplacement(code)
+        }
         compose.onNodeWithTag("create-identity").performClick()
         waitForAnyTag(flow, 15_000, "pin-pad", "invite-error")
         check(!has("invite-error")) { fail(flow, "a fresh invite was refused: ${textOf("invite-error")}") }

@@ -655,12 +655,14 @@ fun LlamenosNavigation(
                 onLock = { cryptoService.lock() },
                 onLogout = {
                     authViewModel.resetAuthState()
+                    inviteViewModel.reset()
                     navController.navigate(LlamenosRoute.Login.route) {
                         popUpTo(0) { inclusive = true }
                     }
                 },
                 onPanicWipe = {
                     authViewModel.resetAuthState()
+                    inviteViewModel.reset()
                     navController.navigate(LlamenosRoute.Login.route) {
                         popUpTo(0) { inclusive = true }
                     }

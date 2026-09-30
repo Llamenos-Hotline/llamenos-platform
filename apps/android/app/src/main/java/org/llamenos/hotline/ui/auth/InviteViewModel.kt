@@ -47,11 +47,13 @@ class InviteViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(InviteUiState())
     val uiState: StateFlow<InviteUiState> = _uiState.asStateFlow()
 
-    /** Whether the user is enrolling with an invite (as opposed to creating a bare identity). */
-    val hasInvite: Boolean get() = _uiState.value.input.isNotBlank()
-
     fun updateInput(input: String) {
         _uiState.value = InviteUiState(input = input)
+    }
+
+    /** Forget the invite (logout, wipe): the next identity on this device starts clean. */
+    fun reset() {
+        _uiState.value = InviteUiState()
     }
 
     /**
