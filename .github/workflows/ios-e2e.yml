@@ -100,8 +100,17 @@ jobs:
           if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then BASE="HEAD^"; fi
           if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then HEAD="HEAD"; fi
 
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
+          # Three-dot on pull_request so only the PR's own changes pick
+          # platforms, not everything the base moved since the fork — see
+          # ci.yml's `lint` "Determine changed files" step for why (#1396).
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"

@@ -129,8 +129,18 @@ jobs:
             HEAD="HEAD"
           fi
 
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
+          # Three-dot on pull_request so only the PR's own changes pick
+          # platforms, not everything the base moved since the fork — see
+          # the `lint` job's "Determine changed files" step for why each
+          # event gets the diff it does (#1396).
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
@@ -1380,8 +1390,30 @@ jobs:
           if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
             BASE="HEAD^"
           fi
+          if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
+            HEAD="HEAD"
+          fi
 
-          FILES=$(git diff --name-only --diff-filter=d "$BASE" "$HEAD" -- '*.ts' '*.tsx' \
+          # Three-dot on pull_request, two-dot everywhere else (#1396).
+          #  - pull_request: `base.sha` is the base branch's tip NOW, not the
+          #    PR's fork point. A two-dot diff against it also lists every
+          #    file the base changed since the fork — the PR never touched
+          #    them, yet they got linted and failed the PR on other people's
+          #    code (#1392: 48 files linted, 5 changed). `BASE...HEAD` diffs
+          #    from the merge base: exactly the PR's own changes.
+          #  - merge_group: `head_sha` is always a single commit whose only
+          #    parent is `base_sha` (the queue stacks each entry on the one
+          #    before it), so the merge base IS `base_sha` and two-dot is
+          #    already exactly the queued change.
+          #  - push (main/desktop): `after` descends from `before`, and a
+          #    push's diff genuinely is "what changed between these commits".
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          FILES=$(git diff --name-only --diff-filter=d "$RANGE" -- '*.ts' '*.tsx' \
             | grep -vE '^(dist/|\.features-gen|\.features-gen-backend|packages/protocol/generated/|packages/i18n/generated/)' \
             || true)
 
