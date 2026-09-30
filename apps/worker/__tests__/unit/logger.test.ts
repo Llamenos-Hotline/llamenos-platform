@@ -6,7 +6,6 @@ import {
   withCorrelation,
   getCorrelation,
   redact,
-  type LogLevel,
 } from '@worker/lib/logger'
 
 describe('logger', () => {
