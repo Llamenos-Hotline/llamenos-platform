@@ -4,9 +4,25 @@
 # Policy (from PR #615, which this file is based on and supersedes): routine
 # PRs — dependency bumps, i18n, docs, app-code features — merge unattended
 # once required status checks are green. Only the paths listed below require
-# human code-owner review before merge; everything else is intentionally left
+# code-owner review before merge; everything else is intentionally left
 # uncovered so it keeps auto-merging. There is deliberately NO catch-all `*`
 # rule: adding one would gate every PR again and defeat the fleet entirely.
+#
+# Two kinds of line. `@rhonda-rodododo` ALONE means a human must approve.
+# `@rhonda-rodododo @llamenos-auto` means either may, and is used only where
+# the worst a mistaken or compromised automated approval can do is let a
+# QUALITY defect through — the other required checks exist for that. The test
+# for adding `@llamenos-auto` to a line: could a merged edit to these files
+# reach a repository secret, a signing or publishing job, device key material,
+# a caller's identity, or the orchestrator that judges the fleet? If yes, the
+# line stays human-only. `@llamenos-auto` is Claude — the fleet's workers are
+# Claude too, so on a human-only line a bot approval would mean no human at all.
+#
+# GitHub never lets an author approve their own PR. A human-only line is
+# therefore UNSATISFIABLE on a PR authored by `@rhonda-rodododo` (the ruleset
+# has no bypass actors). That is deliberate: the fix is for the fleet to author
+# as `@llamenos-auto` so the operator's approval counts, not to widen a
+# human-only line.
 #
 # This file is now LOAD-BEARING, not advisory. It is the whole of the fleet's
 # "this needs a human" gate. The orchestrator used to make that call itself
@@ -78,7 +94,10 @@ signal-notifier/                    @rhonda-rodododo
 # ─── The fleet's own trust base ────────────────────────────────────────
 # A worker that edits the orchestrator, the fragment defining its own lane's
 # write scope, or the hook enforcing the write-deny rules can widen its own
-# authority. These must never be self-approvable.
+# authority. These must never be self-approvable — and @llamenos-auto is the
+# fleet's own reviewer, so co-owning them would be exactly that. orchestrator/
+# is also what fleet-review.yml runs, from the base ref, on the operator's own
+# self-hosted runner under the operator's Claude login.
 orchestrator/                       @rhonda-rodododo
 .claude/agents/                     @rhonda-rodododo
 .claude/settings.json               @rhonda-rodododo
@@ -94,18 +113,34 @@ CODEOWNERS                          @rhonda-rodododo
 # the file that makes "the judge runs only trusted code" true.
 # `bunfig.toml` does not exist yet; it is owned pre-emptively because it
 # configures the same install.
+# Human-only: tauri-release.yml and mobile-release.yml run `bun install` and
+# package.json scripts in the jobs holding TAURI_SIGNING_PRIVATE_KEY and the
+# Android keystore, so a dependency or script swap here reaches the signing keys.
 package.json                        @rhonda-rodododo
 bun.lockb                           @rhonda-rodododo
 bunfig.toml                         @rhonda-rodododo
-lefthook.yml                        @rhonda-rodododo
+# Co-owned: lefthook.yml defines the LOCAL git hooks only. No CI job reads it,
+# and every check it runs is re-run by CI, so the worst a bad edit does is
+# skip a local check.
+lefthook.yml                        @rhonda-rodododo @llamenos-auto
 # vitest's MAIN process executes its config — and the config's globalSetup
 # and plugins — and that process writes the result file and owns the exit
 # code fleet/verify judges. fleet/verify installs the BASE's config bytes over
 # a PR's copy, so an edit here is never in effect on its own PR; what merges,
 # though, judges every PR after it. Rooted glob: the root configs only.
-/vitest.*.config.ts                 @rhonda-rodododo
+# Co-owned: the only jobs that run vitest (ci.yml, fleet-verify.yml) hold no
+# repository secret and no write permission — a weakened config is a gate that
+# passes too easily, which is a quality failure, not a key leak.
+/vitest.*.config.ts                 @rhonda-rodododo @llamenos-auto
 
 # ─── Supply chain, release, deployment ─────────────────────────────────
+# Human-only, every workflow file: the signing secrets (TAURI_SIGNING_PRIVATE_KEY,
+# ANDROID_KEYSTORE_*, PLAY_SERVICE_ACCOUNT, RELEASE_BOT_TOKEN) are REPOSITORY
+# secrets, not environment-scoped ones, so ANY workflow file can reference
+# them once merged — a per-file split would not contain that. Moving them into
+# protected environments is what would make this line safe to co-own.
+# knope.toml runs `Command` steps inside knope-release-pr.yml, which holds
+# RELEASE_BOT_TOKEN.
 .github/workflows/                  @rhonda-rodododo
 knope.toml                          @rhonda-rodododo
 
@@ -113,12 +148,17 @@ knope.toml                          @rhonda-rodododo
 # scripts/ as a whole is the infra lane's to write (see
 # .claude/agents/fragments/infra-supervisor.md) — dev, setup and build helpers
 # merge on green like any other lane work. The entries below are the two
-# subsets that need a human even though a lane may author them:
-#   1. where one quiet edit compromises every install rather than one build;
+# subsets that need an owner's review even though a lane may author them:
+#   1. where one quiet edit compromises every install rather than one build —
+#      human-only;
 #   2. every script that ENFORCES a check. The test for membership is "could
 #      weakening this let a defect through a check?" — a lane that may quietly
 #      weaken the gate judging it can widen its own authority, the same reason
-#      orchestrator/ and .claude/agents/ are owned above.
+#      orchestrator/ and .claude/agents/ are owned above. These are co-owned
+#      with @llamenos-auto: none of them runs in a job holding a repository
+#      secret or a write permission (verified against every workflow that
+#      references them), and none ships, so a weakened gate is a quality
+#      failure. The exceptions stay human-only and say why on their own line.
 # Mirrored in HIGH_IMPACT_PATHS (orchestrator/src/impact.ts); guards.test.ts
 # fails if any of them stops matching a tracked file or stops being owned here.
 #
@@ -159,22 +199,29 @@ scripts/extract-cert-pins.sh        @rhonda-rodododo
 #   check-label-count.sh    — CI: no doc may pin a stale crypto-label count.
 #   check-migration-drift.* — CI + pre-commit/pre-push: a schema change must
 #                             ship with its migration.
-scripts/check-*                     @rhonda-rodododo
+# (check-ipc-allowlist.sh is only a wrapper: the check itself is
+# src/client/lib/desktop-ipc-boundary.test.ts, which this file does not own,
+# so co-owning the wrapper opens nothing that is not already open.)
+scripts/check-*                     @rhonda-rodododo @llamenos-auto
 # CI's tests/ typecheck, gated against a per-file error baseline: loosen its
 # comparison and every new type error in tests/ passes.
-scripts/typecheck-tests-gate.ts     @rhonda-rodododo
+scripts/typecheck-tests-gate.ts     @rhonda-rodododo @llamenos-auto
 # Custom lint rules loaded by eslint.config.js (no-inline-api-shape, the
 # api-schema-binding rail): a rule that reports nothing is a lint gate off.
-scripts/eslint-rules/               @rhonda-rodododo
+scripts/eslint-rules/               @rhonda-rodododo @llamenos-auto
 # Rewrites the drizzle snapshot that check-migration-drift compares against —
 # the migration gate's baseline writer.
-scripts/regenerate-snapshot.ts      @rhonda-rodododo
+scripts/regenerate-snapshot.ts      @rhonda-rodododo @llamenos-auto
 # The built-image gate (image-smoke.yml, and release.yml before publish):
 # image-smoke.sh runs the REAL entrypoint under production hardening against
 # PostgreSQL 17. verify-runtime.ts is the startup invariant that entrypoint
 # runs in every production container, and run-migrations.ts applies the
 # schema to every install's database — both ship inside the image
 # (deploy/docker/Dockerfile), so an edit reaches every server, not one build.
+# All three human-only. image-smoke.sh is a gate, but release.yml runs it
+# inside the publish job, which holds `packages: write` and `id-token: write`
+# (keyless cosign) — an edit there can alter or sign the image every install
+# pulls.
 scripts/image-smoke.sh              @rhonda-rodododo
 scripts/verify-runtime.ts           @rhonda-rodododo
 scripts/run-migrations.ts           @rhonda-rodododo
@@ -184,22 +231,27 @@ scripts/run-migrations.ts           @rhonda-rodododo
 # runners' exit codes; test-fleet.sh runs the fleet's own safety-rail suite.
 # One glob, same reasoning as check-* above. The backend lane keeps its write
 # grant on test-backend-bdd.sh — owning it here only adds the human review.
-scripts/test-*.sh                   @rhonda-rodododo
-scripts/android-parallel-e2e.sh     @rhonda-rodododo
+scripts/test-*.sh                   @rhonda-rodododo @llamenos-auto
+scripts/android-parallel-e2e.sh     @rhonda-rodododo @llamenos-auto
 # Sourced by every test runner above: test-reporter.sh prints the PASS/FAIL
 # the runners report, codegen-guard.sh fails a run on stale generated code,
 # and platform-detect.sh decides which platforms test:all runs at all — so
-# detecting none skips every suite and still exits 0. (#1060's
-# bootstrap-admin-keys.ts lands here too, and is key generation — owned
-# either way.)
-scripts/lib/                        @rhonda-rodododo
+# detecting none skips every suite and still exits 0.
+scripts/lib/                        @rhonda-rodododo @llamenos-auto
+# #1060's bootstrap-admin-keys.ts lands in scripts/lib/ and is key generation,
+# so it is human-only by name, pre-emptively (like bunfig.toml above). Last
+# match wins, so this line must stay BELOW `scripts/lib/`.
+scripts/lib/bootstrap-admin-keys.ts @rhonda-rodododo
 
 # ─── The fleet judging itself ──────────────────────────────────────────
 # Narrower than #615's blanket `tests/`, deliberately: every other test
 # directory is ordinary lane work and merges on green. A blanket `tests/`
 # would have held every BDD feature PR the backend and desktop lanes write.
 # (tests/mocks/ is owned above, with the other key-boundary files.)
-tests/orchestrator/                 @rhonda-rodododo
+# Co-owned: these suites run only in ci.yml and fleet-verify.yml, which hold
+# no secret. The orchestrator they test stays human-only above, so a weakened
+# rail cannot land a change to the fleet's authority without a human.
+tests/orchestrator/                 @rhonda-rodododo @llamenos-auto
 
 # ─── Key material, wherever it appears ─────────────────────────────────
 # Mirrors SECRET_PATH_PATTERNS (orchestrator/src/config.ts). checkScope
