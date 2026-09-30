@@ -61,6 +61,16 @@ private func ffiMobileSymmetricDecrypt(ciphertextHex: String, keyHex: String) th
     try mobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex)
 }
 
+// Stored multi-reader records (messages, call metadata): Rust picks this device's
+// envelope and opens it — neither the device key nor the content key reaches Swift.
+private func ffiMobileDecryptCallMetadata(encryptedContent: String, envelopes: [RecipientKeyEnvelope]) throws -> String {
+    try mobileDecryptCallMetadata(encryptedContent: encryptedContent, envelopes: envelopes)
+}
+
+private func ffiMobileDecryptMessage(encryptedContent: String, envelopes: [RecipientKeyEnvelope]) throws -> String {
+    try mobileDecryptMessage(encryptedContent: encryptedContent, envelopes: envelopes)
+}
+
 // V3 PUK
 private func ffiMobilePukCreate() throws -> String {
     try mobilePukCreate()
@@ -299,6 +309,15 @@ final class CryptoService: @unchecked Sendable {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted message")
         }
         return result
+    }
+
+    /// Decrypt a conversation message from all of its reader envelopes, whether
+    /// a client sealed it or the server did (inbound SMS/WhatsApp/Signal,
+    /// server-encrypted outbound). Rust picks this device's envelope.
+    func decryptMessage(encryptedContent: String, readerEnvelopes: [RecipientEnvelope]) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        let envelopes = readerEnvelopes.map { RecipientKeyEnvelope(pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
+        return try ffiMobileDecryptMessage(encryptedContent: encryptedContent, envelopes: envelopes)
     }
 
     // MARK: - Contact Encryption (HPKE)
@@ -552,38 +571,24 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - Call Metadata Decryption (HPKE)
 
-    /// Decrypt call metadata (callerNumber, answeredBy) from E2EE envelope.
-    /// Returns nil if no matching envelope found or decryption fails.
+    /// Decrypt call metadata (callerNumber, answeredBy) from a call record.
+    /// The server seals it and addresses the admin's envelope by the account
+    /// (Ed25519) key; Rust matches either of this device's keys and opens the
+    /// wrap with the X25519 key. Returns nil if no envelope is ours or it fails to open.
     func decryptCallMetadata(
         encryptedContent: String,
         adminEnvelopes: [(pubkey: String, enc: String, ct: String)]
     ) -> (callerNumber: String, answeredBy: String?)? {
-        guard isUnlocked, let ourPubkey = encryptionPubkeyHex else { return nil }
-        guard let myEnv = adminEnvelopes.first(where: { $0.pubkey == ourPubkey }) else { return nil }
-
-        do {
-            let hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: myEnv.enc, ct: myEnv.ct)
-            let keyHex = try ffiMobileHpkeOpenKey(
-                envelope: hpkeEnvelope,
-                expectedLabel: CryptoLabels.LABEL_CALL_META,
-                aadHex: ""
-            )
-            let plaintextHex = try ffiMobileSymmetricDecrypt(
-                ciphertextHex: encryptedContent,
-                keyHex: keyHex
-            )
-            guard let data = hexToData(plaintextHex),
-                  let json = String(data: data, encoding: .utf8),
-                  let jsonData = json.data(using: .utf8),
-                  let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                return nil
-            }
-            let callerNumber = dict["callerNumber"] as? String ?? "Unknown"
-            let answeredBy = dict["answeredBy"] as? String
-            return (callerNumber, answeredBy)
-        } catch {
+        guard isUnlocked else { return nil }
+        let envelopes = adminEnvelopes.map { RecipientKeyEnvelope(pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
+        guard let json = try? ffiMobileDecryptCallMetadata(encryptedContent: encryptedContent, envelopes: envelopes),
+              let jsonData = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
             return nil
         }
+        let callerNumber = dict["callerNumber"] as? String ?? "Unknown"
+        let answeredBy = dict["answeredBy"] as? String
+        return (callerNumber, answeredBy)
     }
 
     // MARK: - File Encryption (HPKE)
