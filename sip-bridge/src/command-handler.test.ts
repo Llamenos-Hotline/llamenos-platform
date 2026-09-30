@@ -196,6 +196,16 @@ describe('CommandHandler', () => {
       errors.mockRestore()
     })
 
+    it('does not report a prompt the caller cut off by hanging up', async () => {
+      const errors = vi.spyOn(logger, 'error').mockImplementation(() => {})
+      worker.reply('/api/telephony/incoming', [{ action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/es?exp=1&sig=secret' }])
+      await handler.handleEvent(incoming())
+      await handler.handleEvent({ type: 'hangup_requested', channelId: CALLER, timestamp: ts })
+      await handler.handleEvent(playbackDone('pb-1', CALLER, true))
+      expect(errors.mock.calls.map((args) => args.join(' ')).join('\n')).not.toContain('Prompt failed')
+      errors.mockRestore()
+    })
+
     it('plays a prompt to the end before hanging up, so a turned-away caller hears why', async () => {
       worker.reply('/api/telephony/incoming', [
         { action: 'play', url: 'http://app:3000/api/ivr-audio/rateLimited/es' },

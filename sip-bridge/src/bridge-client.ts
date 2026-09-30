@@ -8,6 +8,7 @@ export type BridgeEvent =
   | ChannelCreateEvent
   | ChannelAnswerEvent
   | ChannelHangupEvent
+  | HangupRequestedEvent
   | DtmfReceivedEvent
   | RecordingCompleteEvent
   | RecordingFailedEvent
@@ -41,6 +42,13 @@ export interface ChannelHangupEvent {
   timestamp: string
 }
 
+/** A hangup was asked for (the caller hung up): what the channel is still playing is about to be cut off */
+export interface HangupRequestedEvent {
+  type: 'hangup_requested'
+  channelId: string
+  timestamp: string
+}
+
 export interface DtmfReceivedEvent {
   type: 'dtmf_received'
   channelId: string
@@ -69,7 +77,11 @@ export interface PlaybackFinishedEvent {
   type: 'playback_finished'
   channelId: string
   playbackId: string
-  /** The PBX could not fetch or decode the media — the caller heard nothing */
+  /**
+   * The playback did not play to its end: the PBX could not fetch or decode the
+   * media, or the channel went away under it (Asterisk reports both as failed;
+   * a playback the bridge stopped reports done)
+   */
   failed: boolean
   media: string
   timestamp: string

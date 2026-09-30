@@ -302,6 +302,8 @@ export interface ActiveCall {
   pendingPlaybacks: Set<string>
   /** The worker asked to end the call; it ends once the last prompt finishes */
   hangupAfterPrompts?: boolean
+  /** The caller hung up: prompts cut off from here on were not a playback failure */
+  hangupRequested?: boolean
   dtmfBuffer: string
   activeGather?: {
     numDigits: number

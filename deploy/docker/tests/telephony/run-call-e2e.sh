@@ -28,6 +28,7 @@ KEEP=false
 export E2E_WORKER_PORT="$PORT"
 export E2E_CARRIER_CONTAINER="$PROJECT-sip-carrier-1"
 export E2E_ASTERISK_CONTAINER="$PROJECT-asterisk-1"
+export E2E_APP_CONTAINER="$PROJECT-app-1"
 # The app reaches ARI and the bridge by their names on the compose network,
 # exactly as in production.
 export E2E_WORKER_ARI_URL=http://asterisk:8088

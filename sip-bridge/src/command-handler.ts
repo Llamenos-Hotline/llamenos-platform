@@ -120,6 +120,11 @@ export class CommandHandler {
       case 'channel_hangup':
         await this.onChannelHangup(event)
         break
+      case 'hangup_requested': {
+        const call = this.calls.get(event.channelId)
+        if (call) call.hangupRequested = true
+        break
+      }
       case 'dtmf_received':
         await this.onDtmfReceived(event)
         break
@@ -252,14 +257,15 @@ export class CommandHandler {
    * timeout, and a call the worker ended is hung up.
    */
   private async onPlaybackFinished(event: BridgeEvent & { type: 'playback_finished' }): Promise<void> {
-    if (event.failed) {
+    const call = this.calls.get(event.channelId)
+    if (!call) return
+    // Still ours: not one stopPrompts() cut off (a stopped playback reports done anyway).
+    const ours = call.pendingPlaybacks.delete(event.playbackId)
+    if (event.failed && ours && !call.hangupRequested) {
       // Asterisk reports a prompt it could not fetch or decode only here: the
       // caller heard silence, which is otherwise indistinguishable from a prompt.
       logger.error('[handler]', `Prompt failed to play — the caller heard nothing: ${redactMediaUri(event.media)}`)
     }
-    const call = this.calls.get(event.channelId)
-    if (!call) return
-    call.pendingPlaybacks.delete(event.playbackId)
     if (call.pendingPlaybacks.size > 0) return
     if (call.hangupAfterPrompts) {
       await this.client.hangup(call.channelId)

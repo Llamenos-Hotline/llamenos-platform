@@ -12,6 +12,7 @@ import type {
   AriPlayback,
   BridgeConfig,
   ChannelDestroyedEvent,
+  ChannelHangupRequestEvent,
   ChannelDtmfReceivedEvent,
   ChannelStateChangeEvent,
   PlaybackFinishedEvent,
@@ -206,6 +207,11 @@ export class AriClient implements BridgeClient {
           args: e.args,
           timestamp,
         }
+      }
+
+      case 'ChannelHangupRequest': {
+        const e = ariEvent as ChannelHangupRequestEvent
+        return { type: 'hangup_requested', channelId: e.channel.id, timestamp }
       }
 
       case 'ChannelDestroyed': {
