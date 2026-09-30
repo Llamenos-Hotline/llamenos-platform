@@ -102,7 +102,7 @@ final class ConversationFlowUITests: BaseUITest {
 
         // The view model clears the field only once the server has accepted the reply
         // (201) and its response decoded as the protocol's MessageResponse; on any
-        // failure the typed text stays. (Reading the reply back needs #1339: iOS opens
+        // failure the typed text stays. (Reading the reply back needs #1328: iOS opens
         // message envelopes with the note-key label ID and cannot decrypt them.)
         let cleared = NSPredicate(format: "value != %@", reply)
         XCTAssertEqual(

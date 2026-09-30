@@ -18,7 +18,7 @@ final class ConversationsViewModel {
     /// All conversations from the server, filtered by current status filter.
     var filteredConversations: [ConversationListResponseConversation] = []
 
-    /// All conversations (unfiltered), used for badge count calculations.
+    /// All conversations (unfiltered).
     var allConversations: [ConversationListResponseConversation] = []
 
     /// Current status filter.
