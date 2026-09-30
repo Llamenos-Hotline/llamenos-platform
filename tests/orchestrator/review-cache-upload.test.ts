@@ -21,8 +21,8 @@ import {
  * `set-…` namespace. #1170 (a crypto-content PR) was reviewed PASS by
  * `general + crypto-security-reviewer` at 11:35 and the only artifact
  * uploaded was `fleet-review-pass-pr1170-…`, which its own next lookup could
- * not use. Under a standing review request that is one full multi-reviewer
- * review per rebase.
+ * not use. That is one full multi-reviewer review per re-request after a
+ * rebase.
  *
  * These rails drive the real `record()` into a real `$GITHUB_OUTPUT` file,
  * then check fleet-review.yml uploads every name it wrote.

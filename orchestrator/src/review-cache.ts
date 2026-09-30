@@ -275,8 +275,8 @@ export function artifactReviewCache(
       // the exact review set AND under the general namespace, and both used
       // to be appended to one key — GitHub keeps the LAST value, so only the
       // general name was ever uploaded, and a PR whose review set carries a
-      // profile (every crypto-content PR) could never be a cache hit: under
-      // a standing review request, every rebase of it was a full review.
+      // profile (every crypto-content PR) could never be a cache hit: every
+      // re-request after a rebase of it was a full review.
       const ghOutput = process.env['GITHUB_OUTPUT']
       const outputKey = scope === undefined ? CACHE_ARTIFACT_OUTPUT : CACHE_ARTIFACT_OUTPUT_SCOPED
       if (ghOutput !== undefined) await appendFile(ghOutput, `${outputKey}=${name}\n`)

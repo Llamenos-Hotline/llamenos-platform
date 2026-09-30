@@ -4,11 +4,9 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
   reviewIsRequested, reviewRequestFor, reviewRequestEventFromEnv, reviewTriggerLogins,
-  isRepublishOnlyEvent, standingReviewRequest, decideReviewGate,
   REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN,
-  type ReviewRequestDecision, type ReviewRequestEvent, type ReviewGateOutcome,
+  type ReviewRequestDecision, type ReviewRequestEvent,
 } from '../../orchestrator/src/ci.js'
-import { diffHash, type CachedVerdict, type ReviewCache } from '../../orchestrator/src/review-cache.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
 
 /**
@@ -152,48 +150,25 @@ function gateStep(): WorkflowStep {
   return step
 }
 
-/** GitHub's evaluation of a context path: a missing property is `null`. */
-function contextValue(context: Record<string, unknown>, path: string): unknown {
-  let v: unknown = context
-  for (const part of path.split('.')) v = v !== null && typeof v === 'object' ? (v as Record<string, unknown>)[part] : undefined
-  return v
-}
-
-/** GitHub's evaluation of `join(<array path>.*.<field>, ',')` — the one
- *  function the gate's `env:` may use: it hands over a RAW list (the PR's
- *  requested reviewers), and compares nothing. A missing array joins to ''. */
-function evaluateJoin(context: Record<string, unknown>, arrayPath: string, field: string): string {
-  const arr = contextValue(context, arrayPath)
-  if (!Array.isArray(arr)) return ''
-  return arr.map((x) => (x !== null && typeof x === 'object' ? (x as Record<string, unknown>)[field] : undefined))
-    .filter((x) => x !== undefined && x !== null).map(String).join(',')
-}
-
-const JOIN_EXPR = /^join\(\s*([A-Za-z_][\w.]*)\.\*\.([A-Za-z_]\w*)\s*,\s*','\s*\)$/
-
-/** GitHub's evaluation of `${{ <context path> }}` — or of a raw
- *  `${{ join(<path>.*.<field>, ',') }}` — for the gate's event fields: a
- *  missing property is `null`, which `env:` renders as ''. Any other
- *  expression over `github.event*` is refused outright — the rule must never
- *  be re-expressed in YAML (#1213's shim was). */
+/** GitHub's evaluation of `${{ <context path> }}` for the gate's event
+ *  fields: a missing property is `null`, which `env:` renders as ''. Any
+ *  other expression over `github.event*` is refused outright — the rule must
+ *  never be re-expressed in YAML (#1213's shim was). */
 function evaluateGateEnv(context: Record<string, unknown>): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, raw] of Object.entries(gateStep().env ?? {})) {
     const value = String(raw)
-    const inner = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(value)?.[1]
-    const path = inner !== undefined && /^[A-Za-z_][\w.]*$/.test(inner) ? inner : undefined
-    const joined = inner === undefined ? null : JOIN_EXPR.exec(inner)
-    if (path !== undefined) {
-      const v = contextValue(context, path)
-      env[key] = v === undefined || v === null ? '' : String(v)
-    } else if (joined !== null) {
-      env[key] = evaluateJoin(context, joined[1] ?? '', joined[2] ?? '')
-    } else {
+    const path = /^\$\{\{\s*([A-Za-z_][\w.]*)\s*\}\}$/.exec(value)?.[1]
+    if (path === undefined) {
       if (value.includes('github.event')) {
         throw new Error(`${key} is not a single context path (${value}) — the gate step must hand over raw event fields only`)
       }
       env[key] = value
+      continue
     }
+    let v: unknown = context
+    for (const part of path.split('.')) v = v !== null && typeof v === 'object' ? (v as Record<string, unknown>)[part] : undefined
+    env[key] = v === undefined || v === null ? '' : String(v)
   }
   return env
 }
@@ -246,198 +221,5 @@ describe('rail: the workflow hands the gate what it needs to decide (#1232)', ()
     const cli = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
     expect(cli).toContain('reviewRequestEventFromEnv(process.env, ctx.branch)')
     expect(cli).not.toContain("process.env['FLEET_REVIEW_REQUESTED_REVIEWER']")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// A push under a STANDING review request. The defect: `llamenos-auto` stays
-// in a PR's `requested_reviewers` for good (its verdict is a check, never a
-// GitHub review), GitHub emits no `review_requested` for a login already
-// requested, and every push that changed the diff concluded `not-requested`
-// — red on 15 of 47 open PRs, clearable only by DELETE-then-POST on
-// `requested_reviewers` by hand, after every push.
-//
-// The rule these rails pin, end to end from fleet-review.yml's own `env:`
-// and `runs-on:` through the CLI's own reader to the gate's own decision:
-//   - a push while a TRIGGER login is still requested reviews a changed diff;
-//   - a push with nobody requested, or only a non-trigger, reviews nothing;
-//   - an unchanged diff is a cache hit either way — no model call;
-//   - whenever the gate may reach the engine, `runs-on` is the review box.
-// ---------------------------------------------------------------------------
-
-interface PushPayload extends PrPayload { requested_reviewers: { login: string }[] }
-
-const push = (pr: PrPayload, requested: readonly string[]): PushPayload =>
-  ({ ...pr, requested_reviewers: requested.map((login) => ({ login })) })
-
-/** The live shapes this rule was written against. */
-const PR_1219 = { number: 1219, user: { login: AUTO }, head: { ref: KNOPE_RELEASE_BRANCH } }
-const PR_1184 = { number: 1184, user: { login: AUTO }, head: { ref: 'fleet/desktop/1130' } }
-
-function pushContext(pr: PushPayload): Record<string, unknown> {
-  return { github: { event_name: 'pull_request', event: { action: 'synchronize', number: pr.number, pull_request: pr } } }
-}
-
-/** The CLI's own reading of one `synchronize` delivery. */
-function pushEvent(pr: PushPayload): ReviewRequestEvent {
-  return reviewRequestEventFromEnv(evaluateGateEnv(pushContext(pr)), pr.head.ref)
-}
-
-/** `fleet-review` job's `runs-on`, evaluated over one payload. Only the
- *  expression's exact current SHAPE is understood — anything else throws,
- *  so a rewrite of `runs-on` must come back through this rail. */
-function runsOnFor(context: Record<string, unknown>): 'hosted' | 'review-box' {
-  const wf = parseYaml(readFileSync(FLEET_REVIEW_YML, 'utf8')) as { jobs: Record<string, { 'runs-on'?: unknown }> }
-  const expr = String(wf.jobs['fleet-review']?.['runs-on'] ?? '')
-  const m = /^\$\{\{\s*github\.event\.action == 'synchronize' && join\(\s*([A-Za-z_][\w.]*)\.\*\.([A-Za-z_]\w*)\s*,\s*','\s*\) == '' && fromJSON\('\["ubuntu-latest"\]'\) \|\| fromJSON\('\["self-hosted","fleet-review"\]'\) \}\}$/.exec(expr)
-  if (m === null) throw new Error(`fleet-review runs-on has a shape this rail does not evaluate: ${expr}`)
-  const action = contextValue(context, 'github.event.action')
-  // GitHub's `==` on strings is case-insensitive; '' == '' is the empty list.
-  const hosted = String(action ?? '').toLowerCase() === 'synchronize' && evaluateJoin(context, m[1] ?? '', m[2] ?? '') === ''
-  return hosted ? 'hosted' : 'review-box'
-}
-
-function fakeCache(entry?: { hash: string; verdict: CachedVerdict }): ReviewCache {
-  return {
-    lookup: async (key) => (entry !== undefined && key.diffHash === entry.hash ? entry.verdict : undefined),
-    record: async () => {},
-  }
-}
-
-/** The gate, over one push, exactly as `runReviewGate` (cli.ts) wires it. */
-async function gateFor(event: ReviewRequestEvent, diff: string, cache: ReviewCache): Promise<ReviewGateOutcome> {
-  return decideReviewGate({
-    ctx: { branch: event.branch, repoDir: '/nonexistent', headDir: '/nonexistent', headSha: 'h', baseSha: 'b', pr: '1' },
-    prDiff: async () => diff,
-    changedFiles: async () => ['apps/worker/routes/calls.ts'],
-    cacheFor: () => cache,
-    requested: reviewRequestFor(event).requested,
-    republishOnly: isRepublishOnlyEvent(event),
-    prAuthor: event.prAuthor,
-    reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
-    log: () => {},
-  })
-}
-
-const CHANGED = 'diff --git a/apps/worker/routes/calls.ts b/apps/worker/routes/calls.ts\n+changed\n'
-const EARNED = 'diff --git a/apps/worker/routes/calls.ts b/apps/worker/routes/calls.ts\n+earned\n'
-
-describe('rail: a push reviews a changed diff only while a review is still requested', () => {
-  it('the gate step hands the payload\'s requested_reviewers over raw', () => {
-    expect(evaluateGateEnv(pushContext(push(FLEET_PR, [AUTO, 'some-colleague'])))['FLEET_REVIEW_STANDING_REVIEWERS'])
-      .toBe(`${AUTO},some-colleague`)
-    expect(evaluateGateEnv(pushContext(push(FLEET_PR, [])))['FLEET_REVIEW_STANDING_REVIEWERS']).toBe('')
-  })
-
-  // The defect, injected: an operator-authored PR with `llamenos-auto`
-  // requested days ago, and a push that changed the diff.
-  it('a push to a PR with llamenos-auto still requested reviews the changed diff', async () => {
-    const event = pushEvent(push(FLEET_PR, [OPERATOR, AUTO].filter((l) => l !== FLEET_PR.user.login)))
-    expect(standingReviewRequest(event)).toBe(AUTO)
-    expect(reviewRequestFor(event)).toEqual({ requested: true })
-    expect(isRepublishOnlyEvent(event)).toBe(false)
-    expect((await gateFor(event, CHANGED, fakeCache())).kind).toBe('run-engine')
-  })
-
-  it('the same push with NOBODY requested concludes not-requested — no model call, and the reason names whom to ask', async () => {
-    const event = pushEvent(push(FLEET_PR, []))
-    const d = reviewRequestFor(event)
-    expect(d.requested).toBe(false)
-    expect(!d.requested && d.reason).toContain(`\`${AUTO}\``)
-    expect(isRepublishOnlyEvent(event)).toBe(true)
-    expect((await gateFor(event, CHANGED, fakeCache())).kind).toBe('not-requested')
-  })
-
-  // An unchanged diff (a rebase main did not touch) must stay free under a
-  // standing request: the cache is consulted BEFORE the request, so the
-  // standing request never turns a republish into a model call.
-  it('a rebase with an unchanged diff under a standing request is a cache hit, never a review', async () => {
-    const event = pushEvent(push(FLEET_PR, [AUTO]))
-    const cache = fakeCache({ hash: diffHash(EARNED), verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } })
-    expect((await gateFor(event, EARNED, cache)).kind).toBe('cache-hit')
-  })
-
-  // Defect 2's live instance: #1219, the knope release PR `llamenos-auto`
-  // wrote, with the operator requested (GitHub refuses `llamenos-auto`).
-  it('#1219: a knope force-push with the operator still requested reviews the new release diff', async () => {
-    const event = pushEvent(push(PR_1219, [OPERATOR]))
-    expect(standingReviewRequest(event)).toBe(OPERATOR)
-    expect((await gateFor(event, CHANGED, fakeCache())).kind).toBe('run-engine')
-  })
-
-  // #1184: `llamenos-auto`'s own fleet PR, and nobody has been asked. Red,
-  // and the reason must name the request GitHub WILL accept — never the
-  // author itself.
-  it('#1184: llamenos-auto\'s PR with nobody requested is red, naming the operator as whom to ask', async () => {
-    const event = pushEvent(push(PR_1184, []))
-    const d = reviewRequestFor(event)
-    expect(d.requested).toBe(false)
-    expect(!d.requested && d.reason).toContain(`\`${OPERATOR}\``)
-    expect(!d.requested && d.reason).not.toContain(`\`${AUTO}\``)
-    expect((await gateFor(event, CHANGED, fakeCache())).kind).toBe('not-requested')
-  })
-
-  // CODEOWNERS requests the operator on almost every PR by itself. That is
-  // not a request for the fleet's review, so it must never make a push a
-  // model call — on a Dependabot PR or a colleague's.
-  it.each([
-    [DEPENDABOT_PR],
-    [{ number: 7, user: { login: 'some-colleague' }, head: { ref: 'feature/x' } }],
-  ])('a push under only the CODEOWNERS request for the operator reviews nothing (%#)', async (pr) => {
-    const event = pushEvent(push(pr, [OPERATOR]))
-    expect(standingReviewRequest(event)).toBeUndefined()
-    expect(isRepublishOnlyEvent(event)).toBe(true)
-    const d = reviewRequestFor(event)
-    expect(!d.requested && d.reason).toMatch(/none of them a trigger here/)
-  })
-
-  it('the request is compared case-insensitively, like every other login here', () => {
-    expect(standingReviewRequest(pushEvent(push(FLEET_PR, [AUTO.toUpperCase()])))).toBe(AUTO)
-  })
-
-  // A standing request is a PUSH-only fact. On a `review_requested` event the
-  // event's own reviewer is the whole signal: a request for a colleague must
-  // not start the fleet review just because `llamenos-auto` is also listed.
-  it('on a review_requested event, a standing request for llamenos-auto does not turn someone else\'s request into ours', () => {
-    const env = evaluateGateEnv({
-      github: {
-        event_name: 'pull_request',
-        event: { action: 'review_requested', number: 1, pull_request: push(FLEET_PR, [AUTO, 'some-colleague']), requested_reviewer: { login: 'some-colleague' } },
-      },
-    })
-    const event = reviewRequestEventFromEnv(env, FLEET_PR.head.ref)
-    expect(standingReviewRequest(event)).toBeUndefined()
-    expect(reviewRequestFor(event).requested).toBe(false)
-  })
-
-  // The runner. `run-engine` on a GitHub-hosted runner would have no
-  // logged-in `claude`; the box for a push nobody asked about would queue
-  // gate-only runs in front of real reviews. Every cell of authors ×
-  // branches × requested-reviewer sets: whenever the gate CAN reach the
-  // engine, `runs-on` is the box; with nobody requested it is hosted.
-  const REQUESTED_SETS: readonly (readonly string[])[] = [[], [AUTO], [OPERATOR], ['some-colleague'], [AUTO, OPERATOR], [OPERATOR, 'some-colleague']]
-  it.each(CELLS)('runs-on agrees with the gate on every push to a PR by %s on %s', (author, branch) => {
-    const pr = { number: 1, user: { login: author }, head: { ref: branch } }
-    for (const requested of REQUESTED_SETS) {
-      // GitHub never lists a PR's author among its requested reviewers.
-      const payload = push(pr, requested.filter((l) => l.toLowerCase() !== author.toLowerCase()))
-      const event = pushEvent(payload)
-      const runner = runsOnFor(pushContext(payload))
-      if (!isRepublishOnlyEvent(event)) {
-        expect(runner, `the gate may review ${JSON.stringify(payload.requested_reviewers)} on a hosted runner`).toBe('review-box')
-      }
-      if (payload.requested_reviewers.length === 0) {
-        expect(runner, 'a push with nobody requested must stay off the review box').toBe('hosted')
-        expect(isRepublishOnlyEvent(event)).toBe(true)
-      }
-    }
-  })
-
-  it('every non-push event still runs on the review box', () => {
-    for (const action of ['review_requested']) {
-      expect(runsOnFor({ github: { event_name: 'pull_request', event: { action, pull_request: push(FLEET_PR, []) } } })).toBe('review-box')
-    }
-    expect(runsOnFor({ github: { event_name: 'workflow_dispatch', event: {} } })).toBe('review-box')
-    expect(runsOnFor({ github: { event_name: 'merge_group', event: { action: 'checks_requested' } } })).toBe('review-box')
   })
 })

@@ -15,7 +15,7 @@ import { diffHash } from '../../orchestrator/src/review-cache.js'
  * digits below 65,536 objects, 9 above). #1170's PASS was recorded by the
  * review box's clone (61,899 objects) under the 8-digit text; the same two
  * commits in a 101k-object clone hashed to another key and missed. A cache
- * miss under a standing review request is a full model review, so this is a
+ * miss on a review request is a full model review, so this is a
  * cost defect as well as a correctness one — and the box was ~3,600 objects
  * from invalidating every cached verdict at once.
  *
