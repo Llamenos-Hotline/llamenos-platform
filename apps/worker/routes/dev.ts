@@ -38,6 +38,13 @@ function checkResetSecret(c: { env: { DEV_RESET_SECRET?: string; E2E_TEST_SECRET
   return false
 }
 
+// Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
+// /test-* route carries its own inner guard, which means the outer devGuard
+// (app.ts `api.use('/test-*', devGuard)`) could silently stop matching and
+// nothing would notice (issue #1277). This route exists solely so a test can
+// assert devGuard alone 404s it when devSurfacesEnabled(env) is false.
+dev.get('/test-devguard-canary', (c) => c.json({ ok: true }))
+
 dev.post('/test-reset', async (c) => {
   // Full reset: development only — too destructive for staging
   if (c.env.ENVIRONMENT !== 'development') {
