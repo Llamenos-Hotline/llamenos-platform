@@ -110,12 +110,50 @@ jobs:
     name: build
     needs: changes
     if: needs.changes.outputs.ios_related == 'true' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
+    # The Mac mini (runners `mac-mini-ios-1..4`), not `macos-latest`.
+    #
+    # GitHub's macOS concurrency cap is 5 jobs REPO-WIDE, and money does not
+    # move it: Free, Pro and Team are all 5 (only Enterprise Cloud is 50),
+    # and larger runners share the same 5 while being billed even on public
+    # repos. Hardware we already own is the only lever that adds capacity.
+    #
+    # This job is the one worth moving first. It gates everything — the four
+    # `ui` shards cannot start until it finishes — so whenever it queues for
+    # a macOS slot, the entire iOS gate queues behind it. It is also the only
+    # macOS job here that needs no Docker, no sudo and no booted simulator,
+    # which is what makes it safe to co-tenant today.
+    #
+    # The `ui` shards stay on `macos-latest` for now: four of them on one box
+    # would each pick the SAME simulator UDID (the "Detect simulator" step
+    # takes the first available iPhone), share /tmp/shard-args.txt, and need
+    # passwordless sudo for the firewall step, which this machine does not
+    # have. Tracked in #1403 — moving them before that is fixed would make a
+    # REQUIRED check flaky on every PR, which is worse than queueing for one.
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     timeout-minutes: 45
 
     steps:
+      # MANDATORY, and must stay the literal first step: this job now runs on
+      # a machine the operator owns, so a fork PR's code must never reach it
+      # — before the checkout, before anything else. Same guard, same
+      # reasoning, as the one fronting `fleet/review` (see fleet-review.yml).
+      # The repo's fork-PR approval policy (`all_external_contributors`) is
+      # the first layer; this is the second, because a policy is a setting
+      # someone can change and this is not.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-e2e/build FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -180,8 +218,12 @@ jobs:
       - name: Build server crypto library
         run: packages/crypto/scripts/build-server.sh
 
+      # The four runners on this box share one /opt/homebrew prefix, and
+      # concurrent `brew install` against a shared prefix is not safe. This
+      # is a no-op on the Mac mini (xcodegen 2.44.1 is installed) and still
+      # installs normally anywhere it is genuinely absent.
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
 
       - name: Generate Xcode project
         working-directory: apps/ios
@@ -215,19 +257,19 @@ jobs:
               -scheme Llamenos \
               -configuration UITesting \
               -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-              -derivedDataPath /tmp/llamenos-build \
+              -derivedDataPath /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }} \
               -parallelizeTargets \
               EAGER_LINKING=YES \
               DEBUG_INFORMATION_FORMAT=dwarf \
-              >/tmp/build-for-testing.log 2>&1; then
-            grep -E "error:" /tmp/build-for-testing.log | head -50
-            tail -40 /tmp/build-for-testing.log
+              >$RUNNER_TEMP/build-for-testing.log 2>&1; then
+            grep -E "error:" $RUNNER_TEMP/build-for-testing.log | head -50
+            tail -40 $RUNNER_TEMP/build-for-testing.log
             exit 1
           fi
-          grep -E "\*\* TEST BUILD" /tmp/build-for-testing.log
+          grep -E "\*\* TEST BUILD" $RUNNER_TEMP/build-for-testing.log
           # The scheme regression this workflow was dark behind (#168): a
           # build that succeeds without producing the UI test runner.
-          test -d /tmp/llamenos-build/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
+          test -d /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }}/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
             || { echo "::error::build-for-testing produced no LlamenosUITests-Runner.app"; exit 1; }
 
       - name: Upload test build
@@ -235,7 +277,7 @@ jobs:
         with:
           name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            /tmp/llamenos-build/Build/Products/
+            /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }}/Build/Products/
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
@@ -247,6 +289,24 @@ jobs:
           path: packages/crypto/dist/server/libllamenos_core.dylib
           retention-days: 1
           if-no-files-found: error
+
+      # A hosted runner is thrown away after the job; this one is not. The
+      # DerivedData tree is several GB per build and lives outside
+      # RUNNER_TEMP (it has to: `build` and `ui` must agree on one absolute
+      # path — see the -derivedDataPath comment above), so nothing else will
+      # ever remove it. Unremoved, it fills the disk in a few days and every
+      # iOS build then fails on a full volume.
+      - name: Remove this run's DerivedData
+        if: always()
+        run: rm -rf /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Belt and braces for the runs that never reached the step above
+      # (cancelled mid-build, runner restarted, the job killed by a timeout).
+      # Anything older than a day cannot belong to a live run: this job's own
+      # timeout is 45 minutes.
+      - name: Sweep DerivedData orphaned by earlier runs
+        if: always()
+        run: find /tmp -maxdepth 1 -name 'llamenos-build-*' -type d -mtime +1 -exec rm -rf {} + 2>/dev/null || true
 
   ui:
     name: ui (${{ matrix.shard }})
@@ -280,7 +340,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
           name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
-          path: /tmp/llamenos-build/Build/Products/
+          path: /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }}/Build/Products/
 
       - name: Download server crypto library
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
@@ -348,7 +408,7 @@ jobs:
         timeout-minutes: 50
         run: |
           set -o pipefail
-          XCTESTRUN=$(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
+          XCTESTRUN=$(find /tmp/llamenos-build-${{ github.run_id }}-${{ github.run_attempt }}/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
           # shellcheck disable=SC2046
           xcodebuild test-without-building \
