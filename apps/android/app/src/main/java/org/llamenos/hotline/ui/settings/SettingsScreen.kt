@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PersonRemove
@@ -186,7 +185,6 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onNavigateToCommunications: () -> Unit = {},
     onNavigateToAdmin: () -> Unit,
-    onNavigateToDeviceLink: () -> Unit,
     onNavigateToErasure: () -> Unit = {},
     crashReportingEnabled: Boolean = false,
     onCrashReportingChange: (Boolean) -> Unit = {},
@@ -1047,48 +1045,6 @@ fun SettingsScreen(
             }
 
             // ---- Navigation cards ----
-
-            // Device link
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onNavigateToDeviceLink)
-                    .testTag("settings-device-link-card"),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Link,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.settings_link_device),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            text = stringResource(R.string.settings_device_link_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.Filled.NavigateNext,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
 
             Card(
                 modifier = Modifier

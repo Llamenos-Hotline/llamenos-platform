@@ -134,12 +134,6 @@ struct LlamenosApp: App {
         let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
 
         switch host {
-        case "device-link":
-            // Device linking works at any auth state:
-            // - Unauthenticated: user is setting up a new device by linking from an existing device
-            // - Unlocked: user is adding an additional device to their account from Settings
-            router.navigate(to: .deviceLink)
-
         case "hub-invite":
             // Store the invite token so the login / registration flow can pick it up.
             // Does not require authentication — a new volunteer may tap this link before

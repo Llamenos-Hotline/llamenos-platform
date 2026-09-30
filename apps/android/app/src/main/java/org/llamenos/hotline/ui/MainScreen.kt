@@ -86,7 +86,6 @@ private enum class MainTab(
  * @param onNavigateToNoteCreate Callback to navigate to note create screen
  * @param onNavigateToConversationDetail Callback to navigate to conversation detail screen
  * @param onNavigateToAdmin Callback to navigate to admin panel
- * @param onNavigateToDeviceLink Callback to navigate to device linking screen
  */
 @Composable
 fun MainScreen(
@@ -109,7 +108,6 @@ fun MainScreen(
     onNavigateToCases: () -> Unit,
     onNavigateToBlasts: () -> Unit,
     onNavigateToHelp: () -> Unit,
-    onNavigateToDeviceLink: () -> Unit,
     onNavigateToErasure: () -> Unit = {},
     onNavigateToHubs: () -> Unit = {},
     onNavigateToEvents: () -> Unit = {},
@@ -277,7 +275,6 @@ fun MainScreen(
                         onPanicWipe = onPanicWipe,
                         onNavigateToCommunications = onNavigateToCommunications,
                         onNavigateToAdmin = onNavigateToAdmin,
-                        onNavigateToDeviceLink = onNavigateToDeviceLink,
                         onNavigateToErasure = onNavigateToErasure,
                         biometricState = BiometricSectionState(
                             enrolled = biometricSettingsUiState.isEnrolled,
