@@ -180,18 +180,12 @@ class DeviceLinkViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                // In production, we would:
+                // Simulated — see the KDoc above. A real implementation would:
                 // 1. Send SAS confirmation to the provisioning room
-                // 2. Wait for the encrypted device key from the desktop
-                // 3. Decrypt with shared secret
-                // 4. Import into CryptoService
-
-                // Simulate import delay
+                // 2. Wait for the encrypted device key bundle from the desktop
+                // 3. Decrypt it via decrypt_provisioned_bundle (inside Rust)
+                // 4. Adopt BOTH transported seeds; derive neither from the other
                 delay(2000)
-
-                // In production: decrypt provisioning data with shared secret,
-                // then create device keys linked to the same user identity.
-                // val provision = cryptoService.decryptWithSharedSecret(encryptedData, secret)
 
                 _uiState.update {
                     it.copy(step = DeviceLinkStep.COMPLETE)

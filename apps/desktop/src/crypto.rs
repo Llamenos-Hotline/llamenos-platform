@@ -1152,8 +1152,10 @@ pub fn wipe_keys(
 
 // ── Device provisioning (nsec NEVER enters the webview) ────────────
 
-/// Primary device: encrypt signing seed for a new device's ephemeral pubkey.
-/// Uses the device's X25519 encryption seed for ECDH, encrypts the signing seed.
+/// Primary device: encrypt this device's key bundle for a new device's ephemeral pubkey.
+/// Uses the device's X25519 encryption seed for ECDH; the bundle carries BOTH the
+/// Ed25519 signing seed and the X25519 encryption seed (PROTOCOL.md §2.11 keeps them
+/// independent, so neither can be re-derived from the other on the receiving side).
 /// Returns { encryptedHex, sasCode, primaryEncPubkeyHex }.
 #[tauri::command]
 pub fn provision_encrypt_for_device(
@@ -1161,8 +1163,8 @@ pub fn provision_encrypt_for_device(
     ephemeral_pubkey_hex: String,
 ) -> Result<serde_json::Value, String> {
     state.with_secrets(|secrets| {
-        let result = llamenos_core::provisioning::encrypt_seed_for_provisioning(
-            &secrets.encryption_seed,
+        let result = llamenos_core::provisioning::encrypt_device_bundle_for_provisioning(
+            secrets,
             &ephemeral_pubkey_hex,
         )
         .map_err(err_str)?;
@@ -1236,9 +1238,9 @@ pub fn provision_compute_sas(
     Ok(format!("{} {}", &code[..3], &code[3..]))
 }
 
-/// New device: decrypt the provisioned signing seed and import it as device keys.
-/// The decrypted signing seed NEVER enters JavaScript — it goes directly from
-/// decryption into CryptoState, encrypted with the user's PIN.
+/// New device: decrypt the provisioned key bundle and import it as device keys.
+/// The decrypted seeds NEVER enter JavaScript — they go directly from decryption
+/// into CryptoState, encrypted with the user's PIN.
 /// Returns the PIN-encrypted device key blob for persistent storage.
 #[tauri::command]
 pub fn provision_decrypt_and_import(
@@ -1253,24 +1255,22 @@ pub fn provision_decrypt_and_import(
         .take()
         .ok_or_else(|| "No provisioning session. Call provision_create_session first.".to_string())?;
 
-    // Decrypt the provisioned payload — returns raw seed bytes directly
-    let decrypted = llamenos_core::provisioning::decrypt_provisioned_seed(
+    // Decrypt the provisioned payload — returns BOTH device seeds.
+    //
+    // Both seeds are used exactly as transported. Re-deriving the encryption
+    // seed from the signing seed here (as this command used to do) gives the
+    // linked device a different X25519 key than the one existing ciphertext was
+    // wrapped to: it authenticates fine and decrypts nothing, with no error on
+    // either side. See packages/crypto/src/provisioning.rs and its
+    // `linked_device_decrypts_ciphertext_wrapped_to_primary` regression test.
+    let decrypted = llamenos_core::provisioning::decrypt_provisioned_bundle(
         &encrypted_hex,
         &primary_enc_pubkey_hex,
         &ephemeral_secret,
     )
     .map_err(err_str)?;
 
-    let mut signing_seed = [0u8; 32];
-    signing_seed.copy_from_slice(&decrypted.seed);
-
-    // Derive encryption seed from signing seed (same as device_import_and_load)
-    let encryption_seed = derive_encryption_seed_from_signing(&signing_seed);
-
-    let secrets = device_keys::DeviceSecrets {
-        signing_seed,
-        encryption_seed,
-    };
+    let secrets = decrypted.secrets;
 
     let device_state = device_keys::DeviceKeyState {
         device_id: device_id.clone(),
@@ -1291,6 +1291,17 @@ pub fn provision_decrypt_and_import(
 // ── Internal helpers ────────────────────────────────────────────────
 
 /// Derive X25519 encryption seed from Ed25519 signing seed via HKDF.
+///
+/// ONLY for importing a single-seed identity that has no separate encryption
+/// seed to import — i.e. `device_import_and_load`, whose seeds come from
+/// `scripts/bootstrap-admin.ts` / `apps/worker/lib/demo-crypto.ts`, which
+/// publish an X25519 pubkey derived this same way.
+///
+/// MUST NOT be used for device linking or anywhere a real encryption seed
+/// exists: a device that re-derives its encryption key instead of receiving it
+/// holds the wrong X25519 key and silently decrypts nothing, and the derivation
+/// collapses PROTOCOL.md §2.11's independence guarantee (holding the signing
+/// seed would mean holding the decryption key).
 fn derive_encryption_seed_from_signing(signing_seed: &[u8; 32]) -> [u8; 32] {
     let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, signing_seed);
     let mut encryption_seed = [0u8; 32];

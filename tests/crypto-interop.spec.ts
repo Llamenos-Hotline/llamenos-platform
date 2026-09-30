@@ -362,6 +362,75 @@ test.describe('Cross-platform crypto interop', () => {
     )
     expect(wrongEnvelope).toBeUndefined()
   })
+
+  // ─── Device provisioning key bundle (PROTOCOL.md 6.1.1) ─────
+
+  test('device provisioning bundle decrypts to BOTH device seeds', () => {
+    const p = vectors.provisioning
+
+    // Rust used the generated label constants, not ad-hoc strings.
+    expect(p.aadLabel).toBe(labels.LABEL_DEVICE_PROVISION_BUNDLE)
+    expect(p.hkdfSalt).toBe(labels.LABEL_PROVISIONING_SALT)
+    expect(p.hkdfInfo).toBe(labels.LABEL_DEVICE_PROVISION)
+
+    // New-device side: ECDH against the primary's published X25519 pubkey.
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+
+    const data = hexToBytes(p.encryptedHex)
+    const plaintext = gcm(provKey, data.slice(0, 12), utf8ToBytes(p.aadLabel)).decrypt(data.slice(12))
+
+    // Bundle layout: version || signing seed || encryption seed
+    expect(plaintext.length).toBe(p.bundleLen)
+    expect(plaintext[0]).toBe(p.bundleVersion)
+    const signingSeed = plaintext.slice(1, 33)
+    const encryptionSeed = plaintext.slice(33, 65)
+    expect(bytesToHex(signingSeed)).toBe(p.primarySigningSeedHex)
+    expect(bytesToHex(encryptionSeed)).toBe(p.primaryEncryptionSeedHex)
+
+    // The linked device therefore holds the primary's keypairs — which is what
+    // lets it decrypt ciphertext wrapped to the primary before the link.
+    expect(bytesToHex(ed25519.getPublicKey(signingSeed))).toBe(p.primarySigningPubkeyHex)
+    expect(bytesToHex(x25519.getPublicKey(encryptionSeed))).toBe(p.primaryEncryptionPubkeyHex)
+
+    // The two seeds are independent (PROTOCOL.md 2.11): re-deriving the
+    // encryption seed from the signing seed produces a DIFFERENT key, i.e. a
+    // device that authenticates and then silently decrypts nothing.
+    const rederived = hkdf(sha256, signingSeed, new Uint8Array(0),
+      utf8ToBytes(labels.LABEL_DEVICE_ENCRYPTION_SEED), 32)
+    expect(bytesToHex(rederived)).not.toBe(p.primaryEncryptionSeedHex)
+  })
+
+  test('provisioning SAS matches the Rust-computed code', () => {
+    const p = vectors.provisioning
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const sasBytes = hkdf(sha256, shared, utf8ToBytes(labels.SAS_SALT), utf8ToBytes(labels.SAS_INFO), 4)
+    const num = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
+    const code = (num % 1_000_000).toString().padStart(6, '0')
+    expect(`${code.slice(0, 3)} ${code.slice(3)}`).toBe(p.sasCode)
+  })
+
+  test('provisioning bundle does not authenticate under the pre-bundle AAD', () => {
+    // Domain separation is what prevents a silent downgrade to an older
+    // provisioning payload format.
+    const p = vectors.provisioning
+    const shared = x25519.getSharedSecret(
+      hexToBytes(p.ephemeralSecretHex),
+      hexToBytes(p.primaryEncryptionPubkeyHex),
+    )
+    const provKey = hkdf(sha256, shared, utf8ToBytes(p.hkdfSalt), utf8ToBytes(p.hkdfInfo), 32)
+    const data = hexToBytes(p.encryptedHex)
+
+    expect(() =>
+      gcm(provKey, data.slice(0, 12), utf8ToBytes(labels.LABEL_DEVICE_PROVISION)).decrypt(data.slice(12)),
+    ).toThrow()
+  })
 })
 
 // ─── Helpers ─────────────────────────────────────────────────

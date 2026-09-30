@@ -94,6 +94,38 @@ struct TestVectors {
 
     /// Adversarial test vectors (wrong keys, tampered data)
     adversarial: AdversarialVectors,
+
+    /// Device provisioning key-bundle vectors (PROTOCOL.md 6.1.1)
+    provisioning: ProvisioningVectors,
+}
+
+/// Device provisioning key bundle — the payload a primary device sends to a
+/// device being linked. Cross-platform consumers MUST recover BOTH seeds from
+/// it; deriving one from the other yields a device that decrypts nothing.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProvisioningVectors {
+    /// Primary device seeds — independently random in production (PROTOCOL 2.11),
+    /// fixed here so the vector is reproducible.
+    primary_signing_seed_hex: String,
+    primary_encryption_seed_hex: String,
+    primary_signing_pubkey_hex: String,
+    primary_encryption_pubkey_hex: String,
+    /// The linking device's ephemeral X25519 keypair.
+    ephemeral_secret_hex: String,
+    ephemeral_pubkey_hex: String,
+    /// hex(nonce_12 + ciphertext + tag_16) produced by Rust.
+    encrypted_hex: String,
+    /// SAS both sides must display.
+    sas_code: String,
+    /// Bundle plaintext layout.
+    bundle_version: u8,
+    bundle_len: usize,
+    /// AEAD associated data label for the bundle.
+    aad_label: String,
+    /// HKDF salt / info for the provisioning key.
+    hkdf_salt: String,
+    hkdf_info: String,
 }
 
 // ─── Existing Structs ────────────────────────────────────────
@@ -513,6 +545,47 @@ fn generate_and_verify_test_vectors() {
     )
     .is_err());
 
+    // ─── Device provisioning key bundle ──────────────────────
+    // Fixed seeds so the vector is reproducible; in production both are random
+    // and independent (PROTOCOL.md 2.11).
+    let primary_secrets = llamenos_core::device_keys::DeviceSecrets {
+        signing_seed: [0x11u8; 32],
+        encryption_seed: [0x22u8; 32],
+    };
+    let primary_signing_pubkey = hex::encode(primary_secrets.signing_pubkey().to_bytes());
+    let primary_encryption_pubkey = hex::encode(primary_secrets.encryption_pubkey().to_bytes());
+
+    let ephemeral_secret_bytes = [0x33u8; 32];
+    let ephemeral_pubkey = hex::encode(
+        X25519PublicKey::from(&X25519StaticSecret::from(ephemeral_secret_bytes)).to_bytes(),
+    );
+
+    let provisioning_result = llamenos_core::provisioning::encrypt_device_bundle_for_provisioning(
+        &primary_secrets,
+        &ephemeral_pubkey,
+    )
+    .unwrap();
+
+    // Round-trips in Rust, recovering BOTH seeds unchanged.
+    let provisioning_decrypted = llamenos_core::provisioning::decrypt_provisioned_bundle(
+        &provisioning_result.encrypted_hex,
+        &primary_encryption_pubkey,
+        &ephemeral_secret_bytes,
+    )
+    .unwrap();
+    assert_eq!(
+        provisioning_decrypted.secrets.signing_seed,
+        primary_secrets.signing_seed
+    );
+    assert_eq!(
+        provisioning_decrypted.secrets.encryption_seed,
+        primary_secrets.encryption_seed
+    );
+    assert_eq!(
+        provisioning_decrypted.sas_code,
+        provisioning_result.sas_code
+    );
+
     // ─── Build test vectors JSON ─────────────────────────────
     let vectors = TestVectors {
         version: "3".to_string(),
@@ -648,6 +721,21 @@ fn generate_and_verify_test_vectors() {
             message: AdversarialMessage {
                 valid_encrypted: adv_msg,
             },
+        },
+        provisioning: ProvisioningVectors {
+            primary_signing_seed_hex: hex::encode(primary_secrets.signing_seed),
+            primary_encryption_seed_hex: hex::encode(primary_secrets.encryption_seed),
+            primary_signing_pubkey_hex: primary_signing_pubkey,
+            primary_encryption_pubkey_hex: primary_encryption_pubkey,
+            ephemeral_secret_hex: hex::encode(ephemeral_secret_bytes),
+            ephemeral_pubkey_hex: ephemeral_pubkey,
+            encrypted_hex: provisioning_result.encrypted_hex,
+            sas_code: provisioning_result.sas_code,
+            bundle_version: llamenos_core::provisioning::PROVISIONING_BUNDLE_VERSION,
+            bundle_len: 65,
+            aad_label: LABEL_DEVICE_PROVISION_BUNDLE.to_string(),
+            hkdf_salt: LABEL_PROVISIONING_SALT.to_string(),
+            hkdf_info: LABEL_DEVICE_PROVISION.to_string(),
         },
     };
 
