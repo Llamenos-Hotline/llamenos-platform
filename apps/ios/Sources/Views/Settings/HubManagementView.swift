@@ -107,6 +107,7 @@ struct HubManagementView: View {
                     HubRow(
                         hub: hub,
                         isActive: vm.isActive(hub),
+                        hasKey: vm.hasKey(hub),
                         onTap: {
                             Task { await vm.switchHub(to: hub) }
                         }
@@ -131,6 +132,10 @@ struct HubManagementView: View {
 private struct HubRow: View {
     let hub: SharedHub
     let isActive: Bool
+    /// False when this hub's key envelope could not be fetched or unwrapped.
+    /// The hub is still browsable — only its encrypted content is unreadable —
+    /// so this is an inline notice, never a blocking alert (#1262).
+    let hasKey: Bool
     let onTap: () -> Void
 
     var body: some View {
@@ -166,6 +171,21 @@ private struct HubRow: View {
                             color: statusSwiftUIColor,
                             style: .subtle
                         )
+
+                        // A hub whose key envelope is missing is still browsable —
+                        // only its encrypted content is unreadable (#1262). Said on
+                        // the row that it applies to, and kept to the badge line so
+                        // it costs no row height.
+                        if !hasKey {
+                            Image(systemName: "lock.slash")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color.brandMutedForeground)
+                                .accessibilityIdentifier("hub-row-no-key-\(hub.slug)")
+                                .accessibilityLabel(NSLocalizedString(
+                                    "hubs_key_unavailable",
+                                    comment: "Encrypted content in this hub cannot be opened on this device"
+                                ))
+                        }
 
                         if let phone = hub.phoneNumber, !phone.isEmpty {
                             HStack(spacing: 2) {

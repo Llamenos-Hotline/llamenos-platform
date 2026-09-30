@@ -18,6 +18,10 @@ final class HubManagementViewModel {
     var isSaving: Bool = false
     var isSwitching: Bool = false
     var error: Error?
+    /// Hub IDs whose key envelope could not be fetched or unwrapped.
+    /// Not an error state: browsing these hubs works, only their encrypted
+    /// content cannot be decrypted. The list surfaces that inline per row.
+    var hubKeysUnavailable: Set<String> = []
     var errorMessage: String? { error?.localizedDescription }
     var successMessage: String?
 
@@ -50,8 +54,9 @@ final class HubManagementViewModel {
             )
             hubs = response.hubs
 
-            // Eager-load hub keys for all hubs in parallel.
-            // Errors from individual key fetches are logged but do not fail the overall load.
+            // Eager-load hub keys for all hubs in parallel. A hub whose key cannot
+            // be fetched is still listed and still selectable — only its encrypted
+            // content is unreadable, which the row says for itself.
             await eagerLoadHubKeys(for: hubs)
 
             // If no active hub is set and there are hubs, select the first one
@@ -66,47 +71,78 @@ final class HubManagementViewModel {
     // MARK: - Eager Hub Key Loading
 
     /// Pre-fetch and cache hub keys for all hubs in the background.
-    /// Runs fetches in parallel; individual failures are logged and skipped.
+    /// Runs fetches in parallel. A failure never fails the load — it is recorded
+    /// in `hubKeysUnavailable` so the list can say which hubs cannot be decrypted,
+    /// instead of disappearing into an empty `catch`.
     func eagerLoadHubKeys(for hubs: [SharedHub]) async {
-        await withTaskGroup(of: Void.self) { group in
-            for hub in hubs {
-                guard !cryptoService.hasHubKey(hubId: hub.id) else { continue }
-                group.addTask {
+        let results = await withTaskGroup(of: (String, Bool).self) { group -> [(String, Bool)] in
+            for hub in hubs where !cryptoService.hasHubKey(hubId: hub.id) {
+                group.addTask { [apiService, cryptoService] in
                     do {
-                        let envelope = try await self.apiService.getHubKey(hub.id)
-                        try self.cryptoService.loadHubKey(hubId: hub.id, envelope: envelope)
-                    } catch {}
+                        let envelope = try await apiService.getHubKey(hub.id)
+                        try cryptoService.loadHubKey(hubId: hub.id, envelope: envelope)
+                        return (hub.id, true)
+                    } catch {
+                        #if DEBUG
+                        print("[HubKeys] No key for hub \(hub.id): \(error.localizedDescription)")
+                        #endif
+                        return (hub.id, false)
+                    }
                 }
+            }
+            var collected: [(String, Bool)] = []
+            for await result in group { collected.append(result) }
+            return collected
+        }
+
+        for (hubId, loaded) in results {
+            if loaded {
+                hubKeysUnavailable.remove(hubId)
+            } else {
+                hubKeysUnavailable.insert(hubId)
             }
         }
     }
 
     // MARK: - Hub Switching
 
-    /// Switch to a different hub.
+    /// Switch the active hub.
     ///
-    /// 1. Guard: already active → no-op.
-    /// 2. Fetch hub key from API if not cached in CryptoService.
-    /// 3. Load into CryptoService key cache.
-    /// 4. Update HubContext (persists to UserDefaults).
+    /// The active hub is *browsing context*, and nothing more — CLAUDE.md's
+    /// multi-hub routing axiom puts it plainly: "The active hub controls browsing
+    /// context only." A hub key is a *decryption* credential, so gating the switch
+    /// on having one conflates authorisation to browse with the ability to read
+    /// encrypted content. Desktop has never conflated them
+    /// (`src/client/lib/config.tsx`, `setActiveHub` switches with no hub key), and
+    /// no client creates or distributes hub keys at all yet (#1042) — so the gate
+    /// made every switch on iOS fail with a 404 and leave the user stuck in
+    /// whichever hub became active first (#1262).
     ///
-    /// On any error, HubContext is NOT updated — the active hub remains unchanged.
+    /// The context therefore switches first and unconditionally. The key fetch
+    /// follows and cannot undo it: a missing key is recorded in
+    /// `hubKeysUnavailable` and shown inline on the row, not raised as a blocking
+    /// alert. Operations that genuinely need the key to decrypt fail with their
+    /// own error at the point of use.
+    ///
+    /// Reached only from the hub list — a row tap, or `loadHubs` picking a first
+    /// hub when none is active yet. Background push handling must never switch
+    /// the active hub (see `AppDelegate`, which puts `hubId` in the notification's
+    /// userInfo for the *tap* handler instead).
     func switchHub(to hub: SharedHub) async {
         guard hubContext.activeHubId != hub.id else { return }
         isSwitching = true
         error = nil
         defer { isSwitching = false }
 
-        do {
-            if !cryptoService.hasHubKey(hubId: hub.id) {
-                let envelope = try await apiService.getHubKey(hub.id)
-                try cryptoService.loadHubKey(hubId: hub.id, envelope: envelope)
-            }
-            hubContext.setActiveHub(hub.id)
-            feedbackGenerator.notificationOccurred(.success)
-        } catch {
-            self.error = error
-        }
+        hubContext.setActiveHub(hub.id)
+        feedbackGenerator.notificationOccurred(.success)
+
+        await eagerLoadHubKeys(for: [hub])
+    }
+
+    /// Whether this hub's encrypted content can be decrypted on this device.
+    func hasKey(_ hub: SharedHub) -> Bool {
+        !hubKeysUnavailable.contains(hub.id)
     }
 
     /// Check if a hub is the currently active one. Compares by UUID, not slug.

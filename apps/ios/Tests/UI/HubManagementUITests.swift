@@ -58,11 +58,14 @@ final class HubManagementUITests: BaseUITest {
             XCTAssertTrue(find("hubs-list").waitForExistence(timeout: 15), "The hub list should render")
             // Server slug of "ios-<ClassName>-<ms>" (apps/worker/routes/dev.ts test-create-hub).
             let classHubPrefix = "hub-row-ios-\(String(describing: type(of: self)).lowercased())-"
-            let classHubRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH %@", classHubPrefix))
-                .firstMatch
+            // A super-admin lists every hub on the server, so this class's hub can
+            // sit below the fold — and a SwiftUI List does not instantiate rows it
+            // has not scrolled to.
+            let classHubRow = scrollToMatch(
+                NSPredicate(format: "identifier BEGINSWITH %@", classHubPrefix)
+            )
             XCTAssertTrue(
-                classHubRow.waitForExistence(timeout: 10),
+                classHubRow.exists,
                 "The card for this test class's hub (\(classHubPrefix)…) should be listed"
             )
         }
