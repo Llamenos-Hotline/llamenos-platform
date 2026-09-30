@@ -64,3 +64,6 @@ function parseRemoteUrl(url: string): string | undefined {
   const m = url.match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/)
   return m ? `${m[1]}/${m[2]}` : undefined
 }
+
+// #1396 injection: a lint error in the PR's own file
+export const prLintInjection: any = 1
