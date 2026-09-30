@@ -142,6 +142,31 @@ jobs:
       # The repo's fork-PR approval policy (`all_external_contributors`) is
       # the first layer; this is the second, because a policy is a setting
       # someone can change and this is not.
+      #
+      # WHY THIS IS NOT DEAD CODE, since it reads like it might be. This file
+      # has no `pull_request` trigger of its own — it is reached via
+      # `workflow_call` from ci.yml. It is a reasonable assumption that
+      # `github.event_name` is therefore `workflow_call` and that
+      # `github.event.pull_request` is absent, which would make this guard
+      # inert. It is not: for a REUSABLE workflow the `github` context is the
+      # CALLER's, so a run invoked from ci.yml's `on: pull_request` sees
+      # `event_name == 'pull_request'` with the full PR payload.
+      # `workflow_call` appears in `github.event_name` only when a workflow is
+      # itself triggered by an external `workflow_call` event, never when it is
+      # invoked via `uses:`.
+      #
+      # Measured, not assumed — run 36761873368, this job's own log:
+      #     EVENT_NAME: pull_request
+      #     HEAD_REPO:  Llamenos-Hotline/llamenos-platform
+      #     THIS_REPO:  Llamenos-Hotline/llamenos-platform
+      # The `changes` job in this same file has relied on the same property
+      # since before these runners existed (`case "$EVENT_NAME" in`), and would
+      # have been misclassifying every PR if it did not hold.
+      #
+      # A `fleet/review` pass rejected this guard as dead code on exactly that
+      # assumption. The comment is here so the next reader does not have to
+      # re-derive it — and if you are about to "fix" this by removing the
+      # event_name check, read the log above first.
       - name: Refuse to run on a fork PR (self-hosted runner guard)
         env:
           EVENT_NAME: ${{ github.event_name }}
