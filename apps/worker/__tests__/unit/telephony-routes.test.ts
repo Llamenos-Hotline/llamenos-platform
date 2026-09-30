@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
+import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import type { Services } from '@worker/services'
 import { ServiceError } from '@worker/services/settings'
 // Ensure the crypto FFI mock is loaded before any code that imports @llamenos/crypto/ffi.
@@ -659,7 +660,8 @@ describe('Telephony routes', () => {
       })
       expect(res.status).toBe(200)
       expect(res.headers.get('Content-Type')).toContain('xml')
-      expect(adapter.handleWaitMusic).toHaveBeenCalledWith('en', expect.any(Object), 30, 90)
+      // A cloud provider speaks prompts itself: no generated-speech builder.
+      expect(adapter.handleWaitMusic).toHaveBeenCalledWith('en', expect.any(Object), 30, 90, undefined)
     })
 
     it('returns wait music XML on GET with queueTime 0', async () => {
@@ -668,7 +670,7 @@ describe('Telephony routes', () => {
         method: 'GET',
       })
       expect(res.status).toBe(200)
-      expect(adapter.handleWaitMusic).toHaveBeenCalledWith('es', expect.any(Object), 0, 90)
+      expect(adapter.handleWaitMusic).toHaveBeenCalledWith('es', expect.any(Object), 0, 90, undefined)
     })
   })
 
@@ -756,7 +758,24 @@ describe('Telephony routes', () => {
       const body = await res.text()
       expect(body).toContain('<Say')
       expect(body).toContain('<Hangup')
-      expect(adapter.handleVoicemailComplete).toHaveBeenCalledWith('en')
+      expect(adapter.handleVoicemailComplete).toHaveBeenCalledWith('en', undefined)
+    })
+
+    it('hands a self-hosted PBX generated speech, rooted at the origin it reached us on (#1347)', async () => {
+      // An AsteriskAdapter by type, with the mock's behaviour.
+      const pbx = Object.assign(Object.create(AsteriskAdapter.prototype) as AsteriskAdapter, makeMockAdapter())
+      const builder = vi.fn()
+      const urlBuilder = vi.fn().mockResolvedValue(builder)
+      const withSpeech = { ...services, ivrSpeech: { urlBuilder } } as unknown as Services
+      const app = await createTestApp(pbx, withSpeech)
+      const res = await app.request('http://app:3000/api/telephony/voicemail-complete?hub=hub-1&lang=fr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: '',
+      })
+      expect(res.status).toBe(200)
+      expect(urlBuilder).toHaveBeenCalledWith('http://app:3000')
+      expect(pbx.handleVoicemailComplete).toHaveBeenCalledWith('fr', builder)
     })
   })
 

@@ -1,3 +1,5 @@
+import { ivrAudioUrlExpiry, signIvrMediaPath } from './ivr-media-url'
+
 const E164_REGEX = /^\+\d{7,15}$/
 
 export function isValidE164(phone: string): boolean {
@@ -68,8 +70,11 @@ export function ivrAudioFormatError(bytes: Uint8Array): string | null {
       if (size === 0) return 'WAV file has no audio'
       return null
     }
-    // Chunks are word-aligned: an odd-sized chunk is followed by a pad byte.
-    offset = body + size + (size % 2)
+    // RIFF pads an odd-sized chunk to a word boundary, but Asterisk's format_wav
+    // skips chunks without the pad byte and then fails on the data chunk
+    // (measured on Asterisk 22.8): refuse what the PBX would play as silence.
+    if (size % 2 === 1) return `WAV has an odd-sized ${id.trim()} chunk before its audio, which Asterisk cannot read`
+    offset = body + size
   }
   return 'Malformed WAV: no audio data'
 }
@@ -78,7 +83,17 @@ type AudioUrlMapSource =
   | { fetch(req: Request): Promise<Response> }
   | { getIvrAudioList(): Promise<{ recordings: Array<{ promptType: string; language: string }> }> }
 
-export async function buildAudioUrlMap(settings: AudioUrlMapSource, origin: string): Promise<Record<string, string>> {
+/**
+ * The operator-uploaded prompts, as `promptType:language` → the URL a provider
+ * fetches during this call: signed, and expiring soon after (#1325), so a URL
+ * leaked from a provider's logs is not a lasting way to probe the hotline.
+ */
+export async function buildAudioUrlMap(
+  settings: AudioUrlMapSource,
+  origin: string,
+  hmacSecret: string,
+  nowMs: number = Date.now(),
+): Promise<Record<string, string>> {
   let recordings: Array<{ promptType: string; language: string }>
   if ('getIvrAudioList' in settings) {
     const result = await settings.getIvrAudioList()
@@ -88,9 +103,11 @@ export async function buildAudioUrlMap(settings: AudioUrlMapSource, origin: stri
     const data = await audioRes.json() as { recordings: Array<{ promptType: string; language: string }> }
     recordings = data.recordings
   }
+  const expiresAt = ivrAudioUrlExpiry(nowMs)
   const map: Record<string, string> = {}
   for (const rec of recordings) {
-    map[`${rec.promptType}:${rec.language}`] = `${origin}/api/ivr-audio/${rec.promptType}/${rec.language}`
+    const path = `/api/ivr-audio/${rec.promptType}/${rec.language}`
+    map[`${rec.promptType}:${rec.language}`] = `${origin}${signIvrMediaPath(hmacSecret, path, expiresAt)}`
   }
   return map
 }

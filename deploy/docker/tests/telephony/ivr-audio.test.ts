@@ -15,7 +15,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import settingsRoute from '@worker/routes/settings'
-import { ivrAudioFormatError, IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '@worker/lib/helpers'
+import { buildAudioUrlMap, ivrAudioFormatError, IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '@worker/lib/helpers'
+import { signIvrMediaPath } from '@worker/lib/ivr-media-url'
+import ivrMediaRoutes from '@worker/routes/ivr-media'
+import { IvrSpeechService } from '@worker/services/ivr-speech'
 import { encodePcm16Wav, IVR_WAV_SAMPLE_RATE } from '@/lib/ivr-wav'
 
 /** A WAV header with arbitrary format fields, followed by `dataBytes` of silence */
@@ -72,10 +75,16 @@ describe('ivrAudioFormatError', () => {
     expect(ivrAudioFormatError(wav({ dataBytes: 0 }))).toBe('WAV file has no audio')
   })
 
-  it('skips other chunks, including an odd-sized one and its pad byte', () => {
-    // LIST chunk of 3 bytes + 1 pad byte between fmt and data
-    const list = Uint8Array.from([0x4c, 0x49, 0x53, 0x54, 3, 0, 0, 0, 0x61, 0x62, 0x63, 0])
+  it('skips other chunks before the audio', () => {
+    // LIST chunk of 4 bytes between fmt and data
+    const list = Uint8Array.from([0x4c, 0x49, 0x53, 0x54, 4, 0, 0, 0, 0x61, 0x62, 0x63, 0x64])
     expect(ivrAudioFormatError(wav({ extraChunk: list }))).toBeNull()
+  })
+
+  it('refuses an odd-sized chunk before the audio, which Asterisk reads as silence', () => {
+    // Valid RIFF (3 bytes + 1 pad byte), but format_wav skips it without the pad and fails
+    const list = Uint8Array.from([0x4c, 0x49, 0x53, 0x54, 3, 0, 0, 0, 0x61, 0x62, 0x63, 0])
+    expect(ivrAudioFormatError(wav({ extraChunk: list }))).toMatch(/odd-sized LIST chunk/)
   })
 })
 
@@ -149,5 +158,83 @@ describe('/settings/ivr-audio/:promptType/:language', () => {
   it('answers 404 for a prompt never uploaded', async () => {
     const res = await app({ getIvrAudio: vi.fn().mockResolvedValue(null) }).request('/ivr-audio/greeting/de')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('public IVR media — what a provider fetches during a call (#1325, #1347)', () => {
+  const SECRET = '4f'.repeat(32)
+  const stored = encodePcm16Wav(new Float32Array(80), IVR_WAV_SAMPLE_RATE)
+
+  function app(services: Record<string, unknown>) {
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.env = { HMAC_SECRET: SECRET } as AppEnv['Bindings']
+      c.set('services', services as unknown as AppEnv['Variables']['services'])
+      await next()
+    })
+    return app.route('/api', ivrMediaRoutes)
+  }
+
+  async function mintedUrl(promptType: string, language: string, nowMs = Date.now()): Promise<string> {
+    const map = await buildAudioUrlMap({ getIvrAudioList: async () => ({ recordings: [{ promptType, language }] }) }, 'http://app:3000', SECRET, nowMs)
+    return map[`${promptType}:${language}`]
+  }
+
+  it('plays an upload through the URL minted for the call', async () => {
+    const getIvrAudio = vi.fn().mockResolvedValue({ audio: Buffer.from(stored).toString('base64'), size: stored.byteLength })
+    const res = await app({ settings: { getIvrAudio } }).request(await mintedUrl('greeting', 'fr'))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('audio/wav')
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(stored)
+    expect(getIvrAudio).toHaveBeenCalledWith('greeting', 'fr')
+  })
+
+  it('answers every refusal with the same 404, and touches storage only for a valid signature', async () => {
+    const getIvrAudio = vi.fn().mockResolvedValue(null)
+    const media = app({ settings: { getIvrAudio } })
+    const valid = new URL(await mintedUrl('greeting', 'fr'))
+    const expired = await mintedUrl('greeting', 'fr', Date.now() - 3_600_000)
+    const noExpiry = `http://app:3000${signIvrMediaPath(SECRET, '/api/ivr-audio/greeting/fr')}`
+    const forged = `${valid.origin}${valid.pathname}?exp=${valid.searchParams.get('exp')}&sig=${'0'.repeat(64)}`
+    const otherPrompt = `http://app:3000/api/ivr-audio/pleaseHold/fr${valid.search}`
+
+    const refusals = [`http://app:3000${valid.pathname}`, forged, expired, noExpiry, otherPrompt]
+    const bodies = new Set<string>()
+    for (const url of refusals) {
+      const res = await media.request(url)
+      expect(res.status, url).toBe(404)
+      bodies.add(await res.text())
+    }
+    expect(getIvrAudio).not.toHaveBeenCalled()
+
+    // A valid signature for a prompt that does not exist is the same answer.
+    const missing = await media.request(valid.toString())
+    expect(missing.status).toBe(404)
+    bodies.add(await missing.text())
+    // …and so is a signed path that is not a prompt at all.
+    const junk = await media.request(`http://app:3000${signIvrMediaPath(SECRET, '/api/ivr-audio/..%2F/fr', 9_999_999_999)}`)
+    expect(junk.status).toBe(404)
+    bodies.add(await junk.text())
+    expect(bodies.size).toBe(1)
+  })
+
+  it('serves generated speech through its signed URL, cacheable for good', async () => {
+    const engine = {
+      version: async () => 'espeak-ng test',
+      synthesize: async () => encodePcm16Wav(new Float32Array(2205).fill(0.25), 22050),
+    }
+    const ivrSpeech = new IvrSpeechService(SECRET, engine)
+    const media = app({ ivrSpeech })
+    const url = (await ivrSpeech.urlBuilder('http://app:3000'))('Para español, marque 2.', 'es')
+
+    const res = await media.request(url)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('audio/wav')
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(res.headers.get('etag')).toMatch(/^"[0-9a-f]{64}"$/)
+    expect(ivrAudioFormatError(new Uint8Array(await res.arrayBuffer()))).toBeNull()
+
+    const unsigned = await media.request(url.replace(/\?.*$/, ''))
+    expect(unsigned.status).toBe(404)
   })
 })

@@ -5,6 +5,11 @@
  */
 import { describe, it, expect } from 'vitest'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
+import { fakeSpeech, spoken } from '../helpers/fake-speech'
+
+/** What each <playback> in a document speaks, in order (uploads are null) */
+const playbacks = (xml: string) =>
+  [...xml.matchAll(/<playback file="([^"]*)"/g)].map((m) => spoken(m[1].replace(/&amp;/g, '&')))
 
 function createAdapter() {
   return new FreeSwitchAdapter(
@@ -38,36 +43,50 @@ describe('FreeSwitchAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')
       expect(response.body).toContain('xml/freeswitch-httapi')
     })
 
-    it('never offers Spanish, which the English-only Flite TTS cannot speak (#657)', async () => {
+    it('goes straight on in Spanish when it is the only hub language (#1347: generated speech speaks it)', async () => {
       const response = await adapter.handleLanguageMenu({
         enabledLanguages: ['es'],
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
-      expect(response.body).toContain('caller_lang=en')
-      expect(response.body).not.toContain('caller_lang=es')
+      expect(response.body).toContain('caller_lang=es')
     })
 
-    it('skips the menu for multiple hub languages when only English is speakable (#657)', async () => {
+    it('announces every hub language in its own voice, as generated speech (#1347)', async () => {
       const response = await adapter.handleLanguageMenu({
         enabledLanguages: ['es', 'en', 'zh'],
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.body).not.toContain('<speak')
+      expect(playbacks(response.body).map((p) => p?.locale)).toEqual(['es', 'en', 'zh'])
+      expect(response.body).toContain('<bind')
+    })
+
+    it('never offers Tagalog, which no offline voice speaks (#657, #1347)', async () => {
+      const response = await adapter.handleLanguageMenu({
+        enabledLanguages: ['tl', 'en'],
+        callSid: 'call-1',
+        callerNumber: '+15551234567',
+        hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
+      })
+
       expect(response.body).not.toContain('<bind')
       expect(response.body).toContain('caller_lang=en')
-      expect(response.body).toContain('call_phase=language_selected')
     })
   })
 
@@ -80,6 +99,7 @@ describe('FreeSwitchAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551111111',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')
@@ -95,11 +115,13 @@ describe('FreeSwitchAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551111111',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')
-      // Should contain some kind of gather/input for digits
-      expect(response.body).toContain('xml/freeswitch-httapi')
+      expect(response.body).toContain('<bind')
+      // The digits are generated per call, so they are always generated speech.
+      expect(playbacks(response.body)).toContainEqual({ locale: 'en', text: '5 6 7 8' })
     })
   })
 
@@ -110,6 +132,7 @@ describe('FreeSwitchAdapter', () => {
         expectedDigits: '5678',
         callerLanguage: 'en',
         callSid: 'call-1',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')
@@ -123,6 +146,7 @@ describe('FreeSwitchAdapter', () => {
         expectedDigits: '5678',
         callerLanguage: 'en',
         callSid: 'call-1',
+        speechUrl: fakeSpeech,
       })
 
       expect(response.contentType).toBe('text/xml')

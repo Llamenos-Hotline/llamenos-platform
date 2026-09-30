@@ -5,9 +5,13 @@ import {
   checkRateLimit,
   uint8ArrayToBase64URL,
 } from '@worker/lib/helpers'
+import { verifyIvrMediaPath } from '@worker/lib/ivr-media-url'
 
 describe('buildAudioUrlMap', () => {
   const origin = 'https://api.example.com'
+  const secret = 'ab'.repeat(32)
+  // 2026-09-29T12:00:00Z
+  const now = Date.UTC(2026, 8, 29, 12, 0, 0)
 
   it('builds URL map from getIvrAudioList service', async () => {
     const settings = {
@@ -20,12 +24,43 @@ describe('buildAudioUrlMap', () => {
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin)
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
 
     expect(settings.getIvrAudioList).toHaveBeenCalledOnce()
-    expect(map['welcome:en']).toBe('https://api.example.com/api/ivr-audio/welcome/en')
-    expect(map['welcome:es']).toBe('https://api.example.com/api/ivr-audio/welcome/es')
-    expect(map['goodbye:en']).toBe('https://api.example.com/api/ivr-audio/goodbye/en')
+    expect(map['welcome:en']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/welcome\/en\?exp=\d+&sig=[0-9a-f]{64}$/)
+    expect(map['welcome:es']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/welcome\/es\?/)
+    expect(map['goodbye:en']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/goodbye\/en\?/)
+  })
+
+  it('signs each URL for its own path, expiring 10–15 minutes out on a 5-minute boundary', async () => {
+    const settings = {
+      getIvrAudioList: vi.fn().mockResolvedValue({
+        recordings: [{ promptType: 'greeting', language: 'fr' }, { promptType: 'greeting', language: 'es' }],
+      }),
+    }
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
+    const fr = new URL(map['greeting:fr'])
+    const exp = Number(fr.searchParams.get('exp'))
+    expect(exp % 300).toBe(0)
+    expect(exp * 1000 - now).toBeGreaterThanOrEqual(600_000)
+    expect(exp * 1000 - now).toBeLessThan(900_000)
+
+    const opts = { requireExpiry: true, nowMs: now }
+    expect(verifyIvrMediaPath(secret, fr.pathname, fr.searchParams, opts)).toBe(true)
+    // A signature is bound to its prompt: it does not open another language's.
+    expect(verifyIvrMediaPath(secret, '/api/ivr-audio/greeting/es', fr.searchParams, opts)).toBe(false)
+    // …nor verify under another secret, nor once expired.
+    expect(verifyIvrMediaPath('cd'.repeat(32), fr.pathname, fr.searchParams, opts)).toBe(false)
+    expect(verifyIvrMediaPath(secret, fr.pathname, fr.searchParams, { requireExpiry: true, nowMs: exp * 1000 })).toBe(false)
+  })
+
+  it('hands every call in the same 5-minute window the same URL, so the PBX cache is hit', async () => {
+    const settings = {
+      getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [{ promptType: 'greeting', language: 'fr' }] }),
+    }
+    const first = await buildAudioUrlMap(settings, origin, secret, now + 1_000)
+    const later = await buildAudioUrlMap(settings, origin, secret, now + 299_000)
+    expect(later['greeting:fr']).toBe(first['greeting:fr'])
   })
 
   it('builds URL map from fetch-based settings', async () => {
@@ -39,10 +74,10 @@ describe('buildAudioUrlMap', () => {
       ),
     }
 
-    const map = await buildAudioUrlMap(settings, origin)
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
 
     expect(settings.fetch).toHaveBeenCalledOnce()
-    expect(map['hold:fr']).toBe('https://api.example.com/api/ivr-audio/hold/fr')
+    expect(map['hold:fr']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/hold\/fr\?exp=/)
   })
 
   it('returns empty map when no recordings', async () => {
@@ -50,7 +85,7 @@ describe('buildAudioUrlMap', () => {
       getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin)
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
     expect(Object.keys(map)).toHaveLength(0)
   })
 
@@ -63,7 +98,7 @@ describe('buildAudioUrlMap', () => {
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin)
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
     expect(map).toHaveProperty('captcha_digits:zh-CN')
   })
 
@@ -77,7 +112,7 @@ describe('buildAudioUrlMap', () => {
       }),
     }
 
-    const map = await buildAudioUrlMap(settings, origin)
+    const map = await buildAudioUrlMap(settings, origin, secret, now)
     // Should have one entry (last write wins)
     expect(Object.keys(map).filter(k => k === 'welcome:en')).toHaveLength(1)
   })

@@ -69,6 +69,9 @@ export interface PlaybackFinishedEvent {
   type: 'playback_finished'
   channelId: string
   playbackId: string
+  /** The PBX could not fetch or decode the media — the caller heard nothing */
+  failed: boolean
+  media: string
   timestamp: string
 }
 

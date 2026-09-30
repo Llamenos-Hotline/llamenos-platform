@@ -258,6 +258,8 @@ export class AriClient implements BridgeClient {
           type: 'playback_finished',
           channelId: e.playback.target_uri.replace(/^channel:/, ''),
           playbackId: e.playback.id,
+          failed: e.playback.state === 'failed',
+          media: e.playback.media_uri,
           timestamp,
         }
       }

@@ -216,7 +216,6 @@ export const WORKER_PATHS = {
 
 /** Commands the Worker sends back to the bridge */
 export type BridgeCommand =
-  | SpeakCommand
   | PlayCommand
   | GatherCommand
   | QueueCommand
@@ -226,17 +225,10 @@ export type BridgeCommand =
   | LeaveQueueCommand
 
 /**
- * A prompt as text, for providers that synthesise speech themselves. The bridge
- * has no speech engine: on a PBX a prompt is heard only if an operator uploaded
- * it (a `play` of the app's /api/ivr-audio URL), so `speak` is skipped.
+ * Play a prompt from a URL: an operator's upload (/api/ivr-audio) or speech the
+ * worker generated (/api/ivr-speech). The bridge has no speech engine — the
+ * worker turns every prompt into audio before it reaches the PBX.
  */
-export interface SpeakCommand {
-  action: 'speak'
-  text: string
-  language: string
-}
-
-/** Play an audio file from a URL */
 export interface PlayCommand {
   action: 'play'
   url: string

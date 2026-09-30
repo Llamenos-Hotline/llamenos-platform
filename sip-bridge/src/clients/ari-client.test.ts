@@ -299,7 +299,12 @@ describe('AriClient', () => {
 
     it('PlaybackFinished → playback_finished on the target channel', () => {
       ws.message({ type: 'PlaybackFinished', application: 'llamenos', timestamp: 't', playback: { id: 'pb-1', media_uri: 'sound:x', target_uri: 'channel:ch-1', language: 'en', state: 'done' } })
-      expect(events).toEqual([{ type: 'playback_finished', channelId: 'ch-1', playbackId: 'pb-1', timestamp: 't' }])
+      expect(events).toEqual([{ type: 'playback_finished', channelId: 'ch-1', playbackId: 'pb-1', failed: false, media: 'sound:x', timestamp: 't' }])
+    })
+
+    it('PlaybackFinished in state failed → a playback the caller never heard', () => {
+      ws.message({ type: 'PlaybackFinished', application: 'llamenos', timestamp: 't', playback: { id: 'pb-2', media_uri: 'sound:http://app:3000/x', target_uri: 'channel:ch-1', language: 'en', state: 'failed' } })
+      expect(events).toEqual([{ type: 'playback_finished', channelId: 'ch-1', playbackId: 'pb-2', failed: true, media: 'sound:http://app:3000/x', timestamp: 't' }])
     })
 
     it('RecordingFinished / RecordingFailed → recording_complete / recording_failed', () => {
