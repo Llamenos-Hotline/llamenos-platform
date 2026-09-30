@@ -10,6 +10,7 @@ import {
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 import { apiGet, apiPatch } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Message Simulation ────────────────────────────────────────────
 
@@ -96,9 +97,7 @@ Given('volunteers are available', async ({ request, world }) => {
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: `Msg Shift ${Date.now()}`,
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })
@@ -133,9 +132,7 @@ Given(
     // Create a shift covering all volunteers
     await createShiftViaApi(request, {
       name: `AutoAssign Shift ${Date.now()}`,
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: getScenarioState(world).volunteers.map(v => v.pubkey),
       hubId,
     })

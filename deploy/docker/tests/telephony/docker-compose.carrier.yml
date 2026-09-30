@@ -1,0 +1,45 @@
+# Overlay: a simulated PSTN carrier for driving a real SIP call through the dev
+# telephony profile. TEST ONLY. See README.md in this directory.
+#
+#   docker compose -f deploy/docker/docker-compose.dev.yml \
+#     -f deploy/docker/tests/telephony/docker-compose.carrier.yml \
+#     --profile telephony up -d --build asterisk sip-bridge sip-carrier
+#
+# Paths are relative to deploy/docker/ (the first compose file's directory).
+#
+# The bridge runs on the host network here so it reaches a worktree dev server
+# on 127.0.0.1:$E2E_WORKER_PORT directly. Through host.docker.internal it
+# depends on the host firewall letting container traffic in (ufw drops it by
+# default), which is a property of the machine, not of this stack.
+services:
+  sip-bridge:
+    network_mode: host
+    ports: !reset []
+    extra_hosts: !reset []
+    environment:
+      - BRIDGE_PORT=3200
+      - ARI_URL=ws://127.0.0.1:8088/ari/events
+      - ARI_REST_URL=http://127.0.0.1:8088/ari
+      - WORKER_WEBHOOK_URL=http://127.0.0.1:${E2E_WORKER_PORT:-3931}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3200/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+  asterisk:
+    environment:
+      - SIP_PROVIDER=sip-carrier
+    depends_on:
+      # The trunk's `identify` resolves this hostname when Asterisk loads.
+      sip-carrier:
+        condition: service_started
+
+  sip-carrier:
+    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
+    profiles: ["telephony"]
+    volumes:
+      - ./tests/telephony/carrier:/etc/asterisk:ro
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s

@@ -218,15 +218,23 @@ services:
 
   # ── Optional: Asterisk PBX ───────────────────────────────
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
     # entirely (pre-existing bug, found while verifying #722's fix)
     profiles: ["asterisk", "telephony"]
     restart: unless-stopped
+    # Renders the SIP trunk from SIP_PROVIDER / SIP_USERNAME / SIP_PASSWORD,
+    # then starts Asterisk. Without SIP_PROVIDER no call can route.
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
+    environment:
+      - SIP_PROVIDER=${SIP_PROVIDER:-}
+      - SIP_USERNAME=${SIP_USERNAME:-}
+      - SIP_PASSWORD=${SIP_PASSWORD:-}
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+      - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:

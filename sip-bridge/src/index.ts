@@ -1,13 +1,13 @@
 import type { BridgeConfig } from './types'
-import { createBridgeClient } from './client-factory'
+import { createBridgeClient, parsePbxType } from './client-factory'
 import { WebhookSender } from './webhook-sender'
-import { CommandHandler } from './command-handler'
+import { CommandHandler, callRecordingName, voicemailRecordingName, type RingRequest } from './command-handler'
 import { loadTtsConfigFromEnv } from './tts-engine'
 import { logger } from './logger'
 
 /** Load configuration from environment variables */
 function loadConfig(): BridgeConfig {
-  const pbxType = (process.env.PBX_TYPE ?? 'asterisk') as BridgeConfig['pbxType']
+  const pbxType = parsePbxType(process.env.PBX_TYPE ?? 'asterisk')
 
   // Shared config
   const workerWebhookUrl = process.env.WORKER_WEBHOOK_URL
@@ -58,9 +58,6 @@ function loadConfig(): BridgeConfig {
     bridgePort,
     bridgeHost,
     stasisApp,
-    sipProvider: process.env.SIP_PROVIDER,
-    sipUsername: process.env.SIP_USERNAME,
-    sipPassword: process.env.SIP_PASSWORD,
     connectionTimeoutMs,
     ttsConfig: loadTtsConfigFromEnv(),
   }
@@ -172,29 +169,6 @@ async function main(): Promise<void> {
 
       // ---- All POST endpoints require signature verification ----
 
-      // Command endpoint
-      if (path === '/command' && method === 'POST') {
-        const body = await request.text()
-        if (!verifyRequest(webhook, request, url, body)) {
-          logger.warn('[bridge]', 'Invalid command signature')
-          return new Response('Forbidden', { status: 403 })
-        }
-
-        let data: Record<string, unknown>
-        try {
-          data = JSON.parse(body) as Record<string, unknown>
-        } catch {
-          return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 })
-        }
-        try {
-          const result = await handler.handleHttpCommand(data)
-          return Response.json(result, { status: result.ok ? 200 : 400 })
-        } catch (err) {
-          logger.error('[bridge]', 'Command handler error', err)
-          return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
-        }
-      }
-
       // Ring volunteers endpoint
       if (path === '/ring' && method === 'POST') {
         const body = await request.text()
@@ -202,28 +176,14 @@ async function main(): Promise<void> {
           return new Response('Forbidden', { status: 403 })
         }
 
-        let data: { callSid: string; callerNumber: string; volunteers: Array<{ pubkey: string; phone: string }> }
+        let data: RingRequest
         try {
-          data = JSON.parse(body) as typeof data
+          data = JSON.parse(body) as RingRequest
         } catch {
           return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 })
         }
         try {
-          const channelIds: string[] = []
-          for (const vol of data.volunteers) {
-            const endpoint = getEndpointForPbx(config.pbxType, vol.phone)
-            try {
-              const channel = await client.originate({
-                endpoint,
-                callerId: data.callerNumber,
-                timeout: 30,
-                appArgs: `dialed,${data.callSid},${vol.pubkey}`,
-              })
-              channelIds.push(channel.id)
-            } catch (err) {
-              logger.error('[bridge]', 'Failed to ring volunteer', err)
-            }
-          }
+          const channelIds = await handler.ringVolunteers(data)
           return Response.json({ ok: true, channelIds })
         } catch (err) {
           logger.error('[bridge]', 'Ring error', err)
@@ -244,21 +204,8 @@ async function main(): Promise<void> {
         } catch {
           return Response.json({ ok: false, error: 'Invalid request' }, { status: 400 })
         }
-        try {
-          for (const id of data.channelIds) {
-            if (id !== data.exceptId) {
-              try {
-                await client.hangup(id)
-              } catch {
-                /* may already be gone */
-              }
-            }
-          }
-          return Response.json({ ok: true })
-        } catch (err) {
-          logger.error('[bridge]', 'Cancel-ringing error', err)
-          return Response.json({ ok: false, error: 'Command failed' }, { status: 500 })
-        }
+        handler.cancelRinging(data.channelIds, data.exceptId)
+        return Response.json({ ok: true })
       }
 
       // Hangup endpoint
@@ -310,23 +257,26 @@ async function main(): Promise<void> {
           return new Response('Forbidden', { status: 403 })
         }
 
-        const name = path.replace('/recordings/', '')
+        // /recordings/call/:callSid — the recording of a call, by the call SID the
+        // worker knows (a voicemail if the caller left one, else the bridged call).
+        // /recordings/:name — a recording by name.
+        const rest = path.slice('/recordings/'.length)
+        const callSid = rest.startsWith('call/') ? rest.slice('call/'.length) : null
+        const names = callSid !== null
+          ? [voicemailRecordingName(callSid), callRecordingName(callSid)]
+          : [rest]
 
         // Path traversal protection: reject names containing / or ..
-        if (name.includes('/') || name.includes('..')) {
+        if (names.some((name) => name === '' || name.includes('/') || name.includes('..'))) {
           return new Response('Bad Request: invalid recording name', { status: 400 })
         }
         try {
-          const audio = await client.getRecordingFile(name)
-          if (!audio) {
-            return new Response('Not Found', { status: 404 })
+          for (const name of names) {
+            const audio = await client.getRecordingFile(name)
+            // The worker's SipBridgeAdapter reads { audio: <base64> }.
+            if (audio) return Response.json({ audio: Buffer.from(audio).toString('base64') })
           }
-          return new Response(audio, {
-            headers: {
-              'Content-Type': 'audio/wav',
-              'Content-Length': String(audio.byteLength),
-            },
-          })
+          return new Response('Not Found', { status: 404 })
         } catch (err) {
           logger.error('[bridge]', 'Recording fetch error', err)
           return Response.json({ error: 'Command failed' }, { status: 500 })
@@ -364,21 +314,6 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
-}
-
-/**
- * Get the SIP endpoint format for a phone number based on PBX type.
- * This is used by the /ring endpoint to format the originate target.
- */
-function getEndpointForPbx(pbxType: BridgeConfig['pbxType'], phone: string): string {
-  switch (pbxType) {
-    case 'asterisk':
-      return `PJSIP/${phone}@trunk`
-    case 'freeswitch':
-      return `sofia/internal/${phone}@trunk`
-    case 'kamailio':
-      throw new Error('Kamailio is a SIP proxy — call origination is not supported')
-  }
 }
 
 main().catch((err) => {
