@@ -171,6 +171,7 @@ async function findArtifact(
  */
 async function recordedText(
   artifact: { id: number; runId: number }, name: string, log: (msg: string) => void,
+  consequence = 'reviewing again rather than publishing a verdict without its reason',
 ): Promise<string | undefined> {
   let dir: string | undefined
   try {
@@ -182,12 +183,12 @@ async function recordedText(
     await gh(['run', 'download', String(artifact.runId), '-n', name, '-D', dir], 60_000)
     const parsed = JSON.parse(await readFile(join(dir, `${name}.json`), 'utf8')) as { verdict?: unknown; text?: unknown }
     if (parsed.verdict !== 'FAIL' || typeof parsed.text !== 'string' || parsed.text.trim().length === 0) {
-      log(`cached FAIL artifact ${name} did not contain a FAIL verdict with text — reviewing again (fail safe)`)
+      log(`cached FAIL artifact ${name} did not contain a FAIL verdict with text — ${consequence}`)
       return undefined
     }
     return parsed.text
   } catch (e) {
-    log(`could not read the cached FAIL ${name} — reviewing again rather than publishing a verdict without its reason: ${describeGhFailure(e)}`)
+    log(`could not read the cached FAIL ${name} — ${consequence}: ${describeGhFailure(e)}`)
     return undefined
   } finally {
     if (dir !== undefined) await rm(dir, { recursive: true, force: true })
@@ -281,5 +282,151 @@ export function artifactReviewCache(
       const outputKey = scope === undefined ? CACHE_ARTIFACT_OUTPUT : CACHE_ARTIFACT_OUTPUT_SCOPED
       if (ghOutput !== undefined) await appendFile(ghOutput, `${outputKey}=${name}\n`)
     },
+  }
+}
+
+/**
+ * The verdict a PR last EARNED — a fresh, substantive review this workflow
+ * ran and recorded — on whatever head it was earned on.
+ */
+export interface EarnedVerdict {
+  verdict: 'PASS' | 'FAIL'
+  /** The head the reviewers read. Named on the check so anyone reading it
+   *  knows which commit the verdict is about. */
+  headSha: string
+  /** The run that earned it. */
+  runUrl: string
+  /** What the check states: the verdict, where it came from, and for a FAIL
+   *  the reviewer's own text when it can still be read. */
+  text: string
+}
+
+/** `lastEarnedVerdict`'s answer. `none` and `unreadable` are deliberately
+ *  distinct — unlike a cache miss — because a push concludes GREEN on
+ *  `none`: "could not look" must never become "there was nothing to find",
+ *  or an unreadable history would carry a PR's FAIL into a pass. */
+export type LastVerdictLookup =
+  | { kind: 'found'; earned: EarnedVerdict }
+  | { kind: 'none'; runsSearched: number }
+  | { kind: 'unreadable'; reason: string }
+
+/**
+ * How many of the PR branch's most recent completed `fleet-review.yml` runs
+ * are searched — one page of the runs API. Every push adds a run with no
+ * verdict in it, so this is the depth of push history a verdict survives;
+ * the verdict artifacts themselves are kept 30 days.
+ */
+export const LAST_VERDICT_RUN_WINDOW = 100
+
+interface WorkflowRunsResponse {
+  workflow_runs: { id: number; head_sha: string; html_url: string; path?: string }[]
+}
+
+interface RunArtifactsResponse {
+  artifacts: { id: number; name: string; expired: boolean }[]
+}
+
+export interface LastVerdictDeps {
+  pr: string
+  /** The PR's head branch — the runs API filters on it. */
+  branch: string
+  /** `GITHUB_RUN_ID` — this run, which is still in progress and has earned
+   *  nothing, so it is skipped even if the API lists it. */
+  currentRunId?: string | undefined
+  /** A read-only `gh api` GET; `undefined` on ANY failure (`ghJson`). */
+  api<T>(path: string): Promise<T | undefined>
+  /** A recorded FAIL's own text, or `undefined` when it cannot be read. */
+  failText(artifact: { id: number; runId: number }, name: string): Promise<string | undefined>
+  log(msg: string): void
+}
+
+/**
+ * The verdict this PR last earned, read from the artifacts `fleet-review.yml`
+ * records when — and only when — a review reaches a substantive verdict
+ * (`artifactReviewCache.record`). A republish, a push and an UNREADABLE
+ * record nothing, so the newest run holding one IS the last earned verdict,
+ * and that run's `head_sha` is the commit it was earned on.
+ *
+ * What a push under `fleet/review` republishes when its diff changed (#1284,
+ * `decideReviewGate`). A push is not a review request: the verdict the PR
+ * earned stands until somebody requests another. The cache above answers a
+ * narrower question — "was THIS diff judged by THIS review set" — and still
+ * wins where it hits; this answers "what did the last review say", which is
+ * the operator's rule: "If there's a review there's a review. If another
+ * review is needed it can be requested."
+ *
+ * Whether a verdict was a PASS or a FAIL is read from the artifact NAME
+ * (`cacheArtifactName`), so an EXPIRED record still carries its verdict —
+ * a FAIL does not quietly become "never reviewed" after 30 days. Only the
+ * FAIL's text needs the content, and a FAIL whose text is gone is still
+ * carried as a FAIL, pointing at the run.
+ *
+ * Every read is one this job already has permission for (`actions: read`),
+ * and every failure is `unreadable`, never `none` — see `LastVerdictLookup`.
+ */
+export async function lastEarnedVerdict(deps: LastVerdictDeps): Promise<LastVerdictLookup> {
+  if (!/^[0-9]+$/.test(deps.pr)) return { kind: 'unreadable', reason: `pr "${deps.pr}" is not a PR number` }
+  if (deps.branch.trim().length === 0) return { kind: 'unreadable', reason: 'no head branch to search' }
+  const workflow = CACHE_WRITER_WORKFLOW.split('/').pop() ?? CACHE_WRITER_WORKFLOW
+  const runs = await deps.api<WorkflowRunsResponse>(
+    `repos/${REPO}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(deps.branch)}` +
+    `&status=completed&per_page=${LAST_VERDICT_RUN_WINDOW}`,
+  )
+  if (runs === undefined || !Array.isArray(runs.workflow_runs)) {
+    return { kind: 'unreadable', reason: `could not list ${workflow} runs on ${deps.branch}` }
+  }
+  // Same producing-workflow rule as the cache (`CACHE_WRITER_WORKFLOW`): an
+  // artifact's name is not a capability, so a record from any other
+  // workflow is never believed. Scoped or general, PASS or FAIL, THIS PR.
+  const recordName = new RegExp(`^fleet-review-(?:set-[0-9a-f]{12}-)?(pass|fail)-pr${deps.pr}-[0-9a-f]{24}$`)
+  let searched = 0
+  for (const run of runs.workflow_runs) {
+    if (String(run.id) === deps.currentRunId) continue
+    if (run.path !== undefined && run.path !== CACHE_WRITER_WORKFLOW) continue
+    searched += 1
+    const listed = await deps.api<RunArtifactsResponse>(`repos/${REPO}/actions/runs/${run.id}/artifacts?per_page=100`)
+    // Unreadable, never skipped: skipping a run could skip the FAIL that
+    // run earned and carry an older PASS behind it.
+    if (listed === undefined || !Array.isArray(listed.artifacts)) {
+      return { kind: 'unreadable', reason: `could not list the artifacts of run ${run.id}` }
+    }
+    const records = listed.artifacts.filter((a) => recordName.test(a.name))
+    if (records.length === 0) continue
+    // One run records one verdict, under one or two namespaces — the same
+    // PASS or FAIL in each. A disagreement is not something to pick from.
+    const verdicts = new Set(records.map((a) => (recordName.exec(a.name)?.[1] === 'fail' ? 'FAIL' : 'PASS')))
+    if (verdicts.size !== 1) {
+      return { kind: 'unreadable', reason: `run ${run.id} recorded both a PASS and a FAIL for pr ${deps.pr}` }
+    }
+    const verdict: 'PASS' | 'FAIL' = verdicts.has('FAIL') ? 'FAIL' : 'PASS'
+    const earnedOn = `PR #${deps.pr}'s last review — ${verdict} on ${run.head_sha} (${run.html_url})`
+    const stands = 'This push changed the diff, and a push never starts a review, so that verdict stands until a ' +
+      'review is requested again.'
+    if (verdict === 'PASS') {
+      return { kind: 'found', earned: { verdict, headSha: run.head_sha, runUrl: run.html_url, text: `VERDICT: PASS (carried)\n\n${earnedOn}. ${stands}` } }
+    }
+    const live = records.find((a) => !a.expired)
+    const original = live === undefined ? undefined : await deps.failText({ id: live.id, runId: run.id }, live.name)
+    const body = original ?? `(the reviewer's text is no longer readable — see ${run.html_url})`
+    return {
+      kind: 'found',
+      earned: {
+        verdict, headSha: run.head_sha, runUrl: run.html_url,
+        text: `VERDICT: FAIL (carried)\n\n${earnedOn}. ${stands} The original verdict follows.\n\n---\n\n${body}`,
+      },
+    }
+  }
+  deps.log(`no fleet/review verdict recorded for pr ${deps.pr} in the last ${searched} completed run(s) on ${deps.branch}`)
+  return { kind: 'none', runsSearched: searched }
+}
+
+/** `LastVerdictDeps` wired to the live Actions API. */
+export function liveLastVerdictDeps(
+  pr: string, branch: string, currentRunId: string | undefined, log: (msg: string) => void,
+): LastVerdictDeps {
+  return {
+    pr, branch, currentRunId, log,
+    api: <T>(path: string) => ghJson<T>(['api', path], 30_000, (detail) => log(`gh api ${path} failed: ${detail}`)),
+    failText: (artifact, name) => recordedText(artifact, name, log, 'carrying the FAIL without its text'),
   }
 }

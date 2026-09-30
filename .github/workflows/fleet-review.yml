@@ -45,6 +45,8 @@
 #    "Decide whether to run the review engine" step is what used to be the
 #    `if:`, and its `not-requested` branch FAILS rather than skipping. A
 #    review requested from somebody else is a red check, never a green skip.
+#    (A PUSH is not that case — see invariant 2: it concludes on the PR's
+#    last earned verdict, a real conclusion, never a skip.)
 #    Pinned by a rail in tests/orchestrator/guards.test.ts.
 # 2. A PUSH MAY REPUBLISH A VERDICT; IT MAY NEVER START ONE (#1284).
 #    `synchronize` IS a trigger now — this invariant used to forbid it
@@ -63,13 +65,30 @@
 #    verdict cache, which is keyed on the DIFF HASH (`review-cache.ts`), so a
 #    rebase with an unchanged diff is a `cache-hit` — no model call, the
 #    stored verdict republished on the new head. A push that DID change the
-#    diff has nothing cached, and the gate concludes `not-requested`: a red
-#    check saying so, still no model call. `run-engine` is unreachable on a
-#    push, and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
+#    diff carries the verdict this PR last EARNED forward (`carried`,
+#    `lastEarnedVerdict` in review-cache.ts) — a PASS stays green, a FAIL
+#    stays red, the check naming the head it was earned on — or, on a PR no
+#    review was ever earned on, concludes green saying so (`unreviewed`).
+#    Still no model call either way. `run-engine` is unreachable on a push,
+#    and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
 #    `decideReviewGate` as `republishOnly`, which refuses `run-engine`
 #    outright rather than resting on a `synchronize` payload happening to
 #    carry no `requested_reviewer`. Pinned by rails in
 #    tests/orchestrator/guards.test.ts.
+#
+#    WHY A PUSH NEVER TURNS THE CHECK RED ON ITS OWN ACCOUNT. It used to
+#    conclude `not-requested` — a red "nobody asked" — on every push that
+#    changed a Tier 2 diff, and GitHub sends no fresh `review_requested` for
+#    a login that is still requested, so the only way back to green was to
+#    remove and re-add the reviewer by hand, after every push. The operator's
+#    rule: reviews fire only from a review request, and "if there's a review
+#    there's a review; if another review is needed it can be requested". A
+#    verdict, once earned, stands until somebody asks for another. The one
+#    red a push can produce by itself is `carry-unreadable`: the history
+#    could not be read, and "could not look" must never carry a FAIL into a
+#    green. Correctness is gated on every push regardless — `ci-status`,
+#    `gitleaks`, `CodeQL` and `fleet/verify` — and the merge queue tests the
+#    real merge commit.
 #
 #    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
 #    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
@@ -131,11 +150,16 @@
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
 #                             check so a docs-only PR never sits red.
-#   `not-requested`         → FAIL. Tier 2, no cached PASS, and either this
-#                             review request was not for us, or this was a
-#                             PUSH (#1284) — which changed the diff, so
-#                             nothing the PR already earned covers the new
-#                             head. Still no model call either way.
+#   `carried`               → a PUSH (#1284) that changed the diff: the
+#                             verdict this PR last earned, restated with the
+#                             head it was earned on. PASS → SUCCESS, FAIL →
+#                             RED. No model call.
+#   `unreviewed`            → SUCCESS. A push, and no review has ever been
+#                             earned on this PR. No model call.
+#   `carry-unreadable`      → FAIL. A push, and the PR's review history could
+#                             not be read. No model call.
+#   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
+#                             request was not for us. No model call.
 #   `run-engine`            → the real review, then the label clear.
 #
 # Every run's outcome — each of those, and every way the review itself can
@@ -182,7 +206,8 @@ on:
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
   # exact diff (`cache-hit`), conclude on its own terms (`low-tier`,
-  # `bot-authored`), or go red — never a model call, structurally
+  # `bot-authored`), or carry the PR's last earned verdict forward
+  # (`carried`/`unreviewed`) — never a model call, structurally
   # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
   # `fleet/review` at all and the PR unmergeable until a human removes and
   # re-adds the reviewer by hand.
@@ -753,10 +778,14 @@ jobs:
       #     read, or a review it asks for (by label or by its own content)
       #     does not resolve to a known agent. Fail closed — "we could not
       #     work out what to review" never becomes "nothing needed it".
-      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts). Either
-      #     the review was requested from somebody else, or this was a PUSH
-      #     that changed the diff (#1284), which can never start a review
-      #     whatever else is true (`republishOnly`, ci.ts). Exiting 1
+      #   - `carried` / `unreviewed` / `carry-unreadable` → a PUSH that
+      #     changed the diff (#1284), which can never start a review whatever
+      #     else is true (`republishOnly`, ci.ts). `carried` restates the
+      #     verdict the PR last earned (exit 0 on PASS, 1 on FAIL);
+      #     `unreviewed` exits 0 — nobody has asked; `carry-unreadable` exits
+      #     1 — the history could not be read. Every later step skips.
+      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts): the
+      #     review was requested from somebody else. Exiting 1
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
       #     `if: always()`/`if: failure()` — none of the engine steps do)
@@ -1239,6 +1268,8 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RESULT_FILE: ${{ runner.temp }}/fleet-review-result
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          # The head a CARRIED verdict was earned on — not this run's head.
+          EARNED_SHA: ${{ steps.gate.outputs.earned_sha }}
         run: |
           set -euo pipefail
           engine_failure=""
@@ -1256,6 +1287,8 @@ jobs:
             case "$OUTCOME" in
               low-tier) token="PASS:low-tier" ;;
               cache-hit) token="PASS:cached" ;;
+              carried) token="PASS:carried" ;;
+              unreviewed) token="PASS:unreviewed" ;;
               run-engine)
                 case "$result" in
                   pass) token="PASS:reviewed" ;;
@@ -1276,7 +1309,16 @@ jobs:
             case "$OUTCOME" in
               '') token="NO-VERDICT:gate-error" ;;
               not-requested) token="NO-VERDICT:not-requested" ;;
+              carry-unreadable) token="NO-VERDICT:carry-unreadable" ;;
               review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
+              carried)
+                # The gate exits 1 on a carried FAIL and 0 on a carried PASS.
+                if [ "$GATE_CONCLUSION" = "failure" ]; then
+                  token="REJECTED:carried"
+                else
+                  token="NO-VERDICT:unclassified"
+                fi
+                ;;
               cache-hit)
                 # The gate exits 1 on a cached FAIL and 0 on a cached PASS.
                 if [ "$GATE_CONCLUSION" = "failure" ]; then
@@ -1318,10 +1360,14 @@ jobs:
           case "$token" in
             PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
             PASS:cached) detail="this exact diff and review set already passed; not reviewed again" ;;
+            PASS:carried) detail="a push; the PASS this PR last earned stands — request a review to review this head" ;;
+            PASS:unreviewed) detail="a push, and no review has been requested on this PR; request one if this change needs it" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:unclassified) detail="passed by a path this step has no name for; read the log" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
             REJECTED:cached) detail="this exact diff was already rejected; push a fix" ;;
+            REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
+            NO-VERDICT:carry-unreadable) detail="a push, and this PR's last verdict could not be read; re-run the job" ;;
             NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
             NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
@@ -1346,6 +1392,10 @@ jobs:
               level="notice"
               meaning="The check concluded success."
               ;;
+            REJECTED:carried)
+              level="error"
+              meaning="A reviewer read an earlier head of this PR and rejected it, and nobody has requested a review since. A push never starts a review: fix the code, then request a review to have the new head judged."
+              ;;
             REJECTED:*)
               level="error"
               meaning="A reviewer read this diff and rejected it. Its findings are on the PR as a comment naming the head it judged. Change the code: re-requesting a review of an unchanged diff restates the same verdict."
@@ -1361,7 +1411,11 @@ jobs:
             echo
             echo "$meaning"
             echo
-            echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            if [ -n "${EARNED_SHA:-}" ]; then
+              echo "Verdict earned on: \`${EARNED_SHA}\`. Current head: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            else
+              echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------

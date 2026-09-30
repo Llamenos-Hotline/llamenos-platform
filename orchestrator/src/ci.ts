@@ -5,7 +5,9 @@ import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
 import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
-import { diffHash, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from './review-cache.js'
+import {
+  diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
+} from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
 import { tierFor, type ImpactTier } from './impact.js'
@@ -125,6 +127,13 @@ export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'depen
  * `isRepublishOnlyEvent` is that rule, and `decideReviewGate` enforces it
  * structurally rather than relying on a synchronize payload happening to
  * carry no `requested_reviewer`.
+ *
+ * A push is not a review request, so it never turns the check red on its own
+ * account either. The verdict this PR last EARNED stands until somebody asks
+ * for another (`lastEarnedVerdict`, review-cache.ts): a PASS stays a pass, a
+ * FAIL stays a fail, and a PR nobody has asked about concludes green saying
+ * so. The operator's rule, verbatim: "If there's a review there's a review.
+ * If another review is needed it can be requested."
  */
 export const REVIEW_REPUBLISH_ACTION = 'synchronize'
 
@@ -236,15 +245,15 @@ export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
   if (e.eventName !== 'pull_request') {
     return { requested: false, reason: `\`${e.eventName || '(no event)'}\` is not a review request` }
   }
-  // Stated explicitly, ahead of the reviewer check, so the red check a push
-  // produces says what actually happened. Without this the refusal would
-  // read "this review request named no user" — true of the payload, and
-  // useless to the human looking at it, who did not request anything.
+  // Stated explicitly, ahead of the reviewer check, so the log of a push
+  // says what actually happened. Without this the refusal would read "this
+  // review request named no user" — true of the payload, and useless to the
+  // human looking at it, who did not request anything.
   if (isRepublishOnlyEvent(e)) {
     return {
       requested: false,
-      reason: 'this is a push, not a review request — `fleet/review` republishes a verdict this PR has already ' +
-        'earned for this exact diff, but never starts a new review on a push',
+      reason: 'this is a push, not a review request — `fleet/review` carries forward the verdict this PR last ' +
+        'earned, but never starts a new review on a push',
     }
   }
   const login = loginOf(e.requestedReviewer)
@@ -414,9 +423,9 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  * the vocabulary needs a new entry, not that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:unclassified',
-  'REJECTED:reviewed', 'REJECTED:cached',
-  'NO-VERDICT:not-requested', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
+  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:unreviewed', 'PASS:low-tier', 'PASS:unclassified',
+  'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried',
+  'NO-VERDICT:not-requested', 'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
   'NO-VERDICT:unreadable', 'NO-VERDICT:did-not-run',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable',
@@ -1091,12 +1100,20 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    and the file-level reasons are logged (and printed to the job's own
  *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
  *    the check's own output, not just from reading this file's source.
+ *  - `carried` / `unreviewed` / `carry-unreadable` — a PUSH (#1284,
+ *    `republishOnly`) with nothing cached for this exact diff. A push is not
+ *    a review request, so it neither starts a review nor turns the check red
+ *    on its own account: `carried` restates the verdict this PR last EARNED
+ *    (`lastEarnedVerdict`), naming the head it was earned on — a PASS
+ *    concludes green, a FAIL red; `unreviewed` is a PR no review has ever
+ *    been earned on, concluded green with a title saying exactly that.
+ *    `carry-unreadable` is the one red a push can produce by itself: the
+ *    history could not be read, and "could not look" must never become
+ *    "there was nothing to find" — that would carry a PR's FAIL into a green.
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
- *    either this event did not ask us for one (the review was requested from
+ *    this event did not ask us for one: the review was requested from
  *    somebody else, from a team, or this is not a review-request event at
- *    all — `reviewRequestFor`) or it is a PUSH, which may never start a
- *    review whatever else is true (`republishOnly`, #1284). Fails the job
- *    outright. A `fleet/review` nobody has asked for is not a passing
+ *    all (`reviewRequestFor`). Fails the job outright. A `fleet/review` nobody has asked for is not a passing
  *    review, and the old design's mistake was ever treating "not asked for"
  *    as anything other than a fail-closed red check.
  *  - `run-engine` — no cached PASS, Tier 2, the review WAS requested of us,
@@ -1112,7 +1129,8 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  * Every branch above answers the first question on a push without answering
  * the second: `cache-hit` republishes the verdict this exact diff already
  * earned, `low-tier` and `bot-authored` conclude green on their own terms,
- * and everything else goes red. `run-engine` is unreachable on a push by
+ * and everything else carries the PR's last earned verdict forward (or says
+ * none was ever earned). `run-engine` is unreachable on a push by
  * construction.
  *
  * `runReviewCi` itself resolves the same set and opens with the identical
@@ -1126,6 +1144,9 @@ export type ReviewGateOutcome =
   | { kind: 'cache-hit'; cacheKey: ReviewCacheKey; verdict: CachedVerdict; profiles: string[] }
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'bot-authored'; cacheKey: ReviewCacheKey; author: string; reason: string }
+  | { kind: 'carried'; cacheKey: ReviewCacheKey; earned: EarnedVerdict }
+  | { kind: 'unreviewed'; cacheKey: ReviewCacheKey }
+  | { kind: 'carry-unreadable'; cacheKey: ReviewCacheKey; reason: string }
   | { kind: 'not-requested'; cacheKey: ReviewCacheKey }
   | { kind: 'run-engine'; cacheKey: ReviewCacheKey; profiles: string[]; clearLabels: string[] }
 
@@ -1151,14 +1172,22 @@ export interface ReviewGateDeps {
    * `isRepublishOnlyEvent` over the workflow's own event fields (#1284).
    *
    * `true` makes `run-engine` UNREACHABLE: a push that reaches the bottom of
-   * this function gets `not-requested` (a red check saying the diff changed
-   * and a review must be requested), never a model call. That is the
-   * structural half of the guarantee fleet-review.yml's invariant 2 now
+   * this function carries the PR's last earned verdict forward
+   * (`lastVerdict`), never a model call — whatever `requested` says. That is
+   * the structural half of the guarantee fleet-review.yml's invariant 2
    * states — `requested` being false on a push is the incidental half, true
    * only because GitHub's `synchronize` payload carries no
    * `requested_reviewer`.
    */
   republishOnly: boolean
+  /**
+   * The verdict this PR last EARNED, on any head — `lastEarnedVerdict`
+   * (review-cache.ts) with the live read wired. Asked ONLY on a push that
+   * reached the bottom of the gate, so a review request never pays for it.
+   * Absent on a push fails closed (`carry-unreadable`): an unwired lookup
+   * must never read as "no verdict was ever earned", which is a green.
+   */
+  lastVerdict?: (() => Promise<LastVerdictLookup>) | undefined
   /** The PR's author login — `FLEET_REVIEW_PR_AUTHOR`, the same field
    *  `reviewRequestFor` already consumes. Present so the gate can recognise
    *  an automated dependency PR by IDENTITY rather than by branch name. */
@@ -1250,20 +1279,38 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
 
   // A push reaching this line is a head that MOVED and a diff that CHANGED
   // (an unchanged diff hit the cache above; a Dependabot bump or a docs-only
-  // push concluded green above too). There is nothing to republish, so the
-  // check goes red exactly as an unreviewed Tier 2 diff always has — and,
-  // crucially, `run-engine` is out of reach from here, whatever `requested`
-  // says. This is the structural guarantee that adding `synchronize` to
-  // `fleet-review.yml` (#1284) can never become the every-push model call
-  // that trigger was originally banned for.
-  if (deps.republishOnly || !deps.requested) {
+  // push concluded green above too). Crucially, `run-engine` is out of reach
+  // from here, whatever `requested` says: this is the structural guarantee
+  // that adding `synchronize` to `fleet-review.yml` (#1284) can never become
+  // the every-push model call that trigger was originally banned for.
+  //
+  // Nor does a push turn the check red on its own account. A push is not a
+  // review request, and `not-requested` — "nobody asked" — is not a defect
+  // in the PR. The verdict this PR last earned stands until somebody
+  // requests another; a PR nobody has asked about is green and says so.
+  if (deps.republishOnly) {
+    const last: LastVerdictLookup = deps.lastVerdict === undefined
+      ? { kind: 'unreadable', reason: 'no lookup for the last earned verdict was wired into this gate' }
+      : await deps.lastVerdict()
+    const moved = `the head of pr=${cacheKey.pr} moved and its diff changed (sha256:${cacheKey.diffHash.slice(0, 12)}…)`
+    if (last.kind === 'found') {
+      deps.log(`${moved} — carrying forward the ${last.earned.verdict} earned on ${last.earned.headSha}; ` +
+        'a push never starts a review')
+      return { kind: 'carried', cacheKey, earned: last.earned }
+    }
+    if (last.kind === 'none') {
+      deps.log(`${moved} — no review has been earned on this PR, and a push never starts one`)
+      return { kind: 'unreviewed', cacheKey }
+    }
+    deps.log(`${moved} — could not read the verdict this PR last earned: ${last.reason}`)
+    return { kind: 'carry-unreadable', cacheKey, reason: last.reason }
+  }
+
+  if (!deps.requested) {
     // Whom to ask instead depends on who wrote the PR (`reviewTriggerLogins`)
     // — the caller has the event and says so; naming one fixed login here
     // told #1183's author to request itself (#1232).
-    deps.log(deps.republishOnly
-      ? `the head of pr=${cacheKey.pr} moved and its diff changed (sha256:${cacheKey.diffHash.slice(0, 12)}…) — ` +
-        'nothing cached to republish, and a push never starts a review'
-      : `review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
+    deps.log(`review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
     return { kind: 'not-requested', cacheKey }
   }
 

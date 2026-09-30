@@ -19,7 +19,7 @@ import {
   HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
-import { artifactReviewCache, diffHash } from './review-cache.js'
+import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
@@ -1276,11 +1276,11 @@ async function runCiGate(job: string, run: (ctx: CiContext) => Promise<CiVerdict
  * fail-open bug — a job instantiated on an event and then skipped by `if:`
  * satisfies branch protection exactly like a green check). Its exit code is
  * what enforces the fail-closed branches of `decideReviewGate`:
- * `review-set-unresolved`, `not-requested` and a cached FAIL exit 1, which stops every
+ * `review-set-unresolved`, `not-requested`, `carry-unreadable` and a cached or carried FAIL exit 1, which stops every
  * subsequent step (the smoke test, the real review) from ever running —
  * GitHub Actions does not run later steps after one fails unless they opt
  * in with `if: always()`/`if: failure()`, and none of the review steps do.
- * `cache-hit`, `low-tier` and `run-engine` all exit 0; the `outcome` step
+ * `cache-hit`, `carried` PASS, `unreviewed`, `low-tier` and `run-engine` all exit 0; the `outcome` step
  * output is what the workflow's own `if:` on each later step reads, and
  * `profiles`/`clear_labels` are what it carries into `review-ci` and into
  * the label-clearing job.
@@ -1311,6 +1311,8 @@ async function runReviewGate(): Promise<number> {
     // its own fact, not inferred from `requested` being false, so the gate
     // enforces it structurally — see `ReviewGateDeps.republishOnly`.
     republishOnly: isRepublishOnlyEvent(event),
+    // Asked only on a push whose diff changed — see `ReviewGateDeps.lastVerdict`.
+    lastVerdict: () => lastEarnedVerdict(liveLastVerdictDeps(ctx.pr, ctx.branch, process.env['GITHUB_RUN_ID'], ciLog)),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
@@ -1337,7 +1339,10 @@ async function runReviewGate(): Promise<number> {
     }
   } else {
     const clear = outcome.kind === 'run-engine' ? outcome.clearLabels.join(',') : ''
-    appendFileSync(ghOutput, `outcome=${outcome.kind}\nclear_labels=${clear}\n`)
+    // The head a carried verdict was EARNED on, for the outcome title's
+    // summary — this run's own head is not the one the reviewers read.
+    const earnedOn = outcome.kind === 'carried' ? outcome.earned.headSha : ''
+    appendFileSync(ghOutput, `outcome=${outcome.kind}\nclear_labels=${clear}\nearned_sha=${earnedOn}\n`)
   }
   if (outcome.kind === 'review-set-unresolved') {
     process.stderr.write(
@@ -1352,19 +1357,40 @@ async function runReviewGate(): Promise<number> {
     // fixed "request `llamenos-auto`" this used to print sent #1183's author
     // to request itself, which GitHub refuses (#1232).
     if (!request.requested) process.stderr.write(`${REVIEW_JOB}: ${request.reason}\n`)
-    // On a push the gate got this far only because there was no cached
-    // verdict for the diff the push produced — say that, rather than leaving
-    // "request a review" to imply the previous one was somehow lost.
-    if (isRepublishOnlyEvent(event)) {
-      process.stderr.write(
-        `${REVIEW_JOB}: this push changed the diff, so no verdict this PR has already earned covers the new head\n`,
-      )
-    }
     const [ask] = reviewTriggerLogins(event)
     process.stderr.write(ask === REVIEW_REQUEST_LOGIN
       ? `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`
       : `${REVIEW_JOB}: review not requested — this PR's author cannot be asked to review it, so request a review ` +
         `from \`${ask}\` to run the non-author review\n`)
+    return 1
+  }
+  // A push (#1284) whose diff changed. No model call on any of these, and
+  // none of them is red on the push's own account: the verdict the PR last
+  // earned stands, and a PR nobody has asked about is green saying so. No
+  // review report either — the carried verdict's comment is already on the
+  // PR from the run that earned it, and one per push would be noise.
+  if (outcome.kind === 'carried') {
+    const [ask] = reviewTriggerLogins(event)
+    const again = `request a review from \`${ask}\` to have this head reviewed`
+    if (outcome.earned.verdict === 'FAIL') {
+      process.stderr.write(`${REVIEW_JOB}: FAILED — ${outcome.earned.text}\n${REVIEW_JOB}: ${again}\n`)
+      return 1
+    }
+    process.stdout.write(`${REVIEW_JOB}: ${outcome.earned.text}\n${REVIEW_JOB}: ${again}\n`)
+  }
+  if (outcome.kind === 'unreviewed') {
+    const [ask] = reviewTriggerLogins(event)
+    process.stdout.write(
+      `${REVIEW_JOB}: no review has been requested on this PR, and a push never starts one — nothing was ` +
+      `reviewed, and nothing is blocking\n` +
+      `${REVIEW_JOB}: if this change needs a review, request one from \`${ask}\`\n`,
+    )
+  }
+  if (outcome.kind === 'carry-unreadable') {
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — could not read the verdict this PR last earned, so none was carried forward ` +
+      `(${outcome.reason}); re-run this job, or request a review\n`,
+    )
     return 1
   }
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A

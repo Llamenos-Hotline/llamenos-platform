@@ -1979,18 +1979,48 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     expect(outcome.verdict.verdict).toBe('FAIL')
   })
 
-  // The load-bearing one. A push that CHANGED the diff has nothing to
-  // republish, and must never spend a model call — no matter what
-  // `requested` says. Without the `republishOnly ||` guard in the gate this
-  // returns `run-engine`, which is one model review per push on every open
-  // PR.
-  it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
-    const cache = fakeCache()
+  // The load-bearing one. A push that CHANGED the diff has nothing cached,
+  // and must never spend a model call — no matter what `requested` says.
+  // Without the `republishOnly` guard in the gate this returns
+  // `run-engine`, which is one model review per push on every open PR. It
+  // is not red on its own account either (#1394): the PR's last earned
+  // verdict is carried forward, and a PR nobody asked about is green.
+  const earned = { verdict: 'PASS' as const, headSha: 'earned9', runUrl: 'https://example/run/9', text: 'VERDICT: PASS (carried)' }
+  for (const [label, last, kind] of [
+    ['a PASS was earned', { kind: 'found', earned }, 'carried'],
+    ['a FAIL was earned', { kind: 'found', earned: { ...earned, verdict: 'FAIL' } }, 'carried'],
+    ['nothing was ever earned', { kind: 'none', runsSearched: 3 }, 'unreviewed'],
+    ['the history is unreadable', { kind: 'unreadable', reason: 'api down' }, 'carry-unreadable'],
+  ] as const) {
+    it(`a push that changed the diff never reaches run-engine, even when requested is true — ${label}`, async () => {
+      const cache = fakeCache()
+      const outcome = await decideReviewGate({
+        ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+        cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+        lastVerdict: async () => last,
+      })
+      expect(outcome.kind).toBe(kind)
+      if (outcome.kind === 'carried' && last.kind === 'found') expect(outcome.earned).toEqual(last.earned)
+    })
+  }
+
+  it('a push with no last-verdict lookup wired fails closed — never "nothing was earned", which is green', async () => {
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
-      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => fakeCache(), requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('carry-unreadable')
+  })
+
+  it('a review request never pays for the last-verdict lookup', async () => {
+    let asked = 0
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => fakeCache(), requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      lastVerdict: async () => { asked += 1; return { kind: 'none', runsSearched: 0 } },
+    })
+    expect(outcome.kind).toBe('run-engine')
+    expect(asked).toBe(0)
   })
 
   // A named reviewer profile must not be the loophole either: a labelled PR
@@ -2004,14 +2034,15 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
+      lastVerdict: async () => ({ kind: 'none', runsSearched: 0 }),
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('unreviewed')
   })
 
   // A docs-only push still concludes green on its own terms — the tier
   // branch sits ahead of the request/republish branch and must stay there,
   // or an ordinary push to a docs PR would go red for no reason.
-  it('a docs-only push still concludes low-tier, not not-requested', async () => {
+  it('a docs-only push still concludes low-tier, ahead of the carry', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],

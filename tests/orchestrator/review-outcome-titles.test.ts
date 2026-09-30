@@ -96,11 +96,14 @@ interface Facts {
   result?: string
   /** What the smoke test's `fail()` recorded, if anything. */
   engineFailure?: string
+  /** The gate's `earned_sha` output — set only for a carried verdict. */
+  EARNED_SHA?: string
 }
 
 interface Named { status: number | null; title: string | null; level: string | null; summary: string; stdout: string }
 
 const HEAD = 'f2eea15ba0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5'
+const EARNED = '0a1b2c3d4e5f60718293a4b5c6d7e8f901234567'
 
 function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Named {
   const temp = mkdtempSync(join(work, 'runner-temp-'))
@@ -119,6 +122,7 @@ function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Nam
     OUTCOME: facts.OUTCOME ?? '',
     SMOKE_OUTCOME: facts.SMOKE_OUTCOME ?? '',
     REVIEW_OUTCOME: facts.REVIEW_OUTCOME ?? '',
+    EARNED_SHA: facts.EARNED_SHA ?? '',
   })
   const m = /^::(notice|error) title=fleet\/review outcome::(.*)$/m.exec(r.stdout)
   return {
@@ -170,6 +174,12 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['a cached PASS, found by review-ci', reviewed('cache-pass', 'success'), 'PASS:cached'],
   ['a cached FAIL, restated by the gate', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'cache-hit' }, 'REJECTED:cached'],
   ['a cached FAIL, restated by review-ci', reviewed('cache-fail', 'failure'), 'REJECTED:cached'],
+  // #1394: a push whose diff changed. It never starts a review and is never
+  // red on its own account — the PR's last earned verdict stands.
+  ['a push carries the PASS the PR last earned', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'PASS:carried'],
+  ['a push carries the FAIL the PR last earned', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'REJECTED:carried'],
+  ['a push to a PR no review was ever earned on', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'unreviewed' }, 'PASS:unreviewed'],
+  ['a push whose PR history could not be read', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carry-unreadable' }, 'NO-VERDICT:carry-unreadable'],
   ['low-tier — no reviewable content', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'low-tier' }, 'PASS:low-tier'],
   ['the engine hit a usage limit', smokeFailed('engine-quota'), 'NO-VERDICT:engine-quota'],
   ['the engine is not logged in', smokeFailed('engine-auth'), 'NO-VERDICT:engine-auth'],
@@ -198,6 +208,19 @@ describe('rail: every fleet/review outcome is named on its own check (#1230)', (
     // The run's summary page carries the same title and the head it judged.
     expect(named.summary).toContain(named.title as string)
     expect(named.summary).toContain(HEAD)
+  })
+
+  it('names the head a carried verdict was EARNED on, apart from the head this run is on', () => {
+    for (const verdict of ['success', 'failure'] as const) {
+      const named = name({ JOB_STATUS: verdict, GATE_CONCLUSION: verdict, OUTCOME: 'carried', EARNED_SHA: EARNED })
+      expect(named.summary).toContain(`Verdict earned on: \`${EARNED}\``)
+      expect(named.summary).toContain(`Current head: \`${HEAD}\``)
+      expect(named.summary, 'a carried verdict must not claim this head was judged').not.toContain('Head judged')
+    }
+    // Every other outcome still says which head it judged, and no earned-on line.
+    const reviewedRun = name(reviewed('pass', 'success'))
+    expect(reviewedRun.summary).toContain(`Head judged: \`${HEAD}\``)
+    expect(reviewedRun.summary).not.toContain('Verdict earned on')
   })
 
   it('gives every distinct outcome its own title, and no two outcomes the same one', () => {
