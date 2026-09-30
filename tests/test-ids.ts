@@ -155,6 +155,7 @@ export const TestIds = {
   CONVERSATION_LIST: 'conversation-list',
   CONVERSATION_ITEM: 'conversation-item',
   CONVERSATION_THREAD: 'conversation-thread',
+  CONVERSATION_MESSAGE: 'conversation-message',
   MESSAGE_COMPOSER: 'message-composer',
   CONV_ADD_NOTE_BTN: 'conv-add-note-btn',
   CONV_ASSIGN_BTN: 'conv-assign-btn',
