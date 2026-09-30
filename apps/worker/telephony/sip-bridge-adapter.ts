@@ -268,6 +268,20 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     return speechUrl(text(speechLang), speechLang)
   }
 
+  /**
+   * A voice CAPTCHA's digits as generated speech, one clip per digit: ten
+   * clips a language, shared by every call, where a clip per challenge would
+   * leave a PBX media-cache entry (never evicted) per call. Each clip's URL
+   * hides its digit, so the answer is in no log and no cache key (#1352).
+   */
+  protected captchaDigitUrls(digits: string, lang: string, speechUrl: SpeechUrlBuilder | undefined): string[] {
+    if (!speechUrl) {
+      throw new Error(`${this.getPbxType()} cannot speak a CAPTCHA itself: the route must pass a speech URL builder`)
+    }
+    const speechLang = speechLanguageFor(lang)
+    return digits.split('').map((digit) => speechUrl.captchaDigit(digit, speechLang))
+  }
+
   // --- Private helpers ---
 
   private async fetchRecording(path: string): Promise<ArrayBuffer | null> {

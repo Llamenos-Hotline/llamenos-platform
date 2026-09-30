@@ -598,7 +598,7 @@ describe('AsteriskAdapter', () => {
       // Greeting, the CAPTCHA prompt, each digit, then collect them.
       expect(body.commands).toHaveLength(7)
       expect(body.commands.slice(2, 6).map((c: { url: string }) => spoken(c.url))).toEqual(
-        ['1', '2', '3', '4'].map((text) => ({ locale: 'en', text })),
+        ['1', '2', '3', '4'].map((digit) => ({ locale: 'en', digit })),
       )
       const gather = body.commands[6]
       expect(gather.action).toBe('gather')
