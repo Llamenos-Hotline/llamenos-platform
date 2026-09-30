@@ -324,9 +324,24 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     expect(COMMANDS).toContain('review-gate')
   })
 
-  it('fleet-review.yml triggers on review_requested ONLY, never on a label or a push', () => {
+  it('fleet-review.yml never triggers on a label, and only `synchronize` joins review_requested', () => {
     const on = (parseYaml(reviewYml) as { on: Record<string, unknown> }).on
-    expect(on['pull_request']).toEqual({ types: ['review_requested'] })
+    // What this rail is for: #1158 retired `labeled` as the trigger, and
+    // `labeled` must never come back (see feedback: labels are nouns, not
+    // verbs). Asserting the WHOLE types list, rather than just the absence
+    // of `labeled`, is what makes that stick — a new type cannot be added
+    // here without a deliberate edit to this line.
+    //
+    // #1284 added exactly one: `synchronize`, so the required `fleet/review`
+    // context REAPPEARS on a head that moved. It can only republish what the
+    // PR already earned for this exact diff, or go red; it can never start a
+    // review, structurally (`republishOnly`, ci.ts). The rails that pin that
+    // half live in tests/orchestrator/guards.test.ts — this one only pins
+    // the trigger list itself.
+    expect(on['pull_request']).toEqual({ types: ['review_requested', 'synchronize'] })
+    for (const forbiddenType of ['labeled', 'unlabeled', 'opened', 'reopened', 'edited']) {
+      expect((on['pull_request'] as { types: string[] }).types, forbiddenType).not.toContain(forbiddenType)
+    }
     for (const forbidden of ['push', 'pull_request_target', 'schedule']) {
       expect(on[forbidden], forbidden).toBeUndefined()
     }

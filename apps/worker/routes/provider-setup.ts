@@ -121,7 +121,13 @@ const ConfigureWebhooksRequestSchema = z.object({
 
 const CreateSipTrunkRequestSchema = z.object({
   provider: z.string(),
-  domain: z.string(),
+  /** Per provider: where a hosted provider sends calls, or the carrier a self-hosted PBX trunks to */
+  domain: z.string().min(1),
+  /** Carrier-issued credentials for a registration trunk (self-hosted PBX); both or neither */
+  username: z.string().min(1).optional(),
+  password: z.string().min(1).optional(),
+  /** Addresses the carrier sends calls from; defaults to the carrier host */
+  inboundMatch: z.array(z.string().min(1)).min(1).optional(),
   hubId: z.string().optional(),
 })
 
@@ -721,8 +727,7 @@ providerSetup.post('/create-sip-trunk',
           'application/json': {
             schema: resolver(z.object({
               sipProvider: z.string(),
-              sipUsername: z.string(),
-              credentialsStored: z.boolean(),
+              sipUsername: z.string().optional(),
               trunkSid: z.string().optional(),
               connectionId: z.string().optional(),
             })),
@@ -738,16 +743,21 @@ providerSetup.post('/create-sip-trunk',
     const services = c.get('services')
 
     try {
+      const hubId = validateBodyHubAccess(c, body.hubId, 'telephony:manage-providers')
       const trunk = await services.providerSetup.createSipTrunk(
         body.provider as Parameters<typeof services.providerSetup.createSipTrunk>[0],
-        body.domain,
-        c.get('hubId') ?? body.hubId ?? '',
+        {
+          domain: body.domain,
+          username: body.username,
+          password: body.password,
+          inboundMatch: body.inboundMatch,
+        },
+        hubId,
       )
-      // Never return sipPassword in the response — credentials are stored encrypted server-side
+      // Never return a SIP password: carrier-issued ones live only on the PBX
       return c.json({
         sipProvider: trunk.sipProvider,
         sipUsername: trunk.sipUsername,
-        credentialsStored: true,
         trunkSid: trunk.trunkSid,
         connectionId: trunk.connectionId,
       })

@@ -4,6 +4,7 @@ import { cors } from './middleware/cors'
 import { apiVersion } from './middleware/api-version'
 import { auth } from './middleware/auth'
 import { rateLimit } from './middleware/rate-limit'
+import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from './lib/helpers'
 import { createMiddleware } from 'hono/factory'
 import configRoutes from './routes/config'
 import devRoutes from './routes/dev'
@@ -189,25 +190,21 @@ api.patch('/messaging/preferences', async (c) => {
 // Only POST is registered here; GET /security-events falls through to the authenticated router.
 api.route('/security-events', publicSecurityEventsRoutes)
 
-// Public IVR audio serve (Twilio fetches during calls)
+// Public IVR audio serve: the telephony provider fetches operator-uploaded
+// prompts during a call (buildAudioUrlMap). Operators listen back through the
+// authenticated GET /settings/ivr-audio/:promptType/:language instead.
+api.use('/ivr-audio/*', rateLimit('webhook'))
 api.get('/ivr-audio/:promptType/:language', async (c) => {
   const services = c.get('services')
   const promptType = c.req.param('promptType')
   const language = c.req.param('language')
-  // Validate path params to prevent injection
-  if (!/^[a-z_-]+$/.test(promptType) || !/^[a-z]{2,5}(-[A-Z]{2})?$/.test(language)) {
+  if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) {
     return c.json({ error: 'Invalid parameters' }, 400)
   }
   const result = await services.settings.getIvrAudio(promptType, language)
   if (!result) return c.json({ error: 'Not found' }, 404)
-  // Decode base64 audio to binary for streaming
-  const binary = Uint8Array.from(atob(result.audio), c => c.charCodeAt(0))
-  return new Response(binary, {
-    headers: {
-      'Content-Type': 'audio/wav',
-      'Content-Length': String(binary.byteLength),
-    },
-  })
+  // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
+  return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
 })
 
 // Authenticated routes

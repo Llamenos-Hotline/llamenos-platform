@@ -116,6 +116,7 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   // matching, and guards.test.ts fails if a file those globs match is
   // missing here.
   'scripts/check-bddgen-warmup.sh',
+  'scripts/check-codeql-languages.ts',
   'scripts/check-ecies-active.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',

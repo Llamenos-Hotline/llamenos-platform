@@ -802,7 +802,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
   const cache: ReviewCache = { async lookup() { return { verdict: 'PASS', text: 'VERDICT: PASS (cached)' } }, async record() {} }
   const gate = (reviewSet: () => Promise<ReviewSetDecision>, requested = true) => decideReviewGate({
     ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
-    cacheFor: () => cache, requested, reviewSet, log: () => {},
+    cacheFor: () => cache, requested, republishOnly: false, reviewSet, log: () => {},
   })
 
   // Automated dependency PRs skip the MODEL, never the CHECK. `fleet/review`
@@ -813,7 +813,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     decideReviewGate({
       ctx: ctx({ branch }), prDiff: async () => diff, changedFiles: async () => ['bun.lock'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: false, prAuthor: author,
+      requested: false, republishOnly: false, prAuthor: author,
       reviewSet: async () => ({ ok: true, profiles, fromLabels: profiles, reasons: [] }),
       log: () => {},
     })
@@ -860,7 +860,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     const o = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: [] }),
       log: () => {},
     })
@@ -871,7 +871,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     const o = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
       log: () => {},
     })
@@ -882,7 +882,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     const o = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['README.md'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
       log: () => {},
     })
@@ -893,7 +893,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     const o = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
       cacheFor: () => ({ async lookup() { return undefined }, async record() {} }),
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: [] }),
       log: () => {},
     })
@@ -912,7 +912,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
         async lookup() { return { verdict: 'FAIL' as const, text: 'VERDICT: FAIL (cached)\n\n---\n\nleaks a key' } },
         async record() {},
       }),
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: [], fromLabels: [], reasons: [] }),
       log: () => {},
     })
@@ -926,7 +926,7 @@ describe('decideReviewGate: the review set is decided first, and fails closed', 
     await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['x'],
       cacheFor: (scope) => { seen.push(scope); return { async lookup() { return undefined }, async record() {} } },
-      requested: true,
+      requested: true, republishOnly: false,
       reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
       log: () => {},
     })
