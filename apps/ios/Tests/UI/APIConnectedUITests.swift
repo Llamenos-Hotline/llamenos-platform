@@ -173,11 +173,17 @@ final class APIConnectedUITests: BaseUITest {
             XCTAssertTrue(textEditor.waitForExistence(timeout: 5))
             textEditor.tap()
             textEditor.typeText("API test note - \(Date().timeIntervalSince1970)")
+
+            let callIdField = scrollToVisible("note-call-id-input")
+            XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
+            callIdField.tap()
+            callIdField.typeText("call-api-test")
         }
         then("the save button should be enabled") {
-            let saveButton = find("save-note")
+            // `find` would match the toolbar item's container, which never reports Disabled.
+            let saveButton = app.buttons["save-note"]
             XCTAssertTrue(saveButton.exists, "Save button should exist")
-            XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text")
+            XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text and a call ID")
         }
     }
 
@@ -1092,6 +1098,7 @@ final class APIConnectedUITests: BaseUITest {
     // MARK: - Combined Call + Note Flow
 
     func testCallThenCreateNote() {
+        var noteText = ""
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -1123,12 +1130,25 @@ final class APIConnectedUITests: BaseUITest {
             let textEditor = find("note-text-editor")
             XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "Note text editor should appear after tapping create note")
             textEditor.tap()
-            textEditor.typeText("Note for call \(call.callId)")
+            noteText = "Note for call \(call.callId)"
+            textEditor.typeText(noteText)
+
+            let callIdField = scrollToVisible("note-call-id-input")
+            XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
+            callIdField.tap()
+            callIdField.typeText(call.callId)
+
+            let saveButton = app.buttons["save-note"]
+            XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text and the call ID")
+            saveButton.tap()
+            XCTAssertTrue(textEditor.waitForNonExistence(timeout: 20), "The create sheet should close once the note is saved")
         }
-        then("the note form should be ready to save") {
-            let saveButton = find("save-note")
-            XCTAssertTrue(saveButton.exists, "Save button should exist after entering note text")
-            XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled")
+        then("the note is saved against the call and listed") {
+            let row = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", noteText)).firstMatch
+            XCTAssertTrue(
+                row.waitForExistence(timeout: 15),
+                "The notes list should show the note saved against the call ('\(noteText)')"
+            )
         }
     }
 
