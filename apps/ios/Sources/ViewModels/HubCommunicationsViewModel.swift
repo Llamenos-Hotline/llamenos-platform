@@ -24,9 +24,13 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The server's first step. Named because the wizard completes it as part
+    /// of choosing a template, before any screen maps onto it.
+    static let templateSelectionStep = "template_selection"
+
     var serverStep: String? {
         switch self {
-        case .template: return "template_selection"
+        case .template: return Self.templateSelectionStep
         case .channels: return "channel_selection"
         case .provider: return "provider_connection"
         case .phoneNumber: return "phone_number"
@@ -39,7 +43,7 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
     /// The screen to show for a step the server reports as current.
     static func forServerStep(_ step: String) -> OnboardingStep? {
         switch step {
-        case "template_selection": return .template
+        case templateSelectionStep: return .template
         case "channel_selection": return .channels
         case "provider_connection": return .provider
         case "phone_number": return .phoneNumber
@@ -224,7 +228,7 @@ final class HubCommunicationsViewModel {
             _ = try await onboardAPI.startOnboarding(hubId: hubId, templateId: templateId)
             let state = try await onboardAPI.completeStep(
                 hubId: hubId,
-                step: OnboardingStep.template.serverStep!
+                step: OnboardingStep.templateSelectionStep
             )
             apply(state)
         } catch {
