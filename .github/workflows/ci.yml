@@ -59,6 +59,17 @@ jobs:
   # The actual path map lives in .github/scripts/detect-changed-platforms.sh
   # (the single source of truth — see that file's header), not here; this
   # job only resolves the correct diff range and hands the file list to it.
+  #
+  # The knope release PR is the one exception to "the diff decides". On its
+  # `pull_request` runs every platform flag is forced to `false`, so the
+  # platform jobs report `skipped` (which `ci-status` accepts) and run on the
+  # `merge_group` event instead, against the commit that will actually land.
+  # `orchestrator/src/pr-ci-scope.ts` makes that decision, reading the branch
+  # name from `KNOPE_RELEASE_BRANCH`; see its header for why and for every
+  # case that still runs. It never defers a `merge_group`, `push` or
+  # `workflow_dispatch` run, and it never defers when the base branch has no
+  # merge queue. Jobs that are not platform-gated (build, lint, docs-guard,
+  # audit, crypto-guardrails and the two guards) still run on the release PR.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -92,6 +103,7 @@ jobs:
       crypto: ${{ steps.filter.outputs.crypto }}
       orchestrator: ${{ steps.filter.outputs.orchestrator }}
       audit: ${{ steps.filter.outputs.audit }}
+      platform_jobs: ${{ steps.scope.outputs.platform_jobs }}
 
     steps:
       - name: Checkout
@@ -99,8 +111,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The base branch's rules are fetched only for a pull_request, and a
+      # failed fetch leaves them empty, which pr-ci-scope.ts reads as "no
+      # merge queue" — so an API error always means the platform jobs run.
+      - name: Decide whether platform jobs run on this event
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          BASE_BRANCH_RULES=''
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$BASE_REF" ]]; then
+            BASE_BRANCH_RULES=$(gh api "repos/$REPOSITORY/rules/branches/$BASE_REF") || BASE_BRANCH_RULES=''
+          fi
+          export BASE_BRANCH_RULES
+          bun orchestrator/src/pr-ci-scope.ts >> "$GITHUB_OUTPUT"
+
       - name: Detect changes
         id: filter
+        env:
+          PLATFORM_JOBS: ${{ steps.scope.outputs.platform_jobs }}
         run: |
           # Diff against the PR's actual base, not HEAD^ — HEAD^ only agrees
           # with the base by coincidence on `pull_request` (today's merge-ref
@@ -133,7 +172,22 @@ jobs:
           echo "Changed files ($BASE..$HEAD):"
           echo "$CHANGED"
 
-          printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
+          FLAGS=$(printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh)
+
+          # Deferred to the merge queue: every platform flag goes false and
+          # the iOS tier to `none`. `docs_only`, `app` and `audit` keep what
+          # the diff says, because the jobs they gate still run here.
+          if [[ "$PLATFORM_JOBS" == "defer-to-merge-queue" ]]; then
+            echo "::notice::Knope release PR: platform jobs are deferred to the merge queue, which runs them against the commit that will land."
+            FLAGS=$(printf '%s\n' "$FLAGS" | sed -E \
+              -e 's/^(ios|android|desktop|backend|crypto|ansible|orchestrator)=.*/\1=false/' \
+              -e 's/^ios_tier=.*/ios_tier=none/')
+          elif [[ "$PLATFORM_JOBS" != "run" ]]; then
+            echo "::error::unexpected platform_jobs value '$PLATFORM_JOBS' from the scope step"
+            exit 1
+          fi
+
+          printf '%s\n' "$FLAGS" | tee -a "$GITHUB_OUTPUT"
 
   # ─── Guard: No Generated Files In Git ────────────────────
   no-generated-files-in-git:
