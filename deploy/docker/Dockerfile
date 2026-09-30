@@ -71,7 +71,7 @@ FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52
 #
 # espeak-ng is the one package added: the worker speaks every IVR prompt an
 # operator did not upload on the self-hosted PBXs (IvrSpeechService, #1347),
-# offline, in 19 of the shipped locales. ~30 MB; no recommends (no audio
+# offline (ivr-speech/voices.ts lists the locales). ~30 MB; no recommends (no audio
 # output devices — it only ever writes WAV to a pipe).
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends espeak-ng \
