@@ -11,23 +11,29 @@ backup_postgres_jobs: 2 # parallel dump jobs (directory format only)
 backup_postgres_compress: 9 # compression level (0-9)
 backup_postgres_exclude_tables: [] # tables to skip (e.g., sessions, cache)
 
-# WAL archiving (continuous archiving for PITR)
-backup_postgres_wal_enabled: false
-backup_postgres_wal_dir: "{{ backup_base_dir }}/postgres-wal"
+# NOTE: there is deliberately no `backup_postgres_wal_enabled` knob here.
+# It used to exist and only ever created an empty directory -- no
+# archive_command, no WAL shipping, no PITR. A switch that silently does
+# nothing is worse than its absence, so it was removed (#1125). RPO is the
+# backup interval (24h by default). Reinstate it only together with real
+# WAL archiving.
 
 # Retention policy
 backup_postgres_retain_daily: 7
 backup_postgres_retain_weekly: 4
 backup_postgres_retain_monthly: 3
 
-# Encryption
-backup_age_public_key: "" # age recipient key for encryption
+# Encryption -- REQUIRED. There is no unencrypted backup path: the script
+# refuses to run without a recipient (#1125). playbooks/preflight.yml fails
+# the deploy when backups are enabled and this is unset.
+backup_age_public_key: ""
 
 # Remote storage via rclone
 backup_rclone_remote: "" # e.g., "s3:llamenos-backups/postgres"
 
-# Docker compose file path
-backup_compose_file: "{{ app_dir }}/docker-compose.yml"
+# Docker compose file path -- the postgres service's own Compose project.
+# See group_vars/all/compose.yml.
+backup_compose_file: "{{ llamenos_compose_postgres }}"
 
 # Database credentials
 backup_postgres_user: llamenos

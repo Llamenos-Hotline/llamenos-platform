@@ -737,8 +737,14 @@ jobs:
       # backlog of basic/moderate-tier style findings (role naming, var
       # naming, changed_when, etc.) that are tracked as separate cleanup
       # work, not CI-blocking correctness issues.
+      # NOTE: no path argument. `ansible-lint --profile min .` lints ZERO
+      # files -- verified by planting a playbook with an unresolvable
+      # module: the `.` form reports "0 files processed of 1 encountered"
+      # and passes, while the no-path form processes 257 files and fails
+      # on it. This step has been a false green. Do not reintroduce the
+      # trailing dot (#1125).
       - name: Run ansible-lint
-        run: cd deploy/ansible && ansible-lint --profile min .
+        run: cd deploy/ansible && ansible-lint --profile min
 
       - name: Syntax check
         run: |
@@ -755,6 +761,110 @@ jobs:
       # unnoticed) is exactly the bug class issue #798 fixed.
       - name: Check required env vars across templates
         run: python3 deploy/ansible/scripts/check-required-env.py
+
+      # The justfile is every operator entry point — `just backup`,
+      # `just restore`, `just deploy`. It sat un-parseable on main with
+      # Ansible `{{ x | default(y) }}` expressions embedded in recipes
+      # and `restore` defined twice, so all of them failed immediately
+      # (#1125). Nothing checked, because nothing ran it.
+      - name: Install just
+        run: |
+          curl -fsSL https://github.com/casey/just/releases/download/1.42.4/just-1.42.4-x86_64-unknown-linux-musl.tar.gz \
+            | tar xz -C /usr/local/bin just
+          just --version
+
+      - name: Operator justfile parses
+        run: cd deploy/ansible && just --list
+
+      # The multi-host refactor moved every service to its own Compose
+      # project under {{ app_dir }}/services/<svc>/. Day-2 operations kept
+      # pointing at a monolithic {{ app_dir }}/docker-compose.yml that the
+      # production deploy never creates, so backup, restore, update,
+      # rollback, security-update and the alert cron were all dead — and
+      # invisibly so, because none of them runs on day one (#1121).
+      # Compose paths belong in group_vars/all/compose.yml.
+      - name: No monolithic compose path outside the legacy demo role
+        run: |
+          set -euo pipefail
+          # roles/llamenos + playbooks/migrate-to-multi-host.yml are the
+          # legacy single-compose layout (deploy-demo.yml only) and the
+          # migration off it; both legitimately reference the old path.
+          if grep -rn --include='*.yml' --include='*.j2' \
+               -e '{{ app_dir }}/docker-compose.yml' \
+               -e '{{app_dir}}/docker-compose.yml' \
+               deploy/ansible \
+               | grep -v '^deploy/ansible/roles/llamenos/' \
+               | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
+               | grep -v '^deploy/ansible/group_vars/all/compose.yml' \
+               | grep -vE '^[^:]+:[0-9]+: *#' \
+               `# update.yml and rollback.yml still assume the monolithic` \
+               `# layout. Their blue/green and snapshot logic needs a` \
+               `# redesign, not a path swap -- tracked separately. They` \
+               `# are allowlisted so this guard protects the backup and` \
+               `# restore paths that ARE fixed, instead of being deleted.` \
+               | grep -v '^deploy/ansible/playbooks/update.yml' \
+               | grep -v '^deploy/ansible/playbooks/rollback.yml' ; then
+            echo "::error::Day-2 operations must resolve Compose files through"
+            echo "::error::group_vars/all/compose.yml, not {{ app_dir }}/docker-compose.yml"
+            echo "::error::which the production deploy never creates. See #1121."
+            exit 1
+          fi
+          echo "OK: no monolithic compose references outside the legacy demo role"
+
+      # kv_store is a Durable-Objects-era table that no migration has
+      # created for a long time. restore.yml validated against it with no
+      # ignore_errors, so the restore died before restarting the app
+      # (#1125). A validation query must reference something that exists.
+      - name: Restore paths do not reference dropped tables
+        run: |
+          set -euo pipefail
+          # Comments explaining why the old reference was wrong are fine;
+          # a live reference is not.
+          if grep -rn 'kv_store' \
+               deploy/ansible/playbooks deploy/ansible/roles deploy/ansible/templates \
+               2>/dev/null | grep -vE '^[^:]+:[0-9]+: *#'; then
+            echo "::error::A deployment playbook references kv_store, which does not exist. See #1125."
+            exit 1
+          fi
+          echo "OK: no kv_store references"
+
+  # ─── Backup/Restore Round Trip ────────────────────────────
+  #
+  # The acceptance evidence for #1125. Not a lint and not a syntax check:
+  # it takes a real backup of a database with known content using the real
+  # Ansible backup roles, destroys the content, runs the real
+  # playbooks/restore.yml, and asserts the content came back -- plus that
+  # no artifact leaks a secret in plaintext.
+  #
+  # This exists because every defect in #1125 and #1121 was found by
+  # RUNNING the playbooks, and none of them by reading the playbooks. A
+  # backup path that is only ever read is a backup path nobody has.
+  backup-restore-roundtrip:
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Ansible and age
+        run: |
+          pip install --user ansible==14.1.0
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install -y age
+
+      - name: Run the backup/restore round trip
+        run: deploy/ansible/scripts/verify-backup-restore.sh
 
   desktop-unit:
     needs: changes
@@ -1560,7 +1670,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1593,6 +1703,7 @@ jobs:
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"
+          check_job "backup-restore-roundtrip" "${{ needs.backup-restore-roundtrip.result }}"
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
 
           if [[ -n "$FAILED" ]]; then

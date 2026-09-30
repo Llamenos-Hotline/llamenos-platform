@@ -8,60 +8,21 @@ LOG_PREFIX="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [cleanup]"
 
 log() { echo "${LOG_PREFIX} $*"; }
 
-{% if llamenos_postgres_enabled | default(true) %}
 # ── PostgreSQL Cleanup ──
-
-# Check if postgres container is running in this compose project
-if docker compose -f "${APP_DIR}/docker-compose.yml" ps --status running postgres 2>/dev/null | grep -q postgres; then
-  log "Starting PostgreSQL stale data cleanup..."
-
-  # Expired sessions (older than 30 days)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'session:%'
-        AND updated_at < NOW() - INTERVAL '30 days';
-    " 2>&1 | while read -r line; do log "sessions: ${line}"; done
-
-  # Expired rate-limit entries (older than 1 hour)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'ratelimit:%'
-        AND updated_at < NOW() - INTERVAL '1 hour';
-    " 2>&1 | while read -r line; do log "ratelimit: ${line}"; done
-
-  # Expired CAPTCHA challenges (older than 10 minutes)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'captcha:%'
-        AND updated_at < NOW() - INTERVAL '10 minutes';
-    " 2>&1 | while read -r line; do log "captcha: ${line}"; done
-
-  # Expired invite codes (past expiry timestamp)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'invite:%'
-        AND value::jsonb->>'expiresAt' IS NOT NULL
-        AND (value::jsonb->>'expiresAt')::timestamptz < NOW();
-    " 2>&1 | while read -r line; do log "invites: ${line}"; done
-
-  # Expired ban list entries (if they have TTL)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'ban:%'
-        AND value::jsonb->>'expiresAt' IS NOT NULL
-        AND (value::jsonb->>'expiresAt')::timestamptz < NOW();
-    " 2>&1 | while read -r line; do log "bans: ${line}"; done
-
-  log "PostgreSQL cleanup complete"
-else
-  log "PostgreSQL container not running on this host, skipping cleanup"
-fi
-{% endif %}
+#
+# Deliberately empty. This block used to DELETE FROM kv_store by key
+# prefix -- a Durable-Objects-era table that no migration has created for
+# a long time -- guarded by `docker compose -f ${APP_DIR}/docker-compose.yml`,
+# a file the production deploy never creates. It was dead twice over:
+# the guard was always false, and the SQL would have errored if it had
+# ever run (#1121, #1125).
+#
+# Row expiry is the application's job, not a shell cron's: the retention
+# rules live with the schema, inside a transaction, and are testable.
+# Duplicating them here would mean two implementations of the same
+# retention policy drifting apart. See #1127, which wires the already
+# implemented IdentityService.cleanup() and SettingsService.runCleanup()
+# into the task scheduler. Do not reintroduce SQL here.
 
 # ── Docker Cleanup ──
 log "Pruning unused Docker images..."
