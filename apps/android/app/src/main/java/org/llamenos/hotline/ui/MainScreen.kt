@@ -39,6 +39,7 @@ import org.llamenos.hotline.ui.conversations.ConversationsScreen
 import org.llamenos.hotline.ui.conversations.ConversationsViewModel
 import org.llamenos.hotline.ui.dashboard.DashboardScreen
 import org.llamenos.hotline.ui.dashboard.DashboardViewModel
+import org.llamenos.hotline.ui.hubs.HubSelectionViewModel
 import org.llamenos.hotline.ui.notes.NotesScreen
 import org.llamenos.hotline.ui.notes.NotesViewModel
 import org.llamenos.hotline.ui.settings.BiometricSectionEvent
@@ -131,6 +132,8 @@ fun MainScreen(
     val demoBannerUiState by demoBannerViewModel.uiState.collectAsState()
     val biometricSettingsViewModel: BiometricSettingsViewModel = hiltViewModel()
     val biometricSettingsUiState by biometricSettingsViewModel.uiState.collectAsState()
+    // Picks the hub to browse when none is chosen yet (#1340); refreshed by pull-to-refresh.
+    val hubSelectionViewModel: HubSelectionViewModel = hiltViewModel()
 
     // Unread count for conversations badge
     val conversationsUiState by conversationsViewModel.uiState.collectAsState()
@@ -206,6 +209,7 @@ fun MainScreen(
                         onNavigateToHubs = onNavigateToHubs,
                         onNavigateToEvents = onNavigateToEvents,
                         onNavigateToTriage = onNavigateToTriage,
+                        onRefresh = hubSelectionViewModel::refresh,
                     )
                 }
 

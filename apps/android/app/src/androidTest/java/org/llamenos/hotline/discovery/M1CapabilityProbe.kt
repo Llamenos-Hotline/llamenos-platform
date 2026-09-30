@@ -1,5 +1,6 @@
 package org.llamenos.hotline.discovery
 
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -14,8 +15,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeDown
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -41,8 +40,14 @@ import java.net.URL
  * Drives the real app UI against a live backend to establish, per M1 flow,
  * whether it WORKS / is BROKEN / is ABSENT. Every step either succeeds or fails
  * the test with the exact state it saw; nothing is caught and nothing is skipped.
- * The only backdoors used are the ones the app has no UI for (device enrolment,
- * shift seeding, telephony and messaging simulation) — each is marked `BACKDOOR`.
+ * Enrolment is the real path: an admin creates an invite and grants hub membership
+ * through the admin API (as the desktop admin UI does), and the volunteer redeems the
+ * invite in the Android UI. The only backdoors are for what no client can do here (hub
+ * creation, the test admin's own registration, shift seeding, telephony and messaging
+ * simulation) — each is marked `BACKDOOR`.
+ *
+ * Required flows are enforced by the `m1ProbeGate` Gradle task
+ * (`src/androidTest/m1-probe-required.txt`).
  *
  * Deliberately NOT done: [org.llamenos.hotline.steps.ScenarioHooks]' write of the
  * active hub into ActiveHubState. A real user has no such hook, so the probe lets the
@@ -70,7 +75,7 @@ class M1CapabilityProbe {
     private val testSecret: String = args.getString("testSecret", "test-reset-secret")
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** Hub role the probe user is enrolled with (`-e probeRole role-admin` to separate permission gaps from app gaps). */
+    /** Hub role the probe user is enrolled with (`-e probeRole role-hub-admin` to separate permission gaps from app gaps). */
     private val role: String = args.getString("probeRole", "role-volunteer")
 
     /** Survives `am instrument` process boundaries (the restart phase skips `pm clear`). */
@@ -83,67 +88,63 @@ class M1CapabilityProbe {
 
     // ─── Flows ──────────────────────────────────────────────────────────────
 
-    /** Enrol a device, PIN-lock, reject a wrong PIN, unlock with the right one. */
+    /**
+     * Enrol by invite, get a hub without visiting Hub Management, then lock from both entry
+     * points and after the activity is recreated: every lock shows the PIN pad, a wrong
+     * PIN is rejected, and the PIN that was set unlocks.
+     */
     @Test
     fun auth() {
-        val pubkey = createIdentityViaUi()
-        probe("auth", "local identity created, signing pubkey ${pubkey.take(12)}…")
-        probe("auth", "activeHubId after first dashboard: ${activeHubId()}")
+        val (pubkey, hub) = enrolViaInvite("auth", "probe-auth")
+        probe("auth", "enrolled by invite, signing pubkey ${pubkey.take(12)}…")
+        ensureActiveHub("auth", hub)
 
-        val hub = createHub("probe-auth")
-        enrol(pubkey, hub, role)
-        pullToRefreshDashboard()
-        Thread.sleep(3_000)
-        probe("auth", "after enrolment + dashboard refresh: activeHubId=${activeHubId()} connection=${textOf("connection-status")}")
-
-        // PIN lock from the dashboard top bar; Settings → Lock as the second entry point.
-        Thread.sleep(2_000)
-        compose.waitForIdle()
         compose.onNodeWithTag("lock-button").performClick()
-        val lockedFromDashboard = pollFor(10_000) { has("pin-pad") }
-        probe("auth", "dashboard lock-button → PIN pad shown=$lockedFromDashboard; keys unlocked=${crypto().isUnlocked} dashboard shown=${has("dashboard-title")}")
-        if (!lockedFromDashboard) {
-            tapTab("nav-settings")
-            scrollClick("auth", "settings-lock-button")
-            val lockedFromSettings = pollFor(10_000) { has("pin-pad") }
-            probe("auth", "Settings → Lock → PIN pad shown=$lockedFromSettings; keys unlocked=${crypto().isUnlocked} tags=${visibleTags().take(8)}")
-            // What a locked-but-still-displayed app does on its next request:
-            tapTab("nav-notes")
-            Thread.sleep(3_000)
-            probe("auth", "after lock, Notes tab: tags=${visibleTags()} texts=${screenTexts().take(12)}")
-            // Reach the PIN screen the way a user does after the app is recreated.
-            scenario?.close()
-            launch()
-            waitForTag("auth", "pin-pad", 20_000)
-            probe("auth", "activity recreated → PIN unlock screen")
-        }
+        val lockedFromDashboard = pollFor(10_000) { has("pin-pad") && !has("dashboard-title") }
+        probe("auth", "dashboard lock-button → PIN pad shown=$lockedFromDashboard; keys unlocked=${crypto().isUnlocked}")
+        check(lockedFromDashboard) { fail("auth", "the lock button left the dashboard on screen; tags=${visibleTags()}") }
 
         enterPin("87654321")
-        Thread.sleep(1_500)
-        check(!has("dashboard-title")) { fail("auth", "WRONG PIN reached the dashboard") }
-        probe("auth", "wrong 8-digit PIN rejected; texts=${screenTexts()}")
+        val wrongRejected = pollFor(5_000) { has("pin-error") } && !has("dashboard-title")
+        probe("auth", "wrong PIN rejected=$wrongRejected texts=${screenTexts()}")
+        check(wrongRejected) { fail("auth", "a wrong PIN was not rejected with an error") }
+        unlockWithPin("auth", "after dashboard lock")
 
-        // The PIN that was set (8 digits) — the one the user actually has.
-        enterPin(PIN)
-        val unlocked = pollFor(15_000) { has("dashboard-title") }
-        probe("auth", "correct 8-digit PIN: unlocked=$unlocked texts=${screenTexts()}")
-        if (!unlocked) {
-            // The unlock pad submits at 6 digits; try the 6-digit prefix too, to show neither works.
-            enterPin(PIN.take(6))
-            val unlocked6 = pollFor(10_000) { has("dashboard-title") }
-            probe("auth", "6-digit prefix of the PIN: unlocked=$unlocked6 texts=${screenTexts()}")
-        }
-        probe("auth", "RESULT lockButtonLocks=$lockedFromDashboard correctPinUnlocks=$unlocked")
-        check(unlocked) { fail("auth", "the PIN set at enrolment cannot unlock the app") }
-        check(lockedFromDashboard) { fail("auth", "the lock button dropped the keys but left the dashboard on screen") }
+        tapTab("nav-settings")
+        scrollClick("auth", "settings-lock-button")
+        val lockedFromSettings = pollFor(10_000) { has("pin-pad") && !has("dashboard-title") }
+        probe("auth", "Settings → Lock → PIN pad shown=$lockedFromSettings; keys unlocked=${crypto().isUnlocked}")
+        check(lockedFromSettings) { fail("auth", "Settings → Lock left the app unlocked on screen; tags=${visibleTags()}") }
+        unlockWithPin("auth", "after Settings lock")
+
+        scenario?.close()
+        launch()
+        waitForTag("auth", "pin-pad", 20_000)
+        unlockWithPin("auth", "after the activity was recreated")
+        probe("auth", "activeHubId after unlock: ${activeHubId()}")
+        check(activeHubId() == hub) { fail("auth", "active hub lost across lock/unlock: ${activeHubId()} (expected $hub)") }
+        probe("auth", "RESULT enrolled by invite, hub chosen by the app, both locks show the PIN pad, the PIN unlocks")
+    }
+
+    /** An invite code the server does not know is refused on the login screen. */
+    @Test
+    fun enrolmentRejectsUnknownInvite() {
+        launch()
+        waitForTag("invite", "create-identity", 20_000)
+        compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
+        compose.onNodeWithTag("invite-code-input").performTextReplacement(java.util.UUID.randomUUID().toString())
+        compose.onNodeWithTag("create-identity").performClick()
+        waitForTag("invite", "invite-error", 15_000)
+        probe("invite", "unknown invite: error=${textOf("invite-error")} tags=${visibleTags()}")
+        check(!has("pin-pad")) { fail("invite", "an unknown invite continued to PIN set") }
+        check(crypto().signingPubkeyHex == null) { fail("invite", "a device key was created for an unknown invite") }
+        probe("invite", "RESULT unknown invite refused before any key was created")
     }
 
     /** Log out from Settings: must land back on the login screen. */
     @Test
     fun logout() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-logout")
-        enrol(pubkey, hub, role)
+        enrolViaInvite("logout", "probe-logout")
         tapTab("nav-settings")
         scrollClick("logout", "settings-logout-button")
         waitForTag("logout", "confirm-logout-button", 5_000)
@@ -155,9 +156,7 @@ class M1CapabilityProbe {
     /** Phase 1: create and save a note. State is kept for [notesAfterRestart]. */
     @Test
     fun notesCreate() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-notes")
-        enrol(pubkey, hub, role)
+        val (_, hub) = enrolViaInvite("notes", "probe-notes")
         ensureActiveHub("notes", hub)
         val marker = "probe-note-${System.currentTimeMillis()}"
         stateFile.parentFile?.mkdirs()
@@ -195,9 +194,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun notesDuringCall() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-quicknote")
-        enrol(pubkey, hub, role)
+        val (pubkey, hub) = enrolViaInvite("quicknote", "probe-quicknote")
         backdoor("quicknote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         val ring = backdoor("quicknote", "test-simulate/incoming-call", """{"callerNumber":"+15555550140","hubId":"$hub"}""")
         val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
@@ -232,9 +229,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun notesFromCall() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-callnote")
-        enrol(pubkey, hub, role)
+        val (pubkey, hub) = enrolViaInvite("callnote", "probe-callnote")
         backdoor("callnote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("callnote", hub)
         val ring = backdoor("callnote", "test-simulate/incoming-call", """{"callerNumber":"+15555550130","hubId":"$hub"}""")
@@ -266,9 +261,7 @@ class M1CapabilityProbe {
     /** View the schedule, clock in, clock out. */
     @Test
     fun shifts() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-shifts")
-        enrol(pubkey, hub, role)
+        val (pubkey, hub) = enrolViaInvite("shifts", "probe-shifts")
         backdoor("shifts", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("shifts", hub)
 
@@ -302,9 +295,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun calls() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-calls")
-        enrol(pubkey, hub, role)
+        val (pubkey, hub) = enrolViaInvite("calls", "probe-calls")
         backdoor("calls", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
 
         // 1. Pre-existing answered call
@@ -341,11 +332,9 @@ class M1CapabilityProbe {
     /** List hubs, switch the active hub, and receive a call ring from the non-active hub. */
     @Test
     fun hubs() {
-        val pubkey = createIdentityViaUi()
-        val hubA = createHub("probe-hub-a")
+        val (pubkey, hubA) = enrolViaInvite("hubs", "probe-hub-a")
         val hubB = createHub("probe-hub-b")
-        enrol(pubkey, hubA, role)
-        enrol(pubkey, hubB, role)
+        addHubMember("hubs", pubkey, hubB)
         probe("hubs", "activeHubId the app chose: ${activeHubId()} (A=$hubA B=$hubB)")
 
         tapTab("nav-dashboard")
@@ -380,9 +369,7 @@ class M1CapabilityProbe {
     /** An inbound SMS creates a conversation; open it, read it, reply. */
     @Test
     fun conversations() {
-        val pubkey = createIdentityViaUi()
-        val hub = createHub("probe-conv")
-        enrol(pubkey, hub, role)
+        val (_, hub) = enrolViaInvite("conversations", "probe-conv")
         ensureActiveHub("conversations", hub)
         val body = "probe-sms-${System.currentTimeMillis()}"
         backdoor(
@@ -420,48 +407,73 @@ class M1CapabilityProbe {
     }
 
     /**
-     * A user who belongs to a hub must end up browsing it. If the app has not chosen
-     * one by itself, pick it the only way a user can: Settings → Hubs → tap the hub.
+     * A user who belongs to a hub must end up browsing it without visiting Hub Management
+     * (#1340). Membership is granted after the dashboard first loaded, so this refreshes
+     * the dashboard the way a user would, then requires the app to have chosen the hub.
      */
     private fun ensureActiveHub(flow: String, hubId: String) {
         pullToRefreshDashboard()
-        Thread.sleep(2_000)
-        val chosen = activeHubId()
-        probe(flow, "activeHubId the app chose by itself: $chosen (member of $hubId)")
-        if (chosen == hubId) return
-        tapTab("nav-dashboard")
-        scrollClick(flow, "hubs-card")
-        waitForAnyTag(flow, 15_000, "hub-row", "hubs-error", "hubs-empty")
-        compose.onAllNodesWithTag("hub-row", useUnmergedTree = true).onFirst().performClick()
-        val switched = pollFor(10_000) { activeHubId() == hubId }
-        probe(flow, "selected hub via Settings → Hubs: activeHubId=${activeHubId()} switched=$switched")
-        check(switched) { fail(flow, "could not select the member hub through the UI") }
-        if (has("hubs-back")) compose.onNodeWithTag("hubs-back").performClick()
-        tapTab("nav-dashboard")
+        val chosen = pollFor(15_000) { activeHubId() == hubId }
+        probe(flow, "activeHubId the app chose by itself: ${activeHubId()} (member of $hubId)")
+        check(chosen) { fail(flow, "the app did not select the user's hub by itself: ${activeHubId()} (expected $hubId)") }
     }
 
-    /** Pull-to-refresh only fires with the list at its top, so scroll the first card into view first. */
+    /**
+     * Pull-to-refresh only fires with the list at its top, so scroll the first card into
+     * view first. The pull is a real touch (`input swipe`): a Compose-injected swipe never
+     * triggered the dashboard's refresh, so no request reached the server.
+     */
     private fun pullToRefreshDashboard() {
         waitForTag("nav", "dashboard-pull-refresh", 10_000)
         compose.onNodeWithTag("connection-card").performScrollTo()
-        compose.onNodeWithTag("dashboard-pull-refresh").performTouchInput {
-            swipeDown(startY = top + 20f, endY = bottom, durationMillis = 800)
-        }
         compose.waitForIdle()
-        Thread.sleep(1_500)
+        val node = compose.onNodeWithTag("dashboard-pull-refresh").fetchSemanticsNode()
+        val x = (node.positionOnScreen.x + node.size.width / 2).toInt()
+        val fromY = (node.positionOnScreen.y + node.size.height * 0.2f).toInt()
+        val toY = (node.positionOnScreen.y + node.size.height * 0.8f).toInt()
+        val swipe = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("input swipe $x $fromY $x $toY 600")
+        // Reading to EOF waits for the gesture to finish.
+        ParcelFileDescriptor.AutoCloseInputStream(swipe).use { it.readBytes() }
+        compose.waitForIdle()
     }
 
-    /** Fresh install → hub URL → create identity → PIN twice → dashboard. Returns the signing pubkey. */
-    private fun createIdentityViaUi(): String {
+    /**
+     * Enrolment as a volunteer does it (#1345): an admin creates an invite for [role], the
+     * volunteer redeems it on a fresh install (hub URL + invite code → PIN twice), and the
+     * admin then adds them to a new hub. Returns the signing pubkey and the hub.
+     */
+    private fun enrolViaInvite(flow: String, hubName: String): Pair<String, String> {
+        val hub = createHub(hubName)
+        val invite = adminApi(
+            flow, "POST", "/api/invites",
+            """{"name":"Probe $flow","phone":"+15555550100","roleIds":["$role"]}""",
+        )
+        val code = json.parseToJsonElement(invite).jsonObject["invite"]!!.jsonObject["code"]!!.jsonPrimitive.content
         launch()
-        waitForTag("enrol", "create-identity", 20_000)
+        waitForTag(flow, "create-identity", 20_000)
         compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
+        compose.onNodeWithTag("invite-code-input").performTextReplacement(code)
         compose.onNodeWithTag("create-identity").performClick()
-        waitForTag("enrol", "pin-pad", 10_000)
+        waitForAnyTag(flow, 15_000, "pin-pad", "invite-error")
+        check(!has("invite-error")) { fail(flow, "a fresh invite was refused: ${textOf("invite-error")}") }
         enterPin(PIN)
         enterPin(PIN)
-        waitForTag("enrol", "dashboard-title", 20_000)
-        return checkNotNull(crypto().signingPubkeyHex) { fail("enrol", "no signing pubkey after identity creation") }
+        waitForAnyTag(flow, 20_000, "dashboard-title", "invite-redeem-error")
+        check(has("dashboard-title")) { fail(flow, "invite redemption failed: ${textOf("invite-redeem-error")}") }
+        val pubkey = checkNotNull(crypto().signingPubkeyHex) { fail(flow, "no signing pubkey after enrolment") }
+        probe(flow, "invite redeemed in the UI; the app is on the dashboard")
+        addHubMember(flow, pubkey, hub)
+        return pubkey to hub
+    }
+
+    /** Enter the PIN on the unlock screen and require the dashboard. */
+    private fun unlockWithPin(flow: String, context: String) {
+        waitForTag(flow, "pin-pad", 10_000)
+        enterPin(PIN)
+        val unlocked = pollFor(15_000) { has("dashboard-title") }
+        probe(flow, "$context: the PIN unlocks=$unlocked keys unlocked=${crypto().isUnlocked}")
+        check(unlocked) { fail(flow, "$context: the PIN set at enrolment did not unlock the app; texts=${screenTexts()}") }
     }
 
     private fun enterPin(pin: String) {
@@ -565,26 +577,59 @@ class M1CapabilityProbe {
         return json.parseToJsonElement(body).jsonObject["id"]!!.jsonPrimitive.content
     }
 
-    /** Android has no invite-redemption UI, so enrolment goes through the dev backdoor. */
-    private fun enrol(pubkey: String, hubId: String, role: String) {
-        backdoor("enrol", "test-add-hub-member", """{"pubkey":"$pubkey","hubId":"$hubId","roleIds":["$role"]}""")
+    /** A hub admin adds the user to a hub — `POST /api/hubs/:id/members`, as the desktop admin UI does. */
+    private fun addHubMember(flow: String, pubkey: String, hubId: String) {
+        adminApi(flow, "POST", "/api/hubs/$hubId/members", """{"pubkey":"$pubkey","roleIds":["$role"]}""")
     }
 
-    private fun backdoor(flow: String, path: String, body: String): String {
-        val conn = URL("$hubUrl/api/$path").openConnection() as HttpURLConnection
+    /**
+     * A request signed by the test admin (CI's fixed `ADMIN_SEED`, whose pubkey is the
+     * server's `ADMIN_PUBKEY`). Makes sure the admin is registered first.
+     */
+    private fun adminApi(flow: String, method: String, path: String, body: String): String {
+        if (!adminReady) {
+            val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(ADMIN_SEED, 0u, "GET", "/")
+            backdoor(flow, "test-promote-admin", """{"pubkey":"${token.pubkey}"}""")
+            adminReady = true
+        }
+        val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(
+            ADMIN_SEED, System.currentTimeMillis().toULong(), method, path,
+        )
+        val auth = buildString {
+            append("""{"pubkey":"${token.pubkey}","timestamp":${token.timestamp},"token":"${token.token}"""")
+            token.nonce?.let { append(""","nonce":"$it"""") }
+            append('}')
+        }
+        return http(flow, method, path, body, "ADMIN") { setRequestProperty("Authorization", "Bearer $auth") }
+    }
+
+    private var adminReady = false
+
+    private fun backdoor(flow: String, path: String, body: String): String =
+        http(flow, "POST", "/api/$path", body, "BACKDOOR") { setRequestProperty("X-Test-Secret", testSecret) }
+
+    private fun http(
+        flow: String,
+        method: String,
+        path: String,
+        body: String,
+        kind: String,
+        headers: HttpURLConnection.() -> Unit,
+    ): String {
+        val conn = URL("$hubUrl$path").openConnection() as HttpURLConnection
         try {
-            conn.requestMethod = "POST"
+            conn.requestMethod = method
             conn.connectTimeout = 15_000
             conn.readTimeout = 30_000
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("X-Test-Secret", testSecret)
+            conn.headers()
             conn.doOutput = true
             conn.outputStream.use { it.write(body.toByteArray()) }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            probe(flow, "BACKDOOR POST /api/$path → $code ${text.take(160)}")
-            check(code in 200..299) { fail(flow, "backdoor /api/$path failed: $code $text") }
+            probe(flow, "$kind $method $path → $code ${text.take(160)}")
+            check(code in 200..299) { fail(flow, "$kind $method $path failed: $code $text") }
             return text
         } finally {
             conn.disconnect()
@@ -598,5 +643,8 @@ class M1CapabilityProbe {
     private companion object {
         const val TAG = "PROBE"
         const val PIN = "12345678"
+
+        /** CI's test admin (`tests/helpers.ts` ADMIN_SEED → `TEST_ADMIN_PUBKEY`). */
+        const val ADMIN_SEED = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7"
     }
 }

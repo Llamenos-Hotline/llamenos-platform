@@ -379,6 +379,9 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "refresh() started")
             _uiState.update { it.copy(isRefreshing = true, errorRes = null) }
+            // Re-read /auth/me: the identity may have been registered, or given a hub,
+            // since the dashboard first loaded — and the event key follows the active hub.
+            fetchServerEventKey()
             if (!checkHubReachable()) {
                 _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh) }
             }

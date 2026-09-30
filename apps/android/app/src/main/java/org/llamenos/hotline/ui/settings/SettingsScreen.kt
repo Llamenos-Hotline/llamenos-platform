@@ -397,7 +397,6 @@ fun SettingsScreen(
             text = {
                 PINPad(
                     pin = biometricPinInput,
-                    maxLength = 6,
                     onPinChange = { biometricPinInput = it },
                     onComplete = { completedPin -> onBiometricEvent(BiometricSectionEvent.SubmitPin(completedPin)) },
                     errorMessage = when (biometricState.pinError) {

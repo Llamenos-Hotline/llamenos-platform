@@ -90,6 +90,8 @@ fun DashboardScreen(
     onNavigateToHubs: () -> Unit = {},
     onNavigateToEvents: () -> Unit = {},
     onNavigateToTriage: () -> Unit = {},
+    /** Extra work for pull-to-refresh beyond this screen's own view models (hub selection). */
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -163,6 +165,7 @@ fun DashboardScreen(
             onRefresh = {
                 viewModel.refresh()
                 notesViewModel.refresh()
+                onRefresh()
             },
             modifier = Modifier
                 .fillMaxSize()

@@ -27,6 +27,7 @@ import javax.inject.Singleton
  * Security: If authentication fails (key locked or signing error), a synthetic 401
  * response is returned immediately instead of dispatching an unauthenticated request.
  * This prevents unauthenticated requests from reaching the server.
+ * The only exception is a request tagged [UnsignedRequest] (public endpoints).
  */
 @Singleton
 class AuthInterceptor @Inject constructor(
@@ -35,6 +36,9 @@ class AuthInterceptor @Inject constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
+        if (originalRequest.tag(UnsignedRequest::class.java) != null) {
+            return chain.proceed(originalRequest)
+        }
         val method = originalRequest.method
         val path = originalRequest.url.encodedPath
 

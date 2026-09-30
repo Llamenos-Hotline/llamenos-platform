@@ -37,6 +37,13 @@ import javax.inject.Singleton
 class ApiException(val code: Int, override val message: String) : Exception("HTTP $code: $message")
 
 /**
+ * Request tag for public endpoints that prove identity in their body or not at all
+ * (invite validation and redemption). [AuthInterceptor] sends these without a signature,
+ * so they work before any device key exists, and they are never queued for offline replay.
+ */
+object UnsignedRequest
+
+/**
  * REST API client for the llamenos Worker backend.
  *
  * Uses OkHttp with [AuthInterceptor] for automatic Schnorr authentication.
@@ -156,6 +163,7 @@ class ApiService @Inject constructor(
      * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
      * @param path API path (e.g., "/api/v1/identity")
      * @param body Optional request body (will be JSON-serialized)
+     * @param signed false for public endpoints; see [UnsignedRequest]
      * @return Deserialized response of type T
      * @throws ApiException on non-2xx responses
      * @throws IOException on network errors
@@ -164,6 +172,7 @@ class ApiService @Inject constructor(
         method: String,
         path: String,
         body: Any? = null,
+        signed: Boolean = true,
     ): T = withContext(ioDispatcher) {
         val baseUrl = getBaseUrl()
         val url = "$baseUrl$path"
@@ -187,13 +196,14 @@ class ApiService @Inject constructor(
                     else -> null
                 }
             )
+            .apply { if (!signed) tag(UnsignedRequest::class.java, UnsignedRequest) }
             .build()
 
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (signed && OfflineQueue.isQueueableMethod(httpMethod)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")
@@ -222,6 +232,7 @@ class ApiService @Inject constructor(
         method: String,
         path: String,
         body: Any? = null,
+        signed: Boolean = true,
     ): Unit = withContext(ioDispatcher) {
         val baseUrl = getBaseUrl()
         val url = "$baseUrl$path"
@@ -245,13 +256,14 @@ class ApiService @Inject constructor(
                     else -> null
                 }
             )
+            .apply { if (!signed) tag(UnsignedRequest::class.java, UnsignedRequest) }
             .build()
 
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (signed && OfflineQueue.isQueueableMethod(httpMethod)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")

@@ -34,6 +34,9 @@ import org.llamenos.hotline.ui.admin.SchemaBrowserScreen
 import org.llamenos.hotline.ui.admin.ShiftDetailScreen
 import org.llamenos.hotline.ui.admin.UserDetailScreen
 import org.llamenos.hotline.ui.auth.AuthViewModel
+import org.llamenos.hotline.ui.auth.InviteRedeemScreen
+import org.llamenos.hotline.ui.auth.InviteStage
+import org.llamenos.hotline.ui.auth.InviteViewModel
 import org.llamenos.hotline.ui.calls.CallHistoryScreen
 import org.llamenos.hotline.ui.calls.CallHistoryViewModel
 import org.llamenos.hotline.ui.contacts.ContactsScreen
@@ -115,6 +118,11 @@ sealed interface LlamenosRoute {
     /** Unlock with existing PIN. */
     data object PINUnlock : LlamenosRoute {
         override val route = "pin_unlock"
+    }
+
+    /** Redeem a validated invite with the device keys just created (enrolment). */
+    data object InviteRedeem : LlamenosRoute {
+        override val route = "invite_redeem"
     }
 
     /** Main screen with bottom navigation (Dashboard, Notes, Conversations, Shifts, Settings). */
@@ -385,6 +393,18 @@ sealed interface LlamenosRoute {
 }
 
 /**
+ * Routes that are shown while the device keys are locked (or before they exist). Every
+ * other route shows unlocked content and is left as soon as the keys are dropped.
+ */
+private val AUTH_ROUTES = setOf(
+    LlamenosRoute.Login.route,
+    LlamenosRoute.Onboarding.route,
+    LlamenosRoute.PINSet.route,
+    LlamenosRoute.PINUnlock.route,
+    LlamenosRoute.InviteRedeem.route,
+)
+
+/**
  * Root navigation composable for the llamenos app.
  *
  * Determines the start destination based on whether encrypted keys exist
@@ -415,6 +435,8 @@ fun LlamenosNavigation(
     val navController = rememberNavController()
     val authViewModel: AuthViewModel = hiltViewModel()
     val uiState by authViewModel.uiState.collectAsState()
+    val inviteViewModel: InviteViewModel = hiltViewModel()
+    val inviteState by inviteViewModel.uiState.collectAsState()
 
     // Version check state
     var versionStatus by remember { mutableStateOf<VersionChecker.VersionStatus>(VersionChecker.VersionStatus.Unknown) }
@@ -477,6 +499,34 @@ fun LlamenosNavigation(
         LlamenosRoute.Login.route
     }
 
+    // Whatever dropped the device keys — the Lock button, Settings → Lock, the background
+    // auto-lock — the unlocked screens go with them (#1339). Logout navigates to Login
+    // itself and is already there by the time this runs.
+    LaunchedEffect(navController) {
+        cryptoService.unlockedState.collect { unlocked ->
+            val route = navController.currentDestination?.route ?: return@collect
+            if (unlocked || route in AUTH_ROUTES) return@collect
+            authViewModel.onLocked()
+            val target = if (keystoreService.contains(KeystoreService.KEY_ENCRYPTED_KEYS)) {
+                LlamenosRoute.PINUnlock.route
+            } else {
+                LlamenosRoute.Login.route
+            }
+            navController.navigate(target) { popUpTo(0) { inclusive = true } }
+        }
+    }
+
+    // A validated invite continues to PIN set, where the device keys are created.
+    LaunchedEffect(inviteState.stage) {
+        if (inviteState.stage == InviteStage.VALID &&
+            navController.currentDestination?.route == LlamenosRoute.Login.route
+        ) {
+            navController.navigate(LlamenosRoute.PINSet.route) {
+                popUpTo(LlamenosRoute.Login.route) { inclusive = false }
+            }
+        }
+    }
+
     Column(modifier = modifier) {
         // Soft-update banner (dismissible)
         if (showUpdateBanner) {
@@ -495,6 +545,14 @@ fun LlamenosNavigation(
                         popUpTo(LlamenosRoute.Login.route) { inclusive = false }
                     }
                 },
+                inviteState = inviteState,
+                onInviteChange = { input ->
+                    inviteViewModel.updateInput(input)
+                    // An invite link names its hub; use it unless the user typed one.
+                    val linkHub = InviteViewModel.parseInvite(input)?.hubUrl
+                    if (linkHub != null && uiState.hubUrl.isBlank()) authViewModel.updateHubUrl(linkHub)
+                },
+                onSubmitInvite = inviteViewModel::validate,
             )
         }
 
@@ -514,8 +572,25 @@ fun LlamenosNavigation(
             PINSetScreen(
                 viewModel = authViewModel,
                 onAuthenticated = {
-                    navController.navigate(LlamenosRoute.Main.route) {
+                    // Enrolling with an invite: register the new keys before entering the app.
+                    val next = if (inviteState.stage == InviteStage.VALID) {
+                        LlamenosRoute.InviteRedeem.route
+                    } else {
+                        LlamenosRoute.Main.route
+                    }
+                    navController.navigate(next) {
                         // Clear entire auth flow from back stack
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+            )
+        }
+
+        composable(LlamenosRoute.InviteRedeem.route) {
+            InviteRedeemScreen(
+                viewModel = inviteViewModel,
+                onRedeemed = {
+                    navController.navigate(LlamenosRoute.Main.route) {
                         popUpTo(0) { inclusive = true }
                     }
                 },
@@ -576,13 +651,8 @@ fun LlamenosNavigation(
                 keystoreService = keystoreService,
                 networkMonitor = networkMonitor,
                 offlineQueue = offlineQueue,
-                onLock = {
-                    cryptoService.lock()
-                    authViewModel.resetPinEntry()
-                    navController.navigate(LlamenosRoute.PINUnlock.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                },
+                // The unlockedState observer above moves the UI to the unlock screen.
+                onLock = { cryptoService.lock() },
                 onLogout = {
                     authViewModel.resetAuthState()
                     navController.navigate(LlamenosRoute.Login.route) {

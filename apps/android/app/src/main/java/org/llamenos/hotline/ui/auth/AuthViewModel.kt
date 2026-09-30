@@ -348,12 +348,33 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
+     * The device keys were dropped ([CryptoService.lock]) while the app was unlocked.
+     * Clears the authenticated state, so the unlock screen stays up until the PIN is
+     * entered again instead of bouncing straight back to the dashboard.
+     */
+    fun onLocked() {
+        _uiState.update {
+            it.copy(
+                isAuthenticated = false,
+                hasStoredKeys = keystoreService.contains(KeystoreService.KEY_ENCRYPTED_KEYS),
+                pin = "",
+                confirmPin = "",
+                isConfirmingPin = false,
+                pinMismatch = false,
+                error = null,
+            )
+        }
+    }
+
+    /**
      * Reset all auth state (for logout or starting over).
+     * Storage is cleared before the keys are dropped, so whatever observes the lock sees
+     * an identity that no longer exists (login), not one to unlock.
      */
     fun resetAuthState() {
+        keystoreService.clear()
         cryptoService.clearHubKeys()
         cryptoService.lock()
-        keystoreService.clear()
         _uiState.value = AuthUiState()
     }
 

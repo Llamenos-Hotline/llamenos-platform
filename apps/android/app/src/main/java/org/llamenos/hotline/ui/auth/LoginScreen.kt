@@ -56,11 +56,13 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.ui.components.LoadingOverlay
 
 /**
- * Login screen with logo, hub URL input, and identity creation.
+ * Login screen with logo, hub URL input, invite code, and identity creation.
  *
- * Two entry paths:
- * 1. "Create New Identity" -> PINSetScreen (device keys generated with PIN)
- * 2. "Link from Another Device" -> DeviceLinkScreen (QR scan)
+ * Entry paths:
+ * 1. "Create New Identity" with an invite code or link -> the invite is validated, then
+ *    PINSetScreen, then the invite is redeemed (enrolment: the server learns the identity)
+ * 2. "Create New Identity" without an invite -> PINSetScreen (a local identity only)
+ * 3. "Link from Another Device" -> DeviceLinkScreen (QR scan)
  *
  * Also includes demo mode buttons for testing.
  */
@@ -70,6 +72,9 @@ fun LoginScreen(
     onNavigateToPinSet: () -> Unit,
     onNavigateToDeviceLink: () -> Unit = {},
     onDemoLogin: (String) -> Unit = {},
+    inviteState: InviteUiState = InviteUiState(),
+    onInviteChange: (String) -> Unit = {},
+    onSubmitInvite: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -175,6 +180,35 @@ fun LoginScreen(
                                     .testTag("hub-url-input"),
                             )
 
+                            Spacer(Modifier.height(12.dp))
+
+                            // Invite code, or the whole invite link
+                            OutlinedTextField(
+                                value = inviteState.input,
+                                onValueChange = onInviteChange,
+                                label = { Text(stringResource(R.string.invite_code)) },
+                                singleLine = true,
+                                isError = inviteState.errorRes != null,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Uri,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("invite-code-input"),
+                            )
+
+                            inviteState.errorRes?.let { errorRes ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(errorRes),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.testTag("invite-error"),
+                                )
+                            }
+
                             // Error message
                             if (uiState.error != null) {
                                 Spacer(Modifier.height(8.dp))
@@ -194,10 +228,11 @@ fun LoginScreen(
                                     focusManager.clearFocus()
                                     viewModel.createNewIdentity()
                                     if (viewModel.uiState.value.error == null) {
-                                        onNavigateToPinSet()
+                                        // With an invite, PIN set follows a successful validation.
+                                        if (inviteState.input.isBlank()) onNavigateToPinSet() else onSubmitInvite()
                                     }
                                 },
-                                enabled = !uiState.isLoading,
+                                enabled = !uiState.isLoading && inviteState.stage != InviteStage.VALIDATING,
                                 shape = MaterialTheme.shapes.small,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -334,7 +369,7 @@ fun LoginScreen(
                 Spacer(Modifier.height(48.dp))
             }
 
-            LoadingOverlay(isLoading = uiState.isLoading)
+            LoadingOverlay(isLoading = uiState.isLoading || inviteState.stage == InviteStage.VALIDATING)
         }
     }
 }
