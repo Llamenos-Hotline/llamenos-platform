@@ -53,5 +53,9 @@ EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1
 # The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
 CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
 
+# Intermittent: Contacts tab renders no content within the 5s wait, failed identically in two runs
+# that predate #1287 — ejected #1287 from the merge queue twice before this was traced to #1358.
+CaseManagementUITests/testDetailTabSwitching  # Contacts tab renders no content within 5s, intermittent — #1358
+
 # Switching hubs fetches a hub key first, and no client ever creates one (#1042): every switch 404s.
 HubSwitchUITests/testHubSwitchUpdatesDataScope  # tapping a hub never switches the active hub — #1262
