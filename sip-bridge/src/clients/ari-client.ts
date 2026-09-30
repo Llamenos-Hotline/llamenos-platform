@@ -10,7 +10,6 @@ import type {
   AriBridge,
   AriChannel,
   AriPlayback,
-  AriRecording,
   BridgeConfig,
   ChannelDestroyedEvent,
   ChannelDtmfReceivedEvent,
@@ -30,14 +29,14 @@ type RawEventHandler = (event: AnyAriEvent) => void
  * and REST API for commands. No external dependencies; uses built-in
  * WebSocket and fetch.
  *
- * Implements BridgeClient (protocol-agnostic interface) while also
- * retaining ARI-specific methods for CommandHandler and PjsipConfigurator.
+ * Implements BridgeClient (protocol-agnostic interface) plus ARI-specific
+ * helpers (channel variables, dynamic PJSIP config, module reload).
  *
  * Hardening (from lm-asterisk-bridge-hardening):
  * - Set-based event handlers (O(1) add/remove, no duplicates)
  * - Snapshot-before-fanout (copy Set before iterating)
- * - Reconnect timer tracking + cleanup in disconnect()
- * - Close old WS before reconnect attempt
+ * - One pending reconnect at a time, cleared in disconnect()
+ * - Close old WS before reconnect attempt; a superseded socket's events are ignored
  * - AbortSignal.timeout(30_000) on all fetch calls
  * - Connection deadline for initial connection
  */
@@ -100,84 +99,97 @@ export class AriClient implements BridgeClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-    if (this.ws) {
-      this.ws.close()
-      this.ws = null
-    }
+    const ws = this.ws
+    this.ws = null
+    ws?.close()
   }
 
+  /**
+   * Open the event WebSocket. `this.ws` is always the newest socket — connecting
+   * or open — and only its `close` schedules a reconnect: a superseded socket
+   * closing late must not tear down its replacement, and a failed attempt must
+   * schedule exactly one retry (it used to schedule two, from `close` and from
+   * the caller's catch, so the number of concurrent attempts doubled each round).
+   */
   private async doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Close the old WebSocket before creating a new one — prevents
-      // listener accumulation across reconnects.
-      if (this.ws) {
-        this.ws.close()
-        this.ws = null
-      }
+      const previous = this.ws
+      this.ws = null
+      previous?.close()
 
-      const wsUrl = `${this.config.ariUrl}?app=${this.config.stasisApp}&api_key=${this.config.ariUsername}:${this.config.ariPassword}`
+      // URL-encode the credentials: a generated password (`openssl rand -base64`)
+      // contains `+` and `/`, and a raw `+` in a query string decodes as a space.
+      const query = new URLSearchParams({
+        app: this.config.stasisApp,
+        api_key: `${this.config.ariUsername}:${this.config.ariPassword}`,
+      })
       logger.info('[ari]', `Connecting to ${this.config.ariUrl}...`)
 
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(`${this.config.ariUrl}?${query}`)
+      this.ws = ws
+      let opened = false
 
       ws.addEventListener('open', () => {
+        if (this.ws !== ws) return
+        opened = true
         logger.info('[ari]', 'WebSocket connected')
         this.reconnectDelay = 1000
         this.hasConnected = true
         this.connectionDeadline = null
-        this.ws = ws
         resolve()
       })
 
       ws.addEventListener('message', (event) => {
-        try {
-          const data = JSON.parse(
-            typeof event.data === 'string'
-              ? event.data
-              : new TextDecoder().decode(event.data as ArrayBuffer)
-          ) as AnyAriEvent
-
-          // Snapshot-before-fanout: copy Set before iterating
-          const rawSnapshot = [...this.rawEventHandlers]
-          for (const handler of rawSnapshot) {
-            try {
-              handler(data)
-            } catch (err) {
-              logger.error('[ari]', 'Raw event handler error', err)
-            }
-          }
-
-          const bridgeEvent = this.translateEvent(data)
-          if (bridgeEvent !== null) {
-            const snapshot = [...this.eventHandlers]
-            for (const handler of snapshot) {
-              try {
-                handler(bridgeEvent)
-            } catch (err) {
-              logger.error('[ari]', 'Event handler error', err)
-            }
-            }
-          }
-        } catch (err) {
-          logger.error('[ari]', 'Failed to parse event', err)
-        }
+        this.dispatch(event.data)
       })
 
       ws.addEventListener('close', (event) => {
+        if (this.ws !== ws) return
         logger.info('[ari]', `WebSocket closed: code=${event.code} reason=${event.reason}`)
         this.ws = null
-        if (this.shouldReconnect) {
-          this.scheduleReconnect()
-        }
+        if (!opened) reject(new Error(`Failed to connect to ARI WebSocket: ${event.code} ${event.reason}`))
+        if (this.shouldReconnect) this.scheduleReconnect()
       })
 
-      ws.addEventListener('error', (event) => {
-        logger.error('[ari]', 'WebSocket error', event)
-        if (!this.ws) {
-          reject(new Error('Failed to connect to ARI WebSocket'))
-        }
+      ws.addEventListener('error', () => {
+        // Always followed by `close`, which reports and reconnects.
+        if (this.ws === ws) logger.error('[ari]', 'WebSocket error')
       })
     })
+  }
+
+  /** Parse one WebSocket message and fan it out to raw and translated handlers */
+  private dispatch(raw: unknown): void {
+    let data: AnyAriEvent
+    try {
+      data = JSON.parse(
+        typeof raw === 'string' ? raw : new TextDecoder().decode(raw as ArrayBuffer)
+      ) as AnyAriEvent
+    } catch (err) {
+      logger.error('[ari]', 'Failed to parse event', err)
+      return
+    }
+
+    if (data.type === 'StasisStart') this.holdSubscription((data as StasisStartEvent).channel.id)
+
+    // Snapshot-before-fanout: copy Set before iterating
+    for (const handler of [...this.rawEventHandlers]) {
+      try {
+        handler(data)
+      } catch (err) {
+        logger.error('[ari]', 'Raw event handler error', err)
+      }
+    }
+
+    const bridgeEvent = this.translateEvent(data)
+    if (bridgeEvent === null) return
+    for (const handler of [...this.eventHandlers]) {
+      try {
+        handler(bridgeEvent)
+      } catch (err) {
+        logger.error('[ari]', 'Event handler error', err)
+      }
+    }
   }
 
   private translateEvent(ariEvent: AnyAriEvent): BridgeEvent | null {
@@ -267,35 +279,45 @@ export class AriClient implements BridgeClient {
     }
   }
 
+  /**
+   * Keep receiving a channel's events after it leaves Stasis. The subscription
+   * that comes with entering Stasis ends at StasisEnd — which a hangup emits
+   * *before* ChannelDestroyed — so without this a caller hanging up is never
+   * reported, and their queue, ringing legs and bridge are never cleaned up.
+   * An explicit subscription lasts until the channel is destroyed.
+   */
+  private holdSubscription(channelId: string): void {
+    const source = new URLSearchParams({ eventSource: `channel:${channelId}` })
+    this.request('POST', `/applications/${encodeURIComponent(this.config.stasisApp)}/subscription?${source}`)
+      .catch((err) => logger.error('[ari]', 'Failed to subscribe to channel events', err))
+  }
+
+  /** Schedule the next connection attempt (at most one pending), backing off exponentially */
   private scheduleReconnect(): void {
+    if (this.reconnectTimer !== null) return
+    this.exitIfPastDeadline()
+
+    const delay = this.reconnectDelay
+    this.reconnectDelay = Math.min(delay * 2, this.maxReconnectDelay)
+    const remaining = this.connectionDeadline
+      ? ` (${Math.round((this.connectionDeadline - Date.now()) / 1000)}s until timeout)`
+      : ''
+    logger.info('[ari]', `Reconnecting in ${delay}ms...${remaining}`)
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.exitIfPastDeadline()
+      // A failed attempt closes its socket, and that close schedules the next one.
+      this.doConnect().catch((err) => logger.error('[ari]', 'Reconnection failed', err))
+    }, delay)
+  }
+
+  /** Before the first successful connection, give up (and let the orchestrator restart us) at the deadline */
+  private exitIfPastDeadline(): void {
     if (this.connectionDeadline !== null && Date.now() >= this.connectionDeadline) {
       logger.error('[ari]', `FATAL: Could not connect to Asterisk within ${Math.round(this.connectionTimeoutMs / 1000)}s — exiting.`)
       process.exit(1)
     }
-
-    const remaining = this.connectionDeadline
-      ? ` (${Math.round((this.connectionDeadline - Date.now()) / 1000)}s until timeout)`
-      : ''
-    logger.info('[ari]', `Reconnecting in ${this.reconnectDelay}ms...${remaining}`)
-
-    this.reconnectTimer = setTimeout(async () => {
-      this.reconnectTimer = null
-
-      if (this.connectionDeadline !== null && Date.now() >= this.connectionDeadline) {
-        logger.error('[ari]', `FATAL: Could not connect to Asterisk within ${Math.round(this.connectionTimeoutMs / 1000)}s — exiting.`)
-        process.exit(1)
-      }
-
-      try {
-        await this.doConnect()
-      } catch (err) {
-        logger.error('[ari]', 'Reconnection failed', err)
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
-        if (this.shouldReconnect) {
-          this.scheduleReconnect()
-        }
-      }
-    }, this.reconnectDelay)
   }
 
   // ---- ARI REST API ----
@@ -348,9 +370,16 @@ export class AriClient implements BridgeClient {
     channelId2: string,
     options?: BridgeOptions
   ): Promise<string> {
-    const bridgeType =
-      options?.type === 'passthrough' ? 'simple_bridge' : 'mixing'
-    const ariBridge = await this.createBridge({ type: bridgeType })
+    // ARI has no passthrough bridge type — `simple_bridge` is a bridge
+    // *technology*, and asking for it as a type fails with a 500, so every
+    // SFrame call's bridge used to fail. A two-channel `mixing` bridge already
+    // relays frames untouched (Asterisk picks the native_rtp / simple_bridge
+    // technology, not softmix); what would force decoding is a third party
+    // such as a recorder, which the Tier 5 guard keeps off SFrame calls.
+    if (options?.type === 'passthrough' && options.record) {
+      throw new Error('A passthrough (SFrame) bridge must not be recorded')
+    }
+    const ariBridge = await this.createBridge({ type: 'mixing' })
     await this.addChannelToBridge(ariBridge.id, channelId1)
     await this.addChannelToBridge(ariBridge.id, channelId2)
     if (options?.record) {

@@ -47,6 +47,76 @@ Feature: Multi-Hub Isolation
     When hub "hub-a" is deactivated
     Then provider config for hub "hub-b" still exists
 
+  # ── Hub user directory (#1044) ────────────────────────────────────
+  # Volunteer name and phone are identity-protected: a hub admin sees the
+  # members of their own hub, never the volunteers of another hub.
+
+  Scenario: Hub admin's user list contains only members of their hub
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "vera" is a member of hub "hub-a" only
+    And user "hugo" is a member of hub "hub-b" only
+    When "admin-a" lists the users of hub "hub-a"
+    Then the response is 200
+    And the user list contains "vera"
+    And the user list does not contain "hugo"
+
+  Scenario: Hub admin cannot read another hub's user by pubkey
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "hugo" is a member of hub "hub-b" only
+    When "admin-a" gets user "hugo" through hub "hub-a"
+    Then the response is 404
+
+  Scenario: A hub member who may not read users learns nothing about another hub's user
+    Given user "vera" is a member of hub "hub-a" only
+    And user "hugo" is a member of hub "hub-b" only
+    When "vera" gets user "hugo" through hub "hub-a"
+    Then the response is 403
+
+  Scenario: A member of several hubs shows only this hub's role assignment
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "mira" is a member of hubs "hub-a" and "hub-b"
+    When "admin-a" lists the users of hub "hub-a"
+    Then the user list contains "mira"
+    And "mira" is listed with role assignments for hub "hub-a" only
+
+  Scenario: A member of several hubs, read by pubkey, shows only this hub's role assignment
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "mira" is a member of hubs "hub-a" and "hub-b"
+    When "admin-a" gets user "mira" through hub "hub-a"
+    Then the response is 200
+    And the returned user has role assignments for hub "hub-a" only
+
+  Scenario: Updating a member of several hubs returns only this hub's role assignment
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "mira" is a member of hubs "hub-a" and "hub-b"
+    When "admin-a" renames user "mira" through hub "hub-a"
+    Then the response is 200
+    And the returned user has role assignments for hub "hub-a" only
+
+  Scenario: Hub admin cannot update or delete another hub's user
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "hugo" is a member of hub "hub-b" only
+    When "admin-a" renames user "hugo" through hub "hub-a"
+    Then the response is 404
+    When "admin-a" deletes user "hugo" through hub "hub-a"
+    Then the response is 404
+    And user "hugo" still exists with their original name
+
+  Scenario: Hub admin cannot read another hub's cases through a user's case list
+    Given "admin-a" is a hub admin of hub "hub-a"
+    And user "hugo" is a member of hub "hub-b" only
+    When "admin-a" lists the cases of user "hugo" through hub "hub-a" for hub "hub-b"
+    Then the response is 404
+
+  Scenario: A user created inside a hub is a member of that hub only
+    Given "admin-a" is a hub admin of hub "hub-a"
+    When "admin-a" creates user "nico" through hub "hub-a"
+    Then the response is 201
+    When "admin-a" lists the users of hub "hub-a"
+    Then the user list contains "nico"
+    When the super admin lists the users of hub "hub-b"
+    Then the user list does not contain "nico"
+
   Scenario: Super-admin aggregate view shows operational status without credentials
     Given I am a super admin
     And provider "twilio" is configured for hub "hub-a"
