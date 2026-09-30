@@ -123,8 +123,8 @@ describe('AsteriskAdapter', () => {
       expect(gather).toBeDefined()
       expect(gather.numDigits).toBe(4)
       expect(gather.callbackEvent).toBe('captcha_response')
-      // The digits are generated per call, so they are always generated speech.
-      expect(spokenBy(body.commands)).toContainEqual({ locale: 'es', text: '1 2 3 4' })
+      // The digits are generated speech, one clip per digit (ten clips a language, not one per call).
+      expect(spokenBy(body.commands).slice(-4)).toEqual(['1', '2', '3', '4'].map((text) => ({ locale: 'es', text })))
     })
 
     it('queues caller when no captcha and not rate limited', async () => {

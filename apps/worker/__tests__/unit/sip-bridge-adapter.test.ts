@@ -595,10 +595,12 @@ describe('AsteriskAdapter', () => {
         captchaDigits: '1234',
       })
       const body = JSON.parse(res.body)
-      // Greeting, the CAPTCHA prompt, the digits, then collect them.
-      expect(body.commands).toHaveLength(4)
-      expect(spoken(body.commands[2].url)).toEqual({ locale: 'en', text: '1 2 3 4' })
-      const gather = body.commands[3]
+      // Greeting, the CAPTCHA prompt, each digit, then collect them.
+      expect(body.commands).toHaveLength(7)
+      expect(body.commands.slice(2, 6).map((c: { url: string }) => spoken(c.url))).toEqual(
+        ['1', '2', '3', '4'].map((text) => ({ locale: 'en', text })),
+      )
+      const gather = body.commands[6]
       expect(gather.action).toBe('gather')
       expect(gather.numDigits).toBe(4)
       expect(gather.timeout).toBe(10)

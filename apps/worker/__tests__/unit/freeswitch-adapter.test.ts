@@ -120,8 +120,8 @@ describe('FreeSwitchAdapter', () => {
 
       expect(response.contentType).toBe('text/xml')
       expect(response.body).toContain('<bind')
-      // The digits are generated per call, so they are always generated speech.
-      expect(playbacks(response.body)).toContainEqual({ locale: 'en', text: '5 6 7 8' })
+      // The digits are generated speech, one clip per digit (ten clips a language, not one per call).
+      expect(playbacks(response.body).slice(-4)).toEqual(['5', '6', '7', '8'].map((text) => ({ locale: 'en', text })))
     })
   })
 

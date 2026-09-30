@@ -147,7 +147,8 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       const speakXml =
         greetingXml +
         this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl) +
-        this.fsSpeech(() => digits.split('').join(' '), lang, speechUrl)
+        // A clip per digit: ten clips a language, not a cached clip per call.
+        digits.split('').map((digit) => this.fsSpeech(() => digit, lang, speechUrl)).join('')
       const callbackUrl = this.buildCallbackUrl('/api/telephony/captcha', hubId)
       const bindXml = `\n    <bind strip="#">~\\d{4} ${escapeXml(callbackUrl)}</bind>`
       const timeoutXml = '\n    <pause milliseconds="10000"/>'
