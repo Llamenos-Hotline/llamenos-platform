@@ -40,7 +40,35 @@
 name: Fleet Verify
 
 on:
+  # `types:` is spelled out rather than left bare, and `review_requested` is
+  # the addition (#1124). A bare `pull_request:` means exactly
+  # `[opened, synchronize, reopened]`, and that list is why `scope:<lane>`
+  # grants (#1117) were inert: a grant is read HERE, inside this gate —
+  # `resolveGrantedLanes` in orchestrator/src/ci.ts reads the PR's own labels
+  # — but applying a label is not one of those three events, so nothing
+  # re-evaluated the PR afterwards. The PR went on showing the `scope=fail`
+  # verdict computed before the grant existed, until an unrelated push
+  # happened to re-trigger the gate. Verified live before this fix: #1060
+  # (scope:infra), #1064 (scope:desktop, scope:shared) and #1072
+  # (scope:desktop) each carried their grant and each still reported the
+  # stale failure.
+  #
+  # `review_requested`, not `labeled`, for two reasons. First, requesting a
+  # review is ONE "re-evaluate this PR" event that serves both gates —
+  # fleet/review already keys off the review-request flow (#1158/#1164), so
+  # the operator applies the grant, requests a review, and verify re-runs
+  # with the grant live while review runs on the fresh verdict. Second,
+  # `labeled` fires on EVERY label change, because `on:` cannot filter by
+  # label name; the only way to narrow it is a job-level `if:`, and per #848
+  # a job instantiated on an event and then skipped by `if:` satisfies
+  # branch protection exactly as a green check does. That is a fail-open,
+  # and it is precisely the trap `review_requested` avoids by needing no
+  # filtering at all. Do not add a job-level `if:` here to filter events.
+  #
+  # None of these four is in CodeQL's cache-write-event list above, so the
+  # isolation this whole file exists to provide is unaffected.
   pull_request:
+    types: [opened, synchronize, reopened, review_requested]
   merge_group:
     types: [checks_requested]
 

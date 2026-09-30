@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
@@ -109,9 +110,32 @@ export const RELEASE_REVIEW_REQUEST_LOGIN = 'rhonda-rodododo'
  */
 export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'dependabot']
 
+/**
+ * The `pull_request` ACTION that means "the head moved" — a push, a
+ * force-push, a rebase, or the "Update branch" button.
+ *
+ * `fleet-review.yml` triggers on it (#1284) for ONE reason: `fleet/review`
+ * is a required context under `strict_required_status_checks_policy`, and a
+ * check run attaches to the commit it ran on. A rebase moves the head, the
+ * earned verdict stays on the OLD sha, and the new head carries no
+ * `fleet/review` at all — a permanent block that only a manual
+ * remove-then-re-add of the reviewer could clear.
+ *
+ * It may REPUBLISH a verdict the PR already earned; it may never START one.
+ * `isRepublishOnlyEvent` is that rule, and `decideReviewGate` enforces it
+ * structurally rather than relying on a synchronize payload happening to
+ * carry no `requested_reviewer`.
+ */
+export const REVIEW_REPUBLISH_ACTION = 'synchronize'
+
 export interface ReviewRequestEvent {
   /** `github.event_name`. */
   eventName: string
+  /** `github.event.action` — which `pull_request` action fired. The event
+   *  NAME alone cannot tell `review_requested` from `synchronize`, and the
+   *  two mean opposite things here: one asks for a review, the other only
+   *  moves the head under one already given. */
+  action?: string | undefined
   /** `github.event.requested_reviewer.login` — `undefined` when the request
    *  named a TEAM (`requested_team`) rather than a user, and on every event
    *  that is not `review_requested`. */
@@ -165,6 +189,24 @@ export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'b
   return [REVIEW_REQUEST_LOGIN]
 }
 
+/**
+ * Whether this event may only REPUBLISH an existing verdict — never start a
+ * new review. True for exactly one thing: a `pull_request` whose action is
+ * `synchronize` (#1284).
+ *
+ * This is the whole of what makes adding `synchronize` to `fleet-review.yml`
+ * safe against the quota burn its absence originally prevented. A push is
+ * not a request, so `reviewRequestFor` already refuses it — but that refusal
+ * rests on a `synchronize` payload happening to carry no
+ * `requested_reviewer`, which is GitHub's schema, not this repo's rule.
+ * `decideReviewGate` therefore asks THIS question directly and refuses
+ * `run-engine` outright, so no future change to who counts as a trigger can
+ * quietly turn every push into a model call.
+ */
+export function isRepublishOnlyEvent(e: Pick<ReviewRequestEvent, 'eventName' | 'action'>): boolean {
+  return e.eventName === 'pull_request' && (e.action ?? '').trim() === REVIEW_REPUBLISH_ACTION
+}
+
 /** `reviewRequestFor`'s answer: a request, or the reason this event is not one. */
 export type ReviewRequestDecision =
   | { requested: true }
@@ -193,6 +235,17 @@ export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
   if (e.eventName === 'workflow_dispatch') return { requested: true }
   if (e.eventName !== 'pull_request') {
     return { requested: false, reason: `\`${e.eventName || '(no event)'}\` is not a review request` }
+  }
+  // Stated explicitly, ahead of the reviewer check, so the red check a push
+  // produces says what actually happened. Without this the refusal would
+  // read "this review request named no user" — true of the payload, and
+  // useless to the human looking at it, who did not request anything.
+  if (isRepublishOnlyEvent(e)) {
+    return {
+      requested: false,
+      reason: 'this is a push, not a review request — `fleet/review` republishes a verdict this PR has already ' +
+        'earned for this exact diff, but never starts a new review on a push',
+    }
   }
   const login = loginOf(e.requestedReviewer)
   if (login === undefined) {
@@ -227,6 +280,7 @@ export function reviewIsRequested(e: ReviewRequestEvent): boolean {
 export function reviewRequestEventFromEnv(env: NodeJS.ProcessEnv, branch: string): ReviewRequestEvent {
   return {
     eventName: env['FLEET_REVIEW_EVENT_NAME'] ?? '',
+    action: env['FLEET_REVIEW_EVENT_ACTION'],
     requestedReviewer: env['FLEET_REVIEW_REQUESTED_REVIEWER'],
     requestedTeam: env['FLEET_REVIEW_REQUESTED_TEAM'],
     prAuthor: env['FLEET_REVIEW_PR_AUTHOR'],
@@ -288,6 +342,104 @@ export const REVIEW_KEY_ENV = 'FLEET_REVIEW_API_KEY'
 /** `ok` becomes the job's exit code; `summary` is printed, and is the whole
  *  reason a reader needs for why the job is the colour it is. */
 export interface CiVerdict { ok: boolean; summary: string }
+
+/**
+ * What `runReviewCi` concluded, as ONE token rather than as prose (#1230).
+ *
+ * The job's exit code carries only pass/fail, and `summary` is prose written
+ * for a human — so before this existed, `fleet-review.yml` could not tell a
+ * reviewer rejecting the diff from a scope refusal or an unparseable verdict
+ * without reading its own log, and the "Assert this run reached a real
+ * verdict" step reported every real FAIL as `review-did-not-run`. Every
+ * return path of `runReviewCi` names exactly one of these; the workflow's
+ * "Name this run's outcome" step maps each to its title.
+ *
+ *  - `pass` / `fail`: every reviewer produced a parsed verdict; `fail` if
+ *    any of them rejected the diff. A FAIL alongside an UNREADABLE is still
+ *    `fail` — a reviewer DID read the diff and reject it, so re-running it
+ *    unchanged is not the fix.
+ *  - `unreadable`: no reviewer rejected the diff, but at least one produced
+ *    no verdict that could be read (or never ran).
+ *  - `cache-pass` / `cache-fail`: a prior substantive verdict for this exact
+ *    diff and review set, restated.
+ *  - `scope`: the mechanical pre-check (lane scope, never-write paths)
+ *    refused the diff, so no reviewer was asked.
+ *  - `review-set-unresolved`, `unknown-lane`, `review-disabled`,
+ *    `export-unsafe`: refused before any reviewer ran, for the reason named.
+ */
+export const REVIEW_CI_RESULTS = [
+  'pass', 'fail', 'unreadable', 'cache-pass', 'cache-fail',
+  'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
+] as const
+export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
+
+export interface ReviewCiVerdict extends CiVerdict { result: ReviewCiResult }
+
+/**
+ * Where `runReviewCi` writes its `ReviewCiResult` when no `recordResult` is
+ * injected — set by `fleet-review.yml`'s "Review" step. A FILE named by an
+ * explicit variable, not `$GITHUB_OUTPUT`: every test in this repository also
+ * runs inside an Actions step where `GITHUB_OUTPUT` is always set, and a
+ * write keyed on that would leak into whichever CI step ran the tests.
+ */
+export const REVIEW_RESULT_FILE_ENV = 'FLEET_REVIEW_RESULT_FILE'
+
+export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiResult) => Promise<void> {
+  const file = env[REVIEW_RESULT_FILE_ENV] ?? ''
+  return async (result) => {
+    if (file.length === 0) return
+    await writeFile(file, `${result}\n`)
+  }
+}
+
+/**
+ * The machine-readable half of every outcome title `fleet-review.yml`'s
+ * "Name this run's outcome" step produces (#1230) — an INTERFACE: tooling
+ * matches on these, so renaming one is a breaking change.
+ *
+ * A title is `<TOKEN> — <human detail>`. The token is everything before the
+ * first space; the detail is prose and may change freely. The class before
+ * the colon says what a reader should do:
+ *
+ *  - `PASS:` — the check concluded success.
+ *  - `REJECTED:` — a reviewer read this diff and rejected it. Fix the code.
+ *  - `NO-VERDICT:` — the check is red because the gate fails closed, and
+ *    NOTHING judged the diff. Act on the named cause; do not edit the code
+ *    on review grounds, and do not read it as a rejection.
+ *
+ * No token is a prefix or a substring of another (pinned in
+ * tests/orchestrator/review-outcome-titles.test.ts), so a grep for one never
+ * matches a different outcome. The two `unclassified` tokens are the
+ * catch-alls for facts the naming step does not recognise; seeing one means
+ * the vocabulary needs a new entry, not that anything was judged.
+ */
+export const REVIEW_OUTCOME_TOKENS = [
+  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:unclassified',
+  'REJECTED:reviewed', 'REJECTED:cached',
+  'NO-VERDICT:not-requested', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
+  'NO-VERDICT:unreadable', 'NO-VERDICT:did-not-run',
+  'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
+  'NO-VERDICT:engine-unavailable',
+  'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
+  'NO-VERDICT:gate-error', 'NO-VERDICT:base-predates-gate', 'NO-VERDICT:setup-failed',
+  'NO-VERDICT:unclassified',
+] as const
+export type ReviewOutcomeToken = (typeof REVIEW_OUTCOME_TOKENS)[number]
+
+function isReviewOutcomeToken(s: string): s is ReviewOutcomeToken {
+  return (REVIEW_OUTCOME_TOKENS as readonly string[]).includes(s)
+}
+
+/**
+ * The token a `fleet/review` outcome title leads with, or `undefined` when
+ * there is no title or it does not start with a known token. `undefined`
+ * means UNKNOWN — never a verdict of any kind; read the check's conclusion
+ * and its log instead.
+ */
+export function reviewOutcomeToken(title: string | null | undefined): ReviewOutcomeToken | undefined {
+  const token = (title ?? '').split(' ', 1)[0] ?? ''
+  return isReviewOutcomeToken(token) ? token : undefined
+}
 
 /**
  * `realDispatch` (cli.ts) builds every fleet branch as `fleet/<lane>/<item>`.
@@ -452,6 +604,14 @@ export interface ReviewCiDeps extends CiDeps {
    * never heard of a review cache is unaffected.
    */
   cacheFor?(scope: string | undefined): ReviewCache
+  /**
+   * Where this run's `ReviewCiResult` is written for the workflow to read
+   * (#1230). Omitted means `reviewResultRecorder(process.env)`, which writes
+   * only when `FLEET_REVIEW_RESULT_FILE` is set — i.e. inside the "Review"
+   * step and nowhere else. Never fatal: the result only NAMES the outcome,
+   * and a run that could not record it must still conclude on its verdict.
+   */
+  recordResult?(result: ReviewCiResult): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -666,16 +826,38 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
  * re-check is the invariant `secondOpinion` already enforces by throwing — a
  * review may only downgrade a mechanical pass, never rescue a failure — so a
  * diff that failed scope gets no review at all.
+ *
+ * Every return names its `ReviewCiResult`, recorded for the workflow before
+ * this returns (#1230) — see `ReviewCiDeps.recordResult`. A run that THROWS
+ * records nothing, which the workflow reads as "no result": the review did
+ * not run to a conclusion, which is exactly what a throw means.
  */
-export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
+export async function runReviewCi(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
+  const verdict = await reviewCiVerdict(deps)
+  try {
+    await (deps.recordResult ?? reviewResultRecorder(process.env))(verdict.result)
+  } catch (e) {
+    deps.log(
+      `could not record the review result "${verdict.result}" (non-fatal — this run's own verdict still stands; ` +
+      `its outcome title will say no result was produced): ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+  return verdict
+}
+
+async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   const refusal = headDirRefusal(deps)
-  if (refusal !== undefined) return refusal
+  if (refusal !== undefined) return { ...refusal, result: 'export-unsafe' }
 
   if (deps.apiKey === undefined || deps.apiKey.length === 0) {
-    return { ok: false, summary: `review unavailable: ${REVIEW_KEY_ENV} is not configured on this repository` }
+    return {
+      ok: false,
+      summary: `review unavailable: ${REVIEW_KEY_ENV} is not configured on this repository`,
+      result: 'review-disabled',
+    }
   }
   const lane = await resolveLane(deps)
-  if (lane === undefined) return { ok: false, summary: `unknown lane in branch ${deps.ctx.branch}` }
+  if (lane === undefined) return { ok: false, summary: `unknown lane in branch ${deps.ctx.branch}`, result: 'unknown-lane' }
 
   const report = await deps.verify({
     ...rangeFor(deps.ctx),
@@ -687,6 +869,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     return {
       ok: false,
       summary: `no review requested: ${report.reasons.join('; ') || 'mechanical verification failed'}`,
+      result: 'scope',
     }
   }
 
@@ -696,11 +879,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
   // choose whether to spend a review at all; neither trusts the other.
   // Fails CLOSED both times.
   const set = await deps.reviewSet(report.changedFiles)
-  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}` }
+  if (!set.ok) return { ok: false, summary: `review set refused: ${set.reason}`, result: 'review-set-unresolved' }
   const profiles: ReviewerProfile[] = []
   for (const name of set.profiles) {
     const resolved = await deps.resolveProfile(name)
-    if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}` }
+    if (!resolved.ok) return { ok: false, summary: `review set refused: ${resolved.reason}`, result: 'review-set-unresolved' }
     profiles.push(resolved.profile)
   }
 
@@ -739,7 +922,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
       // Re-published verdicts still reach the PR: a cached result must read
       // as a review, not as a bare status (see `publishReport`).
       await deps.publishReport([{ reviewer: GENERAL_REVIEWER, verdict: cached.verdict, body: cached.text }])
-      return { ok: cached.verdict === 'PASS', summary: cached.text }
+      return {
+        ok: cached.verdict === 'PASS',
+        summary: cached.text,
+        result: cached.verdict === 'PASS' ? 'cache-pass' : 'cache-fail',
+      }
     }
   }
 
@@ -754,6 +941,7 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
       ok: false,
       summary: 'review unavailable: could not strip agent configuration from the PR head export — ' +
         `refusing to hand any reviewer an unstripped tree: ${e instanceof Error ? e.message : String(e)}`,
+      result: 'export-unsafe',
     }
   }
 
@@ -807,7 +995,11 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
     ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
     : `${results.length} reviews — ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
       results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
-  const verdict: CiVerdict = { ok, summary }
+  // A substantive rejection outranks an UNREADABLE beside it: somebody DID
+  // read this diff and reject it, so the outcome to report is "fix the
+  // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
+  const result: ReviewCiResult = ok ? 'pass' : results.some((r) => r.verdict === 'FAIL') ? 'fail' : 'unreadable'
+  const verdict: ReviewCiVerdict = { ok, summary, result }
 
   // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
   // ever recorded — never a cache hit being re-published (that would just
@@ -900,15 +1092,28 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<CiVerdict> {
  *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
  *    the check's own output, not just from reading this file's source.
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
- *    this event did not ask us for one: the review was requested from
+ *    either this event did not ask us for one (the review was requested from
  *    somebody else, from a team, or this is not a review-request event at
- *    all (`reviewRequestFor`). Fails the job outright. A `fleet/review`
- *    nobody has asked for is not a passing review, and the old design's
- *    mistake was ever treating "not asked for" as anything other than a
- *    fail-closed red check.
- *  - `run-engine` — no cached PASS, Tier 2, and the review WAS requested of
- *    us. Carries the resolved review set (`profiles`) into `review-ci`, and
- *    the labels to clear once it passes (`clearLabels`).
+ *    all — `reviewRequestFor`) or it is a PUSH, which may never start a
+ *    review whatever else is true (`republishOnly`, #1284). Fails the job
+ *    outright. A `fleet/review` nobody has asked for is not a passing
+ *    review, and the old design's mistake was ever treating "not asked for"
+ *    as anything other than a fail-closed red check.
+ *  - `run-engine` — no cached PASS, Tier 2, the review WAS requested of us,
+ *    and this is not a republish-only event. Carries the resolved review set
+ *    (`profiles`) into `review-ci`, and the labels to clear once it passes
+ *    (`clearLabels`).
+ *
+ * WHY A PUSH REACHES THIS FUNCTION AT ALL (#1284). `fleet/review` is a
+ * required context under `strict_required_status_checks_policy`, so the
+ * check has to EXIST on the current head; a rebase moves the head and
+ * strands the earned verdict on the old sha. That is a different question
+ * from whether a review is WARRANTED, which only a changed diff makes true.
+ * Every branch above answers the first question on a push without answering
+ * the second: `cache-hit` republishes the verdict this exact diff already
+ * earned, `low-tier` and `bot-authored` conclude green on their own terms,
+ * and everything else goes red. `run-engine` is unreachable on a push by
+ * construction.
  *
  * `runReviewCi` itself resolves the same set and opens with the identical
  * cache lookup — so a direct call to it from anywhere else stays correct on
@@ -941,6 +1146,19 @@ export interface ReviewGateDeps {
    * exactly one job: set first, cache second, tier third, request fourth.
    */
   requested: boolean
+  /**
+   * Whether this event may only REPUBLISH a verdict, never start one —
+   * `isRepublishOnlyEvent` over the workflow's own event fields (#1284).
+   *
+   * `true` makes `run-engine` UNREACHABLE: a push that reaches the bottom of
+   * this function gets `not-requested` (a red check saying the diff changed
+   * and a review must be requested), never a model call. That is the
+   * structural half of the guarantee fleet-review.yml's invariant 2 now
+   * states — `requested` being false on a push is the incidental half, true
+   * only because GitHub's `synchronize` payload carries no
+   * `requested_reviewer`.
+   */
+  republishOnly: boolean
   /** The PR's author login — `FLEET_REVIEW_PR_AUTHOR`, the same field
    *  `reviewRequestFor` already consumes. Present so the gate can recognise
    *  an automated dependency PR by IDENTITY rather than by branch name. */
@@ -1030,11 +1248,22 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
     return { kind: 'low-tier', cacheKey, tier, reasons }
   }
 
-  if (!deps.requested) {
+  // A push reaching this line is a head that MOVED and a diff that CHANGED
+  // (an unchanged diff hit the cache above; a Dependabot bump or a docs-only
+  // push concluded green above too). There is nothing to republish, so the
+  // check goes red exactly as an unreviewed Tier 2 diff always has — and,
+  // crucially, `run-engine` is out of reach from here, whatever `requested`
+  // says. This is the structural guarantee that adding `synchronize` to
+  // `fleet-review.yml` (#1284) can never become the every-push model call
+  // that trigger was originally banned for.
+  if (deps.republishOnly || !deps.requested) {
     // Whom to ask instead depends on who wrote the PR (`reviewTriggerLogins`)
     // — the caller has the event and says so; naming one fixed login here
     // told #1183's author to request itself (#1232).
-    deps.log(`review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
+    deps.log(deps.republishOnly
+      ? `the head of pr=${cacheKey.pr} moved and its diff changed (sha256:${cacheKey.diffHash.slice(0, 12)}…) — ` +
+        'nothing cached to republish, and a push never starts a review'
+      : `review not requested for pr=${cacheKey.pr} sha256:${cacheKey.diffHash.slice(0, 12)}… — no engine call`)
     return { kind: 'not-requested', cacheKey }
   }
 

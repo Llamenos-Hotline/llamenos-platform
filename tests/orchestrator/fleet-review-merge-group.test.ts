@@ -125,9 +125,19 @@ describe('rail: fleet/review reports on the merge queue (#1187)', () => {
   // The other half of the same fact: the arm must be reachable BOTH ways.
   // A merge_group trigger with the pull_request one dropped would satisfy
   // the assertion above while breaking the review itself.
+  //
+  // `review_requested` is asserted by INCLUSION, not by equality: #1284
+  // added `synchronize` alongside it (a push republishes an already-earned
+  // verdict onto a moved head, and can never start a review). The exact,
+  // closed set of `pull_request` types this file may carry is pinned in
+  // tests/orchestrator/guards.test.ts, so loosening it here does not loosen
+  // it anywhere — what this rail is about is that `review_requested`, the
+  // one action that STARTS a review, is still present at all.
   it('still triggers on pull_request review_requested as well — the queue arm is an addition, not a replacement', () => {
     const on = doc(FLEET_REVIEW_YML).on ?? {}
-    expect(on['pull_request']).toEqual({ types: ['review_requested'] })
+    const types = (on['pull_request'] as { types?: string[] } | undefined)?.types
+    expect(types, 'fleet-review.yml lost its pull_request trigger entirely').toBeDefined()
+    expect(types).toContain('review_requested')
   })
 
   it('every workflow producing a ruleset-required context declares merge_group — fleet-review.yml was the last one that did not', () => {

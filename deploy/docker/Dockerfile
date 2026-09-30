@@ -216,7 +216,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # this bump — they come from the Caddy 2.11.4 release's resolved dependency set,
 # not the Alpine base, and need a Caddy version bump to clear (follow-up, needs
 # Caddyfile.production + caddy-ratelimit plugin compat validation first).
-FROM caddy:2.11.4-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e AS static
+FROM caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b AS static
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by
