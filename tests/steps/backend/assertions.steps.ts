@@ -29,6 +29,12 @@ Then('the response should indicate the role is protected', async ({ world }) => 
   expect([400, 403]).toContain(getSharedState(world).lastResponse!.status)
 })
 
+Then('the response body {string} should be true', async ({ world }, field: string) => {
+  expect(getSharedState(world).lastResponse).toBeDefined()
+  const data = getSharedState(world).lastResponse!.data as Record<string, unknown> | null
+  expect(data?.[field]).toBe(true)
+})
+
 Then('the error message contains {string}', async ({ world }, substring: string) => {
   expect(getSharedState(world).lastResponse).toBeDefined()
   const data = getSharedState(world).lastResponse!.data as { error?: string }

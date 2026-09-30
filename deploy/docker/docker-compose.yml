@@ -56,6 +56,11 @@ services:
       - ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      # Required by the app whenever ENVIRONMENT is production (the default above).
+      # validateConfig() throws without it rather than fall back to the spoofable
+      # Host header for webhook signature validation — so the container would
+      # crash-loop with no compose-level explanation. Fail at `up` instead.
+      - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:?WEBHOOK_BASE_URL is required — the public https:// base URL webhooks are delivered to, e.g. https://api.example.org}"
       - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required — generate with openssl rand -hex 32}"
       - STORAGE_ENDPOINT=http://rustfs:9000
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
@@ -73,7 +78,14 @@ services:
       - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)
-      - NTFY_URL=${NTFY_URL:-http://ntfy:80}
+      # No default. The `ntfy` service below sits behind the `push` profile, so
+      # defaulting this to a hostname that usually is not running made the app
+      # advertise a broker that does not exist. That was invisible while this
+      # variable never reached the routes (the `c.env` literal in
+      # src/server/index.ts omitted it, so push was inert everywhere); now that
+      # it does, an unset value must mean "no ntfy", not "a dead one".
+      # Set NTFY_URL explicitly when you run `--profile push`.
+      - NTFY_URL=${NTFY_URL:-}
       - NTFY_AUTH_TOKEN=${NTFY_AUTH_TOKEN:-}
     networks:
       - web
@@ -206,15 +218,24 @@ services:
 
   # ── Optional: Asterisk PBX ───────────────────────────────
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
     # entirely (pre-existing bug, found while verifying #722's fix)
     profiles: ["asterisk", "telephony"]
     restart: unless-stopped
+    # No call can route until the app provisions the SIP trunk
+    # (POST /api/provider-setup/create-sip-trunk). The trunk lives in astdb on
+    # the asterisk-db volume — see asterisk-config/sorcery.conf.
+    # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
+    # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
+    user: root
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+      - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - asterisk-db:/var/lib/asterisk/astdb
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -443,6 +464,7 @@ configs:
       password = ${ARI_PASSWORD:-changeme}
 
 volumes:
+  asterisk-db:
   postgres-data:
   caddy-data:
   caddy-config:

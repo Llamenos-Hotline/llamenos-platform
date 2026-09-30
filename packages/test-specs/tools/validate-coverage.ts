@@ -10,7 +10,7 @@
  *   android — Cucumber step defs (Kotlin @Given/@When/@Then), real phrase matching
  *   desktop — playwright-bdd step definitions, real Cucumber-expression matching
  *   backend — playwright-bdd step definitions, real Cucumber-expression matching
- *   ios     — Swift func test*() method-name matching (approximate; see checkIosCoverage)
+ *   ios     — exact Swift test-method name, in a target a merge-gating CI job runs (see checkIosCoverage)
  *
  * Desktop/backend matching semantics
  * -----------------------------------
@@ -42,9 +42,13 @@
  *
  * What this DOES catch:
  *   - A scenario whose step text has no matching registered step definition
- *     text/keyword-type on the target platform (the same condition that
- *     causes playwright-bdd's `missingSteps: "skip-scenario"` to silently
- *     skip the scenario at runtime).
+ *     text/keyword-type on the target platform. playwright.config.ts runs
+ *     every BDD project with `missingSteps: "fail-on-gen"`, so `bunx bddgen`
+ *     itself refuses such a scenario; this tool reports the same condition
+ *     for every platform in one pass, without generating specs (#1153).
+ *   - A `@wip` / `@fixme` / `@skip` tag with no linked issue — those tags are
+ *     the only sanctioned way to take a scenario out of a run, so each one
+ *     must name the issue that owns it (see findUntrackedSkipTags).
  *   - Deleting/renaming step definition files (proven via the delete
  *     experiment in the PR description).
  *   - Scenario Outline steps, via first-row Examples substitution (see
@@ -84,7 +88,8 @@
  *
  * Exit codes:
  *   0 — all scenarios have matching tests (or coverage is at/above threshold)
- *   1 — coverage is below the required threshold for a validated platform
+ *   1 — coverage is below the required threshold for a validated platform,
+ *       or a @wip/@fixme/@skip tag has no linked issue
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from "fs";
@@ -182,16 +187,16 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
   const lines = content.split("\n");
   const scenarios: Scenario[] = [];
   let featureName = "";
-  let featureTags: string[] = [];
+  const featureTags: string[] = [];
   let pendingTags: string[] = [];
   let featureTagsParsed = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // Collect tags before Feature: line
+    // Collect tags before Feature: line (Gherkin allows several tag lines)
     if (line.startsWith("@") && !featureTagsParsed) {
-      featureTags = parseTags(line);
+      featureTags.push(...parseTags(line));
       continue;
     }
 
@@ -204,7 +209,7 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
 
     // Collect tags before Scenario
     if (line.startsWith("@") && featureTagsParsed) {
-      pendingTags = parseTags(line);
+      pendingTags.push(...parseTags(line));
       continue;
     }
 
@@ -227,8 +232,9 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
       continue;
     }
 
-    // Reset pending tags if line is not a tag or scenario
-    if (!line.startsWith("@") && !line.startsWith("Scenario")) {
+    // Tags attach to the next keyword line; comments and blank lines between
+    // them do not detach them. Any other line (Rule:, Background:, a step) does.
+    if (line !== "" && !line.startsWith("#")) {
       pendingTags = [];
     }
   }
@@ -356,25 +362,6 @@ function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: string):
   }
 }
 
-function parseSwiftTestFile(path: string): TestMethod[] {
-  const content = readFileSync(path, "utf-8");
-  const methods: TestMethod[] = [];
-  const classMatch = content.match(/(?:class|final\s+class)\s+(\w+)/);
-  const className = classMatch?.[1] ?? basename(path, ".swift");
-
-  const methodRegex = /func\s+(test\w+)\s*\(/g;
-  let match: RegExpExecArray | null;
-  while ((match = methodRegex.exec(content)) !== null) {
-    methods.push({
-      name: match[1],
-      file: relative(IOS_TEST_DIR, path),
-      className,
-    });
-  }
-
-  return methods;
-}
-
 // ---- Gherkin step extraction (shared by android fuzzy-phrase + desktop/backend expression matching) ----
 
 interface RawStepLine {
@@ -384,9 +371,14 @@ interface RawStepLine {
 
 /**
  * Extract the raw Given/When/Then/And/But step lines for one scenario,
- * including any Background steps (which apply to every scenario in the
- * file), and substitute the first Examples row's values into
- * `<placeholder>` tokens for Scenario Outlines.
+ * including any Background steps that apply to it, and substitute the first
+ * Examples row's values into `<placeholder>` tokens for Scenario Outlines.
+ *
+ * Background scoping follows Gherkin: a Feature-level Background applies to
+ * every scenario in the file, a Background inside a `Rule:` applies only to
+ * the scenarios of that Rule. Treating a Rule's Background as file-wide made
+ * this tool report scenarios in *other* Rules as unbound when playwright-bdd
+ * binds and runs them (admin/ban-management.feature, #1153).
  *
  * LIMITATION: only the first Examples row is used for substitution — see
  * the "What this DOES NOT catch" note at the top of this file.
@@ -395,10 +387,13 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
   const content = readFileSync(featurePath, "utf-8");
   const lines = content.split("\n");
 
-  const backgroundSteps: RawStepLine[] = [];
+  const featureBackgroundSteps: RawStepLine[] = [];
+  let ruleBackgroundSteps: RawStepLine[] = [];
+  let targetRuleBackgroundSteps: RawStepLine[] = [];
   const scenarioSteps: RawStepLine[] = [];
   const exampleTableRows: string[][] = [];
 
+  let inRule = false;
   let inBackground = false;
   let inTargetScenario = false;
   let inExamplesTable = false;
@@ -408,6 +403,16 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith("Rule:")) {
+      if (sawTargetScenario) break; // moved past our scenario into the next Rule
+      inRule = true;
+      ruleBackgroundSteps = [];
+      inBackground = false;
+      inTargetScenario = false;
+      inExamplesTable = false;
+      continue;
+    }
 
     if (trimmed.startsWith("Background:")) {
       inBackground = true;
@@ -421,8 +426,10 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
       inBackground = false;
       inExamplesTable = false;
       inTargetScenario = scenarioMatch[1].trim() === scenarioTitle;
-      if (inTargetScenario) sawTargetScenario = true;
-      else if (sawTargetScenario) break; // moved past our scenario into the next one
+      if (inTargetScenario) {
+        sawTargetScenario = true;
+        targetRuleBackgroundSteps = ruleBackgroundSteps;
+      } else if (sawTargetScenario) break; // moved past our scenario into the next one
       continue;
     }
 
@@ -449,7 +456,7 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
     const stepMatch = trimmed.match(stepLineRe);
     if (stepMatch) {
       const step: RawStepLine = { keyword: stepMatch[1] as RawStepLine["keyword"], text: stepMatch[2] };
-      if (inBackground) backgroundSteps.push(step);
+      if (inBackground) (inRule ? ruleBackgroundSteps : featureBackgroundSteps).push(step);
       else if (inTargetScenario) scenarioSteps.push(step);
     }
   }
@@ -467,7 +474,7 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
     });
   }
 
-  return [...backgroundSteps, ...resolvedScenarioSteps];
+  return [...featureBackgroundSteps, ...targetRuleBackgroundSteps, ...resolvedScenarioSteps];
 }
 
 /** Legacy string-only accessor, kept for the Android Cucumber matcher which does plain text matching. */
@@ -806,60 +813,334 @@ function checkBackendCoverage(scenarios: Scenario[]): { covered: number; missing
   return checkPlaywrightBddCoverage(scenarios, BACKEND_STEPS_DIR, "backend");
 }
 
-function checkIosCoverage(scenarios: Scenario[]): { covered: number; missing: number } {
-  if (!existsSync(IOS_TEST_DIR)) {
-    console.log("  iOS test directory not found (Tests/)");
-    console.log(`  ${scenarios.length} scenarios tagged @ios pending implementation\n`);
-    return { covered: 0, missing: scenarios.length };
-  }
+// ---- iOS ----
+//
+// iOS has no Gherkin runner: no feature file is bundled, parsed or executed by
+// the iOS test targets. The only link between a scenario and iOS is a naming
+// convention — a Swift test method called `test` + PascalCase(scenario title).
+// A scenario is covered on iOS only when ALL of these hold:
+//
+//   1. A test method has exactly that name. There is no fuzzy fallback. The
+//      old 20-character substring fallback credited `Switch active hub` to
+//      `testBackgroundPushForHubBDoesNotSwitchActiveHubFromHubA` — a test
+//      asserting the active hub is NOT switched — and credited
+//      `Wrong PIN shows error` to the one method that already covered
+//      `Wrong PIN shows error on unlock` (#1221).
+//   2. XCTest actually runs it: a parameterless, non-private `test*` method of
+//      an XCTestCase subclass (directly or via e.g. BaseUITest), or a Swift
+//      Testing `@Test` function, with no `XCTSkip` in its body — and the body
+//      can fail: it makes at least one assertion, and none of them is
+//      `XCTAssertTrue(true…)` (the "pass gracefully" branch 29 iOS UI tests use).
+//   3. Its file belongs to a test target that the `Llamenos` scheme's test
+//      action includes (apps/ios/project.yml). #168 removed LlamenosUITests
+//      from that list; for four months no UI test could run, anywhere.
+//   4. A merge-gating CI job executes that target: a job in `ci-status`'s
+//      `needs` (see iosTargetsGatedByCi). 13 of the 30 scenarios the old
+//      matcher credited were in a target ci.yml passed -skip-testing for.
+//   5. No other @ios scenario maps to the same method name: one test is
+//      credited to at most one scenario.
+//   6. It is not in apps/ios/Tests/UI/ci-quarantine.txt — tests the per-PR
+//      gate skips (each naming the defect that owns it) run only nightly.
+//
+// This measures that a correctly-named, CI-executed test EXISTS. Whether it
+// passes is decided by the CI job that runs it, and whether its assertions
+// match the scenario's Then-steps is a review question this tool cannot
+// answer.
 
-  const testFiles = findFiles(IOS_TEST_DIR, ".swift");
-  const allMethods: TestMethod[] = [];
-  for (const file of testFiles) {
-    allMethods.push(...parseSwiftTestFile(file));
-  }
+const IOS_ROOT = join(ROOT, "apps/ios");
+const IOS_PROJECT_YML = join(IOS_ROOT, "project.yml");
+const WORKFLOWS_DIR = join(ROOT, ".github/workflows");
+/** The scheme every iOS CI job builds and tests through (xcodegen: the app target's scheme). */
+const IOS_SCHEME = "Llamenos";
+/** Aggregate job whose `needs` list is the required merge gate. */
+const CI_GATE_JOB = "ci-status";
+/**
+ * The UI target is run class-by-class through apps/ios/scripts/ui-tests.py,
+ * whose `shard` subcommand assigns every XCTestCase subclass under Tests/UI to
+ * exactly one shard — so a job running it runs the whole target.
+ */
+const IOS_UI_TARGET = "LlamenosUITests";
+const IOS_UI_SHARD_COMMAND = /\bui-tests\.py shard\b/;
 
-  console.log(
-    `  Found ${allMethods.length} Swift test methods across ${testFiles.length} test files\n`
+type XcodegenSource = string | { path: string };
+type XcodegenTestTarget = string | { name: string };
+interface XcodegenProject {
+  targets?: Record<
+    string,
+    { type?: string; sources?: XcodegenSource[]; scheme?: { testTargets?: XcodegenTestTarget[] } }
+  >;
+}
+
+interface WorkflowStep {
+  run?: string;
+}
+interface WorkflowJob {
+  needs?: string | string[];
+  uses?: string;
+  steps?: WorkflowStep[];
+}
+interface Workflow {
+  jobs?: Record<string, WorkflowJob>;
+}
+
+export interface IosTestTarget {
+  name: string;
+  /** Source directories, relative to apps/ios. */
+  sourceDirs: string[];
+  /** Member of the `Llamenos` scheme's test action. */
+  inScheme: boolean;
+}
+
+export interface IosTestMethod {
+  name: string;
+  /** Path relative to apps/ios. */
+  file: string;
+  className: string;
+  /** Test target owning the file, if any. */
+  target: string | undefined;
+  /** Why it earns no scenario credit even when correctly named, if it does not. */
+  disqualified?: string;
+}
+
+export interface IosCoveragePaths {
+  iosRoot: string;
+  projectYml: string;
+  workflowsDir: string;
+}
+
+const DEFAULT_IOS_PATHS: IosCoveragePaths = {
+  iosRoot: IOS_ROOT,
+  projectYml: IOS_PROJECT_YML,
+  workflowsDir: WORKFLOWS_DIR,
+};
+
+/**
+ * `Class.testMethod` → reason, for the UI tests the per-PR merge gate skips
+ * (apps/ios/scripts/ui-tests.py shard). They still run nightly, but a test the
+ * merge gate does not run earns no scenario credit.
+ */
+export function readIosQuarantine(iosRoot: string): Map<string, string> {
+  const path = join(iosRoot, "Tests/UI/ci-quarantine.txt");
+  const quarantined = new Map<string, string>();
+  if (!existsSync(path)) return quarantined;
+  for (const raw of readFileSync(path, "utf-8").split("\n")) {
+    const m = raw.trim().match(/^(\w+)\/(test\w+)\s+#\s*(.*\S)\s*$/);
+    if (m) quarantined.set(`${m[1]}.${m[2]}`, m[3]);
+  }
+  return quarantined;
+}
+
+export function readIosTestTargets(projectYml: string): IosTestTarget[] {
+  const project = Bun.YAML.parse(readFileSync(projectYml, "utf-8")) as XcodegenProject;
+  const targets = project.targets ?? {};
+  const schemeMembers = new Set(
+    (targets[IOS_SCHEME]?.scheme?.testTargets ?? []).map((t) => (typeof t === "string" ? t : t.name))
   );
+  return Object.entries(targets)
+    .filter(([, t]) => t.type === "bundle.unit-test" || t.type === "bundle.ui-testing")
+    .map(([name, t]) => ({
+      name,
+      sourceDirs: (t.sources ?? []).map((s) => (typeof s === "string" ? s : s.path)),
+      inScheme: schemeMembers.has(name),
+    }));
+}
+
+function readWorkflow(path: string): Workflow {
+  return existsSync(path) ? (Bun.YAML.parse(readFileSync(path, "utf-8")) as Workflow) : {};
+}
+
+function asArray(needs: string | string[] | undefined): string[] {
+  return needs === undefined ? [] : Array.isArray(needs) ? needs : [needs];
+}
+
+/**
+ * Test targets a merge-gating CI job executes, mapped to the job that does.
+ *
+ * Read structurally from the parsed workflows on every run, so the credit
+ * follows the CI wiring instead of a claim about it: taking a job out of
+ * `ci-status`'s needs, switching the called workflow to dispatch-only (the
+ * `uses:` job then no longer exists in ci.yml), or deleting the step that
+ * runs a target removes that target's credit.
+ *
+ * A target counts when a gated job either runs `xcodebuild` with a
+ * whole-target `-only-testing:<Target>`, or calls a reusable workflow one of
+ * whose jobs runs the UI sharder (IOS_UI_SHARD_COMMAND).
+ */
+export function iosTargetsGatedByCi(workflowsDir: string): Map<string, string> {
+  const ci = readWorkflow(join(workflowsDir, "ci.yml"));
+  const jobs = ci.jobs ?? {};
+  const gate = new Set(asArray(jobs[CI_GATE_JOB]?.needs));
+  const gated = new Map<string, string>();
+
+  for (const [jobName, job] of Object.entries(jobs)) {
+    if (!gate.has(jobName)) continue;
+    for (const step of job.steps ?? []) {
+      // `-only-testing:Target` selects the whole target; `Target/Class` would not.
+      for (const m of (step.run ?? "").matchAll(/-only-testing:(\w+)(?![\w/])/g)) {
+        gated.set(m[1], `ci.yml ${jobName}`);
+      }
+    }
+    const local = job.uses?.match(/^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/);
+    if (local) {
+      const called = readWorkflow(join(workflowsDir, local[1]));
+      for (const [calledJobName, calledJob] of Object.entries(called.jobs ?? {})) {
+        if ((calledJob.steps ?? []).some((s) => IOS_UI_SHARD_COMMAND.test(s.run ?? ""))) {
+          gated.set(IOS_UI_TARGET, `ci.yml ${jobName} → ${local[1]} ${calledJobName}`);
+        }
+      }
+    }
+  }
+  return gated;
+}
+
+const SWIFT_TYPE_RE =
+  /^([ \t]*)(?:@\w+[ \t]+)*(?:(?:final|public|internal|open|private|fileprivate)[ \t]+)*(class|struct|actor|enum|extension)[ \t]+(\w+)(?:[ \t]*:[ \t]*(\w+))?/gm;
+const SWIFT_TEST_FUNC_RE =
+  /^([ \t]*)((?:@\w+(?:\([^)]*\))?[ \t]+)*)((?:(?:private|fileprivate|public|internal|open|override|final|nonisolated)[ \t]+)*)func[ \t]+(test\w*)[ \t]*\(([^)]*)\)/gm;
+
+/**
+ * Parse every Swift file under apps/ios/Tests into test methods, with the
+ * target each file belongs to and, for methods that cannot earn scenario
+ * credit, why. A method's body is approximated as the text up to the next
+ * test method, which can only over-disqualify, never over-credit.
+ */
+export function parseIosTestMethods(iosRoot: string, targets: IosTestTarget[]): IosTestMethod[] {
+  const files = findFiles(join(iosRoot, "Tests"), ".swift");
+  const sources = files.map((path) => ({ path, content: readFileSync(path, "utf-8") }));
+
+  // Inheritance across all test files, so `X: BaseUITest` resolves to XCTestCase.
+  const superclass = new Map<string, string>();
+  for (const { content } of sources) {
+    for (const m of content.matchAll(SWIFT_TYPE_RE)) {
+      if (m[2] === "class" && m[4]) superclass.set(m[3], m[4]);
+    }
+  }
+  const isXCTestCase = (name: string): boolean => {
+    const seen = new Set<string>();
+    for (let c: string | undefined = name; c && !seen.has(c); c = superclass.get(c)) {
+      seen.add(c);
+      if (c === "XCTestCase") return true;
+    }
+    return false;
+  };
+
+  const methods: IosTestMethod[] = [];
+  for (const { path, content } of sources) {
+    const file = relative(iosRoot, path);
+    const target = targets.find((t) => t.sourceDirs.some((d) => file.startsWith(`${d.replace(/\/$/, "")}/`)))?.name;
+    // Brace matching is unreliable here (test files hold JSON string literals),
+    // so a method belongs to the nearest preceding type declared LESS indented.
+    const types = [...content.matchAll(SWIFT_TYPE_RE)].map((m) => ({
+      index: m.index ?? 0,
+      indent: m[1].length,
+      name: m[3],
+    }));
+    const funcs = [...content.matchAll(SWIFT_TEST_FUNC_RE)];
+
+    funcs.forEach((m, i) => {
+      const start = m.index ?? 0;
+      const end = i + 1 < funcs.length ? (funcs[i + 1].index ?? content.length) : content.length;
+      const indent = m[1].length;
+      const enclosing =
+        types.filter((t) => t.index < start && t.indent < indent).at(-1)?.name ?? basename(path, ".swift");
+      const attributes = m[2];
+      const modifiers = m[3];
+      const params = m[5].trim();
+      const isSwiftTesting = /@Test\b/.test(attributes);
+
+      const body = content.slice(start, end);
+      let disqualified: string | undefined;
+      if (/\b(?:private|fileprivate)\b/.test(modifiers)) disqualified = "private — XCTest does not run it";
+      else if (params !== "" && !isSwiftTesting) disqualified = "takes parameters — XCTest does not run it";
+      else if (!isSwiftTesting && !isXCTestCase(enclosing)) disqualified = `${enclosing} is not an XCTestCase`;
+      else if (/\bXCTSkip\b/.test(body)) disqualified = "calls XCTSkip";
+      else if (/\bXCTAssertTrue\(\s*true\b/.test(body)) disqualified = "contains XCTAssertTrue(true…) — a branch that cannot fail";
+      // A thrown error fails the test, so `try` (not `try?`) is an assertion too.
+      else if (!/(?:\b(?:XCTAssert\w*|XCTFail|XCTUnwrap)|#expect|#require)\s*\(|\btry(?:!|\s)/.test(body)) disqualified = "makes no assertion";
+
+      methods.push({ name: m[4], file, className: enclosing, target, disqualified });
+    });
+  }
+  return methods;
+}
+
+interface IosCoverageResult {
+  covered: number;
+  missing: number;
+}
+
+function checkIosCoverage(
+  scenarios: Scenario[],
+  paths: IosCoveragePaths = DEFAULT_IOS_PATHS
+): IosCoverageResult {
+  const targets = readIosTestTargets(paths.projectYml);
+  const gated = iosTargetsGatedByCi(paths.workflowsDir);
+  const methods = parseIosTestMethods(paths.iosRoot, targets);
+  const quarantined = readIosQuarantine(paths.iosRoot);
+  for (const m of methods) {
+    const why = quarantined.get(`${m.className}.${m.name}`);
+    if (why && !m.disqualified) m.disqualified = `quarantined from the merge gate: ${why}`;
+  }
+
+  console.log(`  ${methods.length} Swift test methods under ${relative(ROOT, paths.iosRoot) || "."}/Tests`);
+  for (const t of targets) {
+    const scheme = t.inScheme ? `in the ${IOS_SCHEME} scheme` : `NOT in the ${IOS_SCHEME} scheme`;
+    const ci = gated.get(t.name) ?? "run by NO merge-gating CI job";
+    console.log(`  target ${t.name} (${t.sourceDirs.join(", ")}): ${scheme}; ${ci}`);
+  }
+  console.log();
+
+  const byName = new Map<string, IosTestMethod[]>();
+  for (const m of methods) byName.set(m.name, [...(byName.get(m.name) ?? []), m]);
+  const claims = new Map<string, number>();
+  for (const s of scenarios) {
+    const name = scenarioToSwiftMethod(s.title);
+    claims.set(name, (claims.get(name) ?? 0) + 1);
+  }
 
   let covered = 0;
   let missing = 0;
   let currentFeature = "";
+  const uncreditedNamed: string[] = [];
 
   for (const scenario of scenarios) {
     if (scenario.featureFile !== currentFeature) {
       currentFeature = scenario.featureFile;
       console.log(`  Feature: ${scenario.featureName} (${scenario.featureFile})`);
     }
+    const expected = scenarioToSwiftMethod(scenario.title);
+    const named = byName.get(expected) ?? [];
+    const credited = named.find(
+      (m) => !m.disqualified && m.target && targets.find((t) => t.name === m.target)?.inScheme && gated.has(m.target)
+    );
 
-    const expectedMethod = scenarioToSwiftMethod(scenario.title);
-    const method = allMethods.find((m) => m.name === expectedMethod);
-
-    if (method) {
-      console.log(
-        `    ✓ ${scenario.title}\n      ${method.className}.${method.name}`
-      );
+    if (credited && (claims.get(expected) ?? 0) === 1) {
+      console.log(`    ✓ ${scenario.title}\n      ${credited.className}.${credited.name} [${credited.target}]`);
       covered++;
-    } else {
-      // Fuzzy match
-      const fuzzyMatch = allMethods.find((m) =>
-        m.name.toLowerCase().includes(expectedMethod.slice(4, 24).toLowerCase())
-      );
-      if (fuzzyMatch) {
-        console.log(
-          `    ~ ${scenario.title}\n      ${fuzzyMatch.className}.${fuzzyMatch.name} (fuzzy match)`
-        );
-        covered++;
-      } else {
-        console.log(
-          `    ✗ ${scenario.title}\n      MISSING (expected: ${expectedMethod})`
-        );
-        missing++;
-      }
+      continue;
     }
+
+    missing++;
+    if (named.length === 0) {
+      console.log(`    ✗ ${scenario.title}\n      MISSING (expected: ${expected})`);
+      continue;
+    }
+    const reasons = named.map((m) => {
+      const where = `${m.className}.${m.name} [${m.target ?? "no target"}]`;
+      if (m.disqualified) return `${where}: ${m.disqualified}`;
+      if (!m.target) return `${where}: file is in no test target`;
+      if (!targets.find((t) => t.name === m.target)?.inScheme) return `${where}: target not in the ${IOS_SCHEME} scheme`;
+      if (!gated.has(m.target)) return `${where}: target not run by any merge-gating CI job`;
+      return `${where}: ${claims.get(expected)} @ios scenarios claim this one method name`;
+    });
+    uncreditedNamed.push(`${scenario.featureFile}: ${scenario.title}`);
+    console.log(`    ✗ ${scenario.title}\n      NOT CREDITED — ${reasons.join("; ")}`);
   }
 
+  if (uncreditedNamed.length > 0) {
+    console.log(`\n  ${uncreditedNamed.length} scenario(s) have a correctly-named test that is not credited (reasons above).`);
+  }
+  console.log();
   return { covered, missing };
 }
 
@@ -903,7 +1184,12 @@ function reportUntaggedFeatures(featureFiles: string[]) {
   const warnings: string[] = [];
   for (const file of featureFiles) {
     const content = readFileSync(file, "utf-8");
-    const firstLine = content.split("\n")[0].trim();
+    // The feature's tag line may sit below comments (e.g. an `# @wip: ... — #N` note)
+    const firstLine =
+      content
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l !== "" && !l.startsWith("#")) ?? "";
     if (!firstLine.startsWith("@")) {
       warnings.push(relative(FEATURES_DIR, file));
     }
@@ -915,6 +1201,94 @@ function reportUntaggedFeatures(featureFiles: string[]) {
     }
     console.log();
   }
+}
+
+/**
+ * Tags that take a scenario out of a run on purpose. `@wip` and `@fixme` are
+ * excluded by every BDD project's tag filter in playwright.config.ts; `@skip`
+ * and `@fixme` are also playwright-bdd special tags that render the test as
+ * skipped without looking up its steps.
+ */
+const SKIP_TAGS = ["wip", "fixme", "skip"];
+
+/** `#1234` (not an HTML entity or URL fragment) or a `.../issues/1234` URL. */
+const ISSUE_REF_RE = /(?:^|[^\w&/])#\d+\b|\/issues\/\d+\b/;
+
+export interface UntrackedSkipTag {
+  featureFile: string;
+  /** 1-indexed line of the tag line carrying the skip tag. */
+  line: number;
+  tags: string[];
+  /** The Feature/Rule/Scenario/Examples line the tags apply to. */
+  target: string;
+}
+
+/**
+ * Every `@wip` / `@fixme` / `@skip` must name the issue that owns it (#1153).
+ *
+ * The BDD projects run with `missingSteps: "fail-on-gen"`, so an unbound
+ * scenario can no longer drop out of a run silently — the only way out is one
+ * of these tags. Without this rule the tag would just be the old silent skip
+ * with an extra keystroke. With it, excluding a scenario is a recorded
+ * decision someone can find and schedule.
+ *
+ * The reference goes in a comment in the annotation block that carries the
+ * tag — the contiguous run of comment and tag lines directly above the
+ * keyword line, with no blank line in between (the convention the existing
+ * `@fixme`s already follow):
+ *
+ *   # @wip: step definitions not written yet — #1122
+ *   @wip
+ *   Scenario: ...
+ */
+export function findUntrackedSkipTags(path: string, featuresDir = FEATURES_DIR): UntrackedSkipTag[] {
+  const lines = readFileSync(path, "utf-8").split("\n");
+  const isComment = (l: string) => l.trim().startsWith("#");
+  const isTagLine = (l: string) => l.trim().startsWith("@");
+  const isAnnotation = (l: string) => isComment(l) || isTagLine(l);
+  const untracked: UntrackedSkipTag[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!isTagLine(lines[i])) continue;
+    const skipTags = parseTags(lines[i].trim()).filter((t) => SKIP_TAGS.includes(t));
+    if (skipTags.length === 0) continue;
+
+    let start = i;
+    while (start > 0 && isAnnotation(lines[start - 1])) start--;
+    let end = i;
+    while (end + 1 < lines.length && isAnnotation(lines[end + 1])) end++;
+
+    const hasIssueRef = lines
+      .slice(start, end + 1)
+      .filter(isComment)
+      .some((l) => ISSUE_REF_RE.test(l.trim().replace(/^#/, "")));
+    if (!hasIssueRef) {
+      untracked.push({
+        featureFile: relative(featuresDir, path),
+        line: i + 1,
+        tags: skipTags,
+        target: lines[end + 1]?.trim() ?? "",
+      });
+    }
+  }
+
+  return untracked;
+}
+
+function reportUntrackedSkipTags(featureFiles: string[]): number {
+  const untracked = featureFiles.flatMap((f) => findUntrackedSkipTags(f));
+  if (untracked.length > 0) {
+    console.log(
+      `ERROR: ${untracked.length} @wip/@fixme/@skip tag(s) with no linked issue.\n` +
+        `  Add a comment naming the owning issue directly above the tag, e.g.\n` +
+        `    # @wip: <why it is excluded> — #1234\n`
+    );
+    for (const u of untracked) {
+      console.log(`  - ${u.featureFile}:${u.line} @${u.tags.join(" @")} → ${u.target}`);
+    }
+    console.log();
+  }
+  return untracked.length;
 }
 
 function checkDuplicateFeatureNames(featureFiles: string[]) {
@@ -958,23 +1332,35 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * covered regardless of content, which is why desktop/backend were
  * fabricated at 100% before this fix.
  *
- * iOS is gated by the auth/PIN-unlock tranche in
- * Tests/Unit/AuthLoginBDDTests.swift (added after ios was first ratcheted to 2%).
- * Why iOS reads far below Android despite having ~480 Swift test methods: the two
- * platforms are measured differently. Android matches Cucumber *step phrases*, so
- * one step definition counts toward every scenario that uses it. iOS matches whole
- * scenario titles 1:1 against Swift method names — `test` + PascalCase(title) — so
- * a test only counts if it is named for the scenario it implements. Most iOS tests
- * predate that convention and test real behaviour under their own names, which is
- * why coverage reads low relative to the test code that exists. Raising iOS
- * coverage is largely a matter of naming tests for their scenarios as areas are
- * worked, not of writing hundreds of new tests.
+ * Desktop/backend are 100: since #1153 their projects run with
+ * `missingSteps: "fail-on-gen"`, so every scenario their tag filters select
+ * must bind or bddgen fails. Scenarios not yet implemented are tagged `@wip`
+ * (or `@fixme` when a real defect blocks them) with a linked issue, which
+ * removes them from the denominator here exactly as it does in the runner.
+ * Anything below 100 means this tool and the runner disagree.
+ *
+ * iOS is 3.3 — exactly 19/569 (3.34%), measured 2026-09-27 (#1221), so losing
+ * a single credited test fails the gate. The previous value, 5, only passed
+ * because the matcher was wrong: its 20-character fuzzy fallback added 10
+ * scenarios (one of them credited to a test asserting the opposite), and 13 of
+ * the 30 it reported lived in a target no CI job ran. The honest number on
+ * main before this ratchet was 15/569 (2.6%) — the AuthLoginBDDTests unit
+ * tranche alone. The 19 are those 15 plus 4 LlamenosUITests methods, which now
+ * count because ci.yml's `ios-e2e` job runs that target under ci-status; a 5th,
+ * testNavigateToShiftsTab, is named for its scenario but quarantined on #1241.
+ * iOS reads far below Android because the two are measured differently:
+ * Android matches Cucumber step phrases, so one step definition counts toward
+ * every scenario that uses it; iOS matches whole scenario titles 1:1 against
+ * test method names. Most of the ~520 iOS test methods test real behaviour under
+ * their own names. Raising this number means naming (and, where they fall
+ * short, extending) tests for the scenarios they actually implement — never
+ * renaming a test onto a scenario whose Then-steps it does not assert.
  */
 const COVERAGE_THRESHOLDS: Record<Platform, number> = {
-  desktop: 95,
-  backend: 77,
+  desktop: 100,
+  backend: 100,
   android: 76,
-  ios: 5,
+  ios: 3.3,
 };
 
 // ---- Main ----
@@ -1003,6 +1389,9 @@ function main() {
 
   // Check for duplicate feature basenames
   checkDuplicateFeatureNames(featureFiles);
+
+  // Every deliberate exclusion must name its issue
+  const untrackedSkipCount = reportUntrackedSkipTags(featureFiles);
 
   const results: { platform: string; total: number; covered: number; missing: number }[] = [];
 
@@ -1049,6 +1438,11 @@ function main() {
 
   let failed = false;
 
+  if (untrackedSkipCount > 0) {
+    console.log(`  ✗ ${untrackedSkipCount} @wip/@fixme/@skip tag(s) with no linked issue (listed above)`);
+    failed = true;
+  }
+
   for (const r of results) {
     const pct = r.total > 0 ? (r.covered / r.total) * 100 : 100;
     const pctStr = r.total > 0 ? pct.toFixed(1) : "N/A";
@@ -1064,7 +1458,7 @@ function main() {
   }
 
   if (failed) {
-    console.log(`\nFAILED: One or more platforms are below their required coverage threshold.`);
+    console.log(`\nFAILED: see the ✗ lines above.`);
     process.exit(1);
   } else {
     console.log("\nPASSED: All platforms meet their coverage thresholds.");
@@ -1080,6 +1474,7 @@ export const __testing = {
   findMatchingStepDef,
   checkPlaywrightBddCoverage,
   newParameterTypeRegistry,
+  checkIosCoverage,
   COVERAGE_THRESHOLDS,
 };
 

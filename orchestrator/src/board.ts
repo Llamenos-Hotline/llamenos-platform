@@ -2,8 +2,8 @@ import ignore, { type Ignore } from 'ignore'
 import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
+import { isReviewerLabel } from './specialist.js'
 import { REVIEW_JOB } from './ci.js'
-import { specialistMergeBlockers, describeSpecialistBlockers } from './specialist.js'
 
 /**
  * `llamenos-fleet board` — the deterministic gate decision table.
@@ -363,41 +363,47 @@ function requiredContextState(onHead: PrCheckContext[], name: string): CheckStat
 }
 
 /**
- * `fleet-review.yml`'s own step names, verbatim (see the file's own
- * comments): "Resolve the base/head SHAs...", "Checkout the PR BASE
- * (trusted)", "Export the PR head as data", "Setup Bun", "Install
- * dependencies (base lockfile, no install scripts)", "Check the base
- * provides the review gate itself", "Decide whether to run the review
- * engine", "Install the non-author review engine", "Authenticate the review
- * engine", "Smoke-test the review engine", "Check the base provides the
- * gate", "Review", "Cache the verdict, if this run produced a fresh PASS".
+ * Which `fleet-review.yml` step failed decides whether an auto-retry could
+ * possibly help. Two steps mean "do not retry", for different reasons:
  *
- * A failure in the step named exactly "Review" is the model's OWN verdict —
- * substantive, and this classifier must never suggest retrying it: a retry
- * of a real FAIL is not what "an engine that could not run" needs, and
- * treating it as infrastructure would let a genuine problem get silently
- * re-rolled instead of surfaced to a human (see `RERUN_REVIEW`'s own
- * doc comment on `classifyPr` below, and the rail in board.test.ts pinning
- * this exact case).
+ *  - **"Review"** — the model's OWN verdict. A retry of a real FAIL is not
+ *    what "an engine that could not run" needs, and treating it as
+ *    infrastructure would let a genuine finding get silently re-rolled
+ *    instead of surfaced to a human.
+ *  - **"Decide whether to run the review engine"** — the gate step, which
+ *    fails on exactly three DECIDED outcomes (`runReviewGate`, cli.ts): a
+ *    cached substantive FAIL for this diff, a review nobody requested of
+ *    `llamenos-auto`, and a review set that could not be resolved. Not one
+ *    of them changes on a retry: the diff is the same, the reviewer request
+ *    is the same, the labels are the same. Classifying these as
+ *    infrastructure produced exactly the churn #1158 exists to stop —
+ *    `RERUN_REVIEW` firing again and again on a PR whose state nothing was
+ *    going to change.
  *
  * Every other step failing — checkout, dependency install, either
- * "base provides..." bootstrap guard, the engine install/auth/smoke-test —
- * is this fleet's OWN infrastructure breaking before the model ever ran, and
- * is exactly what `RERUN_REVIEW` exists to recover from automatically. A
- * step list with no step literally named "Review" present at all (the job
- * failed before reaching it) falls into this branch for the same reason.
+ * "base provides..." bootstrap guard, the engine smoke test — is this
+ * fleet's OWN infrastructure breaking before the model ever ran, and is
+ * exactly what `RERUN_REVIEW` exists to recover from automatically. A step
+ * list with none of the named steps present at all (the job failed before
+ * reaching them) falls into that branch for the same reason.
  */
 export interface WorkflowStep { name: string; conclusion: string | null }
 
+/** Steps whose failure is a DECISION, never a flake — see above. */
+const DECIDED_REVIEW_STEPS: readonly string[] = ['Review', 'Decide whether to run the review engine']
+
 export function classifyReviewFailure(steps: WorkflowStep[]): ReviewFailureKind {
-  const reviewStep = steps.find((s) => s.name === 'Review')
-  if (reviewStep !== undefined && reviewStep.conclusion === 'failure') return 'substantive'
-  return 'infrastructure'
+  const decided = steps.some((s) => DECIDED_REVIEW_STEPS.includes(s.name) && s.conclusion === 'failure')
+  return decided ? 'substantive' : 'infrastructure'
 }
 
 /**
  * `classifyPr`'s own action space is one wider than the public `BoardAction`:
  * `LABEL_FOR_REVIEW_CANDIDATE` marks a PR that passed every cheap check and
+ * is ready for its non-author review. The action's NAME is historical: since
+ * #1158 a review is started by REQUESTING one from `llamenos-auto`, not by
+ * applying a label — renaming it is the auto-merge monitor's own change
+ * (that is what consumes this action), deliberately left out of #1158.
  * has no `fleet/review` verdict on its head and no `review` label yet — a
  * CANDIDATE for `LABEL_FOR_REVIEW`, not yet the verdict. `buildBoard` caps
  * how many candidates actually become `LABEL_FOR_REVIEW` to one per
@@ -541,38 +547,25 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     }
   }
 
-  // #1092: label-driven specialists (`fleet/review/<agent>`) are NOT in the
-  // ruleset — a conditionally-posted check cannot be required — so they
-  // bind HERE, at the merge decision, ahead of `fleet/review` itself: any
-  // FAIL fails (a specialist FAIL outranks a generalist PASS), one still in
-  // flight waits, and one requested by label with no check on this head
-  // (a push since the label) needs the label re-applied.
-  const specialists = specialistMergeBlockers(onHead, pr.labels)
-  if (specialists.failing.length > 0) {
-    return { action: 'NEEDS_FIX', reason: describeSpecialistBlockers(specialists), failingContexts: specialists.failing }
-  }
-  if (specialists.pending.length > 0) {
-    return { action: 'WAITING', reason: describeSpecialistBlockers(specialists), failingContexts: [] }
-  }
-  if (specialists.missing.length > 0) {
-    return { action: 'STALE_LABEL', reason: describeSpecialistBlockers(specialists), failingContexts: [] }
-  }
-
   // Every cheap context is pass-or-skip on the current head. `fleet/review`
   // gets its own tree from here — ABSENT / PENDING / PASS / FAIL, FAIL split
-  // into infrastructure vs substantive.
+  // into infrastructure vs substantive. There is no separate
+  // `fleet/review/<agent>` tree to read any more (#1158): every reviewer a
+  // PR needs runs inside the one `fleet/review` job and lands in the one
+  // verdict below, so a profile's FAIL is already this check's FAIL.
   const review = onHead.find((c) => c.name === REVIEW_JOB)
-  const hasReviewLabel = pr.labels.includes('review')
 
   if (review === undefined) {
-    if (hasReviewLabel) {
-      // #862's own shape: the label says "review requested" but there is no
-      // verdict bound to THIS head — re-triggering means removing and
-      // re-adding the label (see the brief), never inferred as a pending
-      // request.
+    // A PR whose reviewer labels are still on it has an outstanding review:
+    // the job clears each label only once that review has PASSED (#1158), so
+    // a surviving `-reviewer` label with no verdict on this head means the
+    // review has not run here.
+    const outstanding = pr.labels.filter(isReviewerLabel)
+    if (outstanding.length > 0) {
       return {
         action: 'STALE_LABEL',
-        reason: 'carries the "review" label but has no fleet/review verdict on the current head — remove and re-add the label to re-trigger',
+        reason: `asks for ${outstanding.join(', ')} but has no ${REVIEW_JOB} verdict on the current head — ` +
+          're-request a review to run it',
         failingContexts: [],
       }
     }
@@ -679,7 +672,7 @@ export function buildBoard(facts: BoardFacts): BoardView {
         action: chosen ? 'LABEL_FOR_REVIEW' : 'WAITING',
         reason: chosen
           ? result.reason
-          : `${result.reason} — deferred: only one PR gets labelled for review per invocation (#${chosenNumber} is older)`,
+          : `${result.reason} — deferred: only one PR gets a review requested per invocation (#${chosenNumber} is older)`,
       }
     }
     return {

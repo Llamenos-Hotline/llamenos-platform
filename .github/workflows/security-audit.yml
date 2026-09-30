@@ -79,12 +79,10 @@ jobs:
 
   # ─── Rust Dependency Audit ─────────────────────────────────
   rust-audit:
-    # Self-hosted for its persistent disk: `cargo install cargo-audit` (which
-    # still tracks the latest release) only recompiles when a newer version
-    # ships — otherwise it finds the binary already in CARGO_HOME/bin — and
-    # the advisory-db checkout is fetched incrementally instead of cloned.
-    # CARGO_HOME/RUSTUP_HOME are per-runner (see the step below).
-    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    # GitHub-hosted, like every job a `pull_request` can reach. cargo-audit
+    # comes from install-action as a prebuilt, checksum-verified release
+    # binary (seconds), never `cargo install` (a from-source compile).
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 15
@@ -100,31 +98,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Use this runner's persistent Rust cache
-        run: |
-          set -euo pipefail
-          root="${HOME}/.cache/llamenos-ci/${RUNNER_NAME}"
-          # Bounded growth — past the cap, drop the lot and rebuild cold once.
-          cap_mb=6144
-          if [ -d "$root" ] && [ "$(du -sm "$root" | cut -f1)" -gt "$cap_mb" ]; then
-            echo "::warning::$root passed ${cap_mb} MB; wiping it so the cache stays bounded"
-            rm -rf "$root"
-          fi
-          mkdir -p "$root/rustup" "$root/cargo"
-          {
-            echo "RUSTUP_HOME=$root/rustup"
-            echo "CARGO_HOME=$root/cargo"
-            echo "CARGO_INCREMENTAL=0"
-          } >> "$GITHUB_ENV"
-          echo "$root/cargo/bin" >> "$GITHUB_PATH"
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
 
       - name: Install cargo-audit (pinned — avoid silent behaviour drift)
-        run: cargo install cargo-audit --version 0.22.1 --locked
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-audit@0.22.1
+          # Prebuilt binary or a hard failure — never a silent source build.
+          fallback: none
 
       # `cargo audit` on a crate with no Cargo.lock cannot audit anything. That
       # used to be handled by making the apps/desktop step never fail, which
@@ -253,26 +237,16 @@ jobs:
 
   # ─── Container Image Vulnerability Scan ────────────────────
   image-scan:
-    # Self-hosted for the box's persistent Docker layer cache (the daemon's
-    # default builder keeps BuildKit's cache between jobs; a hosted runner
-    # starts empty every time). Three things follow from sharing ONE Docker
-    # daemon between concurrent legs and other jobs:
-    #   - the image tag is unique per leg + run, so parallel legs cannot
-    #     overwrite each other's `load`ed image and scan the wrong one;
-    #   - `max-parallel: 2` leaves one of the three runners free, so a burst
-    #     of scans cannot starve the Rust jobs that share the pool;
-    #   - the built image is removed afterwards (see the last step) — layers
-    #     stay cached, the tagged image does not pile up. Total BuildKit cache
-    #     is capped after every scan (last step) and weekly by
-    #     runner-maintenance.yml.
-    # No docker/setup-buildx-action: it would create a throwaway
-    # docker-container builder whose cache dies with the job. The default
-    # builder is enough for `load: true`, and gha cache import/export does
-    # not apply to it (the cache is the daemon's own).
-    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    # GitHub-hosted, like every job a `pull_request` can reach. A hosted
+    # runner starts with an empty Docker daemon, so layer reuse comes from
+    # BuildKit's GitHub Actions cache backend (below) via a
+    # docker/setup-buildx-action builder.
+    runs-on: ubuntu-latest
+    # Measured on ubuntu-latest per leg: 4.6-5.7 min with an empty gha
+    # cache, 1.0-1.6 min warm. Self-hosted, warm: 1.7-6.2 min.
     timeout-minutes: 20
     env:
-      SCAN_IMAGE: llamenos-scan:${{ matrix.image.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SCAN_IMAGE: llamenos-scan:${{ matrix.image.name }}
 
     permissions:
       contents: read
@@ -281,7 +255,6 @@ jobs:
 
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         image:
           # `deploy/docker/Dockerfile` is multi-stage; Docker defaults to its
@@ -304,31 +277,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # trivy-action's built-in setup restores the Trivy binary from the
-      # Actions cache, and actions/cache stores paths RELATIVE to the
-      # workspace: a binary cached from a hosted runner
-      # (/home/runner/work/<repo>/<repo>) lands at the wrong place when
-      # restored into a self-hosted workspace of different depth
-      # (`<runner>/_work/<repo>/<repo>`). The restore reports success, the
-      # binary is not on PATH, and the scan dies with `trivy: command not
-      # found` (exit 127) — the failure that used to keep this job hosted.
-      # So install Trivy per job, into the job's own temp dir (no shared
-      # $HOME/.local/bin for three runners to race over), and tell
-      # trivy-action to skip its setup. The DB cache is kept on this runner's
-      # disk instead of the Actions cache.
+      # Installed once for the job's four scans below (each passes
+      # `skip-setup-trivy: true`). The first scan restores the vulnerability
+      # DB from the Actions cache into trivy-action's default cache dir; the
+      # later scans read the same dir, so they set `cache: false`.
       - name: Install Trivy
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.70.0
-          cache: false
-          path: ${{ runner.temp }}/trivy
 
-      - name: Keep the Trivy DB on this runner's disk
-        run: |
-          set -euo pipefail
-          dir="${HOME}/.cache/llamenos-ci/${RUNNER_NAME}/trivy"
-          mkdir -p "$dir"
-          echo "TRIVY_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build image for scanning
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -339,14 +298,18 @@ jobs:
           push: false
           load: true
           tags: ${{ env.SCAN_IMAGE }}
-          # No cache-from/cache-to: layer reuse comes from the self-hosted
-          # daemon's own BuildKit cache, keyed by content hash as always.
+          # One gha cache scope per leg, or the three legs overwrite each
+          # other's cache index under BuildKit's shared default scope. The
+          # repo's Actions cache has a fixed quota shared with every other
+          # workflow, so a full quota must degrade to an uncached build, never
+          # a failed scan: `ignore-error=true`.
+          cache-from: type=gha,scope=image-scan-${{ matrix.image.name }}
+          cache-to: type=gha,scope=image-scan-${{ matrix.image.name }},mode=max,ignore-error=true
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
-          cache: false
           image-ref: ${{ env.SCAN_IMAGE }}
           format: 'sarif'
           output: 'image-results.sarif'
@@ -436,22 +399,6 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
 
-      # Drop the tagged image; its layers stay in BuildKit's cache. Runs on
-      # failure/cancel too, or a red scan would leave an image per attempt.
-      - name: Remove scanned image
-        if: always()
-        run: docker image rm --force "$SCAN_IMAGE"
-
-      # Bound the shared BuildKit cache after every scan, not just on
-      # runner-maintenance.yml's weekly schedule: a run that changes bun.lock
-      # or the Rust sources adds a few GB of new layers, and a week is long
-      # enough for that to fill the disk. Keep the figure in step with
-      # BUILDKIT_CACHE_MAX there. Layers a concurrent build is using are left
-      # alone by `builder prune`.
-      - name: Cap BuildKit layer cache
-        if: always()
-        run: docker builder prune --force --max-used-space 10GB
-
   # ─── Crypto Guardrails (informational) ─────────────────────
   # Findings are emitted as ::warning:: annotations and never fail the build —
   # that is by design. Everything else (a missing path, a bad regex, a crashed
@@ -534,11 +481,11 @@ jobs:
   # dated entry in deny.toml `[advisories].ignore` — enforced by the expiry
   # step below.
   cargo-deny:
-    # Self-hosted for its persistent disk: compiling cargo-deny from source
-    # was most of this job's runtime, and with CARGO_HOME persisted the pinned
-    # `cargo install --version 0.20.2` becomes "already installed" after the
-    # first run on each runner. CARGO_HOME/RUSTUP_HOME are per-runner.
-    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    # GitHub-hosted, like every job a `pull_request` can reach. cargo-deny
+    # comes from install-action as a prebuilt, checksum-verified release
+    # binary (seconds); compiling it from source was once most of this job's
+    # runtime.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 15
@@ -547,31 +494,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Use this runner's persistent Rust cache
-        run: |
-          set -euo pipefail
-          root="${HOME}/.cache/llamenos-ci/${RUNNER_NAME}"
-          # Bounded growth — past the cap, drop the lot and rebuild cold once.
-          cap_mb=6144
-          if [ -d "$root" ] && [ "$(du -sm "$root" | cut -f1)" -gt "$cap_mb" ]; then
-            echo "::warning::$root passed ${cap_mb} MB; wiping it so the cache stays bounded"
-            rm -rf "$root"
-          fi
-          mkdir -p "$root/rustup" "$root/cargo"
-          {
-            echo "RUSTUP_HOME=$root/rustup"
-            echo "CARGO_HOME=$root/cargo"
-            echo "CARGO_INCREMENTAL=0"
-          } >> "$GITHUB_ENV"
-          echo "$root/cargo/bin" >> "$GITHUB_PATH"
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
 
       - name: Install cargo-deny (pinned — avoid silent config-schema drift)
-        run: cargo install cargo-deny --version 0.20.2 --locked
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-deny@0.20.2
+          # Prebuilt binary or a hard failure — never a silent source build.
+          fallback: none
 
       # cargo-deny has no native expiry for `ignore` entries, so enforce it:
       # every entry must be a per-ID table with a reason ending in

@@ -22,6 +22,7 @@ import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.RetryInterceptor
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeyValueStore
@@ -208,7 +209,8 @@ class HubScopedViewModelReloadTest {
     fun `ShiftsViewModel triggers a new load on each hub change`() =
         runTest(UnconfinedTestDispatcher()) {
             val (activeHubState, hubFlow) = mockActiveHubState()
-            val vm = ShiftsViewModel(makeApiService(activeHubState), activeHubState)
+            val apiService = makeApiService(activeHubState)
+            val vm = ShiftsViewModel(apiService, activeHubState, ShiftClockRepository(apiService))
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "ShiftsViewModel")
         }
@@ -324,6 +326,7 @@ class HubScopedViewModelReloadTest {
                 mockk<SessionState>(relaxed = true),
                 activeHubState,
                 mockk<AnalyticsRepository>(relaxed = true),
+                ShiftClockRepository(mockk(relaxed = true)),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "DashboardViewModel")

@@ -60,3 +60,32 @@ describe('shared worker-rules fragment', () => {
     }
   })
 })
+
+/**
+ * The scope gate reads `.claude/agents/fragments/*.md`; the supervisor that
+ * briefs the worker reads the ASSEMBLED `.claude/agents/<lane>-supervisor.md`
+ * that `build-agents.sh` writes from it. Nothing rebuilt the assembled files
+ * when a fragment changed, and five of the six had drifted: desktop's
+ * assembled definition still said "Does NOT own: `tests/steps/`" long after
+ * its fragment granted every non-backend directory under it, and none of them
+ * had heard of the `packages/test-specs/features/` shared-write from #847/#908.
+ *
+ * That drift is a scope-DEFINITION error, and it fails in the direction that
+ * does not show up as a red check: the gate lets the diff through while the
+ * supervisor tells its worker the path is out of lane, so the worker
+ * volunteers the partial fix. Pinning the assembled prefix to the fragment
+ * catches it at the fragment edit, which is the only moment anyone is looking.
+ */
+describe('assembled agent definitions stay in sync with their fragments', () => {
+  it.each(['desktop', 'ios', 'android', 'backend', 'shared', 'infra'] as const)(
+    '%s-supervisor.md begins with its fragment verbatim',
+    async (lane) => {
+      const fragment = await readFile(join(FRAGMENTS_DIR, `${lane}-supervisor.md`), 'utf8')
+      const assembled = await readFile(join(FRAGMENTS_DIR, '..', `${lane}-supervisor.md`), 'utf8')
+      expect(
+        assembled.startsWith(fragment),
+        `.claude/agents/${lane}-supervisor.md is stale — rerun .claude/agents/build-agents.sh after editing its fragment`,
+      ).toBe(true)
+    },
+  )
+})

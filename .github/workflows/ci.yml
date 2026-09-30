@@ -86,6 +86,7 @@ jobs:
       ansible: ${{ steps.filter.outputs.ansible }}
       android: ${{ steps.filter.outputs.android }}
       ios: ${{ steps.filter.outputs.ios }}
+      ios_tier: ${{ steps.filter.outputs.ios_tier }}
       desktop: ${{ steps.filter.outputs.desktop }}
       backend: ${{ steps.filter.outputs.backend }}
       crypto: ${{ steps.filter.outputs.crypto }}
@@ -273,6 +274,25 @@ jobs:
       - name: Validate test-specs coverage
         run: bun run test-specs:validate
 
+      # Every BDD project runs with missingSteps: "fail-on-gen" (#1153), so this
+      # fails when any scenario a project's tag filter selects has an unbound
+      # step — the condition that used to render it as a silently skipped test.
+      # Runs here, unconditionally, because the e2e and backend-bdd jobs that
+      # also run bddgen are path-filtered and would miss a feature-only change.
+      #
+      # `bddgen export` first, always: bddgen generates all BDD projects at once
+      # (one in the main thread, the rest in worker threads) and Playwright's TS
+      # transform cache is written non-atomically, so on a cold cache — every
+      # fresh runner — a thread can read a step file another thread is still
+      # writing. It then loads empty (its steps come out "missing" and a correct
+      # tree fails) or truncated (bddgen crashes). `export` loads every
+      # project's step files in one thread, so the cache is complete before the
+      # concurrent pass. Measured on cold caches: 4/22 bare runs failed, 0/25
+      # with the warm-up. Same pattern in the e2e and backend-bdd jobs below and
+      # in scripts/test-backend-bdd.sh.
+      - name: Generate BDD specs (fails on unbound scenarios)
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -300,61 +320,43 @@ jobs:
 
   # ─── Crypto Tests (Rust) ────────────────────────────────────
   #
-  # Runs on the Hetzner self-hosted runners (labels below), not a hosted
-  # runner, because it is the one thing a self-hosted runner does better:
-  # its disk survives between jobs. Toolchain, cargo registry and compiled
-  # dependencies all live OUTSIDE the checkout (actions/checkout runs
-  # `git clean -ffdx`, which would delete a `target/` inside it), in a
-  # per-runner directory — three runners share one $HOME, and concurrent
-  # `rustup toolchain install` runs into one RUSTUP_HOME race each other
-  # (`could not rename 'downloaded' file`). swatinem/rust-cache is
-  # deliberately gone: it tars `target/` up to the Actions cache and back on
-  # every run, which is pure overhead when the directory is already on disk.
+  # GitHub-hosted, like every other job a `pull_request` can reach: a
+  # self-hosted runner would execute PR-authored code on a persistent box
+  # that keeps state between jobs. Swatinem/rust-cache restores the cargo
+  # registry and `target/` from the Actions cache in place of a persistent
+  # disk.
   crypto-tests:
     needs: changes
     if: needs.changes.outputs.crypto == 'true'
-    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Measured on ubuntu-latest: 3.4 min with no rust-cache hit (the test
+    # run itself is ~2.5 min of that). Self-hosted, warm: 2.5-5.6 min.
     timeout-minutes: 15
     env:
       # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
       # targets (mobile, wasm, macOS, Windows) that rustup would install on
-      # the first `cargo` call — ~1.3 GB of the runner's persistent disk, per
-      # runner, for tests that only ever build the host target. Naming the
-      # channel here overrides that file; the compiler is the same `stable`.
+      # the first `cargo` call — ~1.3 GB of downloads for tests that only
+      # ever build the host target. Naming the channel here overrides that
+      # file; the compiler is the same `stable`.
       RUSTUP_TOOLCHAIN: stable
 
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Use this runner's persistent Rust cache
-        run: |
-          set -euo pipefail
-          root="${HOME}/.cache/llamenos-ci/${RUNNER_NAME}"
-          # Bounded growth: a stale `target/` for every past rustc would
-          # otherwise only ever grow. Past the cap, drop the lot and let this
-          # run rebuild cold once.
-          cap_mb=6144
-          if [ -d "$root" ] && [ "$(du -sm "$root" | cut -f1)" -gt "$cap_mb" ]; then
-            echo "::warning::$root passed ${cap_mb} MB; wiping it so the cache stays bounded"
-            rm -rf "$root"
-          fi
-          mkdir -p "$root/rustup" "$root/cargo" "$root/target/crypto"
-          {
-            echo "RUSTUP_HOME=$root/rustup"
-            echo "CARGO_HOME=$root/cargo"
-            echo "CARGO_TARGET_DIR=$root/target/crypto"
-            echo "CARGO_INCREMENTAL=0"
-          } >> "$GITHUB_ENV"
-          echo "$root/cargo/bin" >> "$GITHUB_PATH"
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
           components: clippy, rustfmt
+
+      # After the toolchain step: rust-cache keys on the installed rustc.
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
 
       - name: Run tests
         run: cargo test --manifest-path packages/crypto/Cargo.toml --features mobile
@@ -472,7 +474,8 @@ jobs:
           wait_for_sip_bridge: 'true'
 
       - name: Generate BDD test files
-        run: bunx bddgen
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
 
       - name: Start Vite preview server
         run: |
@@ -610,7 +613,8 @@ jobs:
           wait_for_sip_bridge: 'true'
 
       - name: Generate BDD test files
-        run: bunx bddgen
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
 
       - name: Run backend BDD tests
         run: bun run test:backend:bdd --no-codegen
@@ -1208,6 +1212,23 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # iOS UI tests (LlamenosUITests) against a native backend — see
+  # ios-e2e.yml's header for why this was dark from May to September 2026.
+  # In ci-status's needs, so a failing UI test blocks the merge; the result of
+  # this job is the aggregate of every job in the called workflow.
+  ios-e2e:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ios-e2e.yml
+    with:
+      # full when the diff can rebuild the iOS binary (apps/ios/, crypto,
+      # protocol, i18n, or this file); smoke for blast-radius-only changes
+      # such as scripts/ or package.json. Either way iOS stays gated — the
+      # tier chooses how much of it runs, never whether it runs.
+      tier: ${{ needs.changes.outputs.ios_tier }}
+
   # ─── Crypto Guardrails ───────────────────────────────────────
   crypto-guardrails:
     needs: changes
@@ -1416,6 +1437,21 @@ jobs:
       - name: Check ECIES in active sections
         run: bash scripts/check-ecies-active.sh
 
+      - name: Check bddgen warm-up is applied everywhere
+        run: bash scripts/check-bddgen-warmup.sh
+
+      # No `bun install`: the rail uses only Bun's built-in YAML parser.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # codeql.yml's required legs must cover exactly the languages default
+      # setup analysed — dropping one (e.g. rust, packages/crypto) fails here
+      # instead of silently shrinking SAST coverage.
+      - name: Check CodeQL language coverage
+        run: bun scripts/check-codeql-languages.ts
+
   docker-canary:
     needs: ci-status
     if: github.ref == 'refs/heads/main' && needs.ci-status.result == 'success'
@@ -1524,7 +1560,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1553,6 +1589,7 @@ jobs:
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
           check_job "android-e2e" "${{ needs.android-e2e.result }}"
           check_job "ios-build-test" "${{ needs.ios-build-test.result }}"
+          check_job "ios-e2e" "${{ needs.ios-e2e.result }}"
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"

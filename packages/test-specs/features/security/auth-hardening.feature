@@ -1,4 +1,5 @@
-@backend @security
+# @wip: needs per-scenario server env (ENVIRONMENT, DEV_AUTH_BYPASS) — #1194
+@backend @security @wip
 Feature: Auth bypass removal and dev route gating
   Dev-mode shortcuts for auth bypass, dev route access, and webhook
   signature verification are removed or gated behind explicit flags.

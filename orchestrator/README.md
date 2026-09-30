@@ -3,7 +3,7 @@
 ## What this is
 
 A scheduled dispatch loop that reads open GitHub issues labelled
-`agent-dispatchable` from `rhonda-rodododo/llamenos-platform`, routes each one
+`agent-dispatchable` from `Llamenos-Hotline/llamenos-platform`, routes each one
 to a lane (`backend`, `shared`, `desktop`, `ios`, `android`, `infra`) based on
 its `lane:<id>` label, and — once live dispatch ships in the follow-on plan —
 hands it to an agent scoped to that lane's owned paths.
@@ -130,33 +130,59 @@ ships in the follow-on plan. Until then:
 - **`shadow` is the only mode with real content today.** `off` does nothing;
   `live` is refused.
 
-## Specialist reviewers (#1092)
+## Review (#1158)
 
-A PR label ending in `-reviewer` requests a specialist. For example,
-`crypto-security-reviewer` runs the agent defined at
-`.claude/agents/crypto-security-reviewer.md` against the PR. It posts its
-verdict as the check `fleet/review/crypto-security-reviewer` (workflow
-`.github/workflows/fleet-specialist-review.yml`, CLI `specialist-review-ci`,
-code `src/specialist.ts`).
+**Assigning a reviewer, or re-requesting review, is what triggers a review.**
+Request one from `llamenos-auto` (or from `rhonda-rodododo` on the `release`
+PR) and `fleet/review` runs. Nothing else fires it — no label, and never a
+push.
 
-- **Adding a specialist** takes an agent definition whose frontmatter `name:`
-  equals the label. Merge it to `main` first, because the registry is read from
-  the PR's base. Then create a label of the same name. The workflow needs no
-  change.
-- **Triggering it:** apply the label. Only `labeled` triggers a run, never a
-  push. To re-request a review, re-apply the label.
-- **Fail closed:** an unknown or malformed `-reviewer` label fails its check.
-  It is never skipped.
-- **Never a required context.** A check that runs only when a label is present
-  would block every unlabelled PR. It binds at the merge decision instead,
-  and any FAIL fails:
-  - the required `fleet/review` gate fails while a requested specialist has no
-    PASS for the PR's diff;
-  - requesting a specialist disarms the PR's auto-merge;
-  - `board` and `review-and-merge` refuse on any failing, in-flight, or
-    requested-but-absent `fleet/review/*` check.
-- **Order:** apply the specialist label, wait for it to pass, then (re-)apply
-  `review`. Clearing a specialist FAIL takes a new head.
+**The agent decides which reviews to run from the labels and from the PR
+itself.** The general non-author review always runs. On top of it:
+
+- a label ending `-reviewer` names an agent in `.claude/agents/` — e.g.
+  `crypto-security-reviewer`;
+- the PR's own content adds what nobody asked for — a crypto diff (by changed
+  path or by the PR's own description) gets the crypto review either way.
+
+They all run **concurrently, in one job**, and report **one check**:
+`fleet/review`. Any FAIL fails it; so does a reviewer that could not run.
+
+**The findings land on the PR.** Each reviewer's full text is posted as a PR
+comment — on a FAIL too, since that is the case whose reasoning you actually
+need. A comment, never a GitHub *review*: an approving review from the fleet
+would be one GitHub counts. Re-requesting a review on an unchanged diff
+re-posts nothing.
+
+**Labels are the worklist.** Once the whole set passes, the job removes the
+`-reviewer` labels it acted on, so what is left on a PR is what is still
+owed. A FAIL clears nothing — that is what makes the next review request
+re-run it.
+
+**Verdicts are cached per diff.** A PASS *and* a substantive FAIL are both
+recorded against `sha256(diff)`, so a rebase that does not change the diff
+never re-spends a review to reach the same conclusion — push a fix and the
+hash changes, which reviews afresh. An infrastructure failure (timeout,
+quota, unparseable response) is **never** cached, so it is always retried.
+Adding or removing a `-reviewer` label cannot orphan either verdict.
+
+**`llamenos-fleet review-and-merge` only runs the general review**, so it
+refuses outright on a PR whose set needs more — request a review from
+`llamenos-auto` and let the CI gate run the whole set.
+
+**Fail closed.** Unreadable labels, an unknown or malformed `-reviewer`
+label, an unreadable agent registry: each fails the check with the rule it
+broke. None of them is ever "no review needed".
+
+**Adding a reviewer profile:** write an agent definition whose frontmatter
+`name:` equals the profile name and ends `-reviewer`, merge it to `main`
+first (the registry is read from the PR's base), then create a label of the
+same name if you want to request it by hand. The workflow needs no change.
+
+Workflow `.github/workflows/fleet-review.yml`; CLI `review-gate` then
+`review-ci`; code `src/ci.ts` (`decideReviewSet`, `reviewIsRequested`,
+`decideReviewGate`, `runReviewCi`) and `src/specialist.ts` (the agent
+registry).
 
 ## Cross-lane PRs: `scope:<lane>` grants (#1115)
 
@@ -183,7 +209,20 @@ What a grant cannot do:
   Be precise about what that covers, because an earlier draft of this section
   overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
   **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
-  in it, because lanes legitimately own some of them.
+  in it, because lanes legitimately own some of them. Nor are committed
+  TEMPLATES of a secret (`.env.example`, `keystore.properties.example`): the
+  never-write comparison is `matchesSecretPath`, which subtracts
+  `SECRET_TEMPLATE_SUFFIXES` from the match, because a file that exists to be
+  committed and read cannot be a secret and a deploy template nobody may edit
+  is a deploy nobody may fix (#1253). That subtraction applies only to
+  `TEMPLATED_SECRET_PATTERNS` — `.env` and `keystore.properties`, the two
+  patterns a tracked template justifies. A new secret pattern inherits no
+  carve-out unless a tracked template proves it needs one, so
+  `.npmrc.example` and `id_rsa.example` remain forbidden. The interactive write-deny hook in
+  `.claude/settings.json` never blocked them either — its `\.env$` is
+  anchored — so this removes a divergence rather than creating one. A
+  template is exempt from the WRITE gate only: `classifyImpact` still rates
+  it high-impact, and `gitleaks` still reads its contents.
 
 - **Reach CI or deploy config via a grant.** That is enforced separately, by
   `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,

@@ -53,6 +53,7 @@ Feature: Signal Adapter Integration
     Then the message should be appended to the existing conversation
 
   @fixme
+  # Tracked in #1196.
   # Requires a configured Signal adapter (signal-cli registered number).
   # In CI the Signal bridge runs without a registered number, so the adapter
   # returns 404. Re-enable once the test environment configures Signal credentials.

@@ -47,6 +47,7 @@ runs:
           "STORAGE_ACCESS_KEY=testaccess" \
           "STORAGE_SECRET_KEY=testsecret123456" \
           "HOTLINE_NAME=Llámenos" \
+          "WEBHOOK_BASE_URL=http://localhost:3000" \
           "BRIDGE_SECRET=ci-test-bridge-secret" \
           "ARI_PASSWORD=changeme" \
           "SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001" \

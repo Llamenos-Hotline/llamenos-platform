@@ -1,4 +1,5 @@
-@backend @security
+# @wip: no backend step definitions for any scenario — #1191
+@backend @security @wip
 Feature: Backend access control and input validation (Epic E)
   Surgical fixes for seven backend security vulnerabilities identified in the
   2026-05-18 security audit: co-approver admin check (H01), cross-hub IDOR on

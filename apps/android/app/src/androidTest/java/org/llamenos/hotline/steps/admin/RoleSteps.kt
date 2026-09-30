@@ -30,20 +30,20 @@ class RoleSteps : BaseSteps() {
     @Then("I should see at least {int} roles")
     fun iShouldSeeAtLeastRoles(count: Int) {
         // Volunteers list shows role badges — verify the list is visible
-        val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
     }
 
     @Then("I should see {string} role")
     fun iShouldSeeRole(roleName: String) {
         // Role badges are displayed on volunteer cards
-        val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
     }
 
     @Then("the {string} role should have wildcard permission")
     fun theRoleShouldHaveWildcardPermission(roleName: String) {
         // Server-side RBAC verification — admin role has wildcard by definition
         // On Android, verify admin can access the admin panel (proof of wildcard)
-        val found = assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
     }
 
     @Then("the {string} role should be a system role")
@@ -69,7 +69,7 @@ class RoleSteps : BaseSteps() {
     @Then("the role should be created successfully")
     fun theRoleShouldBeCreatedSuccessfully() {
         // Verify admin panel is still accessible after role creation
-        val found = assertAnyTagDisplayed("admin-tabs", "custom-fields-list", "custom-fields-empty")
+        assertAnyTagDisplayed("admin-tabs", "custom-fields-list", "custom-fields-empty")
     }
 
     @Then("the role slug should be {string}")
@@ -90,7 +90,7 @@ class RoleSteps : BaseSteps() {
     @Then("the role should be removed")
     fun theRoleShouldBeRemoved() {
         // Role deletion is API-level — verify app is still rendering
-        val found = assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 
     @When("I attempt to delete the {string} role")
@@ -101,7 +101,7 @@ class RoleSteps : BaseSteps() {
     @Then("the deletion should fail with a 403 error")
     fun theDeletionShouldFailWithA403Error() {
         // 403 is handled server-side — on Android, UI remains unchanged
-        val found = assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list")
+        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list")
     }
 
     @When("I assign the {string} role to the volunteer")
@@ -122,7 +122,7 @@ class RoleSteps : BaseSteps() {
             onAllNodes(hasTestTagPrefix("volunteer-role-")).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
             // No volunteers visible — empty state is acceptable in test
-            val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+            assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
         }
     }
 
@@ -148,7 +148,7 @@ class RoleSteps : BaseSteps() {
     fun itShouldHavePermission(permission: String) {
         // Permission checking is server-side RBAC
         // On Android, verify the user can access the expected UI area
-        val found = assertAnyTagDisplayed("admin-tabs", "volunteers-list", "dashboard-title")
+        assertAnyTagDisplayed("admin-tabs", "volunteers-list", "dashboard-title")
     }
 
     @Then("it should not have {string} permission")
@@ -169,7 +169,7 @@ class RoleSteps : BaseSteps() {
     @Then("I should see a duplicate slug error")
     fun iShouldSeeADuplicateSlugError() {
         // Server returns 409 Conflict — Android shows error toast/snackbar
-        val found = assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 
     @When("I create a role with slug {string}")
@@ -180,7 +180,7 @@ class RoleSteps : BaseSteps() {
     @Then("I should see an invalid slug error")
     fun iShouldSeeAnInvalidSlugError() {
         // Server validates slug format — Android shows error
-        val found = assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 
     // ---- Update / permissions catalog ----
@@ -194,7 +194,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("the permissions should be updated")
     fun thePermissionsShouldBeUpdated() {
-        val found = assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
     }
 
     @When("I request the permissions catalog")
@@ -206,7 +206,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("I should see all available permissions grouped by domain")
     fun iShouldSeeAllAvailablePermissionsGroupedByDomain() {
-        val found = assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "volunteers-list", "volunteers-empty")
     }
 
     // ---- Access control ----
@@ -222,7 +222,7 @@ class RoleSteps : BaseSteps() {
         } catch (_: Throwable) {
             // Admin card not available
         }
-        val found = assertAnyTagDisplayed("admin-tabs", "settings-admin-card", "dashboard-title")
+        assertAnyTagDisplayed("admin-tabs", "settings-admin-card", "dashboard-title")
     }
 
     @When("I attempt to access an admin endpoint")
@@ -242,7 +242,7 @@ class RoleSteps : BaseSteps() {
     fun iShouldReceiveAForbiddenResponse(statusCode: Int) {
         // On Android, forbidden = restricted UI not shown
         // Verify main screen is visible (no crash) but admin is hidden
-        val found = assertAnyTagDisplayed("dashboard-title", "settings-identity-card", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", "settings-identity-card", NAV_DASHBOARD)
     }
 
     // ---- Multi-role / custom role access ----
@@ -259,7 +259,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("they should have permissions from both roles")
     fun theyShouldHavePermissionsFromBothRoles() {
-        val found = assertAnyTagDisplayed(NAV_NOTES, NAV_DASHBOARD)
+        assertAnyTagDisplayed(NAV_NOTES, NAV_DASHBOARD)
     }
 
     @Given("a volunteer has only a custom {string} role")
@@ -270,7 +270,7 @@ class RoleSteps : BaseSteps() {
     @Then("they should only see endpoints allowed by that role")
     fun theyShouldOnlySeeEndpointsAllowedByThatRole() {
         // Custom role limits navigation — verify main screen is visible
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
     }
 
     @When("the volunteer attempts to access an unauthorized endpoint")
@@ -283,14 +283,14 @@ class RoleSteps : BaseSteps() {
     @Then("they should receive a {int} forbidden response")
     fun theyShouldReceiveAForbiddenResponse(statusCode: Int) {
         // Restricted content not visible
-        val found = assertAnyTagDisplayed("settings-identity-card", NAV_DASHBOARD)
+        assertAnyTagDisplayed("settings-identity-card", NAV_DASHBOARD)
     }
 
     // ---- Reporter UI ----
 
     @Then("I should see the reports navigation")
     fun iShouldSeeTheReportsNavigation() {
-        val found = assertAnyTagDisplayed(NAV_DASHBOARD, "dashboard-title")
+        assertAnyTagDisplayed(NAV_DASHBOARD, "dashboard-title")
     }
 
     @Then("I should not see the calls navigation")
@@ -309,7 +309,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("I should see all navigation items including admin")
     fun iShouldSeeAllNavigationItemsIncludingAdmin() {
-        val found = assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
+        assertAnyTagDisplayed(NAV_DASHBOARD, NAV_NOTES, NAV_CONVERSATIONS, NAV_SHIFTS, NAV_SETTINGS)
     }
 
     // ---- Wildcard permissions ----
@@ -326,7 +326,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("they should have all notes-related permissions")
     fun theyShouldHaveAllNotesRelatedPermissions() {
-        val found = assertAnyTagDisplayed(NAV_NOTES, "dashboard-title")
+        assertAnyTagDisplayed(NAV_NOTES, "dashboard-title")
     }
 
     // ---- Volunteer list role management ----
@@ -339,7 +339,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("the role dropdown should show all default roles")
     fun theRoleDropdownShouldShowAllDefaultRoles() {
-        val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
     }
 
     @Given("a volunteer with {string} role")
@@ -356,7 +356,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("the volunteer should display the {string} badge")
     fun theVolunteerShouldDisplayTheBadge(badgeName: String) {
-        val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
     }
 
     @Given("I changed a volunteer's role to {string}")
@@ -368,7 +368,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("I should see the {string} badge on their card")
     fun iShouldSeeTheBadgeOnTheirCard(badgeName: String) {
-        val found = assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("volunteers-list", "volunteers-empty")
     }
 
     // ---- Add Volunteer / Invite forms ----
@@ -383,7 +383,7 @@ class RoleSteps : BaseSteps() {
 
     @Then("I should see all available roles in the form")
     fun iShouldSeeAllAvailableRolesInTheForm() {
-        val found = assertAnyTagDisplayed("add-volunteer-dialog", "create-invite-dialog", "admin-tabs")
+        assertAnyTagDisplayed("add-volunteer-dialog", "create-invite-dialog", "admin-tabs")
     }
 
     @When("I open the Invite form")
@@ -404,6 +404,6 @@ class RoleSteps : BaseSteps() {
     @Then("I should receive a not found error")
     fun iShouldReceiveANotFoundError() {
         // Server returns 404 — on Android, admin panel remains unchanged
-        val found = assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
+        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 }
