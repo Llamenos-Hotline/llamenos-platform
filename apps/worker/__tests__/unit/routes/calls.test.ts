@@ -15,6 +15,7 @@ import {
   activeCallsResponseSchema,
   callActionResponseSchema,
   callHistoryResponseSchema,
+  callRecordResponseSchema,
 } from '@protocol/schemas/calls'
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
@@ -172,7 +173,7 @@ describe('GET /history — projects rows onto the call-record shape', () => {
   })
 })
 
-describe('single-call routes — wrap the projected call in { call }', () => {
+describe('single-call routes — send the projected call', () => {
   it('GET /:callId returns an active call without the caller hash', async () => {
     const app = createTestApp(['calls:read-active'], {
       getActiveCallById: vi.fn().mockResolvedValue(activeRow()),
@@ -182,9 +183,9 @@ describe('single-call routes — wrap the projected call in { call }', () => {
     expect(res.status).toBe(200)
     const raw = await res.text()
     expectNoRowLeak(raw)
-    const body = callActionResponseSchema.parse(JSON.parse(raw))
-    expect(Object.keys(body.call).sort()).toEqual(ACTIVE_CALL_KEYS)
-    expect(body.call.id).toBe('CA-active-1')
+    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(ACTIVE_CALL_KEYS)
+    const body = callRecordResponseSchema.parse(JSON.parse(raw))
+    expect(body.id).toBe('CA-active-1')
   })
 
   it('GET /:callId falls back to the history record', async () => {
@@ -195,8 +196,8 @@ describe('single-call routes — wrap the projected call in { call }', () => {
 
     const res = await app.request('/CA-history-1')
     expect(res.status).toBe(200)
-    const body = callActionResponseSchema.parse(await res.json())
-    expect(body.call).toMatchObject({ id: 'CA-history-1', status: 'completed' })
+    const body = callRecordResponseSchema.parse(await res.json())
+    expect(body).toMatchObject({ id: 'CA-history-1', status: 'completed' })
   })
 
   it('POST /:callId/answer returns the answered call without the caller hash', async () => {

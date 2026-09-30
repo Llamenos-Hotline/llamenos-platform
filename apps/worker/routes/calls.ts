@@ -265,7 +265,7 @@ calls.get('/:callId',
         description: 'Call record',
         content: {
           'application/json': {
-            schema: resolver(callActionResponseSchema),
+            schema: resolver(callRecordResponseSchema),
           },
         },
       },
@@ -283,10 +283,10 @@ calls.get('/:callId',
     const activeCall = hubId
       ? await services.calls.getActiveCallById(hubId, callId)
       : await services.calls.getActiveCallByCallId(callId)
-    if (activeCall) return c.json({ call: toActiveCallResponse(activeCall) })
+    if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
     const historyRecord = await services.calls.getCallRecord(callId)
-    if (historyRecord) return c.json({ call: toCallRecordResponse(historyRecord) })
+    if (historyRecord) return c.json(toCallRecordResponse(historyRecord))
 
     return c.json({ error: 'Call not found' }, 404)
   },
