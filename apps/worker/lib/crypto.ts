@@ -110,11 +110,44 @@ export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecre
 }
 
 // --- Envelope-Pattern Encryption (Tier 3: E2EE) ---
+//
+// Server-sealed records use the stored-record format every reader opens
+// (`open_record_for_reader` in packages/crypto/src/encryption.rs):
+//   encryptedContent = hex(iv || AES-256-GCM(contentKey, plaintext) || tag), no AAD
+//   envelope = { pubkey, enc: hex(32), ct: hex(48) }, HPKE info = label, no AAD
+// No AAD, because client-sealed and server-sealed messages share a conversation
+// and carry no format marker — a reader cannot tell which AAD to supply. The
+// label is bound as HPKE `info`.
+
+const NO_AAD = new Uint8Array(0)
+
+function sealForPubkeys(
+  plaintext: string,
+  pubkeys: string[],
+  label: string,
+): { encryptedContent: string; envelopes: RecipientEnvelope[] } {
+  const contentKey = randomBytes(32)
+  const labelBytes = utf8ToBytes(label)
+  const encryptedContent = bytesToHex(symmetricEncrypt(contentKey, utf8ToBytes(plaintext), NO_AAD))
+  const envelopes = pubkeys.map((pk): RecipientEnvelope => {
+    // hpkeSeal output is enc(32) || ct+tag
+    const sealed = hpkeSeal(hexToBytes(pk), contentKey, labelBytes, NO_AAD)
+    return {
+      pubkey: pk,
+      enc: bytesToHex(sealed.subarray(0, 32)),
+      ct: bytesToHex(sealed.subarray(32)),
+    }
+  })
+  return { encryptedContent, envelopes }
+}
 
 /**
  * Encrypt a message for storage using the HPKE envelope pattern.
  * Generates a random per-message symmetric key, encrypts the plaintext with AES-256-GCM,
  * then wraps the key for each reader via HPKE.
+ *
+ * Each pubkey is both the envelope address and the X25519 key the wrap is sealed
+ * to, so callers must pass X25519 encryption keys.
  *
  * The plaintext is discarded after encryption — the server cannot read
  * stored messages after this function returns.
@@ -124,51 +157,21 @@ export function encryptMessageForStorage(
   readerPubkeys: string[],
   label: string = LABEL_MESSAGE,
 ): { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] } {
-  const messageKey = randomBytes(32)
-  const labelBytes = utf8ToBytes(label)
-  const aadKeyWrap = utf8ToBytes(`${label}:key-wrap`)
-
-  const encryptedContent = bytesToHex(symmetricEncrypt(messageKey, utf8ToBytes(plaintext), labelBytes))
-
-  const readerEnvelopes: RecipientEnvelope[] = readerPubkeys.map(pk => {
-    const sealed = hpkeSeal(hexToBytes(pk), messageKey, labelBytes, aadKeyWrap)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
-
-  return { encryptedContent, readerEnvelopes }
+  const { encryptedContent, envelopes } = sealForPubkeys(plaintext, readerPubkeys, label)
+  return { encryptedContent, readerEnvelopes: envelopes }
 }
 
 /**
  * Encrypt call record metadata for history storage.
- * Uses the same HPKE envelope pattern as messages: random per-record key
- * wrapped via HPKE for each admin pubkey.
+ * Same format as messages, under LABEL_CALL_META: a random per-record key
+ * wrapped via HPKE for each admin's X25519 pubkey.
  */
 export function encryptCallRecordForStorage(
   metadata: Record<string, unknown>,
   adminPubkeys: string[],
 ): { encryptedContent: string; adminEnvelopes: RecipientEnvelope[] } {
-  const recordKey = randomBytes(32)
-  const labelBytes = utf8ToBytes(LABEL_CALL_META)
-  const aadKeyWrap = utf8ToBytes(`${LABEL_CALL_META}:key-wrap`)
-
-  const encryptedContent = bytesToHex(
-    symmetricEncrypt(recordKey, utf8ToBytes(JSON.stringify(metadata)), labelBytes),
-  )
-
-  const adminEnvelopes: RecipientEnvelope[] = adminPubkeys.map(pk => {
-    const sealed = hpkeSeal(hexToBytes(pk), recordKey, labelBytes, aadKeyWrap)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
-
-  return { encryptedContent, adminEnvelopes }
+  const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, LABEL_CALL_META)
+  return { encryptedContent, adminEnvelopes: envelopes }
 }
 
 // --- Contact Identifier Encryption ---
