@@ -193,7 +193,7 @@ describe('public IVR media — what a provider fetches during a call (#1325, #13
     const getIvrAudio = vi.fn().mockResolvedValue(null)
     const media = app({ settings: { getIvrAudio } })
     const valid = new URL(await mintedUrl('greeting', 'fr'))
-    const expired = await mintedUrl('greeting', 'fr', Date.now() - 3_600_000)
+    const expired = await mintedUrl('greeting', 'fr', Date.now() - 3 * 86_400_000)
     const noExpiry = `http://app:3000${signIvrMediaPath(SECRET, '/api/ivr-audio/greeting/fr')}`
     const forged = `${valid.origin}${valid.pathname}?exp=${valid.searchParams.get('exp')}&sig=${'0'.repeat(64)}`
     const otherPrompt = `http://app:3000/api/ivr-audio/pleaseHold/fr${valid.search}`

@@ -114,6 +114,8 @@ describe('generated speech voices', () => {
     expect(speechLanguageFor('ht')).toBe('ht')
     expect(speechLanguageFor('tl')).toBe('en')
     expect(speechLanguageFor('mix')).toBe('es')
+    // espeak-ng has an Arabic voice, but unvowelled Arabic text comes out unintelligible.
+    expect(speechLanguageFor('ar')).toBe('en')
     expect(speechLanguageFor('xx')).toBe('en')
   })
 })

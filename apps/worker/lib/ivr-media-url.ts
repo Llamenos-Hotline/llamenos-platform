@@ -15,12 +15,16 @@ import { HMAC_IVR_MEDIA_URL } from '@shared/crypto-labels'
 import { timingSafeCompare } from './timing-safe'
 
 /** How long an uploaded prompt's URL is honoured at least (a response's prompts are all fetched well within it) */
-export const IVR_AUDIO_URL_TTL_SECONDS = 600
+export const IVR_AUDIO_URL_TTL_SECONDS = 86_400
 /**
  * Expiries are rounded up to this, so every call in the same window is handed
- * the same URL and the PBX's media cache (keyed by URL) is hit, not refilled.
+ * the same URL. Asterisk's media cache keys on the URL and never evicts an
+ * entry it does not re-fetch — a file plus an astdb row per URL, on a
+ * persistent volume — so each new URL is a permanent entry: at most one per
+ * prompt per day. Deleting an upload still revokes it at once (the route
+ * reads storage); the expiry only bounds how long a leaked URL stays valid.
  */
-export const IVR_AUDIO_URL_BUCKET_SECONDS = 300
+export const IVR_AUDIO_URL_BUCKET_SECONDS = 86_400
 
 const EXPIRY_PATTERN = /^\d{1,12}$/
 

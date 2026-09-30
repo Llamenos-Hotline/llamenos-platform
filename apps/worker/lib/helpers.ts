@@ -85,8 +85,9 @@ type AudioUrlMapSource =
 
 /**
  * The operator-uploaded prompts, as `promptType:language` → the URL a provider
- * fetches during this call: signed, and expiring soon after (#1325), so a URL
- * leaked from a provider's logs is not a lasting way to probe the hotline.
+ * fetches during this call: signed, and expiring within two days (#1325), so a
+ * URL leaked from a provider's logs is not a lasting way to probe the hotline
+ * (IVR_AUDIO_URL_BUCKET_SECONDS says why not sooner).
  */
 export async function buildAudioUrlMap(
   settings: AudioUrlMapSource,

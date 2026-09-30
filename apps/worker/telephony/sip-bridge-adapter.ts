@@ -232,7 +232,12 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   // from a URL: the operator's upload for the caller's language when there is
   // one, else the prompt as speech the worker generates (IvrSpeechService).
 
-  /** Where a prompt is played from: the upload for `promptKey:lang`, else its text as generated speech */
+  /**
+   * Where a prompt is played from. A recording always beats generated speech:
+   * the operator's upload in the caller's language; else, when no voice speaks
+   * that language, the upload in the language their prompts fall back to; else
+   * the prompt as generated speech.
+   */
   protected promptUrl(
     promptKey: string,
     lang: string,
@@ -240,7 +245,11 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     speechUrl: SpeechUrlBuilder | undefined,
     text: (speechLang: string) => string = (speechLang) => getPrompt(promptKey, speechLang),
   ): string {
-    return audioUrls?.[`${promptKey}:${lang}`] ?? this.generatedSpeechUrl(text, lang, speechUrl)
+    const own = audioUrls?.[`${promptKey}:${lang}`]
+    if (own) return own
+    const speechLang = speechLanguageFor(lang)
+    const fallback = speechLang === lang ? undefined : audioUrls?.[`${promptKey}:${speechLang}`]
+    return fallback ?? this.generatedSpeechUrl(text, lang, speechUrl)
   }
 
   /**

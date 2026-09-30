@@ -55,7 +55,7 @@ describe('IVR media URL signing', () => {
     expect(verifyIvrMediaPath('', PATH, query, { requireExpiry: false, nowMs: NOW })).toBe(false)
   })
 
-  it('expires an uploaded prompt 10–15 minutes out, on a 5-minute boundary', () => {
+  it('expires an uploaded prompt 1–2 days out, on a day boundary', () => {
     const exp = ivrAudioUrlExpiry(NOW)
     expect(exp % IVR_AUDIO_URL_BUCKET_SECONDS).toBe(0)
     expect(exp - NOW / 1000).toBeGreaterThanOrEqual(IVR_AUDIO_URL_TTL_SECONDS)

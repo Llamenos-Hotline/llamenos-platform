@@ -32,7 +32,7 @@ describe('buildAudioUrlMap', () => {
     expect(map['goodbye:en']).toMatch(/^https:\/\/api\.example\.com\/api\/ivr-audio\/goodbye\/en\?/)
   })
 
-  it('signs each URL for its own path, expiring 10–15 minutes out on a 5-minute boundary', async () => {
+  it('signs each URL for its own path, expiring 1–2 days out on a day boundary', async () => {
     const settings = {
       getIvrAudioList: vi.fn().mockResolvedValue({
         recordings: [{ promptType: 'greeting', language: 'fr' }, { promptType: 'greeting', language: 'es' }],
@@ -41,9 +41,9 @@ describe('buildAudioUrlMap', () => {
     const map = await buildAudioUrlMap(settings, origin, secret, now)
     const fr = new URL(map['greeting:fr'])
     const exp = Number(fr.searchParams.get('exp'))
-    expect(exp % 300).toBe(0)
-    expect(exp * 1000 - now).toBeGreaterThanOrEqual(600_000)
-    expect(exp * 1000 - now).toBeLessThan(900_000)
+    expect(exp % 86_400).toBe(0)
+    expect(exp * 1000 - now).toBeGreaterThanOrEqual(86_400_000)
+    expect(exp * 1000 - now).toBeLessThan(2 * 86_400_000)
 
     const opts = { requireExpiry: true, nowMs: now }
     expect(verifyIvrMediaPath(secret, fr.pathname, fr.searchParams, opts)).toBe(true)
@@ -54,13 +54,16 @@ describe('buildAudioUrlMap', () => {
     expect(verifyIvrMediaPath(secret, fr.pathname, fr.searchParams, { requireExpiry: true, nowMs: exp * 1000 })).toBe(false)
   })
 
-  it('hands every call in the same 5-minute window the same URL, so the PBX cache is hit', async () => {
+  it('hands every call on the same day the same URL, so the PBX cache gains one entry a day, not one a call', async () => {
     const settings = {
       getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [{ promptType: 'greeting', language: 'fr' }] }),
     }
-    const first = await buildAudioUrlMap(settings, origin, secret, now + 1_000)
-    const later = await buildAudioUrlMap(settings, origin, secret, now + 299_000)
+    const dayStart = Math.floor(now / 86_400_000) * 86_400_000
+    const first = await buildAudioUrlMap(settings, origin, secret, dayStart + 1_000)
+    const later = await buildAudioUrlMap(settings, origin, secret, dayStart + 86_399_000)
+    const tomorrow = await buildAudioUrlMap(settings, origin, secret, dayStart + 86_401_000)
     expect(later['greeting:fr']).toBe(first['greeting:fr'])
+    expect(tomorrow['greeting:fr']).not.toBe(first['greeting:fr'])
   })
 
   it('builds URL map from fetch-based settings', async () => {

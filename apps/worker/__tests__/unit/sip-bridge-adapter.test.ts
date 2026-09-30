@@ -624,6 +624,41 @@ describe('AsteriskAdapter', () => {
       expect(queue.exitEvent).toBe('queue_exit')
     })
 
+    it("plays the fallback language's upload, not generated speech, to a caller no voice speaks (#1347)", async () => {
+      // Tagalog has no offline voice: its prompts fall back to English — and
+      // an English recording still beats English generated speech.
+      const res = await adapter.handleIncomingCall({
+        callSid: 'CA123',
+        callerNumber: '+639170000000',
+        voiceCaptchaEnabled: false,
+        rateLimited: false,
+        callerLanguage: 'tl',
+        speechUrl: fakeSpeech,
+        hotlineName: 'Test',
+        audioUrls: { 'pleaseHold:en': 'https://example.com/hold-en.wav' },
+      })
+      const body = JSON.parse(res.body)
+      const urls = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => c.url)
+      expect(spoken(urls[0])?.locale).toBe('en')
+      expect(urls[1]).toBe('https://example.com/hold-en.wav')
+    })
+
+    it("plays the caller's own-language upload over everything else", async () => {
+      const res = await adapter.handleIncomingCall({
+        callSid: 'CA123',
+        callerNumber: '+639170000000',
+        voiceCaptchaEnabled: false,
+        rateLimited: false,
+        callerLanguage: 'tl',
+        speechUrl: fakeSpeech,
+        hotlineName: 'Test',
+        audioUrls: { 'pleaseHold:tl': 'https://example.com/hold-tl.wav', 'pleaseHold:en': 'https://example.com/hold-en.wav' },
+      })
+      const body = JSON.parse(res.body)
+      const urls = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => c.url)
+      expect(urls[1]).toBe('https://example.com/hold-tl.wav')
+    })
+
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
         callSid: 'CA123',
