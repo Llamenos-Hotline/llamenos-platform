@@ -1,8 +1,7 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
-import type { Context } from 'hono'
 import type { AppEnv } from '../types'
-import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
+import { requirePermission } from '../middleware/permission-guard'
 import { permissionGranted } from '@shared/permissions'
 import { createShiftBodySchema, updateShiftBodySchema, fallbackGroupSchema, shiftResponseSchema, myStatusResponseSchema, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import { okResponseSchema } from '@protocol/schemas/common'
@@ -495,36 +494,6 @@ shifts.put('/fallback',
   },
 )
 
-// --- Schedule ---
-
-// shifts:read sees the full roster. shifts:read-own sees the same schedule — so a
-// user can find a shift to request to join — but each shift's roster is narrowed to
-// the caller, so no user learns who else is on shift.
-shifts.get('/',
-  describeRoute({
-    tags: ['Shifts'],
-    summary: 'List shifts (roster narrowed to the caller without shifts:read)',
-    responses: {
-      200: { description: 'List of shifts', content: { 'application/json': { schema: resolver(shiftListResponseSchema) } } },
-      ...authErrors,
-    },
-  }),
-  requireAnyPermission('shifts:read', 'shifts:read-own'),
-  async (c) => {
-    const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
-    const result = await services.shifts.list(hubId)
-    if (holds(c, 'shifts:read')) return c.json(result)
-    const pubkey = c.get('pubkey')
-    return c.json({
-      shifts: result.shifts.map(shift => ({
-        ...shift,
-        userPubkeys: shift.userPubkeys.filter(pk => pk === pubkey),
-      })),
-    })
-  },
-)
-
 // --- CRUD via entity-router factory ---
 
 const shiftCrudRouter = createEntityRouter({
@@ -537,7 +506,6 @@ const shiftCrudRouter = createEntityRouter({
   updateBodySchema: updateShiftBodySchema,
   deleteResponseSchema: okResponseSchema,
   hubScoped: true,
-  disableList: true,
   disableGet: true,
   auditEvents: {
     created: 'shiftCreated',

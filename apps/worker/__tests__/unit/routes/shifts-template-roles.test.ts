@@ -1,8 +1,8 @@
 /**
  * Shipped hub-template roles vs. the shift routes they exist to use (#1348).
  *
- * Every role a template ships that can answer calls must be able to clock in,
- * clock out, heartbeat and see the schedule — using exactly the permissions the
+ * Every role a template ships that can answer calls must be importable and able
+ * to clock in, heartbeat and clock out — using exactly the permissions the
  * template grants, through the real route and the real permission guard.
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -38,7 +38,6 @@ function callAnsweringTemplateRoles(): TemplateRole[] {
 }
 
 const SELF = 'a'.repeat(64)
-const OTHER = 'b'.repeat(64)
 const HUB = 'hub-1'
 
 function appFor(permissions: string[], services: Record<string, unknown>) {
@@ -85,28 +84,6 @@ describe('shipped template roles that can answer calls (#1348)', () => {
       expect(activeShifts.clockIn).toHaveBeenCalledWith(SELF, HUB)
       expect(activeShifts.heartbeat).toHaveBeenCalledWith(SELF, HUB)
       expect(activeShifts.clockOut).toHaveBeenCalledWith(SELF, HUB)
-    })
-
-    it('sees the hub schedule, and sees who else is rostered only if it may read all shifts', async () => {
-      const list = vi.fn().mockResolvedValue({
-        shifts: [
-          { id: 'mine', encryptedName: 'x', startTime: '09:00', endTime: '17:00', days: [1], ringGroupId: null, userPubkeys: [SELF, OTHER], createdAt: '2026-01-01T00:00:00.000Z' },
-          { id: 'open', encryptedName: 'y', startTime: '17:00', endTime: '23:00', days: [1], ringGroupId: null, userPubkeys: [OTHER], createdAt: '2026-01-01T00:00:00.000Z' },
-        ],
-      })
-      const app = appFor(permissions, { shifts: { list } })
-
-      const res = await app.request('/shifts')
-      expect(res.status, await res.clone().text()).toBe(200)
-      const body = await res.json() as { shifts: Array<{ id: string; userPubkeys: string[] }> }
-      expect(list).toHaveBeenCalledWith(HUB)
-      expect(body.shifts.map(s => s.id)).toEqual(['mine', 'open'])
-
-      const rosterVisible = permissionGranted(permissions, 'shifts:read')
-      expect(body.shifts.find(s => s.id === 'mine')?.userPubkeys)
-        .toEqual(rosterVisible ? [SELF, OTHER] : [SELF])
-      expect(body.shifts.find(s => s.id === 'open')?.userPubkeys)
-        .toEqual(rosterVisible ? [OTHER] : [])
     })
   })
 })
