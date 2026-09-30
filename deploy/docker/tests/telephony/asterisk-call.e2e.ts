@@ -398,25 +398,43 @@ function heard(name: string): Int16Array | null {
 }
 
 const TONE_HZ = 1000
+const WINDOW = 800
 
-/** Seconds of the test tone in 8 kHz audio: 100 ms windows whose 1 kHz amplitude (Goertzel) is clearly present */
-function toneSeconds(samples: Int16Array): number {
-  const n = 800
-  const coeff = 2 * Math.cos((2 * Math.PI * TONE_HZ) / IVR_WAV_SAMPLE_RATE)
-  let windows = 0
-  for (let start = 0; start + n <= samples.length; start += n) {
+/** The 100 ms windows of 8 kHz audio in which a `hz` tone (Goertzel) is clearly present */
+function toneWindows(samples: Int16Array, hz: number): number[] {
+  const coeff = 2 * Math.cos((2 * Math.PI * hz) / IVR_WAV_SAMPLE_RATE)
+  const windows: number[] = []
+  for (let start = 0; start + WINDOW <= samples.length; start += WINDOW) {
     let s1 = 0
     let s2 = 0
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < WINDOW; i++) {
       const s0 = samples[start + i] + coeff * s1 - s2
       s2 = s1
       s1 = s0
     }
-    const amplitude = (2 * Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - coeff * s1 * s2))) / n
+    const amplitude = (2 * Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - coeff * s1 * s2))) / WINDOW
     // The upload is at half scale (~16 000); anything near silence is far below this.
-    if (amplitude > 2_000) windows += 1
+    if (amplitude > 2_000) windows.push(start / WINDOW)
   }
-  return (windows * n) / IVR_WAV_SAMPLE_RATE
+  return windows
+}
+
+/** Seconds of a `hz` test tone in 8 kHz audio */
+function toneSeconds(samples: Int16Array, hz = TONE_HZ): number {
+  return (toneWindows(samples, hz).length * WINDOW) / IVR_WAV_SAMPLE_RATE
+}
+
+/** When, in seconds into the call, a `hz` tone is first heard */
+function toneOnset(samples: Int16Array, hz: number): number {
+  const first = toneWindows(samples, hz)[0]
+  if (first === undefined) throw new Error(`no ${hz} Hz tone was heard`)
+  return (first * WINDOW) / IVR_WAV_SAMPLE_RATE
+}
+
+/** A 2 s PCM WAV test tone at `hz`, as the admin UI uploads it */
+function testTone(hz: number): Uint8Array {
+  const tone = Float32Array.from({ length: 2 * IVR_WAV_SAMPLE_RATE }, (_, i) => 0.5 * Math.sin((2 * Math.PI * hz * i) / IVR_WAV_SAMPLE_RATE))
+  return encodePcm16Wav(tone, IVR_WAV_SAMPLE_RATE)
 }
 
 /** The caller dials, the hotline turns them away; returns what they heard once the call has ended */
@@ -455,8 +473,7 @@ test('a turned-away caller hears the prompt the operator uploaded, fetched by th
   // A browser recording is refused, whatever it says it is; a PCM WAV is accepted.
   const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81])
   expect(await uploadPrompt(request, 'rateLimited', 'en', webm, 'audio/wav')).toEqual({ status: 400, body: JSON.stringify({ error: 'Not a WAV file' }) })
-  const tone = Float32Array.from({ length: 2 * IVR_WAV_SAMPLE_RATE }, (_, i) => 0.5 * Math.sin((2 * Math.PI * TONE_HZ * i) / IVR_WAV_SAMPLE_RATE))
-  const uploaded = await uploadPrompt(request, 'rateLimited', 'en', encodePcm16Wav(tone, IVR_WAV_SAMPLE_RATE), 'audio/wav')
+  const uploaded = await uploadPrompt(request, 'rateLimited', 'en', testTone(TONE_HZ), 'audio/wav')
   expect(uploaded.status, uploaded.body).toBe(200)
 
   try {
@@ -465,5 +482,45 @@ test('a turned-away caller hears the prompt the operator uploaded, fetched by th
     expect(toneSeconds(told)).toBeGreaterThanOrEqual(1.5)
   } finally {
     await apiDelete(request, '/settings/ivr-audio/rateLimited/en')
+  }
+})
+
+/** Distinct tones, so the recording shows which prompt the caller heard, and in what order */
+const GREETING_HZ = 600
+const HOLD_HZ = 1400
+
+test('a caller hears the uploaded greeting, then the hold message, before they are queued', async ({ request }) => {
+  const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX))
+  expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: ['en'] })).status).toBe(200)
+
+  // The keys the admin UI uploads (voice-prompts-section.tsx): what a cloud
+  // provider plays, the PBX must play too (#1346).
+  for (const [promptType, hz] of [['greeting', GREETING_HZ], ['pleaseHold', HOLD_HZ]] as const) {
+    const uploaded = await uploadPrompt(request, promptType, 'en', testTone(hz), 'audio/wav')
+    expect(uploaded.status, uploaded.body).toBe(200)
+  }
+
+  try {
+    const caller = uniqueNumber('+1555783')
+    const name = `${caller}-queued`
+    recordNextCallAs(name)
+    placeCall(caller, hotline, 10)
+    await expect
+      .poll(() => activeCall(request, hubId, caller.slice(-4)), { timeout: 20_000, message: 'the caller is queued and ringing' })
+      .toMatchObject({ status: 'ringing' })
+    await expect
+      .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 30_000, message: 'the caller hung up' })
+      .toMatchObject({ status: 'unanswered' })
+    await expect.poll(() => heard(name) !== null, { timeout: 5_000, message: `the carrier's recording of ${name}` }).toBe(true)
+    const audio = heard(name)
+    if (!audio) throw new Error(`the carrier's recording of ${name} disappeared`)
+
+    // Both whole 2 s prompts, greeting first.
+    expect(toneSeconds(audio, GREETING_HZ)).toBeGreaterThanOrEqual(1.5)
+    expect(toneSeconds(audio, HOLD_HZ)).toBeGreaterThanOrEqual(1.5)
+    expect(toneOnset(audio, GREETING_HZ)).toBeLessThan(toneOnset(audio, HOLD_HZ))
+  } finally {
+    await apiDelete(request, '/settings/ivr-audio/greeting/en')
+    await apiDelete(request, '/settings/ivr-audio/pleaseHold/en')
   }
 })
