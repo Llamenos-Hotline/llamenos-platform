@@ -7,12 +7,9 @@ import { Then } from '../fixtures'
 import { Timeouts } from '../../helpers'
 
 Then('I should see the retention categories', async ({ page }) => {
-  await page.waitForLoadState('domcontentloaded')
-  const categories = page.getByTestId('retention-categories')
-  const section = page.getByTestId('admin-section')
-  const hasCategories = await categories.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  const hasSection = await section.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  expect(hasCategories || hasSection).toBe(true)
+  // The old version also accepted the admin shell's `admin-section` wrapper,
+  // which renders for every section, so it could not fail.
+  await expect(page.getByTestId('retention-categories')).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see retention settings for {string}', async ({ page }, category: string) => {
@@ -23,13 +20,11 @@ Then('I should see retention settings for {string}', async ({ page }, category: 
 Then('each retention category should have a days input and save button', async ({ page }) => {
   await page.waitForLoadState('domcontentloaded')
   const categories = ['call_records', 'notes', 'messages', 'audit_log']
+  // Every category renders (retention-section.tsx CATEGORIES). The old loop
+  // skipped any category that was not visible yet, so it passed with none.
   for (const category of categories) {
-    const catEl = page.getByTestId(`retention-category-${category}`)
-    const isVisible = await catEl.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-    if (!isVisible) continue
-    const daysInput = page.getByTestId(`retention-days-${category}`)
-    const saveBtn = page.getByTestId(`retention-save-${category}`)
-    await expect(daysInput).toBeVisible({ timeout: Timeouts.ELEMENT })
-    await expect(saveBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await expect(page.getByTestId(`retention-category-${category}`)).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await expect(page.getByTestId(`retention-days-${category}`)).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await expect(page.getByTestId(`retention-save-${category}`)).toBeVisible({ timeout: Timeouts.ELEMENT })
   }
 })
