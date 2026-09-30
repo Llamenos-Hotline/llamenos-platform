@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { listIvrAudio, uploadIvrAudio, deleteIvrAudio, getIvrAudioUrl, type IvrAudioRecording } from '@/lib/api'
+import { listIvrAudio, uploadIvrAudio, deleteIvrAudio, downloadIvrAudio, type IvrAudioRecording } from '@/lib/api'
 import { SettingsSection } from '@/components/settings-section'
 import { Badge } from '@/components/ui/badge'
 import { Volume2 } from 'lucide-react'
@@ -53,7 +53,7 @@ export function VoicePromptsSection({ ivrEnabled, recordings, onRecordingsChange
                     )}
                   </div>
                   <AudioRecorder
-                    existingUrl={existing ? getIvrAudioUrl(promptType, langCode) : undefined}
+                    existing={existing ? { version: existing.uploadedAt, load: () => downloadIvrAudio(promptType, langCode) } : undefined}
                     onRecorded={async (blob) => {
                       setAudioSaving(key)
                       try {
