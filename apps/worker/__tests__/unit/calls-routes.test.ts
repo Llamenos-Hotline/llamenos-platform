@@ -3,8 +3,53 @@ import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { hashPhone } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
+import type { activeCalls, callRecords } from '@worker/db/schema'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64) // gitleaks:allow
+
+/** An `active_calls` row as the service returns it — `callerNumber` is the HMAC of the caller's number. */
+function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {}): typeof activeCalls.$inferSelect {
+  return {
+    callId: 'call-1',
+    hubId: 'hub-1',
+    callerNumber: hashPhone('+15551234567', TEST_HMAC_SECRET),
+    callerLast4: '4567',
+    answeredBy: null,
+    status: 'ringing',
+    hasTranscription: false,
+    hasVoicemail: false,
+    hasRecording: false,
+    recordingSid: null,
+    reportedBy: null,
+    startedAt: new Date('2026-09-30T10:00:00.000Z'),
+    answeredAt: null,
+    endedAt: null,
+    duration: null,
+    ...overrides,
+  }
+}
+
+/** A `call_records` row as the service returns it. */
+function callRecordRow(overrides: Partial<typeof callRecords.$inferSelect> = {}): typeof callRecords.$inferSelect {
+  return {
+    callId: 'call-1',
+    hubId: 'hub-1',
+    callerLast4: '4567',
+    startedAt: new Date('2026-09-30T10:00:00.000Z'),
+    endedAt: new Date('2026-09-30T10:05:00.000Z'),
+    duration: 300,
+    answeredBy: 'a'.repeat(64),
+    status: 'completed',
+    hasTranscription: false,
+    hasVoicemail: false,
+    hasRecording: false,
+    recordingSid: null,
+    encryptedContent: '',
+    adminEnvelopes: [],
+    createdAt: new Date('2026-09-30T10:05:00.000Z'),
+    ...overrides,
+  }
+}
 
 function createTestApp(opts: {
   permissions?: string[]
@@ -63,8 +108,8 @@ function makeMockCallsService() {
     getActiveCallById: vi.fn().mockResolvedValue(null),
     getActiveCallByCallId: vi.fn().mockResolvedValue(null),
     getCallRecord: vi.fn().mockResolvedValue(null),
-    answerCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'in-progress' }),
-    endCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'completed' }),
+    answerCall: vi.fn().mockResolvedValue(activeCallRow({ status: 'in-progress', answeredBy: 'a'.repeat(64) })),
+    endCall: vi.fn().mockResolvedValue(callRecordRow()),
     reportSpam: vi.fn().mockResolvedValue({ ok: true }),
     debug: vi.fn().mockResolvedValue({ activeCount: 0, activeCalls: [] }),
   }
@@ -115,11 +160,10 @@ function makeServices(overrides: Record<string, unknown> = {}) {
 
 describe('Calls Routes', () => {
   describe('GET /active', () => {
-    it('returns active calls with full info when user has calls:read-active-full', async () => {
+    it('never sends the caller-number HMAC, even with calls:read-active-full', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCalls.mockResolvedValue([
-        { callId: 'call-1', callerNumber: '+15551234567', status: 'ringing' },
-      ])
+      const row = activeCallRow()
+      callsSvc.getActiveCalls.mockResolvedValue([row])
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -129,17 +173,21 @@ describe('Calls Routes', () => {
 
       const res = await app.request('/active')
       expect(res.status).toBe(200)
-      const body = await res.json()
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
       expect(body.calls).toHaveLength(1)
-      expect(body.calls[0].callerNumber).toBe('+15551234567')
+      expect(body.calls[0].id).toBe('call-1')
+      expect(body.calls[0].callerLast4).toBe('4567')
+      expect(body.calls[0]).not.toHaveProperty('callerNumber')
+      expect(body.calls[0]).not.toHaveProperty('callId')
       expect(callsSvc.getActiveCalls).toHaveBeenCalledWith('hub-1')
     })
 
-    it('redacts callerNumber when user lacks calls:read-active-full', async () => {
+    it('never sends the caller-number HMAC, or a redaction placeholder, without calls:read-active-full', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.getActiveCalls.mockResolvedValue([
-        { callId: 'call-1', callerNumber: '+15551234567', status: 'ringing' },
-      ])
+      const row = activeCallRow()
+      callsSvc.getActiveCalls.mockResolvedValue([row])
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -149,8 +197,11 @@ describe('Calls Routes', () => {
 
       const res = await app.request('/active')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.calls[0].callerNumber).toBe('[redacted]')
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
+      expect(body.calls[0].id).toBe('call-1')
+      expect(body.calls[0]).not.toHaveProperty('callerNumber')
     })
 
     it('returns 403 when permission is missing', async () => {
@@ -219,7 +270,7 @@ describe('Calls Routes', () => {
     it('returns paginated call history', async () => {
       const callsSvc = makeMockCallsService()
       callsSvc.listCallHistory.mockResolvedValue({
-        calls: [{ callId: 'c1' }],
+        calls: [callRecordRow({ callId: 'c1' })],
         total: 1,
         hasMore: false,
       })
@@ -234,6 +285,9 @@ describe('Calls Routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.calls).toHaveLength(1)
+      expect(body.calls[0].id).toBe('c1')
+      expect(body.calls[0]).not.toHaveProperty('callId')
+      expect(body).toMatchObject({ total: 1, page: 1, limit: 10 })
       expect(callsSvc.listCallHistory).toHaveBeenCalledWith('hub-1', {
         search: undefined,
         dateFrom: undefined,
@@ -310,7 +364,8 @@ describe('Calls Routes', () => {
   describe('POST /:callId/answer', () => {
     it('answers a call and returns the call object', async () => {
       const callsSvc = makeMockCallsService()
-      callsSvc.answerCall.mockResolvedValue({ callId: 'call-1', status: 'in-progress' })
+      const row = activeCallRow({ status: 'in-progress', answeredBy: 'a'.repeat(64) })
+      callsSvc.answerCall.mockResolvedValue(row)
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -320,8 +375,11 @@ describe('Calls Routes', () => {
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.call.status).toBe('in-progress')
+      const raw = await res.text()
+      expect(raw).not.toContain(row.callerNumber)
+      const body = JSON.parse(raw)
+      expect(body.call).toMatchObject({ id: 'call-1', status: 'in-progress' })
+      expect(body.call).not.toHaveProperty('callerNumber')
       expect(callsSvc.answerCall).toHaveBeenCalledWith('hub-1', 'call-1', 'a'.repeat(64))
     })
 
@@ -375,7 +433,7 @@ describe('Calls Routes', () => {
         answeredBy: pubkey,
         status: 'in-progress',
       })
-      callsSvc.endCall.mockResolvedValue({ callId: 'call-1', status: 'completed' })
+      callsSvc.endCall.mockResolvedValue(callRecordRow())
 
       const services = makeServices({ calls: callsSvc })
       const { app } = createTestApp({
@@ -387,7 +445,7 @@ describe('Calls Routes', () => {
       const res = await app.request('/call-1/hangup', { method: 'POST' })
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.call.status).toBe('completed')
+      expect(body.call).toMatchObject({ id: 'call-1', status: 'completed', duration: 300 })
       expect(callsSvc.getActiveCallById).toHaveBeenCalledWith('hub-1', 'call-1')
       expect(callsSvc.endCall).toHaveBeenCalledWith('hub-1', 'call-1')
     })
@@ -516,7 +574,7 @@ describe('Calls Routes', () => {
         callerLast4: '4567',
         hubId: 'hub-1',
       })
-      callsSvc.endCall.mockResolvedValue({ callId: 'call-1', status: 'completed' })
+      callsSvc.endCall.mockResolvedValue(callRecordRow())
 
       const services = makeServices({
         calls: callsSvc,
