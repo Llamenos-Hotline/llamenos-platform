@@ -5,6 +5,8 @@
  *     ──WebSocket──▶ sip-bridge ──signed webhooks──▶ worker (IVR, queue, ringing)
  *     ──/ring──▶ sip-bridge ──ARI originate──▶ PJSIP/<volunteer>@trunk ──▶ carrier
  *     (the volunteer's phone answers) ──▶ /user-answer ──▶ ARI mixing bridge
+ *   worker ──play http://app:3000/api/ivr-audio/…──▶ sip-bridge ──ARI sound:<url>──▶
+ *     Asterisk fetches the operator's upload from the app ──RTP──▶ carrier (recorded)
  *
  * Nothing is simulated on the hotline side: the worker only learns about a call
  * from the bridge's webhooks, and a volunteer is only "answered" because the
@@ -14,19 +16,27 @@
  * POST /provider-setup/create-sip-trunk, which writes it into the PBX over ARI.
  * The PBX ships with no trunk at all.
  *
- * Run with run-call-e2e.sh (it starts the PBX stack and an isolated worker).
+ * Run with run-call-e2e.sh (it starts the app and the PBX stack on one network).
  */
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
 import {
+  ADMIN_SEED,
   addHubMemberViaApi,
+  apiDelete,
   apiGet,
+  apiPatch,
   apiPost,
   createUserViaApi,
   listAuditLogViaApi,
+  seedHexToPubkey,
   setFallbackGroupViaApi,
 } from '../../../../tests/api-helpers'
+import { encodePcm16Wav, IVR_WAV_SAMPLE_RATE } from '../../../../src/client/lib/ivr-wav'
 
 const CARRIER = process.env.E2E_CARRIER_CONTAINER ?? 'll-telephony-e2e-sip-carrier-1'
 const HOTLINE_PBX = process.env.E2E_ASTERISK_CONTAINER ?? 'll-telephony-e2e-asterisk-1'
@@ -35,12 +45,12 @@ const CARRIER_HOST = 'sip-carrier'
 /** The username/password the carrier issued for its registration trunk (carrier/pjsip.conf) */
 const CARRIER_ISSUED_USERNAME = 'hotline-reg'
 const CARRIER_ISSUED_PASSWORD = 'carrier-issued-e2e-only'
-/** ARI as the worker is configured to reach it — the production name, see run-call-e2e.sh */
+/** ARI and the bridge as the app is configured to reach them — their names on the compose network */
 const WORKER_ARI_URL = process.env.E2E_WORKER_ARI_URL ?? 'http://asterisk:8088'
+const WORKER_BRIDGE_URL = process.env.E2E_WORKER_BRIDGE_URL ?? 'http://sip-bridge:3000'
 const ARI_REST_URL = process.env.E2E_ARI_REST_URL ?? 'http://127.0.0.1:8088/ari'
 const ARI_USERNAME = process.env.ARI_USERNAME ?? 'llamenos'
 const ARI_PASSWORD = process.env.ARI_PASSWORD ?? ''
-const BRIDGE_URL = process.env.E2E_BRIDGE_URL ?? 'http://127.0.0.1:3200'
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? ''
 
 /** Carrier numbers under this prefix ring forever (see carrier/extensions.conf) */
@@ -184,7 +194,7 @@ async function provisionHotline(
       ariUrl: WORKER_ARI_URL,
       ariUsername: ARI_USERNAME,
       ariPassword: ARI_PASSWORD,
-      bridgeCallbackUrl: BRIDGE_URL,
+      bridgeCallbackUrl: WORKER_BRIDGE_URL,
       bridgeSecret: BRIDGE_SECRET,
     },
   })
@@ -344,4 +354,116 @@ test('a registration trunk registers with the credentials the carrier issued, an
   carrierCli('dialplan set global VOLUNTEER_TALK_SECONDS 4')
   placeCall(caller, hotline, 60, 'registration')
   await expectAnsweredAndCompleted(request, hubId, caller, volunteer.pubkey)
+})
+
+// ---- What the caller hears ----
+
+/** An admin-signed request header, for a body the JSON helpers cannot send */
+function adminAuthorization(method: string, path: string): string {
+  const pubkey = seedHexToPubkey(ADMIN_SEED)
+  const timestamp = Date.now()
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}:${nonce}`)
+  const token = bytesToHex(ed25519.sign(message, hexToBytes(ADMIN_SEED)))
+  return `Bearer ${JSON.stringify({ pubkey, timestamp, token, nonce })}`
+}
+
+/** The operator uploads a prompt through the settings API, as the admin UI does */
+async function uploadPrompt(request: APIRequestContext, promptType: string, language: string, body: Uint8Array, contentType: string) {
+  const path = `/api/settings/ivr-audio/${promptType}/${language}`
+  const res = await request.put(path, {
+    headers: { Authorization: adminAuthorization('PUT', path), 'Content-Type': contentType },
+    data: Buffer.from(body),
+  })
+  return { status: res.status(), body: await res.text() }
+}
+
+/** The caller's next call is recorded, as heard, under this name (carrier/extensions.conf [caller-hears]) */
+function recordNextCallAs(name: string): void {
+  carrierCli(`dialplan set global HEARD_AS ${name}`)
+}
+
+/** What the caller heard on the call recorded under `name`: 8 kHz 16-bit samples, or null before it exists */
+function heard(name: string): Int16Array | null {
+  let wav: Buffer
+  try {
+    wav = execFileSync('docker', ['exec', CARRIER, 'cat', `/tmp/heard-${name}.wav`], { stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    return null
+  }
+  const data = wav.indexOf('data')
+  if (data < 0) return null
+  const pcm = wav.subarray(data + 8)
+  return new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + (pcm.byteLength & ~1)))
+}
+
+const TONE_HZ = 1000
+
+/** Seconds of the test tone in 8 kHz audio: 100 ms windows whose 1 kHz amplitude (Goertzel) is clearly present */
+function toneSeconds(samples: Int16Array): number {
+  const n = 800
+  const coeff = 2 * Math.cos((2 * Math.PI * TONE_HZ) / IVR_WAV_SAMPLE_RATE)
+  let windows = 0
+  for (let start = 0; start + n <= samples.length; start += n) {
+    let s1 = 0
+    let s2 = 0
+    for (let i = 0; i < n; i++) {
+      const s0 = samples[start + i] + coeff * s1 - s2
+      s2 = s1
+      s1 = s0
+    }
+    const amplitude = (2 * Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - coeff * s1 * s2))) / n
+    // The upload is at half scale (~16 000); anything near silence is far below this.
+    if (amplitude > 2_000) windows += 1
+  }
+  return (windows * n) / IVR_WAV_SAMPLE_RATE
+}
+
+/** The caller dials, the hotline turns them away; returns what they heard once the call has ended */
+async function callTurnedAway(caller: string, hotline: string, name: string): Promise<Int16Array> {
+  recordNextCallAs(name)
+  const before = carrierCallCounts().processed
+  placeCall(caller, hotline, 30)
+  // The hotline ends the call itself, long before the caller would have hung up.
+  await expect
+    .poll(carrierCallCounts, { timeout: 20_000, message: `the hotline ended call ${name}` })
+    .toEqual({ processed: before + 1, active: 0 })
+  await expect.poll(() => heard(name) !== null, { timeout: 5_000, message: `the carrier's recording of ${name}` }).toBe(true)
+  const audio = heard(name)
+  if (!audio) throw new Error(`the carrier's recording of ${name} disappeared`)
+  return audio
+}
+
+test('a turned-away caller hears the prompt the operator uploaded, fetched by the PBX from the app', async ({ request }) => {
+  const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX))
+  // One language: no menu to wait through. Rate limiting: one call a minute.
+  expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: ['en'] })).status).toBe(200)
+  expect((await apiPatch(request, `/hubs/${hubId}/settings/spam`, { rateLimitEnabled: true, maxCallsPerMinute: 1 })).status).toBe(200)
+
+  // The first call uses up the caller's budget: routed as usual, nobody answers, they hang up.
+  const caller = uniqueNumber('+1555782')
+  placeCall(caller, hotline, 4)
+  await expect
+    .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 30_000, message: 'the first call ended' })
+    .toMatchObject({ status: 'unanswered' })
+  await expect.poll(carrierCallCounts, { timeout: 15_000 }).toMatchObject({ active: 0 })
+
+  // No prompt uploaded: the hotline turns the caller away, and they hear nothing.
+  const silent = await callTurnedAway(caller, hotline, `${caller}-none`)
+  expect(toneSeconds(silent)).toBe(0)
+
+  // A browser recording is refused, whatever it says it is; a PCM WAV is accepted.
+  const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81])
+  expect(await uploadPrompt(request, 'rateLimited', 'en', webm, 'audio/wav')).toEqual({ status: 400, body: JSON.stringify({ error: 'Not a WAV file' }) })
+  const tone = Float32Array.from({ length: 2 * IVR_WAV_SAMPLE_RATE }, (_, i) => 0.5 * Math.sin((2 * Math.PI * TONE_HZ * i) / IVR_WAV_SAMPLE_RATE))
+  const uploaded = await uploadPrompt(request, 'rateLimited', 'en', encodePcm16Wav(tone, IVR_WAV_SAMPLE_RATE), 'audio/wav')
+  expect(uploaded.status, uploaded.body).toBe(200)
+
+  try {
+    // Now the caller hears the whole 2 s prompt before the hotline hangs up.
+    const told = await callTurnedAway(caller, hotline, `${caller}-uploaded`)
+    expect(toneSeconds(told)).toBeGreaterThanOrEqual(1.5)
+  } finally {
+    await apiDelete(request, '/settings/ivr-audio/rateLimited/en')
+  }
 })

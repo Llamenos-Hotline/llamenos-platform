@@ -1,28 +1,67 @@
-# Overlay: a simulated PSTN carrier for driving a real SIP call through the dev
-# telephony profile. TEST ONLY. See README.md in this directory.
-#
-#   docker compose -f deploy/docker/docker-compose.dev.yml \
-#     -f deploy/docker/tests/telephony/docker-compose.carrier.yml \
-#     --profile telephony up -d --build asterisk sip-bridge sip-carrier
+# Overlay: a simulated PSTN carrier, plus the app itself, for driving a real
+# SIP call through the dev telephony profile. TEST ONLY. See README.md in this
+# directory; run-call-e2e.sh is the entry point.
 #
 # Paths are relative to deploy/docker/ (the first compose file's directory).
 #
-# The bridge runs on the host network here so it reaches a worktree dev server
-# on 127.0.0.1:$E2E_WORKER_PORT directly. Through host.docker.internal it
-# depends on the host firewall letting container traffic in (ufw drops it by
-# default), which is a property of the machine, not of this stack.
+# Everything the call touches runs on this project's own Docker network, the
+# way it does in production: the bridge posts webhooks to http://app:3000, and
+# Asterisk fetches operator-uploaded prompts from the URLs the app hands it
+# (http://app:3000/api/ivr-audio/…). A worker on the host is not reachable from
+# a container on a machine whose firewall drops container→host traffic (ufw's
+# default), so the app runs here as the shipped image, built from this tree.
 services:
-  sip-bridge:
-    network_mode: host
+  # The project's own database and object store: nothing is shared with the
+  # dev stack, and nothing is published on the host ports it uses.
+  postgres:
     ports: !reset []
-    extra_hosts: !reset []
-    environment:
-      - BRIDGE_PORT=3200
-      - ARI_URL=ws://127.0.0.1:8088/ari/events
-      - ARI_REST_URL=http://127.0.0.1:8088/ari
-      - WORKER_WEBHOOK_URL=http://127.0.0.1:${E2E_WORKER_PORT:-3931}
+    # A fresh database first runs a temporary, socket-only server to initialise
+    # itself, then restarts: probe over TCP, which only the real server
+    # answers, or the app starts its migrations against the one going away.
+    # On a slow disk initialisation also outlasts the dev file's 25 s.
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://localhost:3200/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U llamenos -d llamenos"]
+      start_period: 120s
+      start_interval: 2s
+  rustfs:
+    ports: !reset []
+
+  app:
+    profiles: ["telephony"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: app
+    environment:
+      - PLATFORM=bun
+      - PORT=3000
+      - DATABASE_URL=postgresql://llamenos:${PG_PASSWORD:-dev}@postgres:5432/llamenos
+      - PG_POOL_SIZE=10
+      - ENVIRONMENT=development
+      - "ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}"
+      - HOTLINE_NAME=Llámenos (E2E)
+      - DEV_RESET_SECRET=test-reset-secret
+      - TRUST_PROXY_HEADERS=true
+      - "HMAC_SECRET=${HMAC_SECRET:?HMAC_SECRET is required}"
+      - "SERVER_SECRET=${SERVER_SECRET:?SERVER_SECRET is required}"
+      - STORAGE_ENDPOINT=http://rustfs:9000
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-rustfsadmin}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-rustfsadmin}
+      - STORAGE_BUCKET=llamenos-files
+    ports:
+      - "127.0.0.1:${E2E_WORKER_PORT:-3931}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+
+  sip-bridge:
+    environment:
+      - WORKER_WEBHOOK_URL=http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
 
   asterisk:
     depends_on:

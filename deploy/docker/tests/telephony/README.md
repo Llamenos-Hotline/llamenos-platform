@@ -1,16 +1,17 @@
 # Telephony end-to-end: a real call through self-hosted Asterisk
 
-`run-call-e2e.sh` proves that a phone call is actually routed — not that
-Asterisk booted. It starts, in its own compose project (`ll-telephony-e2e`):
+`run-call-e2e.sh` proves that a phone call is actually routed, and that the
+caller actually hears what the operator uploaded — not that Asterisk booted. It
+starts, in its own compose project (`ll-telephony-e2e`), on one Docker network:
 
 | Service       | Role                                                                  |
 |---------------|-----------------------------------------------------------------------|
+| `app`         | The shipped app image, built from this tree, with the project's own `postgres` and `rustfs` |
 | `asterisk`    | The hotline PBX, with the shipped `asterisk-config/` — and, like a fresh deployment, no SIP trunk |
-| `sip-bridge`  | The shipped bridge image (ARI ↔ worker webhooks)                     |
+| `sip-bridge`  | The shipped bridge image (ARI ↔ app webhooks at `http://app:3000`)   |
 | `sip-carrier` | A second Asterisk playing the phone network — TEST ONLY (`carrier/`)  |
 
-…and an isolated worker (`src/server/index.ts`) on its own port and database,
-then runs `asterisk-call.e2e.ts`:
+…then runs `asterisk-call.e2e.ts` against the app's published port:
 
 Every scenario provisions the SIP trunk the way an operator does, through
 `POST /api/provider-setup/create-sip-trunk`, which writes it into the PBX over
@@ -38,39 +39,45 @@ ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other w
    issued (`carrier/pjsip.conf`); asserts the carrier holds the hotline's
    registration, then routes a call in to the registered contact and out to the
    volunteer with digest authentication.
+6. **The caller hears the uploaded prompt** — the hub rate-limits to one call a
+   minute; the caller's second call is turned away and, with no prompt
+   uploaded, hears nothing. The operator's WebM upload is refused; a 2 s 1 kHz
+   PCM WAV is accepted. The third call is turned away again, and the carrier's
+   recording of what the caller heard (`[caller-hears]` in
+   `carrier/extensions.conf`) holds the tone for its whole length: Asterisk
+   fetched it from `http://app:3000/api/ivr-audio/rateLimited/en` and the
+   bridge let it finish before hanging up. Fails without the media cache
+   directory (`asterisk-entrypoint.sh`) or with an immediate hangup.
 
 ```sh
-docker compose -f deploy/docker/docker-compose.dev.yml up -d   # Postgres + RustFS
-bun scripts/worktree-db.ts use-isolated && PG_PASSWORD=dev bun scripts/worktree-db.ts ensure
-(cd packages/crypto && cargo build --release --features server \
-  && mkdir -p dist/server && cp target/release/libllamenos_core.so dist/server/)
-
-deploy/docker/tests/telephony/run-call-e2e.sh           # --keep to leave the PBX up
+deploy/docker/tests/telephony/run-call-e2e.sh                         # needs only Docker and bun
+deploy/docker/tests/telephony/run-call-e2e.sh --keep -g 'hears the prompt'   # one scenario; leave the stack up
 E2E_ARI_DEBUG=1 deploy/docker/tests/telephony/run-call-e2e.sh --keep   # log every ARI event
 ```
 
+The first run builds the app image (including the Rust crypto library), which
+takes several minutes; later runs reuse Docker's cache.
+
 ## What it does not cover
 
-- **Audio content.** Prompts are skipped (no TTS engine is configured, and the
-  image ships no sound files), so the IVR is silent; the language menu times out
-  to the caller's detected language. Media is exercised only as far as the
-  recording capturing ~12 s of the bridged call.
+- **Most prompts.** Only an uploaded `rateLimited` prompt is played on this
+  path. The Asterisk adapter asks for `connecting`, `captcha`, `holdMusic` and
+  `voicemailPrompt`, which are not prompt types an operator can upload, and
+  speaks the language menu, which the bridge cannot (it has no speech engine:
+  a `speak` is skipped). Those parts of the call are silent.
+- **Hold music and the voicemail beep.** The image ships no sound files and
+  no music-on-hold class.
 - **DTMF input.** The captcha and multi-digit menu paths are covered by the
   bridge's unit tests, not driven over SIP here.
 - **Voicemail.** Covered by unit tests only.
 - **A real carrier or NAT.** Both PBXs share one Docker network.
 
-## How the host-run worker reaches ARI
+## Why the app runs in the stack
 
-The worker is configured with the ARI URL it has in production,
-`http://asterisk:8088`. On the host that name does not resolve, so the harness
-maps it to `localhost` with `HOSTALIASES`. A loopback URL is not an option: the
-provider-setup SSRF guard rightly refuses one.
-
-## Why the bridge runs on the host network here
-
-The worker runs on the host. From a container, `host.docker.internal` only
-reaches it if the host firewall lets container traffic in — ufw drops it by
-default — so the overlay puts the bridge on the host network instead. The dev
-compose (`docker-compose.dev.yml`) keeps the bridge on the Docker network and
-maps `host.docker.internal` to the host gateway.
+Asterisk fetches operator-uploaded prompts from the URL the app hands it,
+which is the origin the bridge's webhooks reach (`http://app:3000`). From a
+container, a worker on the host is only reachable if the host firewall lets
+container traffic in — ufw drops it by default — so a host-run worker can never
+serve a prompt to the PBX. Running the shipped image on the compose network is
+also what production does, so the app reaches ARI as `http://asterisk:8088`
+and the bridge as `http://sip-bridge:3000` without any name mapping.

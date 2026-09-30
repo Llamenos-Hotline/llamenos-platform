@@ -21,5 +21,12 @@ chmod 700 "$astdb_dir"
 mkdir -p /var/spool/asterisk/recording
 chown asterisk:asterisk /var/spool/asterisk/recording
 
+# Operator-uploaded IVR prompts are played straight from the app's URL
+# (ARI `sound:http://…/api/ivr-audio/…`). res_http_media_cache downloads each
+# into this directory first, and the image lacks it: without it every fetch
+# fails with "Failed to create temporary storage" and the caller hears nothing.
+mkdir -p /var/cache/asterisk
+chown asterisk:asterisk /var/cache/asterisk
+
 # The image's own command (compose clears CMD when it overrides the entrypoint).
 exec /usr/sbin/asterisk -vvvdddf -T -W -U asterisk -G asterisk -p
