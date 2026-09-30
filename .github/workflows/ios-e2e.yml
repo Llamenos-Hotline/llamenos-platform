@@ -372,9 +372,20 @@ jobs:
       # per-runner, so pgdata/logs/pid need no help.
       - name: Start native backend
         env:
-          NATIVE_BACKEND_PORT: ${{ 3000 + matrix.shard }}
-          NATIVE_BACKEND_PGPORT: ${{ 5432 + matrix.shard }}
-        run: apps/ios/scripts/native-backend.sh start
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          # Computed in shell, never in a workflow expression: GitHub's
+          # expression syntax has no arithmetic operators at all, so
+          # "3000 + matrix.shard" there is a parse error that fails the
+          # ENTIRE workflow at startup — no jobs, no logs, just "this run
+          # likely failed because of a workflow file issue". (Expressions are
+          # parsed inside run blocks too, including in shell comments, so an
+          # empty one written here as an example would break it again.)
+          export NATIVE_BACKEND_PORT=$((3000 + SHARD))
+          export NATIVE_BACKEND_PGPORT=$((5432 + SHARD))
+          echo "shard $SHARD -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"
+          apps/ios/scripts/native-backend.sh start
 
       # Hosted runners only. The firewall on a persistent host is configured
       # once by its operator, not turned off per job — and this host has no
@@ -442,13 +453,15 @@ jobs:
       - name: Run XCUITests (shard ${{ matrix.shard }})
         timeout-minutes: 50
         env:
-          # xcodebuild strips TEST_RUNNER_ and forwards the rest into the test
-          # runner's environment, where BaseUITest reads TEST_HUB_URL. The
-          # shard's backend is not on 3000, so without this every shard would
-          # drive the same (wrong, or absent) server.
-          TEST_RUNNER_TEST_HUB_URL: http://127.0.0.1:${{ 3000 + matrix.shard }}
+          SHARD: ${{ matrix.shard }}
         run: |
           set -o pipefail
+          # xcodebuild strips the TEST_RUNNER_ prefix and forwards the rest
+          # into the test runner's environment, where BaseUITest reads
+          # TEST_HUB_URL. This shard's backend is not on 3000, so without it
+          # every shard would drive the same (wrong) server. Computed here
+          # because GitHub expressions have no arithmetic.
+          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$((3000 + SHARD))"
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
           # shellcheck disable=SC2046
@@ -508,9 +521,11 @@ jobs:
       - name: Stop native backend
         if: always()
         env:
-          NATIVE_BACKEND_PORT: ${{ 3000 + matrix.shard }}
-          NATIVE_BACKEND_PGPORT: ${{ 5432 + matrix.shard }}
-        run: apps/ios/scripts/native-backend.sh stop
+          SHARD: ${{ matrix.shard }}
+        run: |
+          export NATIVE_BACKEND_PORT=$((3000 + SHARD))
+          export NATIVE_BACKEND_PGPORT=$((5432 + SHARD))
+          apps/ios/scripts/native-backend.sh stop
 
       # This host keeps every simulator ever created — each is GBs of runtime
       # state, and a week of runs would fill the disk. Deleted unconditionally,
