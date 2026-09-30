@@ -147,8 +147,8 @@ describe('provider IVR voice coverage', () => {
       telnyx: ['en', 'es', 'zh', 'ar', 'fr', 'ko', 'ru', 'hi', 'pt', 'de'],
       bandwidth: ['en', 'es', 'zh', 'ar', 'fr', 'ko', 'ru', 'hi', 'pt', 'de'],
       // The self-hosted PBXs speak what the worker's espeak-ng generates (#1347).
-      asterisk: ['en', 'es', 'zh', 'vi', 'fr', 'ht', 'ko', 'ru', 'hi', 'pt', 'de', 'uk', 'fa', 'tr', 'ku', 'am', 'my', 'quc'],
-      freeswitch: ['en', 'es', 'zh', 'vi', 'fr', 'ht', 'ko', 'ru', 'hi', 'pt', 'de', 'uk', 'fa', 'tr', 'ku', 'am', 'my', 'quc'],
+      asterisk: ['en', 'es', 'zh', 'vi', 'fr', 'ht', 'ko', 'ru', 'hi', 'pt', 'de', 'uk', 'fa', 'tr'],
+      freeswitch: ['en', 'es', 'zh', 'vi', 'fr', 'ht', 'ko', 'ru', 'hi', 'pt', 'de', 'uk', 'fa', 'tr'],
     })
   })
 

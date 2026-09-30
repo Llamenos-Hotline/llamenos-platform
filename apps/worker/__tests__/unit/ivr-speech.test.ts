@@ -116,6 +116,9 @@ describe('generated speech voices', () => {
     expect(speechLanguageFor('mix')).toBe('es')
     // espeak-ng has an Arabic voice, but unvowelled Arabic text comes out unintelligible.
     expect(speechLanguageFor('ar')).toBe('en')
+    // Unverified languages fall back until measured, rather than risk noise.
+    expect(speechLanguageFor('my')).toBe('en')
+    expect(speechLanguageFor('quc')).toBe('es')
     expect(speechLanguageFor('xx')).toBe('en')
   })
 })

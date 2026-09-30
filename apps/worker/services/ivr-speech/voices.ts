@@ -11,10 +11,12 @@
  * Intelligibility was measured (#1347) by ASR over the 8 kHz G.711 channel
  * (Whisper large-v3, calibrated against human speech through the same
  * channel): es, en, ko, pt near-perfect; fr, de, ru, tr, vi, zh, uk, fa, hi
- * robotic but understood. ht was measured without a human baseline. am, my,
- * ku and quc are UNVERIFIED — no ASR model judges them validly — and should be
- * listened to before a hotline relies on them. Arabic failed (it is written
- * without vowels, which espeak-ng cannot supply), so it is a fallback below.
+ * robotic but understood. ht was measured without a human baseline.
+ *
+ * A language is spoken only once it is known to be understood: a caller in
+ * crisis who picks their language and hears noise shaped like speech takes it
+ * as "this line is not for me". Unmeasured and failed languages fall back
+ * (SPEECH_FALLBACK_LANGUAGE) until measured (#1355).
  */
 import { DEFAULT_LANGUAGE } from '@shared/languages'
 
@@ -36,17 +38,12 @@ export const ESPEAK_NG_VOICES: ReadonlyArray<readonly [locale: string, voice: st
   ['uk', 'uk'],
   ['fa', 'fa'],
   ['tr', 'tr'],
-  // Kurmanji, in the Latin script our `ku` locale is written in
-  ['ku', 'ku'],
-  ['am', 'am'],
-  ['my', 'my'],
-  ['quc', 'quc'],
 ]
 
 /**
  * What a caller hears when no offline engine has a voice for their language
  * and the operator has uploaded no recording for it: the prompts in the
- * language they are most likely to understand. No offline engine speaks these
+ * language they are most likely to understand. No offline engine is known to speak these
  * locales intelligibly; reading their text with another language's voice
  * produces sounds, not words.
  *
@@ -57,6 +54,13 @@ export const ESPEAK_NG_VOICES: ReadonlyArray<readonly [locale: string, voice: st
  *   vowels and it cannot restore them — measured unintelligible, even after
  *   automatic diacritisation. Arabic speakers need an upload or a neural voice.
  *
+ * UNVERIFIED — espeak-ng has a voice, but no ASR model judges these languages
+ * validly, and its Burmese output was judged garbled on inspection. They fall
+ * back until someone who speaks them has listened (#1355); the espeak-ng
+ * voices are am, my, ku (Kurmanji, matching our Latin-script `ku` locale) and quc.
+ * - Amharic, Burmese, Kurdish → English.
+ * - K'iche' → Spanish: K'iche' communities, in Guatemala and the US, are served in Spanish.
+ *
  * Every shipped locale must be voiced or listed here (ivr-speech tests).
  */
 export const SPEECH_FALLBACK_LANGUAGE: Readonly<Record<string, string>> = {
@@ -64,6 +68,10 @@ export const SPEECH_FALLBACK_LANGUAGE: Readonly<Record<string, string>> = {
   so: DEFAULT_LANGUAGE,
   mix: 'es',
   ar: DEFAULT_LANGUAGE,
+  am: DEFAULT_LANGUAGE,
+  my: DEFAULT_LANGUAGE,
+  ku: DEFAULT_LANGUAGE,
+  quc: 'es',
 }
 
 const VOICES: ReadonlyMap<string, string> = new Map(ESPEAK_NG_VOICES)
