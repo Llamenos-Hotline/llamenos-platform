@@ -8,7 +8,7 @@ import type {
   AudioUrlMap,
 } from './adapter'
 import { SipBridgeAdapter } from './sip-bridge-adapter'
-import { getPrompt } from '@shared/voice-prompts'
+import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
 /**
@@ -180,9 +180,19 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
     const { rateLimited, voiceCaptchaEnabled, callerLanguage: lang, callSid, audioUrls, hubId } = params
+    // The same prompts, in the same order, as every cloud adapter: an operator
+    // uploads exactly these keys (settings VALID_PROMPT_TYPES), and on the PBX
+    // a prompt nobody uploaded is silence — the bridge has no speech engine.
+    const greeting = this.ariSpeakOrPlay(
+      'greeting',
+      lang,
+      audioUrls,
+      getPrompt('greeting', lang).replace('{name}', params.hotlineName),
+    )
 
     if (rateLimited) {
       return this.ariJson([
+        greeting,
         this.ariSpeakOrPlay('rateLimited', lang, audioUrls),
         { action: 'hangup' },
       ])
@@ -191,12 +201,9 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     if (voiceCaptchaEnabled && params.captchaDigits) {
       const digits = params.captchaDigits
       return this.ariJson([
-        this.ariSpeakOrPlay(
-          'captcha',
-          lang,
-          audioUrls,
-          getPrompt('captcha', lang).replace('{digits}', digits.split('').join(' '))
-        ),
+        greeting,
+        this.ariSpeakOrPlay('captchaPrompt', lang, audioUrls),
+        this.ariSpeak(digits.split('').join(' '), lang),
         {
           action: 'gather',
           numDigits: 4,
@@ -208,7 +215,8 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     }
 
     return this.ariJson([
-      this.ariSpeakOrPlay('connecting', lang, audioUrls),
+      greeting,
+      this.ariSpeakOrPlay('pleaseHold', lang, audioUrls),
       this.ariQueue(callSid, lang, hubId),
     ])
   }
@@ -224,7 +232,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     }
 
     return this.ariJson([
-      this.ariSpeak(getPrompt('captchaFailed', lang), lang),
+      this.ariSpeak(getPrompt('captchaFail', lang), lang),
       { action: 'hangup' },
     ])
   }
@@ -264,7 +272,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     if (queueTime && queueTime >= timeout) {
       return this.ariJson([{ action: 'leave_queue' }])
     }
-    return this.ariJson([this.ariSpeakOrPlay('holdMusic', lang, audioUrls)])
+    return this.ariJson([this.ariSpeakOrPlay('waitMessage', lang, audioUrls)])
   }
 
   rejectCall(): TelephonyResponse {
@@ -273,7 +281,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
   handleVoicemailComplete(lang: string): TelephonyResponse {
     return this.ariJson([
-      this.ariSpeak(getPrompt('voicemailThankYou', lang), lang),
+      this.ariSpeak(getVoicemailThanks(lang), lang),
       { action: 'hangup' },
     ])
   }
