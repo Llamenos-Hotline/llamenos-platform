@@ -382,8 +382,17 @@ jobs:
           # likely failed because of a workflow file issue". (Expressions are
           # parsed inside run blocks too, including in shell comments, so an
           # empty one written here as an example would break it again.)
-          export NATIVE_BACKEND_PORT=$((3000 + SHARD))
-          export NATIVE_BACKEND_PGPORT=$((5432 + SHARD))
+          #
+          # Deliberately NOT 3000/5432 for shard 0. This host is also somebody's
+          # development machine, and those two are exactly the ports a local
+          # `dev:server` and its Postgres sit on — shard 0 collided with a
+          # running one on the first try and refused to start, which is
+          # native-backend.sh behaving correctly (it will not share a database
+          # with a server it did not start). The offset keeps CI clear of the
+          # conventional defaults entirely, so a person can run the app on this
+          # machine without breaking the merge gate.
+          export NATIVE_BACKEND_PORT=$((3100 + SHARD))
+          export NATIVE_BACKEND_PGPORT=$((5500 + SHARD))
           echo "shard $SHARD -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"
           apps/ios/scripts/native-backend.sh start
 
@@ -461,7 +470,7 @@ jobs:
           # TEST_HUB_URL. This shard's backend is not on 3000, so without it
           # every shard would drive the same (wrong) server. Computed here
           # because GitHub expressions have no arithmetic.
-          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$((3000 + SHARD))"
+          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$((3100 + SHARD))"
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
           # shellcheck disable=SC2046
@@ -523,8 +532,8 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
         run: |
-          export NATIVE_BACKEND_PORT=$((3000 + SHARD))
-          export NATIVE_BACKEND_PGPORT=$((5432 + SHARD))
+          export NATIVE_BACKEND_PORT=$((3100 + SHARD))
+          export NATIVE_BACKEND_PGPORT=$((5500 + SHARD))
           apps/ios/scripts/native-backend.sh stop
 
       # This host keeps every simulator ever created — each is GBs of runtime
