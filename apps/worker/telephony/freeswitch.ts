@@ -8,7 +8,7 @@ import type {
   AudioUrlMap,
 } from './adapter'
 import { SipBridgeAdapter } from './sip-bridge-adapter'
-import { getPrompt } from '@shared/voice-prompts'
+import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 
 /**
@@ -125,9 +125,17 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       audioUrls,
       hubId,
     } = params
+    // The same prompts, in the same order, as every cloud adapter: an operator
+    // uploads exactly these keys (settings VALID_PROMPT_TYPES).
+    const greetingXml = this.fsSpeakOrPlay(
+      'greeting',
+      lang,
+      audioUrls,
+      getPrompt('greeting', lang).replace('{name}', params.hotlineName),
+    )
 
     if (rateLimited) {
-      const speakXml = this.fsSpeakOrPlay('rateLimited', lang, audioUrls)
+      const speakXml = greetingXml + this.fsSpeakOrPlay('rateLimited', lang, audioUrls)
       const hangupXml = '\n    <hangup/>'
       return this.xmlResponse(this.doc(speakXml + hangupXml))
     }
@@ -135,6 +143,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
     if (voiceCaptchaEnabled && params.captchaDigits) {
       const digits = params.captchaDigits
       const speakXml =
+        greetingXml +
         this.fsSpeakOrPlay('captchaPrompt', lang, audioUrls) +
         this.fsSpeak(digits.split('').join(' '), lang)
       const callbackUrl = this.buildCallbackUrl('/api/telephony/captcha', hubId)
@@ -147,7 +156,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const speakXml = this.fsSpeakOrPlay('connecting', lang, audioUrls)
+    const speakXml = greetingXml + this.fsSpeakOrPlay('pleaseHold', lang, audioUrls)
     const parkXml = `\n    <execute application="park"/>`
     return this.xmlResponse(
       this.doc(speakXml + parkXml, {
@@ -212,7 +221,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
   }
 
   handleVoicemailComplete(lang: string): TelephonyResponse {
-    const speakXml = this.fsSpeak(getPrompt('captchaSuccess', lang), lang)
+    const speakXml = this.fsSpeak(getVoicemailThanks(lang), lang)
     const hangupXml = '\n    <hangup/>'
     return this.xmlResponse(this.doc(speakXml + hangupXml))
   }
