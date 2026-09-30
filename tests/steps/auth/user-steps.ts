@@ -17,7 +17,7 @@ import {
   navigateAfterLogin,
 } from '../../helpers'
 import { Navigation } from '../../pages/index'
-import { updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
+import { apiDelete, apiGet, updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
 
 // --- Volunteer lifecycle ---
 
@@ -86,30 +86,16 @@ When('they tap the break button', async ({ page }) => {
 })
 
 // --- Invite onboarding ---
+// Redemption itself (the volunteer's side) is driven end to end in
+// tests/steps/auth/onboarding-steps.ts.
 
 When('I create an invite for a new volunteer', async ({ page }) => {
-  // Wait for the Volunteers page to fully load before trying to click buttons
-  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-
-  // Click the "Invite Volunteer" button (not "Add Volunteer" which generates device key directly)
-  const inviteBtn = page.getByTestId(TestIds.INVITE_BTN)
-  await expect(inviteBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await inviteBtn.click()
+  await page.getByTestId(TestIds.INVITE_BTN).click()
   const name = `InviteVol ${Date.now()}`
-  await page.getByLabel('Name').fill(name)
-  const phone = `+1212${Date.now().toString().slice(-7)}`
-  await page.getByLabel('Phone Number').fill(phone)
-  await page.getByLabel('Phone Number').blur()
-  // Invite form uses 'create-invite-btn', not 'form-save-btn'
-  const createInviteBtn = page.getByTestId('create-invite-btn')
-  const isCreateInvite = await createInviteBtn.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isCreateInvite) {
-    await createInviteBtn.click()
-  } else {
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-  }
-  // Wait for the invite link card to appear
-  await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
+  await page.getByTestId('invite-name-input').fill(name)
+  await page.getByTestId('invite-phone-input').fill(`+1212${Date.now().toString().slice(-7)}`)
+  await page.getByTestId('create-invite-btn').click()
+  await expect(page.getByTestId('invite-link-code')).toBeVisible({ timeout: Timeouts.API })
   // Persist the vol name in localStorage so it survives page.reload()
   await page.evaluate((n) => {
     (window as unknown as Record<string, unknown>).__test_invite_vol_name = n
@@ -117,47 +103,21 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   }, name)
 })
 
-Then('an invite link should be generated', async ({ page }) => {
-  // After creating an invite, the invite link card appears (testid="invite-link-code").
-  // The device key card/code appears after direct volunteer creation (not invite flow).
-  const inviteLinkCode = page.getByTestId('invite-link-code')
-  const isInviteLink = await inviteLinkCode.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isInviteLink) return
-  const inviteCard = page.getByTestId(TestIds.VOLUNTEER_INVITE_CARD)
-  const isInvite = await inviteCard.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isInvite) return
-  const keyCard = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CARD)
-  const isKeyCard = await keyCard.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isKeyCard) return
-  // At minimum, the device key code must be visible
-  await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: 3000 })
+When('I copy the new invite code', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.getByTestId('copy-invite-code-btn').click()
 })
 
-When('the volunteer opens the invite link', async ({ page }) => {
-  // In test context, we'd navigate to the invite URL
-  const inviteLink = page.getByTestId(TestIds.VOLUNTEER_INVITE_LINK)
-  const linkVisible = await inviteLink.isVisible({ timeout: 2000 }).catch(() => false)
-  if (linkVisible) {
-    const href = await inviteLink.getAttribute('href')
-    if (href) await page.goto(href)
-  }
-})
-
-Then('they should see a welcome screen with their name', async ({ page }) => {
-  const volName = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'))) as string
-  expect(volName).toBeTruthy()
-  // Content assertion — verifying displayed volunteer name
-  await expect(page.getByText(new RegExp(volName, 'i')).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
-})
-
-When('the volunteer completes the onboarding flow', async ({ page }) => {
-  // Complete PIN setup
-  const { enterPin } = await import('../../helpers')
-  const pinInput = page.getByTestId('pin-input').locator('input')
-  if (await pinInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await enterPin(page, '12345678')
-    await enterPin(page, '12345678')
-  }
+Then('the clipboard should hold only the invite code', async ({ page, backendRequest }) => {
+  const volName = (await page.evaluate(() => localStorage.getItem('__test_invite_vol_name'))) as string
+  const { data } = await apiGet<{ invites: Array<{ code: string; name: string }> }>(backendRequest, '/invites')
+  const invite = data.invites.find(i => i.name === volName)
+  expect(invite, `no pending invite named ${volName}`).toBeTruthy()
+  // The bare code — no URL, no prose — because it is pasted straight into a
+  // Signal message, and the volunteer pastes it straight into the app.
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: Timeouts.ELEMENT })
+    .toBe(invite!.code)
+  await expect(page.getByTestId('invite-link-code')).toHaveText(invite!.code)
 })
 
 Then('the volunteer name should appear in the pending invites list', async ({ page }) => {
@@ -172,7 +132,6 @@ When('I revoke the invite', async ({ page, request }) => {
   // background 401s cause component remounts that re-fetch the invite list,
   // and the click→DELETE pipeline has intermittent failures. Use the API
   // directly to ensure the invite is actually deleted.
-  const { apiGet, apiDelete } = await import('../../api-helpers')
   const volName = (await page.evaluate(() =>
     (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'),
   )) as string

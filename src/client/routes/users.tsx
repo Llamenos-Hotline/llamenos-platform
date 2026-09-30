@@ -48,7 +48,7 @@ function UsersPage() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [generatedDeviceKey, setGeneratedDeviceKey] = useState<string | null>(null)
-  const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [inviteCode, setInviteCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -80,7 +80,7 @@ function UsersPage() {
           <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('users.title')}</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteLink(null) }}>
+          <Button variant="outline" data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteCode(null) }}>
             <Mail className="h-4 w-4" />
             {t('users.inviteVolunteer')}
           </Button>
@@ -120,29 +120,30 @@ function UsersPage() {
         </Card>
       )}
 
-      {/* Invite link display */}
-      {inviteLink && (
+      {/* Invite code display — the admin sends the bare code over Signal */}
+      {inviteCode && (
         <Card className="border-green-400/50 bg-green-50 dark:border-green-600/50 dark:bg-green-950/10">
           <CardContent className="space-y-3">
             <div className="flex items-start gap-2">
               <Mail className="mt-0.5 h-4 w-4 text-green-600 dark:text-green-400" />
               <div>
                 <p className="text-sm font-medium text-green-800 dark:text-green-300">{t('users.inviteCreated')}</p>
-                <p className="mt-0.5 text-xs text-green-600 dark:text-green-400/80">{t('users.inviteLinkLabel')}</p>
+                <p className="mt-0.5 text-xs text-green-600 dark:text-green-400/80">{t('users.inviteCodeLabel')}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 text-xs">{inviteLink}</code>
+              <code data-testid="invite-link-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 font-mono text-xs">{inviteCode}</code>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => { navigator.clipboard.writeText(inviteLink); toast(t('common.success'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
+                data-testid="copy-invite-code-btn"
+                onClick={() => { navigator.clipboard.writeText(inviteCode); toast(t('setup.inviteCopied'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
                 aria-label={t('a11y.copyToClipboard')}
               >
                 <Copy className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <Button variant="ghost" size="sm" data-testid="dismiss-invite" onClick={() => setInviteLink(null)}>
+            <Button variant="ghost" size="sm" data-testid="dismiss-invite" onClick={() => setInviteCode(null)}>
               {t('common.close')}
             </Button>
           </CardContent>
@@ -155,7 +156,7 @@ function UsersPage() {
           roles={roles}
           onCreated={(invite) => {
             setInvites(prev => [...prev, invite])
-            setInviteLink(`${window.location.origin}/onboarding?code=${invite.code}`)
+            setInviteCode(invite.code)
             setShowInviteForm(false)
           }}
           onCancel={() => setShowInviteForm(false)}
@@ -306,6 +307,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
               <Label htmlFor="invite-name">{t('users.name')}</Label>
               <Input
                 id="invite-name"
+                data-testid="invite-name-input"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 required
@@ -315,6 +317,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
               <Label htmlFor="invite-phone">{t('users.phone')}</Label>
               <PhoneInput
                 id="invite-phone"
+                testId="invite-phone-input"
                 value={phone}
                 onChange={setPhone}
                 required

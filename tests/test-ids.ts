@@ -337,6 +337,13 @@ export const TestIds = {
   SETTINGS_SERVER_ADDRESS_INPUT: 'settings-server-address-input',
   SETTINGS_SERVER_ADDRESS_SUBMIT: 'settings-server-address-submit',
   SETTINGS_SERVER_ADDRESS_ERROR: 'settings-server-address-error',
+
+  // ============ Invite code entry (#1128/#1166) ============
+  HAVE_INVITE_CODE_BTN: 'have-invite-code-btn',
+  INVITE_CODE_INPUT: 'invite-code-input',
+  INVITE_CODE_SUBMIT: 'invite-code-submit',
+  INVITE_CODE_ERROR: 'invite-code-error',
+  INVITE_CODE_CHANGE_SERVER: 'invite-code-change-server',
 } as const
 
 export type TestId = (typeof TestIds)[keyof typeof TestIds]

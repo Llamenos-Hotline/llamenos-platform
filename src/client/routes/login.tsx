@@ -11,7 +11,7 @@ import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
 import { DemoAccountPicker } from '@/components/demo-account-picker'
 import { AccountRecoveryFlow } from '@/components/account-recovery-flow'
-import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Smartphone, Upload, ArrowRight } from 'lucide-react'
+import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Smartphone, Upload, ArrowRight, Ticket } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { LogoMark } from '@/components/logo-mark'
 import { LanguageSelect } from '@/components/language-select'
@@ -392,6 +392,19 @@ function LoginPage() {
             <p role="alert" data-testid="login-error" className="flex items-center gap-1.5 text-sm text-destructive">
               {validationError || error}
             </p>
+          )}
+
+          {/* New volunteer: paste the invite code they were sent */}
+          {recoveryStep === 'upload' && (
+            <div className="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm text-muted-foreground">{t('onboarding.newVolunteerHint')}</p>
+              <Link to="/onboarding" className="block">
+                <Button className="w-full" type="button" data-testid="have-invite-code-btn">
+                  <Ticket className="h-4 w-4" />
+                  {t('onboarding.haveInviteCode')}
+                </Button>
+              </Link>
+            </div>
           )}
 
           {/* Backup file restore */}
