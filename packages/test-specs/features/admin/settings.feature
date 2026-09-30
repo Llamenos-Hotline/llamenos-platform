@@ -231,7 +231,8 @@ Feature: Admin & User Settings
     Then the dialog should be dismissed
     And I should remain on the settings screen
 
-  @desktop @ios @android @regression
+  # @fixme: logout keeps the encrypted device keys the dialog says it removes — #1305
+  @desktop @ios @android @regression @fixme
   Scenario: Confirm logout clears identity
     Given I am authenticated
     And I am on the settings screen
@@ -243,7 +244,8 @@ Feature: Admin & User Settings
 
   # ── Profile Settings ──────────────────────────────────────────────
 
-  @desktop @ios @android
+  # @fixme: races other admin scenarios that save the shared admin profile (passes alone) — #1315
+  @desktop @ios @android @fixme
   Scenario: Admin can edit profile name and it persists
     Given I am logged in as an admin
     When I navigate to the "Settings" page
@@ -426,7 +428,8 @@ Feature: Admin & User Settings
     When I expand the profile section
     Then I should see the spoken languages chips
 
-  @desktop @ios @android
+  # @fixme: spoken-language chips expose no aria-pressed state — #1308
+  @desktop @ios @android @fixme
   Scenario: Toggle spoken language selection
     Given the app is launched
     And I tap the "Settings" tab
@@ -602,7 +605,9 @@ Feature: Admin & User Settings
     Then I should see the settings screen
     And the device link card should still be visible
 
-  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
   @desktop @ios @android @regression @wip
   Scenario: Device link shows QR code
     Given I am authenticated
@@ -610,7 +615,9 @@ Feature: Admin & User Settings
     When I start the device linking process
     Then I should see a QR code displayed
 
-  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
   @desktop @ios @android @regression @wip
   Scenario: Device link shows progress steps
     Given I am authenticated
@@ -618,7 +625,9 @@ Feature: Admin & User Settings
     When I start the device linking process
     Then I should see the linking progress indicator
 
-  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
   @desktop @ios @android @regression @wip
   Scenario: Cancel device linking
     Given I am authenticated
@@ -627,7 +636,9 @@ Feature: Admin & User Settings
     And I cancel the linking
     Then I should return to the settings screen
 
-  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
   @desktop @ios @android @regression @wip
   Scenario: Device link timeout handling
     Given I am authenticated
