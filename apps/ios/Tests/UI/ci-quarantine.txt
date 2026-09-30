@@ -55,3 +55,9 @@ CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders
 
 # Switching hubs fetches a hub key first, and no client ever creates one (#1042): every switch 404s.
 HubSwitchUITests/testHubSwitchUpdatesDataScope  # tapping a hub never switches the active hub — #1262
+# The Blasts screen renders none of its four states — no list, empty state, loading
+# or error — while GET /blasts returns 200. Navigation succeeds and the data
+# arrives; the view produces nothing. Not a flake: the same single test failed on
+# #1397 (CI diff ranges) and #1406 (hub template permissions), two PRs with nothing
+# in common, and no blast/broadcast path on main has changed since 2026-09-28.
+BlastsUITests/testBlastsListShowsContent  # view renders no state on a 200 — #1410
