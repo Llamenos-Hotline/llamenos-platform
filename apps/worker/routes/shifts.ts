@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
+import type { Context } from 'hono'
 import type { AppEnv } from '../types'
-import { requirePermission } from '../middleware/permission-guard'
+import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
+import { permissionGranted } from '@shared/permissions'
 import { createShiftBodySchema, updateShiftBodySchema, fallbackGroupSchema, shiftResponseSchema, myStatusResponseSchema, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -26,6 +28,13 @@ import {
 import { z } from 'zod/v4'
 
 const shifts = new Hono<AppEnv>()
+
+/** Whether the caller holds `perm` globally or in the hub the request is scoped to. */
+function holds(c: Context<AppEnv>, perm: string): boolean {
+  const hubPermissions = c.get('hubPermissions')
+  return permissionGranted(c.get('permissions'), perm)
+    || (hubPermissions != null && permissionGranted(hubPermissions, perm))
+}
 
 // Helper: map DB row timestamps to ISO strings
 function mapOverride(row: {
@@ -329,6 +338,15 @@ shifts.delete('/availability/:id',
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
     const { id } = c.req.param()
+    // shifts:set-availability is a self-service permission: without shifts:manage a
+    // user may delete only their own block. Someone else's is reported as not found
+    // so block ids cannot be probed.
+    if (!holds(c, 'shifts:manage')) {
+      const block = await services.shiftAvailability.get(hubId, id)
+      if (block.userPubkey !== c.get('pubkey')) {
+        return c.json({ error: 'Availability block not found' }, 404)
+      }
+    }
     await services.shiftAvailability.delete(hubId, id)
     return c.json({ ok: true })
   },
@@ -477,6 +495,36 @@ shifts.put('/fallback',
   },
 )
 
+// --- Schedule ---
+
+// shifts:read sees the full roster. shifts:read-own sees the same schedule — so a
+// user can find a shift to request to join — but each shift's roster is narrowed to
+// the caller, so no user learns who else is on shift.
+shifts.get('/',
+  describeRoute({
+    tags: ['Shifts'],
+    summary: 'List shifts (roster narrowed to the caller without shifts:read)',
+    responses: {
+      200: { description: 'List of shifts', content: { 'application/json': { schema: resolver(shiftListResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requireAnyPermission('shifts:read', 'shifts:read-own'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = c.get('hubId') ?? ''
+    const result = await services.shifts.list(hubId)
+    if (holds(c, 'shifts:read')) return c.json(result)
+    const pubkey = c.get('pubkey')
+    return c.json({
+      shifts: result.shifts.map(shift => ({
+        ...shift,
+        userPubkeys: shift.userPubkeys.filter(pk => pk === pubkey),
+      })),
+    })
+  },
+)
+
 // --- CRUD via entity-router factory ---
 
 const shiftCrudRouter = createEntityRouter({
@@ -489,6 +537,7 @@ const shiftCrudRouter = createEntityRouter({
   updateBodySchema: updateShiftBodySchema,
   deleteResponseSchema: okResponseSchema,
   hubScoped: true,
+  disableList: true,
   disableGet: true,
   auditEvents: {
     created: 'shiftCreated',
