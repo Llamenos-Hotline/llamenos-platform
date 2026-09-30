@@ -251,7 +251,15 @@ scripts/lib/bootstrap-admin-keys.ts @rhonda-rodododo
 # Co-owned: these suites run only in ci.yml and fleet-verify.yml, which hold
 # no secret. The orchestrator they test stays human-only above, so a weakened
 # rail cannot land a change to the fleet's authority without a human.
-tests/orchestrator/                 @rhonda-rodododo @llamenos-auto
+# tests/orchestrator/ stays HUMAN-ONLY for the same reason orchestrator/ does,
+# and the reason is sharper here than it looks. guards.test.ts contains the suite
+# `rail: the fleet cannot merge its own changes` — the tests asserting that
+# orchestrator source and its own tests are high impact, and that CODEOWNERS owns
+# every tracked file under every HIGH_IMPACT_PATH. Co-owning this directory with
+# @llamenos-auto would let the fleet's own reviewer approve a change WEAKENING the
+# rail that stops the fleet approving its own changes. It is also a HIGH_IMPACT
+# path in orchestrator/src/impact.ts.
+tests/orchestrator/                 @rhonda-rodododo
 
 # ─── Key material, wherever it appears ─────────────────────────────────
 # Mirrors SECRET_PATH_PATTERNS (orchestrator/src/config.ts). checkScope
