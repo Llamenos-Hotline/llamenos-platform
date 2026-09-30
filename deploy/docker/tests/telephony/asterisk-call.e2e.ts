@@ -10,6 +10,10 @@
  * from the bridge's webhooks, and a volunteer is only "answered" because the
  * carrier's phone picked up the leg Asterisk dialled.
  *
+ * The SIP trunk is what an operator provisions: every test creates it through
+ * POST /provider-setup/create-sip-trunk, which writes it into the PBX over ARI.
+ * The PBX ships with no trunk at all.
+ *
  * Run with run-call-e2e.sh (it starts the PBX stack and an isolated worker).
  */
 import { execFileSync } from 'node:child_process'
@@ -25,6 +29,14 @@ import {
 } from '../../../../tests/api-helpers'
 
 const CARRIER = process.env.E2E_CARRIER_CONTAINER ?? 'll-telephony-e2e-sip-carrier-1'
+const HOTLINE_PBX = process.env.E2E_ASTERISK_CONTAINER ?? 'll-telephony-e2e-asterisk-1'
+/** The carrier's SIP host, as the operator types it into the trunk form */
+const CARRIER_HOST = 'sip-carrier'
+/** The username/password the carrier issued for its registration trunk (carrier/pjsip.conf) */
+const CARRIER_ISSUED_USERNAME = 'hotline-reg'
+const CARRIER_ISSUED_PASSWORD = 'carrier-issued-e2e-only'
+/** ARI as the worker is configured to reach it — the production name, see run-call-e2e.sh */
+const WORKER_ARI_URL = process.env.E2E_WORKER_ARI_URL ?? 'http://asterisk:8088'
 const ARI_REST_URL = process.env.E2E_ARI_REST_URL ?? 'http://127.0.0.1:8088/ari'
 const ARI_USERNAME = process.env.ARI_USERNAME ?? 'llamenos'
 const ARI_PASSWORD = process.env.ARI_PASSWORD ?? ''
@@ -58,10 +70,22 @@ function carrierCli(command: string): string {
   return execFileSync('docker', ['exec', CARRIER, 'asterisk', '-rx', command], { encoding: 'utf8' })
 }
 
-/** The caller dials the hotline and stays on the line for `holdSeconds` */
-function placeCall(caller: string, hotline: string, holdSeconds: number): void {
+/**
+ * The caller dials the hotline and stays on the line for `holdSeconds`. The
+ * carrier delivers it over the IP-authenticated trunk, or to the contact the
+ * hotline registered when `via` is 'registration'.
+ */
+function placeCall(caller: string, hotline: string, holdSeconds: number, via: 'ip' | 'registration' = 'ip'): void {
+  const context = via === 'ip' ? 'place-call' : 'place-call-registered'
   carrierCli(`dialplan set global CALLER_NUMBER ${caller}`)
-  carrierCli(`channel originate Local/${hotline}@place-call application Wait ${holdSeconds}`)
+  carrierCli(`channel originate Local/${hotline}@${context} application Wait ${holdSeconds}`)
+}
+
+/** Calls the carrier has finished, and calls it has in flight */
+function carrierCallCounts(): { processed: number; active: number } {
+  const out = carrierCli('core show channels count')
+  const count = (re: RegExp) => Number(out.match(re)?.[1] ?? Number.NaN)
+  return { processed: count(/^(\d+) calls? processed/m), active: count(/^(\d+) active calls?/m) }
 }
 
 /** The recording as the worker's AsteriskAdapter fetches it (see fetch-recording.ts) */
@@ -71,12 +95,29 @@ function fetchRecording(callSid: string): { byteLength: number; magic: string } 
   return JSON.parse(lastLine) as { byteLength: number; magic: string } | null
 }
 
+const ARI_AUTH = { Authorization: `Basic ${btoa(`${ARI_USERNAME}:${ARI_PASSWORD}`)}` }
+
 async function ari<T>(path: string): Promise<T> {
-  const res = await fetch(`${ARI_REST_URL}${path}`, {
-    headers: { Authorization: `Basic ${btoa(`${ARI_USERNAME}:${ARI_PASSWORD}`)}` },
-  })
+  const res = await fetch(`${ARI_REST_URL}${path}`, { headers: ARI_AUTH })
   expect(res.ok, `ARI GET ${path}`).toBe(true)
   return (await res.json()) as T
+}
+
+/** HTTP status of an ARI GET, for an object that may not exist */
+async function ariStatus(path: string): Promise<number> {
+  const res = await fetch(`${ARI_REST_URL}${path}`, { headers: ARI_AUTH })
+  await res.body?.cancel()
+  return res.status
+}
+
+/** Put the PBX back to how it ships: no SIP trunk. Test setup only — the app has no route for this. */
+async function removeTrunk(): Promise<void> {
+  const objects = [['registration', 'trunk'], ['identify', 'trunk'], ['endpoint', 'trunk'], ['aor', 'trunk'], ['auth', 'trunk-auth']]
+  for (const [type, id] of objects) {
+    const res = await fetch(`${ARI_REST_URL}/asterisk/config/dynamic/res_pjsip/${type}/${id}`, { method: 'DELETE', headers: ARI_AUTH })
+    await res.body?.cancel()
+    expect([204, 404], `ARI DELETE ${type}/${id}`).toContain(res.status)
+  }
 }
 
 /** Channels on the hotline PBX that carry this caller's number (their leg and any volunteer legs) */
@@ -101,11 +142,33 @@ async function auditActions(request: APIRequestContext, hubId: string): Promise<
   return audit.entries.map((e) => e.action)
 }
 
+interface TrunkForm {
+  domain: string
+  username?: string
+  password?: string
+}
+
+/** The operator provisions the PBX's SIP trunk to their carrier, through the app */
+async function createTrunk(request: APIRequestContext, trunk: TrunkForm): Promise<void> {
+  const res = await apiPost<Record<string, unknown>>(request, '/provider-setup/create-sip-trunk', { provider: 'asterisk', ...trunk })
+  expect(res.status, JSON.stringify(res.data)).toBe(200)
+  expect(res.data).toMatchObject({ sipProvider: trunk.domain })
+  expect(res.data.sipUsername).toBe(trunk.username)
+  // A carrier-issued password goes to the PBX and nowhere else.
+  expect(JSON.stringify(res.data)).not.toContain(CARRIER_ISSUED_PASSWORD)
+}
+
 /**
  * A hub with its own hotline number, served by this Asterisk, whose fallback
  * group (nobody is on shift) is one volunteer with the given phone number.
+ * The Asterisk provider is configured and, unless `trunk` is null, the SIP
+ * trunk provisioned (IP-authenticated to the carrier by default).
  */
-async function provisionHotline(request: APIRequestContext, volunteerPhone: string) {
+async function provisionHotline(
+  request: APIRequestContext,
+  volunteerPhone: string,
+  trunk: TrunkForm | null = { domain: CARRIER_HOST },
+) {
   const hotline = uniqueNumber('+1555010')
   const hub = await apiPost<{ hub: { id: string } }>(request, '/hubs', {
     name: `Asterisk E2E ${hotline}`,
@@ -118,7 +181,7 @@ async function provisionHotline(request: APIRequestContext, volunteerPhone: stri
     provider: 'asterisk',
     phoneNumber: hotline,
     credentials: {
-      ariUrl: ARI_REST_URL.replace(/\/ari$/, ''),
+      ariUrl: WORKER_ARI_URL,
       ariUsername: ARI_USERNAME,
       ariPassword: ARI_PASSWORD,
       bridgeCallbackUrl: BRIDGE_URL,
@@ -130,7 +193,20 @@ async function provisionHotline(request: APIRequestContext, volunteerPhone: stri
   const volunteer = await createUserViaApi(request, { name: 'E2E Volunteer', phone: volunteerPhone })
   await addHubMemberViaApi(request, hubId, volunteer.pubkey)
   await setFallbackGroupViaApi(request, [volunteer.pubkey], hubId)
+  if (trunk) await createTrunk(request, trunk)
   return { hotline, hubId, volunteer }
+}
+
+/** An answered call runs its course: the volunteer answers, talks, hangs up, and both legs are released */
+async function expectAnsweredAndCompleted(request: APIRequestContext, hubId: string, caller: string, volunteerPubkey: string) {
+  const callerLast4 = caller.slice(-4)
+  await expect
+    .poll(() => activeCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call answered by the volunteer' })
+    .toMatchObject({ answeredBy: volunteerPubkey, status: 'in-progress' })
+  await expect
+    .poll(() => historyCall(request, hubId, callerLast4), { timeout: 30_000, message: 'call completed in history' })
+    .toMatchObject({ answeredBy: volunteerPubkey, status: 'completed' })
+  await expect.poll(async () => (await channelsFor(caller)).length, { timeout: 15_000 }).toBe(0)
 }
 
 test('an inbound SIP call rings the volunteer, bridges them to the caller, and is recorded', async ({ request }) => {
@@ -203,4 +279,69 @@ test('a caller who hangs up while the volunteer phone rings ends as unanswered, 
   // Nobody is left ringing a volunteer for a caller who is gone.
   await expect.poll(async () => (await channelsFor(caller)).length, { timeout: 10_000 }).toBe(0)
   expect(carrierCli('core show channels count')).toMatch(/^0 active calls/m)
+})
+
+test('the carrier cannot reach the hotline until the operator provisions the SIP trunk', async ({ request }) => {
+  const { hotline, hubId, volunteer } = await provisionHotline(request, uniqueNumber('+1555020'), null)
+  await removeTrunk()
+  expect(await ariStatus('/asterisk/config/dynamic/res_pjsip/endpoint/trunk')).toBe(404)
+
+  // No trunk: the carrier's INVITE matches no endpoint and Asterisk refuses it.
+  const refused = uniqueNumber('+1555779')
+  const before = carrierCallCounts().processed
+  placeCall(refused, hotline, 20)
+  await expect
+    .poll(carrierCallCounts, { timeout: 15_000, message: 'the carrier gave up on the call' })
+    .toEqual({ processed: before + 1, active: 0 })
+  expect(await historyCall(request, hubId, refused.slice(-4))).toBeUndefined()
+  expect(await activeCall(request, hubId, refused.slice(-4))).toBeUndefined()
+
+  // The operator provisions the trunk; the carrier's next call reaches the hotline.
+  await createTrunk(request, { domain: CARRIER_HOST })
+  const caller = uniqueNumber('+1555779')
+  carrierCli('dialplan set global VOLUNTEER_TALK_SECONDS 4')
+  placeCall(caller, hotline, 60)
+  await expectAnsweredAndCompleted(request, hubId, caller, volunteer.pubkey)
+})
+
+test('a provisioned SIP trunk survives an Asterisk restart', async ({ request }) => {
+  const { hotline, hubId, volunteer } = await provisionHotline(request, uniqueNumber('+1555020'))
+
+  execFileSync('docker', ['restart', HOTLINE_PBX])
+  // Back once the bridge has re-registered its Stasis app with the new Asterisk.
+  await expect
+    .poll(async () => {
+      try {
+        return (await ari<Array<{ name: string }>>('/applications')).map((a) => a.name)
+      } catch {
+        return []
+      }
+    }, { timeout: 60_000, message: 'the bridge reconnected to the restarted PBX' })
+    .toContain('llamenos')
+
+  // Nothing re-provisioned the trunk: the call is routed by the one written before the restart.
+  const caller = uniqueNumber('+1555780')
+  carrierCli('dialplan set global VOLUNTEER_TALK_SECONDS 4')
+  placeCall(caller, hotline, 60)
+  await expectAnsweredAndCompleted(request, hubId, caller, volunteer.pubkey)
+})
+
+test('a registration trunk registers with the credentials the carrier issued, and routes a call both ways', async ({ request }) => {
+  const { hotline, hubId, volunteer } = await provisionHotline(request, uniqueNumber('+1555020'), {
+    domain: CARRIER_HOST,
+    username: CARRIER_ISSUED_USERNAME,
+    password: CARRIER_ISSUED_PASSWORD,
+  })
+
+  // The carrier accepted the hotline's REGISTER: it holds a contact for the trunk.
+  await expect
+    .poll(() => carrierCli('pjsip show contacts'), { timeout: 30_000, message: 'the hotline registered with the carrier' })
+    .toMatch(/Contact:\s+hotline-reg\/sip:hotline-reg@/)
+
+  // Inbound to the registered contact; outbound to the volunteer authenticates
+  // with the same credentials (the carrier challenges the hotline-reg endpoint).
+  const caller = uniqueNumber('+1555781')
+  carrierCli('dialplan set global VOLUNTEER_TALK_SECONDS 4')
+  placeCall(caller, hotline, 60, 'registration')
+  await expectAnsweredAndCompleted(request, hubId, caller, volunteer.pubkey)
 })

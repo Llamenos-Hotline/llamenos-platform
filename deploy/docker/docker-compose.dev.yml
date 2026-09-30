@@ -125,9 +125,9 @@ services:
 
   # ── Optional: Asterisk PBX for local SIP telephony dev ─────────────────
   # Start with: docker compose -f deploy/docker/docker-compose.dev.yml --profile telephony up -d
-  # Point SIP_PROVIDER at a carrier (or a local softphone/test carrier) or no
-  # call can route: see deploy/docker/asterisk-entrypoint.sh. An end-to-end
-  # call against a simulated carrier: deploy/docker/tests/telephony/README.md
+  # No call can route until the app provisions the SIP trunk
+  # (POST /api/provider-setup/create-sip-trunk; see asterisk-config/sorcery.conf).
+  # An end-to-end call against a simulated carrier: deploy/docker/tests/telephony/README.md
   asterisk:
     image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
     profiles: ["telephony"]
@@ -135,14 +135,14 @@ services:
       - "5060:5060/udp"   # SIP
       - "5060:5060/tcp"   # SIP TCP
       - "8088:8088"       # ARI HTTP
+    # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
+    # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
+    user: root
     entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
-    environment:
-      - SIP_PROVIDER=${SIP_PROVIDER:-}
-      - SIP_USERNAME=${SIP_USERNAME:-}
-      - SIP_PASSWORD=${SIP_PASSWORD:-}
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
       - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - asterisk-db:/var/lib/asterisk/astdb   # the provisioned SIP trunk
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -218,6 +218,7 @@ configs:
       password = ${ARI_PASSWORD:-changeme}
 
 volumes:
+  asterisk-db:
   pgdata:
   rustfsdata:
   signal-data:

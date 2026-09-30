@@ -25,10 +25,9 @@ services:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:3200/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
 
   asterisk:
-    environment:
-      - SIP_PROVIDER=sip-carrier
     depends_on:
-      # The trunk's `identify` resolves this hostname when Asterisk loads.
+      # The test provisions the trunk to this host through the app, and the
+      # trunk's `identify` resolves it then.
       sip-carrier:
         condition: service_started
 
