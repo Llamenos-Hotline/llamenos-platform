@@ -1224,6 +1224,22 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      # The SAME record under the exact review set's namespace, when the set
+      # carries a profile (`reviewSetTag`, review-cache.ts). `runReviewCi`
+      # records both namespaces; with one output key, GitHub kept only the
+      # last name written — the general one — so a PR with a profile in its
+      # set (every crypto-content PR) never had a scoped artifact to hit, and
+      # under a standing review request every rebase of it was a full review.
+      # Each namespace has its own output and its own upload step now.
+      - name: Cache the verdict under its exact review set, if it has a profile
+        if: always() && steps.review.outputs.cache_artifact_name_scoped != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.review.outputs.cache_artifact_name_scoped }}
+          path: ${{ runner.temp }}/review-cache
+          retention-days: 30
+          if-no-files-found: ignore
+
       # ── Name this run's outcome (#1230) ─────────────────────────────────
       # `fleet/review` has well over a dozen distinct outcomes and used to
       # render every red one identically — `fleet/review: fail`, with the

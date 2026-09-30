@@ -211,6 +211,15 @@ async function recordedText(
  * fail-safe mechanism `lookup` relies on: a broken lookup and a genuine miss
  * are literally the same return value, and both mean "run the engine".
  */
+/** The review step's output naming the artifact to upload for the GENERAL
+ *  namespace (a review set of the general reviewer alone, or the general
+ *  half of a larger set's record). */
+export const CACHE_ARTIFACT_OUTPUT = 'cache_artifact_name'
+
+/** The same, for the EXACT review set's namespace when it carries a profile
+ *  (`reviewSetTag`). Its own key, so `fleet-review.yml` uploads both. */
+export const CACHE_ARTIFACT_OUTPUT_SCOPED = 'cache_artifact_name_scoped'
+
 export function artifactReviewCache(
   outputDir: string | undefined,
   log: (msg: string) => void,
@@ -257,12 +266,20 @@ export function artifactReviewCache(
         join(outputDir, `${name}.json`),
         JSON.stringify({ pr: key.pr, diffHash: key.diffHash, ...verdict, recordedAt: new Date().toISOString() }),
       )
-      // The workflow's upload step reads this name back via
-      // `steps.<review-step-id>.outputs.cache_artifact_name` — the one
+      // The workflow's upload steps read this name back via
+      // `steps.<review-step-id>.outputs.<CACHE_ARTIFACT_OUTPUT…>` — the one
       // source of truth for the name is this function, computed once, never
       // recomputed in bash where it could drift from what lookup() queries.
+      //
+      // ONE OUTPUT KEY PER NAMESPACE. `runReviewCi` records a verdict under
+      // the exact review set AND under the general namespace, and both used
+      // to be appended to one key — GitHub keeps the LAST value, so only the
+      // general name was ever uploaded, and a PR whose review set carries a
+      // profile (every crypto-content PR) could never be a cache hit: under
+      // a standing review request, every rebase of it was a full review.
       const ghOutput = process.env['GITHUB_OUTPUT']
-      if (ghOutput !== undefined) await appendFile(ghOutput, `cache_artifact_name=${name}\n`)
+      const outputKey = scope === undefined ? CACHE_ARTIFACT_OUTPUT : CACHE_ARTIFACT_OUTPUT_SCOPED
+      if (ghOutput !== undefined) await appendFile(ghOutput, `${outputKey}=${name}\n`)
     },
   }
 }
