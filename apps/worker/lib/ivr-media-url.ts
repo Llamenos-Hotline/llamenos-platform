@@ -46,6 +46,18 @@ export function signIvrMediaPath(hmacSecret: string, path: string, expiresAt?: n
   return `${path}?${query}`
 }
 
+/**
+ * A keyed name for what a media URL must not reveal (#1352): only a holder of
+ * the secret can tell which name belongs to what. It is the MAC of `name`
+ * under the signatures' own key and label; `name` never begins with '/' and
+ * every path a route verifies does, so a keyed name can never be presented as
+ * a URL's signature, nor a signature pass as a name.
+ */
+export function ivrMediaKeyedName(hmacSecret: string, name: string): string {
+  if (name.startsWith('/')) throw new Error('A keyed name must not be a path: it would be that path\'s signature')
+  return mac(hmacSecret, name, '')
+}
+
 /** The expiry for an uploaded prompt's URL minted now: at least the TTL, bucketed */
 export function ivrAudioUrlExpiry(nowMs: number = Date.now()): number {
   const earliest = Math.floor(nowMs / 1000) + IVR_AUDIO_URL_TTL_SECONDS

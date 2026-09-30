@@ -228,8 +228,20 @@ export interface TelephonyResponse {
 export type AudioUrlMap = Record<string, string>
 
 /**
- * The URL of `text` spoken in `locale` by the worker's own speech engine
+ * URLs of speech in `locale` from the worker's own speech engine
  * (IvrSpeechService) — for the self-hosted PBXs, which cannot speak a prompt
  * themselves. Cloud providers speak with their own engines and ignore it.
  */
-export type SpeechUrlBuilder = (text: string, locale: string) => string
+export interface SpeechUrlBuilder {
+  /**
+   * `text` spoken. The text can be read back out of the URL, which the PBX
+   * fetches through the request log and keys its media cache on — so only
+   * text any caller hears by dialling in.
+   */
+  (text: string, locale: string): string
+  /**
+   * One digit of a voice CAPTCHA spoken. The URL does not reveal the digit
+   * (#1352): the challenge is the answer, and must not be readable from a log.
+   */
+  captchaDigit(digit: string, locale: string): string
+}
