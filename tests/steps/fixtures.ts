@@ -14,6 +14,8 @@ export type AdminWorld = {
   lastPhone: string
   lastHubId: string
   lastHubName: string
+  /** Instance-wide voiceCaptchaEnabled before a scenario toggled it; `After` restores it. */
+  spamCaptchaBefore?: boolean
 }
 
 export type RolesWorld = {

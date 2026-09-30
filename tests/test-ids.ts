@@ -266,6 +266,7 @@ export const TestIds = {
   SETTINGS_TELEPHONY: 'telephony-provider',
   SETTINGS_TRANSCRIPTION: 'transcription',
   SETTINGS_SPAM: 'spam',
+  SPAM_CAPTCHA_TOGGLE: 'spam-captcha-toggle',
   SETTINGS_KEY_BACKUP: 'key-backup',
   SETTINGS_LINKED_DEVICES: 'linked-devices',
   SETTINGS_ADVANCED: 'advanced',
