@@ -230,23 +230,30 @@ jobs:
           test -d /tmp/llamenos-build/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
             || { echo "::error::build-for-testing produced no LlamenosUITests-Runner.app"; exit 1; }
 
+      # Named by run_id alone (no run_attempt): a partial re-run skips this
+      # job (it already succeeded) and the `ui` shards must find the SAME
+      # artifact name their attempt-1 build produced. `overwrite: true`
+      # covers the other case — a FULL re-run, where this job runs again and
+      # would otherwise collide with attempt-1's artifact under this name.
       - name: Upload test build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-build-${{ github.run_id }}
           path: |
             /tmp/llamenos-build/Build/Products/
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
+          overwrite: true
 
       - name: Upload server crypto library
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-server-crypto-${{ github.run_id }}
           path: packages/crypto/dist/server/libllamenos_core.dylib
           retention-days: 1
           if-no-files-found: error
+          overwrite: true
 
   ui:
     name: ui (${{ matrix.shard }})
@@ -279,13 +286,13 @@ jobs:
       - name: Download test build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-build-${{ github.run_id }}
           path: /tmp/llamenos-build/Build/Products/
 
       - name: Download server crypto library
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-server-crypto-${{ github.run_id }}
           path: packages/crypto/dist/server/
 
       - name: Start native backend
