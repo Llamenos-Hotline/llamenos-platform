@@ -204,6 +204,11 @@ services.scheduler.start({
   settingsService: services.settings,
   auditService: services.audit,
   identityService: services.identity,
+  // Omitting these two is what kept the retention-purge, erasure-expiry
+  // and re-encryption workers from ever running (#1127). TaskSchedulerDeps
+  // now requires them, so this cannot silently regress.
+  retentionService: services.retention,
+  erasureService: services.erasure,
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
       return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)
