@@ -15,9 +15,12 @@
 #           packages/crypto (UniFFI XCFramework), packages/protocol (Swift
 #           codegen), packages/i18n (.strings codegen), or the CI wiring
 #           itself (ci.yml, ios-e2e.yml, detect-changed-platforms.sh).
-#   smoke — only blast-radius shared deps changed (scripts/, package.json,
-#           bun.lock, .mise.toml, tsconfig*.json, vitest*.config.ts).
-#   none  — iOS unreachable from the diff.
+#   smoke — only blast-radius shared deps changed (scripts/, packages/shared/,
+#           package.json, bun.lock, .mise.toml, tsconfig*.json, or a
+#           vitest*.config.ts / vitest*.setup.ts the script does not name).
+#   none  — iOS unreachable from the diff. That includes the four named vitest
+#           suites (vitest.{unit,integration,desktop,orchestrator}.*): each is
+#           loaded only by its own `vitest run`, never by an iOS build.
 #
 # A class listed here runs in BOTH tiers. Classes not listed run only in full.
 # This is a whitelist, never a partition: `ui-tests.py shard` still spreads

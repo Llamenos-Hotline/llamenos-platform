@@ -31,7 +31,26 @@ CHANGED_FILES=$(cat)
 # change to it gets the same "run everything" treatment as ci.yml itself —
 # anything narrower risks a broken rewrite of this script shipping with its
 # own blast radius silently gated to `false`.
-SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/i18n/|package\.json$|bun\.lock|\.mise\.toml$|tsconfig[^/]*\.json$|vitest[^/]*\.config\.ts$|scripts/|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/i18n/|package\.json$|bun\.lock|\.mise\.toml$|tsconfig[^/]*\.json$|vitest[^/]*\.(config|setup)\.ts$|scripts/|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+# Carved out of SHARED_DEPS_RE's `vitest*` catch-all: the vitest files whose
+# ONLY reader is `vitest run --config <that config>` (plus the config's own
+# `setupFiles`). Nothing else loads them — not tsc (tsconfig.json's `include`
+# names no root vitest file), not Playwright, not Gradle/Xcode/cargo, not
+# codegen — so no iOS, Android, crypto or other-platform job can observe a
+# change to one. Each maps to its own consumer's flag instead of the matrix:
+#   vitest.unit.*          -> backend       (backend-unit)
+#   vitest.integration.*   -> backend       (no CI job runs it yet — #1167)
+#   vitest.desktop.*       -> desktop       (desktop-unit)
+#   vitest.orchestrator.*  -> orchestrator  (backend-unit's fleet-tests step)
+# Before this, the two fleet PRs that touched only vitest.orchestrator.config.ts
+# ran the iOS and Android suites. The `.setup.ts` files were in NO regex at all,
+# so a setup-only change used to skip the one job that loads it.
+#
+# A vitest file NOT named here still falls through to SHARED_DEPS_RE and runs
+# everything — a named list, never a prefix, so a new suite fails toward
+# running. guards.test.ts binds this to ci.yml: every `--config vitest.*` a job
+# passes, and each of that config's setupFiles, must run that job alone.
+SHARED_DEPS_EXCLUDE_RE='^vitest\.(unit|integration|desktop|orchestrator)\.(config|setup)\.ts$'
 
 IOS_RE='^apps/ios/'
 # Which iOS TIER a diff earns (see apps/ios/Tests/UI/ci-smoke.txt for the full
@@ -45,7 +64,49 @@ IOS_RE='^apps/ios/'
 # tier: still a real iOS gate, 2 runners instead of 4.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
-DESKTOP_RE='^(apps/desktop/|src/client/|tests/)'
+# desktop-e2e.yml is here for the same reason ios-e2e.yml is in IOS_FULL_RE:
+# its `build` and `test` (E2E (Linux)) jobs gate on this flag, so without it a
+# PR that edits only that workflow skips the very jobs it changes. #910 (the
+# E2E (Linux) Rust cache) merged that way, never having run E2E (Linux).
+DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$|\.github/workflows/desktop-e2e\.yml$)'
+# Carved out of DESKTOP_RE's blanket `tests/` prefix: directories under tests/
+# that are NOT desktop e2e. Without this, `ci.yml`'s `e2e` job
+# (`if: desktop == 'true' || backend == 'true'`) runs four Playwright shards,
+# E2E (Linux) and a Docker Compose stack for changes that cannot affect either.
+# On 2026-09-27 this was the sole reason #1164 — an orchestrator-only PR — sat
+# blocked on `ci-status`.
+#
+# Two independent sources agree these are not e2e, and this list must not drift
+# from either:
+#   - `playwright.config.ts`'s desktop project already carries
+#     `testIgnore: ["**/live/**", …, "**/orchestrator/**", "**/*.test.ts"]`.
+#     Playwright does not run them; the filter should not schedule a job for them.
+#   - `tests/load` (k6), `tests/iso-builder` and `tests/eslint` are referenced by
+#     no job in ci.yml at all.
+#
+# Deliberately NOT excluded: `tests/steps/`, `tests/mocks/`, `tests/pages/`,
+# `tests/fixtures/`, `tests/helpers/`, `tests/e2e/` and the root `*.spec.ts` /
+# helper files — all genuinely e2e or its infrastructure. Nor `tests/desktop/`:
+# it does NOT feed desktop-unit (vitest.desktop.config.ts reads src/client/
+# only) — it is the WebdriverIO suite against a real Tauri build, which no
+# workflow runs yet (#1126). No job observes it today, but it is desktop by
+# content, so it stays in: the day #1126 wires it into a desktop-gated job, a
+# wdio-only change must already run it.
+#
+# guards.test.ts binds each excluded directory to that evidence: Playwright's
+# chromium project must ignore every spec/test file in it, no playwright.config.ts
+# glob may point into it, and no e2e code or config may import from it.
+#
+# This stays an EXCLUDE list rather than becoming an include list on purpose.
+# An include list makes "a new test directory gates nothing" the default, which
+# is the same silent-non-execution failure this repo already has three open
+# issues for (#1126, #1153, #1167). Excluding fails toward running too much,
+# which costs minutes; including fails toward running nothing, which costs a
+# regression nobody sees.
+#
+# Checked as a separate expression rather than folded into DESKTOP_RE because
+# these are POSIX ERE (`grep -E`), which has no negative lookahead.
+DESKTOP_EXCLUDE_RE='^tests/(orchestrator|live|load|iso-builder|eslint)/'
 # src/server/ is the actual Bun server entry point (`bun run build:server`,
 # and the image `docker compose ... up --build` produces for e2e/backend-bdd/
 # android-e2e) — it lives outside apps/worker/ but is exactly as
@@ -59,7 +120,7 @@ DESKTOP_RE='^(apps/desktop/|src/client/|tests/)'
 # steps) — already caught by the blanket `tests/` prefix below for the
 # `desktop` flag, but backend-bdd itself only gates on `backend`, so it needs
 # its own hit here too.
-BACKEND_RE='^(apps/worker/|sip-bridge/|signal-notifier/|deploy/docker/|src/server/|drizzle/|drizzle\.config\.ts$|tests/steps/backend/)'
+BACKEND_RE='^(apps/worker/|sip-bridge/|signal-notifier/|deploy/docker/|src/server/|drizzle/|drizzle\.config\.ts$|tests/steps/backend/|vitest\.(unit|integration)\.(config|setup)\.ts$)'
 CRYPTO_RE='^packages/crypto/'
 ANSIBLE_RE='^deploy/ansible/'
 # Dependency manifests only — deliberately narrower than SHARED_DEPS_RE: a
@@ -70,7 +131,15 @@ AUDIT_RE='^(package\.json$|bun\.lock)'
 # tests run inside the backend-unit job (see that job's own comment in
 # ci.yml) — its own source and tests must gate that job too, independent of
 # the `backend` flag.
-ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.config\.ts$)'
+#
+# .claude/agents/ is orchestrator INPUT, not documentation: loadLanes() and
+# loadLaneScopes() parse fragments/*.md into lane briefs and the scope gate,
+# and tests/orchestrator/{scope,fragments,shared-fragment}.test.ts read the
+# real files — including the rail that fails when an assembled
+# <lane>-supervisor.md is stale against its fragment. Its `.md` files match
+# DOCS_ONLY_EXEMPT_RE, so before this an agents-only PR (#981) set no flag and
+# skipped backend-unit, the one job that checks them.
+ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$|\.claude/agents/)'
 # The cross-platform BDD feature corpus (packages/test-specs/features/**)
 # and the one composite action every backend-bootstrapping job shares
 # (.github/actions/bootstrap-backend) — both are read directly by ci.yml's
@@ -106,7 +175,7 @@ while IFS= read -r file; do
     docs_only=false
   fi
 
-  if echo "$file" | grep -qE "$SHARED_DEPS_RE"; then
+  if echo "$file" | grep -qE "$SHARED_DEPS_RE" && ! echo "$file" | grep -qE "$SHARED_DEPS_EXCLUDE_RE"; then
     ios=true; android=true; desktop=true; backend=true; crypto=true
     echo "Shared-dependency file changed: $file" >&2
   fi
@@ -114,7 +183,8 @@ while IFS= read -r file; do
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
   echo "$file" | grep -qE "$IOS_FULL_RE" && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
-  echo "$file" | grep -qE "$DESKTOP_RE" && { desktop=true; echo "Desktop file changed: $file" >&2; }
+  echo "$file" | grep -qE "$DESKTOP_RE" && ! echo "$file" | grep -qE "$DESKTOP_EXCLUDE_RE" \
+    && { desktop=true; echo "Desktop file changed: $file" >&2; }
   echo "$file" | grep -qE "$BACKEND_RE" && { backend=true; echo "Backend file changed: $file" >&2; }
   echo "$file" | grep -qE "$CRYPTO_RE" && { crypto=true; echo "Crypto file changed: $file" >&2; }
   echo "$file" | grep -qE "$ANSIBLE_RE" && { ansible=true; echo "Ansible file changed: $file" >&2; }

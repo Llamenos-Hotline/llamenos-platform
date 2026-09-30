@@ -4,14 +4,17 @@
 # requires a running backend for state reset and admin bootstrap.
 #
 # Trigger: every pull request; the `changes` job below decides whether the
-# `desktop` platform is actually relevant and gates `build`/`test`
-# accordingly. Manual dispatch always runs.
+# `desktop` or `backend` platform is actually relevant and gates
+# `build`/`test` accordingly — the same two flags as ci.yml's `e2e`, because
+# both start the app against a backend built from the PR, so a server-only
+# change can break these specs (#1160 skipped them). Manual dispatch always
+# runs.
 # Epic 88: Desktop & Mobile E2E Tests.
 #
 # Note: Windows matrix removed — Docker Compose backend is not reliably available
 # on Windows GHA runners. The ci.yml e2e job provides Linux coverage on ALL PRs;
 # this workflow adds broader (non-BDD chromium) coverage gated on the same
-# `desktop` platform flag ci.yml computes.
+# `desktop`/`backend` platform flags ci.yml computes.
 #
 # This workflow is NOT currently a required check — folding it into
 # `ci.yml`'s `ci-status` aggregate is tracked separately. It still needs to
@@ -46,8 +49,11 @@ jobs:
     permissions:
       contents: read
 
+    # Every flag a job below gates on must be declared here: an undeclared
+    # output reads as '' and silently skips the job.
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
+      backend: ${{ steps.filter.outputs.backend }}
 
     steps:
       - name: Checkout
@@ -83,7 +89,7 @@ jobs:
   # Separated from test so the 45-min test timeout is not eaten by build steps.
   build:
     needs: changes
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -121,7 +127,7 @@ jobs:
   # ─── Test (Playwright E2E) ────────────────────────────────────
   test:
     needs: [changes, build]
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
