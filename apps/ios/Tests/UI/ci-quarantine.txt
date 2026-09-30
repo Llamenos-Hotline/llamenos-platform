@@ -61,3 +61,10 @@ HubSwitchUITests/testHubSwitchUpdatesDataScope  # tapping a hub never switches t
 # #1397 (CI diff ranges) and #1406 (hub template permissions), two PRs with nothing
 # in common, and no blast/broadcast path on main has changed since 2026-09-28.
 BlastsUITests/testBlastsListShowsContent  # view renders no state on a 200 — #1410
+# Second test in the same class hitting #1246's defect. The class's other test is
+# already parked below, but this one also selects the Contacts tab and so also
+# waits on `case-contacts-empty` / `case-contacts-loading` — both of which ARE
+# defined in CaseDetailView.swift and neither of which renders. It fails
+# intermittently (passed on one #1407 run, failed the next on an identical diff),
+# which is worse than failing always: it fails other people's PRs at random.
+CaseManagementUITests/testDetailTabSwitching  # contacts tab renders no state — #1246
