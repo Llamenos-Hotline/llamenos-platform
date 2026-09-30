@@ -49,10 +49,21 @@ export interface TaskSchedulerDeps {
   resolveIdentifier: (subscriberId: string) => Promise<string | null>
   onBlastProgress?: BlastProgressCallback
   onBlastStatusChange?: BlastStatusCallback
-  retentionService?: RetentionService
-  auditService?: AuditService
-  erasureService?: ErasureService
-  identityService?: IdentityService
+
+  // These four were optional, and `start()` gated each worker behind an
+  // `if (deps.x)`. src/server/index.ts omitted retentionService and
+  // erasureService, so the retention-purge, erasure-expiry and
+  // re-encryption workers never started in production -- and it
+  // typechecked, because the deps were optional (#1127). For an
+  // EU/GDPR-scoped deployment that meant data-retention deletion and
+  // right-to-erasure expiry had never once executed.
+  //
+  // They are required now. Omitting one is a compile error, not a
+  // silently disabled worker.
+  retentionService: RetentionService
+  auditService: AuditService
+  erasureService: ErasureService
+  identityService: IdentityService
 }
 
 export class TaskScheduler {
@@ -82,33 +93,29 @@ export class TaskScheduler {
       // Start scheduled blast poller
       startScheduledBlastPoller(deps.blastsService)
 
-      if (deps.retentionService && deps.auditService) {
-        startRetentionPurgeWorker({
-          retentionService: deps.retentionService,
-          auditService: deps.auditService,
-          settingsService: deps.settingsService,
-        })
-      }
+      // No `if (deps.x)` guards: every dep is required by the type, so
+      // every worker the scheduler knows about starts whenever the
+      // scheduler starts. A future worker whose dep is forgotten fails
+      // the build instead of quietly never running.
+      startRetentionPurgeWorker({
+        retentionService: deps.retentionService,
+        auditService: deps.auditService,
+        settingsService: deps.settingsService,
+      })
 
-      if (deps.auditService && deps.identityService) {
-        startAuditChainVerifyWorker({
-          auditService: deps.auditService,
-          identityService: deps.identityService,
-        })
-      }
+      startAuditChainVerifyWorker({
+        auditService: deps.auditService,
+        identityService: deps.identityService,
+      })
 
-      if (deps.erasureService && deps.auditService) {
-        startErasureExpiryWorker({
-          erasureService: deps.erasureService,
-          auditService: deps.auditService,
-        })
-      }
+      startErasureExpiryWorker({
+        erasureService: deps.erasureService,
+        auditService: deps.auditService,
+      })
 
-      if (deps.erasureService) {
-        startReEncryptionWorker({
-          erasureService: deps.erasureService,
-        })
-      }
+      startReEncryptionWorker({
+        erasureService: deps.erasureService,
+      })
     }
 
     logger.info('Started')

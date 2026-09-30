@@ -1,0 +1,28 @@
+---
+# Canonical Docker Compose file locations.
+#
+# The multi-host refactor gave every service its own Compose project under
+# {{ app_dir }}/services/<service>/. There is no aggregate
+# {{ app_dir }}/docker-compose.yml on a production host — only the legacy
+# `llamenos` role (used solely by playbooks/deploy-demo.yml) writes one.
+#
+# Day-2 operations (backup, restore, alerting, security scanning) must
+# resolve service Compose files through these variables, never by
+# hardcoding a path. CI enforces that: see the "No monolithic compose
+# path outside the legacy demo role" step in .github/workflows/ci.yml.
+#
+# These live in inventory group_vars (not role defaults) so that every
+# playbook and every role sees the same value, and an operator can
+# override the layout in exactly one place.
+
+llamenos_services_dir: "{{ app_dir }}/services"
+
+llamenos_compose_app: "{{ llamenos_services_dir }}/app/docker-compose.yml"
+llamenos_compose_postgres: "{{ llamenos_services_dir }}/postgres/docker-compose.yml"
+llamenos_compose_rustfs: "{{ llamenos_services_dir }}/rustfs/docker-compose.yml"
+llamenos_compose_caddy: "{{ llamenos_services_dir }}/caddy/docker-compose.yml"
+
+# Glob expanding to every deployed service's Compose file. Used by the
+# operations that act on "the whole stack" (restore's stop/start), which
+# must not assume which optional services a given host runs.
+llamenos_compose_glob: "{{ llamenos_services_dir }}/*/docker-compose.yml"

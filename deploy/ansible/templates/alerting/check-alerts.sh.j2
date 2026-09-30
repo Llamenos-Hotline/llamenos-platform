@@ -36,7 +36,7 @@ TLS_PORT="{{ llamenos_alerting_tls_port | default(443) }}"
 CERT_EXPIRY_DAYS="{{ llamenos_alert_cert_expiry_days | default(7) }}"
 PG_CONTAINER="{{ llamenos_alerting_pg_container | default('llamenos-postgres-1') }}"
 PG_MAX_SIZE_GB="{{ llamenos_alerting_pg_max_size_gb | default(50) }}"
-COMPOSE_FILE="{{ app_dir }}/docker-compose.yml"
+COMPOSE_GLOB="{{ llamenos_compose_glob }}"
 REMINDER_SECONDS=86400  # 24 hours
 
 NOW="$(date +%s)"
@@ -193,7 +193,12 @@ check_backup_staleness() {
     detail="Backup directory ${BACKUP_DIR} does not exist"
   else
     local latest_file
-    latest_file="$(find "${BACKUP_DIR}" -maxdepth 2 -type f \( -name "*.sql.gz.age" -o -name "*.tar.gz.age" -o -name "*.jsonl.gz.age" \) -printf '%T@ %p\n' 2>/dev/null \
+    # The backup scripts write {postgres,rustfs,config}/<period>/<file>,
+    # i.e. depth 3, named *.dump.age / *.tar.gz.age. The old search used
+    # -maxdepth 2 and looked for *.sql.gz.age, so it matched nothing and
+    # paged "No backup files found" every 5 minutes on a healthy host --
+    # over the operator's only live alert channel (#1125).
+    latest_file="$(find "${BACKUP_DIR}" -maxdepth 3 -type f \( -name "*.dump.age" -o -name "*.tar.gz.age" -o -name "*.sql.gz.age" -o -name "*.jsonl.gz.age" \) -printf '%T@ %p\n' 2>/dev/null \
       | sort -rn \
       | head -1 \
       | cut -d' ' -f2-)"
@@ -354,27 +359,47 @@ check_docker_containers() {
     return
   fi
 
-  # Check containers defined in the compose file
-  if [ -f "${COMPOSE_FILE}" ]; then
+  # Every service has its own Compose project under
+  # {{ llamenos_services_dir }}/<service>/. This used to point at a single
+  # {{ app_dir }}/docker-compose.yml that the production deploy never
+  # creates, so the `-f` guard was always false and this check silently
+  # inspected nothing (#1121).
+  local compose_seen=0
+  # nullglob so an unmatched glob yields nothing rather than the literal
+  # pattern. Save and restore it: this function runs inside a long script
+  # and must not change globbing for the checks that follow.
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for compose_file in ${COMPOSE_GLOB}; do
+    compose_seen=1
     local containers
-    containers="$(docker compose -f "${COMPOSE_FILE}" ps --format json 2>/dev/null)" || true
+    containers="$(docker compose -f "${compose_file}" ps --format json 2>/dev/null)" || true
+    [ -n "${containers}" ] || continue
 
-    if [ -n "${containers}" ]; then
-      while IFS= read -r container_json; do
-        local name state health
-        name="$(echo "${container_json}" | jq -r '.Name // .Service // "unknown"' 2>/dev/null)"
-        state="$(echo "${container_json}" | jq -r '.State // "unknown"' 2>/dev/null)"
-        health="$(echo "${container_json}" | jq -r '.Health // "none"' 2>/dev/null)"
+    while IFS= read -r container_json; do
+      local name state health
+      name="$(echo "${container_json}" | jq -r '.Name // .Service // "unknown"' 2>/dev/null)"
+      state="$(echo "${container_json}" | jq -r '.State // "unknown"' 2>/dev/null)"
+      health="$(echo "${container_json}" | jq -r '.Health // "none"' 2>/dev/null)"
 
-        if [ "${state}" != "running" ]; then
-          ok="false"
-          unhealthy_list="${unhealthy_list}${name} (${state}); "
-        elif [ "${health}" = "unhealthy" ]; then
-          ok="false"
-          unhealthy_list="${unhealthy_list}${name} (unhealthy); "
-        fi
-      done <<< "${containers}"
-    fi
+      if [ "${state}" != "running" ]; then
+        ok="false"
+        unhealthy_list="${unhealthy_list}${name} (${state}); "
+      elif [ "${health}" = "unhealthy" ]; then
+        ok="false"
+        unhealthy_list="${unhealthy_list}${name} (unhealthy); "
+      fi
+    done <<< "${containers}"
+  done
+  [ "${had_nullglob}" -eq 1 ] || shopt -u nullglob
+
+  # No Compose project at all means the deploy layout is not what this
+  # host was configured for -- silently reporting "all containers running"
+  # is how this check stayed broken.
+  if [ "${compose_seen}" -eq 0 ]; then
+    ok="false"
+    unhealthy_list="no Compose projects found under ${COMPOSE_GLOB}; "
   fi
 
   if [ "${ok}" = "true" ]; then

@@ -8,10 +8,31 @@
 # - Optional rclone upload
 # - Manifest logging with SHA-256 checksums and object counts
 
+- name: Skip if rustfs not enabled on this deployment
+  ansible.builtin.meta: end_role
+  when: not (llamenos_rustfs_enabled | default(true))
+
+- name: Skip if rustfs is not assigned to this host
+  ansible.builtin.meta: end_role
+  when: >
+    groups.get('llamenos_storage', []) | length > 0 and
+    inventory_hostname not in groups.get('llamenos_storage', [])
+
+# Checked before reaching for apt so the role is a no-op on a host that
+# already has age (and so it can run unprivileged where age is provided
+# out of band, which is how playbooks/verify-backup-restore.yml exercises
+# these roles without root).
+- name: Check whether age is already installed
+  ansible.builtin.command: age --version
+  register: age_installed
+  changed_when: false
+  failed_when: false
+
 - name: Install age encryption tool
   ansible.builtin.apt:
     name: age
     state: present
+  when: age_installed.rc != 0
 
 - name: Create RustFS backup directories
   ansible.builtin.file:
@@ -37,8 +58,12 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-rustfs.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_rustfs_backup
-  changed_when: "'Backup complete' in initial_rustfs_backup.stdout"
-  ignore_errors: true
+  # The script prints "RustFS backup complete" (lowercase b). The old
+  # match string was "Backup complete", so this task reported "ok" whether
+  # the backup ran or not -- and ignore_errors hid a hard failure on top
+  # of that (#1125). The script exits non-zero on any real failure, so no
+  # ignore_errors: a backup that cannot run must fail the deploy.
+  changed_when: "'backup complete' in initial_rustfs_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:

@@ -473,24 +473,59 @@
               - "203.0.113.1/32"
       when: "'0.0.0.0/0' in (ssh_allowed_cidrs | default([]))"
 
-    - name: Validate backup_age_public_key format (if set)
+    # Backups are installed by every deploy (setup.yml imports
+    # playbooks/backup.yml), and there is no unencrypted backup path: the
+    # scripts refuse to write anything without a recipient. The config
+    # archive carries every service .env -- the database password, the
+    # server identity secret, every provider credential -- and both
+    # archives go to the same offsite remote, so an unencrypted backup
+    # ships the ciphertext together with the key that opens it (#1125).
+    # This is therefore a REQUIRED value, not a validate-if-set one.
+    - name: Require backup_age_public_key when backups are enabled
       ansible.builtin.assert:
         that:
-          - backup_age_public_key | length > 0
+          - backup_age_public_key | default('') | length > 0
           - backup_age_public_key | regex_search('^age1[0-9a-z]{58}$') is truthy
         fail_msg: |
-          INVALID: 'backup_age_public_key' does not appear to be a valid age public key.
+          MISSING or INVALID: 'backup_age_public_key'.
 
+          Backups are encrypted with age and there is no unencrypted path.
           Expected format: age1... (59 characters starting with 'age1')
-          Current value: {{ backup_age_public_key[:20] | default('NOT SET') }}...
 
-          To generate a keypair:
+          To generate a keypair, ON YOUR ADMIN MACHINE (not the server):
             age-keygen -o backup-key.txt
 
-          Then copy the public key (starts with 'age1') to backup_age_public_key in vars.yml.
-          Store the private key somewhere safe (NOT on the server).
+          Put the public half (the 'age1...' line) in backup_age_public_key
+          in vars.yml. Store backup-key.txt somewhere safe and OFF the
+          server -- a private key sitting next to the backups it decrypts
+          protects nothing.
+
+          To deploy without backups (development only), set:
+            backup_enabled: false
         success_msg: "backup_age_public_key: [valid age key]"
-      when: backup_age_public_key | default('') | length > 0
+      when: backup_enabled | default(true) | bool
+
+    - name: Warn when backups are local-only
+      ansible.builtin.debug:
+        msg: |
+          WARNING: backup_rclone_remote is empty, so every backup stays on
+          the same disk as the database it protects. Host loss is total
+          data loss. Configure an offsite rclone remote before inviting
+          real users onto this deployment.
+      when:
+        - backup_enabled | default(true) | bool
+        - (backup_rclone_remote | default('')) | length == 0
+
+    - name: Warn when no one is paged for a missed backup
+      ansible.builtin.debug:
+        msg: |
+          WARNING: backup_monitor_webhook_url is empty. The backup health
+          check still runs daily, but its findings go only to
+          {{ app_dir }}/backups/monitor.log, which nobody reads. A missed
+          backup will be discovered during the incident that needs it.
+      when:
+        - backup_enabled | default(true) | bool
+        - (backup_monitor_webhook_url | default('')) | length == 0
 
     # DNS validation (official profile only)
     #

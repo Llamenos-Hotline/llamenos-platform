@@ -1,0 +1,408 @@
+---
+# Backup/Restore Round-Trip Verification — LOCALHOST ONLY
+#
+# This is the acceptance evidence for #1125. It does not read a playbook
+# and conclude that backups work; it takes a backup of a database with
+# known content, destroys the database, runs the REAL playbooks/restore.yml
+# against it, and asserts the content came back.
+#
+# What it exercises, unmocked:
+#   - roles/backup-postgres, roles/backup-config, roles/backup-rustfs
+#     (the real role tasks, rendering the real script templates)
+#   - the rendered backup scripts themselves, executed
+#   - age encryption of both archives, and the assertion that neither
+#     archive yields plaintext secrets without the private key
+#   - playbooks/restore.yml, imported and run as-is
+#
+# It runs entirely against throwaway Docker containers in a scratch
+# directory. It NEVER touches a real host: the play asserts that its
+# target is localhost and that app_dir points inside the scratch tree.
+#
+# Usage:
+#   deploy/ansible/scripts/verify-backup-restore.sh
+#
+# The wrapper script creates the scratch tree, generates a throwaway age
+# keypair and tears the containers down afterwards. Run it, not this
+# playbook directly.
+
+- name: Guard — this playbook must never run against a real host
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Assert localhost-only and scratch-directory-only
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'localhost'
+          - ansible_connection | default('') == 'local'
+          - app_dir is defined
+          - "'llamenos-roundtrip' in app_dir"
+        fail_msg: >-
+          verify-backup-restore.yml refuses to run: it is a destructive
+          round-trip test (it DROPs the database) and may only target
+          localhost with app_dir inside a scratch tree whose path contains
+          'llamenos-roundtrip'. Use deploy/ansible/scripts/verify-backup-restore.sh.
+        quiet: true
+      tags: always
+
+- name: Stand up a scratch deployment with known content
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - "{{ roundtrip_vars }}"
+
+  tasks:
+    # ── The canonical per-service layout (#1121) ────────────────────
+    #
+    # The fixtures are written to exactly the paths the production roles
+    # write, so the compose-path fix is what is being exercised here. A
+    # regression back to {{ app_dir }}/docker-compose.yml fails this test
+    # rather than surviving until an incident.
+    - name: Create the service directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0750"
+      loop:
+        - "{{ llamenos_services_dir }}/postgres"
+        - "{{ llamenos_services_dir }}/rustfs"
+        - "{{ app_dir }}/scripts"
+        - "{{ app_dir }}/backups"
+
+    - name: Write the postgres Compose fixture
+      ansible.builtin.copy:
+        dest: "{{ llamenos_compose_postgres }}"
+        mode: "0640"
+        content: |
+          name: {{ roundtrip_project }}-postgres
+          services:
+            postgres:
+              image: {{ llamenos_postgres_image }}
+              environment:
+                POSTGRES_USER: llamenos
+                POSTGRES_PASSWORD: {{ pg_password }}
+                POSTGRES_DB: llamenos
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U llamenos -d llamenos"]
+                interval: 2s
+                timeout: 3s
+                retries: 30
+          volumes:
+            pgdata:
+
+    # Stands in for RustFS. The backup reads the Docker volume behind the
+    # container's /data mount, so any image with a shell exercises the
+    # real code path without pulling the RustFS image.
+    - name: Write the object-store Compose fixture
+      ansible.builtin.copy:
+        dest: "{{ llamenos_compose_rustfs }}"
+        mode: "0640"
+        content: |
+          name: {{ roundtrip_project }}-rustfs
+          services:
+            rustfs:
+              image: {{ backup_rustfs_helper_image }}
+              command: ["sleep", "infinity"]
+              volumes:
+                - rustfs-data:/data
+          volumes:
+            rustfs-data:
+
+    # A per-service .env, exactly as roles/llamenos-postgres writes one.
+    # The config backup must capture this AND must never store it in
+    # plaintext — that is priority 3 of the issue, asserted below.
+    - name: Write a per-service .env carrying a canary secret
+      ansible.builtin.copy:
+        dest: "{{ llamenos_services_dir }}/postgres/.env.postgres"
+        mode: "0600"
+        content: |
+          POSTGRES_PASSWORD={{ pg_password }}
+          SERVER_SECRET={{ roundtrip_canary_secret }}
+
+    - name: Start the scratch services
+      ansible.builtin.command:
+        cmd: docker compose -f {{ item }} up -d
+      changed_when: true
+      loop:
+        - "{{ llamenos_compose_postgres }}"
+        - "{{ llamenos_compose_rustfs }}"
+
+    - name: Wait for PostgreSQL
+      ansible.builtin.command:
+        cmd: docker compose -f {{ llamenos_compose_postgres }} exec -T postgres pg_isready -U llamenos -d llamenos
+      register: rt_pg_ready
+      retries: 30
+      delay: 2
+      until: rt_pg_ready.rc == 0
+      changed_when: false
+
+    # ── Known content ───────────────────────────────────────────────
+    - name: Seed the database with known content
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE crisis_notes (
+            id          integer PRIMARY KEY,
+            volunteer   text    NOT NULL,
+            ciphertext  text    NOT NULL,
+            created_at  timestamptz NOT NULL DEFAULT now()
+          );
+          INSERT INTO crisis_notes (id, volunteer, ciphertext) VALUES
+            (1, 'volunteer-a', '{{ roundtrip_marker }}-one'),
+            (2, 'volunteer-b', '{{ roundtrip_marker }}-two'),
+            (3, 'volunteer-c', '{{ roundtrip_marker }}-three');
+          CREATE TABLE shifts (id integer PRIMARY KEY, label text NOT NULL);
+          INSERT INTO shifts VALUES (1, 'overnight'), (2, 'weekend');
+          SQL
+      changed_when: true
+
+    - name: Put a known object in the store
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs \
+            sh -c 'mkdir -p /data/llamenos-files && printf %s "{{ roundtrip_marker }}-attachment" > /data/llamenos-files/note-1.bin'
+      changed_when: true
+
+    - name: Record the pre-backup state
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -tAc \
+            "SELECT id || '|' || volunteer || '|' || ciphertext FROM crisis_notes ORDER BY id"
+      register: rt_before
+      changed_when: false
+
+    - name: Show the content that must survive the round trip
+      ansible.builtin.debug:
+        var: rt_before.stdout_lines
+
+# ── Take a real backup, using the real roles ────────────────────────
+- name: Install and run the real backup roles
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  roles:
+    - role: backup-config
+    - role: backup-postgres
+    - role: backup-rustfs
+
+- name: Assert the backups are encrypted and carry no plaintext secrets
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  tasks:
+    - name: Find the backup artifacts
+      ansible.builtin.find:
+        paths: "{{ app_dir }}/backups"
+        recurse: true
+        patterns: "llamenos-*"
+      register: rt_artifacts
+
+    - name: List the backup artifacts
+      ansible.builtin.debug:
+        msg: "{{ rt_artifacts.files | map(attribute='path') | map('basename') | sort }}"
+
+    - name: Assert every artifact is age-encrypted
+      ansible.builtin.assert:
+        that:
+          - rt_artifacts.files | length >= 3
+          - rt_artifacts.files | rejectattr('path', 'search', '\.age$') | list | length == 0
+        fail_msg: >-
+          An unencrypted artifact was written to the backup directory:
+          {{ rt_artifacts.files | rejectattr('path', 'search', '\.age$')
+             | map(attribute='path') | list }}
+        quiet: true
+
+    # Priority 3 of #1125: the config archive contains every service .env.
+    # If it is readable without the private key, the offsite copy ships the
+    # secrets alongside the data they protect.
+    - name: Grep every artifact for the canary secret and the DB password
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          hits=0
+          for f in $(find "{{ app_dir }}/backups" -type f -name 'llamenos-*'); do
+            for needle in '{{ roundtrip_canary_secret }}' '{{ pg_password }}' '{{ roundtrip_marker }}'; do
+              if LC_ALL=C grep -qaF "${needle}" "${f}"; then
+                echo "PLAINTEXT LEAK: ${needle:0:8}... found in ${f}"
+                hits=$((hits + 1))
+              fi
+            done
+            # Also defeat naive compression: an unencrypted tar.gz would
+            # yield the secret after gunzip.
+            if gzip -dc "${f}" 2>/dev/null | LC_ALL=C grep -qaF '{{ roundtrip_canary_secret }}'; then
+              echo "PLAINTEXT LEAK (after gunzip): ${f}"
+              hits=$((hits + 1))
+            fi
+          done
+          echo "leak_count=${hits}"
+      register: rt_leak_scan
+      changed_when: false
+
+    - name: Report the secret scan
+      ansible.builtin.debug:
+        var: rt_leak_scan.stdout_lines
+
+    - name: Assert no backup artifact exposes a secret in plaintext
+      ansible.builtin.assert:
+        that:
+          - "'leak_count=0' in rt_leak_scan.stdout"
+        fail_msg: "{{ rt_leak_scan.stdout }}"
+        quiet: true
+
+# ── Destroy ─────────────────────────────────────────────────────────
+- name: Destroy the data the backup is supposed to protect
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  tasks:
+    - name: Drop every table and empty the object store
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -v ON_ERROR_STOP=1 \
+            -c "DROP TABLE IF EXISTS crisis_notes, shifts CASCADE;"
+          docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs \
+            sh -c 'rm -rf /data/llamenos-files'
+      changed_when: true
+
+    - name: Confirm the data is really gone
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -tAc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+      register: rt_after_destroy
+      changed_when: false
+
+    - name: Assert the database is empty before restoring
+      ansible.builtin.assert:
+        that:
+          - (rt_after_destroy.stdout | trim | int) == 0
+        fail_msg: >-
+          The destroy step left {{ rt_after_destroy.stdout | trim }} tables
+          behind, so a passing restore assertion would prove nothing.
+        quiet: true
+
+    - name: Report the destroyed state
+      ansible.builtin.debug:
+        msg: "Tables in public schema before restore: {{ rt_after_destroy.stdout | trim }}"
+
+# ── The real restore playbook, run as-is ────────────────────────────
+- name: Restore
+  ansible.builtin.import_playbook: restore.yml
+
+# ── Verify ──────────────────────────────────────────────────────────
+- name: Verify the round trip
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  tasks:
+    - name: Read the restored rows back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -tAc \
+            "SELECT id || '|' || volunteer || '|' || ciphertext FROM crisis_notes ORDER BY id"
+      register: rt_restored
+      changed_when: false
+
+    - name: Read the restored shift rows back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d llamenos -tAc "SELECT id || '|' || label FROM shifts ORDER BY id"
+      register: rt_restored_shifts
+      changed_when: false
+
+    - name: Read the restored object back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs \
+            cat /data/llamenos-files/note-1.bin
+      register: rt_restored_object
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm the restored service config still holds the canary secret
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          grep -c 'SERVER_SECRET=' "{{ llamenos_services_dir }}/postgres/.env.postgres"
+      register: rt_restored_env
+      changed_when: false
+
+    - name: ROUND TRIP EVIDENCE
+      ansible.builtin.debug:
+        msg: |
+          Before backup : {{ rt_before.stdout_lines | default(['(not captured)']) }}
+          After restore : {{ rt_restored.stdout_lines }}
+          Shifts        : {{ rt_restored_shifts.stdout_lines }}
+          Object store  : {{ rt_restored_object.stdout | default('(missing)') }}
+          Service .env  : SERVER_SECRET present = {{ rt_restored_env.stdout | trim }}
+
+    - name: Assert the crisis notes came back byte-for-byte
+      ansible.builtin.assert:
+        that:
+          - rt_restored.stdout_lines | length == 3
+          - "'1|volunteer-a|' ~ roundtrip_marker ~ '-one' in rt_restored.stdout_lines"
+          - "'2|volunteer-b|' ~ roundtrip_marker ~ '-two' in rt_restored.stdout_lines"
+          - "'3|volunteer-c|' ~ roundtrip_marker ~ '-three' in rt_restored.stdout_lines"
+        fail_msg: "Restored rows do not match: {{ rt_restored.stdout_lines }}"
+        quiet: true
+
+    - name: Assert the second table came back too
+      ansible.builtin.assert:
+        that:
+          - rt_restored_shifts.stdout_lines | length == 2
+          - "'1|overnight' in rt_restored_shifts.stdout_lines"
+        fail_msg: "Restored shifts do not match: {{ rt_restored_shifts.stdout_lines }}"
+        quiet: true
+
+    - name: Assert the object store came back
+      ansible.builtin.assert:
+        that:
+          - rt_restored_object.stdout | trim == roundtrip_marker ~ '-attachment'
+        fail_msg: >-
+          Object store restore failed. Expected
+          '{{ roundtrip_marker }}-attachment', got
+          '{{ rt_restored_object.stdout | default('(nothing)') }}'.
+        quiet: true
+
+    - name: Assert the service config was restored
+      ansible.builtin.assert:
+        that:
+          - (rt_restored_env.stdout | trim | int) == 1
+        fail_msg: "The restored .env.postgres does not contain SERVER_SECRET."
+        quiet: true
+
+    - name: PASS
+      ansible.builtin.debug:
+        msg: >-
+          Backup/restore round trip verified: database content, object
+          store and service configuration were destroyed and recovered
+          from encrypted backups, and no artifact leaked a secret.

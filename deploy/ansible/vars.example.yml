@@ -230,9 +230,15 @@ llamenos_internal_tls_enabled: false
 # Enable automated backups
 backup_enabled: true
 
-# age public key for encrypting backups
-# Generate a keypair with: age-keygen -o backup-key.txt
-# Store the private key somewhere safe (NOT on the server)
+# age public key for encrypting backups. REQUIRED when backup_enabled is
+# true -- preflight fails the deploy without it and the backup scripts
+# refuse to write anything unencrypted. There is no plaintext path: the
+# config archive contains every service .env (database password, server
+# identity secret, provider credentials), and it is uploaded to the same
+# offsite remote as the database dump.
+#
+# Generate the keypair ON YOUR ADMIN MACHINE: age-keygen -o backup-key.txt
+# Put the 'age1...' public half here. Keep backup-key.txt OFF the server.
 backup_age_public_key: ""
 
 # Path to age private key (for restore operations only — NOT stored on server)
@@ -255,7 +261,9 @@ backup_postgres_retain_daily: 7
 backup_postgres_retain_weekly: 4
 backup_postgres_retain_monthly: 3
 # backup_postgres_exclude_tables: []    # Tables to skip (e.g., sessions)
-# backup_postgres_wal_enabled: false    # Enable WAL archiving for PITR
+# NOTE: there is no WAL-archiving knob. The old backup_postgres_wal_enabled
+# only created an empty directory -- no archive_command, no PITR (#1125).
+# RPO is the backup interval below.
 
 # RustFS (object store mirror)
 backup_rustfs_retain_daily: 7
