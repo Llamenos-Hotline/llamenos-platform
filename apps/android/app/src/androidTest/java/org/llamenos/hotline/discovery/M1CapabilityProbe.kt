@@ -412,8 +412,12 @@ class M1CapabilityProbe {
      * the dashboard the way a user would, then requires the app to have chosen the hub.
      */
     private fun ensureActiveHub(flow: String, hubId: String) {
-        pullToRefreshDashboard()
-        val chosen = pollFor(15_000) { activeHubId() == hubId }
+        // An injected swipe can land before the dashboard settles and not register as a
+        // pull (no request reaches the server), so pull again the way a user would.
+        val chosen = (1..3).any { attempt ->
+            pullToRefreshDashboard()
+            pollFor(5_000) { activeHubId() == hubId }.also { probe(flow, "pull-to-refresh #$attempt: hub chosen=$it") }
+        }
         probe(flow, "activeHubId the app chose by itself: ${activeHubId()} (member of $hubId)")
         check(chosen) { fail(flow, "the app did not select the user's hub by itself: ${activeHubId()} (expected $hubId)") }
     }
