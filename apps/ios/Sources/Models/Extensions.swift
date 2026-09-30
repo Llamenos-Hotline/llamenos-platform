@@ -50,6 +50,28 @@ struct DecryptedNote: Identifiable, Sendable {
     }
 }
 
+// MARK: - SharedNote Envelope Selection
+
+extension SharedNote {
+    /// The HPKE envelope this device can open: the author envelope on our own note,
+    /// otherwise the admin envelope wrapped to our encryption key.
+    ///
+    /// `authorPubkey` is the author's signing key — the one the server takes from the
+    /// auth token — while admin envelopes are addressed by encryption key. Comparing
+    /// `authorPubkey` with the encryption key made every author's own note undecryptable.
+    func readerEnvelope(for crypto: CryptoService) -> HpkeEnvelope? {
+        if let signingPubkey = crypto.signingPubkeyHex, authorPubkey == signingPubkey,
+           let author = authorEnvelope {
+            return HpkeEnvelope(v: 3, labelId: 0, enc: author.enc, ct: author.ct)
+        }
+        if let encryptionPubkey = crypto.encryptionPubkeyHex,
+           let ours = adminEnvelopes?.first(where: { $0.pubkey == encryptionPubkey }) {
+            return HpkeEnvelope(v: 3, labelId: 0, enc: ours.enc, ct: ours.ct)
+        }
+        return nil
+    }
+}
+
 // MARK: - AnyCodableValue
 
 /// Type-erased codable value for custom field values.

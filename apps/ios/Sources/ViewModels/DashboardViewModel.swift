@@ -342,21 +342,7 @@ final class DashboardViewModel {
 
             // Decrypt the recent notes for preview using HPKE envelopes
             recentNotes = response.notes.prefix(3).compactMap { encrypted -> RecentNotePreview? in
-                guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-                var hpkeEnvelope: HpkeEnvelope?
-
-                if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-                    hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct)
-                }
-
-                if hpkeEnvelope == nil, let adminEnvs = encrypted.adminEnvelopes {
-                    if let ourEnv = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                        hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: ourEnv.enc, ct: ourEnv.ct)
-                    }
-                }
-
-                guard let envelope = hpkeEnvelope else { return nil }
+                guard let envelope = encrypted.readerEnvelope(for: cryptoService) else { return nil }
 
                 do {
                     let json = try cryptoService.decryptNote(

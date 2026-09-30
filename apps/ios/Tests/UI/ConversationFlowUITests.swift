@@ -90,18 +90,26 @@ final class ConversationFlowUITests: BaseUITest {
         launchWithAPI()
         openSimulatedConversation()
 
-        // Send button should be disabled when reply field is empty
         let sendButton = find("send-message-button")
         XCTAssertTrue(sendButton.exists, "Send button should exist")
 
-        // Type a message
         let replyField = find("reply-text-field")
-        if replyField.exists {
-            replyField.tap()
-            replyField.typeText("Test message from UI test - \(Date().timeIntervalSince1970)")
+        XCTAssertTrue(replyField.waitForExistence(timeout: 5), "Reply text field should exist in conversation detail")
+        let reply = "Reply from UI test \(UUID().uuidString.prefix(8))"
+        replyField.tap()
+        replyField.typeText(reply)
+        sendButton.tap()
 
-            XCTAssertTrue(sendButton.exists, "Send button should still exist after typing")
-        }
+        // The view model clears the field only once the server has accepted the reply
+        // (201) and its response decoded as the protocol's MessageResponse; on any
+        // failure the typed text stays. (Reading the reply back needs #1339: iOS opens
+        // message envelopes with the note-key label ID and cannot decrypt them.)
+        let cleared = NSPredicate(format: "value != %@", reply)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: cleared, object: replyField)], timeout: 15),
+            .completed,
+            "The reply field should clear once the server accepts the reply"
+        )
     }
 
     // MARK: - Channel Header

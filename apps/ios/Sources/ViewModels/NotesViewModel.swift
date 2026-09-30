@@ -155,33 +155,7 @@ final class NotesViewModel {
 
     /// Find the matching envelope for our pubkey and decrypt the note using HPKE.
     func decryptNote(_ encrypted: SharedNote) -> DecryptedNote? {
-        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-        // Find our envelope — check author envelope first (volunteer's own note)
-        var envelope: HpkeEnvelope?
-
-        if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-            envelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: authorEnv.enc,
-                ct: authorEnv.ct
-            )
-        }
-
-        // Then check admin envelopes
-        if envelope == nil, let adminEnvs = encrypted.adminEnvelopes {
-            if let ourEnvelope = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                envelope = HpkeEnvelope(
-                    v: 3,
-                    labelId: 0,
-                    enc: ourEnvelope.enc,
-                    ct: ourEnvelope.ct
-                )
-            }
-        }
-
-        guard let hpkeEnvelope = envelope else {
+        guard let hpkeEnvelope = encrypted.readerEnvelope(for: cryptoService) else {
             return nil
         }
 

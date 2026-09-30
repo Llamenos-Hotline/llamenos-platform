@@ -117,7 +117,8 @@ final class NoteFlowUITests: BaseUITest {
 
         // A note belongs to a call: the server rejects one with neither a call nor a
         // conversation (createNoteBodySchema), so text alone must not enable Save.
-        let saveButton = find("save-note")
+        // `find` would match the toolbar item's container, which never reports Disabled.
+        let saveButton = app.buttons["save-note"]
         XCTAssertTrue(saveButton.exists, "Save button should exist")
         XCTAssertFalse(saveButton.isEnabled, "Save button should stay disabled until a call is entered")
 
