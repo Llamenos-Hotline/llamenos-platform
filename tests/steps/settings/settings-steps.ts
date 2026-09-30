@@ -6,9 +6,10 @@
  *   - packages/test-specs/features/settings/device-link.feature
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import { Given, When, Then, After } from '../fixtures'
 import { TestIds, sectionTestIdMap } from '../../test-ids'
-import { Timeouts } from '../../helpers'
+import { Timeouts, TEST_PIN, enterPin, navigateAfterLogin } from '../../helpers'
+import { apiPatch, getSpamSettingsViaApi } from '../../api-helpers'
 
 // --- Settings display steps ---
 
@@ -368,6 +369,65 @@ Then('I can cancel without applying the change', async ({ page }) => {
   await cancelBtn.click()
   // The dialog should close
   await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
+})
+
+// Regression coverage for #1130: exercises the admin *sidebar* route
+// (/admin/spam-protection), which renders a different component tree than
+// the "Hub Settings" page used by the scenario above. The bug was that this
+// route's toggle handler re-read settings from the server instead of
+// PATCHing them, so the switch visually flipped and then silently reverted
+// on reload — confirming the switch state right after the click would not
+// have caught that; only the server's state and a fresh load prove the write
+// landed.
+//
+// Spam settings are instance-wide (the client PATCHes the unscoped
+// /settings/spam), so the scenario records the value it started from and the
+// `After` hook below puts it back — no other scenario inherits a flipped CAPTCHA.
+When('I toggle the CAPTCHA setting and confirm the change', async ({ page, backendRequest, adminWorld }) => {
+  const before = (await getSpamSettingsViaApi(backendRequest)).voiceCaptchaEnabled
+  adminWorld.spamCaptchaBefore = before
+  const toggle = page.getByTestId(TestIds.SPAM_CAPTCHA_TOGGLE)
+  // Settle on the server's value before clicking, so the click flips a loaded
+  // setting rather than the switch's pre-fetch default.
+  await expect(toggle).toHaveAttribute('aria-checked', String(before), { timeout: Timeouts.ELEMENT })
+
+  await toggle.click()
+  const confirmBtn = page.getByTestId(TestIds.CONFIRM_DIALOG_OK)
+  await expect(confirmBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await confirmBtn.click()
+  await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
+
+  // The switch must reflect the server's PATCH response, not just the
+  // pre-click intent — confirm it actually flipped.
+  await expect(toggle).toHaveAttribute('aria-checked', String(!before), { timeout: Timeouts.ELEMENT })
+})
+
+Then('the CAPTCHA setting change should persist after a reload', async ({ page, backendRequest, adminWorld }) => {
+  const before = adminWorld.spamCaptchaBefore
+  if (before === undefined) throw new Error('the CAPTCHA toggle step must run first')
+  const expected = !before
+
+  // Server truth: the PATCH landed.
+  await expect
+    .poll(async () => (await getSpamSettingsViaApi(backendRequest)).voiceCaptchaEnabled, { timeout: Timeouts.API })
+    .toBe(expected)
+
+  // A reload clears the in-memory device key, so the app opens on the PIN screen
+  // and unlocking lands on "/" — unlock, then come back to the sidebar route.
+  await page.reload()
+  await expect(page.getByTestId(TestIds.PIN_INPUT)).toBeVisible({ timeout: Timeouts.AUTH })
+  await enterPin(page, TEST_PIN)
+  await page.waitForURL(u => !u.toString().includes('/login'), { timeout: Timeouts.AUTH })
+  await navigateAfterLogin(page, '/admin/spam-protection')
+
+  await expect(page.getByTestId(TestIds.SPAM_CAPTCHA_TOGGLE))
+    .toHaveAttribute('aria-checked', String(expected), { timeout: Timeouts.ELEMENT })
+})
+
+After(async ({ backendRequest, adminWorld }) => {
+  if (adminWorld.spamCaptchaBefore === undefined) return
+  const { status } = await apiPatch(backendRequest, '/settings/spam', { voiceCaptchaEnabled: adminWorld.spamCaptchaBefore })
+  expect(status, 'restoring the instance-wide CAPTCHA setting must succeed').toBe(200)
 })
 
 When('I press {string}', async ({ page }, keys: string) => {

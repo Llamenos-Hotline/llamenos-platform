@@ -116,13 +116,19 @@ export const adminNavConfig: AdminNavConfig = {
         {
           slug: 'transcription',
           labelKey: 'adminNav.items.transcription',
-          requiredPermissions: ['settings:read'],
+          // Matches the backend's actual requirePermission('settings:manage-transcription')
+          // on both GET and PATCH /settings/transcription (apps/worker/routes/settings.ts) —
+          // a settings:read-only admin cannot even load this page, so it must not be offered.
+          requiredPermissions: ['settings:manage-transcription'],
           testid: 'admin-sidebar-item-transcription',
         },
         {
           slug: 'spam-protection',
           labelKey: 'adminNav.items.spamProtection',
-          requiredPermissions: ['settings:read'],
+          // Matches the backend's actual requirePermission('settings:manage-spam') on both
+          // GET and PATCH /settings/spam (apps/worker/routes/settings.ts) — a settings:read-only
+          // admin cannot even load this page, so it must not be offered.
+          requiredPermissions: ['settings:manage-spam'],
           testid: 'admin-sidebar-item-spam-protection',
         },
       ],
