@@ -76,6 +76,7 @@ function makeMockCallsService() {
     getActiveCallByCallId: vi.fn().mockResolvedValue(null),
     getCallRecord: vi.fn().mockResolvedValue(null),
     answerCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'in-progress' }),
+    getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
     endCall: vi.fn().mockResolvedValue({ callId: 'call-1', status: 'completed' }),
     reportSpam: vi.fn().mockResolvedValue({ ok: true }),
     debug: vi.fn().mockResolvedValue({ activeCount: 0, activeCalls: [] }),
@@ -418,6 +419,18 @@ describe('Calls Routes', () => {
         users: [{ pubkey: ME, active: true, onBreak: true, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER }],
       })
       const { app } = answerApp(callsSvc, roster)
+
+      const res = await app.request('/call-1/answer', { method: 'POST' })
+      expect(res.status).toBe(403)
+      expect(callsSvc.answerCall).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when the volunteer is on shift but already on a live call (not rung)', async () => {
+      const callsSvc = makeMockCallsService()
+      // Answering an in-progress call in another hub — ringing skipped them, so
+      // the answer route must refuse them too.
+      callsSvc.getBusyPubkeys.mockResolvedValue(new Set([ME]))
+      const { app } = answerApp(callsSvc, makeRingRoster([ME]))
 
       const res = await app.request('/call-1/answer', { method: 'POST' })
       expect(res.status).toBe(403)

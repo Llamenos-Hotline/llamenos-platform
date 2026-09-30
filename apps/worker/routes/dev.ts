@@ -841,10 +841,10 @@ dev.post('/test-simulate/incoming-call', async (c) => {
 
   // Optionally refuse the call when nobody would be rung — the same ring set
   // (on shift → fallback group; active, not on break, not on a live call, hub
-  // access) that real
-  // telephony routing rings and that the answer route accepts. Real routing never
-  // registers a ringing call nobody can answer; this makes a test that forgot to
-  // put anyone in the ring set fail here, not later as a 403 on answer.
+  // access) that real telephony routing rings and that the answer route
+  // accepts. Real routing never registers a ringing call nobody can answer;
+  // this makes a test that forgot to put anyone in the ring set fail here, not
+  // later as a 403 on answer.
   if (body.checkVolunteers) {
     const ringable = await resolveRingableVolunteers(services, hubId)
     if (!ringable || ringable.available.length === 0) {
