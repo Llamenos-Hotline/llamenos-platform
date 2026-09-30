@@ -37,6 +37,8 @@ export const redeemInviteBodySchema = z.object({
   pubkey: pubkeySchema,
   timestamp: z.number(),
   token: z.string().min(1),
+  /** Random nonce the client signed into the auth message (Rust `create_auth_token` always signs one). */
+  nonce: z.string().optional(),
 })
 
 export const createInviteBodySchema = z.object({

@@ -3,7 +3,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { checkRateLimit } from '../lib/helpers'
 import { hashIP, getClientIp } from '../lib/crypto'
-import { verifyAuthToken } from '../lib/auth'
+import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
 import { requirePermission } from '../middleware/permission-guard'
 import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
@@ -67,10 +67,16 @@ invites.post('/redeem',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Verify Ed25519 auth token signature
+    // Verify the Ed25519 auth token signature, then burn it: a redemption binds a
+    // new device key to an identity, so each signed request is single-use (#1367).
+    // It is consumed before the rate limit and the redemption itself, so a signed
+    // request that is refused for any later reason still cannot be replayed.
     const inviteUrl = new URL(c.req.url)
-    const isValid = await verifyAuthToken({ pubkey: body.pubkey, timestamp: body.timestamp, token: body.token }, c.req.method, inviteUrl.pathname)
-    if (!isValid) {
+    const authPayload = { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token, nonce: body.nonce }
+    if (!verifyAuthToken(authPayload, c.req.method, inviteUrl.pathname)) {
+      return c.json({ error: 'Authentication failed' }, 401)
+    }
+    if (!(await consumeAuthToken(authPayload, services.identity))) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
 
