@@ -2,7 +2,6 @@ import type { BridgeConfig } from './types'
 import { createBridgeClient, parsePbxType } from './client-factory'
 import { WebhookSender } from './webhook-sender'
 import { CommandHandler, callRecordingName, voicemailRecordingName, type RingRequest } from './command-handler'
-import { loadTtsConfigFromEnv } from './tts-engine'
 import { logger } from './logger'
 
 /** Load configuration from environment variables */
@@ -59,7 +58,6 @@ function loadConfig(): BridgeConfig {
     bridgeHost,
     stasisApp,
     connectionTimeoutMs,
-    ttsConfig: loadTtsConfigFromEnv(),
   }
 }
 
@@ -301,7 +299,6 @@ async function main(): Promise<void> {
   // Log startup info
   logger.info('[bridge]', `sip-bridge is running (PBX_TYPE=${config.pbxType})`)
   logger.info('[bridge]', `Webhook target: ${config.workerWebhookUrl}`)
-  logger.info('[bridge]', `TTS engine: ${config.ttsConfig?.engine ?? 'none'} (cache: ${config.ttsConfig?.cacheDir ?? 'disabled'})`)
 
   // Handle graceful shutdown
   const shutdown = () => {

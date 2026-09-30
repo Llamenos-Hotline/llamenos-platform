@@ -225,7 +225,11 @@ export type BridgeCommand =
   | HangupCommand
   | LeaveQueueCommand
 
-/** Speak text via the configured TTS engine */
+/**
+ * A prompt as text, for providers that synthesise speech themselves. The bridge
+ * has no speech engine: on a PBX a prompt is heard only if an operator uploaded
+ * it (a `play` of the app's /api/ivr-audio URL), so `speak` is skipped.
+ */
 export interface SpeakCommand {
   action: 'speak'
   text: string
@@ -304,6 +308,8 @@ export interface ActiveCall {
   ringingChannels: string[]
   /** Prompts queued or playing on this channel */
   pendingPlaybacks: Set<string>
+  /** The worker asked to end the call; it ends once the last prompt finishes */
+  hangupAfterPrompts?: boolean
   dtmfBuffer: string
   activeGather?: {
     numDigits: number
@@ -376,25 +382,4 @@ export interface BridgeConfig {
   stasisApp: string
   /** Maximum time (ms) to wait for initial PBX connection. Default 5 minutes. */
   connectionTimeoutMs: number
-  /** TTS engine configuration */
-  ttsConfig?: {
-    /** Selected engine: google | polly | espeak | none */
-    engine: 'google' | 'polly' | 'espeak' | 'none'
-    /** Directory for cached audio files */
-    cacheDir: string
-    /** Google Cloud API key */
-    googleApiKey?: string
-    /** Google Cloud voice name override */
-    googleVoiceName?: string
-    /** AWS access key ID */
-    awsAccessKeyId?: string
-    /** AWS secret access key */
-    awsSecretAccessKey?: string
-    /** AWS region */
-    awsRegion?: string
-    /** AWS Polly voice ID */
-    pollyVoiceId?: string
-    /** espeak-ng voice name */
-    espeakVoice?: string
-  }
 }

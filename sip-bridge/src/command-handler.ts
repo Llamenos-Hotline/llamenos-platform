@@ -17,7 +17,6 @@ import {
   type WebhookPayload,
 } from './types'
 import { type CallMode, SframeModeDispatcher, parseStasisArgs } from './sframe-mode-dispatcher'
-import { type TtsEngine, createTtsEngine, formatMediaPath } from './tts-engine'
 import { logger } from './logger'
 
 /** How long after a recording must have ended its finish event may still arrive */
@@ -72,14 +71,10 @@ export class CommandHandler {
 
   private readonly recordingSweepTimer: ReturnType<typeof setInterval>
 
-  /** Optional TTS engine for synthesizing voice prompts */
-  private readonly ttsEngine: TtsEngine | null
-
   constructor(client: BridgeClient, webhook: WebhookSender, config: BridgeConfig) {
     this.client = client
     this.webhook = webhook
     this.config = config
-    this.ttsEngine = config.ttsConfig ? createTtsEngine(config.ttsConfig) : null
 
     this.recordingSweepTimer = setInterval(() => {
       this.pruneStaleRecordings()
@@ -135,7 +130,7 @@ export class CommandHandler {
         await this.onRecordingDone(event.recordingName, 'failed')
         break
       case 'playback_finished':
-        this.onPlaybackFinished(event)
+        await this.onPlaybackFinished(event)
         break
     }
   }
@@ -252,12 +247,18 @@ export class CommandHandler {
     }
   }
 
-  /** A prompt finished — once none are left, a waiting gather starts its input timeout */
-  private onPlaybackFinished(event: BridgeEvent & { type: 'playback_finished' }): void {
+  /**
+   * A prompt finished. Once none are left, a waiting gather starts its input
+   * timeout, and a call the worker ended is hung up.
+   */
+  private async onPlaybackFinished(event: BridgeEvent & { type: 'playback_finished' }): Promise<void> {
     const call = this.calls.get(event.channelId)
     if (!call) return
     call.pendingPlaybacks.delete(event.playbackId)
-    if (call.pendingPlaybacks.size === 0 && call.activeGather && !call.activeGather.timeoutTimer) {
+    if (call.pendingPlaybacks.size > 0) return
+    if (call.hangupAfterPrompts) {
+      await this.client.hangup(call.channelId)
+    } else if (call.activeGather && !call.activeGather.timeoutTimer) {
       this.startGatherTimeout(call)
     }
   }
@@ -389,7 +390,8 @@ export class CommandHandler {
   private async executeCommand(channelId: string, cmd: BridgeCommand): Promise<void> {
     switch (cmd.action) {
       case 'speak':
-        await this.playPrompt(channelId, await this.synthesize(cmd.text, cmd.language))
+        // Nothing to play: the prompt was never uploaded for this language (see SpeakCommand).
+        logger.warn('[handler]', `No uploaded audio for a ${cmd.language} prompt — skipping it`)
         break
       case 'play':
         await this.playPrompt(channelId, `sound:${cmd.url}`)
@@ -410,7 +412,7 @@ export class CommandHandler {
         await this.execRecord(channelId, cmd)
         break
       case 'hangup':
-        await this.client.hangup(channelId)
+        await this.hangupAfterPrompts(channelId)
         break
       default: {
         // The worker and the bridge disagreeing on the vocabulary is exactly how
@@ -421,21 +423,40 @@ export class CommandHandler {
     }
   }
 
-  /** Synthesize a prompt; null when no TTS engine is configured or synthesis failed */
-  private async synthesize(text: string, language: string): Promise<string | null> {
-    const audioPath = this.ttsEngine ? await this.ttsEngine.synthesize(text, language) : null
-    if (!audioPath) {
-      logger.warn('[handler]', `No TTS audio for a ${language} prompt (engine: ${this.config.ttsConfig?.engine ?? 'none'}) — skipping it`)
-      return null
+  /**
+   * Queue a prompt on the channel and track it until PlaybackFinished. The ID
+   * is ours and tracked before the request: a prompt that fails at once can
+   * report PlaybackFinished before the play request returns, and an ID added
+   * after that would never be cleared — the call would never hang up.
+   */
+  private async playPrompt(channelId: string, media: string): Promise<void> {
+    const pending = this.calls.get(channelId)?.pendingPlaybacks
+    const requestedId = `prompt-${crypto.randomUUID()}`
+    pending?.add(requestedId)
+    let playbackId: string
+    try {
+      playbackId = await this.client.playMedia(channelId, media, requestedId)
+    } catch (err) {
+      pending?.delete(requestedId)
+      throw err
     }
-    return formatMediaPath(audioPath, this.config.pbxType)
+    // A PBX that names its own playbacks (ESL) is tracked by its name.
+    if (playbackId !== requestedId && pending?.delete(requestedId)) pending.add(playbackId)
   }
 
-  /** Queue a prompt on the channel and track it until PlaybackFinished */
-  private async playPrompt(channelId: string, media: string | null): Promise<void> {
-    if (!media) return
-    const playbackId = await this.client.playMedia(channelId, media)
-    this.calls.get(channelId)?.pendingPlaybacks.add(playbackId)
+  /**
+   * End the call — after the prompts before it have played. ARI runs a
+   * channel's playbacks in order but a hangup at once, so `play` then `hangup`
+   * (a rate-limited caller's message, the voicemail thank-you) would otherwise
+   * cut the caller off before they hear a word.
+   */
+  private async hangupAfterPrompts(channelId: string): Promise<void> {
+    const call = this.calls.get(channelId)
+    if (call && call.pendingPlaybacks.size > 0) {
+      call.hangupAfterPrompts = true
+      return
+    }
+    await this.client.hangup(channelId)
   }
 
   /** Stop every prompt still queued or playing on the call */

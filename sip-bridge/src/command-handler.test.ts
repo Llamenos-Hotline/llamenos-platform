@@ -3,16 +3,6 @@ import { CommandHandler, legStatusFromCause } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
-import { formatMediaPath } from './tts-engine'
-
-vi.mock('./tts-engine', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./tts-engine')>()
-  return {
-    ...actual,
-    createTtsEngine: (config: { engine: string }) =>
-      config.engine === 'none' ? null : { synthesize: async (text: string) => `/tts/${text.length}.wav` },
-  }
-})
 
 // ---- Fake BridgeClient: records every call, hands out predictable IDs ----
 
@@ -104,7 +94,6 @@ const config: BridgeConfig = {
   bridgeHost: '0.0.0.0',
   stasisApp: 'llamenos',
   connectionTimeoutMs: 300_000,
-  ttsConfig: { engine: 'espeak', cacheDir: '/tmp/tts' },
 }
 
 const CALLER = 'caller-1'
@@ -171,7 +160,7 @@ describe('CommandHandler', () => {
         },
       ])
       // Remote audio is a `sound:` URI with the URL; a bare URL is not a valid ARI media URI.
-      expect(pbx.of('playMedia')).toEqual([[CALLER, 'sound:https://hub/audio/greeting.mp3']])
+      expect(pbx.of('playMedia')).toEqual([[CALLER, 'sound:https://hub/audio/greeting.mp3', expect.stringMatching(/^prompt-/)]])
     })
 
     it('is hung up when the worker refuses or cannot be reached — never left in silence', async () => {
@@ -183,18 +172,47 @@ describe('CommandHandler', () => {
       expect(handler.getStatus().activeCalls).toBe(0)
     })
 
-    it('speaks prompts through the TTS engine', async () => {
+    it('skips a spoken prompt: on a PBX only uploaded audio is heard', async () => {
       worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Hola', language: 'es' }])
       await handler.handleEvent(incoming())
-      expect(pbx.of('playMedia')).toEqual([[CALLER, formatMediaPath('/tts/4.wav', 'asterisk')]])
+      expect(pbx.of('playMedia')).toEqual([])
     })
 
-    it('skips a spoken prompt when no TTS engine is configured', async () => {
-      const silent = new CommandHandler(pbx.client, worker.webhook, { ...config, ttsConfig: { engine: 'none', cacheDir: '' } })
-      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Hola', language: 'es' }])
-      await silent.handleEvent(incoming())
-      expect(pbx.of('playMedia')).toEqual([])
-      silent.dispose()
+    it('plays a prompt to the end before hanging up, so a turned-away caller hears why', async () => {
+      worker.reply('/api/telephony/incoming', [
+        { action: 'play', url: 'http://app:3000/api/ivr-audio/rateLimited/es' },
+        { action: 'hangup' },
+      ])
+      await handler.handleEvent(incoming())
+      expect(pbx.of('playMedia')).toHaveLength(1)
+      expect(pbx.of('hangup')).toEqual([])
+
+      await handler.handleEvent(playbackDone('pb-1'))
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+    })
+
+    it('hangs up at once when nothing is playing', async () => {
+      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Adiós', language: 'es' }, { action: 'hangup' }])
+      await handler.handleEvent(incoming())
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+    })
+
+    it('still hangs up when the prompt finishes before the play request returns', async () => {
+      // ARI names the playback as asked; a prompt whose fetch fails at once can
+      // report PlaybackFinished before POST /play has answered.
+      const racing: BridgeClient = {
+        ...pbx.client,
+        playMedia: async (channelId: string, media: string, playbackId?: string) => {
+          pbx.calls.push({ method: 'playMedia', args: [channelId, media, playbackId] })
+          await racer.handleEvent(playbackDone(playbackId ?? '', channelId))
+          return playbackId ?? ''
+        },
+      }
+      const racer = new CommandHandler(racing, worker.webhook, config)
+      worker.reply('/api/telephony/incoming', [{ action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/es' }, { action: 'hangup' }])
+      await racer.handleEvent(incoming())
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+      racer.dispose()
     })
 
     it('logs and skips a command it does not understand instead of dropping it silently', async () => {
@@ -211,8 +229,8 @@ describe('CommandHandler', () => {
   describe('gathering digits', () => {
     it('starts the input timeout only after the menu prompts finish, then posts no digits', async () => {
       worker.reply('/api/telephony/incoming', [
-        { action: 'speak', text: 'Para español, marque uno', language: 'es' },
-        { action: 'speak', text: 'For English, press two', language: 'en-US' },
+        { action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/es' },
+        { action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/en' },
         { action: 'gather', numDigits: 1, timeout: 8, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },
       ])
       await handler.handleEvent(incoming())
@@ -239,7 +257,7 @@ describe('CommandHandler', () => {
 
     it('lets the caller barge in: the first digit stops the prompts and a full entry posts at once', async () => {
       worker.reply('/api/telephony/incoming', [
-        { action: 'speak', text: 'Menu', language: 'en-US' },
+        { action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/en' },
         { action: 'gather', numDigits: 1, timeout: 8, callbackEvent: 'language_selected', metadata: { hub: 'hub-1' } },
       ])
       worker.reply('/api/telephony/language-selected', [queueCmd])
