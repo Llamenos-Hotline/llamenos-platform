@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Drive a real SIP call through self-hosted Asterisk, end to end.
 #
-# Starts, in its own compose project: Asterisk (the hotline PBX), the sip-bridge
-# image, and a simulated PSTN carrier. Starts an isolated worker on its own port
-# and database. Then runs asterisk-call.e2e.ts, which provisions a hub through
-# the API, places a call from the carrier and asserts the worker and PBX state.
+# Starts, in its own compose project: Asterisk (the hotline PBX, with no SIP
+# trunk), the sip-bridge image, and a simulated PSTN carrier. Starts an isolated
+# worker on its own port and database. Then runs asterisk-call.e2e.ts, which
+# provisions a hub and the SIP trunk through the API, places calls from the
+# carrier and asserts the worker and PBX state.
 #
 # Usage: deploy/docker/tests/telephony/run-call-e2e.sh [--keep]
 #   --keep          leave the PBX containers running afterwards (for poking at them)
@@ -25,6 +26,14 @@ KEEP=false
 
 export E2E_WORKER_PORT="$PORT"
 export E2E_CARRIER_CONTAINER="$PROJECT-sip-carrier-1"
+export E2E_ASTERISK_CONTAINER="$PROJECT-asterisk-1"
+# The worker reaches ARI by the name it has in production (http://asterisk:8088
+# on the compose network). It runs on the host here, so resolve that name to
+# the published port via HOSTALIASES rather than configuring a loopback URL the
+# provider-setup SSRF guard would — correctly — refuse.
+export E2E_WORKER_ARI_URL=http://asterisk:8088
+hostaliases="$(mktemp -t llamenos-telephony-e2e-hosts.XXXXXX)"
+echo "asterisk localhost" >"$hostaliases"
 # Exercise the credential encoding: generated passwords contain + and /.
 export ARI_PASSWORD="${ARI_PASSWORD:-e2e+ari/pass=$(openssl rand -hex 4)}"
 export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
@@ -47,6 +56,7 @@ cleanup() {
   if [[ -n "$server_pgid" ]]; then
     kill -TERM -- "-$server_pgid" 2>/dev/null || true
   fi
+  rm -f "$hostaliases"
   if [[ "$KEEP" == false ]]; then
     "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
   fi
@@ -54,8 +64,10 @@ cleanup() {
 trap cleanup EXIT
 
 # Always a fresh stack: credentials are generated per run, and Asterisk only
-# reads the ARI password when it starts.
+# reads the ARI password when it starts. The PBX starts with no SIP trunk: drop
+# this project's astdb volume, where a previous run's provisioned trunk lives.
 "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+docker volume rm -f "${PROJECT}_asterisk-db" >/dev/null
 "${COMPOSE[@]}" up -d --build --wait asterisk sip-carrier sip-bridge
 if [[ -n "${E2E_ARI_DEBUG:-}" ]]; then
   # Log every ARI event sent to the bridge in the Asterisk container's output.
@@ -74,6 +86,7 @@ PLATFORM=bun PORT="$PORT" PG_POOL_SIZE=10 ENVIRONMENT=development \
   SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001 \
   STORAGE_ENDPOINT=http://localhost:9000 STORAGE_ACCESS_KEY=rustfsadmin \
   STORAGE_SECRET_KEY=rustfsadmin STORAGE_BUCKET=llamenos-files \
+  HOSTALIASES="$hostaliases" \
   setsid bun src/server/index.ts >"$log" 2>&1 &
 server_pgid=$!
 echo "worker log: $log"
