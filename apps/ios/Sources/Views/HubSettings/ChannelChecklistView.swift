@@ -117,6 +117,7 @@ struct ChannelChecklistView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(NSLocalizedString("hub_onboarding_channel_settings_title", comment: "Channel Settings"))
         .navigationBarTitleDisplayMode(.inline)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("channel-checklist")
     }
 

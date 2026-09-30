@@ -2,7 +2,17 @@ import Foundation
 
 // MARK: - OnboardingStep
 
-/// The wizard steps for hub communications onboarding.
+/// The wizard screens for hub communications onboarding.
+///
+/// `serverStep` is the step in `ONBOARDING_STEPS`
+/// (apps/worker/services/provider-setup/hub-onboard.ts) that the screen
+/// completes. The server drives progression and refuses a step that is not the
+/// one it is currently on, so the wizard never invents its own step names.
+///
+/// Two screens have no server step of their own: `channelSetup` and `summary`
+/// both review what has been chosen, and together they occupy the server's
+/// final `channel_setup` step — `summary` is the screen that completes it.
+/// `complete` is terminal.
 enum OnboardingStep: String, CaseIterable, Identifiable {
     case template
     case channels
@@ -13,6 +23,31 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
     case complete
 
     var id: String { rawValue }
+
+    var serverStep: String? {
+        switch self {
+        case .template: return "template_selection"
+        case .channels: return "channel_selection"
+        case .provider: return "provider_connection"
+        case .phoneNumber: return "phone_number"
+        case .channelSetup: return nil
+        case .summary: return "channel_setup"
+        case .complete: return nil
+        }
+    }
+
+    /// The screen to show for a step the server reports as current.
+    static func forServerStep(_ step: String) -> OnboardingStep? {
+        switch step {
+        case "template_selection": return .template
+        case "channel_selection": return .channels
+        case "provider_connection": return .provider
+        case "phone_number": return .phoneNumber
+        case "channel_setup": return .channelSetup
+        case "completion": return .complete
+        default: return nil
+        }
+    }
 
     var stepNumber: Int {
         switch self {
@@ -35,14 +70,21 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
 /// Uses @Observable macro (iOS 17+) per project conventions.
 @Observable
 final class HubCommunicationsViewModel {
+    /// The channels the checklist manages, in display order. `HubChannelType`
+    /// is codegen output and cannot synthesise `CaseIterable` from here.
+    private static let manageableChannels: [HubChannelType] = [
+        .voice, .sms, .email, .signal, .whatsapp, .telegram, .rcs,
+    ]
+
     private let onboardAPI: HubOnboardAPI
     private let providerService: ProviderSetupService
     private let hubContext: HubContext
 
     // MARK: - State
 
-    /// Whether the hub has provider setup complete.
-    var providerSetupComplete: Bool = false
+    /// Whether the hub's communications are set up — drives the settings panel
+    /// versus the "start the wizard" empty state.
+    var isSetUp: Bool = false
 
     /// Current provider type (if configured).
     var providerType: SharedProviderType?
@@ -53,8 +95,8 @@ final class HubCommunicationsViewModel {
     /// Hub onboarding state from the API.
     var onboardingState: HubOnboardingState?
 
-    /// Provider settings from the API.
-    var providerSettings: HubProviderSettings?
+    /// Provider and channel setup status from the API.
+    var setupStatus: HubSetupStatus?
 
     /// Current usage stats.
     var usage: HubUsage?
@@ -66,8 +108,8 @@ final class HubCommunicationsViewModel {
     var selectedTemplate: ProviderTemplate?
 
     /// Channel toggles during onboarding or settings.
-    var channelVoice: Bool = true
-    var channelSms: Bool = true
+    var channelVoice: Bool = false
+    var channelSms: Bool = false
     var channelEmail: Bool = false
     var channelSignal: Bool = false
     var channelWhatsApp: Bool = false
@@ -91,6 +133,13 @@ final class HubCommunicationsViewModel {
     /// Success feedback message.
     var successMessage: String?
 
+    /// The channel config as the server last reported it, so saving sends only
+    /// what changed — `PUT /onboard/channels` takes one channel at a time.
+    private var serverChannels = ChannelConfig(
+        email: false, rcs: false, signal: false, sms: false,
+        telegram: false, voice: false, whatsapp: false
+    )
+
     // MARK: - Init
 
     init(onboardAPI: HubOnboardAPI, providerService: ProviderSetupService, hubContext: HubContext) {
@@ -103,7 +152,7 @@ final class HubCommunicationsViewModel {
 
     // MARK: - Data Loading
 
-    /// Load hub provider settings, usage, and onboarding state.
+    /// Load hub provider status, usage, and onboarding state.
     func loadAll() async {
         guard let hubId else { return }
         isLoading = true
@@ -111,32 +160,29 @@ final class HubCommunicationsViewModel {
         defer { isLoading = false }
 
         do {
-            async let settingsTask = onboardAPI.getProviderSettings(hubId: hubId)
+            async let statusTask = onboardAPI.getProviderStatus(hubId: hubId)
             async let usageTask = onboardAPI.getUsage(hubId: hubId)
 
-            let (settings, usageResult) = try await (settingsTask, usageTask)
+            let status = try await statusTask
+            // Usage is supplementary — a failure here must not blank the screen.
+            let usageResult = try? await usageTask
 
-            providerSettings = settings
+            setupStatus = status
             usage = usageResult
-            providerSetupComplete = settings.providerSetupComplete
-            providerType = settings.providerType
-            providerStatus = settings.providerSetupComplete ? .connected : .disconnected
+            providerType = status.providerType
+            providerStatus = status.providerConnected ? .connected : .disconnected
+            isSetUp = status.onboardingComplete || status.providerConnected
 
             // Sync channel toggles from server state
-            syncChannelsFromSettings(settings.channels)
+            applyChannels(channelConfig(from: status))
 
-            // If not set up, load onboarding state
-            if !settings.providerSetupComplete {
-                do {
-                    let state = try await onboardAPI.getOnboardingStatus(hubId: hubId)
-                    onboardingState = state
-                    if let step = OnboardingStep(rawValue: state.currentStep) {
-                        currentStep = step
-                    }
-                    syncChannelsFromOnboarding(state.channelConfig)
-                } catch {
-                    // No onboarding started yet — that's fine
-                }
+            // If not set up, record whether onboarding was ever started — it
+            // decides between "Start Setup" and "Resume Setup". The wizard's
+            // step is deliberately NOT taken from here: `POST /onboard` resets
+            // progress to the first step, so the sheet always opens on the
+            // template picker and drives the server from there.
+            if !isSetUp {
+                onboardingState = try await onboardAPI.getOnboardingStatus(hubId: hubId)
             }
         } catch {
             self.error = error.localizedDescription
@@ -146,7 +192,7 @@ final class HubCommunicationsViewModel {
     /// Load provider templates.
     func loadTemplates() async {
         do {
-            templates = try await onboardAPI.getProviderTemplates()
+            templates = try await onboardAPI.getProviderTemplates().filter(\.isActive)
         } catch {
             self.error = error.localizedDescription
         }
@@ -154,7 +200,20 @@ final class HubCommunicationsViewModel {
 
     // MARK: - Onboarding Actions
 
+    /// Present the wizard from its first screen. `POST /onboard` resets the
+    /// server's progress, so opening the sheet anywhere else would show a step
+    /// the server is about to discard.
+    func presentOnboardingSheet() {
+        currentStep = .template
+        selectedTemplate = nil
+        showOnboardingSheet = true
+    }
+
     /// Start onboarding, optionally with a template.
+    ///
+    /// Choosing a template (or starting from scratch) *is* the server's first
+    /// step, `template_selection`, so it is completed in the same action —
+    /// otherwise the wizard's second screen would have no server step behind it.
     func startOnboarding(templateId: String? = nil) async {
         guard let hubId else { return }
         isCompletingStep = true
@@ -162,12 +221,12 @@ final class HubCommunicationsViewModel {
         defer { isCompletingStep = false }
 
         do {
-            let state = try await onboardAPI.startOnboarding(hubId: hubId, templateId: templateId)
-            onboardingState = state
-            if let step = OnboardingStep(rawValue: state.currentStep) {
-                currentStep = step
-            }
-            syncChannelsFromOnboarding(state.channelConfig)
+            _ = try await onboardAPI.startOnboarding(hubId: hubId, templateId: templateId)
+            let state = try await onboardAPI.completeStep(
+                hubId: hubId,
+                step: OnboardingStep.template.serverStep!
+            )
+            apply(state)
         } catch {
             self.error = error.localizedDescription
         }
@@ -176,10 +235,6 @@ final class HubCommunicationsViewModel {
     /// Select a template and start onboarding with it.
     func selectTemplate(_ template: ProviderTemplate) async {
         selectedTemplate = template
-        // Apply template defaults to channel toggles
-        for channel in template.defaultChannels {
-            setChannel(channel, enabled: true)
-        }
         await startOnboarding(templateId: template.id)
     }
 
@@ -192,23 +247,38 @@ final class HubCommunicationsViewModel {
     /// Complete the current onboarding step and advance.
     func completeCurrentStep() async {
         guard let hubId else { return }
+
+        // Screens the server has no step for advance on their own.
+        guard let serverStep = currentStep.serverStep else {
+            advanceLocally()
+            return
+        }
+
+        // Re-advancing after a back navigation: the server has already recorded
+        // this step and rejects completing it twice.
+        if onboardingState?.completedSteps.contains(serverStep) == true {
+            advanceLocally()
+            return
+        }
+
         isCompletingStep = true
         error = nil
         defer { isCompletingStep = false }
 
         do {
-            let state = try await onboardAPI.completeStep(hubId: hubId, step: currentStep.rawValue)
-            onboardingState = state
+            let state = try await onboardAPI.completeStep(
+                hubId: hubId,
+                step: serverStep,
+                channelConfig: currentStep == .channels ? channelConfigFromToggles() : nil
+            )
+            apply(state)
 
             if state.isComplete {
-                currentStep = .complete
-                providerSetupComplete = true
+                isSetUp = true
                 showOnboardingSheet = false
                 successMessage = NSLocalizedString("hub_onboarding_setup_complete", comment: "Setup complete")
                 // Reload settings
                 await loadAll()
-            } else if let step = OnboardingStep(rawValue: state.currentStep) {
-                currentStep = step
             }
         } catch {
             self.error = error.localizedDescription
@@ -234,64 +304,60 @@ final class HubCommunicationsViewModel {
 
     // MARK: - Channel Management
 
-    /// Update channels on the server.
+    /// Persist the channel toggles. The server enables or disables one channel
+    /// per request, so only the channels that actually changed are sent.
     func saveChannels() async {
         guard let hubId else { return }
         isSavingChannels = true
         error = nil
         defer { isSavingChannels = false }
 
-        let config = ChannelConfig(
-            email: channelEmail,
-            rcs: channelRcs,
-            signal: channelSignal,
-            sms: channelSms,
-            telegram: channelTelegram,
-            voice: channelVoice,
-            whatsapp: channelWhatsApp
-        )
+        let desired = channelConfigFromToggles()
+        var latest = serverChannels
 
         do {
-            try await onboardAPI.updateChannels(hubId: hubId, channels: config)
-            // Also update provider settings channels locally
-            if let settings = providerSettings {
-                let updatedChannels = SharedChannelConfig(
-                    email: channelEmail,
-                    rcs: channelRcs,
-                    signal: channelSignal,
-                    sms: channelSms,
-                    telegram: channelTelegram,
-                    voice: channelVoice,
-                    whatsapp: channelWhatsApp
-                )
-                providerSettings = HubProviderSettings(
-                    channels: updatedChannels,
-                    providerSetupComplete: settings.providerSetupComplete,
-                    providerType: settings.providerType,
-                    quotas: settings.quotas,
-                    subAccountConfigID: settings.subAccountConfigID,
-                    subAccountEnabled: settings.subAccountEnabled,
-                    usage: settings.usage
+            for channel in Self.manageableChannels where enabled(desired, channel) != enabled(latest, channel) {
+                latest = try await onboardAPI.updateChannel(
+                    hubId: hubId,
+                    channel: channel.rawValue,
+                    enabled: enabled(desired, channel)
                 )
             }
         } catch {
             self.error = error.localizedDescription
         }
+
+        // Whether or not every write landed, show what the server now holds.
+        applyChannels(latest)
     }
 
     // MARK: - Private Helpers
 
-    private func syncChannelsFromSettings(_ channels: SharedChannelConfig) {
-        channelVoice = channels.voice
-        channelSms = channels.sms
-        channelEmail = channels.email
-        channelSignal = channels.signal
-        channelWhatsApp = channels.whatsapp
-        channelTelegram = channels.telegram
-        channelRcs = channels.rcs
+    private func advanceLocally() {
+        let allSteps = OnboardingStep.allCases
+        guard let index = allSteps.firstIndex(of: currentStep), index + 1 < allSteps.count else { return }
+        currentStep = allSteps[index + 1]
     }
 
-    private func syncChannelsFromOnboarding(_ config: SharedChannelConfig) {
+    /// Adopt an onboarding state the server returned: its step and its channels.
+    private func apply(_ state: HubOnboardingState) {
+        onboardingState = state
+        if let step = OnboardingStep.forServerStep(state.currentStep) {
+            currentStep = step
+        }
+        applyChannels(ChannelConfig(
+            email: state.channelConfig.email,
+            rcs: state.channelConfig.rcs,
+            signal: state.channelConfig.signal,
+            sms: state.channelConfig.sms,
+            telegram: state.channelConfig.telegram,
+            voice: state.channelConfig.voice,
+            whatsapp: state.channelConfig.whatsapp
+        ))
+    }
+
+    private func applyChannels(_ config: ChannelConfig) {
+        serverChannels = config
         channelVoice = config.voice
         channelSms = config.sms
         channelEmail = config.email
@@ -301,28 +367,45 @@ final class HubCommunicationsViewModel {
         channelRcs = config.rcs
     }
 
-    private func setChannel(_ channel: HubChannelType, enabled: Bool) {
+    private func channelConfigFromToggles() -> ChannelConfig {
+        ChannelConfig(
+            email: channelEmail,
+            rcs: channelRcs,
+            signal: channelSignal,
+            sms: channelSms,
+            telegram: channelTelegram,
+            voice: channelVoice,
+            whatsapp: channelWhatsApp
+        )
+    }
+
+    private func channelConfig(from status: HubSetupStatus) -> ChannelConfig {
+        let on = Set(status.channelsConfigured)
+        return ChannelConfig(
+            email: on.contains(.email),
+            rcs: on.contains(.rcs),
+            signal: on.contains(.signal),
+            sms: on.contains(.sms),
+            telegram: on.contains(.telegram),
+            voice: on.contains(.voice),
+            whatsapp: on.contains(.whatsapp)
+        )
+    }
+
+    private func enabled(_ config: ChannelConfig, _ channel: HubChannelType) -> Bool {
         switch channel {
-        case .voice: channelVoice = enabled
-        case .sms: channelSms = enabled
-        case .email: channelEmail = enabled
-        case .signal: channelSignal = enabled
-        case .whatsapp: channelWhatsApp = enabled
-        case .telegram: channelTelegram = enabled
-        case .rcs: channelRcs = enabled
+        case .voice: return config.voice
+        case .sms: return config.sms
+        case .email: return config.email
+        case .signal: return config.signal
+        case .whatsapp: return config.whatsapp
+        case .telegram: return config.telegram
+        case .rcs: return config.rcs
         }
     }
 
     /// List of currently enabled channels for display.
     var enabledChannels: [HubChannelType] {
-        var result: [HubChannelType] = []
-        if channelVoice { result.append(.voice) }
-        if channelSms { result.append(.sms) }
-        if channelEmail { result.append(.email) }
-        if channelSignal { result.append(.signal) }
-        if channelWhatsApp { result.append(.whatsapp) }
-        if channelTelegram { result.append(.telegram) }
-        if channelRcs { result.append(.rcs) }
-        return result
+        Self.manageableChannels.filter { enabled(channelConfigFromToggles(), $0) }
     }
 }
