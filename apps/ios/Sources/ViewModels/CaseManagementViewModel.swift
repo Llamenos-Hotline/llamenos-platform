@@ -244,15 +244,10 @@ final class CaseManagementViewModel {
             guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { continue }
 
             do {
-                let hpkeEnvelope = HpkeEnvelope(
-                    v: 3,
-                    labelId: 0,
-                    enc: envelope.enc,
-                    ct: envelope.ct
-                )
                 let plaintext = try cryptoService.decryptMessage(
                     encryptedContent: encryptedSummary,
-                    envelope: hpkeEnvelope
+                    enc: envelope.enc,
+                    ct: envelope.ct
                 )
                 if let data = plaintext.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -285,15 +280,10 @@ final class CaseManagementViewModel {
         guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { return }
 
         do {
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: envelope.enc,
-                ct: envelope.ct
-            )
             let plaintext = try cryptoService.decryptMessage(
                 encryptedContent: encryptedFields,
-                envelope: hpkeEnvelope
+                enc: envelope.enc,
+                ct: envelope.ct
             )
             if let data = plaintext.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

@@ -893,15 +893,10 @@ private struct TimelineItemRow: View {
         guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { return }
 
         do {
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: envelope.enc,
-                ct: envelope.ct
-            )
             let plaintext = try cryptoService.decryptMessage(
                 encryptedContent: encrypted,
-                envelope: hpkeEnvelope
+                enc: envelope.enc,
+                ct: envelope.ct
             )
             // Content may be JSON with a "text" field, or raw text
             if let data = plaintext.data(using: .utf8),

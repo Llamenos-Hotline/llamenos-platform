@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://llamenos.org/schemas/crypto-labels.json",
   "title": "Cryptographic Domain Separation Labels",
-  "description": "All domain separation constants used across llamenos crypto operations. Index order matches LABEL_REGISTRY in packages/crypto/src/labels.rs.",
+  "description": "All domain separation constants used across llamenos crypto operations. Key order here is NOT the HPKE envelope labelId: numeric IDs are the indices of LABEL_REGISTRY in packages/crypto/src/labels.rs, which codegen reads (and cross-checks against this file) to generate CryptoLabelIds for Swift and Kotlin.",
   "labels": {
     "LABEL_NOTE_KEY": "llamenos:note-key",
     "LABEL_FILE_KEY": "llamenos:file-key",

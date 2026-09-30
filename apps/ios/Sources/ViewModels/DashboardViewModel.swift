@@ -344,24 +344,25 @@ final class DashboardViewModel {
             recentNotes = response.notes.prefix(3).compactMap { encrypted -> RecentNotePreview? in
                 guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
-                var hpkeEnvelope: HpkeEnvelope?
+                var wire: (enc: String, ct: String)?
 
                 if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-                    hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct)
+                    wire = (authorEnv.enc, authorEnv.ct)
                 }
 
-                if hpkeEnvelope == nil, let adminEnvs = encrypted.adminEnvelopes {
+                if wire == nil, let adminEnvs = encrypted.adminEnvelopes {
                     if let ourEnv = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                        hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: ourEnv.enc, ct: ourEnv.ct)
+                        wire = (ourEnv.enc, ourEnv.ct)
                     }
                 }
 
-                guard let envelope = hpkeEnvelope else { return nil }
+                guard let wire else { return nil }
 
                 do {
                     let json = try cryptoService.decryptNote(
                         ciphertextHex: encrypted.encryptedContent,
-                        envelope: envelope
+                        enc: wire.enc,
+                        ct: wire.ct
                     )
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
