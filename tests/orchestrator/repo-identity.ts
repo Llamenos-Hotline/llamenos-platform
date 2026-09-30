@@ -64,3 +64,5 @@ function parseRemoteUrl(url: string): string | undefined {
   const m = url.match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/)
   return m ? `${m[1]}/${m[2]}` : undefined
 }
+
+// #1396 injection: the PR's own (clean) change
