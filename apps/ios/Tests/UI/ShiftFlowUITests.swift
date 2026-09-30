@@ -83,11 +83,17 @@ final class ShiftFlowUITests: BaseUITest {
             guard clockOutButton.waitForExistence(timeout: 5) else {
                 // Not on shift — try clocking in first
                 let clockInButton = find("clock-in-button")
-                guard clockInButton.waitForExistence(timeout: 5) else { return }
+                XCTAssertTrue(
+                    clockInButton.waitForExistence(timeout: 5),
+                    "Shifts tab should show a clock-in button when the user is not on shift"
+                )
                 clockInButton.tap()
 
                 // Wait for clock out button to appear (shift started)
-                guard find("clock-out-button").waitForExistence(timeout: 10) else { return }
+                XCTAssertTrue(
+                    find("clock-out-button").waitForExistence(timeout: 10),
+                    "Clock-out button should replace clock-in once clocking in succeeds"
+                )
                 find("clock-out-button").tap()
 
                 // Confirmation dialog should appear

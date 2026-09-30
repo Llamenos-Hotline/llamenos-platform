@@ -45,13 +45,13 @@ struct NotesView: View {
             )) {
                 NoteCreateView(
                     customFields: vm.customFields,
-                    onSave: { text, fields, callId, conversationId in
+                    onSave: { text, fields, callId, transcript in
                         await appState.ensureAdminPubkeyLoaded()
                         try await vm.createNote(
                             text: text,
                             fields: fields,
                             callId: callId,
-                            conversationId: conversationId,
+                            transcript: transcript,
                             adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
                         )
                         vm.showCreateSheet = false

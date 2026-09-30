@@ -16,15 +16,10 @@ final class ConversationsViewModel {
     // MARK: - Public State
 
     /// All conversations from the server, filtered by current status filter.
-    var filteredConversations: [AppConversation] = []
+    var filteredConversations: [ConversationListResponseConversation] = []
 
-    /// All conversations (unfiltered), used for badge count calculations.
-    var allConversations: [AppConversation] = []
-
-    /// Total unread message count across all conversations.
-    var totalUnreadCount: Int {
-        allConversations.reduce(0) { $0 + $1.unreadCount }
-    }
+    /// All conversations (unfiltered).
+    var allConversations: [ConversationListResponseConversation] = []
 
     /// Current status filter.
     var statusFilter: ConversationStatusFilter = .active {
@@ -75,9 +70,9 @@ final class ConversationsViewModel {
         errorMessage = nil
 
         do {
-            let response: ConversationsListResponse = try await apiService.request(
+            let response: ConversationListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations"
+                path: apiService.hp("/api/conversations")
             )
             allConversations = response.conversations.sorted { lhs, rhs in
                 // Sort by last message time, newest first
@@ -112,16 +107,14 @@ final class ConversationsViewModel {
         currentMessages = []
 
         do {
-            let response: ConversationMessagesResponse = try await apiService.request(
+            let response: MessageListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations/\(conversationId)/messages"
+                path: apiService.hp("/api/conversations/\(conversationId)/messages")
             )
 
-            currentMessages = response.messages.compactMap { decryptConversationMessage($0) }
+            let channelType = allConversations.first { $0.id == conversationId }?.channelType
+            currentMessages = response.messages.compactMap { decryptConversationMessage($0, channelType: channelType) }
                 .sorted { $0.createdAt < $1.createdAt }
-
-            // Mark as read
-            await markAsRead(conversationId: conversationId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -150,7 +143,7 @@ final class ConversationsViewModel {
             }
 
             // Include assigned volunteer (may be us or someone else)
-            if let assignedPubkey = conversation?.assignedVolunteerPubkey,
+            if let assignedPubkey = conversation?.assignedTo,
                !readerPubkeys.contains(assignedPubkey) {
                 readerPubkeys.append(assignedPubkey)
             }
@@ -165,14 +158,22 @@ final class ConversationsViewModel {
                 readerPubkeys: readerPubkeys
             )
 
-            let request = SendMessageRequest(
+            // SMS, WhatsApp and Signal are delivered by the server's messaging
+            // adapter, which needs the text; it discards it after sending. A web
+            // conversation is end-to-end only.
+            let request = SendMessageBody(
+                body: nil,
                 encryptedContent: encrypted.encryptedContent,
-                recipientEnvelopes: encrypted.envelopes
+                externalID: nil,
+                plaintextForSending: conversation?.channelType == "web" ? nil : text,
+                readerEnvelopes: encrypted.envelopes.map {
+                    SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey)
+                }
             )
 
-            let _: ConversationMessage = try await apiService.request(
+            let _: MessageResponse = try await apiService.request(
                 method: "POST",
-                path: "/api/conversations/\(conversationId)/messages",
+                path: apiService.hp("/api/conversations/\(conversationId)/messages"),
                 body: request
             )
 
@@ -188,26 +189,6 @@ final class ConversationsViewModel {
         }
 
         isSending = false
-    }
-
-    // MARK: - Mark as Read
-
-    /// Mark all messages in a conversation as read.
-    private func markAsRead(conversationId: String) async {
-        do {
-            let _: MarkReadResponse = try await apiService.request(
-                method: "POST",
-                path: "/api/conversations/\(conversationId)/read"
-            )
-
-            // Update the local unread count
-            if let index = allConversations.firstIndex(where: { $0.id == conversationId }) {
-                // Re-fetch to get updated count since Conversation is immutable
-                await loadConversations()
-            }
-        } catch {
-            // Non-critical — don't surface this error
-        }
     }
 
     // MARK: - Real-time Events
@@ -255,11 +236,12 @@ final class ConversationsViewModel {
     // MARK: - Message Decryption
 
     /// Decrypt a conversation message using the HPKE envelope for our encryption pubkey.
-    private func decryptConversationMessage(_ message: ConversationMessage) -> DecryptedMessage? {
+    /// - Parameter channelType: the conversation's channel; messages do not carry it.
+    private func decryptConversationMessage(_ message: Message, channelType: String?) -> DecryptedMessage? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
         // Find our envelope
-        guard let ourEnvelope = message.recipientEnvelopes.first(where: { $0.pubkey == ourPubkey }) else {
+        guard let ourEnvelope = message.readerEnvelopes.first(where: { $0.pubkey == ourPubkey }) else {
             return nil
         }
 
@@ -280,10 +262,10 @@ final class ConversationsViewModel {
             return DecryptedMessage(
                 id: message.id,
                 text: decryptedText,
-                direction: message.direction,
-                channelType: message.channelType,
+                direction: message.direction?.rawValue ?? "",
+                channelType: channelType ?? "",
                 createdAt: DateFormatting.parseISO(message.createdAt) ?? Date(),
-                isRead: message.isRead
+                isRead: message.readAt != nil
             )
         } catch {
             return nil
@@ -298,7 +280,8 @@ final class ConversationsViewModel {
         case .all:
             filteredConversations = allConversations
         case .active:
-            filteredConversations = allConversations.filter { $0.conversationStatus == .active }
+            // Open conversations: in progress, or waiting for someone to claim them.
+            filteredConversations = allConversations.filter { $0.conversationStatus != .closed }
         case .closed:
             filteredConversations = allConversations.filter { $0.conversationStatus == .closed }
         }

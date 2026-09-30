@@ -9,6 +9,10 @@ import SwiftUI
 
 /// Decrypted note content matching the protocol spec (Appendix B).
 /// The plaintext JSON inside every encrypted note envelope.
+///
+/// Encode and decode it with no key strategy: `fields` is keyed by custom field
+/// `name`, which may contain underscores, and desktop and Android read those keys
+/// verbatim.
 struct NotePayload: Codable, Equatable, Sendable {
     /// The note body text.
     let text: String
@@ -46,23 +50,26 @@ struct DecryptedNote: Identifiable, Sendable {
     }
 }
 
-// MARK: - NotesListResponse
+// MARK: - SharedNote Envelope Selection
 
-/// API response wrapper for the paginated notes list.
-struct NotesListResponse: Codable, Sendable {
-    let notes: [NoteResponse]
-    let total: Int
-}
-
-// MARK: - CreateNoteRequest
-
-/// Request body for `POST /api/notes`.
-struct CreateNoteRequest: Encodable, Sendable {
-    let callId: String?
-    let conversationId: String?
-    let encryptedContent: String
-    let authorEnvelope: ProtocolKeyEnvelope?
-    let adminEnvelopes: [RecipientEnvelope]?
+extension SharedNote {
+    /// The HPKE envelope this device can open: the author envelope on our own note,
+    /// otherwise the admin envelope wrapped to our encryption key.
+    ///
+    /// `authorPubkey` is the author's signing key — the one the server takes from the
+    /// auth token — while admin envelopes are addressed by encryption key. Comparing
+    /// `authorPubkey` with the encryption key made every author's own note undecryptable.
+    func readerEnvelope(for crypto: CryptoService) -> HpkeEnvelope? {
+        if let signingPubkey = crypto.signingPubkeyHex, authorPubkey == signingPubkey,
+           let author = authorEnvelope {
+            return HpkeEnvelope(v: 3, labelId: 0, enc: author.enc, ct: author.ct)
+        }
+        if let encryptionPubkey = crypto.encryptionPubkeyHex,
+           let ours = adminEnvelopes?.first(where: { $0.pubkey == encryptionPubkey }) {
+            return HpkeEnvelope(v: 3, labelId: 0, enc: ours.enc, ct: ours.ct)
+        }
+        return nil
+    }
 }
 
 // MARK: - AnyCodableValue
@@ -117,10 +124,6 @@ enum AnyCodableValue: Codable, Equatable, Sendable {
         }
     }
 }
-
-// MARK: - NoteResponse Extensions
-
-extension NoteResponse: Identifiable {}
 
 // MARK: - DecryptedMessage
 

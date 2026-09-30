@@ -6,7 +6,8 @@ import SwiftUI
 /// and dynamically renders custom field inputs based on the field definitions from the server.
 struct NoteCreateView: View {
     let customFields: [CustomFieldDefinition]
-    let onSave: (String, [String: AnyCodableValue]?, String?, String?) async throws -> Void
+    /// Called with the note text, custom field values, the call ID and any attached transcript.
+    let onSave: (String, [String: AnyCodableValue]?, String, String?) async throws -> Void
     var transcriptionService: TranscriptionService?
 
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +18,12 @@ struct NoteCreateView: View {
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
     @State private var attachedTranscript: String?
+
+    private var trimmedText: String { noteText.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedCallId: String { callId.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Save needs the note text and the call it is about.
+    private var canSave: Bool { !trimmedText.isEmpty && !trimmedCallId.isEmpty && !isSaving }
 
     /// Editable custom fields (filtered + sorted).
     private var editableFields: [CustomFieldDefinition] {
@@ -119,10 +126,10 @@ struct NoteCreateView: View {
                     }
                 }
 
-                // Call ID section (optional)
+                // Call ID section — a note belongs to a call (the server rejects one without)
                 Section {
                     TextField(
-                        NSLocalizedString("note_create_call_id_placeholder", comment: "Call ID (optional)"),
+                        NSLocalizedString("notes_call_id_placeholder", comment: "Call ID or reference"),
                         text: $callId
                     )
                     .font(.brandMono(.body))
@@ -174,10 +181,10 @@ struct NoteCreateView: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 14)
                                     .fill(Color.brandPrimary)
-                                    .opacity(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving ? 0.4 : 1.0)
+                                    .opacity(canSave ? 1.0 : 0.4)
                             )
                     }
-                    .disabled(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+                    .disabled(!canSave)
                     .accessibilityIdentifier("save-note")
                 }
             }
@@ -326,8 +333,7 @@ struct NoteCreateView: View {
     // MARK: - Save
 
     private func saveNote() async {
-        let trimmedText = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
+        guard canSave else { return }
 
         // Validate required fields
         for field in editableFields where field.required {
@@ -345,14 +351,7 @@ struct NoteCreateView: View {
 
         do {
             let fields = fieldValues.isEmpty ? nil : fieldValues
-            let trimmedCallId = callId.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            try await onSave(
-                trimmedText,
-                fields,
-                trimmedCallId.isEmpty ? nil : trimmedCallId,
-                attachedTranscript
-            )
+            try await onSave(trimmedText, fields, trimmedCallId, attachedTranscript)
         } catch {
             errorMessage = error.localizedDescription
             isSaving = false

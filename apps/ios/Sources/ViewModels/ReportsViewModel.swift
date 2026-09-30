@@ -213,10 +213,6 @@ final class ReportsViewModel {
     /// Field values are serialized as JSON, encrypted as a single E2EE payload,
     /// and sent with the `reportTypeId` in metadata.
     ///
-    /// Uses `APIService.request(rawBody:)` to bypass the `convertToSnakeCase` encoder —
-    /// the backend expects camelCase keys (`reportTypeId`, `encryptedContent`,
-    /// `readerEnvelopes`).
-    ///
     /// - Parameters:
     ///   - reportTypeId: The report type definition ID.
     ///   - title: The report title (derived from type label or first text field).
@@ -240,9 +236,6 @@ final class ReportsViewModel {
                 readerPubkeys: adminPubkeys
             )
 
-            // Encode body with a plain encoder (no snake_case conversion).
-            // The backend expects camelCase keys (reportTypeId, encryptedContent,
-            // readerEnvelopes), but APIService.encoder uses convertToSnakeCase.
             let body = CreateTypedReportRequest(
                 title: title,
                 category: nil,
@@ -250,13 +243,11 @@ final class ReportsViewModel {
                 encryptedContent: encrypted.encryptedContent,
                 readerEnvelopes: encrypted.envelopes
             )
-            let plainEncoder = JSONEncoder()
-            let rawBody = try plainEncoder.encode(body)
 
             let _: ClientReportResponse = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
-                rawBody: rawBody
+                body: body
             )
 
             // Haptic feedback on success

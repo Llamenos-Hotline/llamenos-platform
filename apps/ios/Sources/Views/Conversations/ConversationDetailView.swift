@@ -33,8 +33,13 @@ struct ConversationDetailView: View {
         .navigationTitle(conversationTitle(vm: vm))
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // This view owns its view model, so it loads the conversation itself: the
+            // channel header, the reply bar and the reply's reader list all need it.
+            await vm.loadConversations()
             await vm.loadMessages(for: conversationId)
         }
+        // `.contain` keeps this identifier off the children (reply field, send button).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversation-detail-view")
     }
 

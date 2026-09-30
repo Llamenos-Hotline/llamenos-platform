@@ -357,53 +357,23 @@ struct ClientSpamSettings: Codable, Sendable {
 }
 
 // MARK: - System Health
-// Client-only: generated `HealthResponse` has different shape (checks array, not named services).
+// `GET /api/system/health` decodes into the generated `SystemHealthResponse`.
 
-/// System health dashboard data from the API.
-struct SystemHealth: Codable, Sendable {
-    let server: ServiceHealthStatus
-    let services: ServiceHealthStatus
-    let calls: ServiceHealthStatus
-    let storage: ServiceHealthStatus
-    let backup: ServiceHealthStatus
-    let volunteers: ServiceHealthStatus
-}
-
-/// Status of an individual service or subsystem.
-struct ServiceHealthStatus: Codable, Sendable {
-    let name: String
-    let status: String
-    let details: String?
-
-    /// Parsed status for display.
-    var healthLevel: HealthLevel {
-        switch status.lowercased() {
-        case "healthy", "ok", "up": return .healthy
-        case "degraded", "warning", "slow": return .degraded
-        default: return .critical
-        }
-    }
-}
-
-/// Health level for status indicators.
-enum HealthLevel: Sendable {
-    case healthy
-    case degraded
-    case critical
-
-    var color: String {
+extension SharedServiceStatusStatus {
+    /// Ordering for "worst status wins" when several services share one card.
+    var severity: Int {
         switch self {
-        case .healthy: return "green"
-        case .degraded: return "yellow"
-        case .critical: return "red"
+        case .ok: return 0
+        case .degraded: return 1
+        case .down: return 2
         }
     }
 
     var icon: String {
         switch self {
-        case .healthy: return "checkmark.circle.fill"
+        case .ok: return "checkmark.circle.fill"
         case .degraded: return "exclamationmark.triangle.fill"
-        case .critical: return "xmark.circle.fill"
+        case .down: return "xmark.circle.fill"
         }
     }
 }

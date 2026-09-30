@@ -59,7 +59,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Volunteers link
         let volunteersLink = find("admin-volunteers")
-        guard volunteersLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(volunteersLink.waitForExistence(timeout: 5), "Volunteers link ('admin-volunteers') should be listed in the admin panel")
         volunteersLink.tap()
 
         // Volunteers list, empty state, or loading should appear
@@ -74,7 +74,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Volunteers link
         let volunteersLink = find("admin-volunteers")
-        guard volunteersLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(volunteersLink.waitForExistence(timeout: 5), "Volunteers link ('admin-volunteers') should be listed in the admin panel")
         volunteersLink.tap()
 
         // Wait for content
@@ -91,7 +91,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Bans link
         let bansLink = find("admin-bans")
-        guard bansLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "Ban list link ('admin-bans') should be listed in the admin panel")
         bansLink.tap()
 
         // Ban list, empty state, or loading should appear
@@ -106,7 +106,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Bans link
         let bansLink = find("admin-bans")
-        guard bansLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "Ban list link ('admin-bans') should be listed in the admin panel")
         bansLink.tap()
 
         // Wait for content to load
@@ -124,7 +124,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Audit Log link
         let auditLink = find("admin-audit-log")
-        guard auditLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(auditLink.waitForExistence(timeout: 5), "Audit log link ('admin-audit-log') should be listed in the admin panel")
         auditLink.tap()
 
         // Audit log list, empty state, or loading should appear
@@ -141,7 +141,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Invites link
         let invitesLink = find("admin-invites")
-        guard invitesLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "Invites link ('admin-invites') should be listed in the admin panel")
         invitesLink.tap()
 
         // Invites list, empty state, or loading should appear
@@ -156,7 +156,7 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Invites link
         let invitesLink = find("admin-invites")
-        guard invitesLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "Invites link ('admin-invites') should be listed in the admin panel")
         invitesLink.tap()
 
         // Wait for content

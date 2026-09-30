@@ -3,51 +3,25 @@ import XCTest
 /// XCUITest suite for the conversations workflow: navigating to conversations,
 /// opening a conversation detail, sending a message, and verifying the list.
 ///
-/// These tests require the app to be in an authenticated state with a valid hub connection.
-/// They use the `--test-authenticated` launch argument to skip auth flow.
-final class ConversationFlowUITests: XCTestCase {
-
-    private var app: XCUIApplication!
-
-    override func setUp() {
-        super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launchAnsweringSystemPrompts()
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
-    }
+/// The list-level scenarios run pre-authenticated without a backend
+/// (`launchAuthenticated`). The detail scenarios need a conversation to open, so
+/// they connect to the live backend and simulate an inbound SMS into this class's
+/// hub first — a fresh class hub holds no conversations, and a detail test that
+/// opened "whatever is there" used to pass without asserting anything.
+final class ConversationFlowUITests: BaseUITest {
 
     // MARK: - Tab Navigation
 
     func testConversationsTabExists() {
+        launchAuthenticated()
+
         let tabView = find("main-tab-view")
         XCTAssertTrue(
             tabView.waitForExistence(timeout: 10),
             "Main tab view should be visible after authentication"
         )
 
-        navigateToConversationsTab()
+        navigateToConversations()
 
         // Conversations list, empty state, loading, or error should appear
         let found = anyElementExists([
@@ -60,7 +34,9 @@ final class ConversationFlowUITests: XCTestCase {
     // MARK: - Empty State
 
     func testEmptyStateShowsMessage() {
-        navigateToConversationsTab()
+        launchAuthenticated()
+
+        navigateToConversations()
 
         let emptyState = find("conversations-empty-state")
         if emptyState.waitForExistence(timeout: 10) {
@@ -72,7 +48,9 @@ final class ConversationFlowUITests: XCTestCase {
     // MARK: - Filter Menu
 
     func testFilterButtonExists() {
-        navigateToConversationsTab()
+        launchAuthenticated()
+
+        navigateToConversations()
 
         // Wait for content to load
         _ = anyElementExists([
@@ -90,26 +68,8 @@ final class ConversationFlowUITests: XCTestCase {
     // MARK: - Conversation Detail
 
     func testConversationDetailOpens() {
-        navigateToConversationsTab()
-
-        // Wait for the conversations list to load
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else {
-            // No conversations to test detail on — skip
-            return
-        }
-
-        // Tap the first conversation row
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        // Detail view should appear
-        let detailView = find("conversation-detail-view")
-        XCTAssertTrue(
-            detailView.waitForExistence(timeout: 5),
-            "Conversation detail view should appear when tapping a conversation"
-        )
+        launchWithAPI()
+        openSimulatedConversation()
 
         // Reply text field should exist
         let replyField = find("reply-text-field")
@@ -127,65 +87,69 @@ final class ConversationFlowUITests: XCTestCase {
     }
 
     func testSendMessageButton() {
-        navigateToConversationsTab()
+        launchWithAPI()
+        openSimulatedConversation()
 
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else { return }
-
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
-
-        let detailView = find("conversation-detail-view")
-        guard detailView.waitForExistence(timeout: 5) else { return }
-
-        // Send button should be disabled when reply field is empty
         let sendButton = find("send-message-button")
         XCTAssertTrue(sendButton.exists, "Send button should exist")
 
-        // Type a message
         let replyField = find("reply-text-field")
-        if replyField.exists {
-            replyField.tap()
-            replyField.typeText("Test message from UI test - \(Date().timeIntervalSince1970)")
+        XCTAssertTrue(replyField.waitForExistence(timeout: 5), "Reply text field should exist in conversation detail")
+        let reply = "Reply from UI test \(UUID().uuidString.prefix(8))"
+        replyField.tap()
+        replyField.typeText(reply)
+        sendButton.tap()
 
-            XCTAssertTrue(sendButton.exists, "Send button should still exist after typing")
-        }
+        // The view model clears the field only once the server has accepted the reply
+        // (201) and its response decoded as the protocol's MessageResponse; on any
+        // failure the typed text stays. (Reading the reply back needs #1328: iOS opens
+        // message envelopes with the note-key label ID and cannot decrypt them.)
+        let cleared = NSPredicate(format: "value != %@", reply)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: cleared, object: replyField)], timeout: 15),
+            .completed,
+            "The reply field should clear once the server accepts the reply"
+        )
     }
 
     // MARK: - Channel Header
 
     func testChannelHeaderVisible() {
-        navigateToConversationsTab()
-
-        let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else { return }
-
-        let cells = app.cells
-        guard cells.count > 0 else { return }
-        cells.firstMatch.tap()
+        launchWithAPI()
+        openSimulatedConversation()
 
         let channelHeader = find("conversation-channel-header")
-        if channelHeader.waitForExistence(timeout: 5) {
-            XCTAssertTrue(true, "Channel header is visible in conversation detail")
-        }
+        XCTAssertTrue(
+            channelHeader.waitForExistence(timeout: 5),
+            "Conversation detail should show the channel header"
+        )
     }
 
-    // MARK: - Navigation Helpers
+    // MARK: - Fixtures
 
-    private func navigateToConversationsTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
-        }
+    /// Simulate an inbound SMS into this class's hub, then open its conversation
+    /// from the Messages tab and wait for the detail view.
+    private func openSimulatedConversation() {
+        let (conversationId, _) = simulateIncomingMessage(
+            senderNumber: "+1555\(Int.random(in: 1_000_000...9_999_999))",
+            body: "Conversation flow \(UUID().uuidString.prefix(8))"
+        )
+        XCTAssertFalse(
+            conversationId.isEmpty,
+            "POST /api/test-simulate/incoming-message should return a conversationId — see the runner log for the simulation warning"
+        )
 
-        let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else { return }
-        // Tab order: 0=Dashboard, 1=Notes, 2=Cases, 3=Conversations, 4=Shifts, 5=Settings
-        let conversationsTabButton = tabBar.buttons.element(boundBy: 3)
-        if conversationsTabButton.exists {
-            conversationsTabButton.tap()
-        }
+        navigateToConversations()
+        let row = find("conversation-row-\(conversationId)")
+        XCTAssertTrue(
+            row.waitForExistence(timeout: 15),
+            "Messages tab should list the conversation simulated in this scenario (\(conversationId))"
+        )
+        row.tap()
+
+        XCTAssertTrue(
+            find("conversation-detail-view").waitForExistence(timeout: 5),
+            "Conversation detail view should appear when tapping a conversation"
+        )
     }
 }

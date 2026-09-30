@@ -133,7 +133,7 @@ final class AdminSettingsUITests: BaseUITest {
         navigateToAdminSettingsScreen("admin-call-settings")
 
         let view = find("call-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(view.waitForExistence(timeout: 10), "Call settings view ('call-settings-view') should appear after opening it from the admin panel")
 
         let ringTimeout = scrollToFind("ring-timeout-slider")
         XCTAssertTrue(ringTimeout.exists, "Ring timeout slider should exist")
@@ -187,7 +187,7 @@ final class AdminSettingsUITests: BaseUITest {
         navigateToAdminSettingsScreen("admin-transcription-settings")
 
         let view = find("transcription-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(view.waitForExistence(timeout: 10), "Transcription settings view ('transcription-settings-view') should appear after opening it from the admin panel")
 
         let enabledToggle = scrollToFind("transcription-enabled-toggle")
         XCTAssertTrue(enabledToggle.exists, "Transcription enabled toggle should exist")
@@ -219,7 +219,7 @@ final class AdminSettingsUITests: BaseUITest {
         navigateToAdminSettingsScreen("admin-spam-settings")
 
         let view = find("spam-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        XCTAssertTrue(view.waitForExistence(timeout: 10), "Spam settings view ('spam-settings-view') should appear after opening it from the admin panel")
 
         let maxCalls = scrollToFind("spam-max-calls-stepper")
         XCTAssertTrue(maxCalls.exists, "Max calls stepper should exist")
@@ -262,17 +262,10 @@ final class AdminSettingsUITests: BaseUITest {
         let loaded = firstCard.waitForExistence(timeout: 10)
             || errorState.waitForExistence(timeout: 5)
 
-        if errorState.exists {
-            // No API connection — error state is acceptable for mock-only tests
-            return
-        }
-
-        guard loaded else {
-            // Neither cards nor error appeared — check loading state
-            let loading = find("health-loading")
-            XCTAssertTrue(loading.exists, "System health should show loading, cards, or error")
-            return
-        }
+        // This class is connected to the live backend (setUp), so the error state is
+        // a failed /system/health call, not an offline launch.
+        XCTAssertFalse(errorState.exists, "System health should load from the connected backend, not show its error state")
+        XCTAssertTrue(loaded, "System health should render its cards within 15s")
 
         // Health cards loaded — verify all 6 are present
         let cards = [
@@ -288,6 +281,19 @@ final class AdminSettingsUITests: BaseUITest {
             let element = scrollToFind(card)
             XCTAssertTrue(element.exists, "\(card) should be visible in system health dashboard")
         }
+
+        // The cards carry the server's values, not placeholders: the server reports its
+        // own status, and the connected test admin is an active user.
+        let serverStatus = scrollToFind("health-status-server")
+        XCTAssertTrue(
+            ["Ok", "Degraded", "Down"].contains(serverStatus.label),
+            "Server card should show the status /api/system/health reported, got '\(serverStatus.label)'"
+        )
+        let totalActive = scrollToFind("health-value-volunteers-0")
+        XCTAssertGreaterThan(
+            Int(totalActive.label) ?? 0, 0,
+            "Volunteers card should count the connected admin as active, got '\(totalActive.label)'"
+        )
     }
 
     func testSystemHealthHasRefreshButton() {
