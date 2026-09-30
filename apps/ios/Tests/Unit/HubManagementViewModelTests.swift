@@ -135,9 +135,12 @@ struct HubManagementViewModelTests {
         UserDefaults.standard.removeObject(forKey: "activeHubId")
     }
 
-    // MARK: switchHub — failure path
+    // MARK: switchHub — missing hub key
 
-    @Test func switchHubDoesNotUpdateContextOnKeyFetchFailure() async {
+    /// The active hub is browsing context, not a decryption credential: a hub
+    /// whose key cannot be fetched is still switched to (#1262). The missing key
+    /// is recorded so the list can say so — it never becomes a blocking error.
+    @Test func switchHubUpdatesContextEvenWhenKeyFetchFails() async {
         let ctx = HubContext()
         ctx.setActiveHub("hub-uuid-001")
 
@@ -145,7 +148,7 @@ struct HubManagementViewModelTests {
         mockAPI.hubKeyResult = .failure(URLError(.badServerResponse))
 
         let mockCrypto = MockHubCryptoService()
-        mockCrypto.hasHubKeyResult = false  // force key fetch so error triggers
+        mockCrypto.hasHubKeyResult = false  // force key fetch so the failure triggers
 
         let vm = HubManagementViewModel(
             apiService: mockAPI,
@@ -155,10 +158,39 @@ struct HubManagementViewModelTests {
         let hub = makeHub(id: "hub-uuid-002", slug: "new-hub")
         await vm.switchHub(to: hub)
 
-        #expect(ctx.activeHubId == "hub-uuid-001")
+        #expect(ctx.activeHubId == "hub-uuid-002")
         #expect(mockCrypto.loadedHubKeyId == nil)
         #expect(vm.isSwitching == false)
-        #expect(vm.error != nil)
+        #expect(vm.error == nil)
+        #expect(vm.hubKeysUnavailable.contains("hub-uuid-002"))
+        #expect(vm.hasKey(hub) == false)
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+    }
+
+    /// A 404 for one hub must not mark the others unreadable, and a later
+    /// successful fetch must clear the mark.
+    @Test func hubKeyAvailabilityIsPerHubAndClearsOnSuccess() async {
+        let ctx = HubContext()
+        let mockAPI = MockHubAPIService()
+        mockAPI.hubKeyResult = .failure(URLError(.badServerResponse))
+        let mockCrypto = MockHubCryptoService()
+        mockCrypto.hasHubKeyResult = false
+
+        let vm = HubManagementViewModel(
+            apiService: mockAPI,
+            cryptoService: mockCrypto,
+            hubContext: ctx
+        )
+        let keyless = makeHub(id: "hub-uuid-002", slug: "keyless")
+        let keyed = makeHub(id: "hub-uuid-003", slug: "keyed")
+
+        await vm.eagerLoadHubKeys(for: [keyless])
+        #expect(vm.hasKey(keyless) == false)
+        #expect(vm.hasKey(keyed) == true)
+
+        mockAPI.hubKeyResult = nil  // the envelope now exists
+        await vm.eagerLoadHubKeys(for: [keyless])
+        #expect(vm.hasKey(keyless) == true)
         UserDefaults.standard.removeObject(forKey: "activeHubId")
     }
 }

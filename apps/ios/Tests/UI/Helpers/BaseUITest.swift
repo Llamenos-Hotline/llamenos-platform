@@ -565,6 +565,21 @@ class BaseUITest: XCTestCase {
         return element
     }
 
+    /// Scroll until the element matching `predicate` is in the list's rendered
+    /// window, and return it. A SwiftUI `List` only instantiates rows near the
+    /// viewport, so a row below the fold does not *exist* until it is scrolled
+    /// to — `waitForExistence` alone will never find it, however long it waits.
+    @discardableResult
+    func scrollToMatch(_ predicate: NSPredicate, maxSwipes: Int = 8) -> XCUIElement {
+        let element = app.descendants(matching: .any).matching(predicate).firstMatch
+        if element.waitForExistence(timeout: 5) { return element }
+        for _ in 0..<maxSwipes {
+            app.swipeUp()
+            if element.waitForExistence(timeout: 1) { return element }
+        }
+        return element
+    }
+
     /// Scroll down until an element is visible (hittable) on screen.
     /// Unlike `scrollToFind` which uses `exists` (true for off-screen elements
     /// in SwiftUI Lists), this checks `isHittable` to guarantee visibility.

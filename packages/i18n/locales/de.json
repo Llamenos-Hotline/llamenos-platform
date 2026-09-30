@@ -2455,6 +2455,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "Verschlüsselte Inhalte in diesem Hub lassen sich auf diesem Gerät noch nicht öffnen",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,6 +2468,7 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "Tippe auf einen Hub, um deinen aktiven Kontext zu wechseln. Der aktive Hub bestimmt, welche Daten du siehst.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",

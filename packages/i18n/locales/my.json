@@ -716,6 +716,7 @@
       "archived": "မော်ကွန်းတင်ထားသည်",
       "suspended": "ဆိုင်းငံ့ထားသည်"
     },
+    "switchFooter": "သင့်လက်ရှိအခြေအနေကို ပြောင်းရန် ဟပ်တစ်ခုကို နှိပ်ပါ။ အသုံးပြုနေသော ဟပ်က သင်မြင်ရမည့် ဒေတာကို ဆုံးဖြတ်သည်။",
     "switchHub": "ဟပ်ပြောင်းမည်",
     "title": "ဟပ်စီမံခန့်ခွဲမှု",
     "urlLabel": "ဟပ် URL",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "ဤဟပ်ရှိ စာဝှက်ထားသောအကြောင်းအရာကို ဤစက်ပစ္စည်းတွင် ယခုအချိန်တွင် မဖွင့်နိုင်သေးပါ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"

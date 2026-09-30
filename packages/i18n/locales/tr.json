@@ -716,6 +716,7 @@
       "archived": "Arşivlenmiş",
       "suspended": "Askıya Alınmış"
     },
+    "switchFooter": "Etkin bağlamını değiştirmek için bir merkeze dokun. Etkin merkez hangi verileri göreceğini belirler.",
     "switchHub": "Merkez değiştir",
     "title": "Merkez Yönetimi",
     "urlLabel": "Merkez URL",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Bu merkezdeki şifreli içerik bu cihazda henüz açılamıyor",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"

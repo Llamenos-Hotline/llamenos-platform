@@ -716,6 +716,7 @@
       "archived": "Arşîvkirî",
       "suspended": "Rawestandî"
     },
+    "switchFooter": "Li navendekê bixe da ku çarçoveya xwe ya çalak biguherînî. Navenda çalak diyar dike ku tu kîjan daneyan dibînî.",
     "switchHub": "Navend biguherîne",
     "title": "Birêvebirina Navendan",
     "urlLabel": "URL ya Navendê",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Naveroka şîfrekirî ya vê navendê hîn li ser vê amûrê nayê vekirin",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
