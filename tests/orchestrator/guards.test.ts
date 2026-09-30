@@ -480,23 +480,27 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
 
   // #1284 made `runs-on` conditional, and this rail is the reason it can be
   // trusted. EVERY event that can reach the review engine still lands on
-  // `llamenos-review-box`; the ONE hosted arm is the republish-only
-  // `synchronize` event, which `decideReviewGate` refuses `run-engine` on
-  // (pinned separately, below). The assertion is on the exact expression,
+  // `llamenos-review-box`; the ONE hosted arm is a `synchronize` to a PR
+  // with NO requested reviewer, which `decideReviewGate` refuses
+  // `run-engine` on (pinned separately, below; and review-request-trigger
+  // .test.ts evaluates this expression against the gate over every
+  // author × branch × requested-reviewer cell). The assertion is on the exact expression,
   // not on "ubuntu-latest appears somewhere": an unconditional hosted
   // `runs-on` would move the reviewer — and the operator's logged-in claude
   // session — onto a GitHub runner, which is what the original rail existed
   // to prevent, and that is what the second assertion here still catches.
-  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on the republish-only push arm', () => {
+  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on a push nobody is requested on', () => {
     const block = fleetReviewJobText()
     const runsOn = block.match(/\n {4}runs-on:.*/)?.[0] ?? ''
     expect(runsOn.length, 'runs-on: not found in the fleet-review job').toBeGreaterThan(0)
     expect(runsOn, 'the self-hosted fleet-review labels must still be the default arm')
       .toMatch(/fromJSON\('\["self-hosted","fleet-review"\]'\)/)
     // `ubuntu-latest` may appear here, but ONLY as the value guarded by the
-    // synchronize condition — never as the fallback, and never alone.
-    expect(runsOn, 'a hosted runner is only ever the synchronize arm')
-      .toMatch(/github\.event\.action == 'synchronize' && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
+    // synchronize-with-nobody-requested condition — never as the fallback,
+    // and never alone. A standing review request makes a push able to reach
+    // the engine, so a bare `synchronize` test is no longer enough.
+    expect(runsOn, 'a hosted runner is only ever a push with no requested reviewer')
+      .toMatch(/github\.event\.action == 'synchronize' && join\(github\.event\.pull_request\.requested_reviewers\.\*\.login, ','\) == '' && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
     expect(block, 'runs-on must never be an unconditional GitHub-hosted runner')
       .not.toMatch(/\n {4}runs-on:\s*ubuntu-latest\s*$/m)
   })
@@ -1979,11 +1983,11 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     expect(outcome.verdict.verdict).toBe('FAIL')
   })
 
-  // The load-bearing one. A push that CHANGED the diff has nothing to
-  // republish, and must never spend a model call — no matter what
-  // `requested` says. Without the `republishOnly ||` guard in the gate this
-  // returns `run-engine`, which is one model review per push on every open
-  // PR.
+  // The load-bearing one. A push nobody asked about that CHANGED the diff
+  // has nothing to republish, and must never spend a model call — no
+  // matter what `requested` says. Without the `republishOnly ||` guard in
+  // the gate this returns `run-engine`, which is one model review per push
+  // on every open PR.
   it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
@@ -2079,6 +2083,17 @@ describe('rail: a push republishes a verdict and never starts one (#1284)', () =
     // The ACTION alone is never enough — a same-named action on another
     // event must not turn that event into a push.
     expect(isRepublishOnlyEvent({ eventName: 'merge_group', action: 'synchronize' })).toBe(false)
+  })
+
+  // The standing-request rule: a push under a request for a TRIGGER login
+  // is not republish-only — the review is still owed — while a push under
+  // only a non-trigger request (CODEOWNERS' automatic one for the operator)
+  // still is.
+  it('a push under a standing request for llamenos-auto is not republish-only; under a non-trigger it still is', () => {
+    expect(isRepublishOnlyEvent({ ...push, prAuthor: 'rhonda-rodododo', standingReviewers: [REVIEW_REQUEST_LOGIN] })).toBe(false)
+    expect(isRepublishOnlyEvent({ ...push, prAuthor: 'rhonda-rodododo', standingReviewers: ['some-colleague'] })).toBe(true)
+    expect(isRepublishOnlyEvent({ ...push, prAuthor: 'dependabot[bot]', standingReviewers: ['rhonda-rodododo'] })).toBe(true)
+    expect(isRepublishOnlyEvent({ ...push, standingReviewers: [] })).toBe(true)
   })
 
   it('reviewRequestFor refuses a push, and says it is a push rather than blaming a missing reviewer', () => {

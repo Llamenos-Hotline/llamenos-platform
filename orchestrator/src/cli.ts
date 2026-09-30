@@ -23,7 +23,7 @@ import { artifactReviewCache, diffHash } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
-  reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
+  reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent, standingReviewRequest,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1301,15 +1301,23 @@ async function runReviewGate(): Promise<number> {
   const facts = await readPrFacts(ctx.pr)
   const event = reviewRequestEventFromEnv(process.env, ctx.branch)
   const request = reviewRequestFor(event)
+  // A push under a standing request reviews a changed diff; say which
+  // request it is standing on, so a model call on a push is never a mystery.
+  const standing = standingReviewRequest(event)
+  if (standing !== undefined) {
+    ciLog(`${REVIEW_JOB}: push to pr=${ctx.pr} while a review is still requested from ${standing} — ` +
+      'a changed diff is reviewed; an unchanged one republishes its cached verdict')
+  }
   const outcome = await decideReviewGate({
     ctx,
     prDiff: () => ciDiff(ctx),
     changedFiles: () => ciChangedFiles(ctx),
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
     requested: request.requested,
-    // A push may republish a verdict but never start one (#1284). Passed as
-    // its own fact, not inferred from `requested` being false, so the gate
-    // enforces it structurally — see `ReviewGateDeps.republishOnly`.
+    // A push nobody asked about may republish a verdict but never start one
+    // (#1284). Passed as its own fact, not inferred from `requested` being
+    // false, so the gate enforces it structurally — see
+    // `ReviewGateDeps.republishOnly`.
     republishOnly: isRepublishOnlyEvent(event),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
@@ -1365,6 +1373,12 @@ async function runReviewGate(): Promise<number> {
       ? `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`
       : `${REVIEW_JOB}: review not requested — this PR's author cannot be asked to review it, so request a review ` +
         `from \`${ask}\` to run the non-author review\n`)
+    // The request is what keeps later pushes reviewed, so say so: it is the
+    // difference between asking once and asking after every push.
+    process.stderr.write(
+      `${REVIEW_JOB}: while that request stands, every later push that changes the diff is reviewed too — ` +
+      'withdraw it to stop\n',
+    )
     return 1
   }
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
