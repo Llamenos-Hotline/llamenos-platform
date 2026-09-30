@@ -329,7 +329,6 @@ jobs:
     # land on it, for an arm that needs none of that, buys exposure for
     # nothing.
     #
-    #
     # A push WITH a requested reviewer goes to the box, because it may be a
     # standing request that reviews the changed diff. The test here is
     # "anyone at all is requested", deliberately looser than the gate's
