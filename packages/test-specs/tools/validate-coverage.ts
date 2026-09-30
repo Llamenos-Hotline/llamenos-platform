@@ -244,14 +244,17 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
 
 /**
  * Platform tag filters, replicating the scenario selection that actually
- * runs in `playwright.config.ts` (`defineBddProject({ tags: ... })`).
- * A scenario tagged e.g. `@desktop @wip` never runs on desktop in CI, so
- * counting it in the desktop denominator would understate real coverage.
+ * runs: `playwright.config.ts` (`defineBddProject({ tags: ... })`) for
+ * desktop/backend, and the `@CucumberOptions(tags = ...)` expression on
+ * `CucumberHiltRunner.kt` for android. A scenario tagged e.g. `@desktop @wip`
+ * never runs on desktop in CI, so counting it in the denominator would
+ * measure scenarios the build never executes.
  *
- * NOTE: these must be kept in sync with playwright.config.ts by hand — there
- * is no shared source of truth between the two today.
+ * NOTE: these must be kept in sync with those runner configs by hand — there
+ * is no shared source of truth between them today.
  */
 const PLATFORM_EXCLUDE_TAGS: Partial<Record<Platform, string[]>> = {
+  android: ["wip"],
   desktop: ["backend", "wip", "fixme", "requires-camera", "requires-live-calls", "requires-demo"],
   backend: ["wip", "fixme"],
 };

@@ -2,19 +2,16 @@ package org.llamenos.hotline.steps.settings
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
-import io.cucumber.java.en.When
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
- * Step definitions for settings-display.feature, lock-logout.feature, and device-link.feature.
+ * Step definitions for settings-display.feature and lock-logout.feature.
  *
  * Feature: Settings Screen — layout, card visibility.
  * Feature: Lock & Logout — lock app, logout with confirmation dialog.
- * Feature: Device Linking — QR code scanning flow.
  */
 class SettingsSteps : BaseSteps() {
 
@@ -180,115 +177,6 @@ class SettingsSteps : BaseSteps() {
         } catch (_: Throwable) {
             assertAnyTagDisplayed("settings-identity-card", "dashboard-title")
         }
-    }
-
-    // ---- Device link ----
-
-    @Given("I navigate to the device link screen from settings")
-    fun iNavigateToTheDeviceLinkScreenFromSettings() {
-        navigateToTab(NAV_SETTINGS)
-        try {
-            onNodeWithTag("settings-device-link-card").performScrollTo()
-            onNodeWithTag("settings-device-link-card").performClick()
-            composeRule.waitForIdle()
-            waitForNode("step-indicator", 5_000)
-        } catch (_: Throwable) {
-            // Device link card or screen not available
-        }
-    }
-
-    @Then("I should see the step indicator")
-    fun iShouldSeeTheStepIndicator() {
-        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
-    }
-
-    @Then("I should see step labels \\(Scan, Verify, Import)")
-    fun iShouldSeeStepLabels() {
-        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
-    }
-
-    @Then("the current step should be {string}")
-    fun theCurrentStepShouldBe(step: String) {
-        assertAnyTagDisplayed("step-indicator", "settings-device-link-card", "dashboard-title")
-    }
-
-    @Then("I should see either the camera preview or the camera permission prompt")
-    fun iShouldSeeEitherTheCameraPreviewOrTheCameraPermissionPrompt() {
-        assertAnyTagDisplayed(
-            "camera-preview-container", "camera-permission-needed",
-            "scanner-content", "step-indicator", "dashboard-title",
-        )
-    }
-
-    @Given("camera permission is not granted")
-    fun cameraPermissionIsNotGranted() {
-        // Camera permission state depends on device — check what's visible
-    }
-
-    @When("a QR code with invalid format is scanned")
-    fun aQrCodeWithInvalidFormatIsScanned() {
-        assertAnyTagDisplayed("step-indicator", "dashboard-title")
-    }
-
-    @Then("I should see the error state")
-    fun iShouldSeeTheErrorState() {
-        assertAnyTagDisplayed("step-indicator", "error-content", "dashboard-title")
-    }
-
-    @Then("the error message should mention {string}")
-    fun theErrorMessageShouldMention(message: String) {
-        // Error message verification — structural check
-    }
-
-    @Then("the device link card should still be visible")
-    fun theDeviceLinkCardShouldStillBeVisible() {
-        try {
-            onNodeWithTag("settings-device-link-card").performScrollTo()
-            onNodeWithTag("settings-device-link-card").assertIsDisplayed()
-        } catch (_: Throwable) {
-            assertAnyTagDisplayed("settings-device-link-card", "dashboard-title")
-        }
-    }
-
-    // "I should see the {string} button" defined in LoginSteps (canonical)
-    // "I should return to the settings screen" defined in AssertionSteps (canonical)
-    // "I should see the settings screen" defined in BottomNavigationSteps (canonical)
-
-    @When("I start the device linking process")
-    fun iStartTheDeviceLinkingProcess() {
-        assertAnyTagDisplayed("step-indicator", "dashboard-title")
-    }
-
-    @Then("I should see a QR code displayed")
-    fun iShouldSeeAQrCodeDisplayed() {
-        assertAnyTagDisplayed(
-            "scanner-content", "step-indicator", "camera-preview-container", "viewfinder", "dashboard-title",
-        )
-    }
-
-    @Then("I should see the linking progress indicator")
-    fun iShouldSeeTheLinkingProgressIndicator() {
-        assertAnyTagDisplayed("step-indicator", "dashboard-title")
-    }
-
-    @When("I cancel the linking")
-    fun iCancelTheLinking() {
-        try {
-            onNodeWithTag("device-link-back").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Back button not available
-        }
-    }
-
-    @When("the provisioning room expires")
-    fun theProvisioningRoomExpires() {
-        assertAnyTagDisplayed("step-indicator", "dashboard-title")
-    }
-
-    @Then("I should see a timeout error message")
-    fun iShouldSeeATimeoutErrorMessage() {
-        assertAnyTagDisplayed("error-content", "error-message", "step-indicator", "dashboard-title")
     }
 
     // Cleanup handled by ScenarioHooks.clearIdentityState() — no duplicate needed

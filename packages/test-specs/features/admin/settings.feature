@@ -176,7 +176,8 @@ Feature: Admin & User Settings
     Then I should see the hub connection card
     And the connection status should be displayed
 
-  @desktop @ios @android @smoke
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @smoke @wip
   Scenario: Settings shows device link card
     Given I am authenticated and on the main screen
     When I tap the "Settings" tab
@@ -553,7 +554,8 @@ Feature: Admin & User Settings
 
   # ── Device Linking ────────────────────────────────────────────────
 
-  @desktop @ios @android @regression @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @requires-camera @wip
   Scenario: Device link screen shows step indicator
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -561,20 +563,23 @@ Feature: Admin & User Settings
     And I should see step labels (Scan, Verify, Import)
     And the current step should be "Scan"
 
-  @desktop @ios @android @regression @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @requires-camera @wip
   Scenario: Device link shows camera or permission prompt
     Given I am authenticated
     And I navigate to the device link screen from settings
     Then I should see either the camera preview or the camera permission prompt
 
-  @desktop @ios @android @regression @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @requires-camera @wip
   Scenario: Camera permission denied shows request button
     Given I am authenticated
     And I navigate to the device link screen from settings
     And camera permission is not granted
     Then I should see the "Request Camera Permission" button
 
-  @desktop @ios @android @regression @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @requires-camera @wip
   Scenario: Invalid QR code shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -583,14 +588,16 @@ Feature: Admin & User Settings
     And the error message should mention "Invalid QR code format"
     And I should see "Retry" and "Cancel" buttons
 
-  @desktop @ios @android @regression
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @wip
   Scenario: Cancel device link returns to settings
     Given I am authenticated
     And I navigate to the device link screen from settings
     When I tap the back button
     Then I should return to the settings screen
 
-  @desktop @ios @android @regression
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @wip
   Scenario: Device link back navigation
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -598,24 +605,30 @@ Feature: Admin & User Settings
     Then I should see the settings screen
     And the device link card should still be visible
 
-  # @fixme: desktop Settings is the approving side of device linking — #1313
-  @desktop @ios @android @regression @fixme
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
+  @desktop @ios @android @regression @wip
   Scenario: Device link shows QR code
     Given I am authenticated
     And I navigate to the device link screen from settings
     When I start the device linking process
     Then I should see a QR code displayed
 
-  # @fixme: desktop Settings is the approving side of device linking — #1313
-  @desktop @ios @android @regression @fixme
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
+  @desktop @ios @android @regression @wip
   Scenario: Device link shows progress steps
     Given I am authenticated
     And I navigate to the device link screen from settings
     When I start the device linking process
     Then I should see the linking progress indicator
 
-  # @fixme: desktop Settings is the approving side of device linking — #1313
-  @desktop @ios @android @regression @fixme
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
+  @desktop @ios @android @regression @wip
   Scenario: Cancel device linking
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -623,8 +636,10 @@ Feature: Admin & User Settings
     And I cancel the linking
     Then I should return to the settings screen
 
-  # @fixme: desktop Settings is the approving side of device linking — #1313
-  @desktop @ios @android @regression @fixme
+  # @wip: device linking is not offered in the pilot build; restored with the
+  # unified provisioning protocol — #1027. Desktop Settings is the approving
+  # side when it returns — #1313.
+  @desktop @ios @android @regression @wip
   Scenario: Device link timeout handling
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -632,7 +647,8 @@ Feature: Admin & User Settings
     And the provisioning room expires
     Then I should see a timeout error message
 
-  @desktop @ios @android @regression @security @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @security @requires-camera @wip
   Scenario: QR code with localhost relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -640,7 +656,8 @@ Feature: Admin & User Settings
     Then I should see the error state
     And the error message should mention private or local network
 
-  @desktop @ios @android @regression @security @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @security @requires-camera @wip
   Scenario: QR code with private IP relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -648,7 +665,8 @@ Feature: Admin & User Settings
     Then I should see the error state
     And the error message should mention private or local network
 
-  @desktop @ios @android @regression @security @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @regression @security @requires-camera @wip
   Scenario: QR code with valid public relay proceeds
     Given I am authenticated
     And I navigate to the device link screen from settings

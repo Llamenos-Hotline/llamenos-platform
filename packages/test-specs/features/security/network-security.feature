@@ -23,7 +23,8 @@ Feature: Network Security
 
   # ── Relay URL Validation ──────────────────────────────────────────
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with localhost relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -31,7 +32,8 @@ Feature: Network Security
     Then I should see the error state
     And the error message should mention private or local network
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with private IP 192.168.x.x relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -39,7 +41,8 @@ Feature: Network Security
     Then I should see the error state
     And the error message should mention private or local network
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with private IP 10.x.x.x relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -47,7 +50,8 @@ Feature: Network Security
     Then I should see the error state
     And the error message should mention private or local network
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with loopback IPv6 relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -55,7 +59,8 @@ Feature: Network Security
     Then I should see the error state
     And the error message should mention private or local network
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with link-local relay shows error
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -63,7 +68,8 @@ Feature: Network Security
     Then I should see the error state
     And the error message should mention private or local network
 
-  @requires-camera
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @requires-camera @wip
   Scenario: QR code with valid public relay proceeds
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -73,7 +79,8 @@ Feature: Network Security
 
   # ── SAS Verification Gate ─────────────────────────────────────────
 
-  @desktop
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @wip
   Scenario: Device linking shows SAS code on verify step
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -83,7 +90,7 @@ Feature: Network Security
     And I should see instructions to compare with the other device
     And I should see "Confirm" and "Reject" buttons
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027 (desktop SAS import steps are also unwritten — #1195)
   @desktop @wip
   Scenario: SAS confirmation required before device key import
     Given I am authenticated
@@ -95,7 +102,7 @@ Feature: Network Security
     Then the device key should not be imported
     And the crypto service should not have a new key
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027 (desktop SAS import steps are also unwritten — #1195)
   @desktop @wip
   Scenario: SAS confirmation allows device key import
     Given I am authenticated
@@ -107,7 +114,7 @@ Feature: Network Security
     Then the device key should be imported
     And I should see the import success state
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027 (desktop SAS import steps are also unwritten — #1195)
   @desktop @wip
   Scenario: SAS rejection aborts device linking
     Given I am authenticated
