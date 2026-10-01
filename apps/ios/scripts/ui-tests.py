@@ -51,6 +51,21 @@ CASE_RE = re.compile(
     r"(?P<status>passed|failed|skipped) \((?P<secs>[\d.]+) seconds\)"
 )
 
+# A test killed for exceeding its execution time allowance is STILL followed by
+# a "passed (N seconds)" line from xcodebuild, so CASE_RE alone records it as a
+# pass. One of these turned a dead shard into a summary that read
+# "62 passed, 0 failed" while the job itself had failed — the gate held (it
+# keys on xcodebuild's exit code) but every human reading the summary saw
+# green.
+TIMEOUT_RE = re.compile(
+    r"Test Case '-\[(?P<target>\w+)\.(?P<cls>\w+) (?P<test>\w+)\]' "
+    r"exceeded execution time allowance"
+)
+
+# xcodebuild's own verdict. Printed when the test run failed for a reason that
+# is not an assertion — a timeout, a crash, a runner that had to be restarted.
+EXECUTE_FAILED = "** TEST EXECUTE FAILED **"
+
 
 def test_classes() -> dict[str, int]:
     """Map every concrete XCTestCase subclass in Tests/UI to its test count.
@@ -206,18 +221,31 @@ def report(log_path: Path, json_out: Path | None) -> int:
     if not log_path.is_file():
         print(f"**No test log at `{log_path}`** — the test step never ran (see the failed step above).")
         return 1
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+
+    # Tests XCTest killed for running too long. Collected first so the status
+    # recorded below is the true one rather than the trailing "passed" line.
+    timed_out = {
+        (m.group("cls"), m.group("test"))
+        for m in TIMEOUT_RE.finditer(text)
+        if m.group("target") == TARGET
+    }
+
     cases = []
-    for m in CASE_RE.finditer(log_path.read_text(encoding="utf-8", errors="replace")):
+    for m in CASE_RE.finditer(text):
         if m.group("target") != TARGET:
             continue
+        key = (m.group("cls"), m.group("test"))
         cases.append(
             {
                 "class": m.group("cls"),
                 "test": m.group("test"),
-                "status": m.group("status"),
+                "status": "timed-out" if key in timed_out else m.group("status"),
                 "seconds": float(m.group("secs")),
             }
         )
+
+    execute_failed = EXECUTE_FAILED in text
 
     if json_out:
         json_out.write_text(json.dumps(cases, indent=2) + "\n", encoding="utf-8")
@@ -235,27 +263,44 @@ def report(log_path: Path, json_out: Path | None) -> int:
 
     print(f"### {TARGET}: {len(cases)} test cases, {total_secs / 60:.1f} min of test time")
     print()
-    print(" · ".join(f"{s}: **{by_status[s]}**" for s in ("passed", "failed", "skipped") if by_status[s]))
+    # "timed-out" is listed alongside the rest so the counts reconcile; a row
+    # whose columns do not sum to its test count is how a killed test hides.
+    statuses = ("passed", "failed", "timed-out", "skipped")
+    print(" · ".join(f"{s}: **{by_status[s]}**" for s in statuses if by_status[s]))
     print()
-    print("| class | tests | passed | failed | skipped | seconds |")
-    print("|---|---:|---:|---:|---:|---:|")
+    print("| class | tests | passed | failed | timed out | skipped | seconds |")
+    print("|---|---:|---:|---:|---:|---:|---:|")
     for cls in sorted(per_class):
         rows = per_class[cls]
         n = lambda s: sum(1 for r in rows if r["status"] == s)  # noqa: E731
         print(
-            f"| {cls} | {len(rows)} | {n('passed')} | {n('failed')} | {n('skipped')} "
+            f"| {cls} | {len(rows)} | {n('passed')} | {n('failed')} | {n('timed-out')} | {n('skipped')} "
             f"| {sum(r['seconds'] for r in rows):.1f} |"
         )
-    failed = [c for c in cases if c["status"] == "failed"]
+    failed = [c for c in cases if c["status"] in ("failed", "timed-out")]
     if failed:
         print()
         print("#### Failed")
         for c in failed:
-            print(f"- `{c['class']}.{c['test']}` ({c['seconds']:.1f}s)")
+            why = " — **killed for exceeding its execution time allowance**" if c["status"] == "timed-out" else ""
+            print(f"- `{c['class']}.{c['test']}` ({c['seconds']:.1f}s){why}")
     print()
     print("#### Slowest 15")
     for c in sorted(cases, key=lambda c: -c["seconds"])[:15]:
         print(f"- `{c['class']}.{c['test']}` {c['status']} {c['seconds']:.1f}s")
+
+    # Report a failure for anything that failed the RUN, not only anything that
+    # failed an assertion. Without this a timeout or a crash-restart is
+    # summarised as a clean pass, because xcodebuild still prints a trailing
+    # "passed (N seconds)" for the test it just killed.
+    if execute_failed or timed_out:
+        print()
+        if timed_out:
+            names = ", ".join(f"`{c}.{t}`" for c, t in sorted(timed_out))
+            print(f"**Killed for exceeding the execution time allowance:** {names}")
+        if execute_failed:
+            print(f"**xcodebuild reported `{EXECUTE_FAILED}`** — the run failed for a reason other than an assertion.")
+        return 1
     return 0
 
 
