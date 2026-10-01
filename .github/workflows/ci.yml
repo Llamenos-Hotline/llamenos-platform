@@ -81,6 +81,48 @@ jobs:
     if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
 
     outputs:
+      # Whether the heavy integration suites run at all, independent of WHICH
+      # paths changed. Path scope says *which* suites a diff could affect; this
+      # says whether this EVENT is the one that should pay for them.
+      #
+      # True only on `merge_group` (and `workflow_dispatch`, which is somebody
+      # explicitly asking). The merge queue is the only place a heavy suite's
+      # result actually decides anything: `main` cannot move except through it
+      # (ruleset 15885614), every required context is evaluated against the
+      # merge group, and the merge group's tree IS main's next tree.
+      #
+      # That makes the other two events pure duplication:
+      #
+      #   push          — the queue just ran these against this exact commit and
+      #                   merged because they passed. Re-running validates
+      #                   nothing new, and since #1407 put ios-e2e on two
+      #                   self-hosted Mac runners it actively starves the NEXT
+      #                   entry's gating run of the runners it needs, against a
+      #                   240-minute queue timeout (#1426).
+      #   pull_request  — the same suites run again in the merge group before
+      #                   anything lands, so a PR-time pass is never the thing
+      #                   that gates the merge. Each push to a PR branch paid
+      #                   for a full set; a PR with five pushes paid six times.
+      #
+      # THE TRADE, stated plainly because it is real: a break now surfaces in
+      # the queue rather than on the PR. With `grouping_strategy: ALLGREEN` and
+      # `max_entries_to_merge: 5`, a failing entry can take its group down and
+      # force a rebuild, where previously it failed alone on its own PR. The
+      # bet is that this is cheaper in aggregate than every push to every PR
+      # paying for suites whose verdict never gated anything — and that bet got
+      # materially safer with #1407, because the iOS suites now run on hardware
+      # where they actually pass (three tests failed on contended GitHub
+      # runners today and pass on the Mac).
+      #
+      # Authors are not left blind: desktop-e2e.yml's `E2E (Linux)` still runs
+      # on `pull_request` (it is deliberately NOT gated here), unit suites still
+      # run everywhere, and `lint`/`build`/`typecheck` are untouched.
+      #
+      # Unit suites (backend-unit, desktop-unit, crypto-tests) and
+      # migration-drift are deliberately NOT gated on this: they are cheap, they
+      # contend for nothing scarce, and they keep `ci-status` a real signal on
+      # main for `docker-canary` rather than a near-vacuous one.
+      revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -415,7 +457,7 @@ jobs:
     needs: [changes, build]
     # Playwright E2E exercises the desktop web frontend against a live
     # backend — relevant if either side changed (#664).
-    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -565,7 +607,7 @@ jobs:
   # ─── Backend BDD Tests ─────────────────────────────────────
   backend-bdd:
     needs: [changes]
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -792,7 +834,7 @@ jobs:
   # ─── Android Build & Test ───────────────────────────────────
   android-build-test:
     needs: changes
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -842,7 +884,7 @@ jobs:
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
     needs: [changes]
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest  # android emulator needs KVM (hosted x86_64 images provide it)
     permissions:
       contents: read
@@ -1090,7 +1132,7 @@ jobs:
 
   ios-build-test:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     # The Mac mini, for the same reason `ios-e2e` moved there in this PR: this
     # job is required via `ci-status`, and on `macos-latest` it simply does not
     # get scheduled. Measured on this branch's own merge-queue run — queued
@@ -1252,7 +1294,7 @@ jobs:
   # this job is the aggregate of every job in the called workflow.
   ios-e2e:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/ios-e2e.yml
