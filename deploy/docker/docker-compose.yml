@@ -75,24 +75,16 @@ services:
       # Optional: GlitchTip/Sentry DSN for client crash reporting (profile: monitoring)
       - GLITCHTIP_DSN=${GLITCHTIP_DSN:-}
       # Signal notification sidecar (profile: signal)
-      # NO DEFAULT, deliberately. `signal-notifier` is optional — it only runs
-      # under `profiles: ["signal"]` — and the readiness check skips an optional
-      # service precisely by testing whether its URL is unset
-      # (`if (!notifierUrl) return null` in routes/health.ts). A default here
-      # sets the variable in EVERY deployment, including ones that never enable
-      # the profile, so the skip never fires, the check always fails against a
-      # host that does not exist, and `status` goes `degraded`.
+      # Points at the sidecar the `signal` profile starts. Keeping this
+      # default is what makes `--profile signal` work without extra operator
+      # configuration — removing it silently disconnects a deployment that
+      # DOES use Signal, which is worse than the problem it would solve.
       #
-      # That is not cosmetic: the compose healthcheck below probes
-      # /api/health/ready and exits 1 on a non-2xx, so the app container sits
-      # `unhealthy` forever, and first-run.sh's `until curl -sf .../health/ready`
-      # never terminates — a hotline that takes calls and does not use Signal
-      # could not complete a documented first install. (#1418)
-      #
-      # `SIP_BRIDGE_URL` is correctly absent from this block for the same reason;
-      # keep any future optional-service URL out of it too, or supply it only
-      # under the profile that actually starts the service.
-      - NOTIFIER_URL=${NOTIFIER_URL:-}
+      # It does mean the variable is set even when the profile is off, so the
+      # health route cannot use "is the URL set?" to decide whether Signal is
+      # deployed. That is handled where it belongs — readiness no longer lets
+      # an OPTIONAL integration gate the verdict (#1418, routes/health.ts).
+      - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)
       # No default. The `ntfy` service below sits behind the `push` profile, so

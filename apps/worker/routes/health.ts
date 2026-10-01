@@ -101,7 +101,24 @@ async function runChecks(env: Record<string, unknown>): Promise<HealthResult> {
   if (sipBridge !== null) checks.sipBridge = sipBridge
   if (signalNotifier !== null) checks.signalNotifier = signalNotifier
 
-  const status = Object.values(checks).every(v => v.status === 'ok') ? 'ok' : 'degraded'
+  // Readiness answers one question: can this instance serve traffic? Only
+  // dependencies that make the answer "no" may gate it.
+  //
+  // `postgres`, `storage` and `relay` are load-bearing — without them the app
+  // cannot take a call or store a note, so a failure there is correctly 503.
+  //
+  // `sipBridge` and `signalNotifier` are OPTIONAL integrations. A hotline whose
+  // Signal sidecar is down still answers the phone, and one that never deployed
+  // Signal is not broken at all. Letting either gate readiness left the app
+  // container `unhealthy` forever on any deployment not running the `signal`
+  // profile, and hung `first-run.sh` on a condition that could never become
+  // true (#1418). Their status is still REPORTED in `checks`, so a
+  // configured-but-failing sidecar stays visible to an operator — it just no
+  // longer claims the whole instance cannot serve.
+  const GATING = ['postgres', 'storage', 'relay']
+  const status = Object.entries(checks)
+    .filter(([name]) => GATING.includes(name))
+    .every(([, v]) => v.status === 'ok') ? 'ok' : 'degraded'
   return { status, checks }
 }
 
