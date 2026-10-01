@@ -47,6 +47,16 @@ on:
         type: choice
         options: [full, smoke]
         default: full
+      take-screenshots:
+        description: >-
+          Also run the ci-non-gating.txt classes (ScreenshotAuditTests) and
+          publish their screenshots as an artifact. Off by default and
+          available ONLY here — not on workflow_call, so ci.yml cannot turn it
+          on, and not on schedule, which supplies no inputs. Those 42 methods
+          contain no assertions and took ~20 minutes of merge-gate critical
+          path to produce attachments nobody ever collected.
+        type: boolean
+        default: false
   # ci.yml's `ios` flag is set by apps/ios/ and shared dependencies, not by
   # apps/worker/ or src/server/ — so a backend-only PR that breaks the iOS
   # client's API contract never runs this suite. The nightly run on main
@@ -184,6 +194,12 @@ jobs:
       # silently — the tier must fail loudly instead, like the quarantine does.
       - name: Check the UI smoke tier
         run: python3 apps/ios/scripts/ui-tests.py check-smoke
+
+      # A class excused from the gate must make no claims. Without this, parking
+      # a real test in ci-non-gating.txt would silently stop checking it — the
+      # same silent-non-execution failure the file exists to avoid, not create.
+      - name: Check the non-gating classes assert nothing
+        run: python3 apps/ios/scripts/ui-tests.py check-non-gating
 
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
@@ -513,6 +529,9 @@ jobs:
           extra=()
           if [ "$INCLUDE_QUARANTINED" = "true" ]; then extra=(--include-quarantined); fi
           if [ "$IOS_TIER" = "smoke" ]; then extra+=(--only-smoke); fi
+          # Unset on workflow_call and schedule, which is the point: neither the
+          # gate nor the nightly can select these.
+          if [ "${{ inputs.take-screenshots }}" = "true" ]; then extra+=(--include-non-gating); fi
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
@@ -595,6 +614,40 @@ jobs:
       - name: Show backend log
         if: always()
         run: cat "$RUNNER_TEMP/llamenos-native-backend/server.log" || true
+
+      # Why those screenshots were never used: nothing took them out of the
+      # .xcresult. Captured with `lifetime = .keepAlways`, bundled into an
+      # ~80 MB result file, uploaded, never opened. Exporting them to a plain
+      # directory is what makes the opt-in worth having at all.
+      - name: Export screenshots
+        if: always() && inputs.take-screenshots == true
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/screenshots-shard-${{ matrix.shard }}"
+          mkdir -p "$out"
+          xcresult="$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult"
+          if [ ! -d "$xcresult" ]; then
+            echo "::warning::no xcresult at $xcresult — nothing to export"
+            exit 0
+          fi
+          # Tolerated rather than required: a change to this CLI must not fail a
+          # run whose tests already passed. The .xcresult artifact still has them.
+          if ! xcrun xcresulttool export attachments \
+                 --path "$xcresult" --output-path "$out" 2>"$RUNNER_TEMP/export.err"; then
+            echo "::warning::xcresulttool export attachments failed"
+            sed 's/^/  /' "$RUNNER_TEMP/export.err" || true
+            exit 0
+          fi
+          echo "exported $(find "$out" -type f | wc -l | tr -d ' ') file(s)"
+
+      - name: Upload screenshots
+        if: always() && inputs.take-screenshots == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-screenshots-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/screenshots-shard-${{ matrix.shard }}
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
