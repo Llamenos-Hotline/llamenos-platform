@@ -66,50 +66,21 @@ jobs:
   # push-scoped release-commit guard (#812). Called from ci.yml it agrees with
   # the gate that already decided to call this workflow; the nightly schedule
   # and a manual dispatch run the suite whatever changed (see `build`).
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
-
-    outputs:
-      ios_related: ${{ steps.filter.outputs.ios }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - name: Detect changes
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          MG_BASE: ${{ github.event.merge_group.base_sha }}
-          MG_HEAD: ${{ github.event.merge_group.head_sha }}
-          PUSH_BASE: ${{ github.event.before }}
-          PUSH_HEAD: ${{ github.event.after }}
-        run: |
-          case "$EVENT_NAME" in
-            pull_request) BASE="$PR_BASE"; HEAD="$PR_HEAD" ;;
-            merge_group) BASE="$MG_BASE"; HEAD="$MG_HEAD" ;;
-            *) BASE="$PUSH_BASE"; HEAD="$PUSH_HEAD" ;;
-          esac
-          if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then BASE="HEAD^"; fi
-          if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then HEAD="HEAD"; fi
-
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
-          echo "$CHANGED"
-
-          printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
-
   build:
     name: build
-    needs: changes
-    if: needs.changes.outputs.ios_related == 'true' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # No `needs:` and no `if:` — deliberately. This workflow used to open with
+    # its own `changes` job computing an `ios_related` flag that gated this
+    # one. That flag could never be false when it mattered: ci.yml already
+    # gates the whole `uses:` call on `changes.outputs.ios == 'true'`, and the
+    # `schedule` / `workflow_dispatch` paths ran regardless via the same
+    # condition's `||` arms. It was a second copy of a decision already made,
+    # and it cost a serialised ubuntu job before any macOS work could start.
+    #
+    # Measured on one merge-queue run: the run was created at 20:13:30,
+    # `changes` started 20:13:55 and finished 20:14:04, and `build` could not
+    # start until 20:14:07 — where android-e2e's shards were already working
+    # at 20:13:46. Deleting it lets the build dispatch immediately, which is
+    # what pulls the whole iOS gate forward.
     # The Mac mini (runners `mac-mini-ios-1..4`), not `macos-latest`.
     #
     # GitHub's macOS concurrency cap is 5 jobs REPO-WIDE, and money does not
@@ -123,13 +94,23 @@ jobs:
     # macOS job here that needs no Docker, no sudo and no booted simulator,
     # which is what makes it safe to co-tenant today.
     #
-    # The `ui` shards stay on `macos-latest` for now: four of them on one box
-    # would each pick the SAME simulator UDID (the "Detect simulator" step
-    # takes the first available iPhone), share "$RUNNER_TEMP/shard-args.txt", and need
-    # passwordless sudo for the firewall step, which this machine does not
-    # have. Tracked in #1403 — moving them before that is fixed would make a
-    # REQUIRED check flaky on every PR, which is worse than queueing for one.
-    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
+    # Built ONCE PER RUNNER CLASS, because a test bundle cannot cross between
+    # them. The Mac mini is on Xcode 27.0 with only the iOS 26.5 simulator
+    # runtime; GitHub's macOS image is on Xcode 26.6. An `.xctestrun` is bound
+    # to the SDK it was built against, so a Mac-built bundle will not run on a
+    # hosted simulator (or vice versa). The two builds run concurrently on
+    # different hardware, so this costs no wall-clock — only a second hosted
+    # macOS slot for ~4 minutes.
+    #
+    # The alternative, building once and running everywhere, is what the
+    # artifact names below used to imply. It cannot work across two Xcode
+    # versions, and failing that way would look like a test bug rather than a
+    # toolchain mismatch.
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(inputs.tier == 'smoke' && '["mac"]' || '["mac", "hosted"]') }}
+    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
     timeout-minutes: 45
@@ -300,7 +281,7 @@ jobs:
       - name: Upload test build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/llamenos-build/Build/Products/
           retention-days: 1
@@ -310,7 +291,7 @@ jobs:
       - name: Upload server crypto library
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: packages/crypto/dist/server/libllamenos_core.dylib
           retention-days: 1
           if-no-files-found: error
@@ -337,7 +318,7 @@ jobs:
     # the same device for all four), its own backend HTTP and PostgreSQL
     # ports, and its own RUNNER_TEMP for every file that used to be a fixed
     # /tmp path.
-    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
+    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
     timeout-minutes: 65
@@ -348,7 +329,33 @@ jobs:
         # `--total` below is `strategy.job-total`, so the shard count follows
         # this list automatically — the smoke tier partitions its own classes
         # across 2 shards rather than running a fraction of the full 4.
-        shard: ${{ fromJSON(inputs.tier == 'smoke' && '[0, 1]' || '[0, 1, 2, 3]') }}
+        # Each shard carries the runner class it runs on, so all four start at
+        # once instead of four queueing through the Mac's two runners.
+        #
+        # The split is MEASURED, not arbitrary. Shards 0 and 3 are the two that
+        # have actually failed on GitHub's macOS runners — shard 0 on
+        # `testClockInViaAPI` / `testShiftStatusWithAPI` (10s waits that a
+        # contended runner misses) and shard 3 on
+        # `testPINWipeAfterTenFailedAttempts` at 313s against XCTest's 300s
+        # allowance. Shards 1 and 2 have passed on hosted runners twice each.
+        # So the fragile pair goes to the hardware where they pass, and the
+        # proven pair goes to the capacity that is otherwise idle.
+        #
+        # This also puts 5 of the 7 day-one-critical classes
+        # (apps/ios/Tests/UI/ci-smoke.txt) on the Mac: shard 0 carries
+        # APIConnectedUITests, AuthFlowUITests, PanicWipeUITests and
+        # ShiftFlowUITests; shard 3 carries SecurityUITests.
+        #
+        # Re-check this split if `ui-tests.py shard` changes its partition —
+        # the indices are positional, and a reshuffle would silently send the
+        # slow classes to the slow runners.
+        #
+        # The smoke tier stays entirely on the Mac: it is two shards, which is
+        # exactly the Mac's concurrency, so there is nothing to gain from
+        # splitting it and a toolchain to avoid straddling.
+        include: ${{ fromJSON(inputs.tier == 'smoke'
+          && '[{"shard":0,"host":"mac"},{"shard":1,"host":"mac"}]'
+          || '[{"shard":0,"host":"mac"},{"shard":3,"host":"mac"},{"shard":1,"host":"hosted"},{"shard":2,"host":"hosted"}]') }}
 
     steps:
       # MANDATORY, and must stay the literal first step — same guard, same
@@ -380,13 +387,13 @@ jobs:
       - name: Download test build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/llamenos-build/Build/Products/
 
       - name: Download server crypto library
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: packages/crypto/dist/server/
 
       # Each concurrent job on this host needs its own HTTP and PostgreSQL
