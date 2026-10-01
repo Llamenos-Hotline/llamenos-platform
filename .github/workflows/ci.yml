@@ -1091,12 +1091,35 @@ jobs:
   ios-build-test:
     needs: changes
     if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-latest
+    # The Mac mini, for the same reason `ios-e2e` moved there in this PR: this
+    # job is required via `ci-status`, and on `macos-latest` it simply does not
+    # get scheduled. Measured on this branch's own merge-queue run — queued
+    # **75 minutes** with no runner assigned, while GitHub served the whole
+    # repository a single macOS slot. Moving `ios-e2e` alone left this one job
+    # able to block every iOS PR exactly as before, which defeated the point.
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     timeout-minutes: 45
 
     steps:
+      # MANDATORY, and must stay the literal first step — same guard, same
+      # reasoning, as `ios-e2e` and `fleet/review`: a fork PR's code must never
+      # execute on a machine the operator owns. See the long note in
+      # ios-e2e.yml for why this is NOT dead code despite the workflow having
+      # no `pull_request` trigger of its own.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-build-test FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -1161,7 +1184,7 @@ jobs:
       - name: Cache DerivedData
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/llamenos-build
+          path: ${{ runner.temp }}/llamenos-build
           key: deriveddata-ios-${{ runner.os }}-${{ hashFiles('apps/ios/**/*.swift', 'apps/ios/project.yml') }}
           restore-keys: |
             deriveddata-ios-${{ runner.os }}-
@@ -1170,22 +1193,23 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      - name: Detect simulator
+      # A DEDICATED device, created here rather than taken from the pool. On a
+      # shared host "the first available iPhone" can return a simulator an
+      # `ios-e2e` shard is actively driving — they run on the same two runners.
+      - name: Create simulator
         id: sim
         run: |
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
+          set -euo pipefail
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                          print(d['name'])
-                          sys.exit(0)
-          print('iPhone 16')
+          rs = [r for r in json.load(sys.stdin)['runtimes']
+                if r.get('isAvailable') and r.get('platform') == 'iOS']
+          if not rs: sys.exit('no available iOS runtime')
+          print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
           ")
-          echo "device=$SIM" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $SIM"
+          UDID=$(xcrun simctl create "ios-build-test-${{ github.run_id }}-${{ github.run_attempt }}" "iPhone 17 Pro" "$RUNTIME")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Created simulator $UDID on $RUNTIME"
 
       - name: Build and test
         working-directory: apps/ios
@@ -1197,12 +1221,22 @@ jobs:
             -scheme Llamenos \
             -only-testing:LlamenosTests \
             -skip-testing:LlamenosUITests \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath /tmp/llamenos-build \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/llamenos-build" \
             -parallelizeTargets \
             EAGER_LINKING=YES \
             DEBUG_INFORMATION_FORMAT=dwarf \
             2>&1 | xcbeautify --report junit --report-path test-results/ios-unit.xml
+
+      - name: Delete this job's simulator
+        if: always()
+        run: |
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
 
       - name: Upload iOS test results
         if: always()
