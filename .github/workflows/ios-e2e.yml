@@ -286,12 +286,12 @@ jobs:
               -parallelizeTargets \
               EAGER_LINKING=YES \
               DEBUG_INFORMATION_FORMAT=dwarf \
-              >$RUNNER_TEMP/build-for-testing.log 2>&1; then
-            grep -E "error:" $RUNNER_TEMP/build-for-testing.log | head -50
-            tail -40 $RUNNER_TEMP/build-for-testing.log
+              >"$RUNNER_TEMP/build-for-testing.log" 2>&1; then
+            grep -E "error:" "$RUNNER_TEMP/build-for-testing.log" | head -50
+            tail -40 "$RUNNER_TEMP/build-for-testing.log"
             exit 1
           fi
-          grep -E "\*\* TEST BUILD" $RUNNER_TEMP/build-for-testing.log
+          grep -E "\*\* TEST BUILD" "$RUNNER_TEMP/build-for-testing.log"
           # The scheme regression this workflow was dark behind (#168): a
           # build that succeeds without producing the UI test runner.
           test -d ${{ runner.temp }}/llamenos-build/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
@@ -389,36 +389,66 @@ jobs:
           name: ios-e2e-server-crypto-${{ github.run_id }}-${{ github.run_attempt }}
           path: packages/crypto/dist/server/
 
-      # Four shards, one host: each needs its own HTTP and PostgreSQL port or
-      # they fight over 3000/5432. native-backend.sh already takes both as
-      # env and refuses a port that is already listening, so a collision is
-      # a loud failure rather than two servers quietly sharing a database.
-      # NATIVE_BACKEND_DIR defaults to RUNNER_TEMP, which is already
-      # per-runner, so pgdata/logs/pid need no help.
+      # Each concurrent job on this host needs its own HTTP and PostgreSQL
+      # port. The number MUST come from the RUNNER, not from the shard index.
+      #
+      # Both runners live on the same Mac mini, so shard-derived ports are
+      # only disjoint WITHIN one run. Two overlapping runs — a `pull_request`
+      # run and a `merge_group` run, say — each have a shard 2; they land one
+      # on each runner and both bind the same port on one machine. That is
+      # exactly how `ui (2)` failed here with "port 3102 is already listening"
+      # while every shard of its own run was perfectly disjoint. A runner
+      # executes one job at a time, so a per-runner port cannot collide no
+      # matter how many runs overlap.
+      #
+      # native-backend.sh takes both ports as env and refuses a port that is
+      # already listening, so a collision is a loud failure rather than two
+      # servers quietly sharing a database. NATIVE_BACKEND_DIR defaults to
+      # RUNNER_TEMP, which is already per-runner, so pgdata/logs/pid need no
+      # help.
+      - name: Allocate this runner's backend ports
+        run: |
+          set -euo pipefail
+          # Arithmetic lives in the shell, never in a workflow expression:
+          # GitHub's expression syntax has no arithmetic operators at all, so
+          # "3100 + something" there is a parse error that fails the ENTIRE
+          # workflow at startup — no jobs, no logs, just "this run likely
+          # failed because of a workflow file issue". (Expressions are parsed
+          # inside run blocks too, including in shell comments, so an empty
+          # one written here as an example would break it the same way.)
+          #
+          # Trailing digits of the runner name: mac-mini-ios-2 -> 2, which
+          # keeps the ports readable against the runner in the log. The 10#0
+          # prefix forces base 10 and makes an empty match 0 rather than a
+          # syntax error. A name with no usable index hashes the whole name
+          # instead of falling back to a constant — a constant would
+          # reintroduce precisely the collision this step exists to remove.
+          slot=$(( 10#0${RUNNER_NAME##*[^0-9]} ))
+          # Out of range as well as absent: a hosted runner is called
+          # "GitHub Actions 1000015958", whose trailing digits are an account
+          # id, not a slot — 3100 + that is not a port at all. Anything above
+          # the plausible number of runners on one host is not an index.
+          if [ "$slot" -lt 1 ] || [ "$slot" -gt 50 ]; then
+            slot=$(( 0x$(printf '%s' "$RUNNER_NAME" | shasum -a 256 | cut -c1-4) % 50 + 1 ))
+            echo "::warning::runner '$RUNNER_NAME' has no trailing index; hashed it to slot $slot"
+          fi
+          # Slots are 1-based, so no port can land on 3100 (the
+          # signal-notifier sidecar's documented port) and none is near the
+          # 3000/5432 a local `dev:server` and its Postgres occupy — this host
+          # is also somebody's development machine, and shard 0 on 3000
+          # collided with a running one on the very first try. Keeping CI off
+          # the conventional defaults means a person can run the app here
+          # without breaking the merge gate.
+          echo "NATIVE_BACKEND_PORT=$((3100 + slot))" >> "$GITHUB_ENV"
+          echo "NATIVE_BACKEND_PGPORT=$((5500 + slot))" >> "$GITHUB_ENV"
+          echo "$RUNNER_NAME (slot $slot) -> http $((3100 + slot)) / pg $((5500 + slot))"
+
       - name: Start native backend
         env:
           SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
-          # Computed in shell, never in a workflow expression: GitHub's
-          # expression syntax has no arithmetic operators at all, so
-          # "3000 + matrix.shard" there is a parse error that fails the
-          # ENTIRE workflow at startup — no jobs, no logs, just "this run
-          # likely failed because of a workflow file issue". (Expressions are
-          # parsed inside run blocks too, including in shell comments, so an
-          # empty one written here as an example would break it again.)
-          #
-          # Deliberately NOT 3000/5432 for shard 0. This host is also somebody's
-          # development machine, and those two are exactly the ports a local
-          # `dev:server` and its Postgres sit on — shard 0 collided with a
-          # running one on the first try and refused to start, which is
-          # native-backend.sh behaving correctly (it will not share a database
-          # with a server it did not start). The offset keeps CI clear of the
-          # conventional defaults entirely, so a person can run the app on this
-          # machine without breaking the merge gate.
-          export NATIVE_BACKEND_PORT=$((3100 + SHARD))
-          export NATIVE_BACKEND_PGPORT=$((5500 + SHARD))
-          echo "shard $SHARD -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"
+          echo "shard $SHARD on $RUNNER_NAME -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"
           apps/ios/scripts/native-backend.sh start
 
       # Hosted runners only. The firewall on a persistent host is configured
@@ -552,14 +582,13 @@ jobs:
             ${{ runner.temp }}/llamenos-native-backend/server.log
           retention-days: 7
 
+      # Reads the ports from the environment the allocation step wrote, so
+      # there is exactly one place deriving them. The guard matters: with
+      # these unset, native-backend.sh falls back to 3000/5432 and would try
+      # to stop the OPERATOR's development server on this shared host.
       - name: Stop native backend
-        if: always()
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          export NATIVE_BACKEND_PORT=$((3100 + SHARD))
-          export NATIVE_BACKEND_PGPORT=$((5500 + SHARD))
-          apps/ios/scripts/native-backend.sh stop
+        if: always() && env.NATIVE_BACKEND_PORT != ''
+        run: apps/ios/scripts/native-backend.sh stop
 
       # This host keeps every simulator ever created — each is GBs of runtime
       # state, and a week of runs would fill the disk. Deleted unconditionally,
