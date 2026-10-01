@@ -78,8 +78,7 @@ final class CaseManagementUITests: BaseUITest {
     /// app's own create-case sheet (client-side E2EE included).
     func testCaseListShowsEntityTypeTabs() {
         given("case management is enabled with two entity types") {
-            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
-            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+            enableCaseManagementWithTemplate()
         }
         and("the app is launched and authenticated as admin") {
             launchAsAdminWithAPI()
@@ -113,7 +112,11 @@ final class CaseManagementUITests: BaseUITest {
         let picker = find("case-type-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "A case type picker should be shown for two entity types")
         picker.tap()
-        let option = app.buttons[typeLabel]
+        // Once a case exists the list behind the sheet shows entity-type tabs with the
+        // same labels ("case-tab-<name>"), so match the picker's option, not the tab.
+        let option = app.buttons
+            .matching(NSPredicate(format: "label == %@ AND NOT (identifier BEGINSWITH 'case-tab-')", typeLabel))
+            .firstMatch
         XCTAssertTrue(option.waitForExistence(timeout: 5), "Case type '\(typeLabel)' should be selectable")
         option.tap()
 
@@ -294,41 +297,31 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Tapping a case card opens the detail view with header.
     func testCaseDetailShowsHeader() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
-        when("I navigate to Cases and tap a case card") {
+        when("I navigate to Cases and tap the case card") {
             navigateToCases()
-            let caseList = find("case-list")
-            guard caseList.waitForExistence(timeout: 10) else {
-                // No case list — skip detail tests
-                return
-            }
-            let firstCard = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
-                .firstMatch
-            guard firstCard.waitForExistence(timeout: 5) else {
-                return
-            }
-            firstCard.tap()
+            openCase()
         }
         then("I should see the case detail header") {
-            let header = find("case-detail-header")
-            if header.waitForExistence(timeout: 5) {
-                XCTAssertTrue(header.exists, "Case detail header should be visible after tapping a card")
-            }
-            // If no records exist, we can't test detail — pass gracefully
+            XCTAssertTrue(
+                find("case-detail-header").waitForExistence(timeout: 5),
+                "Case detail header should be visible after tapping the card of case '\(caseTitle)'"
+            )
         }
     }
 
     /// Scenario: Case detail shows the status pill.
     func testCaseDetailShowsStatusPill() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
         }
         then("I should see the status pill") {
             let statusPill = find("case-status-pill")
@@ -343,15 +336,16 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Case detail shows all 4 tabs (Details, Timeline, Contacts, Evidence).
     func testCaseDetailTabBar() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
         }
         then("I should see all 4 detail tabs") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
 
             let detailsTab = find("case-tab-details")
             let timelineTab = find("case-tab-timeline")
@@ -379,12 +373,13 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Details tab renders field rows from entity type schema.
     func testDetailsTabShowsFields() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail on the Details tab") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
         }
         then("the details tab should show field content or metadata") {
             let detailsTab = find("case-details-tab")
@@ -408,19 +403,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Timeline tab shows interactions or empty state.
     func testTimelineTabShowsInteractions() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail and tap the Timeline tab") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let timelineTab = find("case-tab-timeline")
             if timelineTab.waitForExistence(timeout: 5) {
                 timelineTab.tap()
             }
         }
         then("I should see timeline content or empty state") {
-            guard find("case-detail-header").exists else { return }
+            XCTAssertTrue(find("case-detail-header").exists, "Case detail should still be open")
 
             let found = anyElementExists([
                 "case-timeline",
@@ -437,19 +433,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Contacts tab shows linked contacts or empty state.
     func testContactsTabShowsLinkedContacts() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail and tap the Contacts tab") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let contactsTab = find("case-tab-contacts")
             if contactsTab.waitForExistence(timeout: 5) {
                 contactsTab.tap()
             }
         }
         then("I should see contacts content or empty state") {
-            guard find("case-detail-header").exists else { return }
+            XCTAssertTrue(find("case-detail-header").exists, "Case detail should still be open")
 
             let found = anyElementExists([
                 "case-contact-card",
@@ -475,19 +472,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Evidence tab shows evidence items or empty state.
     func testEvidenceTabShowsItems() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail and tap the Evidence tab") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let evidenceTab = find("case-tab-evidence")
             if evidenceTab.waitForExistence(timeout: 5) {
                 evidenceTab.tap()
             }
         }
         then("I should see evidence content or empty state") {
-            guard find("case-detail-header").exists else { return }
+            XCTAssertTrue(find("case-detail-header").exists, "Case detail should still be open")
 
             let found = anyElementExists([
                 "case-evidence-empty",
@@ -515,19 +513,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Tapping the status pill opens the QuickStatusSheet.
     func testStatusPillOpensSheet() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail and tap the status pill") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let statusPill = find("case-status-pill")
             if statusPill.waitForExistence(timeout: 5) {
                 statusPill.tap()
             }
         }
         then("the QuickStatusSheet should appear with status options") {
-            guard find("case-detail-header").exists else { return }
+            XCTAssertTrue(find("case-detail-header").exists, "Case detail should still be open")
 
             let sheet = find("quick-status-sheet")
             if sheet.waitForExistence(timeout: 5) {
@@ -547,19 +546,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Selecting a new status updates the pill.
     func testSelectNewStatus() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open status sheet and select a different status") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let statusPill = find("case-status-pill")
-            guard statusPill.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be shown in the case detail header for an admin")
             statusPill.tap()
         }
         then("the status should update") {
             let sheet = find("quick-status-sheet")
-            guard sheet.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(sheet.waitForExistence(timeout: 5), "QuickStatusSheet should open after tapping the status pill")
 
             // Find status options that are NOT the currently selected one
             // (the selected one has a checkmark)
@@ -588,12 +588,13 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Full add comment flow — open sheet, type text, submit.
     func testAddCommentFlow() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail, navigate to timeline, and open the comment sheet") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
 
             // Switch to Timeline tab
             let timelineTab = find("case-tab-timeline")
@@ -602,7 +603,7 @@ final class CaseManagementUITests: BaseUITest {
             }
         }
         then("I should be able to open the comment sheet and see the input") {
-            guard find("case-detail-header").exists else { return }
+            XCTAssertTrue(find("case-detail-header").exists, "Case detail should still be open")
 
             // The inline comment input should be visible
             let commentInput = find("case-comment-input")
@@ -649,15 +650,16 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Unassigned case shows "Assign to me" button.
     func testAssignToMeButton() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
         }
         then("I should see the assign button if the case is unassigned to me") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
 
             let assignButton = find("case-assign-btn")
             // The assign button only shows when the current user is NOT in assignedTo.
@@ -680,12 +682,13 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Closing the case detail returns to the list.
     func testCaseDetailCloseReturnsToList() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail and tap the close button") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
 
             let closeButton = find("case-detail-close")
             if closeButton.waitForExistence(timeout: 5) {
@@ -711,15 +714,16 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Switching between all 4 detail tabs renders the correct content.
     func testDetailTabSwitching() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open a case detail") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
         }
         then("switching between tabs should render the correct content areas") {
-            guard find("case-detail-header").waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(find("case-detail-header").waitForExistence(timeout: 5), "Case detail should be open")
 
             // Details tab (default)
             let detailsTab = find("case-tab-details")
@@ -785,19 +789,20 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Cancelling the QuickStatusSheet dismisses it without changes.
     func testQuickStatusSheetCancel() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        let caseTitle = uniqueCaseTitle()
+        given("a case exists and I am authenticated as admin with API") {
+            launchAsAdminWithNewCase(titled: caseTitle)
         }
         when("I open the status sheet and cancel") {
             navigateToCases()
-            guard openFirstCaseCard() else { return }
+            openCase()
             let statusPill = find("case-status-pill")
-            guard statusPill.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(statusPill.waitForExistence(timeout: 5), "Status pill should be shown in the case detail header for an admin")
             statusPill.tap()
         }
         then("cancelling should dismiss the sheet") {
             let sheet = find("quick-status-sheet")
-            guard sheet.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(sheet.waitForExistence(timeout: 5), "QuickStatusSheet should open after tapping the status pill")
 
             // Find and tap the Cancel button in the sheet's toolbar
             let cancelButton = app.buttons.matching(
@@ -824,26 +829,52 @@ final class CaseManagementUITests: BaseUITest {
 
     // MARK: - Helpers
 
-    /// Open the first case card in the list. Returns false if no cards exist.
-    @discardableResult
-    private func openFirstCaseCard() -> Bool {
-        let caseList = find("case-list")
-        guard caseList.waitForExistence(timeout: 10) else {
-            // No case list — CMS disabled or empty
-            return false
-        }
+    /// Whether this class's hub already has case management on with the jail-support
+    /// template. Re-applying a template replaces its entity types with new ids, which
+    /// would orphan the cases earlier tests in the class created — so it runs once.
+    private static var caseManagementEnabled = false
 
-        let firstCard = app.descendants(matching: .any)
+    /// Case management on, with the jail-support template (Arrest Case + Mass Arrest
+    /// Event) applied to this class's hub through the real API.
+    private func enableCaseManagementWithTemplate() {
+        if !Self.caseManagementEnabled {
+            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
+            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+            Self.caseManagementEnabled = true
+        }
+    }
+
+    private func uniqueCaseTitle() -> String {
+        "Case \(UUID().uuidString.prefix(8))"
+    }
+
+    /// Given-step for every case-detail scenario: the scenario creates the case it
+    /// opens, through the app's own create-case sheet, instead of opening whatever
+    /// the hub happens to hold — a fresh class hub holds nothing.
+    private func launchAsAdminWithNewCase(titled title: String) {
+        enableCaseManagementWithTemplate()
+        launchAsAdminWithAPI()
+        navigateToCases()
+        createCase(title: title, typeLabel: "Arrest Case")
+    }
+
+    /// Open a case from the list and wait for its detail view. The scenario's Given
+    /// created one, so the list cannot be empty. Cards are matched by identifier, not
+    /// by title: a card shows its title only when the app can decrypt the case
+    /// summary, which iOS currently cannot (#1025).
+    private func openCase() {
+        let card = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
             .firstMatch
-        guard firstCard.waitForExistence(timeout: 5) else {
-            return false
-        }
-        firstCard.tap()
-
-        // Wait for detail to appear
-        let header = find("case-detail-header")
-        return header.waitForExistence(timeout: 5)
+        XCTAssertTrue(
+            card.waitForExistence(timeout: 15),
+            "The case list should show the case created in this scenario's Given"
+        )
+        card.tap()
+        XCTAssertTrue(
+            find("case-detail-header").waitForExistence(timeout: 10),
+            "Case detail should open after tapping a case card"
+        )
     }
 
 }

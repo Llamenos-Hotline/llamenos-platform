@@ -97,12 +97,15 @@ final class TriageUITests: BaseUITest {
         when("I navigate to triage and tap a report") {
             navigateToTriage()
             let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                triageList.waitForExistence(timeout: 10),
+                "Triage queue should render its list — this scenario needs a conversion-enabled report in the hub"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "Triage queue should list at least one report row ('triage-row-*')")
             firstRow.tap()
         }
         then("I should see the triage detail view with report info") {
@@ -142,18 +145,22 @@ final class TriageUITests: BaseUITest {
         when("I open a triage report detail") {
             navigateToTriage()
             let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                triageList.waitForExistence(timeout: 10),
+                "Triage queue should render its list — this scenario needs a conversion-enabled report in the hub"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "Triage queue should list at least one report row ('triage-row-*')")
             firstRow.tap()
         }
         then("the convert to case button should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(
+                anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5),
+                "Triage detail should open after tapping a report row"
+            )
 
             let convertButton = scrollToFind("triage-convert-button", maxSwipes: 3)
             if convertButton.exists {
@@ -174,18 +181,22 @@ final class TriageUITests: BaseUITest {
         when("I open a triage report detail") {
             navigateToTriage()
             let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                triageList.waitForExistence(timeout: 10),
+                "Triage queue should render its list — this scenario needs a conversion-enabled report in the hub"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "Triage queue should list at least one report row ('triage-row-*')")
             firstRow.tap()
         }
         then("the report type label should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(
+                anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5),
+                "Triage detail should open after tapping a report row"
+            )
 
             let typeLabel = find("triage-report-type")
             if typeLabel.waitForExistence(timeout: 3) {

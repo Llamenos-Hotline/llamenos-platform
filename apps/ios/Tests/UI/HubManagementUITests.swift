@@ -80,7 +80,10 @@ final class HubManagementUITests: BaseUITest {
         }
         then("the active hub should have a visual indicator") {
             let hubList = find("hubs-list")
-            guard hubList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                hubList.waitForExistence(timeout: 10),
+                "Hub list should render — the admin is a member of this class's hub, so the list cannot be empty"
+            )
 
             // The current hub URL is set in launch args, so one hub row
             // should be marked as active
