@@ -1472,7 +1472,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -1574,9 +1574,72 @@ jobs:
           docker inspect -f '{{range .State.Health.Log}}exit={{.ExitCode}} {{.Output}}{{end}}' "$cid" | head -c 2000
           exit 1
 
+      # The Signal deployment, which is the one optional profile a hotline
+      # actually runs — and the one whose wiring is easiest to break without
+      # noticing, because every check above passes with Signal absent.
+      #
+      # A change that removed `NOTIFIER_URL`'s default from the production
+      # compose file reached merge-queue position 3 during this work. Nothing
+      # in CI could have caught it: the app still started, still reported
+      # ready, and still passed every assertion above — it had simply stopped
+      # being connected to its own sidecar. The `signalNotifier: ok` assertion
+      # below is the one that fails on that diff.
+      - name: Assert a Signal deployment comes up and is connected
+        run: |
+          set -euo pipefail
+          compose() { docker compose -p smoke --env-file .env \
+            -f deploy/docker/docker-compose.yml --profile signal "$@"; }
+
+          # `signal-notifier` waits on `signal-cli` being healthy, so this
+          # also proves that dependency chain resolves. signal-cli's probe is
+          # /v1/about, which needs no registered Signal account — a fresh
+          # deployment must come up before anyone registers a number.
+          compose up -d --build
+          compose ps
+
+          cid=$(docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml ps -q app)
+
+          # The app's own view. `signalNotifier: ok` can only be true if the
+          # app resolved the sidecar's URL and the shared key authenticated —
+          # the two things the compose defaults are responsible for.
+          for i in $(seq 1 30); do
+            body=$(docker exec "$cid" bun -e "
+              fetch('http://localhost:3000/api/health/ready')
+                .then(r => r.text()).then(t => { console.log(t); process.exit(0) })
+                .catch(() => { console.log('{}'); process.exit(0) })")
+            case "$body" in
+              *'"signalNotifier":{"status":"ok"'*)
+                echo "  ok    the app reports signalNotifier ok after ${i} checks"
+                echo "$body"
+                signal_ok=1
+                break ;;
+            esac
+            sleep 5
+          done
+
+          if [ "${signal_ok:-0}" != "1" ]; then
+            echo "::error::Signal profile is enabled but the app does not report signalNotifier ok — the app is not connected to its own sidecar"
+            echo "last readiness body: $body"
+            compose logs --tail=40 signal-notifier signal-cli app
+            exit 1
+          fi
+
+          # Readiness must still be 200. A hotline whose Signal sidecar is up
+          # is obviously ready; this guards against a future change making the
+          # happy path gate on something it should not.
+          code=$(docker exec "$cid" bun -e "
+            fetch('http://localhost:3000/api/health/ready')
+              .then(r => { console.log(r.status); process.exit(0) })
+              .catch(() => { console.log('ERR'); process.exit(0) })")
+          [ "$code" = "200" ] || {
+            echo "::error::/api/health/ready returned $code with Signal healthy, expected 200"
+            exit 1
+          }
+          echo "  ok    readiness is 200 with the Signal profile enabled"
+
       - name: Tear down
         if: always()
-        run: docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml down -v || true
+        run: docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml --profile signal down -v --remove-orphans || true
 
   docker-canary:
     needs: ci-status
