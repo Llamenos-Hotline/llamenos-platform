@@ -523,9 +523,28 @@ jobs:
           # xcodebuild strips the TEST_RUNNER_ prefix and forwards the rest
           # into the test runner's environment, where BaseUITest reads
           # TEST_HUB_URL. This shard's backend is not on 3000, so without it
-          # every shard would drive the same (wrong) server. Computed here
-          # because GitHub expressions have no arithmetic.
-          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$((3100 + SHARD))"
+          # every shard would drive the same (wrong) server.
+          #
+          # Reads the port the allocation step chose. It must NOT recompute it
+          # from the shard index: the backend's port is derived from the
+          # RUNNER, and shard N does not run on runner N. When this line did
+          # its own `3100 + SHARD` arithmetic, shard 3 on mac-mini-ios-1
+          # started a backend on 3101 and then pointed the test runner at
+          # 3103, and all 33 of that shard's tests failed with "No test hub
+          # for <class>". Shard 2 passed only because it happened to land on
+          # mac-mini-ios-2, where the two numbers coincide — which is exactly
+          # how a mismatch like this hides.
+          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$NATIVE_BACKEND_PORT"
+
+          # Fail in a second, naming the cause, rather than letting every test
+          # in the shard fail its setup one by one. The failure above cost a
+          # full shard and surfaced as 33 identical assertion failures whose
+          # real cause was one wrong number.
+          if ! curl -fsS --max-time 10 "$TEST_RUNNER_TEST_HUB_URL/api/health/live" >/dev/null; then
+            echo "::error::ios-e2e/ui FAILED: hub-unreachable — shard $SHARD on $RUNNER_NAME points at $TEST_RUNNER_TEST_HUB_URL but nothing answers there. The backend was started on NATIVE_BACKEND_PORT=$NATIVE_BACKEND_PORT; if those differ, a port is being derived in two places."
+            exit 1
+          fi
+          echo "hub reachable at $TEST_RUNNER_TEST_HUB_URL"
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
           # shellcheck disable=SC2046
