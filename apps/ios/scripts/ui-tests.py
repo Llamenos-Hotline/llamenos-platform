@@ -43,6 +43,7 @@ TEST_RE = re.compile(r"^\s*func\s+(test\w+)\s*\(", re.MULTILINE)
 QUARANTINE_FILE = UI_TESTS_DIR / "ci-quarantine.txt"
 SMOKE_FILE = UI_TESTS_DIR / "ci-smoke.txt"
 NON_GATING_FILE = UI_TESTS_DIR / "ci-non-gating.txt"
+MAC_SHARDS_FILE = UI_TESTS_DIR / "ci-mac-shards.txt"
 TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
 QUARANTINE_RE = re.compile(r"^(?P<cls>\w+)/(?P<test>test\w+)\s+#\s*(?P<why>.*\S)\s*$")
 SMOKE_RE = re.compile(r"^(?P<cls>\w+)\s+#\s*(?P<why>.*\S)\s*$")
@@ -165,6 +166,36 @@ def non_gating_classes() -> dict[str, str]:
     return out
 
 
+def mac_shard_classes() -> dict[str, str]:
+    """{class: evidence} for every entry in ci-mac-shards.txt — classes that
+    must land on a shard the workflow routes to the self-hosted Mac."""
+    if not MAC_SHARDS_FILE.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for n, line in enumerate(MAC_SHARDS_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        cls, sep, why = line.partition("#")
+        if not sep or not why.strip():
+            raise SystemExit(f"{MAC_SHARDS_FILE.name}:{n}: expected '<Class>  # <evidence it needs the faster host>'")
+        out[cls.strip()] = why.strip()
+    return out
+
+
+def check_mac_shards() -> int:
+    """An entry naming a class that no longer exists would silently stop
+    pinning it — the class would drift back onto hosted runners and start
+    failing again, with nothing pointing at this file."""
+    entries = mac_shard_classes()
+    known = test_classes()
+    problems = [f"{c}: names no existing test class" for c in entries if c not in known]
+    for p in problems:
+        print(f"  {p}")
+    print(f"{len(entries)} Mac-pinned class(es), {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
 def check_non_gating() -> int:
     """A class excused from the gate must make no claims. If it contains an
     XCTAssert it is a real test, and parking it here hides a verdict nobody
@@ -211,7 +242,7 @@ def check_smoke() -> int:
 
 
 def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False,
-          include_non_gating: bool = False) -> list[str]:
+          include_non_gating: bool = False, mac_shards: list[int] | None = None) -> list[str]:
     """Balanced by expected seconds, not test count: the admin classes cost ~50s a
     test and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
     36368999711, and the 43-min shard hit the 45-min step timeout after its last
@@ -251,7 +282,31 @@ def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = 
 
     bins: list[list[str]] = [[] for _ in range(total)]
     loads = [0.0] * total
+
+    # Classes pinned to the Mac are placed FIRST, and only into the shard
+    # indices the workflow routes there. Everything else is balanced across all
+    # shards afterwards, so the pinning constrains placement without abandoning
+    # cost balance for the rest.
+    #
+    # Without this, which classes land on the Mac is an accident of
+    # ci-timings.json: the packer is positional, so a timings refresh silently
+    # re-targets the routing. That is not hypothetical — #1428 justified
+    # sending shard 3 to the Mac by SecurityUITests' 313s PIN test, while
+    # SecurityUITests sat in shard 2, which goes to GitHub.
+    pinned = mac_shard_classes() if mac_shards else {}
+    mac_targets = [i for i in (mac_shards or []) if 0 <= i < total]
+    if pinned and not mac_targets:
+        raise SystemExit(
+            f"--mac-shards {mac_shards} names no valid index for --total {total}; "
+            f"refusing to silently run Mac-pinned classes on hosted runners")
+    for cls, secs in sorted(((c, cost[c]) for c in pinned if c in cost), key=lambda kv: (-kv[1], kv[0])):
+        lightest = min(mac_targets, key=lambda i: loads[i])
+        bins[lightest].append(cls)
+        loads[lightest] += secs
+
     for cls, secs in sorted(cost.items(), key=lambda kv: (-kv[1], kv[0])):
+        if cls in pinned and mac_targets:
+            continue
         lightest = loads.index(min(loads))
         bins[lightest].append(cls)
         loads[lightest] += secs
@@ -373,12 +428,16 @@ def main() -> int:
     s.add_argument("--include-quarantined", action="store_true")
     s.add_argument("--only-smoke", action="store_true",
                    help="restrict selection to the classes in ci-smoke.txt (SMOKE tier)")
+    s.add_argument("--mac-shards", default="",
+                   help="comma-separated shard indices the workflow routes to the self-hosted Mac; "
+                        "classes in ci-mac-shards.txt are confined to these")
     s.add_argument("--include-non-gating", action="store_true",
                    help="also select the classes in ci-non-gating.txt (asset generation; "
                         "excluded by default because nothing consumes their output)")
     sub.add_parser("check-quarantine")
     sub.add_parser("check-smoke")
     sub.add_parser("check-non-gating")
+    sub.add_parser("check-mac-shards")
     t = sub.add_parser("timings")
     t.add_argument("reports", type=Path, nargs="+")
     r = sub.add_parser("report")
@@ -388,7 +447,8 @@ def main() -> int:
 
     if args.cmd == "shard":
         print("\n".join(shard(args.index, args.total, args.include_quarantined, args.only_smoke,
-                              args.include_non_gating)))
+                              args.include_non_gating,
+                              [int(x) for x in args.mac_shards.split(",") if x.strip()])))
         return 0
     if args.cmd == "check-quarantine":
         return check_quarantine()
@@ -396,6 +456,8 @@ def main() -> int:
         return check_smoke()
     if args.cmd == "check-non-gating":
         return check_non_gating()
+    if args.cmd == "check-mac-shards":
+        return check_mac_shards()
     if args.cmd == "timings":
         return timings(args.reports)
     return report(args.log, args.json)
