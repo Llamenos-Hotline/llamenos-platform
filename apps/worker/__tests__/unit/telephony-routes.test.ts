@@ -18,6 +18,7 @@ vi.mock('@worker/db', () => ({
   getDb: vi.fn().mockReturnValue({}),
 }))
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
+import { recordRingLegs } from '@worker/services/ringing'
 import { checkWebhookReplay } from '@worker/services/webhook-replay'
 
 // Mock webhook replay protection — unit tests have no database
@@ -38,6 +39,7 @@ function makeMockAdapter(overrides?: Partial<TelephonyAdapter>): TelephonyAdapte
     handleWaitMusic: vi.fn().mockResolvedValue({ contentType: 'text/xml', body: '<Response><Play/></Response>' }),
     handleVoicemailComplete: vi.fn().mockReturnValue({ contentType: 'text/xml', body: '<Response><Say>Thank you</Say><Hangup/></Response>' }),
     rejectCall: vi.fn().mockReturnValue({ contentType: 'text/xml', body: '<Response><Reject/></Response>' }),
+    hangupResponse: vi.fn().mockReturnValue({ contentType: 'text/xml', body: '<Response><Hangup/></Response>' }),
     hangupCall: vi.fn().mockResolvedValue(undefined),
     ringVolunteers: vi.fn().mockResolvedValue([]),
     cancelRinging: vi.fn().mockResolvedValue(undefined),
@@ -330,6 +332,20 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /language-selected', () => {
+    it('rejects a caller banned after the language menu was played, without ringing anyone', async () => {
+      services.records.checkBan = vi.fn().mockResolvedValue(true)
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/language-selected?hub=hub-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=CA123&From=%2B15551111111&Digits=1',
+      })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('<Reject')
+      expect(adapter.handleIncomingCall).not.toHaveBeenCalled()
+      expect(services.calls.addCall).not.toHaveBeenCalled()
+    })
+
     it('returns enqueue response for normal call', async () => {
       // parseLanguageWebhook is mocked — override to return digit '2' matching the body.
       // With hub languages ['en', 'es'], digit '2' (index 1) resolves to 'es'.
@@ -453,6 +469,20 @@ describe('Telephony routes', () => {
   })
 
   describe('POST /captcha', () => {
+    it('rejects a caller banned while solving the CAPTCHA, without enqueueing', async () => {
+      services.records.checkBan = vi.fn().mockResolvedValue(true)
+      services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/captcha?hub=hub-1&callSid=CA-captcha&lang=en', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'Digits=1234&From=%2B15551111111',
+      })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('<Reject')
+      expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
+    })
+
     it('returns enqueue on correct CAPTCHA digits', async () => {
       services.settings.verifyCaptcha = vi.fn().mockResolvedValue({ match: true, expected: '1234' })
       const app = await createTestApp(adapter, services)
@@ -544,6 +574,54 @@ describe('Telephony routes', () => {
           hubId: 'hub-1',
         }),
       )
+    })
+
+    const validToken = () => {
+      services.calls.answerCallWithToken = vi.fn().mockResolvedValue({
+        callSid: 'CA-parent',
+        volunteerPubkey: 'pk-vol-1',
+        hubId: 'hub-1',
+      })
+    }
+    const answer = async () => {
+      const app = await createTestApp(adapter, services)
+      return app.request('/api/telephony/user-answer?callToken=valid-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'CallSid=LEG-2',
+      })
+    }
+
+    it('refuses a leg that lost the answer race: no bridge, no audit, no event, no leg cancellation', async () => {
+      // answerCallWithToken is the atomic ringing → in-progress claim; null means
+      // another volunteer already won (or the call is gone / the token is spent).
+      services.calls.answerCallWithToken = vi.fn().mockResolvedValue(null)
+      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      const res = await answer()
+      expect(res.status).toBe(403)
+      expect(adapter.handleCallAnswered).not.toHaveBeenCalled()
+      expect(adapter.cancelRinging).not.toHaveBeenCalled()
+      expect(services.audit.log).not.toHaveBeenCalled()
+    })
+
+    it('cancels the other ringing legs, sparing the winner\'s own leg', async () => {
+      validToken()
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
+      vi.mocked(adapter.parseIncomingWebhook).mockResolvedValue({ callSid: 'LEG-2', callerNumber: '+1', calledNumber: '+2' } as never)
+      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2', 'LEG-3'])
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2', 'LEG-3'], 'LEG-2')
+    })
+
+    it('does not cancel any leg when the winner\'s leg SID is unknown (would hang up the winner)', async () => {
+      validToken()
+      services.calls.getActiveCalls = vi.fn().mockResolvedValue([{ callId: 'CA-parent', callerLast4: '1111' }])
+      vi.mocked(adapter.parseIncomingWebhook).mockRejectedValue(new Error('unparseable'))
+      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      const res = await answer()
+      expect(res.status).toBe(200)
+      expect(adapter.cancelRinging).not.toHaveBeenCalled()
     })
   })
 

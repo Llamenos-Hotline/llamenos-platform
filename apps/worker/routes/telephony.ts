@@ -10,7 +10,7 @@ import { hashPhone } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
-import { startParallelRinging } from '../services/ringing'
+import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
 import { maybeTranscribe, transcribeVoicemail } from '../services/transcription'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -173,6 +173,13 @@ telephony.post('/language-selected',
   const { callSid, callerNumber, digits } = await adapter.parseLanguageWebhook(c.req.raw)
   const isAuto = url.searchParams.get('auto') === '1'
 
+  // Bans are enforced when the call is answered (/incoming), but a ban can be added
+  // while the caller is still in the language menu. Re-check before greeting or
+  // queueing so a newly banned caller never reaches a volunteer.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
+
   // Get hub's ordered language list for digit-to-language mapping
   const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
 
@@ -253,6 +260,11 @@ telephony.post('/captcha',
   const callSid = url.searchParams.get('callSid') || ''
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
 
+  // A ban added while the caller was in the menu / CAPTCHA must still take effect.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
+
   // Look up expected digits from server-side storage (not URL params)
   const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })
 
@@ -296,6 +308,19 @@ telephony.post('/user-answer',
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId || undefined))!
+
+  // Stop every other phone still ringing for this call. The answer itself was
+  // claimed atomically above (first pickup wins — `answerCallWithToken` is a
+  // conditional ringing → in-progress UPDATE, so a losing leg never gets here).
+  // The winner's own leg SID is needed so it is not cancelled with the losers;
+  // if the provider's webhook does not yield one we cancel nothing (losers then
+  // ring out, but can no longer win).
+  const winnerLegSid = await adapter.parseIncomingWebhook(c.req.raw.clone()).then(i => i.callSid, () => undefined)
+  if (winnerLegSid) {
+    await cancelLosingLegs(c.env, services, hubId ?? '', parentCallSid, winnerLegSid)
+  } else {
+    logger.warn('user-answer: winner leg SID not in webhook — not cancelling other legs', { parentCallSid })
+  }
 
   // Publish call answered event + presence update
   publishEvent(c.env, KIND_CALL_UPDATE, {

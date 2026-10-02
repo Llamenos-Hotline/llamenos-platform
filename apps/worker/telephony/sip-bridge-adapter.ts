@@ -84,6 +84,11 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   abstract handleVoicemailComplete(lang: string): TelephonyResponse
   abstract emptyResponse(): TelephonyResponse
 
+  /** ARI and ESL both express "end this leg" as a hangup command. */
+  hangupResponse(): TelephonyResponse {
+    return this.rejectCall()
+  }
+
   // --- Call management (shared — REST calls to bridge) ---
 
   async hangupCall(callSid: string): Promise<void> {
