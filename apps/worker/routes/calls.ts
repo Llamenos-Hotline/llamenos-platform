@@ -6,11 +6,55 @@ import { getTelephonyFromService } from '../lib/service-factories'
 
 import { audit } from '../services/audit'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
-import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema } from '@protocol/schemas/calls'
+import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema, callRecordResponseSchema, callStatusSchema, type CallRecord } from '@protocol/schemas/calls'
 import { okResponseSchema } from '@protocol/schemas/common'
+import type { activeCalls, callRecords } from '../db/schema'
 import { authErrors, notFoundError } from '../openapi/helpers'
 
 const calls = new Hono<AppEnv>()
+
+// Every call a route returns is projected onto `callRecordResponseSchema`, never
+// passed through as a row. An active_calls row carries the HMAC of the caller's
+// number (`callerNumber`), who reported the call as spam, and the provider's
+// recording handle. The HMAC is a stable caller identifier: anyone holding it can
+// link two calls from one person, or confirm a number has called by computing it.
+// Bans resolve it server-side, so no client needs it.
+
+type ActiveCallRow = typeof activeCalls.$inferSelect
+type CallRecordRow = typeof callRecords.$inferSelect
+
+function toActiveCallResponse(row: ActiveCallRow): CallRecord {
+  return callRecordResponseSchema.parse({
+    id: row.callId,
+    hubId: row.hubId ?? undefined,
+    callerLast4: row.callerLast4 ?? undefined,
+    answeredBy: row.answeredBy,
+    startedAt: row.startedAt.toISOString(),
+    status: callStatusSchema.parse(row.status),
+    hasTranscription: row.hasTranscription ?? false,
+    hasVoicemail: row.hasVoicemail ?? false,
+    hasRecording: row.hasRecording ?? false,
+  })
+}
+
+function toCallRecordResponse(row: CallRecordRow): CallRecord {
+  return callRecordResponseSchema.parse({
+    id: row.callId,
+    hubId: row.hubId ?? undefined,
+    callerLast4: row.callerLast4 ?? undefined,
+    answeredBy: row.answeredBy,
+    startedAt: row.startedAt.toISOString(),
+    endedAt: row.endedAt?.toISOString(),
+    duration: row.duration ?? undefined,
+    status: callStatusSchema.parse(row.status),
+    hasTranscription: row.hasTranscription ?? false,
+    hasVoicemail: row.hasVoicemail ?? false,
+    hasRecording: row.hasRecording ?? false,
+    recordingSid: row.recordingSid ?? undefined,
+    encryptedContent: row.encryptedContent || undefined,
+    adminEnvelopes: row.adminEnvelopes,
+  })
+}
 
 calls.get('/active',
   describeRoute({
@@ -32,14 +76,8 @@ calls.get('/active',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
-    const permissions = c.get('permissions')
-    const canSeeFullInfo = checkPermission(permissions, 'calls:read-active-full')
-    const activeCalls = await services.calls.getActiveCalls(hubId)
-    if (!canSeeFullInfo) {
-      const redacted = activeCalls.map(call => ({ ...call, callerNumber: '[redacted]' }))
-      return c.json({ calls: redacted })
-    }
-    return c.json({ calls: activeCalls })
+    const rows = await services.calls.getActiveCalls(hubId)
+    return c.json({ calls: rows.map(toActiveCallResponse) })
   },
 )
 
@@ -122,7 +160,12 @@ calls.get('/history',
       page: query.page,
       limit: query.limit,
     })
-    return c.json(result)
+    return c.json({
+      calls: result.calls.map(toCallRecordResponse),
+      total: result.total,
+      page: query.page,
+      limit: query.limit,
+    })
   },
 )
 
@@ -222,7 +265,7 @@ calls.get('/:callId',
         description: 'Call record',
         content: {
           'application/json': {
-            schema: resolver(callActionResponseSchema),
+            schema: resolver(callRecordResponseSchema),
           },
         },
       },
@@ -240,10 +283,10 @@ calls.get('/:callId',
     const activeCall = hubId
       ? await services.calls.getActiveCallById(hubId, callId)
       : await services.calls.getActiveCallByCallId(callId)
-    if (activeCall) return c.json(activeCall)
+    if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
     const historyRecord = await services.calls.getCallRecord(callId)
-    if (historyRecord) return c.json(historyRecord)
+    if (historyRecord) return c.json(toCallRecordResponse(historyRecord))
 
     return c.json({ error: 'Call not found' }, 404)
   },
@@ -280,7 +323,7 @@ calls.post('/:callId/answer',
       await audit(services.audit, 'callAnswered', pubkey, {
         callerLast4: result.callerLast4 || '',
       }, undefined, result.hubId || hubId || null)
-      return c.json({ call: result })
+      return c.json({ call: toActiveCallResponse(result) })
     } catch (err) {
       if (err instanceof Error && 'status' in err && (err as { status: number }).status === 409) {
         return c.json({ error: 'Call already answered' }, 409)
@@ -322,7 +365,7 @@ calls.post('/:callId/hangup',
 
     try {
       const result = await services.calls.endCall(hubId, callId)
-      return c.json({ call: result })
+      return c.json({ call: toCallRecordResponse(result) })
     } catch {
       return c.json({ error: 'Failed to hang up call' }, 500)
     }

@@ -11,6 +11,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
+import type { CallRecord } from '@protocol/schemas/calls'
 import { apiPost, apiGet, listBansViaApi, listNotesViaApi, encryptForTest } from '../../api-helpers'
 import {
   simulateIncomingCall,
@@ -189,12 +190,12 @@ Then('the call status should be {string}', async ({ request, world }, expectedSt
   const activePath = state.hubId ? `/hubs/${state.hubId}/calls/active` : '/calls/active'
 
   // Check call history first (completed/unanswered calls)
-  const historyRes = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(
+  const historyRes = await apiGet<{ calls: CallRecord[] }>(
     request,
     historyPath,
   )
   if (historyRes.status === 200) {
-    const historyCall = historyRes.data.calls.find(c => c.callId === state.callId)
+    const historyCall = historyRes.data.calls.find(c => c.id === state.callId)
     if (historyCall) {
       expect(historyCall.status).toBe(expectedStatus)
       return
@@ -202,12 +203,12 @@ Then('the call status should be {string}', async ({ request, world }, expectedSt
   }
 
   // If not in history, check active calls (ringing/in-progress calls)
-  const activeRes = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(
+  const activeRes = await apiGet<{ calls: CallRecord[] }>(
     request,
     activePath,
   )
   if (activeRes.status === 200) {
-    const activeCall = activeRes.data.calls.find(c => c.callId === state.callId)
+    const activeCall = activeRes.data.calls.find(c => c.id === state.callId)
     if (activeCall) {
       expect(activeCall.status).toBe(expectedStatus)
       return

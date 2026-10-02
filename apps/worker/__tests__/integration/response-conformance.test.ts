@@ -75,6 +75,7 @@ import { healthResponseSchema, livenessResponseSchema, readinessResponseSchema }
 import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
+import type { activeCalls } from '../../db/schema'
 import { hubListResponseSchema, hubDetailResponseSchema } from '@protocol/schemas/hubs'
 import { noteListResponseSchema, noteResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
@@ -296,13 +297,24 @@ describe('Config Routes — response conformance', () => {
 // ---------------------------------------------------------------------------
 
 describe('Calls Routes — response conformance', () => {
-  const mockActiveCalls = [
+  // An active_calls row, as the service returns it — the route projects it onto the schema (#1129).
+  const mockActiveCalls: (typeof activeCalls.$inferSelect)[] = [
     {
-      id: 'call-1',
-      callerNumber: '+15551234567',
-      startedAt: new Date().toISOString(),
-      status: 'ringing' as const,
+      callId: 'call-1',
+      hubId: 'hub-1',
+      callerNumber: 'f'.repeat(64),
+      callerLast4: '4567',
       answeredBy: null,
+      status: 'ringing',
+      hasTranscription: false,
+      hasVoicemail: false,
+      hasRecording: false,
+      recordingSid: null,
+      reportedBy: null,
+      startedAt: new Date(),
+      answeredAt: null,
+      endedAt: null,
+      duration: null,
     },
   ]
 
@@ -316,7 +328,8 @@ describe('Calls Routes — response conformance', () => {
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/calls/active', activeCallsResponseSchema, { env })
-    expect(Array.isArray(result.parsed.calls)).toBe(true)
+    expect(result.parsed.calls[0].id).toBe('call-1')
+    expect(result.parsed.calls[0].callerNumber).toBeUndefined()
   })
 
   it('GET /calls/today-count — conforms to todayCountResponseSchema', async () => {
