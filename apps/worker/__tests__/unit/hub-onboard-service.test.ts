@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { HubOnboardService } from '@worker/services/provider-setup/hub-onboard'
 import { ProviderSetup } from '@worker/services/provider-setup'
 import { SettingsService } from '@worker/services/settings'
-import { ProviderApiError } from '@worker/services/provider-setup/types'
 import { createMockDb } from './mock-db'
 
 function setup() {
@@ -187,6 +186,64 @@ describe('HubOnboardService', () => {
       const result = await service.getHubUsage('hub-1')
       expect(result.smsSent).toBe(0)
       expect(result.callsReceived).toBe(0)
+    })
+  })
+
+  describe('getHubSetupStatus', () => {
+    it('reports channels, provider and complete quotas', async () => {
+      const { db, service } = setup()
+      db.$setSelectResults([
+        // providerConfigs
+        [{ hubId: 'hub-1', providerType: 'twilio', status: 'connected', phoneNumbers: ['+15550000000'] }],
+        // hubOnboardingState (getOnboardingStatus)
+        [
+          {
+            hubId: 'hub-1',
+            currentStep: 'provider_connection',
+            completedSteps: ['template_selection', 'channel_selection'],
+            channelConfig: {
+              voice: true, sms: true, email: false, signal: false,
+              whatsapp: false, telegram: false, rcs: false,
+            },
+            isComplete: false,
+          },
+        ],
+        // hub_settings (getHubProviderSettings)
+        [{ hubId: 'hub-1', settings: { quotas: { maxSmsPerMonth: 25 } } }],
+      ])
+
+      const result = await service.getHubSetupStatus('hub-1')
+      expect(result.providerConnected).toBe(true)
+      expect(result.providerType).toBe('twilio')
+      expect(result.numbersProvisioned).toBe(1)
+      expect(result.channelsConfigured).toEqual(['voice', 'sms'])
+      expect(result.onboardingComplete).toBe(false)
+      // Every quota is present: the stored partial wins, the rest default.
+      // Clients type these as numbers, so a half-built object fails to decode.
+      expect(result.quotas).toEqual({
+        maxPhoneNumbers: 5,
+        maxSmsPerMonth: 25,
+        maxCallsPerMonth: 500,
+        maxSignalMessagesPerMonth: 500,
+        maxWhatsAppMessagesPerMonth: 500,
+        maxSubAccounts: 0,
+      })
+    })
+
+    it('fills every quota for a hub that has never had one set', async () => {
+      const { db, service } = setup()
+      db.$setSelectResults([[], [], [{ hubId: 'hub-1', settings: {} }]])
+
+      const result = await service.getHubSetupStatus('hub-1')
+      expect(result.providerConnected).toBe(false)
+      expect(result.quotas).toEqual({
+        maxPhoneNumbers: 5,
+        maxSmsPerMonth: 1000,
+        maxCallsPerMonth: 500,
+        maxSignalMessagesPerMonth: 500,
+        maxWhatsAppMessagesPerMonth: 500,
+        maxSubAccounts: 0,
+      })
     })
   })
 

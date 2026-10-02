@@ -8,6 +8,7 @@ import {
 import { SettingsService } from '../settings'
 import { ProviderSetup } from './index'
 import { ProviderApiError } from './types'
+import { hubQuotaSchema } from '@protocol/schemas/provider-setup'
 import type {
   ChannelConfig,
   HubOnboardingState,
@@ -229,6 +230,10 @@ export class HubOnboardService {
       channelsConfigured: channelsConfigured as HubSetupStatus['channelsConfigured'],
       channelsPending: channelsPending as HubSetupStatus['channelsPending'],
       a2pStatus: hubSettings.subAccountEnabled ? 'configured' : undefined,
+      // Parsed, not passed through: a hub that has never had quotas set stores
+      // `{}`, and clients type every quota as a number. hubQuotaSchema fills the
+      // defaults so the field is either complete or absent, never half-built.
+      quotas: hubQuotaSchema.parse(hubSettings.quotas ?? {}),
       onboardingComplete: onboarding?.isComplete ?? false,
     }
   }
