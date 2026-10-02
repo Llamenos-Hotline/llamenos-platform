@@ -133,14 +133,22 @@ dev.post('/test-reset-no-admin', async (c) => {
 // Preserves identity (admin account) and settings (setup state)
 // Used by live telephony E2E tests against staging
 dev.post('/test-reset-records', async (c) => {
-  const isDev = c.env.ENVIRONMENT === 'development'
-  const isStaging = c.env.ENVIRONMENT === 'staging'
-    && c.env.E2E_TEST_SECRET
-    && c.req.header('X-Test-Secret') === c.env.E2E_TEST_SECRET
-  if (!isDev && !isStaging) {
+  // The `staging` arm this used to carry was unreachable. `devGuard`
+  // (app.ts `api.use('/test-*', devGuard)`) runs first and requires
+  // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, so a staging host
+  // never reached this handler — verified by probe: with all three vars set,
+  // both this route and /api/test-devguard-canary answered 404. The compose
+  // file does not pass E2E_TEST_SECRET to the app either, so the secret could
+  // not have arrived even if the guard had allowed it.
+  //
+  // It is removed rather than fixed: it advertised a supported staging mode
+  // that cannot exist, and the live suite it existed for no longer needs a
+  // reset (#1423). Do not re-add it — loosening devGuard is the one thing
+  // lib/dev-surfaces.ts exists to prevent.
+  if (c.env.ENVIRONMENT !== 'development') {
     return c.json({ error: 'Not Found' }, 404)
   }
-  if (isDev && !checkResetSecret(c)) {
+  if (!checkResetSecret(c)) {
     return c.json({ error: 'Forbidden' }, 403)
   }
   const services = c.get('services')

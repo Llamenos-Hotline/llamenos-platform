@@ -206,10 +206,7 @@ final class ShiftsViewModel {
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
-            successMessage = String(
-                format: NSLocalizedString("shifts_signed_up", comment: "Signed up for %@"),
-                shift.encryptedName.isEmpty ? shift.timeRangeDisplay : shift.encryptedName
-            )
+            successMessage = L10n.format("shifts_signed_up", comment: "Signed up for %@", shift.encryptedName.isEmpty ? shift.timeRangeDisplay : shift.encryptedName)
 
             // Reload to show updated volunteer count
             await fetchShifts()

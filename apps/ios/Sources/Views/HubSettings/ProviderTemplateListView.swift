@@ -108,10 +108,7 @@ struct ProviderTemplateListView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 10))
-                    Text(String(
-                        format: NSLocalizedString("hub_onboarding_template_provider", comment: "Provider: %@"),
-                        template.providerType.displayName
-                    ))
+                    Text(L10n.format("hub_onboarding_template_provider", comment: "Provider: %@", template.providerType.displayName))
                     .font(.brand(.caption))
                 }
                 .foregroundStyle(Color.brandMutedForeground)
