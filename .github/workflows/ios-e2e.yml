@@ -201,6 +201,11 @@ jobs:
       - name: Check the non-gating classes assert nothing
         run: python3 apps/ios/scripts/ui-tests.py check-non-gating
 
+      # A Mac-pinned entry naming a deleted class would stop pinning it
+      # silently, and the class would drift back onto hosted runners.
+      - name: Check the Mac-pinned classes exist
+        run: python3 apps/ios/scripts/ui-tests.py check-mac-shards
+
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
       - name: Cache crypto XCFramework + bindings
@@ -532,6 +537,13 @@ jobs:
           # Unset on workflow_call and schedule, which is the point: neither the
           # gate nor the nightly can select these.
           if [ "${{ inputs.take-screenshots }}" = "true" ]; then extra+=(--include-non-gating); fi
+          # The shard indices this workflow routes to the Mac, handed to the
+          # packer so the classes in ci-mac-shards.txt can only land there.
+          # Must match the `host: mac` entries in the matrix above;
+          # guards.test.ts asserts the two agree, because a silent mismatch
+          # puts the fragile classes back on hosted runners — which is the
+          # failure this whole mechanism exists to prevent.
+          extra+=(--mac-shards 0,3)
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
