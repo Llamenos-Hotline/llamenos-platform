@@ -75,6 +75,15 @@ services:
       # Optional: GlitchTip/Sentry DSN for client crash reporting (profile: monitoring)
       - GLITCHTIP_DSN=${GLITCHTIP_DSN:-}
       # Signal notification sidecar (profile: signal)
+      # Points at the sidecar the `signal` profile starts. Keeping this
+      # default is what makes `--profile signal` work without extra operator
+      # configuration — removing it silently disconnects a deployment that
+      # DOES use Signal, which is worse than the problem it would solve.
+      #
+      # It does mean the variable is set even when the profile is off, so the
+      # health route cannot use "is the URL set?" to decide whether Signal is
+      # deployed. That is handled where it belongs — readiness no longer lets
+      # an OPTIONAL integration gate the verdict (#1418, routes/health.ts).
       - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)

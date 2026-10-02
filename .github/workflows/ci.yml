@@ -81,6 +81,48 @@ jobs:
     if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
 
     outputs:
+      # Whether the heavy integration suites run at all, independent of WHICH
+      # paths changed. Path scope says *which* suites a diff could affect; this
+      # says whether this EVENT is the one that should pay for them.
+      #
+      # True only on `merge_group` (and `workflow_dispatch`, which is somebody
+      # explicitly asking). The merge queue is the only place a heavy suite's
+      # result actually decides anything: `main` cannot move except through it
+      # (ruleset 15885614), every required context is evaluated against the
+      # merge group, and the merge group's tree IS main's next tree.
+      #
+      # That makes the other two events pure duplication:
+      #
+      #   push          — the queue just ran these against this exact commit and
+      #                   merged because they passed. Re-running validates
+      #                   nothing new, and since #1407 put ios-e2e on two
+      #                   self-hosted Mac runners it actively starves the NEXT
+      #                   entry's gating run of the runners it needs, against a
+      #                   240-minute queue timeout (#1426).
+      #   pull_request  — the same suites run again in the merge group before
+      #                   anything lands, so a PR-time pass is never the thing
+      #                   that gates the merge. Each push to a PR branch paid
+      #                   for a full set; a PR with five pushes paid six times.
+      #
+      # THE TRADE, stated plainly because it is real: a break now surfaces in
+      # the queue rather than on the PR. With `grouping_strategy: ALLGREEN` and
+      # `max_entries_to_merge: 5`, a failing entry can take its group down and
+      # force a rebuild, where previously it failed alone on its own PR. The
+      # bet is that this is cheaper in aggregate than every push to every PR
+      # paying for suites whose verdict never gated anything — and that bet got
+      # materially safer with #1407, because the iOS suites now run on hardware
+      # where they actually pass (three tests failed on contended GitHub
+      # runners today and pass on the Mac).
+      #
+      # Authors are not left blind: desktop-e2e.yml's `E2E (Linux)` still runs
+      # on `pull_request` (it is deliberately NOT gated here), unit suites still
+      # run everywhere, and `lint`/`build`/`typecheck` are untouched.
+      #
+      # Unit suites (backend-unit, desktop-unit, crypto-tests) and
+      # migration-drift are deliberately NOT gated on this: they are cheap, they
+      # contend for nothing scarce, and they keep `ci-status` a real signal on
+      # main for `docker-canary` rather than a near-vacuous one.
+      revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -415,7 +457,7 @@ jobs:
     needs: [changes, build]
     # Playwright E2E exercises the desktop web frontend against a live
     # backend — relevant if either side changed (#664).
-    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -565,7 +607,7 @@ jobs:
   # ─── Backend BDD Tests ─────────────────────────────────────
   backend-bdd:
     needs: [changes]
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -792,7 +834,7 @@ jobs:
   # ─── Android Build & Test ───────────────────────────────────
   android-build-test:
     needs: changes
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -842,7 +884,7 @@ jobs:
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
     needs: [changes]
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest  # android emulator needs KVM (hosted x86_64 images provide it)
     permissions:
       contents: read
@@ -1090,13 +1132,36 @@ jobs:
 
   ios-build-test:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-latest
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
+    # The Mac mini, for the same reason `ios-e2e` moved there in this PR: this
+    # job is required via `ci-status`, and on `macos-latest` it simply does not
+    # get scheduled. Measured on this branch's own merge-queue run — queued
+    # **75 minutes** with no runner assigned, while GitHub served the whole
+    # repository a single macOS slot. Moving `ios-e2e` alone left this one job
+    # able to block every iOS PR exactly as before, which defeated the point.
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     timeout-minutes: 45
 
     steps:
+      # MANDATORY, and must stay the literal first step — same guard, same
+      # reasoning, as `ios-e2e` and `fleet/review`: a fork PR's code must never
+      # execute on a machine the operator owns. See the long note in
+      # ios-e2e.yml for why this is NOT dead code despite the workflow having
+      # no `pull_request` trigger of its own.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-build-test FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -1161,7 +1226,7 @@ jobs:
       - name: Cache DerivedData
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/llamenos-build
+          path: ${{ runner.temp }}/llamenos-build
           key: deriveddata-ios-${{ runner.os }}-${{ hashFiles('apps/ios/**/*.swift', 'apps/ios/project.yml') }}
           restore-keys: |
             deriveddata-ios-${{ runner.os }}-
@@ -1170,22 +1235,23 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      - name: Detect simulator
+      # A DEDICATED device, created here rather than taken from the pool. On a
+      # shared host "the first available iPhone" can return a simulator an
+      # `ios-e2e` shard is actively driving — they run on the same two runners.
+      - name: Create simulator
         id: sim
         run: |
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
+          set -euo pipefail
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                          print(d['name'])
-                          sys.exit(0)
-          print('iPhone 16')
+          rs = [r for r in json.load(sys.stdin)['runtimes']
+                if r.get('isAvailable') and r.get('platform') == 'iOS']
+          if not rs: sys.exit('no available iOS runtime')
+          print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
           ")
-          echo "device=$SIM" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $SIM"
+          UDID=$(xcrun simctl create "ios-build-test-${{ github.run_id }}-${{ github.run_attempt }}" "iPhone 17 Pro" "$RUNTIME")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Created simulator $UDID on $RUNTIME"
 
       - name: Build and test
         working-directory: apps/ios
@@ -1197,12 +1263,22 @@ jobs:
             -scheme Llamenos \
             -only-testing:LlamenosTests \
             -skip-testing:LlamenosUITests \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath /tmp/llamenos-build \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/llamenos-build" \
             -parallelizeTargets \
             EAGER_LINKING=YES \
             DEBUG_INFORMATION_FORMAT=dwarf \
             2>&1 | xcbeautify --report junit --report-path test-results/ios-unit.xml
+
+      - name: Delete this job's simulator
+        if: always()
+        run: |
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
 
       - name: Upload iOS test results
         if: always()
@@ -1218,7 +1294,7 @@ jobs:
   # this job is the aggregate of every job in the called workflow.
   ios-e2e:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/ios-e2e.yml
