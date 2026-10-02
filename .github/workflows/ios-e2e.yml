@@ -562,15 +562,35 @@ jobs:
           # how a mismatch like this hides.
           export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$NATIVE_BACKEND_PORT"
 
-          # Fail in a second, naming the cause, rather than letting every test
-          # in the shard fail its setup one by one. The failure above cost a
-          # full shard and surfaced as 33 identical assertion failures whose
-          # real cause was one wrong number.
-          if ! curl -fsS --max-time 10 "$TEST_RUNNER_TEST_HUB_URL/api/health/live" >/dev/null; then
-            echo "::error::ios-e2e/ui FAILED: hub-unreachable — shard $SHARD on $RUNNER_NAME points at $TEST_RUNNER_TEST_HUB_URL but nothing answers there. The backend was started on NATIVE_BACKEND_PORT=$NATIVE_BACKEND_PORT; if those differ, a port is being derived in two places."
+          # Confirm the shard is pointed at a backend that answers, rather than
+          # letting every test fail its setup one by one — a port mismatch once
+          # cost a full shard and surfaced as 33 identical assertion failures.
+          #
+          # POLLED, not a single attempt. The first version used one
+          # `curl --max-time 10` and failed a merge-queue run on a backend that
+          # was perfectly healthy: the hosted runner was busy booting a
+          # simulator, the request sat unaccepted for over 10s, and curl
+          # returned "(28) timed out ... 0 bytes received" while the server log
+          # showed it answering 200 moments later. A fixed timeout sized for a
+          # fast machine is exactly the defect this step exists to surface, so
+          # it must not contain one itself.
+          #
+          # Up to ~2 minutes. Long enough to outlast simulator boot on a loaded
+          # hosted runner; far short of the 50-minute step budget, so a backend
+          # that genuinely never came up still fails fast and loudly.
+          hub_ok=0
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 10 "$TEST_RUNNER_TEST_HUB_URL/api/health/live" >/dev/null 2>&1; then
+              hub_ok=1
+              echo "hub reachable at $TEST_RUNNER_TEST_HUB_URL (attempt $attempt)"
+              break
+            fi
+            sleep 5
+          done
+          if [ "$hub_ok" != "1" ]; then
+            echo "::error::ios-e2e/ui FAILED: hub-unreachable — shard $SHARD on $RUNNER_NAME points at $TEST_RUNNER_TEST_HUB_URL and nothing answered in ~2 minutes. The backend was started on NATIVE_BACKEND_PORT=$NATIVE_BACKEND_PORT: if those two numbers differ, a port is being derived in two places; if they match, read the backend log step below — the server is either down or too starved to accept a connection."
             exit 1
           fi
-          echo "hub reachable at $TEST_RUNNER_TEST_HUB_URL"
           XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
           test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
           # shellcheck disable=SC2046
