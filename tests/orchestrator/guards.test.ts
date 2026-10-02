@@ -1213,7 +1213,15 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
     return !(headCommitMessage ?? '').startsWith(prefix)
   }
 
-  for (const file of ['ci.yml', 'ios-e2e.yml']) {
+  // ios-e2e.yml is NOT in this list any more, and that is the point. It used
+  // to carry its own `changes` job whose `ios_related` flag gated `build`;
+  // that flag could never be false when it mattered (ci.yml already gates the
+  // whole `uses:` call on `changes.outputs.ios`, and schedule /
+  // workflow_dispatch ran regardless), so the job was deleted to stop
+  // serialising an ubuntu run ahead of every macOS one. With no `changes` job
+  // there is no release guard in that file and nothing for #812 to bite. The
+  // rail below holds that line.
+  for (const file of ['ci.yml']) {
     it(`${file}'s "changes" job guard names github.event_name — not just the message`, () => {
       const ifLine = jobLevelIf(jobBlock(workflowYaml(file), 'changes'))
       expect(ifLine, `no if: found on ${file}'s changes job`).not.toBe('')
@@ -1236,6 +1244,25 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
       }
     })
   }
+
+  /**
+   * The other half of removing ios-e2e.yml's `changes` job: #812's hazard is
+   * a release-commit guard that forgets to scope itself to `push`. The file
+   * is now free of one entirely, which is strictly safer than a correct
+   * guard — there is nothing to get wrong.
+   *
+   * Re-adding any `head_commit.message` check there must fail here rather
+   * than quietly reintroduce the shape #812 was filed for. If a future change
+   * genuinely needs one, put it back in the loop above so it is checked for
+   * the `event_name` clause, instead of deleting this test.
+   */
+  it('ios-e2e.yml carries no release-commit guard at all — nothing for #812 to bite', () => {
+    const text = workflowYaml('ios-e2e.yml')
+    expect(text, 'ios-e2e.yml must not gate on a push payload it may not have')
+      .not.toContain('head_commit.message')
+    expect(() => jobBlock(text, 'changes'), 'ios-e2e.yml should have no `changes` job; ci.yml already decided')
+      .toThrow(/no "changes:" job found/)
+  })
 })
 
 /**

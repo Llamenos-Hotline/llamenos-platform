@@ -42,6 +42,7 @@ CLASS_RE = re.compile(r"^\s*(?:final\s+)?class\s+(\w+)\s*:\s*(\w+)", re.MULTILIN
 TEST_RE = re.compile(r"^\s*func\s+(test\w+)\s*\(", re.MULTILINE)
 QUARANTINE_FILE = UI_TESTS_DIR / "ci-quarantine.txt"
 SMOKE_FILE = UI_TESTS_DIR / "ci-smoke.txt"
+NON_GATING_FILE = UI_TESTS_DIR / "ci-non-gating.txt"
 TIMINGS_FILE = UI_TESTS_DIR / "ci-timings.json"
 QUARANTINE_RE = re.compile(r"^(?P<cls>\w+)/(?P<test>test\w+)\s+#\s*(?P<why>.*\S)\s*$")
 SMOKE_RE = re.compile(r"^(?P<cls>\w+)\s+#\s*(?P<why>.*\S)\s*$")
@@ -132,6 +133,51 @@ def smoke_classes() -> dict[str, str]:
     return out
 
 
+def non_gating_classes() -> dict[str, str]:
+    """{class: why} for every entry in ci-non-gating.txt — classes the merge
+    gate does not run. Same one-class-per-line shape as ci-smoke.txt."""
+    if not NON_GATING_FILE.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for n, line in enumerate(NON_GATING_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        cls, sep, why = line.partition("#")
+        if not sep or not why.strip():
+            raise SystemExit(f"{NON_GATING_FILE.name}:{n}: expected '<Class>  # <why it does not gate>'")
+        out[cls.strip()] = why.strip()
+    return out
+
+
+def check_non_gating() -> int:
+    """A class excused from the gate must make no claims. If it contains an
+    XCTAssert it is a real test, and parking it here hides a verdict nobody
+    reads — the exact failure this file exists to prevent, not create."""
+    entries = non_gating_classes()
+    known = test_classes()
+    problems: list[str] = []
+    for cls in entries:
+        if cls not in known:
+            problems.append(f"{cls}: names no existing test class")
+            continue
+        src = next((p for p in UI_TESTS_DIR.rglob("*.swift")
+                    if f"class {cls}" in p.read_text(encoding="utf-8")), None)
+        if src is None:
+            problems.append(f"{cls}: no source file found")
+            continue
+        asserts = src.read_text(encoding="utf-8").count("XCTAssert")
+        if asserts:
+            problems.append(
+                f"{cls}: contains {asserts} XCTAssert(s) — a class that asserts "
+                f"something may not be excused from the gate")
+    for p in problems:
+        print(f"  {p}")
+    skipped = sum(known.get(c, 0) for c in entries)
+    print(f"{len(entries)} non-gating class(es), {skipped} test(s) excluded, {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
 def check_smoke() -> int:
     """A smoke entry naming a class that no longer exists would shrink the tier
     silently — the same failure mode `check-quarantine` exists to prevent."""
@@ -149,7 +195,8 @@ def check_smoke() -> int:
     return 1 if problems else 0
 
 
-def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False) -> list[str]:
+def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = False,
+          include_non_gating: bool = False) -> list[str]:
     """Balanced by expected seconds, not test count: the admin classes cost ~50s a
     test and the rest ~20-30s, so count-balanced shards ran 29-43 min in run
     36368999711, and the 43-min shard hit the 45-min step timeout after its last
@@ -164,6 +211,19 @@ def shard(index: int, total: int, include_quarantined: bool, only_smoke: bool = 
     known = sorted(per_test.values())
     default = known[len(known) // 2] if known else 1.0
     selected = test_classes()
+    # Excused from the gate unless explicitly asked for. These produce an
+    # artefact rather than a verdict (check-non-gating enforces that they
+    # contain no XCTAssert), so running them on every merge spends critical
+    # path on output nobody collects — ScreenshotAuditTests alone was 42
+    # methods and ~20 minutes, 44-48% of its shard.
+    if not include_non_gating:
+        excused = non_gating_classes()
+        unknown = [c for c in excused if c not in selected]
+        if unknown:
+            raise SystemExit(f"ci-non-gating.txt names unknown class(es): {', '.join(sorted(unknown))}")
+        selected = {c: n for c, n in selected.items() if c not in excused}
+        if not selected:
+            raise SystemExit("every class is non-gating — refusing to report a vacuous pass")
     if only_smoke:
         smoke = smoke_classes()
         missing = [c for c in smoke if c not in selected]
@@ -268,8 +328,12 @@ def main() -> int:
     s.add_argument("--include-quarantined", action="store_true")
     s.add_argument("--only-smoke", action="store_true",
                    help="restrict selection to the classes in ci-smoke.txt (SMOKE tier)")
+    s.add_argument("--include-non-gating", action="store_true",
+                   help="also select the classes in ci-non-gating.txt (asset generation; "
+                        "excluded by default because nothing consumes their output)")
     sub.add_parser("check-quarantine")
     sub.add_parser("check-smoke")
+    sub.add_parser("check-non-gating")
     t = sub.add_parser("timings")
     t.add_argument("reports", type=Path, nargs="+")
     r = sub.add_parser("report")
@@ -278,12 +342,15 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.cmd == "shard":
-        print("\n".join(shard(args.index, args.total, args.include_quarantined, args.only_smoke)))
+        print("\n".join(shard(args.index, args.total, args.include_quarantined, args.only_smoke,
+                              args.include_non_gating)))
         return 0
     if args.cmd == "check-quarantine":
         return check_quarantine()
     if args.cmd == "check-smoke":
         return check_smoke()
+    if args.cmd == "check-non-gating":
+        return check_non_gating()
     if args.cmd == "timings":
         return timings(args.reports)
     return report(args.log, args.json)
