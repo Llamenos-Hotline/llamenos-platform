@@ -81,10 +81,11 @@ struct UsersView: View {
                     .accessibilityIdentifier("volunteer-row-\(user.id)")
                 }
             } header: {
-                Text(String(format: NSLocalizedString(
+                Text(L10n.format(
                     "admin_members_header",
-                    comment: "Members (%d)"
-                ), viewModel.filteredUsers.count))
+                    comment: "Members (%d)",
+                    viewModel.filteredUsers.count
+                ))
             }
         }
         .listStyle(.insetGrouped)

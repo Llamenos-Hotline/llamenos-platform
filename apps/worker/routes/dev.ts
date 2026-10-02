@@ -38,6 +38,13 @@ function checkResetSecret(c: { env: { DEV_RESET_SECRET?: string; E2E_TEST_SECRET
   return false
 }
 
+// Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
+// /test-* route carries its own inner guard, which means the outer devGuard
+// (app.ts `api.use('/test-*', devGuard)`) could silently stop matching and
+// nothing would notice (issue #1277). This route exists solely so a test can
+// assert devGuard alone 404s it when devSurfacesEnabled(env) is false.
+dev.get('/test-devguard-canary', (c) => c.json({ ok: true }))
+
 dev.post('/test-reset', async (c) => {
   // Full reset: development only — too destructive for staging
   if (c.env.ENVIRONMENT !== 'development') {
@@ -126,14 +133,22 @@ dev.post('/test-reset-no-admin', async (c) => {
 // Preserves identity (admin account) and settings (setup state)
 // Used by live telephony E2E tests against staging
 dev.post('/test-reset-records', async (c) => {
-  const isDev = c.env.ENVIRONMENT === 'development'
-  const isStaging = c.env.ENVIRONMENT === 'staging'
-    && c.env.E2E_TEST_SECRET
-    && c.req.header('X-Test-Secret') === c.env.E2E_TEST_SECRET
-  if (!isDev && !isStaging) {
+  // The `staging` arm this used to carry was unreachable. `devGuard`
+  // (app.ts `api.use('/test-*', devGuard)`) runs first and requires
+  // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, so a staging host
+  // never reached this handler — verified by probe: with all three vars set,
+  // both this route and /api/test-devguard-canary answered 404. The compose
+  // file does not pass E2E_TEST_SECRET to the app either, so the secret could
+  // not have arrived even if the guard had allowed it.
+  //
+  // It is removed rather than fixed: it advertised a supported staging mode
+  // that cannot exist, and the live suite it existed for no longer needs a
+  // reset (#1423). Do not re-add it — loosening devGuard is the one thing
+  // lib/dev-surfaces.ts exists to prevent.
+  if (c.env.ENVIRONMENT !== 'development') {
     return c.json({ error: 'Not Found' }, 404)
   }
-  if (isDev && !checkResetSecret(c)) {
+  if (!checkResetSecret(c)) {
     return c.json({ error: 'Forbidden' }, 403)
   }
   const services = c.get('services')
