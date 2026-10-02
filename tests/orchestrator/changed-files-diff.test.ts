@@ -143,7 +143,9 @@ function lintedFiles(r: Repo, event: EventName): string[] {
 const DETECT_STEPS = [
   { file: 'ci.yml', job: 'changes' },
   { file: 'desktop-e2e.yml', job: 'changes' },
-  { file: 'ios-e2e.yml', job: 'changes' },
+  // ios-e2e.yml had a `changes` job of its own; it was removed on main so the
+  // iOS matrix starts from ci.yml's filter and the e2e build instead of
+  // recomputing its own (#1420/#1428). Nothing to assert there any more.
 ] as const
 
 let repo: Repo

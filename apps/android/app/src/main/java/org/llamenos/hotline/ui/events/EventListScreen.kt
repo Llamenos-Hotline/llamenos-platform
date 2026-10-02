@@ -185,7 +185,7 @@ fun EventListScreen(
                     org.llamenos.hotline.ui.components.ErrorCard(
                         error = uiState.error ?: "",
                         onDismiss = { viewModel.dismissError() },
-                        onRetry = { viewModel.loadEvents() },
+                        onRetry = { viewModel.refresh() },
                         testTag = "events-error",
                     )
                 }
