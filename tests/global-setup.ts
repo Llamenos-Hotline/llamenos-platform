@@ -90,26 +90,52 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
       }
       console.log('[global-setup] Admin promoted to role-super-admin successfully')
     } else {
-      throw new Error('Admin has wrong roles and no DEV_RESET_SECRET available to promote')
+      throw new Error(
+        `Admin ${bytesToHex(ed25519.getPublicKey(hexToBytes(ADMIN_SEED)))} has roles ` +
+        `${JSON.stringify(me.roles)} instead of role-super-admin. On a development server, set ` +
+        `E2E_TEST_SECRET/DEV_RESET_SECRET so this can self-correct. On a DEPLOYMENT there is no ` +
+        `such escape hatch by design — the fix is ADMIN_PUBKEY on the server matching this seed's ` +
+        `public key, since that is what grants the role at bootstrap.`
+      )
     }
   }
 }
 
+/**
+ * Create the default hub tests need for `currentHubId`, through the REAL
+ * authenticated route rather than a test-only one.
+ *
+ * This used to POST /api/test-create-hub and, before that, to return early
+ * whenever no X-Test-Secret was configured. Both made the setup undeployable:
+ * `devGuard` (apps/worker/app.ts) answers 404 for every /api/test-* outside a
+ * development server, so against a real deployment this silently created
+ * nothing and every test needing a hub failed later, for a reason that looked
+ * nothing like its cause.
+ *
+ * `POST /api/hubs` is the route an operator uses. It needs
+ * `system:manage-hubs` or `system:create-hub`, which the admin bootstrapped
+ * above holds, and it works identically on a dev box and a deployment. See
+ * #1423.
+ */
 async function ensureDefaultHub(baseUrl: string): Promise<void> {
-  const secret = loadDevVarsSecret()
-  if (!secret) return
-  // Check if a hub already exists
   const configRes = await fetch(`${baseUrl}/api/config`)
   if (!configRes.ok) return
   const config = await configRes.json() as { hubs?: Array<{ id: string }> }
   if (config.hubs && config.hubs.length > 0) return
-  // Create a default hub for tests that need currentHubId
-  const res = await fetch(`${baseUrl}/api/test-create-hub`, {
+
+  const path = '/api/hubs'
+  const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)
+  const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
-    headers: { 'X-Test-Secret': secret, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Default Test Hub' }),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${JSON.stringify(token)}`,
+    },
+    body: JSON.stringify({ name: 'Default Test Hub', slug: 'default-test-hub' }),
   })
-  if (!res.ok) {
+  // 409 = another worker won the race and created it first; that is success
+  // for our purposes, since the hub the tests need now exists.
+  if (!res.ok && res.status !== 409) {
     const text = await res.text()
     console.warn(`[global-setup] Hub creation failed (non-fatal): ${res.status} ${text}`)
   }
