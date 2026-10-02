@@ -96,11 +96,9 @@ struct TriageListView: View {
             )
         } description: {
             if vm.selectedFilter != .all {
-                Text(String(
-                    format: NSLocalizedString(
-                        "triage_empty_filtered",
-                        comment: "No %@ reports in the triage queue."
-                    ),
+                Text(L10n.format(
+                    "triage_empty_filtered",
+                    comment: "No %@ reports in the triage queue.",
                     vm.selectedFilter.displayName.lowercased()
                 ))
             } else {
