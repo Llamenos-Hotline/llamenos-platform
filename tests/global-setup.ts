@@ -102,28 +102,40 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
 }
 
 /**
- * Create the default hub tests need for `currentHubId`, through the REAL
- * authenticated route rather than a test-only one.
+ * Put a fresh server through the FIRST-RUN WIZARD, which is how a real
+ * deployment gets its first admin and its first hub.
  *
- * This used to POST /api/test-create-hub and, before that, to return early
- * whenever no X-Test-Secret was configured. Both made the setup undeployable:
- * `devGuard` (apps/worker/app.ts) answers 404 for every /api/test-* outside a
- * development server, so against a real deployment this silently created
- * nothing and every test needing a hub failed later, for a reason that looked
- * nothing like its cause.
+ * This matters more than it looks. A live server that nobody has taken
+ * through the wizard has no hubs at all — that is the designed state, not a
+ * fault. So "create a hub" is not the setup step; "complete setup" is, and
+ * `POST /api/setup/complete` does three things that matter here:
  *
- * `POST /api/hubs` is the route an operator uses. It needs
- * `system:manage-hubs` or `system:create-hub`, which the admin bootstrapped
- * above holds, and it works identically on a dev box and a deployment. See
- * #1423.
+ *   1. creates the default hub if none exists, named from HOTLINE_NAME with
+ *      TWILIO_PHONE_NUMBER attached
+ *   2. assigns the calling admin to it with role-super-admin
+ *   3. records setupCompleted, so the app stops presenting the wizard
+ *
+ * An earlier version of this function called `POST /api/hubs` instead. That
+ * creates a hub and nothing else: no hub membership for the admin, and a
+ * server still reporting setup as incomplete. Half-configured in a way that
+ * would surface later as a permissions failure inside a test, far from here.
+ *
+ * It also replaced `POST /api/test-create-hub`, which `devGuard` answers 404
+ * for outside a development server — and which the old code skipped silently
+ * whenever no X-Test-Secret was set, i.e. exactly on a deployment. Nothing was
+ * created, nothing was said, and every test needing a `currentHubId` failed
+ * later for a reason that looked nothing like its cause.
+ *
+ * Driving the real wizard means the suites bootstrap the same way an operator
+ * does on day one, which is the flow worth exercising anyway. See #1423.
  */
-async function ensureDefaultHub(baseUrl: string): Promise<void> {
+async function completeFirstRunSetup(baseUrl: string): Promise<void> {
   const configRes = await fetch(`${baseUrl}/api/config`)
   if (!configRes.ok) return
   const config = await configRes.json() as { hubs?: Array<{ id: string }> }
   if (config.hubs && config.hubs.length > 0) return
 
-  const path = '/api/hubs'
+  const path = '/api/setup/complete'
   const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
@@ -131,13 +143,13 @@ async function ensureDefaultHub(baseUrl: string): Promise<void> {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${JSON.stringify(token)}`,
     },
-    body: JSON.stringify({ name: 'Default Test Hub', slug: 'default-test-hub' }),
+    // demoMode stays false: the suites exercise the real product, and demo
+    // mode seeds a fictional dataset they do not expect.
+    body: JSON.stringify({ demoMode: false }),
   })
-  // 409 = another worker won the race and created it first; that is success
-  // for our purposes, since the hub the tests need now exists.
-  if (!res.ok && res.status !== 409) {
+  if (!res.ok) {
     const text = await res.text()
-    console.warn(`[global-setup] Hub creation failed (non-fatal): ${res.status} ${text}`)
+    console.warn(`[global-setup] First-run setup failed (non-fatal): ${res.status} ${text}`)
   }
 }
 
@@ -207,6 +219,6 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   await resetTestState(BACKEND_URL)
   await bootstrapAdmin(BACKEND_URL)
   await verifyAdminAccess(BACKEND_URL)
-  await ensureDefaultHub(BACKEND_URL)
+  await completeFirstRunSetup(BACKEND_URL)
   console.log('[global-setup] Test state initialized successfully')
 }
