@@ -46,6 +46,28 @@ Feature: In-Call Quick Actions
     And the hub audit log should contain a "noteCreated" entry
     And the hub audit log should contain a "numberBanned" entry
 
+  # Parallel ringing rings every on-shift volunteer at once, so two volunteers
+  # pressing Answer within the same second is ordinary operation. Only the first
+  # may take the call. These run against real PostgreSQL, which is the only place
+  # the guarded UPDATE is actually exercised.
+  @backend @calls
+  Scenario: Only the first volunteer to answer gets the call
+    And 2 volunteers are on shift
+    And an incoming call is ringing for the hub
+    When volunteer 0 answers the call through the hub API
+    And volunteer 1 also tries to answer the call through the hub API
+    Then the response status should be 409
+    And the call should still be answered by volunteer 0
+
+  @backend @calls
+  Scenario: The answering volunteer may re-answer their own call
+    And 1 volunteers are on shift
+    And an incoming call is ringing for the hub
+    When volunteer 0 answers the call through the hub API
+    And volunteer 0 also tries to answer the call through the hub API
+    Then the response status should be 200
+    And the call should still be answered by volunteer 0
+
   @backend @calls @bans
   Scenario: Banned caller cannot call back
     And 2 volunteers are on shift

@@ -77,6 +77,42 @@ When(
   },
 )
 
+// Answers WITHOUT asserting success — these scenarios are about what the server
+// does to the second volunteer, so the status is the assertion, not a precondition.
+When(
+  'volunteer {int} also tries to answer the call through the hub API',
+  async ({ request, world }, volIndex: number) => {
+    const state = getScenarioState(world)
+    expect(state.callId).toBeTruthy()
+    const res = await apiPost(
+      request,
+      `/hubs/${state.hubId}/calls/${state.callId}/answer`,
+      {},
+      state.volunteers[volIndex].deviceKey,
+    )
+    state.lastApiResponse = res
+    setLastResponse(world, res)
+  },
+)
+
+// The status code alone would not catch a guard that returns 409 but writes
+// anyway, so assert on the stored owner too.
+Then(
+  'the call should still be answered by volunteer {int}',
+  async ({ request, world }, volIndex: number) => {
+    const state = getScenarioState(world)
+    const expected = state.volunteers[volIndex].pubkey
+    const res = await apiGet<{ calls: Array<{ callId: string; answeredBy?: string | null }> }>(
+      request,
+      `/hubs/${state.hubId}/calls/active`,
+    )
+    expect(res.status).toBe(200)
+    const call = res.data.calls.find(c => c.callId === state.callId)
+    expect(call, `call ${state.callId} is no longer active`).toBeTruthy()
+    expect(call?.answeredBy).toBe(expected)
+  },
+)
+
 // ── Ban + Hangup Actions ─────────────────────────────────────────
 
 When(

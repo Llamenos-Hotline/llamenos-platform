@@ -5,7 +5,7 @@
  * and volunteer presence derived from shifts + active calls.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, desc, sql, gte, lte, count, or, lt } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { ServiceError } from './settings'
@@ -208,7 +208,22 @@ export class CallsService {
     return row
   }
 
-  /** Mark a call as answered by a volunteer */
+  /**
+   * Mark a call as answered by a volunteer — first pickup wins.
+   *
+   * Parallel ringing rings every on-shift, non-busy volunteer at once, so two
+   * volunteers pressing Answer within the same second is ordinary operation,
+   * not a rare race. The UPDATE is therefore guarded on the call still being
+   * unclaimed. Without that guard both UPDATEs matched and the later one
+   * silently overwrote `answeredBy`: both clients received 200 and believed
+   * they held the call, while the row named only whoever wrote last.
+   *
+   * Re-answering by the SAME volunteer still succeeds, so a double-tap or a
+   * client retry is idempotent rather than a conflict against itself.
+   *
+   * `routes/calls.ts` has always mapped a 409 from here to "Call already
+   * answered"; that branch was unreachable until this guard existed.
+   */
   async answerCall(hubId: string, callId: string, pubkey: string): Promise<ActiveCallRow> {
     const [row] = await this.db
       .update(activeCalls)
@@ -221,15 +236,34 @@ export class CallsService {
         and(
           eq(activeCalls.callId, callId),
           eq(activeCalls.hubId, hubId),
+          or(isNull(activeCalls.answeredBy), eq(activeCalls.answeredBy, pubkey)),
         ),
       )
       .returning()
 
-    if (!row) {
-      throw new ServiceError(404, 'Call not found')
+    if (row) return row
+
+    // Nothing was updated, which has two very different causes: the call does
+    // not exist in this hub, or another volunteer already holds it. They owe
+    // the caller different answers, so read back rather than reporting 404 for
+    // both — a volunteer who lost the race needs to be told that, not told the
+    // call vanished.
+    const [existing] = await this.db
+      .select({ answeredBy: activeCalls.answeredBy })
+      .from(activeCalls)
+      .where(
+        and(
+          eq(activeCalls.callId, callId),
+          eq(activeCalls.hubId, hubId),
+        ),
+      )
+      .limit(1)
+
+    if (existing) {
+      throw new ServiceError(409, 'Call already answered')
     }
 
-    return row
+    throw new ServiceError(404, 'Call not found')
   }
 
   /**

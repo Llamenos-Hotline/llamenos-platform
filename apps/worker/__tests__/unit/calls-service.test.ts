@@ -174,9 +174,12 @@ describe('CallsService', () => {
       expect(result.answeredBy).toBe('pk1') // mock returns 'pk1'
     })
 
-    it('throws 404 when call does not exist', async () => {
-      createServiceWithData()
-      // Mock update to return empty array
+    // A guarded UPDATE that matches nothing is ambiguous — the call may be
+    // absent, or already held by someone else. These two cover the read-back
+    // that tells them apart. The guard's SQL itself is proven against real
+    // PostgreSQL by call-actions.feature, because the mock below ignores
+    // WHERE clauses and so cannot tell a guarded UPDATE from an unguarded one.
+    function serviceWhereUpdateMatchesNothing(existingRow: unknown | null) {
       const db = {
         update: vi.fn().mockReturnValue({
           set: vi.fn().mockReturnValue({
@@ -185,11 +188,29 @@ describe('CallsService', () => {
             }),
           }),
         }),
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue(existingRow ? [existingRow] : []),
+            }),
+          }),
+        }),
       }
-      const emptySvc = new CallsService(db as never)
+      return new CallsService(db as never)
+    }
+
+    it('throws 404 when the call does not exist in this hub', async () => {
+      const svc = serviceWhereUpdateMatchesNothing(null)
       await expect(
-        emptySvc.answerCall('hub-1', 'nonexistent', 'pk1'),
+        svc.answerCall('hub-1', 'nonexistent', 'pk1'),
       ).rejects.toThrow('Call not found')
+    })
+
+    it('throws 409, not 404, when another volunteer already holds the call', async () => {
+      const svc = serviceWhereUpdateMatchesNothing({ answeredBy: 'volunteer-pk-other' })
+      await expect(
+        svc.answerCall('hub-1', 'call-1', 'volunteer-pk-late'),
+      ).rejects.toMatchObject({ status: 409, message: 'Call already answered' })
     })
   })
 
