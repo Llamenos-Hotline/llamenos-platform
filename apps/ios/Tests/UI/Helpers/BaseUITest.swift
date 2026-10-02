@@ -449,12 +449,35 @@ class BaseUITest: XCTestCase {
 
     // MARK: - PIN Helpers
 
+    /// Taps a PIN into the pad, one digit at a time.
+    ///
+    /// Uses `app.buttons[...]` rather than this file's `find(...)`, and the
+    /// difference is the whole cost of the slowest test in the suite.
+    /// `find` is `app.descendants(matching: .any)[id]`, which walks EVERY
+    /// element type in the accessibility hierarchy. The digits are plain
+    /// SwiftUI `Button`s (`PINPadView.PINDigitButton` applies
+    /// `.accessibilityIdentifier("pin-\(digit)")`), so a typed query resolves
+    /// them without that walk — and the walk happened twice per digit, once
+    /// for the existence check and again inside `tap()`.
+    ///
+    /// `testPINWipeAfterTenFailedAttempts` calls this ten times with an
+    /// eight-digit PIN: 80 digits, 160 hierarchy walks, and essentially the
+    /// entire runtime of a test that has been taking 168-313s depending on
+    /// how fast a runner GitHub hands out.
+    ///
+    /// A missing button now fails loudly. The previous `if
+    /// button.waitForExistence { tap() }` silently skipped the digit, which
+    /// submits a DIFFERENT PIN than the test asked for — a lockout test that
+    /// quietly enters seven digits instead of eight is not testing what it
+    /// claims to.
     func enterPIN(_ pin: String) {
         for char in pin {
-            let button = find("pin-\(char)")
-            if button.waitForExistence(timeout: 2) {
-                button.tap()
+            let button = app.buttons["pin-\(char)"]
+            guard button.waitForExistence(timeout: 2) else {
+                XCTFail("PIN pad button `pin-\(char)` never appeared; the entered PIN would be incomplete")
+                return
             }
+            button.tap()
         }
     }
 
