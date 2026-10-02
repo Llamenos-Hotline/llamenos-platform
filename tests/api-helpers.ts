@@ -368,14 +368,19 @@ export async function verifyHubMembership(
       pubkey: seedHexToPubkey(ADMIN_SEED),
       roleIds: ['role-super-admin'],
     })
+    // Declared out here, not inside the branch: the final diagnostic below
+    // reports it too, and it stays `null` when the real route succeeded —
+    // which is itself the useful signal that no fallback was needed.
+    let devStatus: number | null = null
     if (addStatus !== 200 && addStatus !== 201 && addStatus !== 204 && addStatus !== 409) {
       // Dev-only fallback: bypasses auth entirely, for the case where the
-      // admin's own permissions are what is broken.
-      const { status: devStatus } = await devPost(request, '/test-add-hub-member', {
+      // admin's own permissions are what is broken. 404 here means a
+      // deployment, where this route does not exist by design.
+      ;({ status: devStatus } = await devPost(request, '/test-add-hub-member', {
         hubId,
         pubkey: seedHexToPubkey(ADMIN_SEED),
         roleIds: ['role-super-admin'],
-      })
+      }))
       // Only now is it genuinely unrecoverable: the real route failed AND the
       // dev bypass either failed or does not exist on this server.
       if (devStatus !== 200) {
@@ -408,7 +413,8 @@ export async function verifyHubMembership(
         )
         throw new Error(
           `Admin still lacks hub membership after re-add for hub ${hubId} ` +
-          `(status: ${finalStatus}, dev-add: ${devStatus}, body: ${JSON.stringify(finalData)})`
+          `(status: ${finalStatus}, add-member: ${addStatus}, ` +
+          `dev-add: ${devStatus ?? 'not attempted'}, body: ${JSON.stringify(finalData)})`
         )
       }
     }
