@@ -2552,7 +2552,77 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       expect(evalJobIf(grouped, { revalidate: 'true', desktop: 'false', backend: 'false' })).toBe(false)
     })
 
-    it('evalJobIf still refuses to guess at a condition outside its grammar', () => {
+    /**
+   * #1428 routes some ui shards to the self-hosted Mac and the rest to GitHub.
+   * WHICH classes land in a given shard is decided by `ui-tests.py shard`,
+   * which packs by cost from ci-timings.json — so the routing is positional and
+   * a timings change silently re-targets it.
+   *
+   * It already did. #1428's own comment justified sending shard 3 to the Mac
+   * because SecurityUITests' PIN test takes 313s on a hosted runner, while
+   * SecurityUITests actually sat in shard 2, which goes to GitHub. The routing
+   * never did what it claimed, and ShiftFlowUITests then failed 3 of 3 merge
+   * groups on hosted shards, blocking every iOS-touching PR.
+   *
+   * `--mac-shards` fixes that by confining ci-mac-shards.txt's classes to the
+   * routed indices. These rails hold the two halves together: the indices
+   * passed to the packer must be exactly the matrix entries routed to the Mac.
+   * Changing one without the other is the silent mismatch this prevents.
+   */
+  describe('Mac-pinned classes land only on Mac-routed shards (#1428, #1424)', () => {
+    const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+
+    /** The shard indices the `ui` matrix routes to the self-hosted Mac. */
+    function macShardsFromMatrix(): number[] {
+      const m = iosYaml().match(/include: \$\{\{ fromJSON\(inputs\.tier == 'smoke'\s*\n\s*&& '(.+?)'\s*\n\s*\|\| '(.+?)'\) \}\}/s)
+      if (m === null) throw new Error('could not find the ui matrix include expression')
+      return (JSON.parse(m[2] as string) as Array<{ shard: number; host: string }>)
+        .filter((e) => e.host === 'mac').map((e) => e.shard).sort((a, b) => a - b)
+    }
+
+    /** The indices actually handed to `ui-tests.py shard`. */
+    function macShardsPassedToPacker(): number[] {
+      const m = iosYaml().match(/--mac-shards ([0-9,]+)/)
+      if (m === null) throw new Error('ios-e2e.yml does not pass --mac-shards to ui-tests.py')
+      return (m[1] as string).split(',').map(Number).sort((a, b) => a - b)
+    }
+
+    it('the indices passed to the packer are exactly the matrix entries routed to the Mac', () => {
+      expect(macShardsPassedToPacker()).toEqual(macShardsFromMatrix())
+    })
+
+    it('ci-mac-shards.txt names at least one class, each with its evidence', () => {
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const entries = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+      expect(entries.length, 'an empty pin list silently returns every class to hosted runners').toBeGreaterThan(0)
+      for (const e of entries) {
+        expect(e, `"${e}" must carry a comment giving the measured evidence`).toMatch(/\S\s+#\s+\S/)
+      }
+    })
+
+    it('every pinned class is actually selected by the packer onto a Mac shard', () => {
+      const macShards = macShardsFromMatrix()
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const pinned = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+        .map((l) => (l.split('#')[0] as string).trim())
+      const onMac = new Set<string>()
+      for (const i of macShards) {
+        const out = execFileSync('python3', [
+          join(process.cwd(), 'apps', 'ios', 'scripts', 'ui-tests.py'),
+          'shard', '--index', String(i), '--total', '4', '--mac-shards', macShards.join(','),
+        ], { encoding: 'utf8' })
+        for (const line of out.split('\n')) {
+          const cls = line.trim().split('/').pop()
+          if (cls) onMac.add(cls)
+        }
+      }
+      for (const cls of pinned) {
+        expect(onMac.has(cls), `${cls} is pinned to the Mac but the packer did not place it on shards ${macShards}`).toBe(true)
+      }
+    })
+  })
+
+  it('evalJobIf still refuses to guess at a condition outside its grammar', () => {
       expect(() => evalJobIf("github.ref == 'refs/heads/main'", {})).toThrow(/must not guess/)
       expect(() => evalJobIf("!cancelled() && needs.changes.outputs.ios == 'true'", {})).toThrow(/must not guess/)
     })
