@@ -9,6 +9,11 @@ describe('validateConfig', () => {
     ADMIN_PUBKEY: 'c'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
+    // Required since #1438: `createBlobStorage()` is called
+    // unconditionally at startup and throws without them, so a valid
+    // deployment env includes them.
+    STORAGE_ACCESS_KEY: 'rustfsadmin',
+    STORAGE_SECRET_KEY: 'rustfsadmin',
   }
 
   it('passes with all required vars present', () => {
