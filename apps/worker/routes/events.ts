@@ -29,12 +29,29 @@ const events = new Hono<AppEnv>()
 // =========================================================================
 
 const SUNSET_DATE = '2026-07-01'
+const RECORDS_SUCCESSOR_PATH = '/api/records?category=event'
 
 events.use('*', async (c, next) => {
+  // The sunset date has passed: the bare list endpoint (the main "browse all
+  // events" entry point) now hard-redirects to its documented successor
+  // instead of continuing to serve data. This intentionally does NOT apply to
+  // GET/POST/PATCH/DELETE on /:id or any sub-resource — those remain
+  // functional during the deprecation window, unchanged.
+  //
+  // Matched by suffix (not an exact '/' route) because this middleware sees
+  // the full request path (e.g. '/api/events'), not a sub-router-relative
+  // one — see demo-telephony.ts for the same c.req.path.endsWith() pattern.
+  if (c.req.method === 'GET' && c.req.path.endsWith('/events')) {
+    c.header('Deprecation', 'true')
+    c.header('Sunset', SUNSET_DATE)
+    c.header('Link', `<${RECORDS_SUCCESSOR_PATH}>; rel="successor-version"`)
+    return c.redirect(RECORDS_SUCCESSOR_PATH, 301)
+  }
+
   await next()
   c.header('Deprecation', 'true')
   c.header('Sunset', SUNSET_DATE)
-  c.header('Link', '</api/records?category=event>; rel="successor-version"')
+  c.header('Link', `<${RECORDS_SUCCESSOR_PATH}>; rel="successor-version"`)
 })
 
 // Admin events migration endpoints removed — migration is complete.
