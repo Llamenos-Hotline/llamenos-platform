@@ -7,6 +7,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { x25519 } from '@noble/curves/ed25519.js'
+import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { LABEL_CALL_META, LABEL_MESSAGE } from '@shared/crypto-labels'
+import type { RecipientEnvelope } from '@shared/types'
 import {
   hashPhone,
   hashIP,
@@ -154,6 +159,60 @@ describe('encryptCallRecordForStorage', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Server-sealed records open the way every client opens them: no AAD
+// ---------------------------------------------------------------------------
+
+function x25519Reader(): { secret: Uint8Array; pubkey: string } {
+  const secret = x25519.utils.randomSecretKey()
+  return { secret, pubkey: bytesToHex(x25519.getPublicKey(secret)) }
+}
+
+/** Open a record as a reader would: HPKE info = label, then the content. */
+function openAsReader(
+  encryptedContent: string,
+  envelope: RecipientEnvelope,
+  secret: Uint8Array,
+  label: string,
+  aad: Uint8Array = new Uint8Array(0),
+): string {
+  const wrapped = hexToBytes(envelope.enc + envelope.ct)
+  const contentKey = hpkeOpen(secret, wrapped, utf8ToBytes(label), aad)
+  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(encryptedContent), aad))
+}
+
+describe('server-sealed records (no AAD, label-bound)', () => {
+  it('every reader opens an inbound message with LABEL_MESSAGE and no AAD', () => {
+    const admin = x25519Reader()
+    const volunteer = x25519Reader()
+    const { encryptedContent, readerEnvelopes } = encryptMessageForStorage('caller: I need help', [admin.pubkey, volunteer.pubkey])
+    expect(openAsReader(encryptedContent, readerEnvelopes[0], admin.secret, LABEL_MESSAGE)).toBe('caller: I need help')
+    expect(openAsReader(encryptedContent, readerEnvelopes[1], volunteer.secret, LABEL_MESSAGE)).toBe('caller: I need help')
+  })
+
+  it('an admin opens call metadata with LABEL_CALL_META and no AAD', () => {
+    const admin = x25519Reader()
+    const meta = { answeredBy: 'ab'.repeat(32), callerNumber: '+15555550142' }
+    const { encryptedContent, adminEnvelopes } = encryptCallRecordForStorage(meta, [admin.pubkey])
+    expect(JSON.parse(openAsReader(encryptedContent, adminEnvelopes[0], admin.secret, LABEL_CALL_META))).toEqual(meta)
+  })
+
+  it('the key-wrap AAD the server used to add is gone', () => {
+    const admin = x25519Reader()
+    const { encryptedContent, readerEnvelopes } = encryptMessageForStorage('x', [admin.pubkey])
+    const oldAad = utf8ToBytes(`${LABEL_MESSAGE}:key-wrap`)
+    expect(() => openAsReader(encryptedContent, readerEnvelopes[0], admin.secret, LABEL_MESSAGE, oldAad)).toThrow()
+  })
+
+  it('call metadata does not open as a message, nor a message as call metadata', () => {
+    const admin = x25519Reader()
+    const meta = encryptCallRecordForStorage({ callerNumber: '+15555550142' }, [admin.pubkey])
+    const msg = encryptMessageForStorage('x', [admin.pubkey])
+    expect(() => openAsReader(meta.encryptedContent, meta.adminEnvelopes[0], admin.secret, LABEL_MESSAGE)).toThrow()
+    expect(() => openAsReader(msg.encryptedContent, msg.readerEnvelopes[0], admin.secret, LABEL_CALL_META)).toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // encryptContactIdentifier / decryptContactIdentifier
 // ---------------------------------------------------------------------------
 
@@ -177,7 +236,6 @@ describe('encryptContactIdentifier / decryptContactIdentifier', () => {
   })
 
   it('throws on corrupted ciphertext', () => {
-    const enc = encryptContactIdentifier('hello', SECRET)
     const corrupted = 'enc:' + 'deadbeef'.repeat(20)
     expect(() => decryptContactIdentifier(corrupted, SECRET)).toThrow()
   })

@@ -20,6 +20,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::auth;
 use crate::device_keys::{self, DeviceKeyState, DeviceSecrets, EncryptedDeviceKeys};
+use crate::encryption::{self, RecipientKeyEnvelope};
 use crate::errors::CryptoError;
 use crate::hpke_envelope::{self, HpkeEnvelope};
 use crate::puk::{self, PukState, RotatePukResult};
@@ -347,6 +348,79 @@ pub fn mobile_symmetric_decrypt(
 
     key_bytes.zeroize();
     Ok(hex::encode(plaintext))
+}
+
+// ── Stored multi-reader records (messages, call metadata) ───────────
+
+/// Open a stored record as this device: the envelope may be addressed to the
+/// device's Ed25519 account key or its X25519 key, and is opened with the
+/// device's X25519 secret. The content key never leaves Rust.
+fn open_stored_record(
+    secrets: &DeviceSecrets,
+    ds: &DeviceKeyState,
+    encrypted_content: &str,
+    envelopes: &[RecipientKeyEnvelope],
+    label: &str,
+) -> Result<String, CryptoError> {
+    let secret_hex = Zeroizing::new(hex::encode(secrets.encryption_seed));
+    let plaintext = encryption::open_record_for_reader(
+        encrypted_content,
+        envelopes,
+        &[&ds.signing_pubkey_hex, &ds.encryption_pubkey_hex],
+        &secret_hex,
+        label,
+    )?;
+    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
+}
+
+fn open_call_metadata(
+    secrets: &DeviceSecrets,
+    ds: &DeviceKeyState,
+    encrypted_content: &str,
+    envelopes: &[RecipientKeyEnvelope],
+) -> Result<String, CryptoError> {
+    open_stored_record(
+        secrets,
+        ds,
+        encrypted_content,
+        envelopes,
+        crate::labels::LABEL_CALL_META,
+    )
+}
+
+fn open_message(
+    secrets: &DeviceSecrets,
+    ds: &DeviceKeyState,
+    encrypted_content: &str,
+    envelopes: &[RecipientKeyEnvelope],
+) -> Result<String, CryptoError> {
+    open_stored_record(
+        secrets,
+        ds,
+        encrypted_content,
+        envelopes,
+        crate::labels::LABEL_MESSAGE,
+    )
+}
+
+/// Decrypt a call record's metadata (`LABEL_CALL_META`) as this device.
+/// Takes the record's `encryptedContent` and all of its `adminEnvelopes`.
+#[uniffi::export]
+pub fn mobile_decrypt_call_metadata(
+    encrypted_content: String,
+    envelopes: Vec<RecipientKeyEnvelope>,
+) -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| open_call_metadata(secrets, ds, &encrypted_content, &envelopes))
+}
+
+/// Decrypt a conversation message (`LABEL_MESSAGE`) as this device, whether a
+/// client or the server sealed it. Takes all of the message's reader envelopes.
+#[uniffi::export]
+pub fn mobile_decrypt_message(
+    encrypted_content: String,
+    envelopes: Vec<RecipientKeyEnvelope>,
+) -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| open_message(secrets, ds, &encrypted_content, &envelopes))
 }
 
 // ── PUK operations ─────────────────────────────────────────────────
@@ -1059,6 +1133,123 @@ pub fn mobile_clear_wake_key() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Stored records: which key opens them ─────────────────────────
+
+    use crate::encryption::{seal_record_for_readers, RecordReader};
+    use crate::labels::{LABEL_CALL_META, LABEL_MESSAGE};
+
+    /// A device whose Ed25519 and X25519 keys are, as always, different keys.
+    fn fixed_device() -> (DeviceSecrets, DeviceKeyState) {
+        let secrets = DeviceSecrets {
+            signing_seed: [7u8; 32],
+            encryption_seed: [9u8; 32],
+        };
+        let ds = DeviceKeyState {
+            device_id: "stored-record-dev".into(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        assert_ne!(ds.signing_pubkey_hex, ds.encryption_pubkey_hex);
+        (secrets, ds)
+    }
+
+    const CALL_META: &str = r#"{"answeredBy":null,"callerNumber":"+15555550142"}"#;
+
+    #[test]
+    fn call_metadata_opens_whichever_device_key_the_envelope_is_addressed_to() {
+        let (secrets, ds) = fixed_device();
+        let (_, other_pk) = crate::hpke_envelope::generate_x25519_keypair();
+        // The server and desktop address envelopes by the account (Ed25519) key;
+        // iOS and Android address their own by the X25519 key. Either way the
+        // wrap is sealed to the X25519 key.
+        for address in [&ds.signing_pubkey_hex, &ds.encryption_pubkey_hex] {
+            let record = seal_record_for_readers(
+                CALL_META.as_bytes(),
+                &[
+                    RecordReader {
+                        address: other_pk.clone(),
+                        encryption_pubkey: other_pk.clone(),
+                    },
+                    RecordReader {
+                        address: address.clone(),
+                        encryption_pubkey: ds.encryption_pubkey_hex.clone(),
+                    },
+                ],
+                LABEL_CALL_META,
+            )
+            .unwrap();
+            let opened = open_call_metadata(
+                &secrets,
+                &ds,
+                &record.encrypted_content,
+                &record.reader_envelopes,
+            )
+            .unwrap();
+            assert_eq!(opened, CALL_META);
+        }
+    }
+
+    #[test]
+    fn a_wrap_sealed_to_the_ed25519_key_does_not_open() {
+        // Both keys are 64 hex chars; sealing to the signing key as though it were
+        // X25519 (#1021, #1283) yields an envelope nobody can open.
+        let (secrets, ds) = fixed_device();
+        let record = seal_record_for_readers(
+            CALL_META.as_bytes(),
+            &[RecordReader {
+                address: ds.signing_pubkey_hex.clone(),
+                encryption_pubkey: ds.signing_pubkey_hex.clone(),
+            }],
+            LABEL_CALL_META,
+        )
+        .unwrap();
+        assert!(matches!(
+            open_call_metadata(
+                &secrets,
+                &ds,
+                &record.encrypted_content,
+                &record.reader_envelopes
+            ),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn call_metadata_and_message_readers_are_bound_to_their_labels() {
+        let (secrets, ds) = fixed_device();
+        let reader = [RecordReader {
+            address: ds.signing_pubkey_hex.clone(),
+            encryption_pubkey: ds.encryption_pubkey_hex.clone(),
+        }];
+        let message = seal_record_for_readers(b"hola", &reader, LABEL_MESSAGE).unwrap();
+        let meta = seal_record_for_readers(CALL_META.as_bytes(), &reader, LABEL_CALL_META).unwrap();
+
+        assert_eq!(
+            open_message(
+                &secrets,
+                &ds,
+                &message.encrypted_content,
+                &message.reader_envelopes
+            )
+            .unwrap(),
+            "hola"
+        );
+        assert!(open_call_metadata(
+            &secrets,
+            &ds,
+            &message.encrypted_content,
+            &message.reader_envelopes
+        )
+        .is_err());
+        assert!(open_message(
+            &secrets,
+            &ds,
+            &meta.encrypted_content,
+            &meta.reader_envelopes
+        )
+        .is_err());
+    }
 
     #[test]
     fn generate_unlock_lock_cycle() {
