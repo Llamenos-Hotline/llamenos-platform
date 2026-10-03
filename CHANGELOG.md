@@ -404,6 +404,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.19.19 (2026-10-03)
+
+### Features
+
+- scope:<lane> grants make cross-lane PRs expressible (#1117)
+- one batched fleet/review, triggered by a review request (#1164)
+- one PostgreSQL database per worktree — created by setup, one DATABASE_URL export, swept when the worktree goes (#1267)
+- conclude fleet/review green on Dependabot PRs without a model call (#1275)
+- speak every prompt on self-hosted PBXs, and sign every IVR media URL (#1387)
+
+### Fixes
+
+- do not ring volunteers already on a live call in any hub (#1077)
+- backend owns the shared test helpers its own suite imports (#1116)
+- inbound webhooks 500 on Bun — use backgroundTask, not c.executionCtx (#1132) (#1157)
+- let a worker refuse a worse fix, and give migrations an owner (#1181)
+- fail generation on unbound scenarios instead of silently skipping them (#1153) (#1199)
+- point owner-scoped addresses at Llamenos-Hotline after the org move (#1215)
+- clock in to a real hub; shifts BDD tags are not the fix for #1212 (#1216)
+- point runtime-resolved addresses at Llamenos-Hotline after the org move (#1220)
+- initialise settings, roles and the platform admin at startup (#1160)
+- point every llamenos-releases consumer at Llamenos-Hotline (#1228)
+- lowercase the repository path in the build-cache image refs (#1217)
+- post fleet/review verdict comments as llamenos-auto (#1238)
+- give llamenos-auto-authored PRs a route to a fleet/review verdict (#1232) (#1239)
+- give fleet/verify its token; pin where an unreadable PR read fails closed (#1258)
+- make contact type filter assertion actually assert something (#1261)
+- stop the never-write guard calling a committed template a secret (#1256)
+- make the deploy path capable of completing a first deploy (#1253)
+- assertAnyTagDisplayed must be able to fail; fix the hub-comms defects it hid (#1222) (#1224)
+- let the shared lane write the crypto step definitions it owns both ends of (#1266)
+- prove TestDB queries the same database as the server (#1263)
+- make demo identities unreachable off a development server (#1265)
+- warm the bddgen transform cache in desktop-e2e (#1268)
+- honest iOS coverage (15→19/569, no fuzzy credit) and the iOS UI suite gates merges (#1225)
+- give image-smoke's log flush 60s, not 5s (#1274)
+- name every fleet/review outcome on its own check (#1230) (#1270)
+- republish fleet/review on a moved head, without re-reviewing (#1284)
+- scope hub user list, get and writes to hub members (#1281)
+- route a real call through self-hosted Asterisk end to end (#1321)
+- provision the Asterisk SIP trunk through the app, and keep it (#1327)
+- make operator-uploaded prompts audible on self-hosted Asterisk, and prove it with a real call (#1335)
+- play the prompts operators upload on Asterisk and FreeSWITCH (#1349)
+- never claim a browser audio SDK that isn't installed (#1171)
+- events list no longer claims "No events" while loading (android-e2e shard 3) (#1402)
+- gate readiness on load-bearing deps only, keep Signal wired (#1420)
+- make the live suite runnable against a deployed server (#1429)
+- stop %@ format specifiers being handed non-object arguments (#1414)
+- create the default hub through the real API, not a test route (#1431)
+- stop the PIN wipe test dying on slow runners, and stop a dead shard reporting green (#1425)
+- bootstrap desktop suites through real routes, not dev-only ones (#1433)
+- refuse to issue the hub's shared SIP trunk credential (#1435)
+- create test hubs through the real API on iOS and Android (#1436)
+- let every shipped call-answering template role clock in (and be importable at all) (#1406)
+- enforce first-pickup-wins (atomic answer, ring-set eligibility, cancel losing legs) (#1072)
+- diff pull requests from the merge base, not the base tip (#1397)
+- let the default Volunteer role clock in (#1441)
+- point the Vite proxy at TEST_HUB_URL, not always :3000 (#1443)
+- make the review-cache key deterministic, and ask the right reviewer (#1447)
+- backfill shifts:set-availability onto an existing Volunteer role (#1444)
+
 ## 0.19.18 (2026-09-26)
 
 ### Fixes

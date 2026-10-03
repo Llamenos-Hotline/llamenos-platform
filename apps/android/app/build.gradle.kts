@@ -50,7 +50,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.19.18"
+        versionName = "0.19.19"
 
         testInstrumentationRunner = "org.llamenos.hotline.CucumberHiltRunner"
 
