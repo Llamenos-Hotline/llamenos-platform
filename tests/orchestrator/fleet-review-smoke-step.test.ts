@@ -289,7 +289,15 @@ function withoutTheSharedSource(script: string): string {
   expect(afterFiLine, 'could not find the closing "fi" line after the resolution block — this mutation is vacuous').toBeGreaterThan(afterEndMarkerLine)
   const before = script.slice(0, startIdx)
   const after = script.slice(afterFiLine)
-  const hardcoded = 'rev_binary="claude"\n          rev_model="hardcoded-mismatched-model"\n\n'
+  // `rev_tools` is hardcoded alongside the binary/model pair for the same
+  // reason the mutation exists: a step that stops importing the shared source
+  // would have to retype ALL THREE, and the mutation has to reproduce that
+  // faithfully. Leaving it unset instead would trip the step's own
+  // "REVIEWER_TOOLS resolved to nothing" guard and make the mutation fail for
+  // the wrong reason — a mutation that cannot pass proves nothing about the
+  // rail that is supposed to catch it.
+  const hardcoded = 'rev_binary="claude"\n          rev_model="hardcoded-mismatched-model"\n'
+    + '          rev_tools="Read,Grep,Glob"\n\n'
   const mutated = before + hardcoded + after
   expect(mutated, 'mutation produced no change — vacuous').not.toBe(script)
   return mutated

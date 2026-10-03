@@ -969,9 +969,9 @@ jobs:
           # every jq call after it for a reason with nothing to do with
           # engine configuration.
           engine_json="$(bun -e '
-            import { reviewerInvocationFor } from "./orchestrator/src/review.ts"
+            import { reviewerInvocationFor, REVIEWER_TOOLS } from "./orchestrator/src/review.ts"
             const inv = reviewerInvocationFor("claude")
-            console.log(JSON.stringify({ binary: inv.binary, model: inv.model }))
+            console.log(JSON.stringify({ binary: inv.binary, model: inv.model, tools: REVIEWER_TOOLS.join(",") }))
           ' 2>"$RUNNER_TEMP/engine-resolve-stderr.log")"
           engine_status=$?
           engine_err="$(cat "$RUNNER_TEMP/engine-resolve-stderr.log" 2>/dev/null || true)"
@@ -980,6 +980,21 @@ jobs:
           fi
           rev_binary="$(printf '%s' "$engine_json" | jq -r '.binary')"
           rev_model="$(printf '%s' "$engine_json" | jq -r '.model')"
+          # The reviewer's tool restriction, from the SAME export the real
+          # review builds its argv from (`verifierArgs`/`REVIEWER_TOOLS`) —
+          # never a literal list typed here, for the same reason
+          # `reviewerInvocationFor` is imported rather than retyped.
+          #
+          # It is smoke-tested at all because `--tools` is the flag that
+          # withholds `Bash` from the reviewer, and a runner whose `claude`
+          # build does not accept it would otherwise pass this step (which
+          # used to pass a hand-written, flag-poorer argv) and then fail
+          # EVERY real review as an opaque `engine-unavailable`. Asserting
+          # the flag here names it as a configuration problem instead.
+          rev_tools="$(printf '%s' "$engine_json" | jq -r '.tools')"
+          if [ -z "$rev_tools" ] || [ "$rev_tools" = "null" ]; then
+            fail "engine-misconfigured" "REVIEWER_TOOLS resolved to nothing — the reviewer would run with the full default tool set, Bash included: $engine_json"
+          fi
           if [ -z "$rev_binary" ] || [ "$rev_binary" = "null" ] || [ -z "$rev_model" ] || [ "$rev_model" = "null" ]; then
             fail "engine-misconfigured" "reviewerInvocationFor printed unparseable output: $engine_json"$'\n'"$engine_err"
           fi
@@ -989,7 +1004,7 @@ jobs:
           fi
 
           run_out="$(cd "$root" && printf 'Reply with exactly: VERDICT: PASS\n' \
-            | "$rev_binary" --print --permission-mode plan --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+            | "$rev_binary" --print --permission-mode plan --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then

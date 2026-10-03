@@ -549,9 +549,14 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
   // (possibly different) resolution, silently disagreed with it.
   it('resolves the reviewer binary/model dynamically via reviewerInvocationFor, never a literal pinned in the invocation', () => {
     const text = fleetReviewJobText()
-    expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --model "\$rev_model"/)
+    // `--tools "$rev_tools"` is pinned here too: it is the flag that
+    // withholds `Bash` from the reviewer (see `REVIEWER_TOOLS`), and the
+    // smoke test is the only place a runner whose `claude` build rejects the
+    // flag gets named as a configuration problem instead of failing every
+    // real review as an opaque `engine-unavailable`.
+    expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --tools "\$rev_tools" --model "\$rev_model"/)
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
-      .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
+      .toMatch(/import \{ reviewerInvocationFor, REVIEWER_TOOLS \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
       .not.toMatch(/--model "?sonnet"?\b/)
     expect(text, 'smoke test pins a literal claude binary again instead of resolving one')
