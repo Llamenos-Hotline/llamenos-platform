@@ -8,6 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types/infra'
+import { spawnSync } from 'node:child_process'
+import path from 'node:path'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -66,6 +68,36 @@ vi.mock('hono-openapi', () => ({
 
 // Import after mocks
 import authRoutes from '@worker/routes/auth'
+
+// ---------------------------------------------------------------------------
+// bootstrap-admin output parsing (#1040) — label-agnostic so the same test
+// runs against any version of the script.
+// ---------------------------------------------------------------------------
+
+const HEX64 = /^[0-9a-f]{64}$/
+const BOOTSTRAP_SCRIPT = path.resolve(__dirname, '../../../../scripts/bootstrap-admin.ts')
+
+function runBootstrapAdminScript(): string {
+  const r = spawnSync('bun', [BOOTSTRAP_SCRIPT], { encoding: 'utf8' })
+  if (r.status !== 0) throw new Error(`bootstrap-admin exited ${r.status}: ${r.stderr}`)
+  return r.stdout
+}
+
+/** The `ADMIN_PUBKEY=<hex>` / `ADMIN_DECRYPTION_PUBKEY=<hex>` lines the operator copies into .env. */
+function configLinesFrom(out: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const m of out.matchAll(/^\s*(ADMIN_PUBKEY|ADMIN_DECRYPTION_PUBKEY)=([0-9a-f]{64})\s*$/gm)) env[m[1]] = m[2]
+  return env
+}
+
+/** 64-hex values printed on the line after a label mentioning "secret" or "seed". */
+function secretValuesFrom(out: string): string[] {
+  const lines = out.split('\n')
+  return lines.flatMap((l, i) => {
+    const next = (lines[i + 1] ?? '').trim()
+    return l.trim().endsWith(':') && /secret|seed/i.test(l) && HEX64.test(next) ? [next] : []
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -315,6 +347,43 @@ describe('auth routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.adminDecryptionPubkey).toBe('decrypt-pk')
+    })
+
+    // #1040: GET /me echoes ADMIN_DECRYPTION_PUBKEY || ADMIN_PUBKEY verbatim to every
+    // authenticated user. Configure the server exactly as `bun run bootstrap-admin` tells
+    // the operator to (the KEY=value lines it prints) and assert no seed it printed as a
+    // secret ever comes back. Against the old script this fails: its "public keys" were
+    // the seeds, so /me served the admin's secret.
+    describe('configured from the real bootstrap-admin output (#1040)', () => {
+      const out = runBootstrapAdminScript()
+      const envLines = configLinesFrom(out)
+      const secrets = secretValuesFrom(out)
+
+      it('the script prints config lines and at least one secret', () => {
+        expect(envLines.ADMIN_PUBKEY).toMatch(HEX64)
+        expect(secrets.length).toBeGreaterThan(0)
+      })
+
+      for (const [label, keys] of [
+        ['ADMIN_PUBKEY + ADMIN_DECRYPTION_PUBKEY (local dev step)', ['ADMIN_PUBKEY', 'ADMIN_DECRYPTION_PUBKEY']],
+        ['ADMIN_PUBKEY only (Docker step)', ['ADMIN_PUBKEY']],
+      ] as const) {
+        it(`never serves a printed secret: ${label}`, async () => {
+          const { app } = createApp()
+          const env: Record<string, string> = { ...defaultEnv as Record<string, string> }
+          delete env.ADMIN_DECRYPTION_PUBKEY
+          for (const k of keys) {
+            expect(envLines[k], `script printed no ${k}= line`).toMatch(HEX64)
+            env[k] = envLines[k]
+          }
+
+          const res = await app.request('/auth/me', {}, env as never)
+          expect(res.status).toBe(200)
+          const raw = await res.text()
+          for (const secret of secrets) expect(raw).not.toContain(secret)
+          expect(JSON.parse(raw).adminDecryptionPubkey).toBe(env.ADMIN_DECRYPTION_PUBKEY ?? env.ADMIN_PUBKEY)
+        })
+      }
     })
 
     it('falls back to ADMIN_PUBKEY when ADMIN_DECRYPTION_PUBKEY not set', async () => {

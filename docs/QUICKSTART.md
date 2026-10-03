@@ -393,11 +393,13 @@ cd /path/to/llamenos
 bun run bootstrap-admin
 ```
 
-This outputs the public key (hex) and the secret key (nsec). Set the public key in your `.env`:
+This prints two public keys and, separately under a `SECRET` heading, the admin's secret seed. Set only the public keys in your `.env`:
 
 ```bash
-ADMIN_PUBKEY=<hex public key from bootstrap-admin output>
+ADMIN_PUBKEY=<ADMIN_PUBKEY value from bootstrap-admin output>
 ```
+
+Never put the secret seed in `.env`: values configured as admin keys are served to every authenticated user.
 
 Then start the application:
 
@@ -456,23 +458,17 @@ cd /path/to/llamenos
 bun run bootstrap-admin
 ```
 
-Output:
-```
-=== Llamenos Admin Bootstrap ===
+The script prints the public values (`ADMIN_PUBKEY`, `ADMIN_DECRYPTION_PUBKEY`) separately from the
+secret values (the admin seed and `SERVER_SECRET`), which appear under a `SECRET` heading.
 
-PUBLIC KEY (hex):
-  a1b2c3d4...
-
-SECRET KEY (nsec) -- share this securely with the admin:
-  nsec1...
-```
-
-1. Copy the hex public key into your server's `.env` as `ADMIN_PUBKEY`.
+1. Copy the `ADMIN_PUBKEY` public value into your server's `.env`. Never copy the secret seed into server config.
 2. Restart the application: `docker compose up -d`.
-3. Store the nsec in a password manager. It cannot be recovered.
-4. Log in at `https://hotline.yourorg.org` using the nsec.
+3. Store the admin seed in a password manager. It cannot be recovered.
+4. The admin imports the seed on the login screen. `ADMIN_PUBKEY` pins the platform admin but does
+   not create the account; the setup wizard (In-Browser Bootstrap above) is the supported way to
+   register the first admin.
 
-**SECURITY WARNING**: The admin nsec is the master key for your hotline. If compromised, an attacker can manage all volunteers, read admin-wrapped notes, and modify all settings. Store it in a hardware security module or a high-security password manager (1Password, Bitwarden, KeePassXC). Never reuse this keypair on public WebSocket relays or other services.
+**SECURITY WARNING**: The admin seed is the master key for your hotline. If compromised, an attacker can manage all volunteers, read admin-wrapped notes, and modify all settings. Store it in a hardware security module or a high-security password manager (1Password, Bitwarden, KeePassXC). Never reuse this keypair on public WebSocket relays or other services.
 
 ---
 

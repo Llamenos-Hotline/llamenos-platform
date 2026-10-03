@@ -83,6 +83,17 @@ export function validateConfig(env: ConfigInput = process.env): void {
     logger.warn('ADMIN_PUBKEY not set — first admin must be bootstrapped via the Tauri desktop app')
   }
 
+  // ADMIN_DECRYPTION_PUBKEY: optional 64-hex X25519 device-encryption PUBLIC key.
+  // It is served verbatim to every authenticated user by GET /api/auth/me, so a
+  // malformed value must fail at startup rather than be published to clients.
+  const adminDecryptionPubkey = env['ADMIN_DECRYPTION_PUBKEY']?.trim() ?? ''
+  if (adminDecryptionPubkey.length > 0 && (adminDecryptionPubkey.length !== 64 || !HEX_RE.test(adminDecryptionPubkey))) {
+    throw new Error(
+      `[llamenos] ADMIN_DECRYPTION_PUBKEY must be exactly 64 hex characters (X25519 public key). Got length ${adminDecryptionPubkey.length}. ` +
+      `This value is served to all authenticated users — it must be a PUBLIC key, never a secret seed. Generate with: bun run bootstrap-admin`
+    )
+  }
+
   assertNonEmpty(env, 'HOTLINE_NAME')
   assertNonEmpty(env, 'ENVIRONMENT')
 

@@ -55,6 +55,16 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ ...validEnv, ADMIN_PUBKEY: '' })).not.toThrow()
   })
 
+  it('accepts a 64-hex ADMIN_DECRYPTION_PUBKEY and an unset one', () => {
+    expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(64) })).not.toThrow()
+    expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: '' })).not.toThrow()
+  })
+
+  it('throws if ADMIN_DECRYPTION_PUBKEY is malformed (it is published to every user)', () => {
+    expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(63) })).toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+    expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: 'z'.repeat(64) })).toThrow(/ADMIN_DECRYPTION_PUBKEY/)
+  })
+
   it('throws if ADMIN_PUBKEY is wrong length', () => {
     expect(() => validateConfig({ ...validEnv, ADMIN_PUBKEY: 'a'.repeat(32) })).toThrow(/ADMIN_PUBKEY/)
   })
