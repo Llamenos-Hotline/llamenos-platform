@@ -1,5 +1,4 @@
-# @wip: no backend step definitions for any scenario — #1191
-@backend @security @wip
+@backend @security
 Feature: Backend access control and input validation (Epic E)
   Surgical fixes for seven backend security vulnerabilities identified in the
   2026-05-18 security audit: co-approver admin check (H01), cross-hub IDOR on
@@ -10,10 +9,15 @@ Feature: Backend access control and input validation (Epic E)
 
   @backend
   Scenario: Erasure co-approver with volunteer role is rejected
+    # The requester and co-approver must be different users — a co-approver
+    # matching the requester trips the separate "cannot approve your own
+    # request" check (400) before the admin-role check (403) ever runs. The
+    # original draft of this scenario used "vol-pk-1" for both roles, which
+    # could only ever exercise that earlier check, never H01.
     Given a registered volunteer user with pubkey "vol-pk-1"
-    And a registered admin user with pubkey "admin-pk-1"
+    And a registered volunteer user with pubkey "vol-pk-3"
     When "vol-pk-1" submits an emergency erasure request
-    And the co-approver signature is made by "vol-pk-1" (a volunteer, not an admin)
+    And the co-approver signature is made by "vol-pk-3" (a volunteer, not an admin)
     Then the response status is 403
     And the error mentions co-approver must be an admin
 
@@ -23,7 +27,7 @@ Feature: Backend access control and input validation (Epic E)
     And a registered volunteer user with pubkey "vol-pk-2"
     When "vol-pk-2" submits an emergency erasure request
     And the co-approver signature is made by "admin-pk-1" (a hub admin)
-    Then the response status is 201
+    Then the response status is 200
 
   @backend
   Scenario: Erasure co-approver with unknown pubkey is rejected
@@ -141,6 +145,19 @@ Feature: Backend access control and input validation (Epic E)
     Then the response status is not 400
 
   # ── H07: SSRF guard fails closed on DNS resolution failure ────────────────
+  #
+  # These exercise the real `apps/worker/lib/ssrf-guard.ts` functions in-process
+  # (imported directly, not over HTTP) — there is no route whose sole job is
+  # "validate this arbitrary URL", only call sites embedded in provider-setup
+  # routes that would need a full hub+provider fixture to reach. The NXDOMAIN
+  # scenario uses the real DNS resolver against the IETF-reserved ".invalid"
+  # TLD (RFC 2606), which is guaranteed to never resolve — deterministic
+  # without mocking. The other two scenarios need a specific resolved IP on
+  # demand, which real DNS cannot give deterministically in CI; they exercise
+  # the identical isInternalAddress() classification that a real DNS answer
+  # would feed into, by passing the "resolved" address as the URL's literal
+  # host (validateExternalUrlWithDns skips the DNS hop for an IP-literal host
+  # and runs the exact same check a real resolution result would hit).
 
   @backend
   Scenario: Webhook URL with unresolvable hostname is blocked
@@ -189,30 +206,42 @@ Feature: Backend access control and input validation (Epic E)
     And the returned generation is 2
 
   # ── HIGH-W2: Dev endpoint checkResetSecret only accepts X-Test-Secret ────
+  #
+  # The real path is /api/test-reset (not /api/dev/test-reset — devRoutes mounts
+  # at the API root, see apps/worker/app.ts `api.route('/', devRoutes)`).
+  # "accepts requests with correct X-Test-Secret" is verified against
+  # /api/test-push-log instead of /api/test-reset: both are gated by the exact
+  # same checkResetSecret() guard, but test-reset wipes the whole database —
+  # unsafe to actually trigger mid-suite, when the backend-bdd project runs
+  # several other @backend scenarios in parallel against this same server and
+  # DB (playwright.config.ts workers > 1). tests/steps/backend/network-security.steps.ts
+  # already follows this precedent: every existing call to /api/test-reset in
+  # this suite omits or mismatches X-Test-Secret for exactly this reason.
+  # "returns 404 in production environment" is removed: verifying it needs the
+  # server process itself started with ENVIRONMENT=production, which no
+  # backend-bdd scenario can do to the single shared dev server instance
+  # (tracked separately in #1194, "needs per-scenario server env"). The
+  # behavior is already covered by a real test —
+  # apps/worker/__tests__/unit/dev-route-guard.test.ts — which injects
+  # ENVIRONMENT=production directly via Hono's `app.request(path, init, env)`.
 
   @backend
   Scenario: Dev test-reset rejects requests without X-Test-Secret header
     Given the server is running in development mode with DEV_RESET_SECRET set
-    When I call POST /api/dev/test-reset without X-Test-Secret header
+    When I call POST /api/test-reset without X-Test-Secret header
     Then the response status is 404
 
   @backend
   Scenario: Dev test-reset rejects requests with wrong X-Test-Secret
     Given the server is running in development mode with DEV_RESET_SECRET set
-    When I call POST /api/dev/test-reset with X-Test-Secret "wrong-secret"
+    When I call POST /api/test-reset with X-Test-Secret "wrong-secret"
     Then the response status is 404
 
   @backend
-  Scenario: Dev test-reset accepts requests with correct X-Test-Secret
+  Scenario: Dev test-push-log accepts requests with correct X-Test-Secret
     Given the server is running in development mode with DEV_RESET_SECRET set
-    When I call POST /api/dev/test-reset with correct X-Test-Secret
+    When I call GET /api/test-push-log with correct X-Test-Secret
     Then the response status is 200
-
-  @backend
-  Scenario: Dev test-reset returns 404 in production environment
-    Given the server is running in production mode
-    When I call POST /api/dev/test-reset with any credentials
-    Then the response status is 404
 
   # ── HIGH-W3: Ban list does not store plaintext phone numbers ─────────────
 
@@ -236,7 +265,7 @@ Feature: Backend access control and input validation (Epic E)
     Given I am authenticated as an admin with "recovery:approve" permission
     And my pubkey is "admin-pk-1"
     And a recovery session exists and is awaiting contributions
-    When I call POST /api/recovery-group/session/{id}/emergency with approverPubkey "other-pk-2"
+    When I apply the emergency override with approverPubkey "other-pk-2"
     Then the response status is 403
     And the error mentions approverPubkey must match
 
@@ -245,5 +274,5 @@ Feature: Backend access control and input validation (Epic E)
     Given I am authenticated as an admin with "recovery:approve" permission
     And my pubkey is "admin-pk-1"
     And a recovery session exists and is awaiting contributions
-    When I call POST /api/recovery-group/session/{id}/emergency with approverPubkey "admin-pk-1"
+    When I apply the emergency override with approverPubkey "admin-pk-1"
     Then the response is not 403

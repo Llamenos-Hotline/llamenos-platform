@@ -224,6 +224,30 @@ dev.post('/test-add-webauthn-credential', async (c) => {
   return c.json({ ok: true, credentialId })
 })
 
+// ─── Session Seeding (BDD test helper — #1191) ──────────────────────────────
+// Mints a real server session (the same services.identity.createSession() the
+// WebAuthn login route calls) for an arbitrary pubkey, bypassing the WebAuthn
+// authenticator ceremony. There is no way to simulate a real platform
+// authenticator's signature from a black-box BDD test, so scenarios that need
+// to distinguish "authenticated with a session token" from "authenticated with
+// a fresh Ed25519 signature" (e.g. requireFreshAuth / ELEVATED_AUTH_REQUIRED)
+// have no other route to a genuine, server-validated session token.
+dev.post('/test-create-session', async (c) => {
+  if (c.env.ENVIRONMENT !== 'development') {
+    return c.json({ error: 'Not Found' }, 404)
+  }
+  if (!checkResetSecret(c)) {
+    return c.json({ error: 'Not Found' }, 404)
+  }
+  const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
+  if (!body.pubkey) {
+    return c.json({ error: 'pubkey is required' }, 400)
+  }
+  const services = c.get('services')
+  const session = await services.identity.createSession(body.pubkey)
+  return c.json({ token: session.token, pubkey: session.pubkey })
+})
+
 // ─── Recovery Session Seeding (BDD test helper — EP09) ──────────────────────
 // Directly creates a recovery_sessions row in an arbitrary status, bypassing
 // the Signal verification ceremony (Phase 1). There is no way to intercept
