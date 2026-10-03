@@ -1,0 +1,6 @@
+---
+- name: Restart postgres-exporter
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}/observability/postgres-exporter"
+    state: restarted
+    recreate: always

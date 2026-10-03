@@ -6,5 +6,9 @@ healthcheck_endpoints:
     url: "http://app:3000/api/health"
   - name: postgres
     url: "tcp://postgres:5432"
-healthcheck_ntfy_url: "https://ntfy.sh"
-healthcheck_ntfy_topic: "llamenos-health"
+# Empty by default: "https://ntfy.sh/llamenos-health" was a guessable PUBLIC
+# topic anyone could subscribe to or forge alerts into (#1148). Set your own
+# unguessable topic (or self-hosted ntfy instance), or this stays log-only.
+healthcheck_ntfy_url: ""
+healthcheck_ntfy_topic: ""
+healthcheck_ntfy_token: ""

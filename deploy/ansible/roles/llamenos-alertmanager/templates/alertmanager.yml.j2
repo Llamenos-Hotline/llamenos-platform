@@ -1,5 +1,17 @@
 # Llamenos Alertmanager configuration — managed by Ansible
 # Do not edit manually; changes will be overwritten on next deploy.
+#
+# The Jinja if/elif/endif conditional tags below the `receivers:` key are
+# deliberately at column 0, not indented to match the surrounding YAML: Jinja2
+# (trim_blocks=True, lstrip_blocks=False, Ansible's default) keeps any
+# whitespace BEFORE a block tag as literal output, so an indented tag leaks
+# that indentation onto the following line and silently produces invalid YAML
+# ("webhook_configs:" ending up 8 spaces deep instead of 4). That was this
+# file's actual state before #1148 -- the default alert_notification_method
+# (ntfy) rendered unparseable YAML, so Alertmanager could never even start.
+# Every other templated receiver block in this repo (prometheus.yml.j2's
+# conditional scrape-job guards) already follows the column-0 convention this
+# restores.
 
 global:
   resolve_timeout: 5m
@@ -13,11 +25,16 @@ route:
 
 receivers:
   - name: 'default'
-    {% if alert_notification_method == 'ntfy' %}
+{% if alert_notification_method == 'ntfy' %}
     webhook_configs:
-      - url: '{{ alert_ntfy_url | default("https://ntfy.sh") }}/{{ alert_ntfy_topic | default("llamenos-alerts") }}'
+      - url: '{{ alert_ntfy_url }}/{{ alert_ntfy_topic }}'
         send_resolved: true
-    {% elif alert_notification_method == 'email' %}
+{% if (alert_ntfy_token | default('')) | length > 0 %}
+        http_config:
+          authorization:
+            credentials: '{{ alert_ntfy_token }}'
+{% endif %}
+{% elif alert_notification_method == 'email' %}
     email_configs:
       - to: '{{ alert_smtp_to }}'
         from: '{{ alert_smtp_from }}'
@@ -25,11 +42,11 @@ receivers:
         auth_username: '{{ alert_smtp_username }}'
         auth_password: '{{ alert_smtp_password }}'
         send_resolved: true
-    {% elif alert_notification_method == 'webhook' %}
+{% elif alert_notification_method == 'webhook' %}
     webhook_configs:
       - url: '{{ alert_webhook_url }}'
         send_resolved: true
-    {% endif %}
+{% endif %}
 
 inhibit_rules:
   - source_match:

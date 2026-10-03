@@ -1,0 +1,35 @@
+---
+# PostgreSQL Exporter role
+#
+# Deploys prometheus-community/postgres_exporter as a standalone Compose
+# project on llamenos-internal (reaches `postgres:5432` directly, same network
+# the app uses) + llamenos-observability (scraped by Prometheus's `postgres`
+# job at postgres-exporter:9187). Never joins llamenos-web -- the connection
+# string carries pg_password and must not be reachable from any
+# publicly-routed container.
+#
+# Without this role the prometheus.yml.j2 `postgres` scrape job has no target
+# to reach at all, making up{job="postgres"} permanently 0 with no database
+# metrics ever collected (#1148).
+
+- name: Create postgres-exporter directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}/observability/postgres-exporter"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0750"
+
+- name: Template postgres-exporter docker-compose.yml
+  ansible.builtin.template:
+    src: ../../../templates/compose/postgres-exporter.j2
+    dest: "{{ app_dir }}/observability/postgres-exporter/docker-compose.yml"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0640"
+  notify: Restart postgres-exporter
+
+- name: Start postgres-exporter
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}/observability/postgres-exporter"
+    state: present
