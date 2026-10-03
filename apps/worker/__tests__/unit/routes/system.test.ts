@@ -28,10 +28,14 @@ function makeApp(opts: {
     services = {},
   } = opts
 
+  // `onlineNow` comes from getHubPresence (services/presence.ts), which composes
+  // the active-call list with the ringing resolver — there is no
+  // `calls.getPresence` to mock any more, so the roster services it reads have
+  // to be present here.
   const mockCalls = {
     getActiveCalls: vi.fn().mockResolvedValue([]),
     getTodayCount: vi.fn().mockResolvedValue(0),
-    getPresence: vi.fn().mockResolvedValue({ users: [] }),
+    getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
   }
 
   const mockIdentity = {
@@ -40,6 +44,11 @@ function makeApp(opts: {
 
   const mockShifts = {
     getCurrentVolunteers: vi.fn().mockResolvedValue([]),
+  }
+
+  const mockSettings = {
+    getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }] }),
   }
 
   const app = new Hono<AppEnv>()
@@ -51,6 +60,7 @@ function makeApp(opts: {
       calls: mockCalls,
       identity: mockIdentity,
       shifts: mockShifts,
+      settings: mockSettings,
       ...services,
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')
@@ -59,7 +69,7 @@ function makeApp(opts: {
   })
   app.route('/', systemRoutes)
 
-  return { app, mockCalls, mockIdentity, mockShifts }
+  return { app, mockCalls, mockIdentity, mockShifts, mockSettings }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,16 +184,21 @@ describe('GET /system/health', () => {
     expect(calls.today).toBe(15)
   })
 
+  /**
+   * `onShift` is the roster; `onlineNow` is who a call would actually reach.
+   * They are deliberately different numbers — pk2 is rostered but on break, so
+   * the hotline would not ring them. Before presence was derived from the
+   * ringing resolver, `onlineNow` was 0 on every deployment.
+   */
   it('returns correct user counts from service', async () => {
-    const { app, mockIdentity, mockCalls, mockShifts } = makeApp()
+    const { app, mockIdentity, mockShifts } = makeApp()
     mockIdentity.getUsers.mockResolvedValue({
       users: [
-        { active: true },
-        { active: true },
-        { active: false },
+        { pubkey: 'pk1', active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
+        { pubkey: 'pk2', active: true, onBreak: true, roles: ['role-volunteer'], hubRoles: [] },
+        { pubkey: 'pk3', active: false, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
       ],
     })
-    mockCalls.getPresence.mockResolvedValue({ users: [{ pubkey: 'pk1' }] })
     mockShifts.getCurrentVolunteers.mockResolvedValue(['pk1', 'pk2'])
 
     const res = await app.request('/health')

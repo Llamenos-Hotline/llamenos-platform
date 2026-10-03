@@ -8,6 +8,8 @@ import { hangUpCallerLeg } from '../services/call-hangup'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers, cancelLosingLegs } from '../services/ringing'
+import { getHubPresence } from '../services/presence'
+import { currentRingDecision } from '../services/routing-readiness'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -93,8 +95,75 @@ calls.get('/presence',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
-    const result = await services.calls.getPresence(hubId)
+    const result = await getHubPresence(services, hubId)
     return c.json(result)
+  },
+)
+
+/**
+ * Would a call arriving right now ring anybody?
+ *
+ * The ring decision used to be unmeasurable on a deployment. Nothing reported
+ * what `resolveRingableVolunteers` resolves to, and its only non-provider caller
+ * is `POST /demo/telephony/simulate/incoming-call`, which is demo-gated — so on
+ * a VM running `DEMO_MODE=false` the live suite's ring-eligibility checks
+ * skipped, and R1's "that volunteer clocks in, receives a call" could only be
+ * verified on a demo server. This is the read-only oracle for it, and the answer
+ * an operator needs before a caller finds out.
+ *
+ * Read-only by construction: it resolves, it does not ring. No provider call, no
+ * call record, no demo gate.
+ *
+ * Two tiers, following `/active`'s `calls:read-active` + `calls:read-active-full`
+ * precedent rather than a new rule. The gate is `calls:read-active`, which the
+ * default volunteer role holds: somebody who can answer a call may ask whether a
+ * call would reach anyone. `volunteers` is identity-bearing, so it is added only
+ * for a caller who already holds `calls:read-presence` — hub-admin and
+ * super-admin in the shipped roles. Everyone else gets the verdict and counts,
+ * which is what the question actually needs and names nobody.
+ */
+const ringDecisionResponseSchema = z.object({
+  wouldRing: z.boolean(),
+  volunteerCount: z.number(),
+  usingFallbackGroup: z.boolean(),
+  scheduledNow: z.number(),
+  clockedIn: z.number(),
+  volunteers: z.array(z.object({ pubkey: z.string() })).optional(),
+})
+
+calls.get('/routing',
+  describeRoute({
+    tags: ['Calls'],
+    summary: 'Whether a call arriving now would ring anybody, and who',
+    responses: {
+      200: {
+        description: 'The current ring decision for this hub',
+        content: {
+          'application/json': {
+            schema: resolver(ringDecisionResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('calls:read-active'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = c.get('hubId') ?? ''
+    const decision = await currentRingDecision(services, hubId)
+
+    const body: z.infer<typeof ringDecisionResponseSchema> = {
+      wouldRing: decision.wouldRing,
+      volunteerCount: decision.volunteerCount,
+      usingFallbackGroup: decision.usingFallbackGroup,
+      scheduledNow: decision.scheduledNow,
+      clockedIn: decision.clockedIn,
+    }
+    if (checkPermission(c.get('permissions'), 'calls:read-presence')) {
+      body.volunteers = decision.pubkeys.map(pubkey => ({ pubkey }))
+    }
+    return c.json(body)
   },
 )
 

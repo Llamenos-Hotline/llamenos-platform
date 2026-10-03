@@ -32,6 +32,27 @@ interface Role {
   permissions: string[]
 }
 
+interface Hub {
+  id: string
+  name: string
+  status?: string
+}
+
+interface Shift {
+  id: string
+  userPubkeys: string[]
+}
+
+/** `GET /calls/routing` — `volunteers` only for a caller with `calls:read-presence`. */
+interface RingDecision {
+  wouldRing?: boolean
+  volunteerCount?: number
+  usingFallbackGroup?: boolean
+  scheduledNow?: number
+  clockedIn?: number
+  volunteers?: Array<{ pubkey: string }>
+}
+
 /** Mirrors `permissionGranted` (packages/shared/permissions.ts): global
  *  wildcard, exact match, or domain wildcard. Checking only the literal string
  *  reports `calls:*` as "cannot answer calls", which is wrong. */
@@ -127,6 +148,198 @@ test.describe('deployment readiness', () => {
       )
       expect(status, 'admin authentication against the deployment').toBe(200)
       expect(data.hubs?.length ?? 0, 'the deployment has no hub — onboarding did not finish').toBeGreaterThan(0)
+    })
+
+    /**
+     * A hotline that cannot route a call is not ready, and nothing else here
+     * says so: `/health/ready` passes, `/api/config` reports the wizard
+     * complete, and every role check above is green on a deployment where an
+     * incoming call rings nobody at all.
+     *
+     * Out of the box a hub has no shift and no fallback group. That default is
+     * CORRECT — being rostered is the admin's consent, and nobody is enrolled
+     * into receiving crisis calls implicitly — so this is not a bug to fix by
+     * auto-creating a shift. It is a state an operator has to be TOLD they are
+     * in, before a caller discovers it: `startParallelRinging` resolves nobody,
+     * the caller hears hold music and leaves a voicemail no volunteer knows to
+     * expect. (The server now also logs this per hub at boot —
+     * `apps/worker/services/routing-readiness.ts` — but a deployment check must
+     * not depend on somebody having read the boot log.)
+     *
+     * Deliberately a question about CONFIGURATION, not about this minute: a hub
+     * with a 09:00–17:00 shift rings nobody at 03:00 and that is the schedule
+     * working as intended. Non-empty `shifts` OR a non-empty fallback group is
+     * what "a call can be routed" means. Read-only — two GETs per hub.
+     */
+    test('every hub has somebody a call could ring', async ({ request }) => {
+      const { data: hubsData } = await apiGet<{ hubs?: Hub[] }>(request, '/hubs', adminSeed as string)
+      const hubs = (hubsData.hubs ?? []).filter(h => (h.status ?? 'active') === 'active')
+      expect(hubs.length, 'the deployment has no active hub').toBeGreaterThan(0)
+
+      const unroutable: string[] = []
+      for (const hub of hubs) {
+        const [{ status: shiftStatus, data: shiftData }, { status: fbStatus, data: fbData }] = await Promise.all([
+          apiGet<{ shifts?: Shift[] }>(request, `/hubs/${hub.id}/shifts`, adminSeed as string),
+          apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hub.id}/shifts/fallback`, adminSeed as string),
+        ])
+        expect(shiftStatus, `GET /hubs/${hub.id}/shifts`).toBe(200)
+        expect(fbStatus, `GET /hubs/${hub.id}/shifts/fallback`).toBe(200)
+
+        const rostered = new Set((shiftData.shifts ?? []).flatMap(sh => sh.userPubkeys ?? []))
+        const fallback = fbData.userPubkeys ?? []
+        if (rostered.size === 0 && fallback.length === 0) {
+          unroutable.push(`${hub.id} (${hub.name}): 0 rostered, 0 in fallback group`)
+        }
+      }
+
+      expect(
+        unroutable,
+        'these hubs would ring NOBODY — an incoming call reaches hold music and then voicemail. '
+        + 'Put at least one volunteer on a shift (Admin → Shifts), or in the hub\'s fallback group '
+        + '(Admin → Shifts → Fallback group). Nothing else in this suite fails on this state.',
+      ).toEqual([])
+    })
+
+    /**
+     * `/calls/presence` is what an admin dashboard polls to answer "is anyone
+     * there?". It answered `{ activeCalls: 0, availableVolunteers: 0, users: [] }`
+     * on every deployment, whatever the roster said, because `createServices`
+     * built `CallsService` without the optional `ShiftsService` its presence
+     * lookup was gated on (measured against a VM-shaped server; presence is now
+     * derived from the ringing resolver in apps/worker/services/presence.ts).
+     *
+     * What a live, non-destructive suite can assert about it is the part that
+     * does not depend on who happens to be working right now: presence reports
+     * people this hub could actually ring, and its count agrees with its list.
+     * The "a clocked-in volunteer appears in presence" half needs a volunteer
+     * clocked in, so it belongs to the acceptance suite that puts one there
+     * (#1462), not here — a check that passes because its subject is absent is
+     * exactly what #1271 and #1323 are about.
+     */
+    test('presence reports people this hub could ring, and counts them consistently', async ({ request }) => {
+      const { data: hubsData } = await apiGet<{ hubs?: Hub[] }>(request, '/hubs', adminSeed as string)
+      const hubs = (hubsData.hubs ?? []).filter(h => (h.status ?? 'active') === 'active')
+
+      for (const hub of hubs) {
+        const { status, data: presence } = await apiGet<{
+          activeCalls?: number
+          availableVolunteers?: number
+          users?: Array<{ pubkey: string; status: string }>
+        }>(request, `/hubs/${hub.id}/calls/presence`, adminSeed as string)
+        expect(status, `GET /hubs/${hub.id}/calls/presence`).toBe(200)
+
+        const users = presence.users ?? []
+        expect(
+          presence.availableVolunteers,
+          `availableVolunteers disagrees with the users it listed for hub ${hub.id}`,
+        ).toBe(users.filter(u => u.status === 'available').length)
+
+        const [{ data: shiftData }, { data: fbData }] = await Promise.all([
+          apiGet<{ shifts?: Shift[] }>(request, `/hubs/${hub.id}/shifts`, adminSeed as string),
+          apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hub.id}/shifts/fallback`, adminSeed as string),
+        ])
+        const couldRing = new Set([
+          ...(shiftData.shifts ?? []).flatMap(sh => sh.userPubkeys ?? []),
+          ...(fbData.userPubkeys ?? []),
+        ])
+
+        // Anyone presence calls available must be somebody the hub's own
+        // configuration can ring. An `on-call` entry is exempt: they are on a
+        // live call, which can outlast their removal from the roster.
+        const strangers = users
+          .filter(u => u.status === 'available' && !couldRing.has(u.pubkey))
+          .map(u => u.pubkey.slice(0, 8))
+        expect(
+          strangers,
+          `presence reports these pubkeys as available in hub ${hub.id}, but no shift or fallback `
+          + 'group names them — presence and the ringing rule have drifted apart',
+        ).toEqual([])
+      }
+    })
+
+    /**
+     * The ring decision, measurable on THIS deployment.
+     *
+     * It was not measurable at all: nothing reported what
+     * `resolveRingableVolunteers` resolves to, and its only non-provider caller
+     * is `POST /demo/telephony/simulate/incoming-call`, which is demo-gated. On
+     * a VM running `DEMO_MODE=false` — the configuration that actually ships —
+     * the ring-eligibility checks in the live suite skipped, so R1's "that
+     * volunteer clocks in, receives a call" could only ever be verified on a
+     * demo server. A check that skips on the one configuration that counts is
+     * not coverage. `GET /calls/routing` is the read-only oracle; it resolves,
+     * it does not ring.
+     *
+     * The assertions here are the ones that hold whatever the current staffing
+     * is — the suite must not require somebody to be clocked in at the moment
+     * an operator runs it:
+     *
+     *  - the oracle EXISTS and answers on this deployment, in this mode. This
+     *    is the load-bearing one, and it is unconditional: it fails if the
+     *    route is absent, unauthorised, or demo-gated, which is the whole
+     *    defect;
+     *  - its verdict, its count and its list agree with each other —
+     *    unconditional;
+     *  - `wouldRing: false` comes with the counts that diagnose why, so an
+     *    operator can tell "nobody rostered" from "rostered, nobody clocked in"
+     *    from "rostered and clocked in, but all unavailable";
+     *  - it agrees with `/calls/presence`, which derives from the same
+     *    resolver. Honest about its own limits: how sharp this is depends on
+     *    who happens to be on shift — on an empty hub both sides are empty and
+     *    it proves nothing. The assertion that a reimplementation cannot
+     *    survive is in `apps/worker/__tests__/integration/presence-matches-ring-targets.test.ts`,
+     *    which stages an on-break volunteer against real PostgreSQL; this is
+     *    its smoke test on the real deployment, not its proof.
+     *
+     * Reported, not asserted: whether a call reaches anyone RIGHT NOW. A hub
+     * with a 09:00–17:00 shift correctly rings nobody at 03:00.
+     */
+    test('the ring decision is readable on this deployment, and agrees with presence', async ({ request }) => {
+      const { data: hubsData } = await apiGet<{ hubs?: Hub[] }>(request, '/hubs', adminSeed as string)
+      const hubs = (hubsData.hubs ?? []).filter(h => (h.status ?? 'active') === 'active')
+      expect(hubs.length, 'the deployment has no active hub').toBeGreaterThan(0)
+
+      for (const hub of hubs) {
+        const { status, data: ring } = await apiGet<RingDecision>(
+          request, `/hubs/${hub.id}/calls/routing`, adminSeed as string,
+        )
+        expect(
+          status,
+          `GET /hubs/${hub.id}/calls/routing — without this route the ring decision cannot be `
+          + 'measured on a deployment at all, only on a demo-mode server',
+        ).toBe(200)
+
+        expect(typeof ring.wouldRing, 'the oracle returned no verdict').toBe('boolean')
+        expect(ring.wouldRing, 'wouldRing disagrees with volunteerCount').toBe((ring.volunteerCount ?? 0) > 0)
+        expect(ring.volunteers?.length ?? 0, 'the volunteer list disagrees with the count').toBe(ring.volunteerCount ?? 0)
+
+        // Both derive from `resolveRingableVolunteers`. If they differ, one of
+        // them has grown its own copy of the eligibility rule.
+        const { data: presence } = await apiGet<{ users?: Array<{ pubkey: string; status: string }> }>(
+          request, `/hubs/${hub.id}/calls/presence`, adminSeed as string,
+        )
+        const presenceAvailable = (presence.users ?? []).filter(u => u.status === 'available').map(u => u.pubkey).sort()
+        expect(
+          (ring.volunteers ?? []).map(v => v.pubkey).sort(),
+          `GET /calls/routing and GET /calls/presence disagree for hub ${hub.id} — they are supposed to be `
+          + 'the same resolver, so one of them has been reimplemented',
+        ).toEqual(presenceAvailable)
+
+        // A verdict of "nobody" has to be diagnosable, not just true.
+        if (!ring.wouldRing) {
+          expect(typeof ring.scheduledNow, 'wouldRing is false and scheduledNow is missing').toBe('number')
+          expect(typeof ring.clockedIn, 'wouldRing is false and clockedIn is missing').toBe('number')
+          console.log(
+            `[readiness] hub ${hub.id} (${hub.name}) would ring nobody right now: `
+            + `${ring.scheduledNow} rostered now, ${ring.clockedIn} clocked in. `
+            + (ring.scheduledNow === 0
+              ? 'Nobody is scheduled for this hour — check the shift schedule and the fallback group.'
+              : ring.clockedIn === 0
+                ? 'Somebody is scheduled but nobody has clocked in.'
+                : 'Scheduled and clocked in, but all of them are inactive, on break, or already on a call.'),
+          )
+        }
+      }
     })
 
     /**
