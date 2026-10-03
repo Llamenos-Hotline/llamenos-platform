@@ -123,11 +123,11 @@ function makeEnv(overrides?: Record<string, unknown>): AppEnv['Bindings'] {
     TWILIO_PHONE_NUMBER: '+15551234567',
     ADMIN_PUBKEY: 'a'.repeat(64),
     AI: { run: vi.fn() } as unknown as AppEnv['Bindings']['AI'],
-    R2_BUCKET: {
+    BLOB_STORAGE: {
       put: vi.fn(),
       get: vi.fn(),
       delete: vi.fn(),
-    } as unknown as AppEnv['Bindings']['R2_BUCKET'],
+    } as unknown as AppEnv['Bindings']['BLOB_STORAGE'],
     ...overrides,
   } as AppEnv['Bindings']
 }
