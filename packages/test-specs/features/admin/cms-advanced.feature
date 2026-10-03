@@ -20,6 +20,12 @@ Feature: CMS Advanced Operations (EP06-A4)
     And the secondary contact is soft-deleted with a mergedIntoId
     And the primary contact has the merged encrypted summary
 
+  Scenario: Merged-away contact no longer appears in the directory
+    Given two contacts exist in the directory
+    When I merge the secondary contact into the primary contact with re-encrypted merged data
+    Then the merged-away secondary contact is no longer returned in the contact list
+    And the primary contact is still returned in the contact list
+
   Scenario: Merge fails when primary contact not found
     When I attempt to merge a non-existent primary contact
     Then the response status is 404
@@ -48,8 +54,6 @@ Feature: CMS Advanced Operations (EP06-A4)
   # Bulk Contact Operations
   # ---------------------------------------------------------------------------
 
-  # @fixme: bulk delete soft-deletes but the directory list never filters deletedAt — #1202
-  @fixme
   Scenario: Admin can delete multiple contacts in bulk
     Given three contacts exist in the directory
     When I perform a bulk delete action on all three contacts
