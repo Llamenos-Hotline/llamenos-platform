@@ -3,7 +3,7 @@
  * Simulates calls, verifies routing, call state, and call history via API.
  */
 import { expect } from '@playwright/test'
-import { When, Then } from './fixtures'
+import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
   simulateIncomingCall,
@@ -11,7 +11,7 @@ import {
   simulateEndCall,
   simulateVoicemail,
 } from '../../simulation-helpers'
-import { apiGet } from '../../api-helpers'
+import { apiGet, apiPost, createVolunteerViaApi, addHubMemberViaApi } from '../../api-helpers'
 
 // ── Call Simulation ────────────────────────────────────────────────
 
@@ -51,6 +51,107 @@ When('the call goes to voicemail', async ({ request, world }) => {
   expect(getScenarioState(world).callId).toBeDefined()
   const result = await simulateVoicemail(request, getScenarioState(world).callId!)
   getScenarioState(world).callStatus = result.status
+})
+
+// ── In-app answer (first pickup wins) ──────────────────────────────
+// These go through the real POST /hubs/:hubId/calls/:callId/answer route — the
+// simulation endpoint bypasses the ring-set and first-pickup checks under test.
+
+const IN_APP_ANSWER_KEY = 'inAppAnswer'
+
+interface InAppAnswer {
+  /** 1-based volunteer index (into ScenarioState.volunteers) */
+  volunteer: number
+  status: number
+}
+
+interface InAppAnswerState {
+  answers: InAppAnswer[]
+}
+
+function inAppAnswers(world: Record<string, unknown>): InAppAnswerState {
+  let s = getState<InAppAnswerState | undefined>(world, IN_APP_ANSWER_KEY)
+  if (!s) {
+    s = { answers: [] }
+    setState(world, IN_APP_ANSWER_KEY, s)
+  }
+  return s
+}
+
+async function answerInApp(
+  request: Parameters<typeof apiPost>[0],
+  world: Record<string, unknown>,
+  index: number,
+): Promise<InAppAnswer> {
+  const state = getScenarioState(world)
+  expect(state.callId).toBeDefined()
+  const vol = state.volunteers[index - 1]
+  expect(vol).toBeDefined()
+  const res = await apiPost(request, `/hubs/${state.hubId}/calls/${state.callId}/answer`, {}, vol.deviceKey)
+  const answer = { volunteer: index, status: res.status }
+  inAppAnswers(world).answers.push(answer)
+  return answer
+}
+
+Given('a hub member who is not on shift', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const member = await createVolunteerViaApi(request, { name: `BDD Off-shift ${Date.now()}` })
+  await addHubMemberViaApi(request, state.hubId, member.pubkey, ['role-volunteer'])
+  state.volunteers.push({ ...member, onShift: false })
+})
+
+When('volunteer {int} answers the call in the app', async ({ request, world }, index: number) => {
+  await answerInApp(request, world, index)
+})
+
+When('the off-shift member answers the call in the app', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const index = state.volunteers.findIndex(v => v.onShift === false) + 1
+  expect(index).toBeGreaterThan(0)
+  await answerInApp(request, world, index)
+})
+
+When(
+  'volunteers {int} and {int} answer the call in the app at the same time',
+  async ({ request, world }, a: number, b: number) => {
+    await Promise.all([answerInApp(request, world, a), answerInApp(request, world, b)])
+  },
+)
+
+Then('exactly {int} in-app answer succeeds', async ({ world }, count: number) => {
+  expect(inAppAnswers(world).answers.filter(a => a.status === 200)).toHaveLength(count)
+})
+
+Then('every other in-app answer is rejected with status {int}', async ({ world }, status: number) => {
+  const losers = inAppAnswers(world).answers.filter(a => a.status !== 200)
+  expect(losers.length).toBeGreaterThan(0)
+  for (const loser of losers) expect(loser.status).toBe(status)
+})
+
+Then('the last in-app answer is rejected with status {int}', async ({ world }, status: number) => {
+  const answers = inAppAnswers(world).answers
+  expect(answers.length).toBeGreaterThan(0)
+  expect(answers[answers.length - 1].status).toBe(status)
+})
+
+Then('the winning volunteer owns the call', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const winners = inAppAnswers(world).answers.filter(a => a.status === 200)
+  expect(winners).toHaveLength(1)
+  const { status, data } = await apiGet<{ answeredBy: string; status: string }>(
+    request,
+    `/hubs/${state.hubId}/calls/${state.callId}`,
+  )
+  expect(status).toBe(200)
+  expect(data.status).toBe('in-progress')
+  expect(data.answeredBy).toBe(state.volunteers[winners[0].volunteer - 1].pubkey)
+})
+
+Then('volunteer {int} can still hang up the call', async ({ request, world }, index: number) => {
+  const state = getScenarioState(world)
+  const vol = state.volunteers[index - 1]
+  const res = await apiPost(request, `/hubs/${state.hubId}/calls/${state.callId}/hangup`, {}, vol.deviceKey)
+  expect(res.status).toBe(200)
 })
 
 // ── Call State Assertions ──────────────────────────────────────────

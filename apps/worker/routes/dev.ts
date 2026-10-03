@@ -8,6 +8,8 @@ import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedDemoDataset } from '../services/demo-seeder'
+import { ServiceError } from '../services/settings'
+import { resolveRingableVolunteers } from '../services/ringing'
 import { DEMO_HUB } from '../lib/demo-dataset'
 import { demoIdentities } from '../lib/demo-identities'
 import { getDb } from '../db'
@@ -37,6 +39,13 @@ function checkResetSecret(c: { env: { DEV_RESET_SECRET?: string; E2E_TEST_SECRET
   if (c.req.header('X-Test-Secret') === secret) return true
   return false
 }
+
+// Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
+// /test-* route carries its own inner guard, which means the outer devGuard
+// (app.ts `api.use('/test-*', devGuard)`) could silently stop matching and
+// nothing would notice (issue #1277). This route exists solely so a test can
+// assert devGuard alone 404s it when devSurfacesEnabled(env) is false.
+dev.get('/test-devguard-canary', (c) => c.json({ ok: true }))
 
 dev.post('/test-reset', async (c) => {
   // Full reset: development only — too destructive for staging
@@ -126,14 +135,22 @@ dev.post('/test-reset-no-admin', async (c) => {
 // Preserves identity (admin account) and settings (setup state)
 // Used by live telephony E2E tests against staging
 dev.post('/test-reset-records', async (c) => {
-  const isDev = c.env.ENVIRONMENT === 'development'
-  const isStaging = c.env.ENVIRONMENT === 'staging'
-    && c.env.E2E_TEST_SECRET
-    && c.req.header('X-Test-Secret') === c.env.E2E_TEST_SECRET
-  if (!isDev && !isStaging) {
+  // The `staging` arm this used to carry was unreachable. `devGuard`
+  // (app.ts `api.use('/test-*', devGuard)`) runs first and requires
+  // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, so a staging host
+  // never reached this handler — verified by probe: with all three vars set,
+  // both this route and /api/test-devguard-canary answered 404. The compose
+  // file does not pass E2E_TEST_SECRET to the app either, so the secret could
+  // not have arrived even if the guard had allowed it.
+  //
+  // It is removed rather than fixed: it advertised a supported staging mode
+  // that cannot exist, and the live suite it existed for no longer needs a
+  // reset (#1423). Do not re-add it — loosening devGuard is the one thing
+  // lib/dev-surfaces.ts exists to prevent.
+  if (c.env.ENVIRONMENT !== 'development') {
     return c.json({ error: 'Not Found' }, 404)
   }
-  if (isDev && !checkResetSecret(c)) {
+  if (!checkResetSecret(c)) {
     return c.json({ error: 'Forbidden' }, 403)
   }
   const services = c.get('services')
@@ -769,7 +786,7 @@ interface SimulateIncomingCallBody {
   callerNumber: string
   language?: string
   hubId?: string
-  /** When true, returns 422 if no volunteers are on shift (mirrors real telephony routing) */
+  /** When true, returns 422 if the call would ring nobody (same ring set as real telephony routing) */
   checkVolunteers?: boolean
 }
 
@@ -837,15 +854,15 @@ dev.post('/test-simulate/incoming-call', async (c) => {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }
 
-  // Optionally check for on-shift volunteers (mirrors real telephony routing)
+  // Optionally refuse the call when nobody would be rung — the same ring set
+  // (on shift → fallback group; active, not on break, not on a live call, hub
+  // access) that real telephony routing rings and that the answer route
+  // accepts. Real routing never registers a ringing call nobody can answer;
+  // this makes a test that forgot to put anyone in the ring set fail here, not
+  // later as a 403 on answer.
   if (body.checkVolunteers) {
-    let volunteerPubkeys: string[] = []
-    try {
-      volunteerPubkeys = await services.shifts.getCurrentVolunteers(hubId)
-    } catch {
-      // Shifts not configured — proceed with empty list
-    }
-    if (volunteerPubkeys.length === 0) {
+    const ringable = await resolveRingableVolunteers(services, hubId)
+    if (!ringable || ringable.available.length === 0) {
       return c.json({ error: 'No volunteers available', status: 'no-volunteers' }, 422)
     }
   }
@@ -879,7 +896,14 @@ dev.post('/test-simulate/answer-call', async (c) => {
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
   if (!call) return c.json({ error: 'Call not found' }, 404)
-  await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+  try {
+    await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+  } catch (err) {
+    if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
+      return c.json({ error: err.message }, err.status)
+    }
+    throw err
+  }
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests
