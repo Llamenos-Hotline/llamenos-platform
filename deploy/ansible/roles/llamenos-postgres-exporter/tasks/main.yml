@@ -5,12 +5,46 @@
 # project on llamenos-internal (reaches `postgres:5432` directly, same network
 # the app uses) + llamenos-observability (scraped by Prometheus's `postgres`
 # job at postgres-exporter:9187). Never joins llamenos-web -- the connection
-# string carries pg_password and must not be reachable from any
-# publicly-routed container.
+# string must not be reachable from any publicly-routed container.
 #
 # Without this role the prometheus.yml.j2 `postgres` scrape job has no target
 # to reach at all, making up{job="postgres"} permanently 0 with no database
 # metrics ever collected (#1148).
+#
+# The exporter authenticates as its OWN role (postgres_exporter), created
+# below with exactly the built-in `pg_monitor` privilege -- not as `llamenos`,
+# the application's own role, which can read and write every table including
+# the E2EE envelope tables. A compromised metrics-scraping sidecar should
+# never also be a path to application data.
+
+- name: Wait for PostgreSQL to be ready (may be starting from a fresh deploy)
+  ansible.builtin.command: >-
+    docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml
+    exec -T postgres pg_isready -U llamenos -d llamenos
+  register: _pg_exporter_pg_ready
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: _pg_exporter_pg_ready.rc == 0
+
+# Idempotent: creates postgres_exporter with LOGIN + pg_monitor only if it
+# doesn't already exist, then unconditionally syncs its password to
+# postgres_exporter_password (so rotating the var and re-running converges),
+# then ensures CONNECT on the llamenos database specifically (pg_monitor
+# itself grants no CONNECT). no_log on this task AND the compose-template task
+# below: both carry postgres_exporter_password in their module args.
+- name: Create/sync the least-privilege postgres_exporter role (pg_monitor only)
+  community.docker.docker_container_exec:
+    container: llamenos-postgres-postgres-1
+    command: psql -U llamenos -d llamenos -v ON_ERROR_STOP=1 -f -
+    stdin: |
+      SELECT 'CREATE ROLE postgres_exporter LOGIN IN ROLE pg_monitor'
+      WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres_exporter')\gexec
+      ALTER ROLE postgres_exporter WITH PASSWORD '{{ postgres_exporter_password }}';
+      GRANT CONNECT ON DATABASE llamenos TO postgres_exporter;
+  no_log: true
+  changed_when: false
+  register: _pg_exporter_role
 
 - name: Create postgres-exporter directory
   ansible.builtin.file:
@@ -27,6 +61,7 @@
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
     mode: "0640"
+  no_log: true
   notify: Restart postgres-exporter
 
 - name: Start postgres-exporter

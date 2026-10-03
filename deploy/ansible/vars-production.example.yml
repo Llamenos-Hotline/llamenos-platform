@@ -110,6 +110,9 @@ storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
 # REQUIRED when observability_enabled (true by default for this profile, see
 # above): without it Prometheus can never authenticate the app scrape (#1148).
 metrics_scrape_token: ""         # openssl rand -hex 32
+# Password for the DEDICATED postgres_exporter DB role (pg_monitor only) --
+# never reuse pg_password, which can read/write every table.
+postgres_exporter_password: ""   # openssl rand -base64 24
 
 # ─── Alert receiver (required when observability/alerting is enabled) ────
 # Pick ONE: an unguessable ntfy topic (self-hosted ntfy strongly preferred over

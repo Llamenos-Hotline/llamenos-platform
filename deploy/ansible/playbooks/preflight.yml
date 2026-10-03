@@ -421,6 +421,13 @@
     # reports 1, so AppDown fires from first boot (#1148). Catch it here, before
     # the Prometheus container ever starts, instead of the day the alert gets
     # muted for crying wolf.
+    # Deliberately does NOT echo "Current value" the way the pg_password/
+    # hmac_secret/server_secret/storage_secret_key/signal_notifier_bearer_token
+    # asserts above do -- that pre-existing pattern prints a live secret into
+    # preflight's stdout (and whatever log aggregates it), which is out of
+    # scope to fix for every secret in one unrelated PR, but there is no
+    # reason to grow the list. set/not-set and length are enough to debug a
+    # missing var without the secret leaving the vault.
     - name: Assert metrics_scrape_token is set when observability/Prometheus is enabled
       ansible.builtin.assert:
         that:
@@ -432,7 +439,7 @@
           the llamenos-app scrape job can never authenticate and up{job="llamenos-app"}
           stays 0 forever.
 
-          Current value: {{ metrics_scrape_token | default('NOT SET') }}
+          Current state: {{ 'SET' if (metrics_scrape_token | default('')) | length > 0 else 'NOT SET' }}
           Length: {{ metrics_scrape_token | default('') | length }} chars (expected: >= 16)
 
           To generate:
@@ -441,6 +448,29 @@
       when:
         - observability_enabled | default(false) | bool
         - prometheus_enabled | default(true) | bool
+        - not (healthcheck_only | default(false) | bool)
+
+    - name: Assert postgres_exporter_password is set when the postgres exporter is enabled
+      ansible.builtin.assert:
+        that:
+          - postgres_exporter_password is defined
+          - postgres_exporter_password | length >= 16
+        fail_msg: |
+          REQUIRED: 'postgres_exporter_password' must be at least 16 characters
+          when the postgres exporter is enabled. It is the password for a
+          DEDICATED, pg_monitor-only database role -- never pg_password itself.
+
+          Current state: {{ 'SET' if (postgres_exporter_password | default('')) | length > 0 else 'NOT SET' }}
+          Length: {{ postgres_exporter_password | default('') | length }} chars (expected: >= 16)
+
+          To generate:
+            openssl rand -base64 24
+        success_msg: "postgres_exporter_password: [set, {{ postgres_exporter_password | length }} chars]"
+      when:
+        - observability_enabled | default(false) | bool
+        - prometheus_enabled | default(true) | bool
+        - postgres_exporter_enabled | default(true) | bool
+        - llamenos_postgres_enabled | default(true) | bool
         - not (healthcheck_only | default(false) | bool)
 
     - name: Warn if ntfy is not enabled

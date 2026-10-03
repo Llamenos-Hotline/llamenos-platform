@@ -270,6 +270,11 @@ prometheus_retention_size: 5GB
 prometheus_scrape_interval: 15s
 
 postgres_exporter_image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+# Password for the DEDICATED postgres_exporter DB role (pg_monitor privilege
+# only; created/synced by roles/llamenos-postgres-exporter) -- never the
+# application's own pg_password, which can read/write every table.
+# Generate with: openssl rand -base64 24
+postgres_exporter_password: ""
 
 grafana_image: grafana/grafana-oss:11.5.2
 grafana_admin_password: ""
