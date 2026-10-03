@@ -6,10 +6,12 @@ import type {
   VoicemailParams,
   TelephonyResponse,
   AudioUrlMap,
+  SpeechUrlBuilder,
 } from './adapter'
 import { SipBridgeAdapter } from './sip-bridge-adapter'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { GENERATED_SPEECH_LOCALES } from '../services/ivr-speech/voices'
 
 /**
  * FreeSwitchAdapter — generates mod_httapi XML responses for FreeSWITCH.
@@ -51,24 +53,24 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
     return `<document type="xml/freeswitch-httapi">${paramsXml}\n  <work>${work}\n  </work>\n</document>`
   }
 
-  private fsSpeak(text: string, lang: string): string {
-    return `\n    <speak voice="${getFliteVoice(lang)}">${escapeXml(text)}</speak>`
-  }
-
   private fsPlay(url: string): string {
     return `\n    <playback file="${escapeXml(url)}"/>`
   }
 
-  private fsSpeakOrPlay(
+  /** Play a prompt: the operator's upload for the caller's language, else generated speech */
+  private fsPrompt(
     promptKey: string,
     lang: string,
-    audioUrls?: AudioUrlMap,
-    text?: string,
+    audioUrls: AudioUrlMap | undefined,
+    speechUrl: SpeechUrlBuilder | undefined,
+    text?: (speechLang: string) => string,
   ): string {
-    const audioUrl = audioUrls?.[`${promptKey}:${lang}`]
-    if (audioUrl) return this.fsPlay(audioUrl)
-    const content = text ?? getPrompt(promptKey, lang)
-    return this.fsSpeak(content, lang)
+    return this.fsPlay(this.promptUrl(promptKey, lang, audioUrls, speechUrl, text))
+  }
+
+  /** Play text no operator can upload (it varies per call, or has no prompt type) as generated speech */
+  private fsSpeech(text: (speechLang: string) => string, lang: string, speechUrl: SpeechUrlBuilder | undefined): string {
+    return this.fsPlay(this.generatedSpeechUrl(text, lang, speechUrl))
   }
 
   private buildCallbackUrl(path: string, hubId?: string): string {
@@ -107,7 +109,8 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const promptXml = menu.options.map(o => this.fsSpeak(o.prompt, o.language)).join('')
+    // Each option in its own language: FREESWITCH_VOICES offers only languages generated speech speaks.
+    const promptXml = menu.options.map((o) => this.fsSpeech(() => o.prompt, o.language, params.speechUrl)).join('')
 
     const callbackUrl = this.buildCallbackUrl('/api/telephony/language-selected', hubId)
     const bindXml = `\n    <bind strip="#">~\\d ${escapeXml(callbackUrl)}</bind>`
@@ -123,19 +126,18 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       callerLanguage: lang,
       callSid,
       audioUrls,
+      speechUrl,
       hubId,
     } = params
     // The same prompts, in the same order, as every cloud adapter: an operator
-    // uploads exactly these keys (settings VALID_PROMPT_TYPES).
-    const greetingXml = this.fsSpeakOrPlay(
-      'greeting',
-      lang,
-      audioUrls,
-      getPrompt('greeting', lang).replace('{name}', params.hotlineName),
+    // uploads exactly these keys (settings VALID_PROMPT_TYPES); a prompt nobody
+    // uploaded is generated speech.
+    const greetingXml = this.fsPrompt('greeting', lang, audioUrls, speechUrl, (speechLang) =>
+      getPrompt('greeting', speechLang).replace('{name}', params.hotlineName),
     )
 
     if (rateLimited) {
-      const speakXml = greetingXml + this.fsSpeakOrPlay('rateLimited', lang, audioUrls)
+      const speakXml = greetingXml + this.fsPrompt('rateLimited', lang, audioUrls, speechUrl)
       const hangupXml = '\n    <hangup/>'
       return this.xmlResponse(this.doc(speakXml + hangupXml))
     }
@@ -144,8 +146,9 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       const digits = params.captchaDigits
       const speakXml =
         greetingXml +
-        this.fsSpeakOrPlay('captchaPrompt', lang, audioUrls) +
-        this.fsSpeak(digits.split('').join(' '), lang)
+        this.fsPrompt('captchaPrompt', lang, audioUrls, speechUrl) +
+        // A clip per digit: ten clips a language, not a cached clip per call.
+        digits.split('').map((digit) => this.fsSpeech(() => digit, lang, speechUrl)).join('')
       const callbackUrl = this.buildCallbackUrl('/api/telephony/captcha', hubId)
       const bindXml = `\n    <bind strip="#">~\\d{4} ${escapeXml(callbackUrl)}</bind>`
       const timeoutXml = '\n    <pause milliseconds="10000"/>'
@@ -156,7 +159,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const speakXml = greetingXml + this.fsSpeakOrPlay('pleaseHold', lang, audioUrls)
+    const speakXml = greetingXml + this.fsPrompt('pleaseHold', lang, audioUrls, speechUrl)
     const parkXml = `\n    <execute application="park"/>`
     return this.xmlResponse(
       this.doc(speakXml + parkXml, {
@@ -167,10 +170,10 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    const { digits, expectedDigits, callerLanguage: lang, callSid } = params
+    const { digits, expectedDigits, callerLanguage: lang, callSid, speechUrl } = params
 
     if (digits === expectedDigits) {
-      const speakXml = this.fsSpeak(getPrompt('captchaSuccess', lang), lang)
+      const speakXml = this.fsSpeech((speechLang) => getPrompt('captchaSuccess', speechLang), lang, speechUrl)
       const parkXml = `\n    <execute application="park"/>`
       return this.xmlResponse(
         this.doc(speakXml + parkXml, {
@@ -180,7 +183,7 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
       )
     }
 
-    const failXml = this.fsSpeak(getPrompt('captchaFail', lang), lang)
+    const failXml = this.fsSpeech((speechLang) => getPrompt('captchaFail', speechLang), lang, speechUrl)
     const hangupXml = '\n    <hangup/>'
     return this.xmlResponse(this.doc(failXml + hangupXml))
   }
@@ -192,9 +195,9 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
   }
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
-    const { callerLanguage: lang, audioUrls, maxRecordingSeconds, hubId } = params
+    const { callerLanguage: lang, audioUrls, speechUrl, maxRecordingSeconds, hubId } = params
     const maxSeconds = maxRecordingSeconds || 120
-    const speakXml = this.fsSpeakOrPlay('voicemailPrompt', lang, audioUrls)
+    const speakXml = this.fsPrompt('voicemailPrompt', lang, audioUrls, speechUrl)
     const callbackUrl = this.buildCallbackUrl('/api/telephony/voicemail-recording', hubId)
     const recordXml = `\n    <record name="voicemail_${Date.now()}.wav" error-file="silence_stream://250" beep-file="tone_stream://%(250,0,800)" limit="${maxSeconds}" action="${escapeXml(callbackUrl)}"/>`
     return this.xmlResponse(this.doc(speakXml + recordXml))
@@ -205,13 +208,14 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
     audioUrls?: AudioUrlMap,
     queueTime?: number,
     queueTimeout?: number,
+    speechUrl?: SpeechUrlBuilder,
   ): Promise<TelephonyResponse> {
     const timeout = queueTimeout || 90
     if (queueTime && queueTime >= timeout) {
       const leaveXml = `\n    <execute application="transfer" data="voicemail"/>`
       return this.xmlResponse(this.doc(leaveXml))
     }
-    const musicXml = this.fsSpeakOrPlay('waitMessage', lang, audioUrls)
+    const musicXml = this.fsPrompt('waitMessage', lang, audioUrls, speechUrl)
     return this.xmlResponse(this.doc(musicXml))
   }
 
@@ -220,8 +224,8 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
     return this.xmlResponse(this.doc(hangupXml))
   }
 
-  handleVoicemailComplete(lang: string): TelephonyResponse {
-    const speakXml = this.fsSpeak(getVoicemailThanks(lang), lang)
+  handleVoicemailComplete(lang: string, speechUrl?: SpeechUrlBuilder): TelephonyResponse {
+    const speakXml = this.fsSpeech((speechLang) => getVoicemailThanks(speechLang), lang, speechUrl)
     const hangupXml = '\n    <hangup/>'
     return this.xmlResponse(this.doc(speakXml + hangupXml))
   }
@@ -234,17 +238,15 @@ export class FreeSwitchAdapter extends SipBridgeAdapter {
 // --- Helpers ---
 
 /**
- * FreeSWITCH TTS voices (mod_flite) — the explicit, ordered list of locales
- * FreeSWITCH can speak. Flite ships English voices only, so FreeSWITCH offers
- * no multi-language IVR menu until a multilingual TTS engine is configured.
+ * The locales a FreeSWITCH IVR can speak: those generated speech has a voice
+ * for (the worker synthesises every prompt the operator did not upload, and
+ * mod_httapi plays it from its URL). Absent locales are never offered in the
+ * IVR menu.
  */
-export const FREESWITCH_VOICES = new IvrVoiceCatalog<string>('freeswitch', [
-  ['en', 'slt'],
-])
-
-function getFliteVoice(lang: string): string {
-  return FREESWITCH_VOICES.voiceForPrompt(lang)
-}
+export const FREESWITCH_VOICES = new IvrVoiceCatalog<string>(
+  'freeswitch',
+  GENERATED_SPEECH_LOCALES.map((locale) => [locale, locale] as const),
+)
 
 function escapeXml(text: string): string {
   return text

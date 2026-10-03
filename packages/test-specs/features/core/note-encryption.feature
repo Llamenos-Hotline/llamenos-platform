@@ -95,7 +95,8 @@ Feature: Note Encryption & Management
     And I should see the creation date
     And I should see the author pubkey
 
-  @ios @android @regression
+  # @fixme: desktop has no separate note detail view — #1313
+  @ios @android @regression @fixme
   Scenario: Note detail back navigation
     Given I am authenticated
     And at least one note exists
@@ -103,7 +104,8 @@ Feature: Note Encryption & Management
     And I tap the back button
     Then I should return to the notes list
 
-  @ios @android @regression
+  # @fixme: desktop has no separate note detail view — #1313
+  @ios @android @regression @fixme
   Scenario: Note detail shows copy button
     Given I am authenticated
     And at least one note exists

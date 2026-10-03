@@ -25,6 +25,41 @@ type SipCredentialParams = Omit<SipConnectionParams, 'issuedAt' | 'expiresAt'>
 export const SIP_PARAMS_TTL_SECONDS = 3600
 
 /**
+ * Whether SIP credentials may be issued to a volunteer at all.
+ *
+ * Currently ALWAYS false, deliberately. Every provider generator below takes
+ * `identity` and declares it `_identity` — the credentials returned are the
+ * hub's own `sipUsername`/`sipPassword` from its `TelephonyProviderConfig`,
+ * which is hub-scoped. So every volunteer in a hub would receive the same
+ * credential: the hub's trunk account at the telephony vendor (#1203).
+ *
+ * Three consequences, in increasing order of seriousness:
+ *
+ *   1. Per-volunteer revocation is impossible. When a volunteer leaves there
+ *      is nothing to revoke; rotating deauthenticates the whole hub including
+ *      the trunk.
+ *   2. A seized or malicious device holds credentials that can originate
+ *      calls billed to the hub.
+ *   3. Registration goes to the VENDOR's SIP domain, so the vendor observes
+ *      every volunteer's source IP and online/offline pattern — continuous,
+ *      passive, invisible. Under a threat model naming nation states and
+ *      private hacking firms this is the one that matters.
+ *
+ * The leak is latent today only because no client completes SIP registration
+ * (#1188). Finishing that work would activate it, which is why this refuses
+ * at the source rather than relying on clients not asking.
+ *
+ * The real fix is per-volunteer identities against OUR OWN registrar (#1173's
+ * Kamailio design). A per-volunteer credential at the vendor would still leak
+ * (3). So this does not return true when some provider gains per-user
+ * credentials — it returns true when registration targets infrastructure we
+ * run.
+ */
+export function sipCredentialsMayBeIssued(_config: TelephonyProviderConfig | null): boolean {
+  return false
+}
+
+/**
  * Check whether a provider has SIP endpoints configured for native VoIP clients.
  * All providers support standard SIP — this checks for the necessary credentials.
  */
