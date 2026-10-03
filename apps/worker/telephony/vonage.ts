@@ -261,6 +261,11 @@ export class VonageAdapter implements TelephonyAdapter {
     return this.ncco([])
   }
 
+  /** An answered Vonage call with an empty NCCO ends immediately. */
+  hangupResponse(): TelephonyResponse {
+    return this.ncco([])
+  }
+
   async hangupCall(callSid: string): Promise<void> {
     await this.vonageApi(`/v1/calls/${callSid}`, {
       method: 'PUT',

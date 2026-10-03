@@ -984,7 +984,7 @@ function CrashReportingSettings() {
       {pendingCount > 0 && (
         <div className="rounded-lg border border-border p-4 space-y-3">
           <p className="text-sm text-muted-foreground">
-            {t('crashReporting.pendingReportsDescription', { defaultValue: '%@ crash report(s) from previous sessions are ready to send.' }).replace('%@', String(pendingCount))}
+            {t('crashReporting.pendingReportsDescription', { count: pendingCount })}
           </p>
           <div className="flex gap-2">
             {enabled && (

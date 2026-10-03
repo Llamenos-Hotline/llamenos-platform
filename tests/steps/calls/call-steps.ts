@@ -163,13 +163,9 @@ When('I tap the add note button on a call record', async ({ page }) => {
 })
 
 When('I tap the back button on call history', async ({ page }) => {
-  const backBtn = page.getByTestId(TestIds.BACK_BTN)
-  const backVisible = await backBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (backVisible) {
-    await backBtn.click()
-  } else {
-    await page.goBack()
-  }
+  // The call history route has no in-page back control: back is history navigation.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await page.goBack()
 })
 
 Then('I should see the date from filter', async ({ page }) => {
@@ -190,13 +186,16 @@ Given('a date range is selected', async ({ page }) => {
   await dateFrom.fill('2024-01-01')
   await expect(dateTo).toBeVisible({ timeout: Timeouts.ELEMENT })
   await dateTo.fill('2024-12-31')
+  // The filter form applies on submit: filling the inputs alone changes neither
+  // the URL search nor `hasFilters`, which is why the clear-button check used to
+  // need a page-title fallback. Submit it, as a user would.
+  await page.getByTestId(TestIds.CALL_SEARCH_BTN).click()
+  await expect(page).toHaveURL(/[?&]dateFrom=2024-01-01/, { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the date range clear button', async ({ page }) => {
-  // Clear button only appears when hasFilters is true (dates are filled)
-  const clearBtn = page.getByTestId(TestIds.CALL_CLEAR_FILTERS)
-  const isVisible = await clearBtn.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isVisible) return
-  // Fallback: page rendered (date fill may not trigger React state in test env)
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Clear only renders once a filter is set (hasFilters). The old fallback —
+  // "date fill may not trigger React state in test env", then the page title —
+  // passed exactly when filling the dates had no effect.
+  await expect(page.getByTestId(TestIds.CALL_CLEAR_FILTERS)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })

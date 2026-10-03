@@ -4,7 +4,6 @@ import { cors } from './middleware/cors'
 import { apiVersion } from './middleware/api-version'
 import { auth } from './middleware/auth'
 import { rateLimit } from './middleware/rate-limit'
-import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from './lib/helpers'
 import { createMiddleware } from 'hono/factory'
 import configRoutes from './routes/config'
 import devRoutes from './routes/dev'
@@ -19,6 +18,7 @@ import callsRoutes from './routes/calls'
 import auditRoutes from './routes/audit'
 import settingsRoutes from './routes/settings'
 import telephonyRoutes from './routes/telephony'
+import ivrMediaRoutes from './routes/ivr-media'
 import webrtcRoutes from './routes/webrtc'
 import messagingRoutes from './messaging/router'
 import conversationsRoutes from './routes/conversations'
@@ -103,7 +103,10 @@ api.use('*', async (c, next) => {
   const durationSec = (performance.now() - t0) / 1000
   const method = c.req.method
   // Normalize path: strip query params and collapse IDs for cardinality control
-  const path = c.req.path.replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
+  // A generated-speech path names its own text (one per CAPTCHA), so it is one route.
+  const path = c.req.path
+    .replace(/\/ivr-speech\/.*$/, '/ivr-speech/:clip')
+    .replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
   recordHttpRequest(method, path, c.res.status, durationSec)
 })
 
@@ -190,22 +193,11 @@ api.patch('/messaging/preferences', async (c) => {
 // Only POST is registered here; GET /security-events falls through to the authenticated router.
 api.route('/security-events', publicSecurityEventsRoutes)
 
-// Public IVR audio serve: the telephony provider fetches operator-uploaded
-// prompts during a call (buildAudioUrlMap). Operators listen back through the
-// authenticated GET /settings/ivr-audio/:promptType/:language instead.
+// Public IVR media: what a telephony provider fetches during a call —
+// operator-uploaded prompts and generated speech — through signed URLs only.
 api.use('/ivr-audio/*', rateLimit('webhook'))
-api.get('/ivr-audio/:promptType/:language', async (c) => {
-  const services = c.get('services')
-  const promptType = c.req.param('promptType')
-  const language = c.req.param('language')
-  if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) {
-    return c.json({ error: 'Invalid parameters' }, 400)
-  }
-  const result = await services.settings.getIvrAudio(promptType, language)
-  if (!result) return c.json({ error: 'Not found' }, 404)
-  // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
-  return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
-})
+api.use('/ivr-speech/*', rateLimit('webhook'))
+api.route('/', ivrMediaRoutes)
 
 // Authenticated routes
 const authenticated = new Hono<AppEnv>()

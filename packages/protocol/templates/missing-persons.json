@@ -383,7 +383,8 @@
         "conversations:*",
         "reports:*",
         "shifts:read",
-        "volunteers:read",
+        "shifts:set-availability",
+        "users:read",
         "hubs:read"
       ]
     },
@@ -420,6 +421,7 @@
         "notes:create",
         "notes:read-own",
         "shifts:read-own",
+        "shifts:set-availability",
         "calls:hangup",
         "calls:report-spam",
         "calls:identify-caller",
