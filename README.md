@@ -138,9 +138,9 @@ Authentication uses Ed25519/X25519 keypairs. Generate the first admin:
 bun run bootstrap-admin
 ```
 
-This outputs:
-- A **recovery key** — give this to the admin, store it securely
-- A **hex public key** — you'll need this in the next step
+This prints, separately:
+- Two **public** values — `ADMIN_PUBKEY` (Ed25519) and `ADMIN_DECRYPTION_PUBKEY` (X25519) — for the next step
+- The admin's **secret seed**, under a `SECRET` heading — give it only to the admin and never put it in `.env` or any server config
 
 ### 3. Configure environment
 
@@ -151,7 +151,8 @@ cp .env.example .env
 Edit `.env` with your admin public key and telephony credentials:
 
 ```env
-ADMIN_PUBKEY=hex_public_key_from_step_2
+ADMIN_PUBKEY=hex_public_key_from_step_2   # the PUBLIC value, never the secret seed
+ADMIN_DECRYPTION_PUBKEY=hex_decryption_public_key_from_step_2
 ENVIRONMENT=development
 
 # Twilio (default voice provider — optional if configuring via admin UI)

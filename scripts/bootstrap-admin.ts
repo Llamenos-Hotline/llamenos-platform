@@ -19,6 +19,12 @@
  * convenience — the client has no way to import a second, unrelated seed, so an
  * independently generated decryption key produces envelopes nobody can open.
  *
+ * The printed report puts the two PUBLIC values first, under labels that say
+ * "public", and the secrets after a SECRET heading (#1040). The regression that
+ * forces that layout: the script used to print the secret seed under the label
+ * "PUBLIC KEY (hex)", so an operator following it configured the admin's secret
+ * as ADMIN_PUBKEY — a value GET /api/auth/me serves to every authenticated user.
+ *
  * NOTE: The recommended approach is in-app bootstrap — open the deployed app
  * and the setup wizard generates the keypair for you. This CLI script is for
  * headless/CI setups where that is not available.
@@ -78,36 +84,36 @@ export function generateAdminKeys(): AdminBootstrapKeys {
  *
  * Returned as a string rather than printed so a test can assert on exactly what
  * an operator is told to copy — in particular that the secret seed is never
- * offered as a value to put in server config.
+ * offered as a value to put in server config, and that nothing secret appears
+ * before the SECRET heading.
  */
 export function formatBootstrapOutput(keys: AdminBootstrapKeys, serverSecret: string): string {
   return `=== Llámenos Admin Bootstrap ===
 
 Generated one admin signing seed and derived the public keys from it.
 
---- SECRET — keep on this machine only ---
+--- PUBLIC values — these go in the server config ---
 
-ADMIN SIGNING SEED (hex) — the admin logs in and decrypts with THIS:
-  ${keys.seedHex}
-
-  This is the ONLY secret. Do NOT put it in the server's environment, the
-  Ansible vault, a .env file, CI, or a ticket. The server never needs it, and
-  anything holding it can impersonate the admin and read every note.
-  Store it in the operator's password manager. It cannot be recovered.
-
---- PUBLIC — these go in the server config ---
-
-ADMIN_PUBKEY (Ed25519 identity, hex):
+ADMIN_PUBKEY (Ed25519 identity public key, hex):
   ${keys.identityPubkey}
 
-ADMIN_DECRYPTION_PUBKEY (X25519 HPKE recipient, hex):
+ADMIN_DECRYPTION_PUBKEY (X25519 HPKE recipient public key, hex):
   ${keys.decryptionPubkey}
+
+--- SECRET values — NEVER put these in server config, a vault, CI, or a ticket ---
+
+ADMIN SECRET SEED (hex) — the admin logs in and decrypts with THIS:
+  ${keys.seedHex}
 
 SERVER_SECRET (hex) — server-side only; signs WebSocket relay events:
   ${serverSecret}
 
-  SERVER_SECRET is a server secret, not an operator secret: the server derives
-  its own Ed25519 event-signing keypair from it. It belongs in the vault.
+WARNING: the admin seed is the ONLY admin secret, and anyone holding it IS the
+admin — they can impersonate them and read every note. The server never needs
+it. Store it in the operator's password manager; it cannot be recovered.
+SERVER_SECRET is different: it is a server secret, not an operator secret — the
+server derives its own Ed25519 event-signing keypair from it, and it belongs in
+the vault alongside the other server configuration.
 
 --- Next Steps ---
 
@@ -130,11 +136,11 @@ SERVER_SECRET (hex) — server-side only; signs WebSocket relay events:
 
 3. Local development — the same three lines in the repo's .env (gitignored).
 
-4. Log in: open the app and import the ADMIN SIGNING SEED above. The client
+4. Log in: open the app and import the ADMIN SECRET SEED above. The client
    re-derives both public keys from it, so they will match the server config.
 
-This backend is Bun + PostgreSQL. It is not a Cloudflare Worker, there is no
-wrangler config under apps/worker, and no secrets are pushed with wrangler.
+This backend is Bun + PostgreSQL, not a serverless edge runtime: no secrets are
+pushed with a provider CLI, and there is no edge config under apps/worker.
 `
 }
 
