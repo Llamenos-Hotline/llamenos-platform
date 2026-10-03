@@ -261,6 +261,63 @@
         success_msg: "admin_pubkey: {{ admin_pubkey[:8] }}... (64 chars)"
       when: admin_pubkey is defined and admin_pubkey | length > 0
 
+    # Mirrors the admin-HPKE-recipient block in apps/worker/lib/config.ts, so
+    # the operator learns about it here rather than from a container that
+    # refuses to boot after Ansible has reported success.
+    #
+    # admin_pubkey is Ed25519 (it verifies the admin's request signatures).
+    # admin_decryption_pubkey is X25519 (it is the HPKE recipient every note,
+    # message and hub-key envelope is sealed to). Before #1283 the app fell
+    # back from the second to the first. DHKEM(X25519) accepts any 32 bytes as
+    # a recipient key, so that fallback never errored — it produced envelopes
+    # for which no secret key exists, and every note written on such a
+    # deployment was lost silently.
+    - name: Assert admin_decryption_pubkey is set when admin_pubkey is
+      ansible.builtin.assert:
+        that:
+          - admin_decryption_pubkey is defined
+          - admin_decryption_pubkey | length > 0
+        fail_msg: |
+          REQUIRED: 'admin_decryption_pubkey' must be set whenever 'admin_pubkey' is.
+
+          These are two different keys for two different algorithms:
+            admin_pubkey            Ed25519 — verifies the admin's signatures
+            admin_decryption_pubkey X25519  — the HPKE recipient notes are sealed to
+
+          The server will not substitute one for the other and refuses to boot
+          without it, because sealing a note to the Ed25519 key succeeds and
+          produces a note that nobody — not the volunteer, not the admin, not
+          the server — can ever decrypt.
+
+          To fix:
+            1. Run: bun run bootstrap-admin
+            2. Copy BOTH printed public keys into vars.yml
+        success_msg: "admin_decryption_pubkey: {{ admin_decryption_pubkey[:8] }}... (set)"
+      when: admin_pubkey is defined and admin_pubkey | length > 0
+
+    - name: Assert admin_decryption_pubkey is a valid 64-character hex string, distinct from admin_pubkey
+      ansible.builtin.assert:
+        that:
+          - admin_decryption_pubkey | length == 64
+          - admin_decryption_pubkey | regex_search('^[0-9a-f]{64}$') is truthy
+          - admin_decryption_pubkey != (admin_pubkey | default(''))
+        fail_msg: |
+          INVALID: 'admin_decryption_pubkey' must be a 64-character lowercase hex
+          X25519 public key, and must differ from 'admin_pubkey'.
+
+          Length: {{ admin_decryption_pubkey | length }} chars (expected: 64)
+          Same as admin_pubkey: {{ admin_decryption_pubkey == (admin_pubkey | default('')) }}
+
+          If the two are equal, one key was copied into both slots — and if it
+          is the Ed25519 one, every admin envelope on this deployment would be
+          undecryptable.
+
+          To fix:
+            1. Run: bun run bootstrap-admin
+            2. Copy BOTH printed public keys into vars.yml — they are different values
+        success_msg: "admin_decryption_pubkey: {{ admin_decryption_pubkey[:8] }}... (64 chars, distinct)"
+      when: admin_decryption_pubkey is defined and admin_decryption_pubkey | length > 0
+
     # The app demands EXACTLY 64 lowercase hex characters (assertHex64 in
     # apps/worker/lib/config.ts). This used to accept any 32+ characters, so a
     # 32- or 40-char secret passed preflight and then hard-failed at container

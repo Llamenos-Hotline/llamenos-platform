@@ -18,6 +18,7 @@ import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
 import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
+import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { ServiceError } from './settings'
 
 // ---------------------------------------------------------------------------
@@ -413,7 +414,13 @@ export class ConversationsService {
 
   async handleIncoming(
     incoming: IncomingMessage,
-    adminDecryptionPubkey: string,
+    /**
+     * The platform admin's X25519 HPKE recipient, or `undefined` when the
+     * deployment has none. Typed as a brand so an Ed25519 auth key — which is
+     * also 64 hex characters, and which the messaging router used to pass here
+     * — cannot be supplied by mistake (#1283).
+     */
+    adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
     hubId?: string,
   ): Promise<{
     conversationId: string
@@ -486,8 +493,9 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern
-    const readerPubkeys = [adminDecryptionPubkey]
+    // Encrypt the message content using envelope pattern. An absent admin
+    // recipient means one fewer reader, never a substituted key (#1283).
+    const readerPubkeys: string[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
     if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
       readerPubkeys.push(conv.assignedTo)
     }
