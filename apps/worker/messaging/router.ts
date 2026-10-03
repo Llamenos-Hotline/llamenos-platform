@@ -225,11 +225,16 @@ messaging.post('/:channel/webhook',
     const sourceUuid = incoming.metadata?.sourceUuid
     if (sourceNumber && sourceUuid) {
       backgroundTask(c,
-        new SignalIdentityService(getDb()).recordIdentity({
-          hubId,
-          number: sourceNumber,
-          uuid: sourceUuid,
-        }).then(() => undefined)
+        services.settings.getMessagingConfig()
+          .then(config => new SignalIdentityService(getDb()).recordIdentity({
+            hubId,
+            number: sourceNumber,
+            uuid: sourceUuid,
+            // Honor the admin's configured trust policy (e.g. 'manual' review
+            // for new contacts) instead of silently defaulting to 'tofu'.
+            trustMode: config.signal?.trustMode,
+          }))
+          .then(() => undefined)
       )
     }
   }
