@@ -67,7 +67,13 @@ export interface TelephonyAdapter {
    * Generate hold music / wait message for callers in queue.
    * When queueTime exceeds threshold, returns <Leave/> to trigger voicemail.
    */
-  handleWaitMusic(lang: string, audioUrls?: AudioUrlMap, queueTime?: number, queueTimeout?: number): Promise<TelephonyResponse>
+  handleWaitMusic(
+    lang: string,
+    audioUrls?: AudioUrlMap,
+    queueTime?: number,
+    queueTimeout?: number,
+    speechUrl?: SpeechUrlBuilder,
+  ): Promise<TelephonyResponse>
 
   /**
    * Reject a banned/blocked caller.
@@ -138,7 +144,7 @@ export interface TelephonyAdapter {
   // --- Additional response methods ---
 
   /** Thank the caller after voicemail recording and hang up */
-  handleVoicemailComplete(lang: string): TelephonyResponse
+  handleVoicemailComplete(lang: string, speechUrl?: SpeechUrlBuilder): TelephonyResponse
 
   /** Return an empty/no-op response */
   emptyResponse(): TelephonyResponse
@@ -151,6 +157,7 @@ export interface LanguageMenuParams {
   enabledLanguages: string[]
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface IncomingCallParams {
@@ -165,6 +172,7 @@ export interface IncomingCallParams {
   captchaDigits?: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface CaptchaResponseParams {
@@ -174,6 +182,7 @@ export interface CaptchaResponseParams {
   callerLanguage: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface CallAnsweredParams {
@@ -198,6 +207,7 @@ export interface VoicemailParams {
   maxRecordingSeconds?: number
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface RingVolunteersParams {
@@ -224,3 +234,10 @@ export interface TelephonyResponse {
 
 /** Map of "promptType:language" -> audio URL for custom recordings */
 export type AudioUrlMap = Record<string, string>
+
+/**
+ * The URL of `text` spoken in `locale` by the worker's own speech engine
+ * (IvrSpeechService) — for the self-hosted PBXs, which cannot speak a prompt
+ * themselves. Cloud providers speak with their own engines and ignore it.
+ */
+export type SpeechUrlBuilder = (text: string, locale: string) => string
