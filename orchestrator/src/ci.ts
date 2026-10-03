@@ -129,25 +129,23 @@ export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'depen
 export const REVIEW_REPUBLISH_ACTION = 'synchronize'
 
 /**
- * The event name of the operator's manual escape hatch — `fleet-review.yml`'s
+ * The event name of the operator's manual dispatch — `fleet-review.yml`'s
  * `workflow_dispatch` trigger, carrying a `pr_number` input.
  *
- * It is a REAL review trigger, not a bypass: a dispatch reaches `run-engine`
- * like any review request, runs the full review set, and can return FAIL.
- * What it skips is only GitHub's `review_requested` delivery, which #1471
- * measured as unreachable for a whole class of PR: when the required
- * reviewer is a CODEOWNER of a path the PR touches, GitHub re-adds the
- * request the instant it is removed, so the remove-then-re-add recovery
- * `review_requested` depends on emits NO event at all — `DELETE
- * .../requested_reviewers` answers 200 with the PR object and changes
- * nothing, and the follow-up POST no-ops on an already-requested login.
- * Eight PRs sat red on a required `fleet/review` with no reachable way to
- * earn a verdict.
+ * It is a REAL review trigger and never a bypass: it reaches `run-engine`
+ * like any review request, runs the full review set, and can return FAIL. It
+ * is accepted with no reviewer login to check because triggering a
+ * `workflow_dispatch` at all needs write access to this repository.
  *
- * It stays the ESCAPE HATCH, never the primary path: it takes an operator
- * typing a PR number, and it is write-access-gated (triggering
- * `workflow_dispatch` at all needs write access), which is what makes
- * accepting it safe without a reviewer login to check.
+ * WHAT IT IS NOT is a second route to a green gate, and #1471 was briefed on
+ * the belief that it was. A dispatch's check run attaches to the commit, but
+ * the check SUITE a `workflow_dispatch` creates on a branch is not associated
+ * with the PULL REQUEST, so that check run never enters the PR's
+ * status-check rollup — measured on #1372, #1378 and #1184, each of whose
+ * heads carries a dispatch SUCCESS while the rollup still shows an older
+ * `pull_request` FAILURE. So a dispatch is how you GET a verdict; only
+ * `review_requested` CLEARS the context. `reviewNotRequestedAdvice` must
+ * therefore never offer it as the recovery, and a rail pins that.
  */
 export const REVIEW_DISPATCH_EVENT = 'workflow_dispatch'
 
@@ -399,16 +397,31 @@ export function reviewNotRequestedAdvice(input: {
   alreadyRequested: readonly string[] | undefined
 }): string[] {
   const { pr, branch, ask, isAuthorStandIn, alreadyRequested } = input
-  const dispatch = `gh workflow run fleet-review.yml --ref ${branch} -f pr_number=${pr}`
+  // Deliberately NOT a `gh workflow run fleet-review.yml` suggestion. A
+  // dispatch does run the real review and does write a `fleet/review` check
+  // run on the head — but a check suite created by a `workflow_dispatch` on a
+  // branch is not associated with the PULL REQUEST, so that check run never
+  // enters the PR's status-check rollup and cannot clear (or fail) the
+  // required context. Measured on three of #1471's PRs at once: #1372's head
+  // carries a `pull_request` FAILURE and a later `workflow_dispatch` SUCCESS,
+  // and the rollup surfaces only the FAILURE; same on #1378 and #1184 (whose
+  // head carries TWO dispatch successes and still shows a four-day-old red).
+  // Naming it here would replace one dead end with another, which is the
+  // whole defect this function exists to stop.
   const pending = alreadyRequested?.some((l) => loginOf(l) === loginOf(ask)) === true
   if (pending) {
     return [
       `review not requested — \`${ask}\` is ALREADY a requested reviewer on this PR, so requesting one again ` +
         'does nothing: GitHub emits no `review_requested` event for a login it already has, and re-adds a ' +
         "CODEOWNER's request the instant you remove it (the DELETE answers 200 with the PR object and changes " +
-        'nothing). That recovery cannot start a review here (#1471).',
-      `run the review directly instead: ${dispatch}`,
-      '  (a dispatch runs the real review set and can FAIL — it is the escape hatch, not a bypass)',
+        'nothing, while every command in the sequence reports success). That recovery cannot start a review ' +
+        'here (#1471).',
+      `check it rather than trust it: gh api repos/<owner>/<repo>/issues/${pr}/events ` +
+        '--jq \'[.[] | select(.event|test("review_request"))] | last\' — if the newest review-request event ' +
+        'is not from just now, nothing fired and `reviewRequests` is telling you nothing.',
+      'a `workflow_dispatch` of fleet-review.yml WILL run the real review, but its check run is not associated ' +
+        `with PR #${pr} and so never enters this PR's status-check rollup — it cannot clear this context. ` +
+        'Escalate on #1471 instead of looping.',
     ]
   }
   return [
@@ -416,7 +429,14 @@ export function reviewNotRequestedAdvice(input: {
       ? `review not requested — this PR's author cannot be asked to review it, so request a review from ` +
         `\`${ask}\` to run the non-author review`
       : `review not requested — request a review from \`${ask}\` to run the non-author review`,
-    `if that request is a no-op (GitHub re-adds a CODEOWNER instantly), run the review directly: ${dispatch}`,
+    // Only claimed when the list was actually READ and that login was absent.
+    // `undefined` means the read failed, which cannot rule out the no-op
+    // above — so say nothing rather than promise an event will fire.
+    ...(alreadyRequested === undefined
+      ? [`(could not read this PR's requested reviewers, so whether that request will emit an event is unknown — ` +
+         'check `issues/<n>/events` after making it)']
+      : [`\`${ask}\` is not currently requested on this PR, so that request will emit an event and start the ` +
+         `review (branch \`${branch}\`).`]),
   ]
 }
 

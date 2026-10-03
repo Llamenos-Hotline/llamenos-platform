@@ -76,22 +76,29 @@
 #    and a `push` event carries no PR to attach a check to. That ban is
 #    unchanged and nothing below relaxes it.
 #
-#    `review_requested` remains the only PR EVENT that starts a review, and
-#    it fires on both the first request and every re-request — but it is NOT
-#    the only thing that can start one, and this file used to claim it was.
-#    `workflow_dispatch` starts a real review too (#1471). It has to: a
-#    re-request is NOT always re-emittable. When the required reviewer is a
-#    CODEOWNER of a path the PR touches, GitHub re-adds the request the
-#    instant you remove it, so the documented remove-then-re-add recovery
-#    emits NO event — `DELETE .../requested_reviewers` answers 200 with the
-#    PR object and changes nothing, the follow-up POST no-ops on a login
-#    already requested, and `requested_reviewers` cannot tell "requested just
-#    now" from "requested last week and never re-fired", so every command in
-#    the sequence reports success while nothing happens. Eight PRs sat red on
-#    a required `fleet/review` with no reachable way to earn a verdict at
-#    all, which is strictly worse than any of the triggers banned above. The
-#    dispatch is write-access-gated, runs the full review set, and can return
-#    FAIL — it is the escape hatch, never a bypass and never a pass.
+#    `review_requested` remains the ONLY thing that can start a review AND
+#    clear this context. `workflow_dispatch` runs a real review too, but its
+#    check run does not reach the PR's rollup — see its own comment under
+#    `on:` below, and do not mistake it for a second route to a green gate.
+#
+#    AND THE RE-REQUEST IS NOT ALWAYS RE-EMITTABLE (#1471). When the required
+#    reviewer is a CODEOWNER of a path the PR touches, GitHub re-adds the
+#    request the instant you remove it, so the remove-then-re-add recovery
+#    this file documents emits NO event: `DELETE .../requested_reviewers`
+#    answers 200 with the PR object and changes nothing, the follow-up POST
+#    no-ops on a login already requested, and `requested_reviewers` cannot
+#    tell "requested just now" from "requested four days ago and never
+#    re-fired" — so every command in the sequence reports success while
+#    nothing happens. Measured both directions in one session: on #1372
+#    (reviewer a code owner of a touched path) the list stayed populated and
+#    the newest event stayed four days old; on #1467 (reviewer owning nothing
+#    it touched) the identical sequence emptied the list and emitted a fresh
+#    event. The honest check is the EVENTS endpoint, never `reviewRequests`:
+#      gh api repos/<o>/<r>/issues/<n>/events \
+#        --jq '[.[] | select(.event|test("review_request"))] | last'
+#    `reviewNotRequestedAdvice` (ci.ts) is what stops the red check sending
+#    its reader into that loop. The remaining gap — a verdict that can be
+#    RECORDED when no event can be made to fire — is #1471, still open.
 #
 #    The republish arm never runs on `llamenos-review-box` — see `runs-on`
 #    below. It cannot reach the engine, so it must not queue in front of a
@@ -160,9 +167,11 @@
 #                             one loop that cannot terminate (#1471). It
 #                             names the dispatch instead.
 #   `run-engine`            → the real review, then the label clear. Reached
-#                             from a `review_requested` OR from the
-#                             `workflow_dispatch` escape hatch — both run
-#                             the same review set and both can FAIL.
+#                             from a `review_requested`, or from a
+#                             `workflow_dispatch` — both run the same review
+#                             set and both can FAIL, but only the former's
+#                             check run reaches the PR's rollup (see the
+#                             `workflow_dispatch` comment under `on:`).
 #
 # Every run's outcome — each of those, and every way the review itself can
 # end — is then NAMED on the check by the job's last step, "Name this run's
@@ -227,21 +236,25 @@ on:
   # somebody with write access typing this PR's number IS the "look at this
   # now" that a review request means on the other arm.
   #
-  # It satisfies the required context because a dispatch run's check attaches
-  # to `github.sha`, which for `--ref <branch>` is that branch's tip at
-  # trigger time (see the ctx step's own comment). ALWAYS dispatch with
-  # `--ref <the PR's own head branch>`: the ctx step refuses any other ref
-  # outright rather than publish a `fleet/review` onto a commit that is not
-  # the PR's.
+  # IT DOES NOT SATISFY THE REQUIRED CONTEXT, and this comment used to say it
+  # did (#1471). A dispatch run's check DOES attach to `github.sha`, which for
+  # `--ref <branch>` is that branch's tip at trigger time — but the check
+  # SUITE a `workflow_dispatch` creates on a branch is not associated with the
+  # PULL REQUEST, so that check run never enters the PR's status-check rollup.
+  # Measured on three of #1471's PRs at once: #1372's head carries a
+  # `pull_request` FAILURE and a later `workflow_dispatch` SUCCESS, and the
+  # rollup surfaces only the FAILURE; #1378 the same; #1184's head carries TWO
+  # dispatch successes and still shows a four-day-old red. So a dispatch is
+  # how you GET a verdict (a real review, a real check run on the commit, a
+  # readable outcome in the log) — not how you CLEAR the gate. Treat it as
+  # debugging and as evidence, and do not route a blocked PR through it
+  # expecting to merge.
   #
-  # Why it is not optional. Before #1471 this comment claimed the dispatch
-  # "CAN satisfy the required context" while the gate refused it, so the one
-  # trigger that is always reachable was the one that did not work. It has to
-  # work, because `review_requested` is NOT always re-emittable — see
-  # invariant 2 in the file header for the CODEOWNERS re-add that makes a
-  # re-request a measured no-op.
+  # ALWAYS dispatch with `--ref <the PR's own head branch>`: the ctx step
+  # refuses any other ref outright rather than review a diff nobody asked for
+  # and write a `fleet/review` onto a commit that is not the PR's.
   #
-  # Still not the primary path: it takes an operator typing a PR number, so
+  # Not the primary path: it takes an operator typing a PR number, so
   # nothing routine should depend on it, and `review_requested` stays the
   # trigger the fleet actually uses. Also used for local debugging and for
   # forcing a re-review after a provider-variable change (see "Switching the

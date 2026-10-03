@@ -368,13 +368,37 @@ describe('rail: advice that cannot work says so (#1471)', () => {
     expect(text).toContain('cannot be asked to review it')
   })
 
-  it('refuses to tell you to re-request a login the PR ALREADY has, and names the dispatch instead', () => {
+  it('refuses to tell you to re-request a login the PR ALREADY has', () => {
     const text = advice({ alreadyRequested: [OPERATOR] })
     expect(text).toContain('ALREADY a requested reviewer')
     expect(text).not.toMatch(/request a review from `rhonda-rodododo` to run/)
-    expect(text).toContain('gh workflow run fleet-review.yml --ref fleet/desktop/1130 -f pr_number=1184')
-    // It must not read as a bypass: the dispatch runs the real review.
-    expect(text).toMatch(/can FAIL/)
+    // It points at the EVENTS endpoint, the only honest source: every command
+    // in the remove-then-add sequence reports success while nothing fires, and
+    // `reviewRequests` cannot tell "just now" from "four days ago".
+    expect(text).toContain(`issues/1184/events`)
+  })
+
+  // A dispatch runs the real review, but a check suite created by a
+  // `workflow_dispatch` on a branch is not associated with the PULL REQUEST,
+  // so its `fleet/review` check run never enters the PR's status-check rollup
+  // and cannot clear the required context. Measured on #1372/#1378/#1184,
+  // whose heads each carry a dispatch SUCCESS while the rollup still shows an
+  // older `pull_request` FAILURE. Advice naming it would be a second dead end
+  // — which is the exact failure this function exists to stop.
+  it('never offers a dispatch as the way to clear the context', () => {
+    for (const alreadyRequested of [undefined, [], [OPERATOR], [AUTO]]) {
+      for (const isAuthorStandIn of [true, false]) {
+        const text = advice({ alreadyRequested, isAuthorStandIn })
+        expect(text, `${String(alreadyRequested)}/${String(isAuthorStandIn)}`).not.toMatch(/gh workflow run/)
+      }
+    }
+  })
+
+  it('where it mentions a dispatch at all, it says the check does not reach this PR', () => {
+    const text = advice({ alreadyRequested: [OPERATOR] })
+    expect(text).toMatch(/workflow_dispatch/)
+    expect(text).toMatch(/never enters this PR's status-check rollup/)
+    expect(text).toMatch(/cannot clear this context/)
   })
 
   it('matches the already-requested login case-insensitively, as GitHub does', () => {
@@ -384,15 +408,23 @@ describe('rail: advice that cannot work says so (#1471)', () => {
   it('an UNREADABLE requested-reviewer list is not an empty one — it never claims the re-request works', () => {
     const text = advice({ alreadyRequested: undefined })
     expect(text).not.toContain('ALREADY a requested reviewer')
-    // Still offers the escape hatch, since it cannot rule out the no-op.
-    expect(text).toContain('gh workflow run fleet-review.yml')
+    // Nor does it promise the request WILL fire — it cannot rule out the no-op.
+    expect(text).toMatch(/whether that request will emit an event is unknown/)
+    expect(text).not.toMatch(/so that request will emit an event/)
   })
 
-  it('every branch of the advice offers a reachable next action', () => {
+  it('promises the request will fire only when it has SEEN the login is absent', () => {
+    expect(advice({ alreadyRequested: [] })).toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: [AUTO] })).toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: [OPERATOR] })).not.toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: undefined })).not.toMatch(/so that request will emit an event/)
+  })
+
+  it('every branch names the login to ask', () => {
     for (const alreadyRequested of [undefined, [], [OPERATOR], [AUTO]]) {
       for (const isAuthorStandIn of [true, false]) {
         const text = advice({ alreadyRequested, isAuthorStandIn })
-        expect(text, `${String(alreadyRequested)}/${String(isAuthorStandIn)}`).toContain('fleet-review.yml')
+        expect(text, `${String(alreadyRequested)}/${String(isAuthorStandIn)}`).toContain(`\`${OPERATOR}\``)
       }
     }
   })
