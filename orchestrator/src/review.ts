@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { EngineId, Lane } from './config.js'
@@ -230,10 +230,10 @@ const VERDICT_LINE_RE = /^VERDICT: (?:(PASS)$|(FAIL)\b)/
 /**
  * Enforces VERIFIER_BRIEF's contract — "end your response with exactly one
  * line, and nothing after it" — by judging ONLY the final non-empty line of
- * the reviewer's ASSISTANT TEXT (see `decodeEngineOutput`: `claude --print`
- * prints only the final assistant message, so `stdout` already IS that text,
- * with nothing to separate it from — unlike the retired `opencode` reviewer,
- * whose `--format json` event stream needed its own tool-output filter).
+ * the reviewer's ASSISTANT TEXT (see `decodeEngineOutput`: the engine's
+ * `--output-format json` envelope carries that text whole in `.result`, with
+ * no tool output interleaved — unlike the retired `opencode` reviewer, whose
+ * event stream needed its own filter).
  *
  * A verdict found anywhere else is not a verdict. A reviewer that walks
  * through the diff before deciding quotes it, and this repository's own
@@ -307,7 +307,7 @@ const REVIEWER_MODEL = process.env['FLEET_REVIEW_MODEL'] || 'sonnet'
  *     real error from `claude` itself that is not a model-id complaint.
  *     This is the transient case retrying can plausibly fix.
  */
-export type EngineFailureKind = 'engine-misconfigured' | 'engine-unavailable'
+export type EngineFailureKind = 'engine-misconfigured' | 'engine-unavailable' | 'budget-exhausted'
 
 /**
  * `claude`'s own, stable error text for a `--model` id its build does not
@@ -327,6 +327,18 @@ export function classifyEngineFailure(text: string): EngineFailureKind {
   if (/unrecognized_model|isn'?t described by this version'?s model catalog|issue with the selected model/i.test(text)) {
     return 'engine-misconfigured'
   }
+  // `claude`'s own text when `--max-turns` runs out: "Reached max turns (N)".
+  // This is NOT an availability problem — the engine answered, ran a full
+  // session, and spent its whole budget without emitting a verdict. Reporting
+  // it as "unavailable" sends a reader looking for an outage, and the advice
+  // that follows ("re-request the review") re-runs the same diff with the
+  // same budget and exhausts again: a loop that costs a full session per
+  // attempt and can never clear. Same lesson as #866, one layer up.
+  // `--output-format json` reports this structurally as
+  // `subtype: 'error_max_turns'`, which `decodeEngineOutput` surfaces into the
+  // diagnostics. The literal error text stays as a fallback for any path that
+  // still emits it plainly.
+  if (/error_max_turns|reached max turns/i.test(text)) return 'budget-exhausted'
   return 'engine-unavailable'
 }
 
@@ -726,15 +738,173 @@ export interface EngineRun {
 }
 
 /**
- * `claude --print` (text output, the only mode this reviewer ever runs in —
- * see `invokeVerifierEngine`) prints only the final assistant message; tool
- * output is never interleaved into stdout, so there is no event stream to
- * filter here the way an `opencode --format json` reviewer once needed
- * (`opencodeAssistantText`, removed with opencode itself at #812 — see
- * `verifierFor`). `stdout` IS the assistant text, in full.
+ * Reads the engine's `--output-format json` envelope (see
+ * `invokeVerifierEngine` for why that mode): `.result` is the final assistant
+ * message whole, with no tool output interleaved, so it needs none of the
+ * event-stream filtering the retired `opencode` reviewer did
+ * (`opencodeAssistantText`, removed with opencode at #812).
+ *
+ * It also lifts `subtype`, `num_turns` and `permission_denials` into
+ * `diagnostics`. That is the point of the mode: a bare `--print` returns ONLY
+ * the final message, so a session that ends without one — an exhausted turn
+ * budget — left literally nothing behind. #1445 spent ten turns in 68 seconds
+ * and the report artifact was 268 bytes, with no way to tell whether it had
+ * been reading, looping, or fighting its permission mode.
+ *
+ * Falls back to treating stdout as the text when it is not JSON, so an engine
+ * that predates the flag still reviews rather than failing on its envelope.
  */
-function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineRun, 'reached'> {
-  return { assistantText: stdout, diagnostics: stderr.trim().slice(-2000) }
+/**
+ * The reviewer's own account of a session: which tools it reached for, and
+ * how often. Lifted into the check summary rather than left in the artifact,
+ * because the question an exhausted review raises — "what did it spend ten
+ * turns on?" — should be answerable from the red check itself.
+ *
+ * #1445 is the case this exists for: ten turns in 68 seconds on a three-file
+ * PR. A histogram of `Bash x7` reads very differently from `Read x7`, and
+ * differently again from a long `permission_denials` list.
+ */
+function summariseStream(events: Record<string, unknown>[]): string {
+  const tools = new Map<string, number>()
+  for (const ev of events) {
+    if (ev['type'] !== 'assistant') continue
+    const msg = ev['message']
+    if (typeof msg !== 'object' || msg === null) continue
+    const content = (msg as Record<string, unknown>)['content']
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null) continue
+      const pc = part as Record<string, unknown>
+      if (pc['type'] !== 'tool_use') continue
+      const name = typeof pc['name'] === 'string' ? pc['name'] : 'unknown'
+      tools.set(name, (tools.get(name) ?? 0) + 1)
+    }
+  }
+  if (tools.size === 0) return ''
+  return 'tools: ' + [...tools.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([n, c]) => `${n}x${c}`)
+    .join(' ')
+}
+
+/**
+ * Persists the raw event stream beside the review report, so the churn can be
+ * read after the fact and not just summarised.
+ *
+ * `FLEET_REVIEW_REPORT_DIR` is already uploaded wholesale by
+ * `fleet-review.yml`'s "Upload review report" step, so dropping a file in it
+ * needs no workflow change. Best-effort by design: a reviewer that produced a
+ * verdict must never fail because its transcript could not be written.
+ */
+async function writeSessionTranscript(stdout: string, stderr: string): Promise<void> {
+  const dir = process.env['FLEET_REVIEW_REPORT_DIR']
+  if (dir === undefined || dir === '') return
+  try {
+    await mkdir(dir, { recursive: true })
+    // One file per invocation. A review SET runs several reviewers, and a
+    // single name would leave only the last one's session behind — the same
+    // last-writer-wins shape that made the scoped cache artifact necessary.
+    const stamp = `${process.pid}-${events(stdout)}`
+    await writeFile(join(dir, `session-${stamp}.jsonl`), stdout, 'utf8')
+    if (stderr.trim() !== '') await writeFile(join(dir, `session-${stamp}.stderr.txt`), stderr, 'utf8')
+  } catch { /* never fail a review over its own diagnostics */ }
+}
+
+/** A short, stable discriminator so concurrent reviewers cannot collide. */
+function events(stdout: string): string {
+  let h = 0
+  for (let i = 0; i < stdout.length; i++) h = (h * 31 + stdout.charCodeAt(i)) | 0
+  return Math.abs(h).toString(36).slice(0, 8)
+}
+
+export function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineRun, 'reached'> {
+  const diagnostics = stderr.trim().slice(-2000)
+  const events: Record<string, unknown>[] = []
+  for (const line of stdout.split('\n')) {
+    const t = line.trim()
+    if (t === '') continue
+    try { events.push(JSON.parse(t) as Record<string, unknown>) } catch { /* not an event line */ }
+  }
+  // Nothing parseable: an engine predating `--output-format`, or a crash
+  // before it emitted anything. Treat stdout as the assistant text, which is
+  // what this did before the flag existed — a reviewer that still answers
+  // must not be failed over its envelope.
+  if (events.length === 0) return { assistantText: stdout, diagnostics }
+
+  const final = [...events].reverse().find((e) => e['type'] === 'result')
+  const result = final !== undefined && typeof final['result'] === 'string' ? final['result'] : ''
+  const subtype = final !== undefined && typeof final['subtype'] === 'string' ? final['subtype'] : ''
+  const turns = final !== undefined && typeof final['num_turns'] === 'number' ? final['num_turns'] : undefined
+  const denials = final !== undefined && Array.isArray(final['permission_denials']) ? final['permission_denials'] : []
+
+  // `num_turns` is kept even on a PASS: it is the only way to see a reviewer
+  // creeping toward its ceiling BEFORE it starts failing.
+  const notes = [
+    subtype !== '' && subtype !== 'success' ? `subtype=${subtype}` : '',
+    turns !== undefined ? `num_turns=${turns}` : '',
+    denials.length > 0 ? `permission_denials=${denials.length}` : '',
+    summariseStream(events),
+  ].filter((x) => x !== '').join(' ')
+
+  // On an exhausted budget there is no `result` event text at all, so the
+  // last thing the reviewer actually SAID is the best remaining evidence.
+  const lastText = result !== '' ? result : lastAssistantText(events)
+  return {
+    assistantText: lastText,
+    diagnostics: [notes, diagnostics].filter((x) => x !== '').join('\n'),
+  }
+}
+
+/** The final assistant text in the stream, for a session that ended without a
+ *  `result` event. A bare `--print` discarded this; it is often the reviewer
+ *  mid-sentence, which is still more than nothing. */
+function lastAssistantText(events: Record<string, unknown>[]): string {
+  for (const ev of [...events].reverse()) {
+    if (ev['type'] !== 'assistant') continue
+    const msg = ev['message']
+    if (typeof msg !== 'object' || msg === null) continue
+    const content = (msg as Record<string, unknown>)['content']
+    if (!Array.isArray(content)) continue
+    const text = content
+      .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+      .filter((c) => c['type'] === 'text' && typeof c['text'] === 'string')
+      .map((c) => c['text'] as string)
+      .join('\n')
+      .trim()
+    if (text !== '') return text
+  }
+  return ''
+}
+
+/**
+ * The reviewer's argv, as one exported function so a rail can pin it.
+ *
+ * Extracted because the flags are load-bearing and were not covered:
+ * removing `--output-format json` left the whole fleet suite green, while
+ * silently returning the reviewer to a mode where an exhausted session
+ * leaves nothing behind at all (see `decodeEngineOutput`).
+ *
+ * `--output-format json` rather than bare `--print`. Same final assistant
+ * text (now in `.result`), plus the three facts a bare `--print` throws
+ * away and that an exhausted session leaves nothing else to go on:
+ *
+ *   subtype            'error_max_turns' — the budget ran out, reported
+ *                      structurally instead of inferred from error text
+ *   num_turns          how many it actually used
+ *   permission_denials tools it was refused. `--permission-mode plan`
+ *                      denies edits, so a reviewer that keeps reaching for
+ *                      one burns a turn per attempt — which is the shape of
+ *                      #1445: ten turns in 68 seconds, far too fast to be
+ *                      reading anything.
+ *
+ * On exhaustion the payload carries NO `result` key at all, so the
+ * session's work is lost either way; what changes is that we now know it
+ * was the budget, and how it was spent.
+ */
+export function verifierArgs(input: { model: string; maxTurns: number; exportDir: string }): string[] {
+  return ['--print', '--output-format', 'stream-json', '--verbose',
+    '--permission-mode', 'plan', '--model', input.model,
+    '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
 }
 
 /**
@@ -805,8 +975,7 @@ export async function invokeVerifierEngine(input: {
   const projectRoot = await mkdtemp(join(tmpdir(), 'llamenos-fleet-reviewer-root-'))
   try {
     const env = verifierEnv()
-    const args = ['--print', '--permission-mode', 'plan', '--model', model,
-      '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
+    const args = verifierArgs({ model, maxTurns: input.maxTurns, exportDir: input.exportDir })
 
     try {
       // execFile (unlike execFileSync) has no `input` option — the prompt must
@@ -821,6 +990,7 @@ export async function invokeVerifierEngine(input: {
       })
       call.child?.stdin?.end(input.prompt)
       const { stdout, stderr } = await call
+      await writeSessionTranscript(stdout, stderr ?? '')
       return { reached: true, ...decodeEngineOutput(stdout, stderr ?? '') }
     } catch (e) {
       // A crash, a timeout, a missing binary, or (see `classifyEngineFailure`)
@@ -830,6 +1000,10 @@ export async function invokeVerifierEngine(input: {
       // rather than silently falling through parseVerdict's own "no VERDICT
       // line" path.
       const err = e as { stdout?: string; stderr?: string }
+      // The transcript matters MOST here. An exhausted budget exits non-zero,
+      // so this is the arm #1445 took — and the arm that previously left a
+      // 268-byte artifact and no record of the ten turns.
+      await writeSessionTranscript(err.stdout ?? '', err.stderr ?? '')
       const decoded = decodeEngineOutput(err.stdout ?? '', err.stderr ?? '')
       const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
       return { reached: false, failureKind, ...decoded }
