@@ -27,3 +27,50 @@ groups:
         annotations:
           summary: "High disk usage"
           description: "Disk usage is above 85% for more than 5 minutes."
+
+      - alert: PostgresExporterDown
+        expr: up{job="postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL exporter is unreachable"
+          description: "postgres-exporter has been unscrapable for more than 2 minutes -- database health is unknown."
+
+      - alert: HighErrorRate
+        # 0/0 evaluates to NaN in PromQL, which compares false to any threshold,
+        # so this correctly stays silent rather than firing when there is no
+        # traffic at all.
+        expr: >-
+          sum(rate(llamenos_http_requests_total{status_class="5xx"}[5m]))
+          /
+          sum(rate(llamenos_http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated 5xx error rate"
+          description: "More than 5% of HTTP requests have returned a 5xx status for more than 5 minutes."
+
+      # Deliberately NOT added here, to avoid recreating the exact "fires from
+      # first boot, gets muted, outage goes unnoticed" failure this issue is
+      # about (#1148):
+      #   - Backup staleness / SIP bridge down: llamenos_backup_age_seconds and
+      #     llamenos_sip_bridge_status are defined in metrics.ts but have ZERO
+      #     production call sites, so the gauge never exists and any rule
+      #     against it would be permanently true (or permanently absent,
+      #     depending on phrasing) regardless of real backup/bridge health.
+      #     Wiring those setters into the backup service / SIP bridge adapter
+      #     is apps/worker work, out of this change's scope.
+      #   - Certificate expiry: Caddy exposes no cert-expiry metric without a
+      #     blackbox_exporter instance (not currently deployed); adding one is
+      #     a new component, not a rule tweak.
+      #   - "No calls routed in N minutes": no counter for a successfully
+      #     answered/routed call exists yet (only llamenos_calls_unroutable_total,
+      #     which counts routing FAILURES).
+      # All three operational signals above (backup staleness, TLS expiry, and
+      # container/DB health) ARE covered today, independent of these Prometheus
+      # metrics, by the cron-based `alerting` role (templates/alerting/check-alerts.sh.j2)
+      # -- which is why vars.yml now defaults llamenos_alerting_enabled to true
+      # for the official profile alongside observability_enabled.

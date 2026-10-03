@@ -90,6 +90,16 @@ NTFY_AUTH_TOKEN={{ ntfy_auth_token }}
 {% if (glitchtip_dsn | default('')) | length > 0 %}
 GLITCHTIP_DSN={{ glitchtip_dsn }}
 {% endif %}
+{# METRICS_SCRAPE_TOKEN gates apps/worker/routes/metrics.ts's /api/metrics/prometheus
+   route: with it set, Prometheus authenticates via a bearer token instead of a
+   logged-in admin session (which a scraper can never have). Leaving it unset does
+   NOT disable the route -- it falls through to requiring c.get('pubkey'), which is
+   only ever populated by the `auth` middleware that this route deliberately does
+   NOT run, so an unset token makes the scrape permanently un-authenticatable (#1148).
+   Render it whenever observability is enabled so the two configs can never drift. #}
+{% if (metrics_scrape_token | default('')) | length > 0 %}
+METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}
+{% endif %}
 {% if llamenos_signal_enabled | default(false) | bool %}
 SIGNAL_NOTIFIER_BEARER_TOKEN={{ signal_notifier_bearer_token }}
 {% endif %}

@@ -20,6 +20,9 @@ services:
       - ACME_EMAIL={{ acme_email }}
     networks:
       - llamenos-web
+{% if observability_enabled | default(false) | bool %}
+      - llamenos-observability
+{% endif %}
     logging:
       driver: json-file
       options:
@@ -40,3 +43,7 @@ volumes:
 networks:
   llamenos-web:
     external: true
+{% if observability_enabled | default(false) | bool %}
+  llamenos-observability:
+    external: true
+{% endif %}

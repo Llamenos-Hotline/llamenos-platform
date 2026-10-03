@@ -34,7 +34,12 @@ llamenos_ntfy_enabled: true
 # Signal sidecar needs a registered Signal number + bearer token; enable it as a
 # separate, later step (then also set signal_notifier_bearer_token below).
 llamenos_signal_enabled: false
-observability_enabled: false
+# observability_enabled and llamenos_alerting_enabled are deliberately NOT set
+# here: the tracked vars.yml already derives both to `true` for
+# deployment_profile == official (#1148). Set metrics_scrape_token and a
+# notification receiver below, or preflight refuses to deploy with monitoring
+# half-configured. Set either var to `false` here only to deliberately opt a
+# specific official deployment out.
 
 # ─── Domain & TLS ────────────────────────────────────────────────
 # Apex domain you control. TLS terminates ON THIS BOX with a Let's Encrypt
@@ -102,6 +107,20 @@ pg_password: ""                  # openssl rand -base64 24 (>= 16 chars)
 storage_access_key: ""           # openssl rand -hex 16
 storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
 # signal_notifier_bearer_token: ""   # openssl rand -hex 32 — only if llamenos_signal_enabled
+# REQUIRED when observability_enabled (true by default for this profile, see
+# above): without it Prometheus can never authenticate the app scrape (#1148).
+metrics_scrape_token: ""         # openssl rand -hex 32
+
+# ─── Alert receiver (required when observability/alerting is enabled) ────
+# Pick ONE: an unguessable ntfy topic (self-hosted ntfy strongly preferred over
+# a public instance for an opsec-sensitive deployment), or a webhook. Never
+# reuse a guessable topic like "llamenos-alerts" — see #1148.
+alert_ntfy_url: ""
+alert_ntfy_topic: ""
+alert_ntfy_token: ""
+llamenos_ntfy_url: "{{ alert_ntfy_url }}"
+llamenos_ntfy_topic: "{{ alert_ntfy_topic }}"
+llamenos_ntfy_token: "{{ alert_ntfy_token }}"
 
 # ─── Backups (playbooks/backup.yml) ──────────────────────────────
 # age PUBLIC key only. Keep the private key OFF the server (age-keygen -o key.txt).

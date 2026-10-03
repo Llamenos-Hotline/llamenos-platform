@@ -11,6 +11,34 @@
   ansible.builtin.meta: end_role
   when: not (llamenos_alerting_enabled | default(false) | bool)
 
+# A no-op alerting role is worse than none: it reads as coverage in a deploy
+# report while silently delivering nothing (#1148, same class of bug as the
+# unauthenticated Prometheus scrape and the watchdog's bare `echo`). Fail loudly
+# here instead of discovering it the day the hotline actually goes down.
+- name: Preflight — a receiver must be configured for the selected provider
+  ansible.builtin.assert:
+    that:
+      - >-
+        (llamenos_alerting_provider | default('ntfy') != 'ntfy') or
+        ((llamenos_ntfy_url | default('')) | length > 0 and (llamenos_ntfy_topic | default('')) | length > 0)
+      - >-
+        (llamenos_alerting_provider | default('ntfy') != 'gotify') or
+        ((llamenos_gotify_url | default('')) | length > 0 and (llamenos_gotify_token | default('')) | length > 0)
+      - >-
+        (llamenos_alerting_provider | default('ntfy') != 'email') or
+        (llamenos_alerting_email_to | default('')) | length > 0
+      - >-
+        (llamenos_alerting_provider | default('ntfy') != 'webhook') or
+        (llamenos_alerting_webhook_url | default('')) | length > 0
+    fail_msg: >-
+      llamenos_alerting_enabled is true with llamenos_alerting_provider=
+      {{ llamenos_alerting_provider | default('ntfy') }}, but no receiver is
+      configured for it. Set llamenos_ntfy_url + llamenos_ntfy_topic (ntfy),
+      llamenos_gotify_url + llamenos_gotify_token (gotify),
+      llamenos_alerting_email_to (email), or llamenos_alerting_webhook_url
+      (webhook) -- or set llamenos_alerting_enabled: false.
+    quiet: true
+
 - name: Install alerting dependencies
   ansible.builtin.apt:
     name:

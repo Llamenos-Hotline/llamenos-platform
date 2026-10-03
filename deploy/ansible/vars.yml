@@ -243,21 +243,33 @@ ntp_servers:
   - "3.pool.ntp.org"
 
 # ─── Observability ──────────────────────────────────────────────
-# Auto-enabled when deployment_profile == "official" (via llamenos_monitoring_enabled)
-# Can also be enabled independently for self-hoster deployments
-observability_enabled: false
+# Auto-enabled when deployment_profile == "official" (via llamenos_monitoring_enabled,
+# defined above). Previously this was hardcoded to `false` regardless of profile --
+# the comment lied and a stock "official" deploy shipped with no metrics and no
+# alerts (#1148). Self-hosters: set `observability_enabled: true` explicitly.
+observability_enabled: "{{ llamenos_monitoring_enabled }}"
 prometheus_enabled: true
 grafana_enabled: true
 loki_enabled: true
 promtail_enabled: true
 alertmanager_enabled: true
 node_exporter_enabled: true
+postgres_exporter_enabled: true
 healthcheck_only: false
+
+# Bearer token the Prometheus `llamenos-app` scrape job authenticates with against
+# /api/metrics/prometheus (apps/worker/routes/metrics.ts). REQUIRED for the scrape
+# to ever succeed -- without it the route has no way to authenticate a scraper that
+# holds no admin session, and `up{job="llamenos-app"}` is permanently 0 (#1148).
+# Generate with: openssl rand -hex 32
+metrics_scrape_token: ""
 
 prometheus_image: prom/prometheus:v3.2.1
 prometheus_retention: 15d
 prometheus_retention_size: 5GB
 prometheus_scrape_interval: 15s
+
+postgres_exporter_image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
 
 grafana_image: grafana/grafana-oss:11.5.2
 grafana_admin_password: ""
@@ -279,8 +291,13 @@ alert_smtp_password: ""
 alert_smtp_from: ""
 alert_smtp_to: ""
 
-alert_ntfy_url: "https://ntfy.sh"
-alert_ntfy_topic: "llamenos-alerts"
+# No default receiver. "https://ntfy.sh/llamenos-alerts" was a guessable PUBLIC
+# topic -- anyone who guessed it could watch this deployment's outage/health state
+# in real time, and publish forged alerts into the on-call channel (#1148). The
+# llamenos-alertmanager role's preflight fails the play if alertmanager_enabled is
+# true and no receiver below is actually configured for alert_notification_method.
+alert_ntfy_url: ""
+alert_ntfy_topic: ""
 alert_ntfy_token: ""
 
 alert_webhook_url: ""
@@ -294,8 +311,12 @@ healthcheck_endpoints:
     url: "http://app:3000/api/health"
   - name: postgres
     url: "tcp://postgres:5432"
-healthcheck_ntfy_url: "https://ntfy.sh"
-healthcheck_ntfy_topic: "llamenos-health"
+# Same guessable-public-topic problem as alert_ntfy_* above. Empty = no
+# notification sent (logged locally only), which is strictly safer than
+# broadcasting to a public default.
+healthcheck_ntfy_url: ""
+healthcheck_ntfy_topic: ""
+healthcheck_ntfy_token: ""
 
 # ─── Auto-Healing & Monitoring ──────────────────────────────────
 llamenos_alert_webhook: ""
@@ -305,10 +326,19 @@ llamenos_alert_cert_expiry_days: 7
 llamenos_alert_disk_percent: 85
 
 # ─── Alerting ───────────────────────────────────────────────────
-llamenos_alerting_enabled: false
+# Auto-enabled for the "official" profile, same as llamenos_monitoring_enabled
+# above -- this is the cron-based check (backup staleness, TLS expiry, NTP
+# drift, disk, container health, PG size) that actually covers the signals the
+# Prometheus alert rules can't yet, because the metrics behind them
+# (llamenos_backup_age_seconds, llamenos_sip_bridge_status) have no production
+# call sites (#1148). Self-hosters: set `llamenos_alerting_enabled: true`
+# explicitly, and a receiver below, or this stays silent.
+llamenos_alerting_enabled: "{{ deployment_profile == 'official' }}"
 llamenos_alerting_provider: ntfy
-llamenos_ntfy_url: "https://ntfy.sh"
-llamenos_ntfy_topic: "llamenos-alerts"
+# Same guessable-public-topic problem as alert_ntfy_* above -- empty by default.
+llamenos_ntfy_url: ""
+llamenos_ntfy_topic: ""
+llamenos_ntfy_token: ""
 llamenos_alerting_tags: "llamenos"
 
 # ─── Security Scanning ──────────────────────────────────────────

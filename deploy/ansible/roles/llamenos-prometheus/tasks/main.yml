@@ -2,9 +2,11 @@
 # Prometheus role
 #
 # Deploys Prometheus server with auto-generated scrape configuration derived
-# from inventory. Scrapes: app (/api/metrics), node-exporter, caddy, postgres
-# exporter, and any additional targets defined in vars.
-# Alert rules are templated alongside the config.
+# from inventory. Scrapes: app (/api/metrics/prometheus, bearer-authenticated),
+# node-exporter, caddy (internal metrics listener), postgres-exporter, and any
+# additional targets defined in vars. Alert rules are templated alongside the
+# config. After starting, asserts up{job="llamenos-app"} actually reports 1 --
+# a scrape that cannot succeed is worse than no scrape at all (#1148).
 
 - name: Create Prometheus directories
   ansible.builtin.file:
@@ -49,3 +51,42 @@
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}/observability/prometheus"
     state: present
+
+# A scrape that can never succeed is worse than no scrape: it manufactures a
+# permanent AppDown instead of real signal (#1148). Query Prometheus's own API
+# from inside its container (its port is deliberately not published to the
+# host) and fail the deploy if up{job="llamenos-app"} is not 1 within a minute
+# -- long enough for one full scrape_interval plus retry jitter on first boot.
+- name: Query up{job="llamenos-app"} from inside the Prometheus container
+  ansible.builtin.command:
+    cmd: >-
+      docker compose -f {{ app_dir }}/observability/prometheus/docker-compose.yml
+      exec -T prometheus
+      wget -qO- http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22llamenos-app%22%7D
+  register: _prometheus_app_up_check
+  changed_when: false
+  ignore_errors: true
+  retries: 6
+  delay: 10
+  until: >-
+    _prometheus_app_up_check.rc == 0
+    and (_prometheus_app_up_check.stdout | trim is match('^\{.*\}$'))
+    and ((_prometheus_app_up_check.stdout | from_json).data.result | default([]) | length > 0)
+    and ((_prometheus_app_up_check.stdout | from_json).data.result[0].value[1] == "1")
+  when:
+    - llamenos_app_enabled | default(true) | bool
+
+- name: Assert the llamenos-app scrape target is actually up
+  ansible.builtin.assert:
+    that:
+      - _prometheus_app_up_check is succeeded
+    fail_msg: >-
+      up{job="llamenos-app"} did not report 1 within 60s of starting Prometheus.
+      Check that metrics_scrape_token matches METRICS_SCRAPE_TOKEN in the app
+      container's env, and that the app container is healthy
+      ({{ app_dir }}/observability/prometheus/prometheus.yml's llamenos-app job
+      targets app:3000/api/metrics/prometheus). Last response:
+      {{ _prometheus_app_up_check.stdout | default('(no output)') }}
+    quiet: true
+  when:
+    - llamenos_app_enabled | default(true) | bool

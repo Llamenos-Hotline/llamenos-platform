@@ -11,8 +11,12 @@ ALERT_LOG="{{ app_dir }}/alerting/alerts.log"
 HOSTNAME_LABEL="{{ inventory_hostname | default(ansible_hostname) | default('llamenos') }}"
 
 # ── ntfy ────────────────────────────────────────────────────────────
-NTFY_URL="{{ llamenos_ntfy_url | default('https://ntfy.sh') }}"
-NTFY_TOPIC="{{ llamenos_ntfy_topic | default('llamenos-alerts') }}"
+# No fallback URL/topic: "https://ntfy.sh/llamenos-alerts" was a guessable
+# PUBLIC topic anyone could subscribe to or forge alerts into (#1148).
+# roles/alerting/tasks/main.yml's preflight assert already refuses to deploy
+# with llamenos_alerting_provider=ntfy and either of these unset.
+NTFY_URL="{{ llamenos_ntfy_url | default('') }}"
+NTFY_TOPIC="{{ llamenos_ntfy_topic | default('') }}"
 NTFY_TOKEN="{{ llamenos_ntfy_token | default('') }}"
 
 # ── Gotify ──────────────────────────────────────────────────────────
@@ -47,17 +51,22 @@ send_alert() {
 
   case "${ALERT_PROVIDER}" in
     ntfy)
-      local auth_header=""
+      # Built as an argv array, never through `eval`: title/message can contain
+      # a backup FILENAME (check-alerts.sh.j2's backup-staleness check), which
+      # is attacker-controlled if an attacker can write to the backup
+      # directory. The old `eval curl ... "\"${message}\""` re-parsed that
+      # string through the shell a second time -- a crafted filename executed
+      # as the deploy user (#1148). An array passes each element to exec()
+      # directly; the shell never sees it as source text to interpret twice.
+      local -a curl_args=(curl -sf --max-time 10
+        -H "Title: ${title}"
+        -H "Priority: ${priority}"
+        -H "Tags: ${tags}")
       if [ -n "${NTFY_TOKEN}" ]; then
-        auth_header="-H \"Authorization: Bearer ${NTFY_TOKEN}\""
+        curl_args+=(-H "Authorization: Bearer ${NTFY_TOKEN}")
       fi
-      eval curl -sf --max-time 10 \
-        -H "\"Title: ${title}\"" \
-        -H "\"Priority: ${priority}\"" \
-        -H "\"Tags: ${tags}\"" \
-        ${auth_header} \
-        -d "\"${message}\"" \
-        "\"${NTFY_URL}/${NTFY_TOPIC}\"" >/dev/null 2>&1 || true
+      curl_args+=(-d "${message}" "${NTFY_URL}/${NTFY_TOPIC}")
+      "${curl_args[@]}" >/dev/null 2>&1 || true
       ;;
 
     gotify)

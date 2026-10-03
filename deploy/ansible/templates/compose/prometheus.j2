@@ -6,7 +6,15 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./alert-rules.yml:/etc/prometheus/rules/alert-rules.yml:ro
+      # The rules role templates to rules/llamenos.yml (tasks/main.yml), and
+      # prometheus.yml's `rule_files: [/etc/prometheus/rules/*.yml]` expects a
+      # DIRECTORY here. The old single-file bind (./alert-rules.yml, a path
+      # that never existed on the host) made Docker auto-create it as an empty
+      # directory, so the glob matched nothing and all 3 alert rules silently
+      # never loaded, no matter how AppDown/HighMemoryUsage/HighDiskUsage read
+      # in the template (#1148). Verified with `docker run -v
+      # <missing-file>:<path>` reproducing the empty-directory behavior.
+      - ./rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'

@@ -303,16 +303,26 @@ loki_enabled: true
 promtail_enabled: true
 alertmanager_enabled: true
 node_exporter_enabled: true
+postgres_exporter_enabled: true
 
 # Lightweight alternative — if true, disables Prometheus/Grafana/Loki/Promtail
 # and uses a simple HTTP health poller with ntfy notifications instead
 healthcheck_only: false
+
+# Bearer token the Prometheus `llamenos-app` scrape job authenticates with
+# against /api/metrics/prometheus. REQUIRED for the scrape to succeed -- without
+# it, `up{job="llamenos-app"}` is permanently 0 and AppDown fires forever (#1148).
+# Generate with: openssl rand -hex 32
+metrics_scrape_token: ""
 
 # Prometheus settings
 prometheus_image: prom/prometheus:v3.2.1
 prometheus_retention: 15d
 prometheus_retention_size: 5GB
 prometheus_scrape_interval: 15s
+
+# PostgreSQL exporter settings (scraped by the `postgres` job in prometheus.yml.j2)
+postgres_exporter_image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
 
 # Grafana settings
 grafana_image: grafana/grafana-oss:11.5.2
@@ -345,9 +355,13 @@ alert_smtp_from: "alerts@yourdomain.org"
 alert_smtp_to: "oncall@yourdomain.org"
 
 # ntfy settings (for alert_notification_method: ntfy)
-alert_ntfy_url: "https://ntfy.sh"
-alert_ntfy_topic: "llamenos-alerts"
-alert_ntfy_token: "" # Optional auth token
+# No default receiver: "https://ntfy.sh/llamenos-alerts" was a guessable PUBLIC
+# topic anyone could subscribe to or forge alerts into (#1148). Set your own
+# unguessable topic (or self-hosted ntfy instance) below, or the alertmanager
+# role's preflight fails the play.
+alert_ntfy_url: "" # e.g. "https://ntfy.sh" or your own ntfy instance
+alert_ntfy_topic: "" # pick an unguessable topic, e.g. $(openssl rand -hex 16)
+alert_ntfy_token: "" # Optional auth token, sent as "Authorization: Bearer <token>"
 
 # Webhook settings (for alert_notification_method: webhook)
 alert_webhook_url: ""
@@ -363,8 +377,9 @@ healthcheck_endpoints:
     url: "http://app:3000/api/health"
   - name: postgres
     url: "tcp://postgres:5432"
-healthcheck_ntfy_url: "https://ntfy.sh"
-healthcheck_ntfy_topic: "llamenos-health"
+healthcheck_ntfy_url: "" # same guessable-public-topic problem as alert_ntfy_* -- set your own
+healthcheck_ntfy_topic: ""
+healthcheck_ntfy_token: ""
 
 # ─── Auto-Healing & Monitoring ──────────────────────────────────
 # Webhook URL for alerts (ntfy, gotify, or any HTTP endpoint)
@@ -396,9 +411,12 @@ llamenos_alerting_enabled: false
 llamenos_alerting_provider: ntfy
 
 # ntfy settings (default provider)
-llamenos_ntfy_url: "https://ntfy.sh"
-llamenos_ntfy_topic: "llamenos-alerts"
-# llamenos_ntfy_token: ""  # Optional auth token for self-hosted ntfy
+# No default receiver: the old "https://ntfy.sh/llamenos-alerts" default was a
+# guessable PUBLIC topic (#1148). Pick your own unguessable topic, or this role's
+# preflight fails the play when llamenos_alerting_enabled is true.
+llamenos_ntfy_url: ""
+llamenos_ntfy_topic: ""
+llamenos_ntfy_token: ""  # Optional auth token for self-hosted ntfy
 
 # Tags included in alert metadata
 llamenos_alerting_tags: "llamenos"

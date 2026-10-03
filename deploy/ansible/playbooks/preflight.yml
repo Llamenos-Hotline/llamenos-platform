@@ -415,6 +415,34 @@
         success_msg: "signal_notifier_bearer_token: [set, {{ signal_notifier_bearer_token | length }} chars]"
       when: llamenos_signal_enabled | default(false) | bool
 
+    # Without this, apps/worker/routes/metrics.ts's /api/metrics/prometheus route
+    # has no way to authenticate a scraper that holds no admin session -- the
+    # scrape is permanently un-authenticatable and up{job="llamenos-app"} never
+    # reports 1, so AppDown fires from first boot (#1148). Catch it here, before
+    # the Prometheus container ever starts, instead of the day the alert gets
+    # muted for crying wolf.
+    - name: Assert metrics_scrape_token is set when observability/Prometheus is enabled
+      ansible.builtin.assert:
+        that:
+          - metrics_scrape_token is defined
+          - metrics_scrape_token | length >= 16
+        fail_msg: |
+          REQUIRED: 'metrics_scrape_token' must be at least 16 characters when
+          observability is enabled with Prometheus scraping the app. Without it,
+          the llamenos-app scrape job can never authenticate and up{job="llamenos-app"}
+          stays 0 forever.
+
+          Current value: {{ metrics_scrape_token | default('NOT SET') }}
+          Length: {{ metrics_scrape_token | default('') | length }} chars (expected: >= 16)
+
+          To generate:
+            openssl rand -hex 32
+        success_msg: "metrics_scrape_token: [set, {{ metrics_scrape_token | length }} chars]"
+      when:
+        - observability_enabled | default(false) | bool
+        - prometheus_enabled | default(true) | bool
+        - not (healthcheck_only | default(false) | bool)
+
     - name: Warn if ntfy is not enabled
       ansible.builtin.debug:
         msg: "Note: ntfy push relay not enabled (Android push notifications via UnifiedPush disabled)"
