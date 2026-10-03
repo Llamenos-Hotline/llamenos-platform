@@ -25,6 +25,7 @@ import { getProviderCapability } from '../services/provider-setup/registry'
 import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
+import { audit } from '../services/audit'
 import { permissionGranted, resolvePermissions, resolveHubPermissions } from '@shared/permissions'
 
 /**
@@ -823,6 +824,10 @@ providerSetup.post('/signal/register',
         method: body.method ?? 'sms',
         hubId,
       })
+      await audit(services.audit, 'signalRegistrationStarted', c.get('pubkey'), {
+        numberLast4: body.phoneNumber.slice(-4),
+        status: registration.status,
+      }, undefined, hubId)
       return c.json(registration)
     } catch (err) {
       return handleSignalError(err, c)
@@ -900,6 +905,10 @@ providerSetup.post('/signal/verify',
         registrationId: body.registrationId,
         code: body.code,
       })
+      await audit(services.audit, 'signalRegistrationVerified', pubkey, {
+        registrationId: body.registrationId,
+        status: registration.status,
+      }, undefined, registration.hubId)
       return c.json(registration)
     } catch (err) {
       return handleSignalError(err, c)

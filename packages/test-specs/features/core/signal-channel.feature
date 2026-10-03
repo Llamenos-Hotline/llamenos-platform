@@ -1,5 +1,4 @@
-# @wip: no backend step definitions for any scenario — #1193
-@backend @wip
+@backend
 Feature: Signal Messaging Channel
   As the Signal messaging subsystem
   I want to handle receipts, reactions, registration, retry, identity trust, and failover
@@ -7,14 +6,20 @@ Feature: Signal Messaging Channel
 
   # ── Receipt & Reaction Handling ──────────────────────────────────
 
+  # messages.external_id is a globally-unique column (it's the provider's message
+  # ID in production), so these two scenarios — and
+  # core/signal-integration.feature's "Signal delivery receipt updates message
+  # status" scenario, which independently uses "1700000000000" — must each use a
+  # distinct literal; a shared one collides under this suite's parallel execution.
+
   Scenario: Delivery receipt updates message status
-    Given an outbound message was sent via Signal with timestamp "1700000000000"
-    When a delivery receipt webhook arrives for timestamp "1700000000000"
+    Given an outbound message was sent via Signal with timestamp "1700000002000"
+    When a delivery receipt webhook arrives for timestamp "1700000002000"
     Then the message status should be updated to "delivered"
 
   Scenario: Read receipt updates message status
-    Given an outbound message was sent via Signal with timestamp "1700000000000"
-    When a read receipt webhook arrives for timestamp "1700000000000"
+    Given an outbound message was sent via Signal with timestamp "1700000002001"
+    When a read receipt webhook arrives for timestamp "1700000002001"
     Then the message status should be updated to "read"
 
   Scenario: Emoji reaction is broadcast via Nostr
@@ -35,18 +40,27 @@ Feature: Signal Messaging Channel
     Then the webhook should return 200 OK
 
   # ── Registration & Provisioning ──────────────────────────────────
+  # No CI/local environment has a registered Signal number (see the @fixme on
+  # core/signal-integration.feature's "Unrecognised envelope type" scenario,
+  # tracked in #1196), so these scenarios bind to the DB-backed registration
+  # state machine in apps/worker/services/provider-setup/signal-registration.ts
+  # (routes: /provider-setup/signal/*) rather than the legacy bridge-synchronous
+  # flow in apps/worker/routes/setup.ts. That state machine's statuses are
+  # idle|pending|verifying|complete|failed — not pending_verification/verified —
+  # so this feature asserts the real status strings instead of the ones a live
+  # bridge round-trip would produce.
 
   Scenario: Admin initiates Signal number registration
     Given the admin is authenticated
     And a Signal bridge is reachable at the configured URL
     When the admin submits a phone number for registration
-    Then the registration state should be "pending_verification"
+    Then the registration state should be "pending"
     And an audit log entry should be created
 
   Scenario: Admin verifies registration code
     Given registration is pending for "+15551234567"
     When the admin submits verification code "123456"
-    Then the registration state should be "verified"
+    Then the registration state should be "complete"
     And an audit log entry should be created
 
   Scenario: Registration fails with captcha requirement
@@ -73,9 +87,13 @@ Feature: Signal Messaging Channel
     Then the next retry delay should be approximately 120 seconds
 
   Scenario: Message moves to dead-letter after max retries
+    # "queued message status" (not "message status") to stay distinct from the
+    # conversation-message status checker already bound for the receipt
+    # scenarios above — the retry queue and the conversation message log are
+    # different tables with independent status fields.
     Given a queued message has been retried 5 times
     When it fails again
-    Then the message status should be "dead"
+    Then the queued message status should be "dead"
     And it should appear in the dead-letter queue
 
   Scenario: Rate limit prevents rapid sends to same recipient
@@ -86,7 +104,7 @@ Feature: Signal Messaging Channel
   Scenario: Admin can retry dead-letter messages
     Given a dead-letter message exists
     When the admin retries the message
-    Then the message status should be "pending" with retry count 0
+    Then it should have status "pending" with retry count 0
 
   # ── Identity Trust Management ────────────────────────────────────
 
@@ -113,6 +131,14 @@ Feature: Signal Messaging Channel
     And a verification timestamp
 
   # ── Number Failover ──────────────────────────────────────────────
+  # apps/worker/messaging/signal/failover.ts is real, tested, pure state-machine
+  # code with no HTTP route and no caller from the send path yet (tracked
+  # separately — wiring it in needs a `failover` field on the shared
+  # SignalConfig type, which is packages/shared/ and outside backend's owned
+  # paths). These scenarios drive the real exported functions directly via
+  # dev-only test endpoints; "a health check runs" uses an injectable health
+  # checker (also added to failover.ts) instead of a real bridge, since no
+  # reachable bridge exists in CI/local either.
 
   Scenario: Primary bridge failure triggers failover to backup
     Given failover is enabled with threshold 3

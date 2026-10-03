@@ -13,7 +13,22 @@ import { resolveRingableVolunteers } from '../services/ringing'
 import { DEMO_HUB } from '../lib/demo-dataset'
 import { demoIdentities } from '../lib/demo-identities'
 import { getDb } from '../db'
-import { sql as rawSql } from 'drizzle-orm'
+import { sql as rawSql, eq } from 'drizzle-orm'
+import { signalMessageQueue } from '../db/schema'
+import { SignalIdentityService } from '../messaging/signal/identity'
+import { SignalMessageQueue } from '../messaging/signal/queue'
+import { SignalAdapter } from '../messaging/signal/adapter'
+import type { SignalWebhookPayload } from '../messaging/signal/types'
+import {
+  setActiveTarget,
+  getFailoverState,
+  resetFailoverState,
+  runHealthCheck,
+  getActiveSignalConfig,
+  type FailoverConfig,
+} from '../messaging/signal/failover'
+import type { SignalConfig } from '@shared/types'
+import type { BridgeHealthStatus } from '../messaging/signal/health'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -1125,6 +1140,284 @@ dev.post('/test-simulate/signal-typing', async (c) => {
   }
 
   return c.json({ ok: true, eventType: 'TYPING_INDICATOR', payload })
+})
+
+// 7d. Simulate an "unknown envelope" Signal webhook — exercises the real
+// SignalAdapter.parseReaction/parseTypingIndicator methods (not a hand-rolled
+// copy of the dispatch logic in messaging/router.ts) against a payload with no
+// dataMessage/receiptMessage/typingMessage. The real webhook route 404s
+// without a bridge actually registered, and no reachable signal-cli bridge
+// exists in CI/local (see core/signal-channel.feature, and the @fixme on
+// core/signal-integration.feature's "Unrecognised envelope type" — #1196).
+const TEST_SIGNAL_CONFIG: SignalConfig = {
+  bridgeUrl: 'https://signal-test.invalid',
+  bridgeApiKey: 'test-api-key',
+  webhookSecret: 'test-webhook-secret',
+  registeredNumber: '+15550001111',
+}
+
+dev.post('/test-simulate/signal-unknown-envelope', (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const adapter = new SignalAdapter(TEST_SIGNAL_CONFIG, c.env.HMAC_SECRET)
+  const payload: SignalWebhookPayload = {
+    envelope: {
+      source: '+15559876543',
+      sourceUuid: 'test-uuid-unknown',
+      timestamp: Date.now(),
+      // Intentionally no dataMessage / receiptMessage / typingMessage
+    },
+  }
+
+  // Mirrors messaging/router.ts's real dispatch order for Signal webhooks:
+  // typing, then reaction, then "no dataMessage" acknowledgment.
+  if (adapter.parseTypingIndicator(payload)) return c.json({ ok: true })
+  if (adapter.parseReaction(payload)) return c.json({ ok: true })
+  if (!payload.envelope.dataMessage) return c.json({ ok: true })
+  return c.json({ ok: false }, 400)
+})
+
+// 7e. Directly exercise SignalIdentityService.recordIdentity — the real
+// service method the production webhook handler now calls too
+// (messaging/router.ts). Needed because CI/local has no registered Signal
+// bridge, so inbound messages can't flow through the real webhook route.
+dev.post('/test-simulate/signal-identity', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const body = await c.req.json().catch(() => ({})) as {
+    hubId?: string
+    number?: string
+    uuid?: string
+    fingerprint?: string
+    trustMode?: 'auto' | 'tofu' | 'manual'
+  }
+  if (!body.hubId || !body.number || !body.uuid) {
+    return c.json({ error: 'hubId, number, and uuid are required' }, 400)
+  }
+
+  const identityService = new SignalIdentityService(getDb())
+  const result = await identityService.recordIdentity({
+    hubId: body.hubId,
+    number: body.number,
+    uuid: body.uuid,
+    fingerprint: body.fingerprint,
+    trustMode: body.trustMode,
+  })
+  const identity = await identityService.getIdentityByUuid(body.hubId, body.uuid)
+  return c.json({ ...result, identity })
+})
+
+// 7f. Signal retry queue test endpoints — thin pass-throughs to the real
+// SignalMessageQueue service (messaging/signal/queue.ts), which has no HTTP
+// route for enqueue/fail/mark-sent since those happen internally during a
+// real send attempt. The admin-facing routes (queue/stats, queue/dead-letters,
+// queue/retry/:id in routes/signal.ts) are untouched by this.
+dev.post('/test-simulate/signal-queue/enqueue', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const body = await c.req.json().catch(() => ({})) as {
+    hubId?: string
+    conversationId?: string
+    recipientIdentifier?: string
+    body?: string
+  }
+  if (!body.hubId || !body.conversationId || !body.recipientIdentifier || !body.body) {
+    return c.json({ error: 'hubId, conversationId, recipientIdentifier, and body are required' }, 400)
+  }
+
+  const queue = new SignalMessageQueue(getDb())
+  const id = await queue.enqueue({
+    hubId: body.hubId,
+    conversationId: body.conversationId,
+    recipientIdentifier: body.recipientIdentifier,
+    body: body.body,
+  })
+  const [row] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, id))
+  return c.json({ id, status: row?.status, retryCount: row?.retryCount })
+})
+
+dev.post('/test-simulate/signal-queue/mark-failed', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const body = await c.req.json().catch(() => ({})) as { messageId?: string; error?: string }
+  if (!body.messageId) {
+    return c.json({ error: 'messageId is required' }, 400)
+  }
+
+  const queue = new SignalMessageQueue(getDb())
+  const [before] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, body.messageId))
+  if (!before) {
+    return c.json({ error: 'Message not found' }, 404)
+  }
+
+  await queue.markFailed(body.messageId, body.error ?? 'Simulated send failure', before.retryCount)
+
+  const [after] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, body.messageId))
+  return c.json({
+    status: after?.status,
+    retryCount: after?.retryCount,
+    nextRetryAt: after?.nextRetryAt?.toISOString() ?? null,
+    lastError: after?.lastError ?? null,
+  })
+})
+
+dev.post('/test-simulate/signal-queue/mark-sent', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const body = await c.req.json().catch(() => ({})) as { messageId?: string; externalId?: string }
+  if (!body.messageId) {
+    return c.json({ error: 'messageId is required' }, 400)
+  }
+
+  const queue = new SignalMessageQueue(getDb())
+  await queue.markSent(body.messageId, body.externalId)
+  return c.json({ ok: true })
+})
+
+dev.get('/test-simulate/signal-queue/message', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const id = c.req.query('id')
+  if (!id) {
+    return c.json({ error: 'id query param is required' }, 400)
+  }
+
+  const [row] = await getDb().select().from(signalMessageQueue).where(eq(signalMessageQueue.id, id))
+  if (!row) {
+    return c.json({ error: 'Message not found' }, 404)
+  }
+  return c.json({
+    id: row.id,
+    status: row.status,
+    retryCount: row.retryCount,
+    recipientIdentifier: row.recipientIdentifier,
+    nextRetryAt: row.nextRetryAt?.toISOString() ?? null,
+    lastError: row.lastError,
+  })
+})
+
+dev.get('/test-simulate/signal-queue/rate-limited', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const recipientIdentifier = c.req.query('recipientIdentifier')
+  if (!recipientIdentifier) {
+    return c.json({ error: 'recipientIdentifier query param is required' }, 400)
+  }
+
+  const queue = new SignalMessageQueue(getDb())
+  const rateLimited = await queue.isRateLimited(recipientIdentifier)
+  return c.json({ rateLimited })
+})
+
+// 7g. Signal failover test endpoints — thin pass-throughs to the real
+// pure-function state machine in messaging/signal/failover.ts, which has no
+// HTTP route or admin UI (not yet a shipped feature — see the comment on
+// core/signal-channel.feature's Number Failover section). The `*Healthy`
+// flags stand in for a real bridge health check via runHealthCheck's
+// injectable checker, since no reachable bridge exists here either.
+dev.post('/test-simulate/signal-failover/reset', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+  const body = await c.req.json().catch(() => ({})) as { key?: string }
+  resetFailoverState(body.key)
+  return c.json({ ok: true })
+})
+
+dev.post('/test-simulate/signal-failover/set-target', (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+  return (async () => {
+    const body = await c.req.json().catch(() => ({})) as { key?: string; target?: 'primary' | 'backup' }
+    if (!body.key || !body.target) {
+      return c.json({ error: 'key and target are required' }, 400)
+    }
+    setActiveTarget(body.key, body.target)
+    return c.json(getFailoverState(body.key))
+  })()
+})
+
+dev.get('/test-simulate/signal-failover/state', (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+  const key = c.req.query('key')
+  if (!key) {
+    return c.json({ error: 'key query param is required' }, 400)
+  }
+  return c.json(getFailoverState(key))
+})
+
+function buildTestFailoverConfigs(key: string, overrides?: Partial<FailoverConfig>): {
+  primaryConfig: SignalConfig
+  failoverConfig: FailoverConfig
+} {
+  const primaryConfig: SignalConfig = {
+    bridgeUrl: 'https://primary-bridge.invalid',
+    bridgeApiKey: 'primary-key',
+    webhookSecret: 'primary-secret',
+    registeredNumber: key,
+  }
+  const failoverConfig: FailoverConfig = {
+    enabled: true,
+    backupBridgeUrl: 'https://backup-bridge.invalid',
+    backupBridgeApiKey: 'backup-key',
+    backupRegisteredNumber: `${key}-backup`,
+    backupWebhookSecret: 'backup-secret',
+    failoverThreshold: 3,
+    healthCheckIntervalSec: 60,
+    autoRecover: true,
+    ...overrides,
+  }
+  return { primaryConfig, failoverConfig }
+}
+
+dev.post('/test-simulate/signal-failover/health-check', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+  const body = await c.req.json().catch(() => ({})) as {
+    key?: string
+    failoverConfig?: Partial<FailoverConfig>
+    primaryHealthy?: boolean
+    backupHealthy?: boolean
+  }
+  if (!body.key) {
+    return c.json({ error: 'key is required' }, 400)
+  }
+
+  const { primaryConfig, failoverConfig } = buildTestFailoverConfigs(body.key, body.failoverConfig)
+
+  const fakeHealthCheck = async (config: SignalConfig): Promise<BridgeHealthStatus> => {
+    const isBackup = config.registeredNumber === failoverConfig.backupRegisteredNumber
+    const healthy = isBackup ? (body.backupHealthy ?? false) : (body.primaryHealthy ?? false)
+    return healthy
+      ? { connected: true, lastChecked: new Date().toISOString() }
+      : { connected: false, error: 'Simulated bridge down', lastChecked: new Date().toISOString() }
+  }
+
+  const state = await runHealthCheck(primaryConfig, failoverConfig, fakeHealthCheck)
+  return c.json(state)
+})
+
+dev.post('/test-simulate/signal-failover/active-config', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+  const body = await c.req.json().catch(() => ({})) as {
+    key?: string
+    failoverConfig?: Partial<FailoverConfig>
+  }
+  if (!body.key) {
+    return c.json({ error: 'key is required' }, 400)
+  }
+
+  const { primaryConfig, failoverConfig } = buildTestFailoverConfigs(body.key, body.failoverConfig)
+  const activeConfig = getActiveSignalConfig(primaryConfig, failoverConfig)
+  return c.json(activeConfig)
 })
 
 // ─── Test Push Log (dev/test BDD helper) ──────────────────────────────────

@@ -12,6 +12,7 @@ import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
 import type { SignalWebhookPayload } from './signal/types'
+import { SignalIdentityService } from './signal/identity'
 import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
@@ -208,6 +209,29 @@ messaging.post('/:channel/webhook',
   } catch (err) {
     logger.error(`Failed to parse ${channel} webhook`, err)
     return c.json({ error: 'Failed to parse message' }, 400)
+  }
+
+  // Identity trust tracking: record/refresh the sender's Signal identity on
+  // first (and every subsequent) contact. SignalIdentityService.recordIdentity
+  // already existed with full trust-level logic (TOFU/auto/manual) and a
+  // unit-test suite but had no caller anywhere in the app — this is the
+  // missing wire-up. No per-message identity-key fingerprint is available
+  // from the signal-cli-rest-api webhook payload (only from its separate
+  // /v1/identities polling endpoint, not yet integrated), so fingerprint is
+  // omitted here; this call only ever takes the "new identity" branch, never
+  // the "key changed" branch, until that polling integration exists.
+  if (channel === 'signal' && hubId) {
+    const sourceNumber = incoming.metadata?.source
+    const sourceUuid = incoming.metadata?.sourceUuid
+    if (sourceNumber && sourceUuid) {
+      backgroundTask(c,
+        new SignalIdentityService(getDb()).recordIdentity({
+          hubId,
+          number: sourceNumber,
+          uuid: sourceUuid,
+        }).then(() => undefined)
+      )
+    }
   }
 
   // Firehose observer: buffer Signal group messages for inference agents

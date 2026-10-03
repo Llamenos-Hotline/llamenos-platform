@@ -135,6 +135,12 @@ export function setActiveTarget(key: string, target: 'primary' | 'backup'): void
 export async function runHealthCheck(
   primaryConfig: SignalConfig,
   failoverConfig: FailoverConfig,
+  // Injectable so callers (tests) can supply a deterministic result instead of
+  // a real network round-trip — there is no reachable signal-cli bridge in
+  // CI/local (see core/signal-channel.feature's Number Failover comment).
+  // Defaults to the real bridge health check, so production behavior is
+  // unchanged.
+  checkHealth: (config: SignalConfig) => Promise<BridgeHealthStatus> = checkBridgeHealth,
 ): Promise<FailoverState> {
   const key = primaryConfig.registeredNumber
   if (!failoverConfig.enabled) {
@@ -146,7 +152,7 @@ export async function runHealthCheck(
   state.lastHealthCheck = now
 
   // Check primary
-  const primaryHealth = await checkBridgeHealth(primaryConfig)
+  const primaryHealth = await checkHealth(primaryConfig)
   state.primaryStatus = primaryHealth
 
   if (primaryHealth.connected) {
@@ -182,7 +188,7 @@ export async function runHealthCheck(
         registeredNumber: failoverConfig.backupRegisteredNumber,
         webhookSecret: failoverConfig.backupWebhookSecret,
       }
-      const backupHealth = await checkBridgeHealth(backupConfig)
+      const backupHealth = await checkHealth(backupConfig)
       state.backupStatus = backupHealth
 
       if (backupHealth.connected) {
