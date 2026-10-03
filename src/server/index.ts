@@ -11,6 +11,7 @@ import { createDatabase, closeDb, getDb, schema } from '../../apps/worker/db'
 import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
 import { createServices, type Services } from '../../apps/worker/services'
+import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig } from '../../apps/worker/lib/config'
@@ -104,6 +105,14 @@ try {
 } catch (err) {
   console.warn('[llamenos] Could not check for plaintext contacts:', err)
 }
+
+// --- Startup: warn about any hub that could not route a call to anybody ---
+// A hub with no shift and no fallback group rings nobody, which is the correct
+// out-of-the-box state (nobody is enrolled into crisis calls implicitly) but is
+// invisible: readiness passes, the wizard reports complete, and the first caller
+// hears voicemail. Warn while it can still be fixed, not once somebody is on the
+// line. A warning only — never a boot failure.
+await warnOnUnroutableHubs(services)
 
 const env: Record<string, unknown> = {
   // The only place a raw env string becomes a typed key. Past this point the

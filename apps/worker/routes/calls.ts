@@ -8,6 +8,7 @@ import { hangUpCallerLeg } from '../services/call-hangup'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers, cancelLosingLegs } from '../services/ringing'
+import { getHubPresence } from '../services/presence'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -93,7 +94,7 @@ calls.get('/presence',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
-    const result = await services.calls.getPresence(hubId)
+    const result = await getHubPresence(services, hubId)
     return c.json(result)
   },
 )

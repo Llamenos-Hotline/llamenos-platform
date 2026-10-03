@@ -32,6 +32,17 @@ interface Role {
   permissions: string[]
 }
 
+interface Hub {
+  id: string
+  name: string
+  status?: string
+}
+
+interface Shift {
+  id: string
+  userPubkeys: string[]
+}
+
 /** Mirrors `permissionGranted` (packages/shared/permissions.ts): global
  *  wildcard, exact match, or domain wildcard. Checking only the literal string
  *  reports `calls:*` as "cannot answer calls", which is wrong. */
@@ -127,6 +138,113 @@ test.describe('deployment readiness', () => {
       )
       expect(status, 'admin authentication against the deployment').toBe(200)
       expect(data.hubs?.length ?? 0, 'the deployment has no hub — onboarding did not finish').toBeGreaterThan(0)
+    })
+
+    /**
+     * A hotline that cannot route a call is not ready, and nothing else here
+     * says so: `/health/ready` passes, `/api/config` reports the wizard
+     * complete, and every role check above is green on a deployment where an
+     * incoming call rings nobody at all.
+     *
+     * Out of the box a hub has no shift and no fallback group. That default is
+     * CORRECT — being rostered is the admin's consent, and nobody is enrolled
+     * into receiving crisis calls implicitly — so this is not a bug to fix by
+     * auto-creating a shift. It is a state an operator has to be TOLD they are
+     * in, before a caller discovers it: `startParallelRinging` resolves nobody,
+     * the caller hears hold music and leaves a voicemail no volunteer knows to
+     * expect. (The server now also logs this per hub at boot —
+     * `apps/worker/services/routing-readiness.ts` — but a deployment check must
+     * not depend on somebody having read the boot log.)
+     *
+     * Deliberately a question about CONFIGURATION, not about this minute: a hub
+     * with a 09:00–17:00 shift rings nobody at 03:00 and that is the schedule
+     * working as intended. Non-empty `shifts` OR a non-empty fallback group is
+     * what "a call can be routed" means. Read-only — two GETs per hub.
+     */
+    test('every hub has somebody a call could ring', async ({ request }) => {
+      const { data: hubsData } = await apiGet<{ hubs?: Hub[] }>(request, '/hubs', adminSeed as string)
+      const hubs = (hubsData.hubs ?? []).filter(h => (h.status ?? 'active') === 'active')
+      expect(hubs.length, 'the deployment has no active hub').toBeGreaterThan(0)
+
+      const unroutable: string[] = []
+      for (const hub of hubs) {
+        const [{ status: shiftStatus, data: shiftData }, { status: fbStatus, data: fbData }] = await Promise.all([
+          apiGet<{ shifts?: Shift[] }>(request, `/hubs/${hub.id}/shifts`, adminSeed as string),
+          apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hub.id}/shifts/fallback`, adminSeed as string),
+        ])
+        expect(shiftStatus, `GET /hubs/${hub.id}/shifts`).toBe(200)
+        expect(fbStatus, `GET /hubs/${hub.id}/shifts/fallback`).toBe(200)
+
+        const rostered = new Set((shiftData.shifts ?? []).flatMap(sh => sh.userPubkeys ?? []))
+        const fallback = fbData.userPubkeys ?? []
+        if (rostered.size === 0 && fallback.length === 0) {
+          unroutable.push(`${hub.id} (${hub.name}): 0 rostered, 0 in fallback group`)
+        }
+      }
+
+      expect(
+        unroutable,
+        'these hubs would ring NOBODY — an incoming call reaches hold music and then voicemail. '
+        + 'Put at least one volunteer on a shift (Admin → Shifts), or in the hub\'s fallback group '
+        + '(Admin → Shifts → Fallback group). Nothing else in this suite fails on this state.',
+      ).toEqual([])
+    })
+
+    /**
+     * `/calls/presence` is what an admin dashboard polls to answer "is anyone
+     * there?". It answered `{ activeCalls: 0, availableVolunteers: 0, users: [] }`
+     * on every deployment, whatever the roster said, because `createServices`
+     * built `CallsService` without the optional `ShiftsService` its presence
+     * lookup was gated on (measured against a VM-shaped server; presence is now
+     * derived from the ringing resolver in apps/worker/services/presence.ts).
+     *
+     * What a live, non-destructive suite can assert about it is the part that
+     * does not depend on who happens to be working right now: presence reports
+     * people this hub could actually ring, and its count agrees with its list.
+     * The "a clocked-in volunteer appears in presence" half needs a volunteer
+     * clocked in, so it belongs to the acceptance suite that puts one there
+     * (#1462), not here — a check that passes because its subject is absent is
+     * exactly what #1271 and #1323 are about.
+     */
+    test('presence reports people this hub could ring, and counts them consistently', async ({ request }) => {
+      const { data: hubsData } = await apiGet<{ hubs?: Hub[] }>(request, '/hubs', adminSeed as string)
+      const hubs = (hubsData.hubs ?? []).filter(h => (h.status ?? 'active') === 'active')
+
+      for (const hub of hubs) {
+        const { status, data: presence } = await apiGet<{
+          activeCalls?: number
+          availableVolunteers?: number
+          users?: Array<{ pubkey: string; status: string }>
+        }>(request, `/hubs/${hub.id}/calls/presence`, adminSeed as string)
+        expect(status, `GET /hubs/${hub.id}/calls/presence`).toBe(200)
+
+        const users = presence.users ?? []
+        expect(
+          presence.availableVolunteers,
+          `availableVolunteers disagrees with the users it listed for hub ${hub.id}`,
+        ).toBe(users.filter(u => u.status === 'available').length)
+
+        const [{ data: shiftData }, { data: fbData }] = await Promise.all([
+          apiGet<{ shifts?: Shift[] }>(request, `/hubs/${hub.id}/shifts`, adminSeed as string),
+          apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hub.id}/shifts/fallback`, adminSeed as string),
+        ])
+        const couldRing = new Set([
+          ...(shiftData.shifts ?? []).flatMap(sh => sh.userPubkeys ?? []),
+          ...(fbData.userPubkeys ?? []),
+        ])
+
+        // Anyone presence calls available must be somebody the hub's own
+        // configuration can ring. An `on-call` entry is exempt: they are on a
+        // live call, which can outlast their removal from the roster.
+        const strangers = users
+          .filter(u => u.status === 'available' && !couldRing.has(u.pubkey))
+          .map(u => u.pubkey.slice(0, 8))
+        expect(
+          strangers,
+          `presence reports these pubkeys as available in hub ${hub.id}, but no shift or fallback `
+          + 'group names them — presence and the ringing rule have drifted apart',
+        ).toEqual([])
+      }
     })
 
     /**

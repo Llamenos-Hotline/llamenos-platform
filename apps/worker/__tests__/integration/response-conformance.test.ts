@@ -334,14 +334,34 @@ describe('Calls Routes — response conformance', () => {
   })
 
   it('GET /calls/presence — conforms to callPresenceResponseSchema', async () => {
-    const mockCalls = {
-      getPresence: vi.fn().mockResolvedValue({
-        users: [{ pubkey: MOCK_PUBKEY, status: 'available' }],
-      }),
-    }
-
+    // Presence is composed in services/presence.ts from the ringing resolver,
+    // not read off CallsService, so the route needs the services that resolver
+    // reads. Mocking `calls.getPresence` here would have conformed to the
+    // schema while production answered `users: []` — the defect this shape
+    // change removes.
     const { app, env } = buildApp('/calls', callsRoutes, {
-      services: { calls: mockCalls },
+      services: {
+        calls: {
+          getActiveCalls: vi.fn().mockResolvedValue([]),
+          getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
+        },
+        shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue([MOCK_PUBKEY]) },
+        activeShifts: {
+          listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [{ pubkey: MOCK_PUBKEY, hubId: '' }] }),
+          listClockedInPubkeys: vi.fn().mockResolvedValue(new Set([MOCK_PUBKEY])),
+        },
+        settings: {
+          getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+          getRoles: vi.fn().mockResolvedValue({
+            roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }],
+          }),
+        },
+        identity: {
+          getUsers: vi.fn().mockResolvedValue({
+            users: [{ pubkey: MOCK_PUBKEY, active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] }],
+          }),
+        },
+      },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/calls/presence', callPresenceResponseSchema, { env })
