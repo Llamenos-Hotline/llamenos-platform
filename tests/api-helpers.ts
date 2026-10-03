@@ -73,7 +73,13 @@ function createEd25519AuthToken(
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }
 }
 
-function authHeaders(seedHex: string, method: string, path: string): Record<string, string> {
+/**
+ * Build Ed25519 auth headers for a raw `request.get/post/...()` call that
+ * needs the full response object (status, headers, body) — e.g. to inspect
+ * a redirect's Location header, which the apiGet/apiPost wrappers below
+ * intentionally don't expose.
+ */
+export function authHeaders(seedHex: string, method: string, path: string): Record<string, string> {
   // Strip query params — server verifies against url.pathname (no query string)
   const pathWithoutQuery = path.split('?')[0]
   const token = createEd25519AuthToken(seedHex, method, pathWithoutQuery)

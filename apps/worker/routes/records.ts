@@ -45,7 +45,23 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
   if (checkPermission(permissions, 'cases:read-all')) return 'all'
   if (checkPermission(permissions, 'cases:read-assigned')) return 'assigned'
   if (checkPermission(permissions, 'cases:read-own')) return 'own'
+  // Backward-compat alias: before the entity-unification migration, `events:read`
+  // granted unscoped read access to every event in the hub — there was no
+  // row-level scoping on the old events table. Events are now records with
+  // category:"event", so the alias preserves that unscoped access instead of
+  // silently locking out anyone who still carries the legacy permission.
+  if (checkPermission(permissions, 'events:read')) return 'all'
   return null
+}
+
+/** True when the caller's access comes ONLY from the events:read alias above
+ * (i.e. they hold no real cases:read-* permission). Used to audit alias usage
+ * without touching every one of getAccessLevel's 8 call sites. */
+function usedEventsReadAlias(permissions: string[]): boolean {
+  const hasRealCasesRead = checkPermission(permissions, 'cases:read-all') ||
+    checkPermission(permissions, 'cases:read-assigned') ||
+    checkPermission(permissions, 'cases:read-own')
+  return !hasRealCasesRead && checkPermission(permissions, 'events:read')
 }
 
 /**
@@ -102,6 +118,12 @@ records.get('/',
     const accessLevel = getAccessLevel(permissions)
     if (!accessLevel) {
       return c.json({ error: 'Forbidden', required: 'cases:read-own' }, 403)
+    }
+
+    if (usedEventsReadAlias(permissions)) {
+      await audit(services.audit, 'permissionAliasUsed', pubkey, {
+        permissionAlias: 'events:read -> cases:read',
+      }, undefined, hubId || null)
     }
 
     const crossHub = query.crossHub === 'true'

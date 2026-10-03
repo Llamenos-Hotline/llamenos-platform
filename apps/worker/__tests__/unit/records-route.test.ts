@@ -152,6 +152,44 @@ describe('getAccessLevel (via route behaviour)', () => {
       expect.not.objectContaining({ assignedTo: 'admin-pub' }),
     )
   })
+
+  // --- Backward-compat alias: legacy events:read grants unscoped records read ---
+
+  it('allows listing with only the legacy events:read permission', async () => {
+    const { app } = makeApp({ permissions: ['events:read'] })
+    const res = await app.request('/?page=1&limit=10')
+    expect(res.status).toBe(200)
+  })
+
+  it('does not scope list for a caller using only the events:read alias', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:read'], pubkey: 'legacy-pub' })
+    await app.request('/?page=1&limit=10')
+    expect(mockCases.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ assignedTo: 'legacy-pub' }),
+    )
+  })
+
+  it('audits alias usage when events:read is the only qualifying permission', async () => {
+    const { app, mockAudit } = makeApp({ permissions: ['events:read'], pubkey: 'legacy-pub' })
+    await app.request('/?page=1&limit=10')
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      'permissionAliasUsed',
+      'legacy-pub',
+      expect.objectContaining({ permissionAlias: 'events:read -> cases:read' }),
+      expect.anything(),
+    )
+  })
+
+  it('does not audit alias usage when the caller has a real cases:read-* permission', async () => {
+    const { app, mockAudit } = makeApp({ permissions: ['cases:read-all', 'events:read'] })
+    await app.request('/?page=1&limit=10')
+    expect(mockAudit.log).not.toHaveBeenCalledWith(
+      'permissionAliasUsed',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
