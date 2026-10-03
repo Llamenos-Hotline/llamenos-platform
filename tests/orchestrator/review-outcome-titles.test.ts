@@ -162,6 +162,12 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['(5) not-requested — the request was not a valid trigger (every Dependabot PR, #1257)',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'not-requested' }, 'NO-VERDICT:not-requested'],
   ['(6) UNREADABLE — the engine ran, its output did not parse (#1263)', reviewed('unreadable', 'failure'), 'NO-VERDICT:unreadable'],
+  // Exhausting `--max-turns` is NOT an availability problem and NOT a parse
+  // failure: the engine answered and spent a whole session. It gets its own
+  // token because its remedy differs — re-requesting re-runs the same diff
+  // under the same budget and exhausts again.
+  ['(6b) budget exhausted — the engine ran a full session and reached no verdict',
+    reviewed('budget-exhausted', 'failure'), 'NO-VERDICT:budget-exhausted'],
   ['(7) scope — touched files outside the lane\'s scope (#1235)', reviewed('scope', 'failure'), 'NO-VERDICT:scope'],
   ['review-set-unresolved, decided by the gate',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'review-set-unresolved' }, 'NO-VERDICT:review-set-unresolved'],
@@ -412,6 +418,9 @@ describe('rail: runReviewCi names the result of every return path', () => {
     ['the reviewer rejected the diff', { secondOpinion: verdict('FAIL') }, 'fail', false],
     ['a rejection beside an UNREADABLE is still a rejection', { ...withProfile, secondOpinion: verdict('FAIL'), profileReview: verdict('UNREADABLE') }, 'fail', false],
     ['the reviewer left no readable verdict', { secondOpinion: verdict('UNREADABLE') }, 'unreadable', false],
+    ['the reviewer used its whole turn budget',
+      { secondOpinion: async () => ({ verdict: 'UNREADABLE' as const, text: 'Error: Reached max turns (10)', failureKind: 'budget-exhausted' as const }) },
+      'budget-exhausted', false],
     ['a reviewer threw', { secondOpinion: async () => { throw new Error('engine exploded') } }, 'unreadable', false],
     ['a cached PASS', { cacheFor: cacheOf({ verdict: 'PASS', text: 'cached pass' }) }, 'cache-pass', true],
     ['a cached FAIL', { cacheFor: cacheOf({ verdict: 'FAIL', text: 'cached fail' }) }, 'cache-fail', false],
