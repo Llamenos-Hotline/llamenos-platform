@@ -16,7 +16,6 @@ import {
   loginAsAdmin,
   TestIds,
   Timeouts,
-  navigateAfterLogin,
 } from './helpers'
 import { Navigation } from './pages/index'
 import {
@@ -144,92 +143,12 @@ test.describe('Call Simulation', () => {
   })
 })
 
-test.describe('Message Simulation', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page)
-  })
-
-  test('simulated incoming SMS creates a conversation', async ({ page, request }) => {
-    const senderNumber = uniqueCallerNumber()
-    const messageBody = `Test SMS ${Date.now()}`
-
-    // Simulate incoming SMS
-    const { conversationId, messageId } = await simulateIncomingMessage(request, {
-      senderNumber,
-      body: messageBody,
-      channel: 'sms',
-    })
-    expect(conversationId).toBeTruthy()
-    expect(messageId).toBeTruthy()
-
-    // Navigate to conversations page directly (nav link may not be visible if messaging isn't configured)
-    await navigateAfterLogin(page, '/conversations')
-
-    // The conversation list should show the new conversation
-    const conversationList = page.getByTestId(TestIds.CONVERSATION_LIST)
-    await expect(conversationList).toBeVisible({ timeout: Timeouts.API })
-
-    // At least one conversation item should be present
-    const conversationItems = page.getByTestId(TestIds.CONVERSATION_ITEM)
-    await expect(conversationItems.first()).toBeVisible({ timeout: Timeouts.API })
-  })
-
-  test('simulated incoming WhatsApp message creates a conversation', async ({ page, request }) => {
-    const senderNumber = uniqueCallerNumber()
-    const messageBody = `WhatsApp test ${Date.now()}`
-
-    const { conversationId, messageId } = await simulateIncomingMessage(request, {
-      senderNumber,
-      body: messageBody,
-      channel: 'whatsapp',
-    })
-    expect(conversationId).toBeTruthy()
-    expect(messageId).toBeTruthy()
-
-    // Navigate to conversations page directly (nav link may not be visible if messaging isn't configured)
-    await navigateAfterLogin(page, '/conversations')
-
-    const conversationList = page.getByTestId(TestIds.CONVERSATION_LIST)
-    await expect(conversationList).toBeVisible({ timeout: Timeouts.API })
-
-    const conversationItems = page.getByTestId(TestIds.CONVERSATION_ITEM)
-    await expect(conversationItems.first()).toBeVisible({ timeout: Timeouts.API })
-  })
-
-  test('multiple messages from same sender appear in one conversation', async ({ page, request }) => {
-    const senderNumber = uniqueCallerNumber()
-
-    // Send two messages from the same number
-    const msg1 = await simulateIncomingMessage(request, {
-      senderNumber,
-      body: `First message ${Date.now()}`,
-      channel: 'sms',
-    })
-    const msg2 = await simulateIncomingMessage(request, {
-      senderNumber,
-      body: `Second message ${Date.now()}`,
-      channel: 'sms',
-    })
-
-    // Both messages should be in the same conversation
-    expect(msg1.conversationId).toBe(msg2.conversationId)
-    expect(msg1.messageId).not.toBe(msg2.messageId)
-
-    // Navigate to conversations directly (nav link may not be visible if messaging isn't configured)
-    await navigateAfterLogin(page, '/conversations')
-
-    const conversationList = page.getByTestId(TestIds.CONVERSATION_LIST)
-    await expect(conversationList).toBeVisible({ timeout: Timeouts.API })
-
-    // Click the conversation to view the thread
-    const conversationItem = page.getByTestId(TestIds.CONVERSATION_ITEM).first()
-    await conversationItem.click()
-
-    // The thread should be visible
-    const thread = page.getByTestId(TestIds.CONVERSATION_THREAD)
-    await expect(thread).toBeVisible({ timeout: Timeouts.API })
-  })
-})
+// Inbound-message UI coverage lives in the hub-scoped BDD feature
+// packages/test-specs/features/platform/desktop/messaging/inbound-messages.feature.
+// This project runs on an instance with no hub at all, which the setup wizard never
+// produces (it always creates a default hub), and the conversation list is scoped to
+// the user's member hubs — so a message seeded here would belong to no hub and could
+// not appear in any real deployment's list.
 
 test.describe('Simulation endpoint validation', () => {
   test('incoming call requires callerNumber', async ({ request }) => {

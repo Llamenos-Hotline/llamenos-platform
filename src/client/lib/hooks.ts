@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
 import { startRinging, stopRinging } from './notifications'
+import { rememberCallHub } from './call-hubs'
 import {
   getMyShiftStatus,
   listActiveCalls,
@@ -11,7 +12,7 @@ import {
   reportCallSpam as apiReportSpam,
   type HubCall,
   type ShiftStatus,
-  type Conversation,
+  type HubConversation,
 } from './api'
 import {
   KIND_CALL_RING,
@@ -47,6 +48,11 @@ export function useCalls() {
   const [calls, setCalls] = useState<HubCall[]>([])
   const [currentCall, setCurrentCall] = useState<HubCall | null>(null)
   const memberHubIds = useMemberHubIds()
+  // Record every call's hub so a note about it can be filed to the right hub later,
+  // even after the call left this list (e.g. hung up) and whatever hub is active.
+  useEffect(() => {
+    for (const c of calls) rememberCallHub(c.id, c.hubId)
+  }, [calls])
   const currentCallRef = useRef(currentCall)
   currentCallRef.current = currentCall
   const callsRef = useRef(calls)
@@ -229,9 +235,15 @@ export function useShiftStatus() {
  *
  * WebSocket delivers real-time updates (new messages, assignments, closures).
  * REST polling (every 30s) provides the full conversation list as a fallback.
+ *
+ * Multi-hub axiom: both channels cover EVERY hub the user is a member of, and each
+ * conversation is tagged with its own hub so actions on it (claim, reply, note)
+ * never fall back to the active hub.
  */
 export function useConversations() {
-  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversations, setConversations] = useState<HubConversation[]>([])
+  const conversationsRef = useRef(conversations)
+  conversationsRef.current = conversations
   const memberHubIds = useMemberHubIds()
 
   // --- WebSocket subscriptions for conversation events (every member hub) ---
@@ -274,27 +286,40 @@ export function useConversations() {
     }
   })
 
-  // --- REST polling fallback (every 30s) ---
+  // --- REST polling fallback (every 30s, every member hub) ---
+  const memberHubKey = memberHubIds.join(',')
   useEffect(() => {
+    if (!memberHubKey) return
+    const hubIds = memberHubKey.split(',')
     let mounted = true
     const poll = () => {
-      listConversations()
-        .then(({ conversations: polled }) => {
-          if (mounted) setConversations(polled)
-        })
-        .catch(() => {
-          console.error('[conversations] Background conversation polling failed')
+      Promise.allSettled(hubIds.map(hubId => listConversations(hubId)))
+        .then(results => {
+          if (!mounted) return
+          const polled: HubConversation[] = []
+          const failedHubs = new Set<string>()
+          results.forEach((result, i) => {
+            if (result.status === 'fulfilled') polled.push(...result.value.conversations)
+            else failedHubs.add(hubIds[i])
+          })
+          if (failedHubs.size > 0) {
+            console.error('[conversations] Background conversation polling failed for hubs:', [...failedHubs].join(','))
+          }
+          // A hub whose poll failed keeps its known conversations — one unreachable hub
+          // must not make another hub's conversations vanish.
+          const kept = conversationsRef.current.filter(c => failedHubs.has(c.hubId))
+          setConversations([...polled, ...kept])
         })
     }
     poll()
     const interval = setInterval(poll, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [])
+  }, [memberHubKey])
 
   // Apply a conversation returned by a mutation (claim, reopen) so the acting
   // user's view reflects their own action without waiting for the relay echo
   // or the next poll.
-  const applyConversation = useCallback((updated: Conversation) => {
+  const applyConversation = useCallback((updated: HubConversation) => {
     setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))
   }, [])
 

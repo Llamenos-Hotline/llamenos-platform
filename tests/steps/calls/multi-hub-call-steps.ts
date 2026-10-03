@@ -97,3 +97,39 @@ Then('that call should be answered on the second hub', async ({ page, backendReq
     return call ? { status: call.status, answered: !!call.answeredBy } : null
   }, { timeout: Timeouts.API }).toEqual({ status: 'in-progress', answered: true })
 })
+
+When('the volunteer writes a note on the active call panel', async ({ page }) => {
+  const text = `dashboard-note-${Date.now()}`
+  await page.getByTestId(TestIds.ACTIVE_CALL_NOTE_INPUT).fill(text)
+  await page.getByTestId(TestIds.ACTIVE_CALL_NOTE_SAVE_BTN).click()
+})
+
+When('the volunteer writes a note about that call through the note sheet', async ({ page }) => {
+  const { callId } = await recordedIds(page)
+  expect(callId, 'the call step must record the call id').toBeTruthy()
+  const text = `sheet-note-${Date.now()}`
+  // Alt+N opens the note sheet; focus must not be inside an input for the shortcut to fire.
+  await page.locator('body').press('Alt+n')
+  await expect(page.getByTestId(TestIds.NOTE_SHEET)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await page.getByTestId(TestIds.SHEET_CALL_ID_INPUT).fill(callId!)
+  await page.getByTestId(TestIds.SHEET_NOTE_TEXT).fill(text)
+  await page.getByTestId(TestIds.SHEET_SAVE_BTN).click()
+  await expect(page.getByTestId(TestIds.NOTE_SHEET)).toBeHidden({ timeout: Timeouts.ELEMENT })
+})
+
+Then('that note should be filed under the second hub and not the first', async ({ page, backendRequest, workerHub }) => {
+  const { hubId, callId } = await recordedIds(page)
+  expect(hubId).toBeTruthy()
+  expect(workerHub).not.toBe(hubId)
+  // Server-side truth: the note must exist under the call's own hub and never under the active one.
+  const countFor = async (hub: string) => {
+    const { status, data } = await apiGet<{ notes: { callId?: string }[] }>(
+      backendRequest,
+      `/hubs/${hub}/notes?callId=${encodeURIComponent(callId!)}`,
+    )
+    expect(status).toBe(200)
+    return data.notes.filter(n => n.callId === callId).length
+  }
+  await expect.poll(() => countFor(hubId!), { timeout: Timeouts.API }).toBe(1)
+  expect(await countFor(workerHub)).toBe(0)
+})

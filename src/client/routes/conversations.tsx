@@ -10,6 +10,7 @@ import {
   claimConversation,
   updateConversation,
   type ConversationMessage,
+  type HubConversation,
 } from '@/lib/api'
 import { encryptMessage } from '@/lib/platform'
 import { useToast } from '@/lib/toast'
@@ -41,56 +42,58 @@ function ConversationsPage() {
   const { openNewConversationNote } = useNoteSheet()
 
   const selectedConv = conversations.find(c => c.id === selectedId)
+  // A conversation always acts on its own hub, never the active one.
+  const selectedHubId = selectedConv?.hubId
 
   // Load messages when conversation is selected
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedId || !selectedHubId) {
       setMessages([])
       return
     }
 
     setMessagesLoading(true)
-    getConversationMessages(selectedId, { limit: 100 })
+    getConversationMessages(selectedHubId, selectedId, { limit: 100 })
       .then(({ messages: msgs }) => setMessages(msgs))
       .catch(() => toast(t('conversations.loadError', { defaultValue: 'Failed to load messages' }), 'error'))
       .finally(() => setMessagesLoading(false))
-  }, [selectedId, t, toast])
+  }, [selectedId, selectedHubId, t, toast])
 
   // Refresh messages periodically when a conversation is selected
   useEffect(() => {
-    if (!selectedId) return
+    if (!selectedId || !selectedHubId) return
     const interval = setInterval(() => {
-      getConversationMessages(selectedId, { limit: 100 })
+      getConversationMessages(selectedHubId, selectedId, { limit: 100 })
         .then(({ messages: msgs }) => setMessages(msgs))
         .catch(() => {
           console.error('[conversations] Background message refresh failed')
         })
     }, 10_000)
     return () => clearInterval(interval)
-  }, [selectedId])
+  }, [selectedId, selectedHubId])
 
-  const handleClaim = useCallback(async (convId: string) => {
+  const handleClaim = useCallback(async (conv: HubConversation) => {
     try {
-      applyConversation(await claimConversation(convId))
+      applyConversation(await claimConversation(conv.hubId, conv.id))
       toast(t('conversations.claimed', { defaultValue: 'Conversation claimed' }))
     } catch {
       toast(t('conversations.claimError', { defaultValue: 'Failed to claim conversation' }), 'error')
     }
   }, [applyConversation, t, toast])
 
-  const handleClose = useCallback(async (convId: string) => {
+  const handleClose = useCallback(async (conv: HubConversation) => {
     try {
-      await updateConversation(convId, { status: 'closed' })
-      if (selectedId === convId) setSelectedId(null)
+      await updateConversation(conv.hubId, conv.id, { status: 'closed' })
+      if (selectedId === conv.id) setSelectedId(null)
       toast(t('conversations.closed', { defaultValue: 'Conversation closed' }))
     } catch {
       toast(t('conversations.closeError', { defaultValue: 'Failed to close conversation' }), 'error')
     }
   }, [selectedId, t, toast])
 
-  const handleReopen = useCallback(async (convId: string) => {
+  const handleReopen = useCallback(async (conv: HubConversation) => {
     try {
-      applyConversation(await updateConversation(convId, { status: 'active' }))
+      applyConversation(await updateConversation(conv.hubId, conv.id, { status: 'active' }))
       toast(t('conversations.reopened', { defaultValue: 'Conversation reopened' }))
     } catch {
       toast(t('conversations.reopenError', { defaultValue: 'Failed to reopen conversation' }), 'error')
@@ -99,7 +102,7 @@ function ConversationsPage() {
 
   // Encrypt and send a message using envelope pattern
   const handleComposerSend = useCallback(async (plaintext: string) => {
-    if (!selectedId || !hasDeviceKey || !publicKey) return
+    if (!selectedId || !selectedHubId || !hasDeviceKey || !publicKey) return
 
     // Build reader list: current user + admin decryption pubkey
     const readerPubkeys = [publicKey]
@@ -110,7 +113,7 @@ function ConversationsPage() {
     const encrypted = await encryptMessage(plaintext, readerPubkeys)
 
     try {
-      const msg = await sendConversationMessage(selectedId, {
+      const msg = await sendConversationMessage(selectedHubId, selectedId, {
         encryptedContent: encrypted.encryptedContent,
         readerEnvelopes: encrypted.readerEnvelopes,
         plaintextForSending: plaintext,
@@ -119,7 +122,7 @@ function ConversationsPage() {
     } catch {
       toast(t('conversations.sendError', { defaultValue: 'Failed to send message' }), 'error')
     }
-  }, [selectedId, hasDeviceKey, publicKey, adminDecryptionPubkey, t, toast])
+  }, [selectedId, selectedHubId, hasDeviceKey, publicKey, adminDecryptionPubkey, t, toast])
 
   const hasAnyMessaging = channels.sms || channels.whatsapp || channels.signal || channels.reports
 
@@ -208,7 +211,7 @@ function ConversationsPage() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedConv.status === 'waiting' && (
-                  <Button size="sm" data-testid="conv-assign-btn" onClick={() => handleClaim(selectedConv.id)}>
+                  <Button size="sm" data-testid="conv-assign-btn" onClick={() => handleClaim(selectedConv)}>
                     <UserCheck className="h-3.5 w-3.5 mr-1" />
                     {t('conversations.claim', { defaultValue: 'Claim' })}
                   </Button>
@@ -219,18 +222,18 @@ function ConversationsPage() {
                     {t('conversations.reassign', { defaultValue: 'Reassign' })}
                   </Button>
                 )}
-                <Button size="sm" variant="outline" data-testid="conv-add-note-btn" onClick={() => openNewConversationNote(selectedConv.id)}>
+                <Button size="sm" variant="outline" data-testid="conv-add-note-btn" onClick={() => openNewConversationNote(selectedConv.id, selectedConv.hubId)}>
                   <StickyNote className="h-3.5 w-3.5 mr-1" />
                   {t('notes.addNote', { defaultValue: 'Add Note' })}
                 </Button>
                 {selectedConv.status === 'active' && (
-                  <Button size="sm" variant="outline" data-testid="conv-close-btn" onClick={() => handleClose(selectedConv.id)}>
+                  <Button size="sm" variant="outline" data-testid="conv-close-btn" onClick={() => handleClose(selectedConv)}>
                     <X className="h-3.5 w-3.5 mr-1" />
                     {t('conversations.close', { defaultValue: 'Close' })}
                   </Button>
                 )}
                 {selectedConv.status === 'closed' && (
-                  <Button size="sm" variant="outline" data-testid="conv-reopen-btn" onClick={() => handleReopen(selectedConv.id)}>
+                  <Button size="sm" variant="outline" data-testid="conv-reopen-btn" onClick={() => handleReopen(selectedConv)}>
                     <RotateCcw className="h-3.5 w-3.5 mr-1" />
                     {t('conversations.reopen', { defaultValue: 'Reopen' })}
                   </Button>

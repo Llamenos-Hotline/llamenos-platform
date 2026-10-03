@@ -30,12 +30,15 @@ vi.mock('./api/client', async (importActual) => ({
       return { calls: [{ callId: 'CA-on-hub-B', hubId: 'hub-B', callerNumber: '[redacted]', startedAt: '2026-01-01T00:00:00Z', status: 'ringing' }] }
     }
     if (path.endsWith('/calls/active')) return { calls: [] }
+    if (path === '/hubs/hub-B/conversations?') return { conversations: [{ id: 'conv-on-hub-B', status: 'waiting', channelType: 'sms', messageCount: 1 }] }
+    if (path.endsWith('/conversations?')) return { conversations: [{ id: 'conv-on-hub-A', status: 'waiting', channelType: 'sms', messageCount: 1 }] }
     return {}
   }),
 }))
 
-import { setActiveHub } from './api'
+import { setActiveHub, createNote } from './api'
 import { useCalls, useConversations } from './hooks'
+import { rememberedCallHub, clearRememberedCallHubs } from './call-hubs'
 
 function latest(kindsIncludes: number) {
   const sub = [...subscribed].reverse().find(s => s.kinds.includes(kindsIncludes))
@@ -86,6 +89,13 @@ describe('useCalls with the user in two hubs and hub A active', () => {
     expect(requested).toEqual([{ path: '/hubs/hub-B/calls/CA-on-hub-B/spam', method: 'POST' }])
   })
 
+  it('remembers which hub each call belongs to so a later note is filed there', async () => {
+    clearRememberedCallHubs()
+    const { result } = renderHook(() => useCalls())
+    await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
+    await waitFor(() => expect(rememberedCallHub('CA-on-hub-B')).toBe('hub-B'))
+  })
+
   it('hangs up against the call\'s own hub', async () => {
     const { result } = renderHook(() => useCalls())
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
@@ -115,5 +125,26 @@ describe('useConversations with the user in two hubs and hub A active', () => {
   it('subscribes to conversation events on every member hub', async () => {
     renderHook(() => useConversations())
     await waitFor(() => expect(new Set(latest(KIND_MESSAGE_NEW).hubIds)).toEqual(new Set(['hub-A', 'hub-B'])))
+  })
+
+  it('polls conversations on every member hub and tags each with its own hub', async () => {
+    requested.length = 0
+    const { result } = renderHook(() => useConversations())
+    await waitFor(() => expect(result.current.conversations.map(c => `${c.id}@${c.hubId}`).sort())
+      .toEqual(['conv-on-hub-A@hub-A', 'conv-on-hub-B@hub-B']))
+    expect([...new Set(requested.filter(r => r.path.includes('/conversations')).map(r => r.path))].sort())
+      .toEqual(['/hubs/hub-A/conversations?', '/hubs/hub-B/conversations?'])
+  })
+})
+
+describe('createNote with hub A active', () => {
+  beforeEach(() => {
+    requested.length = 0
+    setActiveHub('hub-A')
+  })
+
+  it('files a note to the hub it is given, not the active hub', async () => {
+    await createNote({ callId: 'CA-on-hub-B', encryptedContent: 'x' }, 'hub-B')
+    expect(requested).toEqual([{ path: '/hubs/hub-B/notes', method: 'POST' }])
   })
 })

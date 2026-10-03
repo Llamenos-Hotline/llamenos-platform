@@ -59,6 +59,8 @@ export type ConversationWorld = {
   seeded?: SeededConversation
   /** The outbound message posted by "I sent a message in a conversation". */
   outbound?: { conversationId: string; messageId: string; body: string }
+  /** Inbound messages simulated at the worker's hub from one sender, in arrival order. */
+  inbound?: { last4: string; conversationIds: string[]; bodies: string[] }
 }
 
 export type SasWorld = {
