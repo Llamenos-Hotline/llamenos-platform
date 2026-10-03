@@ -13,7 +13,7 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS } from '../../orchestrator/src/review.js'
+import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
@@ -556,11 +556,50 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // real review as an opaque `engine-unavailable`.
     expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --tools "\$rev_tools" --model "\$rev_model"/)
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
-      .toMatch(/import \{ reviewerInvocationFor, REVIEWER_TOOLS \} from "\.\/orchestrator\/src\/review\.ts"/)
+      .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
       .not.toMatch(/--model "?sonnet"?\b/)
     expect(text, 'smoke test pins a literal claude binary again instead of resolving one')
       .not.toMatch(/\|\s*claude --print --permission-mode plan/)
+  })
+
+  // The reviewer's tool list is the ONE value the smoke step may not import
+  // from review.ts, and these two rails are what make carrying it as a
+  // literal safe.
+  //
+  // Why it cannot be imported: this job executes the HEAD's copy of
+  // fleet-review.yml against a BASE checkout of the source (`ref:
+  // base_sha`, deliberate — the gate never runs the code it judges). A
+  // `bun -e` import of any symbol the head ADDS therefore resolves against
+  // a base that does not have it yet and dies with `SyntaxError: Export
+  // named '...' not found`, taking `fleet/review` red for the very PR that
+  // adds the symbol. `REVIEWER_TOOLS` hit this exactly (the PR adding it
+  // could not pass its own gate), and ANY future export consumed by this
+  // YAML would hit it identically — so the ban is on the pattern, not on
+  // the one symbol.
+  //
+  // Why a literal is still safe: this assertion runs in the TEST SUITE,
+  // where the YAML and review.ts are necessarily the SAME commit, so the
+  // drift a literal could otherwise hide is caught here instead — at the
+  // one place where comparing the two versions is even meaningful.
+  it('carries the reviewer tool list as its own literal, equal to REVIEWER_TOOLS in the source', () => {
+    const text = fleetReviewJobText()
+    const m = /^\s*FLEET_REVIEWER_TOOLS:\s*(\S+)\s*$/m.exec(text)
+    if (m === null) throw new Error('FLEET_REVIEWER_TOOLS not set in the fleet-review job env')
+    expect(m[1], 'the workflow\'s FLEET_REVIEWER_TOOLS has drifted from REVIEWER_TOOLS in orchestrator/src/review.ts')
+      .toBe(REVIEWER_TOOLS.join(','))
+    // And it is what actually reaches the engine, not merely declared.
+    expect(text, 'the smoke invocation does not pass the env-carried tool list')
+      .toMatch(/rev_tools="\$FLEET_REVIEWER_TOOLS"/)
+  })
+
+  it('never imports the tool list across the head-YAML/base-checkout version boundary', () => {
+    const text = fleetReviewJobText()
+    // Any `bun -e` import naming REVIEWER_TOOLS is the deadlock, restored.
+    for (const m of text.matchAll(/import \{([^}]*)\} from "\.\/orchestrator\/src\/review\.ts"/g)) {
+      expect(m[1], 'a gate-time import names REVIEWER_TOOLS again — this deadlocks fleet/review for any PR that changes it')
+        .not.toMatch(/\bREVIEWER_TOOLS\b/)
+    }
   })
 
   // Scoped to the smoke-test step's own run: block — the job's surrounding
