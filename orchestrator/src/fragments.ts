@@ -39,6 +39,10 @@ export interface LaneScope {
  * more bullets below) is not a shape this parser recognizes and will drop
  * the later bullets silently. And any backticked path must contain `/`, `.`,
  * or `*` or it will be silently treated as prose, not scope.
+ *
+ * To own ONE file at the top level, write it with a leading slash —
+ * `/README.md`, not `README.md`. A bare name is a basename pattern and matches
+ * that name at every depth in the tree; see `matchesPath` and #1473.
  */
 const OWNED_HEADING = /^\*\*Owned paths:?\*\*\s*(.*)$/
 const NOT_OWNED_HEADING = /^\*\*Does NOT own:?\*\*\s*(.*)$/i
@@ -134,10 +138,57 @@ function globToRegExp(pattern: string): RegExp {
  * write list MORE conservative, never less.
  */
 export function matchesPath(file: string, pattern: string): boolean {
+  // A LEADING `/` anchors the pattern to the repo root, and is the ONLY way to
+  // express "this one file, at the top level" (#1473).
+  //
+  // Without it, a single-file grant is unsayable. A pattern with no `/` is a
+  // basename pattern matched at ANY depth, so infra's `README.md` grant in
+  // #1467 also handed it `apps/ios/README.md`, `packages/test-specs/README.md`
+  // and 17 others — including a file the shared lane owns exclusively. Lane
+  // scope decides which lane may SELF-MERGE a path, so that silently
+  // transferred authority over other lanes' documentation; the review rejected
+  // it on breadth, independent of those files being harmless documentation.
+  // Adding a `/` to the pattern does not help either: `README.md/` reads as a
+  // directory and `./README.md` matches nothing.
+  //
+  // Deliberately ADDITIVE. Bare `README.md` keeps its basename-prefix
+  // behaviour, because that behaviour is load-bearing for the never-write list
+  // (see `SECRET_PATH_PATTERNS` and `config.ts`): it is what makes `.env`,
+  // `*.pem` and `id_ed25519` catch a secret at any depth, the way CODEOWNERS'
+  // `**/.env` would. Narrowing basename matching globally to fix one grant
+  // would have quietly widened what a worker may write. The defect was the
+  // ABSENCE of an anchored alternative, not the presence of basename matching.
+  if (pattern.startsWith('/')) {
+    const rooted = pattern.slice(1)
+    // A lone `/` is not "the whole repo": before the anchor existed it matched
+    // nothing (no repo-relative path starts with `/`), and an empty pattern
+    // here would make `startsWith('')` own every file. Keep it matching
+    // nothing, so adding the anchor cannot widen any existing scope.
+    if (rooted.length === 0) return false
+    return matchesRootedPath(file, rooted)
+  }
   if (!pattern.includes('/')) {
     const basename = file.slice(file.lastIndexOf('/') + 1)
     return pattern.includes('*') ? globToRegExp(pattern).test(basename) : basename.startsWith(pattern)
   }
+  return matchesRootedPath(file, pattern)
+}
+
+/**
+ * The three rules a path-shaped (non-basename) pattern has always used,
+ * unchanged and now shared with the root-anchored form so both spell
+ * "directory", "glob" and "literal prefix" identically: a trailing slash is a
+ * directory, a `*` is a single-segment glob, anything else is a literal prefix.
+ *
+ * The prefix case means `/README.md` also matches a root `README.md.bak`,
+ * exactly as `docs/QUICKSTART.md` already matches `docs/QUICKSTART.md.bak`.
+ * That is the pre-existing behaviour of every slash-bearing owned path, kept
+ * on purpose rather than tightened here: whether a dotted pattern should
+ * instead match exactly is a separate, riskier decision (#1473 raises it), and
+ * making the anchored form behave differently from every other path pattern
+ * would be a second semantics for readers to hold.
+ */
+function matchesRootedPath(file: string, pattern: string): boolean {
   if (pattern.endsWith('/')) {
     return file.startsWith(pattern)
   }
