@@ -2,8 +2,9 @@
 # Cross-Host Restore Playbook
 #
 # Restores services from backup in the correct order:
-# 1. Stop all services
-# 2. Restore config (docker-compose.yml, .env, Caddyfile)
+# 1. Stop all per-service Docker Compose stacks
+# 2. Restore config (the {{ app_dir }}/services/ tree: each service's
+#    docker-compose.yml, .env.<service>, Caddyfile, etc.)
 # 3. Restore PostgreSQL
 # 4. Restore RustFS (file attachments)
 # 6. Verify data integrity
@@ -37,6 +38,10 @@
   pre_tasks:
     - name: Skip hosts without disk encryption (this play keeps data at rest)
       ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
+      tags: always
+
+    - name: Discover installed per-service compose stacks
+      ansible.builtin.import_tasks: tasks/discover-services.yml
       tags: always
 
     - name: Validate age key path (if encryption is configured)
@@ -123,17 +128,21 @@
           tags: always
 
         # ── Stop services ──────────────────────────────────────────────
+        # Reverse of the start order (proxy/app first, data/storage last) so
+        # nothing keeps writing to postgres/rustfs while they come down.
 
-        - name: Stop Docker Compose stack
+        - name: Stop per-service Docker Compose stacks
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml down
+            cmd: >
+              docker compose -f {{ app_dir }}/services/{{ item }}/docker-compose.yml down
+          loop: "{{ llamenos_installed_services | reverse | list }}"
           when: not restore_dry_run
           tags: [postgres, rustfs, config]
           ignore_errors: true
 
-        - name: "[DRY RUN] Would stop Docker Compose stack"
+        - name: "[DRY RUN] Would stop per-service Docker Compose stacks"
           ansible.builtin.debug:
-            msg: "docker compose down (skipped — dry run)"
+            msg: "docker compose down for {{ llamenos_installed_services | reverse | list }} (skipped — dry run)"
           when: restore_dry_run
           tags: [postgres, rustfs, config]
 
@@ -162,16 +171,18 @@
 
         - name: Extract and restore config files
           ansible.builtin.shell: |
+            set -euo pipefail
             cd {{ restore_tmpdir.path }}
             tar -xzf config.tar.gz
-            # Restore docker-compose.yml, .env, Caddyfile (preserve ownership)
-            for f in {{ app_dir }}/docker-compose.yml {{ app_dir }}/.env {{ app_dir }}/Caddyfile; do
-              relpath="${f}"
-              if [ -f "{{ restore_tmpdir.path }}${relpath}" ]; then
-                cp "{{ restore_tmpdir.path }}${relpath}" "${f}"
-                echo "Restored: ${f}"
-              fi
-            done
+            # backup-config archives the whole per-service tree
+            # ({{ app_dir }}/services/<service>/docker-compose.yml, .env.<service>,
+            # Caddyfile, etc.) — restore it wholesale, preserving ownership.
+            if [ -d "{{ restore_tmpdir.path }}{{ app_dir }}/services" ]; then
+              cp -a "{{ restore_tmpdir.path }}{{ app_dir }}/services/." "{{ app_dir }}/services/"
+              echo "Restored: {{ app_dir }}/services/"
+            else
+              echo "No {{ app_dir }}/services/ tree found in this config backup"
+            fi
           when:
             - config_backup_file is defined
             - not restore_dry_run
@@ -188,13 +199,13 @@
 
         - name: Start PostgreSQL container only
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d postgres
+            cmd: docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml up -d
           when: not restore_dry_run and (pg_backup_file is defined or rustfs_backup_file is defined)
           tags: [postgres, rustfs]
 
         - name: Wait for PostgreSQL to be ready
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres pg_isready -U llamenos -d llamenos
+            cmd: docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml exec -T postgres pg_isready -U llamenos -d llamenos
           register: pg_ready
           retries: 15
           delay: 2
@@ -219,9 +230,9 @@
 
         - name: Drop and recreate database
           ansible.builtin.shell: |
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml exec -T postgres \
               psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos;"
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml exec -T postgres \
               psql -U llamenos -d postgres -c "CREATE DATABASE llamenos OWNER llamenos;"
           when:
             - pg_backup_file is defined
@@ -230,7 +241,7 @@
 
         - name: Restore PostgreSQL from backup
           ansible.builtin.shell: |
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres \
+            docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml exec -T postgres \
               pg_restore -U llamenos -d llamenos --no-owner --no-privileges \
               < {{ restore_tmpdir.path }}/pg.dump
           register: pg_restore_result
@@ -243,7 +254,7 @@
         - name: Validate PostgreSQL restore
           ansible.builtin.command:
             cmd: >
-              docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres
+              docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml exec -T postgres
               psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM kv_store"
           register: pg_validate
           when:
@@ -267,13 +278,13 @@
 
         - name: Start RustFS container
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d rustfs
+            cmd: docker compose -f {{ app_dir }}/services/rustfs/docker-compose.yml up -d
           when: not restore_dry_run and rustfs_backup_file is defined
           tags: [rustfs]
 
         - name: Wait for RustFS to be healthy
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs curl -sf http://localhost:9000/health
+            cmd: docker compose -f {{ app_dir }}/services/rustfs/docker-compose.yml exec -T rustfs curl -sf http://localhost:9000/health
           register: rustfs_ready
           retries: 10
           delay: 2
@@ -297,9 +308,9 @@
 
         - name: Copy restored files into RustFS container
           ansible.builtin.shell: |
-            CONTAINER_NAME="$(docker compose -f {{ app_dir }}/docker-compose.yml ps -q rustfs)"
+            CONTAINER_NAME="$(docker compose -f {{ app_dir }}/services/rustfs/docker-compose.yml ps -q rustfs)"
             docker cp {{ restore_tmpdir.path }}/rustfs-restore/. "${CONTAINER_NAME}:/tmp/rustfs-restore/"
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs \
+            docker compose -f {{ app_dir }}/services/rustfs/docker-compose.yml exec -T rustfs \
               sh -c "aws s3 sync /tmp/rustfs-restore/ s3://{{ backup_rustfs_bucket | default('llamenos-files') }}/ --endpoint-url http://localhost:9000; \
                      rm -rf /tmp/rustfs-restore"
           register: rustfs_restore_result
@@ -323,9 +334,10 @@
 
         # ── Start full stack ───────────────────────────────────────────
 
-        - name: Start full Docker Compose stack
+        - name: Start per-service Docker Compose stacks
           ansible.builtin.command:
-            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d
+            cmd: docker compose -f {{ app_dir }}/services/{{ item }}/docker-compose.yml up -d
+          loop: "{{ llamenos_installed_services }}"
           when: not restore_dry_run
           tags: [postgres, rustfs, config]
 

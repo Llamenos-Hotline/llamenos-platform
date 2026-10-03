@@ -4,11 +4,14 @@
 backup_base_dir: "{{ app_dir }}/backups"
 backup_config_dir: "{{ backup_base_dir }}/config"
 
-# Paths to back up
+# Paths to back up. Production hosts render one docker-compose.yml and
+# .env.<service> per service under {{ app_dir }}/services/<service>/ (see
+# roles/llamenos-app, roles/llamenos-postgres, etc.) rather than a single
+# monolithic {{ app_dir }}/docker-compose.yml + .env — backing up the whole
+# tree captures every service's compose file, env file and Caddyfile in one
+# pass. See issue #1121.
 backup_config_paths:
-  - "{{ app_dir }}/docker-compose.yml"
-  - "{{ app_dir }}/.env"
-  - "{{ app_dir }}/Caddyfile"
+  - "{{ app_dir }}/services"
 
 # Optional extra paths (TLS certs, ansible inventory, etc.)
 backup_config_extra_paths: []

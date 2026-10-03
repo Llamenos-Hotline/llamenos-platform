@@ -808,6 +808,12 @@ jobs:
       - name: Check required env vars across templates
         run: python3 deploy/ansible/scripts/check-required-env.py
 
+      # Catches drift back to the legacy monolithic docker-compose.yml path
+      # (issue #1121): backup/restore/update/rollback/security-update must
+      # reference the per-service layout production actually renders.
+      - name: Check no day-2 playbook references the legacy compose layout
+        run: python3 deploy/ansible/scripts/check-compose-paths.py
+
   desktop-unit:
     needs: changes
     if: needs.changes.outputs.desktop == 'true'

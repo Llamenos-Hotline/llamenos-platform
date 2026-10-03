@@ -1,0 +1,72 @@
+---
+# Discovers which per-service Docker Compose stacks are actually installed
+# on this host, in the dependency order day-2 operations need (data/storage
+# before the app that depends on them, the app before its reverse proxy).
+#
+# Production hosts render one docker-compose.yml per service under
+# {{ app_dir }}/services/<service>/ — see roles/llamenos-app,
+# roles/llamenos-postgres, roles/llamenos-rustfs, roles/llamenos-caddy,
+# roles/llamenos-whisper, roles/llamenos-asterisk, roles/llamenos-signal,
+# roles/llamenos-ntfy, roles/kamailio. There is no monolithic
+# {{ app_dir }}/docker-compose.yml on a production host; that file is only
+# ever written by the legacy `llamenos` role used by playbooks/deploy-demo.yml
+# for the internal staging instance. Day-2 operations (backup, restore,
+# update, rollback, security-update) are production-only tools and
+# deliberately do NOT recognize the legacy layout — see issue #1121.
+#
+# Sets:
+#   llamenos_installed_services: ordered list of service directory names
+#     (e.g. ["postgres", "rustfs", "app", "caddy"]) that have a rendered
+#     docker-compose.yml under {{ app_dir }}/services/<name>/.
+#
+# Callers MUST use import_tasks (not include_tasks) so --tags still runs
+# this, and should put `tags: always` on the import — the same convention as
+# skip-unencrypted-host.yml.
+
+- name: Known service start order (data/storage first, proxy last)
+  ansible.builtin.set_fact:
+    _llamenos_service_order:
+      - postgres
+      - rustfs
+      - ntfy
+      - app
+      - caddy
+      - whisper
+      - asterisk
+      - signal
+      - kamailio
+
+- name: Find installed per-service compose files
+  ansible.builtin.find:
+    paths: "{{ app_dir }}/services"
+    patterns: "docker-compose.yml"
+    recurse: true
+    depth: 2
+  register: _llamenos_found_compose
+
+- name: Build ordered list of installed services
+  # `intersect`/`difference` go through Python sets and do NOT preserve
+  # input order (verified: alphabetical, not canonical, output). `select`/
+  # `reject` with the 'in' test are filters, not set ops, so they keep the
+  # order of the list being filtered.
+  ansible.builtin.set_fact:
+    llamenos_installed_services: >-
+      {{ (_llamenos_service_order | select('in', _llamenos_found_names) | list)
+         + (_llamenos_found_names | reject('in', _llamenos_service_order) | list) }}
+  vars:
+    _llamenos_found_names: >-
+      {{ _llamenos_found_compose.files
+         | map(attribute='path') | map('dirname') | map('basename') | list }}
+
+- name: Fail if no per-service compose stacks are installed
+  ansible.builtin.fail:
+    msg: >
+      No per-service docker-compose.yml found under {{ app_dir }}/services/
+      on {{ inventory_hostname }}. This playbook operates on the production
+      multi-host layout (one compose file per service — see
+      docs/deployment/first-deploy.md), not the legacy monolithic
+      {{ app_dir }}/docker-compose.yml that playbooks/deploy-demo.yml writes
+      for the internal staging instance. If this is a fresh host, run
+      playbooks/deploy.yml first. If it was deployed with the legacy
+      layout, run playbooks/migrate-to-multi-host.yml, then playbooks/deploy.yml.
+  when: llamenos_installed_services | length == 0
