@@ -102,7 +102,7 @@ export function createMockState(): { storage: MockStorage } & Record<string, unk
 export function createMockEnv(overrides?: Partial<Env>): Env {
   const defaultEnv: Env = {
     AI: { run: async () => ({}) } as unknown as Env['AI'],
-    R2_BUCKET: { put: async () => ({}), get: async () => null, delete: async () => {} } as unknown as Env['R2_BUCKET'],
+    BLOB_STORAGE: { put: async () => ({}), get: async () => null, delete: async () => {} } as unknown as Env['BLOB_STORAGE'],
     STORAGE_MANAGER: undefined,
     STORAGE_ADMIN: undefined,
     TWILIO_ACCOUNT_SID: 'AC-test',

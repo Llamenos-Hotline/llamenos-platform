@@ -1313,8 +1313,10 @@ fun SettingsScreen(
                 if (pendingCrashReports > 0) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = stringResource(R.string.crash_reporting_pending_reports_description)
-                            .replace("%@", pendingCrashReports.toString()),
+                        text = stringResource(
+                            R.string.crash_reporting_pending_reports_description,
+                            pendingCrashReports,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

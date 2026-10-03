@@ -5,8 +5,10 @@
  *     ──WebSocket──▶ sip-bridge ──signed webhooks──▶ worker (IVR, queue, ringing)
  *     ──/ring──▶ sip-bridge ──ARI originate──▶ PJSIP/<volunteer>@trunk ──▶ carrier
  *     (the volunteer's phone answers) ──▶ /user-answer ──▶ ARI mixing bridge
- *   worker ──play http://app:3000/api/ivr-audio/…──▶ sip-bridge ──ARI sound:<url>──▶
- *     Asterisk fetches the operator's upload from the app ──RTP──▶ carrier (recorded)
+ *   worker ──play http://app:3000/api/ivr-audio/… (an operator's upload)
+ *          or http://app:3000/api/ivr-speech/… (the worker's generated speech)──▶
+ *     sip-bridge ──ARI sound:<url>──▶ Asterisk fetches it from the app ──RTP──▶
+ *     carrier (recorded)
  *
  * Nothing is simulated on the hotline side: the worker only learns about a call
  * from the bridge's webhooks, and a volunteer is only "answered" because the
@@ -37,6 +39,7 @@ import {
   setFallbackGroupViaApi,
 } from '../../../../tests/api-helpers'
 import { encodePcm16Wav, IVR_WAV_SAMPLE_RATE } from '../../../../src/client/lib/ivr-wav'
+import { findClip, wavSamples } from './audio-match'
 
 const CARRIER = process.env.E2E_CARRIER_CONTAINER ?? 'll-telephony-e2e-sip-carrier-1'
 const HOTLINE_PBX = process.env.E2E_ASTERISK_CONTAINER ?? 'll-telephony-e2e-asterisk-1'
@@ -170,7 +173,8 @@ async function createTrunk(request: APIRequestContext, trunk: TrunkForm): Promis
 
 /**
  * A hub with its own hotline number, served by this Asterisk, whose fallback
- * group (nobody is on shift) is one volunteer with the given phone number.
+ * group (nobody is on shift) is one volunteer with the given phone number, and
+ * whose IVR offers `languages` (one: no menu).
  * The Asterisk provider is configured and, unless `trunk` is null, the SIP
  * trunk provisioned (IP-authenticated to the carrier by default).
  */
@@ -178,6 +182,7 @@ async function provisionHotline(
   request: APIRequestContext,
   volunteerPhone: string,
   trunk: TrunkForm | null = { domain: CARRIER_HOST },
+  languages: string[] = ['en'],
 ) {
   const hotline = uniqueNumber('+1555010')
   const hub = await apiPost<{ hub: { id: string } }>(request, '/hubs', {
@@ -186,6 +191,8 @@ async function provisionHotline(
   })
   expect(hub.status, JSON.stringify(hub.data)).toBe(201)
   const hubId = hub.data.hub.id
+  // One language by default: no spoken menu for the call to sit through.
+  expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: languages })).status).toBe(200)
 
   const configured = await apiPost(request, '/provider-setup/configure', {
     provider: 'asterisk',
@@ -454,8 +461,7 @@ async function callTurnedAway(caller: string, hotline: string, name: string): Pr
 
 test('a turned-away caller hears the prompt the operator uploaded, fetched by the PBX from the app', async ({ request }) => {
   const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX))
-  // One language: no menu to wait through. Rate limiting: one call a minute.
-  expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: ['en'] })).status).toBe(200)
+  // Rate limiting: one call a minute.
   expect((await apiPatch(request, `/hubs/${hubId}/settings/spam`, { rateLimitEnabled: true, maxCallsPerMinute: 1 })).status).toBe(200)
 
   // The first call uses up the caller's budget: routed as usual, nobody answers, they hang up.
@@ -466,9 +472,10 @@ test('a turned-away caller hears the prompt the operator uploaded, fetched by th
     .toMatchObject({ status: 'unanswered' })
   await expect.poll(carrierCallCounts, { timeout: 15_000 }).toMatchObject({ active: 0 })
 
-  // No prompt uploaded: the hotline turns the caller away, and they hear nothing.
-  const silent = await callTurnedAway(caller, hotline, `${caller}-none`)
-  expect(toneSeconds(silent)).toBe(0)
+  // No prompt uploaded: the hotline tells the caller why, in its own generated voice (#1347).
+  const rateLimited = generatedSpeech('en', 'prompt:rateLimited')
+  const spoken = await callTurnedAway(caller, hotline, `${caller}-none`)
+  expectHeard(spoken, [rateLimited])
 
   // A browser recording is refused, whatever it says it is; a PCM WAV is accepted.
   const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81])
@@ -477,9 +484,11 @@ test('a turned-away caller hears the prompt the operator uploaded, fetched by th
   expect(uploaded.status, uploaded.body).toBe(200)
 
   try {
-    // Now the caller hears the whole 2 s prompt before the hotline hangs up.
+    // Now the caller hears the whole 2 s prompt before the hotline hangs up —
+    // the operator's recording, instead of the generated one.
     const told = await callTurnedAway(caller, hotline, `${caller}-uploaded`)
     expect(toneSeconds(told)).toBeGreaterThanOrEqual(1.5)
+    expect(findClip(told, rateLimited)?.score ?? 0).toBeLessThan(0.3)
   } finally {
     await apiDelete(request, '/settings/ivr-audio/rateLimited/en')
   }
@@ -491,7 +500,6 @@ const HOLD_HZ = 1400
 
 test('a caller hears the uploaded greeting, then the hold message, before they are queued', async ({ request }) => {
   const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX))
-  expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: ['en'] })).status).toBe(200)
 
   // The keys the admin UI uploads (voice-prompts-section.tsx): what a cloud
   // provider plays, the PBX must play too (#1346).
@@ -523,4 +531,66 @@ test('a caller hears the uploaded greeting, then the hold message, before they a
     await apiDelete(request, '/settings/ivr-audio/greeting/en')
     await apiDelete(request, '/settings/ivr-audio/pleaseHold/en')
   }
+})
+
+/**
+ * The clip the app serves as generated speech for a prompt (`prompt:<key>`)
+ * or a language-menu option (`menu:<digit>`) in `locale`, fetched through the
+ * signed URL the worker hands the PBX (fetch-speech.ts).
+ */
+function generatedSpeech(locale: string, spec: string): { locale: string; text: string; samples: Int16Array } {
+  const out = execFileSync('bun', [fileURLToPath(new URL('fetch-speech.ts', import.meta.url)), locale, spec], { encoding: 'utf8' })
+  const { text, wav } = JSON.parse(out.trim().split('\n').pop() ?? '') as { text: string; wav: string }
+  return { locale, text, samples: wavSamples(Buffer.from(wav, 'base64')) }
+}
+
+/** Each clip was heard whole, in this order: the samples the app served, through the phone line */
+function expectHeard(recording: Int16Array, clips: Array<{ locale: string; text: string; samples: Int16Array }>): void {
+  let previous = -1
+  for (const clip of clips) {
+    const match = findClip(recording, clip.samples)
+    const what = `${clip.locale}: "${clip.text}"`
+    expect(match?.score ?? 0, `the caller heard ${what}`).toBeGreaterThan(0.9)
+    expect(match!.at, `${what} after the clip before it`).toBeGreaterThan(previous)
+    previous = match!.at
+  }
+}
+
+/** A caller who presses nothing, on a hub with a language menu, until they hang up; returns what they heard */
+async function callThroughMenu(request: APIRequestContext, hubId: string, caller: string, hotline: string): Promise<Int16Array> {
+  const name = `${caller}-menu`
+  recordNextCallAs(name)
+  placeCall(caller, hotline, 30)
+  await expect
+    .poll(() => historyCall(request, hubId, caller.slice(-4)), { timeout: 60_000, message: 'the caller hung up' })
+    .toMatchObject({ status: 'unanswered' })
+  await expect.poll(() => heard(name) !== null, { timeout: 5_000, message: `the carrier's recording of ${name}` }).toBe(true)
+  const audio = heard(name)
+  if (!audio) throw new Error(`the carrier's recording of ${name} disappeared`)
+  return audio
+}
+
+test('a caller in a language nobody recorded hears the menu and every prompt, generated by the hotline (#1347)', async ({ request }) => {
+  // Spanish and French, and not one uploaded prompt.
+  const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX), undefined, ['es', 'fr'])
+  // A French number: pressing nothing, the caller is served in the language their number suggests.
+  const audio = await callThroughMenu(request, hubId, uniqueNumber('+3361'), hotline)
+
+  expectHeard(audio, [
+    generatedSpeech('es', 'menu:1'),
+    generatedSpeech('fr', 'menu:2'),
+    generatedSpeech('fr', 'prompt:greeting'),
+    generatedSpeech('fr', 'prompt:pleaseHold'),
+  ])
+})
+
+test('a caller whose language no offline voice speaks is spoken to in the declared fallback, not in noise (#1347)', async ({ request }) => {
+  const { hotline, hubId } = await provisionHotline(request, uniqueNumber(UNANSWERED_PREFIX), undefined, ['es', 'fr'])
+  // A Philippine number: Tagalog, which espeak-ng cannot speak — so English (SPEECH_FALLBACK_LANGUAGE).
+  const audio = await callThroughMenu(request, hubId, uniqueNumber('+6391'), hotline)
+
+  expectHeard(audio, [
+    generatedSpeech('en', 'prompt:greeting'),
+    generatedSpeech('en', 'prompt:pleaseHold'),
+  ])
 })
