@@ -280,7 +280,9 @@ describe('IdentityService — User CRUD', () => {
       const db = {
         insert: vi.fn().mockReturnValue({
           values: insertValues.mockReturnValue({
-            returning: vi.fn().mockResolvedValue([returnedRow]),
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([returnedRow]),
+            }),
           }),
         }),
       }
@@ -305,7 +307,9 @@ describe('IdentityService — User CRUD', () => {
       const db = {
         insert: vi.fn().mockReturnValue({
           values: insertValues.mockReturnValue({
-            returning: vi.fn().mockResolvedValue([returnedRow]),
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([returnedRow]),
+            }),
           }),
         }),
       }
@@ -321,6 +325,30 @@ describe('IdentityService — User CRUD', () => {
 
       const vals = insertValues.mock.calls[0][0]
       expect(vals.roles).toEqual(['role-admin'])
+    })
+
+    it('raises a 409 ServiceError instead of an unhandled DB error when the pubkey already exists', async () => {
+      // #1197: demo-mode setup re-creates accounts with fixed pubkeys. The insert
+      // must resolve the unique-constraint conflict itself (onConflictDoNothing
+      // returns no row) rather than let a raw Postgres error reach app.ts's
+      // catch-all 500 handler.
+      const db = {
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        }),
+      }
+
+      const svc = new IdentityService(db as never)
+      await expect(svc.createUser({
+        pubkey: 'existing-pk',
+        name: 'Duplicate',
+        phone: '+15551111111',
+        encryptedSecretKey: 'enc',
+      })).rejects.toMatchObject({ status: 409 })
     })
   })
 
@@ -392,7 +420,9 @@ describe('IdentityService — User CRUD', () => {
       const db = {
         insert: vi.fn().mockReturnValue({
           values: insertValues.mockReturnValue({
-            returning: vi.fn().mockResolvedValue([makeUserRow({ pubkey: 'admin-pk', roles: ['role-super-admin'] })]),
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([makeUserRow({ pubkey: 'admin-pk', roles: ['role-super-admin'] })]),
+            }),
           }),
         }),
       }

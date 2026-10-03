@@ -100,7 +100,10 @@ Feature: Admin & User Settings
     And the toggle should be off by default
 
   @desktop @ios @android @fixme
-  # fixme: Demo mode setup triggers /api/hubs/{id}/users which returns 500 in CI Docker backend — #1197
+  # fixme: the 500 this scenario was blocked on (#1197) is fixed and verified
+  # end-to-end — but demo accounts get seeded into a different hub than the one
+  # this scenario reads from afterward (SetupWizard.tsx picks the server-wide
+  # config.hubs[0] rather than this session's own hub). Tracked separately — #1457
   Scenario: Complete setup with demo mode creates demo accounts
     Given I am logged in as an admin
     When I navigate to the setup wizard summary step
@@ -125,7 +128,8 @@ Feature: Admin & User Settings
     And I should see "Demo data resets daily"
 
   @desktop @ios @android @fixme
-  # fixme: Demo mode setup triggers /api/hubs/{id}/users which returns 500 in CI Docker backend — #1197
+  # fixme: same hub-resolution gap as "Complete setup with demo mode creates
+  # demo accounts" above — not the #1197 500 (fixed). Tracked as #1457
   Scenario: Clicking demo account logs in and redirects to dashboard
     Given demo mode has been enabled
     When I visit the login page
@@ -142,7 +146,8 @@ Feature: Admin & User Settings
     Then "Test environment — do not enter real caller information. Data here is not confidential and may be deleted at any time." should no longer be visible
 
   @desktop @ios @android @fixme
-  # fixme: Demo mode setup triggers /api/hubs/{id}/users which returns 500 in CI Docker backend — #1197
+  # fixme: same hub-resolution gap as "Complete setup with demo mode creates
+  # demo accounts" above — not the #1197 500 (fixed). Tracked as #1457
   Scenario: Demo shifts are populated
     Given demo mode has been enabled
     And I am logged in as an admin
