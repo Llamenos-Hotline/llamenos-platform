@@ -124,6 +124,29 @@ export class ActiveShiftsService {
     return row ?? null
   }
 
+  /**
+   * Pubkeys currently clocked into a hub, as a set for membership tests.
+   *
+   * This is the volunteer's own consent to receive crisis calls. The ringing
+   * path intersects it with the scheduled roster (see
+   * `resolveRingableVolunteers`), so a clock-in row is load-bearing for call
+   * routing — it is not only dashboard state.
+   *
+   * Deliberately NOT filtered on `lastHeartbeat` freshness. No client sends a
+   * heartbeat yet and `cleanupStale` has no caller (#1142), so a freshness
+   * filter would expire every clock-in within minutes and ring nobody at all —
+   * strictly worse than the stale rows it would exclude. Once clients heartbeat
+   * and a scheduler runs `cleanupStale`, eviction belongs there, in one place,
+   * rather than in a second freshness rule here.
+   */
+  async listClockedInPubkeys(hubId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ pubkey: activeShifts.pubkey })
+      .from(activeShifts)
+      .where(eq(activeShifts.hubId, hubId))
+    return new Set(rows.map(r => r.pubkey))
+  }
+
   /** List all volunteers currently clocked into a hub */
   async listActiveByHub(hubId: string): Promise<{ activeShifts: ActiveShiftRow[] }> {
     const rows = await this.db

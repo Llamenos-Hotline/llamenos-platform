@@ -15,6 +15,7 @@ import {
   apiPatch,
   apiPost,
   apiPut,
+  clockInViaApi,
   createHubViaApi,
   createShiftViaApi,
   createVolunteerViaApi,
@@ -68,6 +69,9 @@ Given(
       userPubkeys: volunteers.map(v => v.pubkey),
       hubId,
     })
+    // Clock-in is per hub, and ringing requires it alongside the shift, so being
+    // clocked into the first hub does not put them on shift in this one.
+    for (const vol of volunteers) await clockInViaApi(request, hubId, vol.deviceKey)
     const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
     expect(res.status, `enabling the mock on the second hub failed: ${JSON.stringify(res.data)}`).toBe(200)
   },

@@ -119,10 +119,14 @@ function makeMockSettingsService() {
 /** Every roster user is a volunteer member of the hub the tests answer in. */
 const HUB_MEMBER = { roles: [] as string[], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] }
 
-/** Volunteers a call would ring: on shift, active, not on break, members of hub-1. */
+/**
+ * Volunteers a call would ring: scheduled, clocked in, active, not on break,
+ * members of hub-1.
+ */
 function makeRingRoster(onShift: string[], users = onShift) {
   return {
     shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(onShift) },
+    activeShifts: { listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(onShift)) },
     identity: {
       getUsers: vi.fn().mockResolvedValue({
         users: users.map(pubkey => ({ pubkey, active: true, onBreak: false, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER })),
