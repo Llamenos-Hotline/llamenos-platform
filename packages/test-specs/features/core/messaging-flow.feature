@@ -271,6 +271,7 @@ Feature: Messaging Flow
   @backend @security
   Scenario: Outbound message stores encrypted content, not plaintext
     Given a conversation exists for an SMS contact
+    And the admin has registered a device encryption key
     When a volunteer sends an outbound message with plaintext "Help is on the way"
     Then the stored message encryptedContent should not contain "Help is on the way"
     And the stored message should have reader envelopes with HPKE fields

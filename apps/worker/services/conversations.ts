@@ -19,6 +19,10 @@ import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import { ServiceError } from './settings'
+import { resolveHpkeRecipients } from './reader-keys'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('services.conversations')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -486,10 +490,13 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern
-    const readerPubkeys = [adminDecryptionPubkey]
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
+    // Encrypt the message content using envelope pattern — for the admin and
+    // the assignee, each resolved to X25519 recipient keys (never an auth key).
+    const readerPubkeys = await resolveHpkeRecipients(this.db, [adminDecryptionPubkey, conv.assignedTo])
+    if (readerPubkeys.length === 0) {
+      logger.warn('Inbound message sealed for no reader: set ADMIN_DECRYPTION_PUBKEY or register a device X25519 key', {
+        conversationId: conv.id,
+      })
     }
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)

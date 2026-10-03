@@ -6,7 +6,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
-  simulateIncomingCall,
+  simulateIncomingCallResponse,
   simulateAnswerCall,
   simulateEndCall,
   simulateVoicemail,
@@ -17,19 +17,32 @@ import { apiGet, apiPost, createVolunteerViaApi, addHubMemberViaApi } from '../.
 
 When('a call arrives from {string}', async ({ request, world }, caller: string) => {
   const state = getScenarioState(world)
-  try {
-    const result = await simulateIncomingCall(request, { callerNumber: caller, hubId: state.hubId })
-    state.callId = result.callId
-    state.callStatus = result.status
 
-    // Check if the caller is on the ban list — simulation endpoint bypasses ban logic
-    if (state.banPhones.includes(caller)) {
-      state.callStatus = 'rejected'
-    }
-  } catch {
-    // Call rejected (e.g., banned caller, server error)
-    state.callStatus = 'rejected'
+  // Record the server's own answer and nothing else. The step must never decide
+  // the outcome itself (e.g. by re-reading the ban list it just wrote) and must
+  // never swallow a failure: a crashing server and an enforced ban both used to
+  // land on callStatus 'rejected', so a 500 made every ban scenario pass.
+  const response = await simulateIncomingCallResponse(request, {
+    callerNumber: caller,
+    hubId: state.hubId,
+  })
+  state.callHttpStatus = response.status
+  state.callResponseBody = response.data
+
+  if (response.ok) {
+    state.callId = response.data.callId
+    state.callStatus = response.data.status
+    return
   }
+
+  // Only the documented refusals are routing decisions. Anything else — a 500,
+  // a 404 from a disabled simulation route, an HTML error page — is a fault and
+  // must fail the scenario here rather than be re-read as "rejected".
+  expect(
+    [403, 422],
+    `incoming-call for ${caller} returned HTTP ${response.status}: ${JSON.stringify(response.data)}`,
+  ).toContain(response.status)
+  state.callStatus = response.status === 403 ? 'rejected' : (response.data.status ?? 'refused')
 })
 
 When('volunteer {int} answers the call', async ({ request, world }, index: number) => {
@@ -161,12 +174,28 @@ Then('the call status is {string}', async ({ world }, expectedStatus: string) =>
 })
 
 Then('the call is rejected', async ({ world }) => {
-  expect(getScenarioState(world).callStatus).toBe('rejected')
+  const state = getScenarioState(world)
+
+  // "Rejected" means the server refused the caller as banned — HTTP 403 with the
+  // ban marker. Asserting only on a local status string cannot distinguish that
+  // from a server fault, which is how a 500 used to satisfy this step.
+  expect(
+    state.callHttpStatus,
+    `expected the ban check to refuse the call with 403, got ${state.callHttpStatus}: ${JSON.stringify(state.callResponseBody)}`,
+  ).toBe(403)
+  expect(state.callResponseBody?.banned).toBe(true)
+  expect(state.callStatus).toBe('rejected')
+  // A refused call is never recorded, so there is nothing to answer or end.
+  expect(state.callId).toBeUndefined()
 })
 
 Then('no volunteers receive a ring', async ({ world }) => {
-  // When a call is rejected, no ring happens — verified by the rejected status
-  expect(getScenarioState(world).callStatus).toBe('rejected')
+  const state = getScenarioState(world)
+  // No call record was created, so no ring event could have been published.
+  // Assert the refusal itself, not a status string the step could have set.
+  expect(state.callHttpStatus).toBe(403)
+  expect(state.callResponseBody?.banned).toBe(true)
+  expect(state.callId).toBeUndefined()
 })
 
 Then('all {int} volunteers receive a ring', async ({ world }, count: number) => {
