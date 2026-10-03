@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "تم بدء المناوبة، لكن هذا الجهاز لا يمكنه استقبال المكالمات داخل التطبيق. حاول بدء المناوبة مرة أخرى.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "أخذ استراحة",
     "help": "Help",

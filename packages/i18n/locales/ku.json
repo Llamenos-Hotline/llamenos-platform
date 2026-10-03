@@ -617,6 +617,7 @@
     "errorBreak": "Nûvekirina rewşa bêhnvedanê bi ser neket",
     "errorClockIn": "Destpêkirina şiftê bi ser neket",
     "errorClockOut": "Qedandina şiftê bi ser neket",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Nûvekirin bi ser neket",
     "goOnBreak": "Bêhnvedanê Bigire",
     "help": "Alîkarî",

@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Смена начата, но это устройство не может принимать звонки в приложении. Попробуйте начать смену снова.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Уйти на перерыв",
     "help": "Help",

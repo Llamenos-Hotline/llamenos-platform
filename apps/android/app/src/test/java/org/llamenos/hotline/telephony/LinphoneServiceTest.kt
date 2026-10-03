@@ -17,7 +17,7 @@ class LinphoneServiceTest {
         val activeHubState = mockk<ActiveHubState>(relaxed = true)
         val scope = TestScope(UnconfinedTestDispatcher())
 
-        val svc = LinphoneService(context, activeHubState, scope)
+        val svc = LinphoneService(context, activeHubState, mockk(relaxed = true), scope)
         svc.storePendingCallHub("call-abc-123", "hub-uuid-001")
 
         assertEquals("hub-uuid-001", svc.pendingCallHubIdForTesting("call-abc-123"))
@@ -29,7 +29,7 @@ class LinphoneServiceTest {
         val activeHubState = mockk<ActiveHubState>(relaxed = true)
         val scope = TestScope(UnconfinedTestDispatcher())
 
-        val svc = LinphoneService(context, activeHubState, scope)
+        val svc = LinphoneService(context, activeHubState, mockk(relaxed = true), scope)
         svc.storePendingCallHub("call-abc-123", "hub-uuid-001")
         svc.consumePendingCallHubForTesting("call-abc-123")
 

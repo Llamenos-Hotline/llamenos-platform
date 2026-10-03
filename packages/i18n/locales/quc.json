@@ -617,6 +617,7 @@
     "errorBreak": "Man xtikir ta xjalwachix ri uxlanem",
     "errorClockIn": "Man xtikir ta xtikitaj ri samaj",
     "errorClockOut": "Man xtikir ta xk'istaj ri samaj",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Man xtikir ta xk'astaj chik",
     "goOnBreak": "Tuxlanij",
     "help": "To'ik",

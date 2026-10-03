@@ -143,6 +143,18 @@ fun ShiftsScreen(
                             }
                         }
 
+                        // This device is clocked in but cannot ring for in-app calls
+                        uiState.callSetupErrorRes?.let { errorRes ->
+                            item {
+                                org.llamenos.hotline.ui.components.ErrorCard(
+                                    error = stringResource(errorRes),
+                                    onDismiss = { viewModel.clearError() },
+                                    onRetry = { viewModel.retryCallSetup() },
+                                    testTag = "shifts-call-setup-error",
+                                )
+                            }
+                        }
+
                         // Shifts grouped by day
                         val shiftsByDay = uiState.shifts.groupBy { shift ->
                             shift.dayIndices.firstOrNull() ?: 0

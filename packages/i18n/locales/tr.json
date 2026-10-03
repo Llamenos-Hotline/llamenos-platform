@@ -617,6 +617,7 @@
     "errorBreak": "Mola durumu güncellenemedi",
     "errorClockIn": "Vardiya başlatılamadı",
     "errorClockOut": "Vardiya sonlandırılamadı",
+    "errorInAppCallsUnavailable": "Vardiya başlatıldı, ancak bu cihaz uygulama içi aramaları alamıyor. Vardiyayı yeniden başlatmayı deneyin.",
     "errorRefresh": "Yenileme başarısız oldu",
     "goOnBreak": "Mola Ver",
     "help": "Yardım",
