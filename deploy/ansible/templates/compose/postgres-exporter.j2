@@ -8,7 +8,10 @@ services:
       # llamenos-internal-only: the postgres-exporter container is never on
       # llamenos-web, so this connection string is reachable only from other
       # containers on the internal network (prometheus, same as the app).
-      - DATA_SOURCE_NAME=postgresql://llamenos:{{ pg_password }}@postgres:5432/llamenos?sslmode=disable
+      # Authenticates as the dedicated `postgres_exporter` role (pg_monitor
+      # privilege only, created by tasks/main.yml) -- NOT as `llamenos`, the
+      # application's own role, which can read/write every table.
+      - DATA_SOURCE_NAME=postgresql://postgres_exporter:{{ postgres_exporter_password }}@postgres:5432/llamenos?sslmode=disable
     networks:
       - llamenos-internal
       - llamenos-observability
