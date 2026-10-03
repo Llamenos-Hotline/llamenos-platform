@@ -39,6 +39,9 @@ export BRIDGE_SECRET="${BRIDGE_SECRET:-$(openssl rand -hex 32)}"
 export HMAC_SECRET="$(openssl rand -hex 32)"
 export SERVER_SECRET="$(openssl rand -hex 32)"
 export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './tests/api-helpers'; console.log(seedHexToPubkey(ADMIN_SEED))")"
+# The X25519 HPKE recipient derived from the same seed — a different key from
+# ADMIN_PUBKEY, and required whenever it is set (#1283).
+export ADMIN_DECRYPTION_PUBKEY="$(bun -e "import { deriveAdminKeys } from './scripts/bootstrap-admin'; import { ADMIN_SEED } from './tests/api-helpers'; import { hexToBytes } from '@noble/hashes/utils.js'; console.log(deriveAdminKeys(hexToBytes(ADMIN_SEED)).decryptionPubkey)")"
 export TEST_HUB_URL="http://127.0.0.1:$PORT"
 
 COMPOSE=(docker compose -p "$PROJECT"
