@@ -1,21 +1,47 @@
 name: Verify Backup Restore
 
-# Scheduled + manual: proves production backups are actually restorable,
-# instead of leaving that question unanswered until the day it matters.
-# Runs playbooks/test-restore.yml, which is explicitly documented as
-# non-destructive — it restores the latest backup into a disposable,
-# throwaway container/schema and never touches the running application or
-# its database. See deploy/ansible/playbooks/test-restore.yml.
+# Scheduled + manual: proves production backups actually exist, are fresh,
+# and (optionally) are restorable — instead of leaving that question
+# unanswered until the day it matters.
+#
+# Two tiers, because the second one needs a security decision this workflow
+# does not get to make unilaterally:
+#
+#   1. Backup status (always runs, no new secret). Calls
+#      playbooks/backup-status.yml, which only reads file existence/age/size
+#      — no decryption, no production data touched.
+#   2. Restore test (runs only if PROD_RESTORE_AGE_PRIVATE_KEY is set). Calls
+#      playbooks/test-restore.yml, which IS explicitly documented as
+#      non-destructive — it restores the latest backup into a disposable,
+#      throwaway container and never touches the running application or its
+#      database. See deploy/ansible/playbooks/test-restore.yml.
+#
+# Why tier 2 is optional: backups are now always age-encrypted (see #1125),
+# and test-restore.yml decrypts on the REMOTE host (it execs docker commands
+# there) — there is no way to satisfy the issue's "run test-restore.yml on a
+# schedule" ask without the age PRIVATE key being reachable from that host
+# during the run. vars.example.yml's own guidance is that this key is "for
+# restore operations only — NOT stored on server", i.e. a human deliberately
+# stages it only when actually restoring. Keeping a copy in GitHub Secrets
+# for unattended weekly use is a real change to that key's custody and isn't
+# this workflow's call to make by itself. So: it is staged on the remote
+# host ONLY for the duration of this job, written by a dedicated step, and
+# removed by an `if: always()` step further down — but only ever happens if
+# someone has explicitly decided to set PROD_RESTORE_AGE_PRIVATE_KEY.
+# Without it, you still get tier 1 every week, and a clear note that tier 2
+# did not run — not a silent gap and not a false "restore verified" claim.
 #
 # Required secrets (in the "production" GitHub Environment — the same ones
 # deploy-prod.yml already uses):
-#   PROD_INVENTORY_YML       — content of inventory-production.yml (Ansible inventory)
-#   ANSIBLE_VAULT_PASSWORD   — password for ansible-vault encrypted vars-production.yml
-#   PROD_VARS_YML_ENCRYPTED  — content of encrypted vars-production.yml
-#   PROD_SSH_PRIVATE_KEY     — SSH private key for the production VPS deploy user
+#   PROD_INVENTORY_YML            — content of inventory-production.yml
+#   ANSIBLE_VAULT_PASSWORD        — password for ansible-vault encrypted vars-production.yml
+#   PROD_VARS_YML_ENCRYPTED       — content of encrypted vars-production.yml
+#   PROD_SSH_PRIVATE_KEY          — SSH private key for the production VPS deploy user
+# Optional secret, enables tier 2:
+#   PROD_RESTORE_AGE_PRIVATE_KEY  — age private key matching backup_age_public_key
 #
-# A red run here means restores are untested or broken — treat it the same
-# as a failed deploy, not as routine noise to re-run until green.
+# A red run here means backups (or restores) are untested or broken — treat
+# it the same as a failed deploy, not as routine noise to re-run until green.
 
 on:
   schedule:
@@ -34,8 +60,8 @@ permissions:
   packages: read
 
 jobs:
-  test-restore:
-    name: Test Restore Against Production Backups
+  verify-backups:
+    name: Verify Backup Status and (Optionally) Test Restore
     # Needs SSH access to the production host, same as deploy-prod.yml.
     runs-on: [self-hosted, linux, x64, hetzner, llamenos]
     environment: production
@@ -131,13 +157,76 @@ jobs:
           fi
           echo "inventory-production.yml resolves $count host(s) in group 'llamenos_servers'."
 
+      - name: Check whether restore-test key is configured
+        id: restore_key
+        env:
+          RESTORE_AGE_KEY: ${{ secrets.PROD_RESTORE_AGE_PRIVATE_KEY }}
+        run: |
+          if [ -n "${RESTORE_AGE_KEY:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Tier 1 — always runs. Freshness/size/manifest only, no decryption.
+      - name: Run backup-status (read-only)
+        working-directory: deploy/ansible
+        run: |
+          ansible-playbook playbooks/backup-status.yml \
+            -i inventory-production.yml \
+            -e "@vars-production.yml" \
+            --vault-password-file "$RUNNER_TEMP/vault-pass"
+
+      # Tier 2 — opt-in. Stages the age private key on the remote host only
+      # for this step, so test-restore.yml's server-side decrypt can run.
+      - name: Stage restore key on remote host
+        if: steps.restore_key.outputs.present == 'true'
+        env:
+          RESTORE_AGE_KEY: ${{ secrets.PROD_RESTORE_AGE_PRIVATE_KEY }}
+        working-directory: deploy/ansible
+        run: |
+          set -euo pipefail
+          printf '%s' "$RESTORE_AGE_KEY" > "$RUNNER_TEMP/restore-key.txt"
+          chmod 600 "$RUNNER_TEMP/restore-key.txt"
+          # `src=` (not an inlined `content=`) so the key value never appears
+          # in a shell command line / process listing on the runner.
+          ansible -i inventory-production.yml llamenos_servers \
+            -m ansible.builtin.copy \
+            -a "src=$RUNNER_TEMP/restore-key.txt dest=/tmp/.llamenos-restore-test-key mode=0600" \
+            --become
+          rm -f "$RUNNER_TEMP/restore-key.txt"
+
       - name: Run test-restore (non-destructive)
+        if: steps.restore_key.outputs.present == 'true'
         working-directory: deploy/ansible
         run: |
           ansible-playbook playbooks/test-restore.yml \
             -i inventory-production.yml \
             -e "@vars-production.yml" \
+            -e "backup_age_private_key_path=/tmp/.llamenos-restore-test-key" \
             --vault-password-file "$RUNNER_TEMP/vault-pass"
+
+      - name: Remove staged restore key from remote host
+        if: always() && steps.restore_key.outputs.present == 'true'
+        working-directory: deploy/ansible
+        run: |
+          ansible -i inventory-production.yml llamenos_servers \
+            -m ansible.builtin.file \
+            -a "path=/tmp/.llamenos-restore-test-key state=absent" \
+            --become || true
+
+      - name: Note that restore testing did not run
+        if: steps.restore_key.outputs.present != 'true'
+        run: |
+          {
+            echo "### Restore test skipped"
+            echo
+            echo "Only tier 1 (backup-status: existence/freshness/size) ran this week."
+            echo "Tier 2 (an actual decrypt + restore into a scratch container, via"
+            echo "\`playbooks/test-restore.yml\`) needs \`PROD_RESTORE_AGE_PRIVATE_KEY\`"
+            echo "set on the production environment — a deliberate choice, since it"
+            echo "means a copy of the backup decryption key is reachable by CI."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop SSH agent
         if: always()
@@ -146,6 +235,6 @@ jobs:
       - name: Clean up secrets
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/vault-pass"
+          rm -f "$RUNNER_TEMP/vault-pass" "$RUNNER_TEMP/restore-key.txt"
           rm -f deploy/ansible/inventory-production.yml
           rm -f deploy/ansible/vars-production.yml

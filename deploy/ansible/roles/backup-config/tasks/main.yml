@@ -53,33 +53,82 @@
 # knob documented as backing it up actually does. Non-fatal: a control node
 # without that directory configured (or without local disk) must not fail
 # the server-side backup it has nothing to do with.
+#
+# Two things this must never do: write the archive in plaintext (it is the
+# ansible-vault file's ciphertext PLUS the vault password lives nowhere near
+# it, but inventory/vars can still carry plaintext secrets depending on
+# operator setup — treat it as sensitive and encrypt it the same as the
+# server-side backups), and land it inside a git work tree, where a `git add
+# -A` or an IDE's "stage all" could commit it.
 - name: Back up the Ansible control directory (local, control-node only)
   when: backup_config_ansible_dir | default('') | length > 0
   delegate_to: localhost
   become: false
   run_once: true
+  vars:
+    local_backup_dir: "{{ backup_config_ansible_backup_dir | default(lookup('env', 'HOME') + '/.local/share/llamenos/ansible-config-backups') }}"
   block:
+    - name: Refuse a local backup destination inside a git work tree
+      ansible.builtin.command:
+        cmd: git -C "{{ local_backup_dir | dirname }}" rev-parse --is-inside-work-tree
+      register: local_backup_in_git_tree
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if the local backup destination is inside a git work tree
+      ansible.builtin.fail:
+        msg: >-
+          backup_config_ansible_backup_dir ({{ local_backup_dir }}) resolves inside a
+          git work tree — a secrets archive there risks being committed. Point it
+          somewhere outside any repository (the default is
+          ~/.local/share/llamenos/ansible-config-backups).
+      when: local_backup_in_git_tree.stdout | default('') | trim == 'true'
+
     - name: Ensure local Ansible-config backup directory exists
       ansible.builtin.file:
-        path: "{{ (backup_config_ansible_dir | dirname) + '/ansible-config-backups' }}"
+        path: "{{ local_backup_dir }}"
         state: directory
         mode: "0700"
 
-    - name: Archive the Ansible control directory
+    # `age` on the server is installed by the task above via `apt`, which
+    # only ever targets the remote host. The control node here could be any
+    # OS (macOS, a non-Debian distro) — never assume apt, just check.
+    - name: Check whether age is available on the control node
+      ansible.builtin.command: age --version
+      register: local_age_check
+      changed_when: false
+      failed_when: false
+
+    - name: Warn and skip if the local archive cannot be encrypted
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: skipping the local Ansible control directory archive —
+          {{ 'backup_age_public_key is not set' if backup_age_public_key | default('') | length == 0
+             else "the 'age' binary was not found on the control node (install it: https://github.com/FiloSottile/age)" }}.
+          Refusing to write server secrets to disk unencrypted instead.
+      when: backup_age_public_key | default('') | length == 0 or local_age_check.rc != 0
+
+    - name: Archive and encrypt the Ansible control directory
       ansible.builtin.shell: |
         set -euo pipefail
         TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
-        DEST_DIR="{{ (backup_config_ansible_dir | dirname) + '/ansible-config-backups' }}"
-        tar -czf "${DEST_DIR}/llamenos-ansible-${TIMESTAMP}.tar.gz" \
+        DEST_DIR="{{ local_backup_dir }}"
+        tar -czf - \
           --exclude='.git' \
-          -C "{{ backup_config_ansible_dir | dirname }}" "{{ backup_config_ansible_dir | basename }}"
+          --exclude='*.pem' --exclude='id_rsa*' --exclude='id_ed25519*' \
+          --exclude='vault-pass*' --exclude='*vault_pass*' \
+          -C "{{ backup_config_ansible_dir | dirname }}" "{{ backup_config_ansible_dir | basename }}" \
+          | age -r "{{ backup_age_public_key }}" -o "${DEST_DIR}/llamenos-ansible-${TIMESTAMP}.tar.gz.age"
         # Retain the 10 most recent local archives. This is a convenience
         # copy, not the only copy -- the control node is expected to be
         # backed up or version-controlled by its own normal means.
-        find "${DEST_DIR}" -maxdepth 1 -type f -name 'llamenos-ansible-*.tar.gz' -printf '%T@ %p\n' \
+        find "${DEST_DIR}" -maxdepth 1 -type f -name 'llamenos-ansible-*.tar.gz.age' -printf '%T@ %p\n' \
           | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs -r rm -f
       args:
         executable: /bin/bash
+      when:
+        - backup_age_public_key | default('') | length > 0
+        - local_age_check.rc == 0
       changed_when: true
   rescue:
     - name: Report that the local Ansible-config archive failed

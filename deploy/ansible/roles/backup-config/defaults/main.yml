@@ -14,6 +14,11 @@ backup_config_paths:
 backup_config_extra_paths: []
 # Ansible inventory/vars on the control node (backed up locally, not on remote)
 backup_config_ansible_dir: "" # e.g., "/path/to/deploy/ansible"
+# Where the local, age-encrypted archive of backup_config_ansible_dir is
+# written on the control node. Must resolve outside any git work tree.
+# Defaults to a path outside this repo so it is never a `git add -A` away
+# from being committed.
+backup_config_ansible_backup_dir: "" # e.g., "~/.local/share/llamenos/ansible-config-backups"
 
 # Retention policy
 backup_config_retain_daily: 14

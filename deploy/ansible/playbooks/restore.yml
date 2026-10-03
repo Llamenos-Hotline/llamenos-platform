@@ -358,6 +358,7 @@
             {% else %}
             cp {{ rustfs_backup_file }} {{ restore_tmpdir.path }}/rustfs-data.tar.gz
             {% endif %}
+          register: rustfs_decrypt
           when:
             - rustfs_backup_file is defined
             - not restore_dry_run
@@ -365,6 +366,10 @@
           tags: [rustfs]
           ignore_errors: true
 
+        # Validate the archive BEFORE touching /data: `tar -tzf` fails loudly
+        # on a truncated/corrupt/undecrypted file, so a bad backup is caught
+        # before the existing data is deleted rather than after — a failed
+        # restore must never leave the volume emptied with nothing restored.
         - name: Extract RustFS backup directly into its data volume
           ansible.builtin.command:
             cmd: >
@@ -372,12 +377,13 @@
               -v {{ rustfs_volume_name.stdout | default('') | trim }}:/data
               -v {{ restore_tmpdir.path }}:/backup
               alpine:3
-              sh -c "rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null; tar -xzf /backup/rustfs-data.tar.gz -C /data"
+              sh -c "set -e; tar -tzf /backup/rustfs-data.tar.gz >/dev/null; rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null; tar -xzf /backup/rustfs-data.tar.gz -C /data"
           register: rustfs_restore_result
           when:
             - rustfs_backup_file is defined
             - not restore_dry_run
             - rustfs_volume_name is defined and not (rustfs_volume_name.failed | default(false))
+            - rustfs_decrypt is defined and not (rustfs_decrypt.failed | default(true))
           tags: [rustfs]
           ignore_errors: true
 
@@ -408,13 +414,17 @@
             msg: >-
               WARNING: RustFS restore did not complete cleanly
               (volume resolved: {{ not (rustfs_volume_name.failed | default(true)) }},
+              decrypt failed: {{ rustfs_decrypt.failed | default(true) }},
               extract rc: {{ rustfs_restore_result.rc | default('not run') }}).
               The application stack is being started anyway; verify attachments
-              manually before trusting this restore.
+              manually before trusting this restore. If the extract never ran,
+              the existing RustFS data was left untouched.
           when:
             - rustfs_backup_file is defined
             - not restore_dry_run
-            - (rustfs_volume_name.failed | default(true)) or (rustfs_restore_result.rc | default(1)) != 0
+            - (rustfs_volume_name.failed | default(true))
+              or (rustfs_decrypt.failed | default(true))
+              or (rustfs_restore_result.rc | default(1)) != 0
           tags: [rustfs]
 
         - name: Display RustFS restore result
