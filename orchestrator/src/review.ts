@@ -307,7 +307,7 @@ const REVIEWER_MODEL = process.env['FLEET_REVIEW_MODEL'] || 'sonnet'
  *     real error from `claude` itself that is not a model-id complaint.
  *     This is the transient case retrying can plausibly fix.
  */
-export type EngineFailureKind = 'engine-misconfigured' | 'engine-unavailable'
+export type EngineFailureKind = 'engine-misconfigured' | 'engine-unavailable' | 'budget-exhausted'
 
 /**
  * `claude`'s own, stable error text for a `--model` id its build does not
@@ -327,6 +327,14 @@ export function classifyEngineFailure(text: string): EngineFailureKind {
   if (/unrecognized_model|isn'?t described by this version'?s model catalog|issue with the selected model/i.test(text)) {
     return 'engine-misconfigured'
   }
+  // `claude`'s own text when `--max-turns` runs out: "Reached max turns (N)".
+  // This is NOT an availability problem — the engine answered, ran a full
+  // session, and spent its whole budget without emitting a verdict. Reporting
+  // it as "unavailable" sends a reader looking for an outage, and the advice
+  // that follows ("re-request the review") re-runs the same diff with the
+  // same budget and exhausts again: a loop that costs a full session per
+  // attempt and can never clear. Same lesson as #866, one layer up.
+  if (/reached max turns/i.test(text)) return 'budget-exhausted'
   return 'engine-unavailable'
 }
 

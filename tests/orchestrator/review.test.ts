@@ -62,10 +62,23 @@ describe('classifyEngineFailure', () => {
     expect(classifyEngineFailure(`${stdout}\n${stderr}`)).toBe('engine-misconfigured')
   })
 
+  it('reads claude\'s own "Reached max turns" text as budget-exhausted, not engine-unavailable', () => {
+    // Verbatim from a real run: fleet/review on #1445 (3 files) spent all ten
+    // turns in 68 seconds and emitted no verdict. Reported as
+    // `engine-unavailable` it became "re-request the review" — which re-runs
+    // the same diff under the same budget and exhausts again, a loop costing
+    // a full session each time. The remedy differs, so the classification
+    // must too.
+    expect(classifyEngineFailure('Error: Reached max turns (10)')).toBe('budget-exhausted')
+    expect(classifyEngineFailure('fleet/review: FAIL — review unavailable: Error: Reached max turns (20)')).toBe('budget-exhausted')
+  })
+
   it('reads an ordinary crash/timeout/outage as engine-unavailable', () => {
     expect(classifyEngineFailure('spawn ENOENT')).toBe('engine-unavailable')
     expect(classifyEngineFailure('simulated: Unexpected server error from provider')).toBe('engine-unavailable')
     expect(classifyEngineFailure('')).toBe('engine-unavailable')
+    // 'turns' alone must not trip the budget branch
+    expect(classifyEngineFailure('took several turns to connect')).toBe('engine-unavailable')
   })
 })
 

@@ -1274,6 +1274,7 @@ jobs:
                   fail) token="REJECTED:reviewed" ;;
                   cache-fail) token="REJECTED:cached" ;;
                   unreadable) token="NO-VERDICT:unreadable" ;;
+                  budget-exhausted) token="NO-VERDICT:budget-exhausted" ;;
                   scope) token="NO-VERDICT:scope" ;;
                   review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
                   unknown-lane) token="NO-VERDICT:unknown-lane" ;;
@@ -1310,6 +1311,10 @@ jobs:
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
             NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
             NO-VERDICT:unreadable) detail="a reviewer ran but left no readable verdict; re-request the review" ;;
+            # Deliberately NOT "re-request": that re-runs the same diff under the same
+            # budget and exhausts again — a loop costing a full session per attempt
+            # that can never clear. These remedies are ones that actually work.
+            NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict; split the PR, or raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts — re-requesting will exhaust again" ;;
             NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
             NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
