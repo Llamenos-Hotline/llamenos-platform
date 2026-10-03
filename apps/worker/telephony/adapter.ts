@@ -75,6 +75,14 @@ export interface TelephonyAdapter {
   rejectCall(): TelephonyResponse
 
   /**
+   * Response for a webhook whose call leg must be ended immediately — e.g. a
+   * volunteer who picked up after another volunteer already won the call.
+   * Unlike rejectCall (a pre-answer rejection of a caller), this terminates a
+   * leg that has already been answered.
+   */
+  hangupResponse(): TelephonyResponse
+
+  /**
    * End/hangup a call by its SID.
    */
   hangupCall(callSid: string): Promise<void>

@@ -10,7 +10,7 @@ import { hashPhone } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
-import { startParallelRinging } from '../services/ringing'
+import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
 import { maybeTranscribe, transcribeVoicemail } from '../services/transcription'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -296,6 +296,19 @@ telephony.post('/user-answer',
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId || undefined))!
+
+  // Stop every other phone still ringing for this call. The answer itself was
+  // claimed atomically above (first pickup wins — `answerCallWithToken` is a
+  // conditional ringing → in-progress UPDATE, so a losing leg never gets here).
+  // The winner's own leg SID is needed so it is not cancelled with the losers;
+  // if the provider's webhook does not yield one we cancel nothing (losers then
+  // ring out, but can no longer win).
+  const winnerLegSid = await adapter.parseIncomingWebhook(c.req.raw.clone()).then(i => i.callSid, () => undefined)
+  if (winnerLegSid) {
+    await cancelLosingLegs(c.env, services, hubId ?? '', parentCallSid, winnerLegSid)
+  } else {
+    logger.warn('user-answer: winner leg SID not in webhook — not cancelling other legs', { parentCallSid })
+  }
 
   // Publish call answered event + presence update
   publishEvent(c.env, KIND_CALL_UPDATE, {
