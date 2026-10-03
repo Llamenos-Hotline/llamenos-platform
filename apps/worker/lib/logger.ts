@@ -144,14 +144,39 @@ export function getCorrelation(): CorrelationContext {
 // Sensitive field redaction
 // ---------------------------------------------------------------------------
 
+// Field names the telephony/messaging code actually uses for caller/callee
+// identifiers, in addition to the generic "phone"/"email" style names.
+// `caller`/`called` are unanchored so they also catch compound names like
+// `callerNumber`, `callerLast4`, `calledNumber`. `from`/`to`/`number`/`address`
+// are anchored to whole-key matches (like the pre-existing `^pin$`) so we don't
+// blanket-redact unrelated fields such as `fromDate`/`toDate`/`pageNumber`
+// (the latter is already covered by the `phone` alternative for phone-ish uses).
 const SENSITIVE_KEY_RE =
-  /phone|email|nsec|secret|token|ciphertext|encrypted|content|recovery|^pin$|password|credential|apikey|auth_token|access_key|secret_key|private_key|server_secret|sid|signature|jwt|nonce|cookie|session|bearer/i
+  /phone|email|nsec|secret|token|ciphertext|encrypted|content|recovery|^pin$|password|credential|apikey|auth_token|access_key|secret_key|private_key|server_secret|sid|signature|jwt|nonce|cookie|session|bearer|^from$|^to$|caller|called|msisdn|^number$|recipient|^address$/i
 
-const NAME_KEY_RE = /^(first|last|full|display|user)?name$/i
+// Anchored allowlist of "*name" keys that carry a person's or organisation's
+// display name — organisational structure (hub/volunteer names) is
+// implicating data under this project's scope rule, not just direct PII.
+// Deliberately anchored (not a bare `/name$/i` suffix match) so it does not
+// sweep up unrelated technical fields that happen to end in "name" —
+// `errName`, `fileName`, `hostname`, `pathname`, `roleName`, `queueName`,
+// `templateName`, `policyName`, `instanceName`, etc. — which the logger's
+// own error-unwrapping path and other call sites rely on staying visible.
+const NAME_KEY_RE = /^(first|last|full|display|user|volunteer|hub)?name$/i
 
 const NSEC_RE = /nsec1[0-9a-z]{58}/g
 const HEX_KEY_RE = /\b[0-9a-f]{64}\b/gi
-const PHONE_RE = /\b(\+?1?\s?)?(\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})\b/g
+// E.164-aware phone matcher. ITU E.164 numbers are `+` followed by 7-15
+// digits with no internal separators — the previous regex only recognized a
+// NANP-shaped "(optional +1) 3-3-4 digit" grouping, so any non-NANP or
+// longer international number (the default case for this 22-locale,
+// EU-oriented product) passed through unredacted. Three alternatives:
+//   1. `+` followed by 7-15 digits (canonical E.164 wire format)
+//   2. Human-formatted groups of 2-4 digits separated by space/dot/dash/parens
+//      (NANP "(555) 123-4567" as well as non-NANP groupings like "030 12 34 56")
+//   3. A bare, unformatted run of 7-15 digits (numbers logged with no
+//      separators and no leading "+")
+const PHONE_RE = /\+\d{7,15}\b|\(?\d{2,4}\)?(?:[\s.-]\d{2,4}){1,4}\b|\b\d{7,15}\b/g
 const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
 const MAX_REDACT_DEPTH = 3
 
