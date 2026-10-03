@@ -57,9 +57,10 @@ function createRedeemAuth(seedHex: string): { pubkey: string; timestamp: number;
 
 // ── Given ───────────────────────────────────��───────────────────────
 
-Given('an invite exists for {string} with phone {string}', async ({ request, world }, name: string, phone: string) => {
+Given('an invite exists for {string} with phone {string}', async ({ request, world, workerHub }, name: string, phone: string) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name, phone, roleIds: ['role-volunteer'],
   }, ADMIN_SEED)
   expect(res.status).toBe(201)
@@ -86,9 +87,10 @@ Given('a registered volunteer user', async ({ request, world }) => {
 
 // ── When ────────────────────────────────────────────────────────────
 
-When('the admin creates an invite for {string} with phone {string}', async ({ request, world }, name: string, phone: string) => {
+When('the admin creates an invite for {string} with phone {string}', async ({ request, world, workerHub }, name: string, phone: string) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name, phone, roleIds: ['role-volunteer'],
   }, ADMIN_SEED)
   setLastResponse(world, res)
@@ -171,15 +173,35 @@ When('a client floods invite validation {int} times', async ({ request, world },
   setLastResponse(world, { status: s.rateLimitResponses[s.rateLimitResponses.length - 1], data: null })
 })
 
-When('the volunteer tries to create an invite', async ({ request, world }) => {
+When('the volunteer tries to create an invite', async ({ request, world, workerHub }) => {
   const s = getS(world)
   expect(s.volunteerDeviceKey).toBeDefined()
   setLastResponse(world, await apiPost(request, '/invites', {
+    hubId: workerHub,
     name: 'Unauthorized Invite', phone: '+15559999999', roleIds: ['role-volunteer'],
   }, s.volunteerDeviceKey!))
 })
 
 // ── Then ─────────────────��──────────────────────────────────────────
+
+/**
+ * The list the operator actually sees — GET /api/hubs/:hubId/users, which the
+ * shift editor and the ring-group picker populate from. A redeemed volunteer
+ * missing from it cannot be scheduled and can never be rung (#1037).
+ */
+Then('the redeemed user is a member of the hub', async ({ request, world, workerHub }) => {
+  const s = getS(world)
+  expect(s.redeemerSeedHex, 'no user redeemed an invite in this scenario').toBeDefined()
+  const pubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(s.redeemerSeedHex!)))
+  const { status, data } = await apiGet<{ users: Array<{ pubkey: string }> }>(
+    request, `/hubs/${workerHub}/users`, ADMIN_SEED,
+  )
+  expect(status).toBe(200)
+  expect(
+    (data.users ?? []).map(u => u.pubkey),
+    'the redeemed volunteer is absent from the hub the invite named',
+  ).toContain(pubkey)
+})
 
 Then('the invite has a valid UUID code', async ({ world }) => {
   const s = getS(world)

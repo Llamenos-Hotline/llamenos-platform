@@ -39,6 +39,7 @@ services:
       - PG_POOL_SIZE=10
       - ENVIRONMENT=development
       - "ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}"
+      - "ADMIN_DECRYPTION_PUBKEY=${ADMIN_DECRYPTION_PUBKEY:?ADMIN_DECRYPTION_PUBKEY is required — the admin X25519 HPKE recipient (#1283)}"
       - HOTLINE_NAME=Llámenos (E2E)
       - DEV_RESET_SECRET=test-reset-secret
       - TRUST_PROXY_HEADERS=true

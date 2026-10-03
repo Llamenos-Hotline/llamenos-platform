@@ -339,9 +339,10 @@ Then('only notes for that call should be returned', async ({ world }) => {
 
 // ─── Invites ────────────────────────────────────────────────────────
 
-When('an admin creates an invite for {string}', async ({ request, world }, name: string) => {
+When('an admin creates an invite for {string}', async ({ request, world, workerHub }, name: string) => {
   getCrudState(world).inviteName = name
   const { data, status } = await apiPost<{ code?: string; invite?: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name,
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
