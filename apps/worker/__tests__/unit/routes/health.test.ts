@@ -105,7 +105,7 @@ describe('health route', () => {
       expect(body.checks.storage.status).toBe('failing')
     })
 
-    it('returns 503 when sip bridge fails', async () => {
+    it('reports a failing sip bridge WITHOUT gating readiness', async () => {
       fetchSpy.mockImplementation(async (url: unknown) => {
         if (String(url).includes('sip-bridge')) {
           return new Response(null, { status: 500 })
@@ -115,8 +115,13 @@ describe('health route', () => {
 
       const app = createTestApp()
       const res = await app.request('/')
-      expect(res.status).toBe(503)
+      // The SIP bridge is an OPTIONAL integration: a hotline whose bridge is
+      // down can still store notes and serve its API, so this must not report
+      // the instance as unable to serve. It must still be VISIBLE though —
+      // silently dropping the check would hide a real outage from operators.
+      expect(res.status).toBe(200)
       const body = await res.json()
+      expect(body.status).toBe('ok')
       expect(body.checks.sipBridge.status).toBe('failing')
     })
 
@@ -128,7 +133,7 @@ describe('health route', () => {
       expect(body.checks.sipBridge).toBeUndefined()
     })
 
-    it('returns 503 when signal notifier fails', async () => {
+    it('reports a failing signal notifier WITHOUT gating readiness', async () => {
       fetchSpy.mockImplementation(async (url: unknown) => {
         const urlStr = String(url)
         if (urlStr.includes('signal-notifier')) {
@@ -141,8 +146,12 @@ describe('health route', () => {
 
       const app = createTestApp()
       const res = await app.request('/')
-      expect(res.status).toBe(503)
+      // Optional integration — see #1418. Gating on this left the container
+      // `unhealthy` forever on every deployment that did not run the `signal`
+      // profile, and hung first-run.sh on a condition that could never pass.
+      expect(res.status).toBe(200)
       const body = await res.json()
+      expect(body.status).toBe('ok')
       expect(body.checks.signalNotifier.status).toBe('failing')
     })
 
@@ -159,10 +168,43 @@ describe('health route', () => {
 
       const app = createTestApp()
       const res = await app.request('/')
-      expect(res.status).toBe(503)
+      expect(res.status).toBe(200)
       const body = await res.json()
+      expect(body.status).toBe('ok')
       expect(body.checks.signalNotifier.status).toBe('failing')
       expect(body.checks.signalNotifier.detail).toContain('migration pending')
+    })
+
+    // The distinction this route now rests on, pinned directly. Without this,
+    // a future change that made everything non-gating would pass every test
+    // above — each of those only proves one check behaves one way.
+    it('gates readiness on load-bearing deps but not on optional integrations', async () => {
+      // Storage failing (load-bearing) alongside a healthy optional stack.
+      fetchSpy.mockImplementation(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('signal-notifier')) return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        if (u.includes('sip-bridge')) return new Response('ok', { status: 200 })
+        return new Response(null, { status: 500 }) // storage
+      })
+      let res = await createTestApp().request('/')
+      expect(res.status).toBe(503)
+      expect((await res.json()).status).toBe('degraded')
+
+      // Now invert it: load-bearing healthy, BOTH optional integrations down.
+      fetchSpy.mockImplementation(async (url: unknown) => {
+        const u = String(url)
+        if (u.includes('signal-notifier')) return new Response(null, { status: 500 })
+        if (u.includes('sip-bridge')) return new Response(null, { status: 500 })
+        if (u.includes('storage:9000')) return new Response(null, { status: 403 })
+        return new Response('ok', { status: 200 })
+      })
+      res = await createTestApp().request('/')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.status).toBe('ok')
+      // Still reported — non-gating must not mean invisible.
+      expect(body.checks.sipBridge.status).toBe('failing')
+      expect(body.checks.signalNotifier.status).toBe('failing')
     })
 
     it('skips signalNotifier check when SIGNAL_NOTIFIER_URL not configured', async () => {

@@ -1,4 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
+import { getPrompt } from '@shared/voice-prompts'
+import { speechLanguageFor } from '../services/ivr-speech/voices'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -9,6 +11,7 @@ import type {
   VoicemailParams,
   TelephonyResponse,
   AudioUrlMap,
+  SpeechUrlBuilder,
   WebhookCallInfo,
   WebhookDigits,
   WebhookCallStatus,
@@ -79,9 +82,10 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     audioUrls?: AudioUrlMap,
     queueTime?: number,
     queueTimeout?: number,
+    speechUrl?: SpeechUrlBuilder,
   ): Promise<TelephonyResponse>
   abstract rejectCall(): TelephonyResponse
-  abstract handleVoicemailComplete(lang: string): TelephonyResponse
+  abstract handleVoicemailComplete(lang: string, speechUrl?: SpeechUrlBuilder): TelephonyResponse
   abstract emptyResponse(): TelephonyResponse
 
   /** ARI and ESL both express "end this leg" as a hangup command. */
@@ -223,20 +227,50 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
     }
   }
 
-  protected speak(text: string, lang: string): { action: 'speak'; text: string; language: string } {
-    return { action: 'speak', text, language: this.mapLanguage(lang) }
-  }
-
   protected play(url: string): { action: 'play'; url: string } {
     return { action: 'play', url }
   }
 
+  // --- Prompts (shared) ---
+  //
+  // A PBX has no speech engine the app can rely on, so every prompt is played
+  // from a URL: the operator's upload for the caller's language when there is
+  // one, else the prompt as speech the worker generates (IvrSpeechService).
+
   /**
-   * Language code mapping — subclasses can override for PBX-specific TTS engines.
-   * Default maps common locale codes to TTS engine language codes.
+   * Where a prompt is played from. A recording always beats generated speech:
+   * the operator's upload in the caller's language; else, when no voice speaks
+   * that language, the upload in the language their prompts fall back to; else
+   * the prompt as generated speech.
    */
-  protected mapLanguage(lang: string): string {
-    return lang
+  protected promptUrl(
+    promptKey: string,
+    lang: string,
+    audioUrls: AudioUrlMap | undefined,
+    speechUrl: SpeechUrlBuilder | undefined,
+    text: (speechLang: string) => string = (speechLang) => getPrompt(promptKey, speechLang),
+  ): string {
+    const own = audioUrls?.[`${promptKey}:${lang}`]
+    if (own) return own
+    const speechLang = speechLanguageFor(lang)
+    const fallback = speechLang === lang ? undefined : audioUrls?.[`${promptKey}:${speechLang}`]
+    return fallback ?? this.generatedSpeechUrl(text, lang, speechUrl)
+  }
+
+  /**
+   * Text as generated speech, in the language the caller's prompts are spoken
+   * in: theirs, or the declared fallback when no offline voice speaks it.
+   */
+  protected generatedSpeechUrl(
+    text: (speechLang: string) => string,
+    lang: string,
+    speechUrl: SpeechUrlBuilder | undefined,
+  ): string {
+    if (!speechUrl) {
+      throw new Error(`${this.getPbxType()} cannot speak a prompt itself: the route must pass a speech URL builder`)
+    }
+    const speechLang = speechLanguageFor(lang)
+    return speechUrl(text(speechLang), speechLang)
   }
 
   // --- Private helpers ---

@@ -192,10 +192,11 @@ struct EventListView: View {
 
                         Spacer()
 
-                        Text(String(format: NSLocalizedString(
+                        Text(L10n.format(
                             "events_page_indicator",
-                            comment: "Page %d of %d"
-                        ), vm.currentPage, vm.totalPages))
+                            comment: "Page %d of %d",
+                            vm.currentPage, vm.totalPages
+                        ))
                         .font(.brand(.caption))
                         .foregroundStyle(Color.brandMutedForeground)
 

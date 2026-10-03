@@ -94,6 +94,7 @@ import type {
 import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
+import { speechLanguageFor } from './ivr-speech/voices'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
@@ -153,6 +154,18 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
 const DEFAULT_CALL_SETTINGS: CallSettings = {
   queueTimeoutSeconds: 90,
   voicemailMaxSeconds: 120,
+}
+
+/**
+ * On a self-hosted PBX every prompt nobody uploaded is generated speech
+ * (IvrSpeechService), so a language with no offline voice is not just absent
+ * from the menu: its callers are spoken to in another language. Say which, and
+ * how to fix it, where the operator hits the limit.
+ */
+function generatedSpeechGap(provider: string, unspeakable: string[]): string {
+  if (provider !== 'asterisk' && provider !== 'freeswitch') return ''
+  const heard = unspeakable.map((code) => `${code} → ${speechLanguageFor(code)}`).join(', ')
+  return `. No offline voice exists for them: callers in these languages hear prompts in another language (${heard}) unless you upload recordings in their language.`
 }
 
 const VALID_PROMPT_TYPES = [
@@ -586,7 +599,8 @@ export class SettingsService {
       if (unspeakable.length > 0) {
         throw new ServiceError(
           400,
-          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}`,
+          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}` +
+            generatedSpeechGap(resolution.catalog.provider, unspeakable),
         )
       }
     }

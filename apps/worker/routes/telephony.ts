@@ -2,7 +2,8 @@ import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
-import type { TelephonyAdapter } from '../telephony/adapter'
+import type { SpeechUrlBuilder, TelephonyAdapter } from '../telephony/adapter'
+import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
@@ -22,6 +23,20 @@ import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
 
 const logger = createLogger('telephony')
+
+/** Operator-uploaded prompts, as signed URLs the provider fetches from the origin it reached us on */
+function audioUrlsFor(c: Context<AppEnv>) {
+  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET)
+}
+
+/**
+ * Generated speech, for a provider with no speech engine of its own (the
+ * self-hosted PBXs); cloud providers speak prompts themselves.
+ */
+async function speechUrlFor(c: Context<AppEnv>, adapter: TelephonyAdapter): Promise<SpeechUrlBuilder | undefined> {
+  if (!(adapter instanceof SipBridgeAdapter)) return undefined
+  return c.get('services').ivrSpeech.urlBuilder(new URL(c.req.url).origin)
+}
 
 const telephony = new Hono<AppEnv>()
 
@@ -149,6 +164,7 @@ telephony.post('/incoming',
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     enabledLanguages,
     hubId,
+    speechUrl: await speechUrlFor(c, adapter),
   })
   return telephonyResponse(response)
 })
@@ -217,7 +233,7 @@ telephony.post('/language-selected',
     await services.settings.storeCaptcha({ callSid, expected: captchaDigits })
   }
 
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const response = await adapter.handleIncomingCall({
     callSid,
     callerNumber,
@@ -226,6 +242,7 @@ telephony.post('/language-selected',
     callerLanguage,
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     audioUrls,
+    speechUrl: await speechUrlFor(c, adapter),
     captchaDigits,
     hubId,
   })
@@ -268,7 +285,14 @@ telephony.post('/captcha',
   // Look up expected digits from server-side storage (not URL params)
   const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })
 
-  const response = await adapter.handleCaptchaResponse({ callSid, digits, expectedDigits: expected, callerLanguage: callerLang, hubId })
+  const response = await adapter.handleCaptchaResponse({
+    callSid,
+    digits,
+    expectedDigits: expected,
+    callerLanguage: callerLang,
+    hubId,
+    speechUrl: await speechUrlFor(c, adapter),
+  })
 
   if (match) {
     const origin = new URL(c.req.url).origin
@@ -431,9 +455,15 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
   const queueTime = c.req.method === 'POST'
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
     : 0
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const callSettings = await services.settings.getCallSettings(hubId)
-  const response = await adapter.handleWaitMusic(lang, audioUrls, queueTime, callSettings.queueTimeoutSeconds)
+  const response = await adapter.handleWaitMusic(
+    lang,
+    audioUrls,
+    queueTime,
+    callSettings.queueTimeoutSeconds,
+    await speechUrlFor(c, adapter),
+  )
   return telephonyResponse(response)
 })
 
@@ -464,7 +494,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   }
 
   if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
-    const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+    const audioUrls = await audioUrlsFor(c)
     const origin = new URL(c.req.url).origin
     const callSettings = await services.settings.getCallSettings(hubId)
     const response = await adapter.handleVoicemail({
@@ -472,6 +502,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
       callerLanguage: lang,
       callbackUrl: origin,
       audioUrls,
+      speechUrl: await speechUrlFor(c, adapter),
       maxRecordingSeconds: callSettings.voicemailMaxSeconds,
       hubId,
     })
@@ -488,7 +519,7 @@ telephony.post('/voicemail-complete', validateWebhook, async (c) => {
   const services = c.get('services')
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
-  return telephonyResponse(adapter.handleVoicemailComplete(lang))
+  return telephonyResponse(adapter.handleVoicemailComplete(lang, await speechUrlFor(c, adapter)))
 })
 
 // --- Step 9: Call recording status callback (bridged call recording) ---
