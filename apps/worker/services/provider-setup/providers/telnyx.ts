@@ -4,7 +4,7 @@ import type {
   NumberSearchQuery,
   NumberProvisionRequest,
 } from '@protocol/schemas/provider-setup'
-import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig, WebhookUrls } from '../types'
+import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest, WebhookUrls } from '../types'
 import { ProviderApiError } from '../types'
 import { nowISO } from '../utils'
 import { safeFetch } from '../../../lib/safe-fetch'
@@ -202,7 +202,7 @@ export const telnyxProvider: ProviderCapabilityImpl = {
 
   async createSipTrunk(
     credentials: Record<string, unknown>,
-    domain: string,
+    { domain }: SipTrunkRequest,
   ): Promise<SipTrunkConfig> {
     const apiKey = String(credentials.apiKey ?? credentials.accessToken ?? '')
     const sipUsername = `llamenos-${crypto.randomUUID().slice(0, 8)}`

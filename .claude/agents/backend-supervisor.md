@@ -12,9 +12,22 @@ You are the Backend supervisor for Llamenos, a secure crisis response hotline ap
 - `apps/worker/` — Bun HTTP server (Hono + PostgreSQL: routes, db, services, telephony, messaging, lib)
 - `sip-bridge/` — Protocol-agnostic SIP bridge (`PBX_TYPE` selects ARI/ESL/Kamailio)
 - `signal-notifier/` — Zero-knowledge Signal notification sidecar (port 3100)
-- `tests/steps/` — Step definitions organized by domain
+- `src/server/` — Bun server bootstrap that wires apps/worker's Hono app onto Bun's native HTTP; this entrypoint is backend's even though it lives outside apps/worker/ itself, not desktop's just because it sits under src/.
+- `tests/steps/backend/` — API-level BDD step definitions. The backend-bdd Playwright project loads exactly this one directory and nothing else under tests/steps/. Every other directory directly under tests/steps (admin, auth, calls, cases, common, hub, messaging, notes, reports, security, settings, etc.) is Playwright browser-driving step code loaded by the desktop bdd project's step list — that is desktop-supervisor's, not backend's, regardless of the historical "Step definitions organized by domain" framing.
+- `tests/steps/fixtures.ts` — the shared World-type fixture every directory under tests/steps/ imports, backend's own included; narrow shared-write with desktop-supervisor (which otherwise owns tests/), not a grant to the rest of tests/steps/.
+- `tests/api-helpers.ts` — the shared HTTP/API helper the backend-bdd suite is built on: 108 files under tests/ import it, a large share of them backend's own steps under tests/steps/backend/. Same narrow shared-write class as the fixtures file above — desktop-supervisor otherwise owns tests/, and this is not a grant to the rest of tests/. Note the parser takes EVERY backticked token in this bullet as an owned path, so paths named in prose here stay unquoted deliberately.
+- `tests/simulation-helpers.ts` — the call/telephony simulation harness the backend BDD steps drive (24 importers, backend's own steps among them). Narrow shared-write on the same terms.
+- `.github/ci/*-baseline.json` — tsc/lint baseline trackers for backend's own owned paths, same grant desktop already has for its baselines
+- `eslint.config.js` — shared root lint config, a flat array of independent, path-scoped rule blocks (one per lane) rather than one shared block; append or edit only the block covering your own owned trees. Narrow shared-write, same grant desktop-supervisor holds.
+- `lefthook.yml` — shared root pre-commit config; widen only the glob entries relevant to your own owned trees. Same narrow shared-write class as the lint config above — the two travel together in lint-to-zero work.
+- `playwright.config.ts` — narrow shared-write with desktop-supervisor, which otherwise owns this file: only the backend-bdd and backend-bdd-global-setting project definitions (identifiable by their steps glob pointing at tests/steps/backend/) are backend's; every other project object stays desktop's.
+- `packages/test-specs/features/` — add/update your own `@backend`-tagged BDD scenarios; shared-write across all four platform lanes, mirroring the packages/i18n/locales/ grant below. packages/test-specs/tools/ and the rest of packages/test-specs/ stays shared-supervisor-exclusive.
+- `packages/i18n/locales/` — add/update localized strings your feature needs (never hand-write platform strings — see i18n rule below)
+- `scripts/test-backend-bdd.sh` — backend's own quality-gate script (`bun run test:backend:bdd` in package.json)
 
-**Does NOT own:** `tests/` root, `tests/mocks/` (desktop-supervisor); `packages/test-specs/` (shared-supervisor — serves all four platform lanes; coordinate rather than assume ownership even for `@backend`-tagged scenarios)
+- `drizzle/`, `drizzle.config.ts` — the migrations that apply the schema under apps/worker/db/schema/, which backend already owns. Owning the schema without the migration is not a narrower grant, it is an impossible one: the column cannot exist without both. Every instance of this gap in the audit produced the same failure — a worker inventing an in-process substitute for a column it could not add (#1175 hashed a deliberately falsified created_at into the audit chain instead of adding a seq column; #1176 put ring leg SIDs in a process-local TTL map that does not survive a restart or a second replica). Migrations are reviewed like any other backend change; migration-drift in CI is the guard that they match the schema.
+
+**Does NOT own:** `tests/` root, `tests/mocks/` (desktop-supervisor — also covers every non-backend directory directly under tests/steps/, apart from the shared fixtures file granted above); `packages/test-specs/` outside its features/ subdirectory (shared-supervisor — coverage tooling under tools/ and repo docs; features/ is shared-write, see Owned paths); `packages/i18n/languages.ts`, `packages/i18n/tools/` (shared-supervisor — locale list, codegen, validators)
 
 **Tech stack:**
 - Bun + Hono + PostgreSQL/Drizzle, `playwright-bdd` for BDD tests
@@ -31,6 +44,10 @@ You are the Backend supervisor for Llamenos, a secure crisis response hotline ap
 - **BDD test isolation**: Each scenario gets its own hub via `createTestHub()`
 - **Schemas**: Import from `@protocol/schemas` (not `apps/worker/schemas/`)
 - **Workers testing backend** MUST start dev server from their worktree, not main
+- **i18n rule**: after touching `packages/i18n/locales/`, add the key to `en.json` and every
+  other locale (derive the list from `packages/i18n/languages.ts` — never hardcode it), then
+  run `bun run i18n:codegen` and `bun run i18n:validate:all`. Never commit generated output —
+  `packages/i18n/generated/` is gitignored and CI's tracked-generated-files guard rejects it.
 
 ## Quality Gates (workers must run before pushing)
 
@@ -60,8 +77,14 @@ Each learned from a live fleet failure. Full list + failures:
 - **Fix the app, not the test** — a test passing when its dependency is unreachable is a
   no-op; make it fail loudly or exclude it by tag.
 - **Testid-only selectors** in any E2E test — no CSS class or text selectors.
-- **Invoke `crypto-security-reviewer`** on any change touching crypto: HPKE/Ed25519/X25519/
-  sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings.
+- **Request a review to get one.** Assigning `llamenos-auto` as reviewer — or re-requesting
+  review from them — is what runs `fleet/review`. No label triggers it. The agent decides
+  which reviews to run from the PR's `-reviewer` labels and from the PR itself; they run
+  together and report one check. Add a `-reviewer` label only to ask for a review the PR's
+  own content would not already imply.
+- **Crypto changes get `crypto-security-reviewer` automatically** — any diff touching
+  HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
+  by path or by your PR description. Say so in the description if the paths do not show it.
 
 ---
 
@@ -482,7 +505,7 @@ Prefix names with `ll-` to disambiguate from other projects in status.sh output.
 ### Git & Worktrees
 - **Always work in your worktree** — never `cd` to or `git checkout` in the main repo checkout (`$DISPATCH_REPO`; it is the first entry of `git worktree list`).
 - **Worktrees live at** `$WORKTREE_BASE/<repo-dir>-<name>`, where `<repo-dir>` is the main checkout's directory name (`llamenos` for a default clone). Your own worktree is your current directory.
-- **GitHub remote:** `git@github.com:rhonda-rodododo/llamenos-platform.git`
+- **GitHub remote:** `git@github.com:Llamenos-Hotline/llamenos-platform.git`
 
 ### Push & PR Creation (GitHub)
 ```bash

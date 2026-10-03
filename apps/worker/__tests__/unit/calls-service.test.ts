@@ -174,22 +174,35 @@ describe('CallsService', () => {
       expect(result.answeredBy).toBe('pk1') // mock returns 'pk1'
     })
 
-    it('throws 404 when call does not exist', async () => {
-      createServiceWithData()
-      // Mock update to return empty array
-      const db = {
-        update: vi.fn().mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([]),
+    function dbWith(updated: unknown[], existing: unknown[]) {
+      const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue(updated) })
+      return {
+        where,
+        db: {
+          update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where }) }),
+          select: vi.fn().mockReturnValue({
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(existing) }),
             }),
           }),
-        }),
+        },
       }
-      const emptySvc = new CallsService(db as never)
+    }
+
+    it('throws 404 when call does not exist', async () => {
+      const { db } = dbWith([], [])
       await expect(
-        emptySvc.answerCall('hub-1', 'nonexistent', 'pk1'),
-      ).rejects.toThrow('Call not found')
+        new CallsService(db as never).answerCall('hub-1', 'nonexistent', 'pk1'),
+      ).rejects.toMatchObject({ status: 404, message: 'Call not found' })
+    })
+
+    it('throws 409 when the call exists but was already answered (first pickup wins)', async () => {
+      // The conditional UPDATE matched no row (status != ringing / answered_by set),
+      // but the call is still there → someone else won.
+      const { db } = dbWith([], [{ callId: 'call-1', status: 'in-progress', answeredBy: 'pk-first' }])
+      await expect(
+        new CallsService(db as never).answerCall('hub-1', 'call-1', 'pk-second'),
+      ).rejects.toMatchObject({ status: 409, message: 'Call already answered' })
     })
   })
 

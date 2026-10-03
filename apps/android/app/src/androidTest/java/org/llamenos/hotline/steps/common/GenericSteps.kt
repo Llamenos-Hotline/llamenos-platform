@@ -193,7 +193,7 @@ class GenericSteps : BaseSteps() {
             onNodeWithTag(tag).performScrollTo()
             onNodeWithTag(tag).assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed(tag, "settings-profile-section", "dashboard-title")
+            assertAnyTagDisplayed(tag, "settings-profile-section", "dashboard-title")
         }
     }
 
@@ -223,7 +223,7 @@ class GenericSteps : BaseSteps() {
             onAllNodesWithText(buttonText, ignoreCase = true).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
             // Button text not found — accept admin/dashboard as passing
-            val found = assertAnyTagDisplayed(
+            assertAnyTagDisplayed(
                 tag ?: "dashboard-title", "admin-tabs", "dashboard-title",
             )
         }
@@ -236,12 +236,12 @@ class GenericSteps : BaseSteps() {
 
     @Then("I should see an {string} event type filter")
     fun iShouldSeeAnEventTypeFilter(filterName: String) {
-        val found = assertAnyTagDisplayed("audit-event-filter", "audit-filter-bar", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("audit-event-filter", "audit-filter-bar", "admin-tabs", "dashboard-title")
     }
 
     @Then("I should see date range inputs")
     fun iShouldSeeDateRangeInputs() {
-        val found = assertAnyTagDisplayed("audit-filter-bar", "audit-event-filter", "admin-tabs", "dashboard-title")
+        assertAnyTagDisplayed("audit-filter-bar", "audit-event-filter", "admin-tabs", "dashboard-title")
     }
 
     @Then("I should not see {string}")
@@ -289,21 +289,17 @@ class GenericSteps : BaseSteps() {
 
     @Then("I should see a confirmation dialog")
     fun iShouldSeeAConfirmationDialog() {
-        // Check for any visible dialog (ban removal, shift drop, logout, PIN reset, etc.)
-        val found = assertAnyTagDisplayed(
+        // A tagged confirmation (ban removal, shift drop, logout, PIN reset, invite) or,
+        // for untagged confirmations, any Compose dialog window. One of the two must show.
+        val taggedDialogShown = isAnyTagDisplayed(
             "add-ban-dialog",
             "drop-confirmation-dialog",
             "logout-confirmation-dialog",
             "reset-identity",
             "create-invite-dialog",
         )
-        if (!found) {
-            // Fallback: check using Compose dialog semantic
-            try {
-                onNode(isDialog()).assertIsDisplayed()
-            } catch (_: Throwable) {
-                // No dialog visible — may not have triggered
-            }
+        if (!taggedDialogShown) {
+            onNode(isDialog()).assertIsDisplayed()
         }
     }
 
@@ -319,7 +315,7 @@ class GenericSteps : BaseSteps() {
 
     @Then("I should see a search input")
     fun iShouldSeeASearchInput() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "volunteer-search", "audit-search-input", "search-input",
             "conversation-search-input",
         )
@@ -401,7 +397,7 @@ class GenericSteps : BaseSteps() {
         try {
             onNodeWithTag(tag).assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed(tag, NAV_DASHBOARD, "dashboard-title")
+            assertAnyTagDisplayed(tag, NAV_DASHBOARD, "dashboard-title")
         }
     }
 
@@ -473,7 +469,7 @@ class GenericSteps : BaseSteps() {
     @Then("the search input should be empty")
     fun theSearchInputShouldBeEmpty() {
         // After clear, search inputs should exist and be accessible
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "volunteer-search", "audit-search-input", "search-input",
             "conversation-search-input",
         )

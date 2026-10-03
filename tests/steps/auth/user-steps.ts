@@ -17,6 +17,7 @@ import {
   navigateAfterLogin,
 } from '../../helpers'
 import { Navigation } from '../../pages/index'
+import { ensureAuthenticated } from '../common/ui-helpers'
 import { apiDelete, apiGet, updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
 
 // --- Volunteer lifecycle ---
@@ -93,9 +94,18 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   await page.getByTestId(TestIds.INVITE_BTN).click()
   const name = `InviteVol ${Date.now()}`
   await page.getByTestId('invite-name-input').fill(name)
-  await page.getByTestId('invite-phone-input').fill(`+1212${Date.now().toString().slice(-7)}`)
-  await page.getByTestId('create-invite-btn').click()
+  const phone = `+1212${Date.now().toString().slice(-7)}`
+  await page.getByTestId('invite-phone-input').fill(phone)
+  // Blur so the phone field validates — the submit button stays disabled until it does.
+  await page.getByTestId('invite-phone-input').blur()
+  // The invite form submits with 'create-invite-btn', not 'form-save-btn'.
+  const createInviteBtn = page.getByTestId('create-invite-btn')
+  await expect(createInviteBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await createInviteBtn.click()
+  // Wait for the invite card to appear. It now shows the bare invite code (#1128),
+  // not an onboarding URL, so assert on the card rather than on its contents here.
   await expect(page.getByTestId('invite-link-code')).toBeVisible({ timeout: Timeouts.API })
+  await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
   // Persist the vol name in localStorage so it survives page.reload()
   await page.evaluate((n) => {
     (window as unknown as Record<string, unknown>).__test_invite_vol_name = n
@@ -118,6 +128,47 @@ Then('the clipboard should hold only the invite code', async ({ page, backendReq
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: Timeouts.ELEMENT })
     .toBe(invite!.code)
   await expect(page.getByTestId('invite-link-code')).toHaveText(invite!.code)
+})
+
+// The three steps below drive the invite-LINK flow. Desktop no longer has one —
+// its invite card shows a bare code the volunteer pastes (#1128), covered by
+// platform/desktop/auth/invite-redemption.feature — so the scenario that uses
+// them in core/auth-login.feature is tagged @ios @android only. They are kept so
+// that re-tagging it @desktop fails loudly rather than reporting a missing step.
+Then('an invite link should be generated', async ({ page }) => {
+  // The invite card shows the full onboarding URL (`${origin}/onboarding?code=…`).
+  await expect(page.getByTestId('invite-link-code')).toHaveText(/\/onboarding\?code=\S+/, { timeout: Timeouts.ELEMENT })
+})
+
+When('the volunteer opens the invite link', async ({ page }) => {
+  // The previous body looked for a testid the app never renders and silently did
+  // nothing, so the rest of the scenario ran against the admin's volunteers page.
+  const link = (await page.getByTestId('invite-link-code').textContent())?.trim() ?? ''
+  expect(link, 'invite link').toMatch(/\/onboarding\?code=\S+/)
+  await page.goto(link)
+  await expect(page).toHaveURL(/\/onboarding\?code=/, { timeout: Timeouts.NAVIGATION })
+})
+
+Then('they should see a welcome screen with their name', async ({ page }) => {
+  const volName = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'))) as string
+  expect(volName).toBeTruthy()
+  // Content assertion — verifying displayed volunteer name
+  await expect(page.getByText(new RegExp(volName, 'i')).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+})
+
+When('the volunteer completes the onboarding flow', async ({ page }) => {
+  // welcome → PIN (create + confirm) → keypair + invite redemption → backup → continue
+  const { enterPin } = await import('../../helpers')
+  await page.getByRole('button', { name: 'Get Started' }).click()
+  await enterPin(page, '12345678')
+  await enterPin(page, '12345678')
+  // The backup step only renders once the keypair exists and the invite was redeemed.
+  await expect(page.getByTestId('recovery-key')).toBeVisible({ timeout: Timeouts.AUTH })
+  await page.getByRole('button', { name: 'Download Encrypted Backup' }).click()
+  await page.getByRole('checkbox').check()
+  const continueBtn = page.getByRole('button', { name: 'Continue' })
+  await expect(continueBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await continueBtn.click()
 })
 
 Then('the volunteer name should appear in the pending invites list', async ({ page }) => {
@@ -159,31 +210,19 @@ Then('I should see the volunteer device key', async ({ page }) => {
 
 When('I paste invalid phone numbers in the textarea', async ({ page }) => {
   const bulkPhones = page.getByTestId('ban-bulk-phones')
-  if (await bulkPhones.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await bulkPhones.fill('+12\n+34\ninvalid')
-    return
-  }
-  const textarea = page.locator('textarea').first()
-  if (await textarea.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await textarea.fill('+12\n+34\ninvalid')
-  }
+  await expect(bulkPhones).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await bulkPhones.fill('+12\n+34\ninvalid')
 })
 
 When('I paste two phone numbers in the textarea', async ({ page }) => {
   const phone1 = `+1212${Date.now().toString().slice(-7)}`
   const phone2 = `+1212${(Date.now() + 1).toString().slice(-7)}`
   const bulkPhones = page.getByTestId('ban-bulk-phones')
-  if (await bulkPhones.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await bulkPhones.fill(`${phone1}\n${phone2}`)
-  } else {
-    const textarea = page.locator('textarea').first()
-    if (await textarea.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await textarea.fill(`${phone1}\n${phone2}`)
-    }
-  }
+  await expect(bulkPhones).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await bulkPhones.fill(`${phone1}\n${phone2}`)
   await page.evaluate(
     ({ p1, p2 }) => {
-      (window as unknown as Record<string, unknown>).__test_bulk_phones = [p1, p2]
+      (window as unknown as Record<string, unknown>).__test_ban_phones = [p1, p2]
     },
     { p1: phone1, p2: phone2 },
   )
@@ -244,13 +283,8 @@ Given('a reporter is logged in', async ({ page, backendRequest }) => {
   // Check if a reporter key was set by a previous step (e.g., "a reporter has been invited and onboarded")
   let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
   if (!key) {
-    // No reporter exists yet — create one via the admin flow
-    // Ensure we're logged in as admin first
-    const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-    const isAuth = await sidebar.isVisible({ timeout: 1000 }).catch(() => false)
-    if (!isAuth) {
-      await loginAsAdmin(page)
-    }
+    // No reporter exists yet — create one via the admin flow, as the admin.
+    await ensureAuthenticated(page)
     await Navigation.goToVolunteers(page)
     const name = `Reporter ${Date.now()}`
     const phone = `+1212${Date.now().toString().slice(-7)}`
@@ -284,40 +318,24 @@ When('they create a new report', async ({ page }) => {
   const newBtn = page.getByTestId(TestIds.REPORT_NEW_BTN)
   await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
   await newBtn.click()
-  // Reports creation form — fill in title and body
-  const titleInput = page.getByTestId(TestIds.REPORT_TITLE_INPUT)
-  const isTitleVisible = await titleInput.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isTitleVisible) {
-    await titleInput.fill('Test report content')
-  }
-  const bodyInput = page.getByTestId(TestIds.REPORT_BODY_INPUT)
-  const isBodyVisible = await bodyInput.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isBodyVisible) {
-    await bodyInput.fill('Test report body content')
-  } else {
-    // Chat-style interface — find textarea
-    const textarea = page.locator('textarea').first()
-    const isTextarea = await textarea.isVisible({ timeout: 3000 }).catch(() => false)
-    if (isTextarea) {
-      await textarea.fill('Test report content')
-    }
-  }
-  // Submit via report submit button, form save, or generic submit (use combined locator)
+  // A unique title, so the saved-report check can find this report and no other.
+  const title = `Test report ${Date.now()}`
+  await page.getByTestId(TestIds.REPORT_TITLE_INPUT).fill(title)
+  await page.getByTestId(TestIds.REPORT_BODY_INPUT).fill('Test report body content')
+  await page.evaluate((t) => {
+    (window as unknown as Record<string, unknown>).__test_report_title = t
+  }, title)
   const submitBtn = page.getByTestId(TestIds.REPORT_SUBMIT_BTN)
-    .or(page.getByTestId(TestIds.FORM_SAVE_BTN))
-    .or(page.getByTestId(TestIds.FORM_SUBMIT_BTN))
-  await expect(submitBtn.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await submitBtn.first().click()
+  await expect(submitBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
+  await submitBtn.click()
 })
 
 Then('the report should be saved successfully', async ({ page }) => {
-  // Check for success toast, success text, or return to report list
-  const successToast = page.getByTestId(TestIds.SUCCESS_TOAST)
-  const isToast = await successToast.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isToast) return
-  const successText = page.getByText(/success|saved|created/i).first()
-  const isText = await successText.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isText) return
-  // Success toast may have already dismissed — check we're back on the list page
-  await expect(page.getByTestId(TestIds.REPORT_LIST)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The report list is on screen whether or not anything was saved, so it proves
+  // nothing by itself: the new report must be listed under its own title.
+  const title = await page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__test_report_title as string | undefined,
+  )
+  expect(title, 'the create step must record the report title').toBeTruthy()
+  await expect(page.getByTestId(TestIds.REPORT_LIST).getByText(title as string)).toBeVisible({ timeout: Timeouts.API })
 })

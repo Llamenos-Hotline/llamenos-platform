@@ -1,5 +1,6 @@
 package org.llamenos.hotline.steps.cases
 
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
@@ -30,8 +31,7 @@ class CaseDetailSteps : BaseSteps() {
     fun aCaseDetailIsOpen() {
         navigateToMainScreen()
         navigateViaDashboardCard("cases-card")
-        waitForCaseListOrEmpty()
-        openFirstCaseOrCreate()
+        openFirstCase()
         waitForDetailLoaded()
     }
 
@@ -215,36 +215,24 @@ class CaseDetailSteps : BaseSteps() {
     // ---- Private helpers ----
 
     /**
-     * Wait for the case list, loading, empty, or error state to appear.
+     * Open the first case in the list.
+     *
+     * Every scenario that opens a case detail seeds records in its Background
+     * ("the app is launched and authenticated as admin"), so a card must appear.
+     * Waiting on the loading spinner or the always-present title instead let this
+     * run before the list loaded, find no cards, and open a blank *new* case —
+     * which has a status pill but none of a saved case's actions.
      */
-    private fun waitForCaseListOrEmpty() {
-        composeRule.waitUntil(10_000) {
-            composeRule.onAllNodesWithTag("case-list").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("case-empty-state").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("cases-loading").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("cases-error").fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag("cases-title").fetchSemanticsNodes().isNotEmpty()
-        }
-    }
-
-    /**
-     * Open the first case card, or create a new case if none exist.
-     */
-    private fun openFirstCaseOrCreate() {
-        val hasCaseCards = composeRule.onAllNodes(hasTestTagPrefix("case-card-"))
-            .fetchSemanticsNodes().isNotEmpty()
-        if (hasCaseCards) {
-            onAllNodes(hasTestTagPrefix("case-card-")).onFirst().performClick()
-            composeRule.waitForIdle()
-        } else {
-            // Create a new case via FAB — this navigates to case detail with "new"
-            try {
-                onNodeWithTag("case-create-fab").performClick()
-                composeRule.waitForIdle()
-            } catch (_: Throwable) {
-                // FAB not available
+    private fun openFirstCase() {
+        try {
+            composeRule.waitUntil(10_000) {
+                composeRule.onAllNodes(hasTestTagPrefix("case-card-")).fetchSemanticsNodes().isNotEmpty()
             }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("No case cards appeared although the scenario seeded case records", e)
         }
+        onAllNodes(hasTestTagPrefix("case-card-")).onFirst().performClick()
+        composeRule.waitForIdle()
     }
 
     /**

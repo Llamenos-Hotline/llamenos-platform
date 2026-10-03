@@ -1,5 +1,5 @@
 import { SECRET_PATH_PATTERNS } from './config.js'
-import { matchesPath } from './fragments.js'
+import { isSecretTemplatePath, matchesPath } from './fragments.js'
 
 export const LARGE_DIFF_FILES = 40
 export const LARGE_DIFF_LINES = 1500
@@ -115,6 +115,8 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   // as globs; these are exact files because this list is prefix/exact
   // matching, and guards.test.ts fails if a file those globs match is
   // missing here.
+  'scripts/check-bddgen-warmup.sh',
+  'scripts/check-codeql-languages.ts',
   'scripts/check-ecies-active.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',
@@ -184,8 +186,24 @@ export function classifyImpact(
     // (config.ts) would refuse to write is high-impact here too, so a secret
     // that reaches a diff by a route the write gate did not cover still
     // always requires human review rather than auto-merging.
+    //
+    // This deliberately uses `matchesPath`, NOT the write gate's
+    // `matchesSecretPath`: the template carve-out (`.env.example`) is a
+    // write-gate exemption only. The required relation is never-write ⊆
+    // high-impact, so the merge gate staying the BROADER of the two keeps it
+    // intact while being strictly more conservative — and substantively
+    // right, because a real credential pasted into a committed template is
+    // the one mistake a revert can never undo. `deploy/` is not in
+    // `HIGH_IMPACT_PATHS`, so without this line a template edit would be
+    // classified low-impact the moment it stopped counting as a secret.
     const secretHit = SECRET_PATH_PATTERNS.find((p) => matchesPath(f, p))
-    if (secretHit) reasons.push(`${f} matches secret pattern ${secretHit} (never-write and high-impact)`)
+    if (secretHit) {
+      reasons.push(
+        isSecretTemplatePath(f)
+          ? `${f} matches secret pattern ${secretHit} as a committed template (writable, still high-impact)`
+          : `${f} matches secret pattern ${secretHit} (never-write and high-impact)`,
+      )
+    }
   }
   if (changedFiles.length > LARGE_DIFF_FILES) {
     reasons.push(`${changedFiles.length} files exceeds the ${LARGE_DIFF_FILES}-file review threshold`)

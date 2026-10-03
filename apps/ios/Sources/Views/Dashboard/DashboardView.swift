@@ -7,7 +7,7 @@ struct DashboardView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: DashboardViewModel?
+    @State private var viewModelBox = ViewModelBox<DashboardViewModel>()
     @State private var quickActionDestination: QuickActionDestination?
 
     var body: some View {
@@ -233,33 +233,59 @@ struct DashboardView: View {
                 )
             }
 
-            if appState.hasPermission("settings:read") {
+            // Two per row, whichever of the restricted screens this user may open.
+            let restricted = restrictedQuickActions
+            ForEach(Array(stride(from: 0, to: restricted.count, by: 2)), id: \.self) { start in
                 GridRow {
-                    quickActionCard(
-                        title: NSLocalizedString("dashboard_contacts", comment: "Contacts"),
-                        icon: "person.crop.circle.badge.clock",
-                        destination: .contacts,
-                        accessibilityID: "dashboard-contacts-action"
-                    )
-
-                    quickActionCard(
-                        title: NSLocalizedString("dashboard_blasts", comment: "Message Blasts"),
-                        icon: "megaphone.fill",
-                        destination: .blasts,
-                        accessibilityID: "dashboard-blasts-action"
-                    )
-                }
-
-                GridRow {
-                    quickActionCard(
-                        title: NSLocalizedString("dashboard_triage", comment: "Triage"),
-                        icon: "tray.and.arrow.down.fill",
-                        destination: .triage,
-                        accessibilityID: "dashboard-triage-action"
-                    )
+                    ForEach(restricted[start..<min(start + 2, restricted.count)]) { action in
+                        quickActionCard(
+                            title: action.title,
+                            icon: action.icon,
+                            destination: action.destination,
+                            accessibilityID: action.accessibilityID
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private struct QuickAction: Identifiable {
+        let title: String
+        let icon: String
+        let destination: QuickActionDestination
+        let accessibilityID: String
+        var id: String { accessibilityID }
+    }
+
+    /// Quick actions for screens only some roles can use, each shown only with the
+    /// permission its screen's API requires (apps/worker/routes: contacts-v2 →
+    /// contacts:view, blasts → blasts:read, records triage → reports:triage).
+    /// They were all gated on settings:read, which every volunteer holds, so
+    /// volunteers were offered three screens the server then refused.
+    private var restrictedQuickActions: [QuickAction] {
+        [
+            ("contacts:view", QuickAction(
+                title: NSLocalizedString("dashboard_contacts", comment: "Contacts"),
+                icon: "person.crop.circle.badge.clock",
+                destination: .contacts,
+                accessibilityID: "dashboard-contacts-action"
+            )),
+            ("blasts:read", QuickAction(
+                title: NSLocalizedString("dashboard_blasts", comment: "Message Blasts"),
+                icon: "megaphone.fill",
+                destination: .blasts,
+                accessibilityID: "dashboard-blasts-action"
+            )),
+            ("reports:triage", QuickAction(
+                title: NSLocalizedString("dashboard_triage", comment: "Triage"),
+                icon: "tray.and.arrow.down.fill",
+                destination: .triage,
+                accessibilityID: "dashboard-triage-action"
+            )),
+        ]
+        .filter { appState.hasPermission($0.0) }
+        .map { $0.1 }
     }
 
     private func quickActionCard(title: String, icon: String, destination: QuickActionDestination, accessibilityID: String) -> some View {
@@ -450,7 +476,7 @@ struct DashboardView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: DashboardViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = DashboardViewModel(
@@ -459,9 +485,7 @@ struct DashboardView: View {
             webSocketService: appState.webSocketService,
             hubContext: hubContext
         )
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

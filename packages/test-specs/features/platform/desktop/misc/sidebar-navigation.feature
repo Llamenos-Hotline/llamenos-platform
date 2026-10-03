@@ -14,7 +14,7 @@ Feature: Sidebar Navigation
 
   Scenario: Login page renders with sign-in form
     When I visit the login page
-    Then I should see the device key input
+    Then I should see the device key import input field
 
   Scenario: Login rejects invalid device key
     When I visit the login page

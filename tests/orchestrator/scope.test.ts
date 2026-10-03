@@ -85,6 +85,8 @@ describe('checkScope', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
+        'drizzle/',
+        'drizzle.config.ts',
       ])
       expect(backend.notOwned).toEqual([
         'tests/',
@@ -877,6 +879,84 @@ describe('scripts/ ownership (#1066): infra owns it, backend keeps its own gate 
       }
     }
     expect(dead, `lane scope rules matching no tracked file:\n${dead.join('\n')}`).toEqual([])
+  })
+})
+
+/**
+ * #1235: the shared lane owns both ends of a crypto BDD scenario — the Rust
+ * crate under `packages/crypto/` and the feature file under
+ * `packages/test-specs/` — but not `tests/steps/crypto/`, the step
+ * definitions that make the scenario execute. A scenario cannot be
+ * implemented without them, so the lane that writes the scenario was
+ * structurally barred from the middle of its own work, and `fleet/review`
+ * refused the PR for straying.
+ *
+ * This is the scope-forced compromise #1181 exists to prevent: the failure
+ * mode is not a red check, it is a worker quietly shipping the partial fix
+ * that fits inside its lane. So the rail asserts the whole diff a crypto
+ * scenario change requires is writable BY ONE LANE — three separate
+ * per-file assertions would each pass under the very split that caused the
+ * failure.
+ */
+describe('crypto BDD is writable end to end by the lane that owns the crypto domain (#1235)', () => {
+  let scopes: Record<string, LaneScope>
+  let shared: LaneScope
+  let desktop: LaneScope
+  let files: string[]
+
+  // The exact file list of #1235, the PR this gap blocked.
+  const CRYPTO_SCENARIO_DIFF = [
+    'packages/crypto/tests/interop.rs',
+    'packages/test-specs/features/security/crypto-interop.feature',
+    'tests/steps/crypto/crypto-steps.ts',
+  ]
+
+  beforeAll(async () => {
+    scopes = await loadLaneScopes(process.cwd())
+    const s = scopes['shared']
+    const d = scopes['desktop']
+    if (!s || !d) throw new Error('expected shared and desktop lane fragments to exist')
+    shared = s
+    desktop = d
+    files = trackedFiles()
+  })
+
+  it('the three files are real tracked files, not a scope rule guarding nothing', () => {
+    for (const f of CRYPTO_SCENARIO_DIFF) expect(files, `${f} is not tracked`).toContain(f)
+  })
+
+  it('the exact #1235 diff is in scope for shared — crate, feature file and step definitions together', () => {
+    expect(checkScope(CRYPTO_SCENARIO_DIFF, shared, []).strayed).toEqual([])
+  })
+
+  it('SOME single lane can write the whole diff — the property the split broke', () => {
+    const capable = Object.entries(scopes)
+      .filter(([, s]) => s.owned.length > 0 && checkScope(CRYPTO_SCENARIO_DIFF, s, []).strayed.length === 0)
+      .map(([lane]) => lane)
+    expect(capable, 'no lane may write a crypto scenario and its step definitions in one diff').toContain('shared')
+  })
+
+  it('desktop keeps tests/steps/crypto/ — the grant is shared-write, not a transfer', () => {
+    // The steps are Playwright browser code loaded by the desktop bdd
+    // project; desktop must still be able to change them, exactly as it
+    // still owns tests/steps/fixtures.ts and playwright.config.ts alongside
+    // backend's narrow grants on both.
+    expect(checkScope(['tests/steps/crypto/crypto-steps.ts'], desktop, []).strayed).toEqual([])
+  })
+
+  it.each([
+    'tests/steps/backend/hub-scoped-call-settings.steps.ts',
+    'tests/steps/hub/hub-steps.ts',
+    'tests/steps/fixtures.ts',
+    'tests/mocks/tauri-core.ts',
+    'tests/api-helpers.ts',
+    'tests/global-setup.ts',
+  ])('the grant does not widen into the rest of tests/ — shared may not write %s', (file) => {
+    expect(checkScope([file], shared, []).strayed).toEqual([file])
+  })
+
+  it('shared owns exactly one path under tests/ — a blanket tests/ grant would hand it every platform\'s step code', () => {
+    expect(shared.owned.filter((p) => p.startsWith('tests/'))).toEqual(['tests/steps/crypto/'])
   })
 })
 

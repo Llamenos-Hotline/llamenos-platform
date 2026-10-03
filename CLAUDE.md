@@ -39,7 +39,7 @@ All platforms implement the same protocol: `docs/protocol/PROTOCOL.md`
 - **Telephony**: 8 providers via `TelephonyAdapter` interface (Twilio, SignalWire, Vonage, Plivo, Telnyx, Bandwidth, Asterisk, FreeSWITCH). `SipBridgeAdapter` base class for ARI/ESL/Kamailio backends. `PBX_TYPE` env var selects backend for `sip-bridge/`.
 - **Auth**: Ed25519/X25519 per-device keys for E2EE + WebAuthn session tokens for multi-device support
 - **i18n**: `packages/i18n/` — 22 locales (source of truth: `packages/i18n/languages.ts`; never hardcode a count/list elsewhere — `bun run i18n:validate` fails loudly if one drifts from `packages/i18n/locales/`) + codegen for iOS `.strings` and Android `strings.xml`
-- **Deployment**: Docker Compose / Helm (VPS self-hosted), Cloudflare Tunnels for ingress. EU/GDPR-compatible.
+- **Deployment**: Docker Compose / Helm (VPS self-hosted), provisioned by the Ansible playbooks in `deploy/ansible/`. **Ingress is Caddy on the origin host** — it terminates TLS itself with a Let's Encrypt certificate (`deploy/ansible/roles/llamenos-caddy/templates/caddy.j2`). There is no Cloudflare Tunnel and no CDN in front of it. EU/GDPR-compatible.
 - **Testing**: E2E via Playwright (desktop), XCUITest (iOS), Compose UI tests (Android), Cucumber BDD (Android E2E), backend BDD; Rust tests via `cargo test`
 - **Desktop Security**: Tauri Stronghold (encrypted vault), isolation pattern, CSP, single-instance
 - **Load Testing**: k6-based load tests for calls, messages, and mixed traffic (`bun run load:*`)
@@ -185,6 +185,7 @@ docs/
 - **knope manages versions**: Never manually bump `package.json`, `Cargo.toml`, or platform version files. knope auto-maintains release PRs with changelogs.
 - **Tauri-only desktop**: No browser/PWA fallback. `platform.ts` always routes through Tauri IPC. Use `PLAYWRIGHT_TEST=true` for test builds that mock the IPC layer.
 - **packages/crypto path dep**: `apps/desktop/Cargo.toml` references `../../packages/crypto`. No external repo needed.
+- **TLS terminates on the origin host — never behind a CDN**: Caddy on the app host issues its own Let's Encrypt certificate, and `acme_ca` is pinned to Let's Encrypt with **no fallback issuer**. The Android client hard-fails on any chain that does not lead to ISRG Root X1/X2 (`apps/android/app/src/main/res/xml/network_security_config.xml`, plus an OkHttp `CertificatePinner` in `ApiService.kt`). Putting Cloudflare or any other proxy in front presents *its* chain, so the web would look healthy while every Android client is dead — the same reason the ZeroSSL fallback is disabled. Four places under `deploy/` say so explicitly; do not re-introduce a CDN. (`scripts/dev-tunnel.sh` runs `cloudflared` for **local dev webhooks only** — it is not part of any deploy path.)
 - **wrangler.jsonc**: Only exists at `site/wrangler.jsonc` (Cloudflare Pages, marketing site). No wrangler config in `apps/worker/` — the backend is Bun+PostgreSQL, not a Cloudflare Worker.
 - **iOS UniFFI**: Build with `packages/crypto/scripts/build-mobile.sh ios`, copy XCFramework to `apps/ios/`. **Mobile crypto is real — there is no mock fallback on either platform.** The `#if !canImport(LlamenosCore)` stand-in types this file used to describe no longer exist anywhere under `apps/ios/`.
 - **Android JNI**: Build with `packages/crypto/scripts/build-mobile.sh android`, which produces debug (test-kdf, x86_64) and release (production, ARM) variants in `dist/android/jniLibs-{debug,release}/`. Copy to `apps/android/app/src/{debug,release}/jniLibs/`. `CryptoService` calls `System.loadLibrary("llamenos_core")` and then guards every operation with `check(nativeLibLoaded)` at 31 sites — it hard-fails without the native library rather than falling back to placeholder crypto.
@@ -211,10 +212,10 @@ After `mise install`, install Ruby gems for Fastlane: `cd apps/ios && bundle ins
 ```bash
 mise run setup              # First-time full setup (installs tools, deps, builds crypto, runs codegen)
 mise run setup --quick      # Skip mobile builds (desktop/backend only)
-bun run workspace-setup     # Manual incremental sync (runs automatically on bun install)
-bun run workspace-setup --force  # Full rebuild without timestamp checks
-bun run workspace-setup --ios    # Include iOS crypto build
-bun run workspace-setup --android  # Include Android crypto build
+bun run worktree-setup      # Incremental sync (codegen + crypto artifacts) — run by hand in a new worktree
+bun run worktree-setup --force   # Full rebuild without timestamp checks
+bun run worktree-setup --ios     # Include iOS crypto build
+bun run worktree-setup --android # Include Android crypto build
 ```
 
 Mobile builds are skipped by default for speed. Pass `--ios` or `--android` explicitly, or use branch names like `feat/ios-*` / `feat/android-*` / `feat/mobile-*` to auto-enable them.
@@ -296,9 +297,11 @@ bun run test:crypto                      # Crypto: cargo test + clippy
 bun run test:backend:bdd                 # Backend BDD against local backend (API-level)
 
 # Deploy (runs on Linux machine)
-bun run deploy                           # Deploy EVERYTHING (Worker + marketing site)
-bun run deploy:api                       # Deploy Worker only
-bun run deploy:site                      # Deploy marketing site only
+# These deploy ONLY the marketing site (Cloudflare Pages). `deploy` is an alias for `deploy:site`.
+# The server is deployed by the Ansible playbooks in `deploy/ansible/`, dispatched from the
+# `deploy-*.yml` GitHub Actions workflows — there is no `bun run` script for it.
+bun run deploy                           # Marketing site (alias for deploy:site)
+bun run deploy:site                      # Marketing site
 
 # Android (runs on Linux machine)
 bun run test:android                     # Unit tests + lint + build androidTest APK
@@ -311,7 +314,7 @@ bun run version:bump <major|minor|patch> [description]     # Bump version across
 bun run bootstrap-admin                  # Generate admin keypair
 ```
 
-**Deployment rules — NEVER run `wrangler pages deploy` or `wrangler deploy` directly.** Always use `bun run deploy` or `bun run deploy:site` from the root. Running wrangler from the wrong directory will deploy the wrong artifact.
+**Deployment rules — NEVER run `wrangler pages deploy` or `wrangler deploy` directly.** Always use `bun run deploy` or `bun run deploy:site` from the root. Running wrangler from the wrong directory will deploy the wrong artifact. Wrangler only ever touches the marketing site; the server never goes near it.
 
 **Key config files**: `site/wrangler.jsonc` (Cloudflare Pages, marketing site only), `playwright.config.ts`, `.env` (Twilio creds + ADMIN_PUBKEY, gitignored)
 

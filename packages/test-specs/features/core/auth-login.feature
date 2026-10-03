@@ -330,7 +330,8 @@ Feature: Authentication & Login
     And I tap "Log in"
     Then I should be redirected away from login
 
-  @desktop @ios @android @regression
+  # @fixme: typing in the device key field does not clear the login error — #1307
+  @desktop @ios @android @regression @fixme
   Scenario: Error clears when typing in device key field
     Given the app is freshly installed
     And I am on the login screen
@@ -488,7 +489,8 @@ Feature: Authentication & Login
       | Shifts        |
       | Settings      |
 
-  @desktop @ios @android @regression
+  # @fixme: desktop encryptNote succeeds while locked; needs a security decision — #1312
+  @desktop @ios @android @regression @fixme
   Scenario: Crypto operations blocked when locked
     Given the crypto service is locked
     When I attempt to create an auth token

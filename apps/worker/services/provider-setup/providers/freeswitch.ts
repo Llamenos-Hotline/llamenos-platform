@@ -2,7 +2,7 @@ import type {
   OwnedNumber,
   AvailableNumber,
 } from '@protocol/schemas/provider-setup'
-import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig } from '../types'
+import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest } from '../types'
 import { ProviderApiError } from '../types'
 import { isInternalAddress } from '../../../lib/ssrf-guard'
 import { safeFetch } from '../../../lib/safe-fetch'
@@ -85,7 +85,7 @@ export const freeswitchProvider: ProviderCapabilityImpl = {
 
   async createSipTrunk(
     credentials: Record<string, unknown>,
-    domain: string,
+    { domain }: SipTrunkRequest,
   ): Promise<SipTrunkConfig> {
     const eslPassword = String(credentials.eslPassword ?? '')
     const baseUrl = getEslBaseUrl(credentials)

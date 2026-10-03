@@ -23,6 +23,7 @@ Feature: Signal Notification Service
   # Fix belongs in deploy/docker/docker-compose.yml or docker-compose.test.yml
   # (outside this PR's owned paths — needs a `web` network entry on the
   # signal-notifier service); un-@fixme once that lands and this passes in CI.
+  # Tracked in #1196.
   @fixme
   Scenario: Register Signal contact for notifications
     Given the admin is authenticated
@@ -40,6 +41,7 @@ Feature: Signal Notification Service
   # this tag), unmasked because the step definitions no longer vacuously pass when the
   # sidecar rejects the request. Needs either a provisioned test Signal number or a
   # delivery mock in signal-notifier before this can run in CI.
+  # Tracked in #1196.
   @fixme
   Scenario: Security alert sent on new login IP
     Given a volunteer has a registered Signal notification contact
@@ -54,6 +56,7 @@ Feature: Signal Notification Service
   # — this scenario tests a retry-tracking feature that does not exist in the current
   # implementation. Needs either retry tracking added to signal-notifier or this
   # scenario rewritten to match the sidecar's actual synchronous contract.
+  # Tracked in #1196.
   @fixme
   Scenario: Notification delivery with retry on failure
     Given a registered Signal notification contact
@@ -67,6 +70,7 @@ Feature: Signal Notification Service
   # contact for notifications" above — see that scenario's comment for the full
   # root-cause writeup (docker-compose `internal: true` network with no `web`
   # network attached silently drops the 3100 host port publish).
+  # Tracked in #1196.
   @fixme
   Scenario: Unregister Signal contact stops notifications
     Given a volunteer has a registered Signal notification contact
@@ -81,12 +85,14 @@ Feature: Signal Notification Service
   # "login_only"/"all" preference — this scenario's semantics don't map onto the
   # actual implementation. Needs rewriting once the real alert-type filtering design
   # (alertOnNewDevice / alertOnPasskeyChange / alertOnPinChange) is reflected here.
+  # Tracked in #1196.
   @fixme
   Scenario: Security preferences control which alerts are sent
     Given a volunteer has security notification preferences set to "login_only"
     When a non-login security event occurs
     Then no notification should be dispatched for that event
 
+  # Tracked in #1196.
   @fixme
   Scenario: All-alerts preference sends notification for every security event
     Given a volunteer has security notification preferences set to "all"
@@ -99,6 +105,7 @@ Feature: Signal Notification Service
   # contact for notifications" above — see that scenario's comment for the full
   # root-cause writeup (docker-compose `internal: true` network with no `web`
   # network attached silently drops the 3100 host port publish).
+  # Tracked in #1196.
   @fixme
   Scenario: Signal notification service health check returns healthy
     When the signal-notifier health endpoint is requested

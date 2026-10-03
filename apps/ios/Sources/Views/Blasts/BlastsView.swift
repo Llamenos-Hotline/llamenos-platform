@@ -4,7 +4,7 @@ import SwiftUI
 
 struct BlastsView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: BlastsViewModel?
+    @State private var viewModelBox = ViewModelBox<BlastsViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -173,9 +173,9 @@ struct BlastsView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: BlastsViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = BlastsViewModel(apiService: appState.apiService)
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

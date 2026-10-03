@@ -7,6 +7,7 @@ import androidx.annotation.StringRes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -16,16 +17,16 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.api.AnalyticsRepository
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.BanRequest
-import org.llamenos.hotline.model.ClockResponse
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
-import org.llamenos.hotline.model.ShiftStatusResponse
+import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
 
 data class DashboardUiState(
@@ -63,6 +64,7 @@ class DashboardViewModel @Inject constructor(
     private val sessionState: SessionState,
     private val activeHubState: ActiveHubState,
     private val analyticsRepository: AnalyticsRepository,
+    private val shiftClockRepository: ShiftClockRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -108,6 +110,15 @@ class DashboardViewModel @Inject constructor(
         activeHubState.refreshTrigger
             .onEach { refresh() }
             .launchIn(viewModelScope)
+
+        // Clock state for the hub being viewed; other member hubs keep their own.
+        combine(shiftClockRepository.clockedIn, activeHubState.activeHubId) { clockedIn, hubId ->
+            hubId?.let { clockedIn[it] }
+        }
+            .onEach { startedAt ->
+                _uiState.update { it.copy(isOnShift = startedAt != null, shiftStartedAt = startedAt) }
+            }
+            .launchIn(viewModelScope)
     }
 
     /**
@@ -131,7 +142,7 @@ class DashboardViewModel @Inject constructor(
                 viewModelScope.launch { fetchActiveCall() }
             }
             is LlamenosEvent.ShiftUpdate -> {
-                viewModelScope.launch { loadShiftStatus() }
+                // Schedule changes do not change this device's clock-in state.
             }
             is LlamenosEvent.NoteCreated -> {
                 // Notes list will refresh via its own ViewModel
@@ -195,56 +206,46 @@ class DashboardViewModel @Inject constructor(
     }
 
     /**
-     * Load the current volunteer's shift status from the API.
-     * Returns true on success, false on failure.
+     * Refresh health check against the active hub. `my-status` needs no permission
+     * beyond authentication, so it cannot fail for a role that lacks call access.
      */
-    private suspend fun loadShiftStatus(): Boolean {
+    private suspend fun checkHubReachable(): Boolean {
         return try {
-            val status = apiService.request<ShiftStatusResponse>("GET", apiService.hp("/api/shifts/my-status"))
-            _uiState.update {
-                it.copy(
-                    isOnShift = status.isOnShift,
-                    isOnBreak = status.onBreak,
-                    shiftStartedAt = status.startedAt,
-                    activeCallCount = status.activeCallCount ?: it.activeCallCount,
-                    callsToday = status.callsToday ?: it.callsToday,
-                    errorRes = null,
-                )
-            }
+            apiService.request<MyStatusResponse>("GET", apiService.hp("/api/shifts/my-status"))
             true
         } catch (e: Exception) {
-            android.util.Log.w("DashboardViewModel", "loadShiftStatus failed: ${e.message}")
+            android.util.Log.w("DashboardViewModel", "my-status check failed: ${e.message}")
             false
         }
     }
 
     /**
-     * Quick clock in from the dashboard.
+     * Quick clock in to the active hub from the dashboard.
      */
     fun clockIn() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isClockingInOut = true, errorRes = null) }
-            try {
-                apiService.request<ClockResponse>("POST", "/api/shifts/clock-in")
-                loadShiftStatus()
-            } catch (_: Exception) {
-                _uiState.update { it.copy(errorRes = R.string.dashboard_error_clock_in) }
-            }
-            _uiState.update { it.copy(isClockingInOut = false) }
-        }
+        clockAction(R.string.dashboard_error_clock_in) { hubId -> shiftClockRepository.clockIn(hubId) }
     }
 
     /**
-     * Quick clock out from the dashboard.
+     * Quick clock out of the active hub from the dashboard.
      */
     fun clockOut() {
+        clockAction(R.string.dashboard_error_clock_out) { hubId -> shiftClockRepository.clockOut(hubId) }
+    }
+
+    private fun clockAction(@StringRes failure: Int, action: suspend (hubId: String) -> Unit) {
+        // Explicit user action in the hub being browsed — the only place the active hub decides.
+        val hubId = activeHubState.activeHubId.value
+        if (hubId == null) {
+            _uiState.update { it.copy(errorRes = failure) }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isClockingInOut = true, errorRes = null) }
             try {
-                apiService.request<ClockResponse>("POST", "/api/shifts/clock-out")
-                loadShiftStatus()
+                action(hubId)
             } catch (_: Exception) {
-                _uiState.update { it.copy(errorRes = R.string.dashboard_error_clock_out) }
+                _uiState.update { it.copy(errorRes = failure) }
             }
             _uiState.update { it.copy(isClockingInOut = false) }
         }
@@ -378,8 +379,7 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "refresh() started")
             _uiState.update { it.copy(isRefreshing = true, errorRes = null) }
-            val success = loadShiftStatus()
-            if (!success) {
+            if (!checkHubReachable()) {
                 _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh) }
             }
             fetchActiveCall()

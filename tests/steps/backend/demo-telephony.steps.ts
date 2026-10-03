@@ -22,6 +22,7 @@ import {
   listAuditLogViaApi,
   setFallbackGroupViaApi,
 } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 interface SimulatedCallResponse {
   ok?: boolean
@@ -63,9 +64,7 @@ Given(
     for (const vol of volunteers) await addHubMemberViaApi(request, hubId, vol.pubkey)
     await createShiftViaApi(request, {
       name: `BDD Shift B ${Date.now()}`,
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: volunteers.map(v => v.pubkey),
       hubId,
     })

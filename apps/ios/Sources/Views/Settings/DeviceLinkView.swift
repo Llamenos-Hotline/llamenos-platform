@@ -16,47 +16,50 @@ import UIKit
 struct DeviceLinkView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State private var viewModel: DeviceLinkViewModel?
+    @State private var viewModelBox = ViewModelBox<DeviceLinkViewModel>()
 
+    /// No NavigationStack of its own: the login flow pushes this view onto the
+    /// NavigationStack it already has, and a stack pushed inside a stack is not
+    /// supported. Presenters that show it modally (Account settings) wrap it in one.
     var body: some View {
         let vm = resolvedViewModel
 
-        NavigationStack {
-            VStack {
-                switch vm.currentStep {
-                case .scanning:
-                    scanningStep(vm: vm)
-                case .connecting:
-                    connectingStep
-                case .verifying(let sasCode):
-                    verifyingStep(sasCode: sasCode, vm: vm)
-                case .importing:
-                    importingStep
-                case .completed:
-                    completedStep
-                case .error(let message):
-                    errorStep(message: message, vm: vm)
-                }
-            }
-            .navigationTitle(NSLocalizedString("device_link_title", comment: "Link Device"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    if case .completed = vm.currentStep {
-                        // Show "Done" instead of "Cancel" on completion
-                    } else {
-                        Button(NSLocalizedString("cancel", comment: "Cancel")) {
-                            vm.cancel()
-                            dismiss()
-                        }
-                        .accessibilityIdentifier("cancel-device-link")
-                    }
-                }
-            }
-            .task {
-                await vm.requestCameraPermission()
+        VStack {
+            switch vm.currentStep {
+            case .scanning:
+                scanningStep(vm: vm)
+            case .connecting:
+                connectingStep
+            case .verifying(let sasCode):
+                verifyingStep(sasCode: sasCode, vm: vm)
+            case .importing:
+                importingStep
+            case .completed:
+                completedStep
+            case .error(let message):
+                errorStep(message: message, vm: vm)
             }
         }
+        .navigationTitle(NSLocalizedString("device_link_title", comment: "Link Device"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                if case .completed = vm.currentStep {
+                    // Show "Done" instead of "Cancel" on completion
+                } else {
+                    Button(NSLocalizedString("cancel", comment: "Cancel")) {
+                        vm.cancel()
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("cancel-device-link")
+                }
+            }
+        }
+        .task {
+            await vm.requestCameraPermission()
+        }
+        // A container only carries an identifier once it is an accessibility element.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("device-link-view")
     }
 
@@ -220,10 +223,11 @@ struct DeviceLinkView: View {
             }
             .padding(.vertical, 8)
             .accessibilityIdentifier("sas-code-display")
-            .accessibilityLabel(String(format: NSLocalizedString(
+            .accessibilityLabel(L10n.format(
                 "device_link_sas_code",
-                comment: "Verification code: %@"
-            ), sasCode))
+                comment: "Verification code: %@",
+                sasCode
+            ))
 
             // Confirm / Reject buttons
             VStack(spacing: 12) {
@@ -382,7 +386,7 @@ struct DeviceLinkView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: DeviceLinkViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = DeviceLinkViewModel(
@@ -390,9 +394,7 @@ struct DeviceLinkView: View {
             authService: appState.authService,
             keychainService: appState.keychainService
         )
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }
@@ -500,7 +502,9 @@ struct QRScannerView: UIViewRepresentable {
 
 #if DEBUG
 #Preview("Device Link - Scanning") {
-    DeviceLinkView()
-        .environment(AppState(hubContext: HubContext()))
+    NavigationStack {
+        DeviceLinkView()
+    }
+    .environment(AppState(hubContext: HubContext()))
 }
 #endif

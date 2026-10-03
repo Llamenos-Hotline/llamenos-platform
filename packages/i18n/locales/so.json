@@ -14,7 +14,7 @@
     "themeLight": "Muuqaalka iftiimenka",
     "themeSystem": "Muuqaalka nidaamka",
     "back": "Dib u noqo",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "Isdiiwaangeliyayaal ma jiraan wali",
     "optOutFooter": "Cagta Hoose ee Ka Bixitaanka",
     "rateLimit": "Xadaynta Tirada (fariimo/ilbiriqsi)",
-    "recipientCount": "%d qaabilayaal",
+    "recipientCount": "{{count}} qaabilayaal",
     "recipientCountOne": "1 qaabile",
     "recipients": "qaabilayaal",
     "saveDraft": "Kaydi Naqshad",
@@ -946,19 +946,19 @@
     "dotFilled": "Buuxa",
     "enterPin": "Geli PIN-kaaga",
     "keyLocked": "Furahu waa xiran yahay",
-    "lockoutRemaining": "Xiran. Mar kale isku day %d ilbiriqsiyadii kadib.",
+    "lockoutRemaining": "Xiran. Mar kale isku day {{seconds}} ilbiriqsiyadii kadib.",
     "mismatch": "PIN-yadu ma isu mid yihiin. Mar kale isku day.",
     "setEncrypting": "Furuhaa waa la siraysaa...",
     "setSubtitle": "Dooro PIN 6-8 lambar ah si aad ugu ilaaliso furuhaaga",
     "setTitle": "Samee PIN",
     "tooShort": "PIN waa inay noqotaa 6 lambar",
-    "unlockAttempts": "%d ka mid ah %d tijaabiyood loo isticmaalay",
+    "unlockAttempts": "{{used}} ka mid ah {{total}} tijaabiyood loo isticmaalay",
     "unlockSubtitle": "Geli PIN-kaaga si aad u furto",
     "unlockTitle": "Geli PIN-kaaga",
     "unlockVerifying": "Waa la hubinayaa...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1433,7 +1433,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d wicitaan(no) socda",
+    "activeCalls": "{{count}} wicitaan(no) socda",
     "assigned": "La qoondeeyay",
     "available": "Diyaar",
     "clockIn": "Wareegga Gal",
@@ -1442,7 +1442,7 @@
     "clockOutTitle": "Wareegga Dhamee?",
     "clockedIn": "Hadda wareegga ayaad ku jirtaa",
     "clockedOut": "Hadda wareegga ka baxday",
-    "count": "%d wareeg(yo)",
+    "count": "{{count}} wareeg(yo)",
     "create": "Wareeg Samee",
     "createShift": "Wareeg Samee",
     "days": {
@@ -1487,7 +1487,7 @@
     "selectedCount": "{{count}} la doortay",
     "shiftName": "Magaca Wareegga",
     "signUp": "Isdiiwaangeli",
-    "signedUp": "Waxaad isdiiwaangelisay %@",
+    "signedUp": "Waxaad isdiiwaangelisay {{shift}}",
     "since": "Tan iyo",
     "startTime": "Wakhtiga Bilawga",
     "startsAt": "waxay bilaabataa",
@@ -2454,7 +2454,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -2481,6 +2481,7 @@
     "noFields": "No custom fields defined for this event type.",
     "noLinkedCases": "No cases linked to this event.",
     "noLinkedReports": "No reports linked to this event.",
+    "noSubEvents": "No sub-events for this event.",
     "noTimeline": "No timeline entries yet.",
     "searchCases": "Search cases...",
     "searchPlaceholder": "Search events...",
@@ -3592,8 +3593,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -3616,9 +3617,9 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "provider": {
     "status": {
@@ -3859,7 +3860,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -3870,7 +3871,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -3934,7 +3935,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -4306,7 +4307,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -4360,7 +4361,7 @@
     "connecting": "Waa la isku xirayaa...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "actionDone": "Waa la dhammeeyay",
   "recovery": {
@@ -4436,7 +4437,7 @@
     "subtitle": "Geli PIN-kaaga si aad u furto",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "connectionSuccess": "Isku xirku waa guulaysatay",
   "dismiss": "Iska dhaaf",
@@ -4470,7 +4471,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4483,7 +4484,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4522,16 +4523,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4644,7 +4645,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",
