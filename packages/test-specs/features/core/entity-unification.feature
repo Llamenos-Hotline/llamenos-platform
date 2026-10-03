@@ -39,12 +39,10 @@ Feature: Entity System Unification
     Then I should receive 1 record
     And the server should not have seen the plaintext date
 
-  # @wip: unbound, and the Given creates the role without assigning it to any user — the
-  # request then goes out as admin, so binding the wording alone would pass vacuously — #1198
-  @permission-aliasing @wip
+  @permission-aliasing
   Scenario: events:read permission maps to cases:read
     Given a user has permission "events:read" but not "cases:read"
-    When the user requests GET /api/records
+    When the user requests GET "/api/records"
     Then the request should be permitted
     And the audit log should show permission alias "events:read -> cases:read"
 

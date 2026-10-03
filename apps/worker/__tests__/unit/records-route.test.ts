@@ -152,6 +152,46 @@ describe('getAccessLevel (via route behaviour)', () => {
       expect.not.objectContaining({ assignedTo: 'admin-pub' }),
     )
   })
+
+  // --- Backward-compat alias: legacy events:read is PERMITTED but scoped to
+  // 'own' (assigned-to/created-by only) — events:read never implied hub-wide
+  // visibility into case records, so the alias must not grant it either. ---
+
+  it('allows listing with only the legacy events:read permission', async () => {
+    const { app } = makeApp({ permissions: ['events:read'] })
+    const res = await app.request('/?page=1&limit=10')
+    expect(res.status).toBe(200)
+  })
+
+  it('scopes list to the caller when using only the events:read alias (no hub-wide read)', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:read'], pubkey: 'legacy-pub' })
+    await app.request('/?page=1&limit=10')
+    expect(mockCases.list).toHaveBeenCalledWith(
+      expect.objectContaining({ assignedTo: 'legacy-pub' }),
+    )
+  })
+
+  it('audits alias usage when events:read is the only qualifying permission', async () => {
+    const { app, mockAudit } = makeApp({ permissions: ['events:read'], pubkey: 'legacy-pub' })
+    await app.request('/?page=1&limit=10')
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      'permissionAliasUsed',
+      'legacy-pub',
+      expect.objectContaining({ permissionAlias: 'events:read -> cases:read' }),
+      expect.anything(),
+    )
+  })
+
+  it('does not audit alias usage when the caller has a real cases:read-* permission', async () => {
+    const { app, mockAudit } = makeApp({ permissions: ['cases:read-all', 'events:read'] })
+    await app.request('/?page=1&limit=10')
+    expect(mockAudit.log).not.toHaveBeenCalledWith(
+      'permissionAliasUsed',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -194,6 +234,16 @@ describe('GET /records/:id — IDOR prevention', () => {
       permissions: ['cases:read-own'],
       pubkey: 'attacker-pub',
       record: { id: 'rec-1', createdBy: 'victim-pub', assignedTo: ['volunteer-pub'] },
+    })
+    const res = await app.request('/rec-1')
+    expect(res.status).toBe(403)
+  })
+
+  it('does NOT let the legacy events:read alias read an arbitrary case record (no hub-wide escalation)', async () => {
+    const { app } = makeApp({
+      permissions: ['events:read'],
+      pubkey: 'legacy-pub',
+      record: { id: 'rec-1', createdBy: 'victim-pub', assignedTo: ['someone-else-pub'] },
     })
     const res = await app.request('/rec-1')
     expect(res.status).toBe(403)

@@ -45,7 +45,27 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
   if (checkPermission(permissions, 'cases:read-all')) return 'all'
   if (checkPermission(permissions, 'cases:read-assigned')) return 'assigned'
   if (checkPermission(permissions, 'cases:read-own')) return 'own'
+  // Backward-compat alias: a caller who still only carries the legacy
+  // `events:read` permission (pre-entity-unification) is not locked out of
+  // /records entirely, but is NOT granted hub-wide read access either —
+  // `events:read` never implied visibility into every case record (PII,
+  // medical cases, etc.), only into the old events table. Map it to the
+  // most restrictive real level ('own': assigned-to/created-by only) so the
+  // permission check passes without widening what the caller can actually
+  // see. See entity-unification.feature "events:read permission maps to
+  // cases:read".
+  if (checkPermission(permissions, 'events:read')) return 'own'
   return null
+}
+
+/** True when the caller's access comes ONLY from the events:read alias above
+ * (i.e. they hold no real cases:read-* permission). Used to audit alias usage
+ * without touching every one of getAccessLevel's 8 call sites. */
+function usedEventsReadAlias(permissions: string[]): boolean {
+  const hasRealCasesRead = checkPermission(permissions, 'cases:read-all') ||
+    checkPermission(permissions, 'cases:read-assigned') ||
+    checkPermission(permissions, 'cases:read-own')
+  return !hasRealCasesRead && checkPermission(permissions, 'events:read')
 }
 
 /**
@@ -102,6 +122,12 @@ records.get('/',
     const accessLevel = getAccessLevel(permissions)
     if (!accessLevel) {
       return c.json({ error: 'Forbidden', required: 'cases:read-own' }, 403)
+    }
+
+    if (usedEventsReadAlias(permissions)) {
+      await audit(services.audit, 'permissionAliasUsed', pubkey, {
+        permissionAlias: 'events:read -> cases:read',
+      }, undefined, hubId || null)
     }
 
     const crossHub = query.crossHub === 'true'

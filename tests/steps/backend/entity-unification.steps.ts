@@ -3,8 +3,12 @@ import { Given, When, Then, Before, getState, setState } from './fixtures'
 import {
   apiGet,
   apiPost,
+  authHeaders,
+  generateTestKeypair,
+  uniquePhone,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { setLastResponse } from './shared-state'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { ed25519 } from '@noble/curves/ed25519.js'
 
@@ -24,6 +28,8 @@ interface EntityUnificationState {
   appliedEntityTypeId?: string
   appliedTemplateIds: string[]
   adminPubkey: string
+  /** Seed of the non-admin user created by "a user has permission ... but not ..." */
+  permissionTestUserSeedHex?: string
 }
 
 const STATE_KEY = 'entity_unification'
@@ -125,13 +131,35 @@ Given('a record exists with start_date blind indexes for {string}',
 
 Given('a user has permission {string} but not {string}',
   async ({ request, world }, hasPermission: string, _missingPermission: string) => {
-    const roleRes = await apiPost<{ id: string }>(request, '/roles', {
-      name: `perm_test_role_${Date.now()}`,
+    // Roles live under /settings/roles, not /roles, and createRoleSchema
+    // requires a slug + description — the old version of this step posted
+    // to a 404ing path with an incomplete body; it was never caught because
+    // the scenario was @wip.
+    const suffix = Date.now()
+    const roleRes = await apiPost<{ id: string }>(request, '/settings/roles', {
+      name: `perm_test_role_${suffix}`,
+      slug: `perm-test-role-${suffix}`,
+      description: `Permission-aliasing test role for ${hasPermission}`,
       permissions: [hasPermission],
     })
     expect(roleRes.status).toBe(201)
+
+    // The role must actually be assigned to a user — otherwise the scenario's
+    // later "the user requests..." step has no non-admin identity to sign as,
+    // and would silently fall back to the admin seed, which already has every
+    // permission and would make the assertion pass vacuously.
+    const kp = generateTestKeypair()
+    const userRes = await apiPost<{ id: string }>(request, '/users', {
+      name: `PermTestUser ${Date.now()}`,
+      phone: uniquePhone(),
+      roleIds: [roleRes.data.id],
+      pubkey: kp.pubkey,
+    })
+    expect(userRes.status).toBe(201)
+
     const state = getState_(world)
     state.appliedTemplateIds = [roleRes.data.id]
+    state.permissionTestUserSeedHex = kp.seedHex
   },
 )
 
@@ -180,19 +208,24 @@ When('the admin creates a record with that entity type', async ({ request, world
 
 When('a client sends GET \\/api\\/events', async ({ request, world }) => {
   const fullPath = '/api/events'
+  // Must be a VALID signed token — an empty/forged one gets rejected by the
+  // top-level `authenticated.use('*', auth)` middleware with 401 before the
+  // request ever reaches the deprecation redirect in routes/events.ts.
   const res = await request.get(fullPath, {
-    headers: {
-      'Authorization': `Bearer ${JSON.stringify({ pubkey: seedHexToPubkey(ADMIN_SEED), timestamp: Date.now(), token: '' })}`,
-      'Content-Type': 'application/json',
-    },
+    headers: authHeaders(ADMIN_SEED, 'GET', fullPath),
     maxRedirects: 0,
   })
+  const headers = Object.fromEntries(Object.entries(res.headers()).map(([k, v]) => [k, String(v)]))
+  const body = await res.text()
+
+  // Write to the SHARED state: "the response status should be 301" (and the
+  // other generic response assertions) read getSharedState(world), not this
+  // file's private entity_unification state. Writing only here meant that
+  // Then step always failed on `lastResponse` being undefined.
+  setLastResponse(world, { status: res.status(), data: body, headers })
+
   const state = getState_(world)
-  state.lastResponse = {
-    status: res.status(),
-    headers: Object.fromEntries(Object.entries(res.headers()).map(([k, v]) => [k, String(v)])),
-    body: await res.text(),
-  }
+  state.lastResponse = { status: res.status(), headers, body }
 })
 
 When('the admin lists records with blindIndexToken {string} and field {string}',
@@ -239,8 +272,15 @@ When('I filter records by blindIndexToken {string} on field {string}',
 )
 
 When('the user requests GET {string}', async ({ request, world }, path: string) => {
-  const res = await apiGet(request, path)
   const state = getState_(world)
+  // apiGet() prepends '/api' itself — strip it if the Gherkin text spelled
+  // out the full path (e.g. "/api/records"), or a literal "/api/api/..."
+  // 404 results.
+  const relativePath = path.startsWith('/api/') ? path.slice(4) : path
+  // Sign as the non-admin user set up by "a user has permission ... but not
+  // ...", when one exists — falling back to admin would exercise nothing,
+  // since admin already holds every permission.
+  const res = await apiGet(request, relativePath, state.permissionTestUserSeedHex)
   state.lastResponse = {
     status: res.status,
     body: res.data,
@@ -282,17 +322,9 @@ Then('the record should use 3-tier encryption \\(summary fields pii\\)',
   },
 )
 
-Then('the response Location header should contain {string}', async ({ world }, path: string) => {
-  const state = getState_(world)
-  const location = state.lastResponse?.headers?.location ?? state.lastResponse?.headers?.Location ?? ''
-  expect(location).toContain(path)
-})
-
-Then('the response should include a Deprecation header', async ({ world }) => {
-  const state = getState_(world)
-  const deprecation = state.lastResponse?.headers?.deprecation ?? state.lastResponse?.headers?.Deprecation
-  expect(deprecation).toBeDefined()
-})
+// "the response Location header should contain {string}" and "the response
+// should include a Deprecation header" now live in assertions.steps.ts,
+// reading from the shared state that the When step above actually writes to.
 
 Then('the result should contain {int} record', async ({ world }, count: number) => {
   const state = getState_(world)
@@ -379,9 +411,12 @@ Then('the request should be permitted', async ({ world }) => {
 })
 
 Then('the audit log should show permission alias {string}', async ({ request }, alias: string) => {
-  const res = await apiGet<{ entries: Array<{ details?: string }> }>(request, '/audit')
+  // `details` comes back as a JSONB object (Record<string, unknown>), not a
+  // string — stringify it before searching rather than assuming a shape the
+  // API has never had.
+  const res = await apiGet<{ entries: Array<{ details?: Record<string, unknown> }> }>(request, '/audit')
   expect(res.status).toBe(200)
-  const hasAlias = res.data.entries.some(e => e.details?.includes(alias))
+  const hasAlias = res.data.entries.some(e => JSON.stringify(e.details ?? {}).includes(alias))
   expect(hasAlias).toBe(true)
 })
 

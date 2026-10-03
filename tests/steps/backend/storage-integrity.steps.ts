@@ -44,6 +44,8 @@ interface StorageIntegrityState {
   /** Admin keypair info */
   adminSeedHex?: string
   adminPubkey?: string
+  /** Sub-resource path used by the last "the {settingsType} settings are updated..." step */
+  settingsPath?: string
 }
 
 const STORAGE_INTEGRITY_KEY = 'storage_integrity'
@@ -67,136 +69,181 @@ function seedHexToPubkey(seedHex: string): string {
   return bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
 }
 
+/** Dummy 64-char hex value for HPKE enc field — satisfies hpkeEncSchema validation in tests */
+const DUMMY_ENC = '0'.repeat(64)
+
+/**
+ * The storage-integrity.feature Examples tables name entityTypes like
+ * "note adminEnvelopes" and "record blindIndexes" — the prefix identifies
+ * which table/API the row lives in, the suffix identifies which JSONB column
+ * the scenario is actually checking.
+ */
+function tableForEntityType(entityType: string): string {
+  if (entityType.startsWith('note ')) return 'notes'
+  if (entityType.startsWith('record ')) return 'case_records'
+  if (entityType.startsWith('conversation')) return 'conversations'
+  throw new Error(`Unknown entityType for JSONB round-trip: ${entityType}`)
+}
+
 // ── Given: Entity creation ──────────────────────────────────────────
 
-Given('a {string} entity is created via the API with structured JSONB data', async ({ request, world }, entityType: string) => {
-  switch (entityType) {
-    case 'note with envelopes': {
-      // Create a real volunteer first with a known keypair
-      const volKp = generateTestKeypair()
-      getStorageIntegrityState(world).volunteerKp = volKp
-      const regResult = await apiPost(request, '/users', {
-        name: `StorageVol ${Date.now()}`,
-        phone: uniquePhone(),
-        roleIds: ['role-volunteer'],
-        pubkey: volKp.pubkey,
-      })
-      expect([200, 201]).toContain(regResult.status)
+Given('a {string} entity is created via the API with structured JSONB data', async ({ request, world, workerHub }, entityType: string) => {
+  const state = getStorageIntegrityState(world)
 
-      const adminSeedHex = ADMIN_SEED
-      const adminPubkey = seedHexToPubkey(adminSeedHex)
+  if (entityType === 'note adminEnvelopes' || entityType === 'note authorEnvelope') {
+    // Create a real volunteer first with a known keypair
+    const volKp = generateTestKeypair()
+    state.volunteerKp = volKp
+    const regResult = await apiPost(request, '/users', {
+      name: `StorageVol ${Date.now()}`,
+      phone: uniquePhone(),
+      roleIds: ['role-volunteer'],
+      pubkey: volKp.pubkey,
+    })
+    expect([200, 201]).toContain(regResult.status)
 
-      const contentKey = generateContentKey()
-      const ciphertextHex = encryptContent('Storage test note', contentKey, LABEL_NOTE_KEY)
-      const volEnv = await wrapKeyForRecipient(contentKey, volKp.pubkey, volKp.seedHex, LABEL_NOTE_KEY)
-      const adminEnv = await wrapKeyForRecipient(contentKey, adminPubkey, adminSeedHex, LABEL_NOTE_KEY)
+    const adminSeedHex = ADMIN_SEED
+    const adminPubkey = seedHexToPubkey(adminSeedHex)
+    state.adminSeedHex = adminSeedHex
+    state.adminPubkey = adminPubkey
 
-      const { status, data } = await apiPost<Record<string, unknown>>(
-        request,
-        '/notes',
-        {
-          encryptedContent: ciphertextHex,
-          callId: `storage-note-${Date.now()}`,
-          authorEnvelope: volEnv,
-          adminEnvelopes: [{ pubkey: adminPubkey, ...adminEnv }],
-        },
-        volKp.seedHex,
-      )
-      expect([200, 201]).toContain(status)
-      getStorageIntegrityState(world).entityIds.set(entityType, data.id as string)
-      getStorageIntegrityState(world).apiResponses.set(entityType, data)
-      break
-    }
+    const contentKey = generateContentKey()
+    const ciphertextHex = encryptContent('Storage test note', contentKey, LABEL_NOTE_KEY)
+    const volEnv = await wrapKeyForRecipient(contentKey, volKp.pubkey, volKp.seedHex, LABEL_NOTE_KEY)
+    const adminEnv = await wrapKeyForRecipient(contentKey, adminPubkey, adminSeedHex, LABEL_NOTE_KEY)
 
-    case 'case record': {
-      // Create a case record with structured JSONB fields
-      const { status, data } = await apiPost<{ record: Record<string, unknown> }>(
-        request,
-        '/cases',
-        {
-          entityTypeId: `test-type-${Date.now()}`,
-          statusHash: 'open',
-          blindIndexes: { searchField: 'hashed-value', category: 'test-cat' },
-          summaryEnvelopes: [
-            { pubkey: 'a'.repeat(64), ct: 'b'.repeat(64), enc: '02' + 'c'.repeat(64) },
-          ],
-        },
-      )
-      if (status === 200 || status === 201) {
-        const record = (data as Record<string, unknown>).record ?? data
-        const id = (record as Record<string, unknown>).id as string
-        getStorageIntegrityState(world).entityIds.set(entityType, id)
-        getStorageIntegrityState(world).apiResponses.set(entityType, record as Record<string, unknown>)
-      } else {
-        // If cases endpoint needs different structure, try alternate
-        expect([200, 201]).toContain(status)
-      }
-      break
-    }
-
-    case 'conversation': {
-      // Create a conversation with metadata
-      const { simulateIncomingMessage, uniqueCallerNumber } = await import('../../simulation-helpers')
-      const sender = uniqueCallerNumber()
-      const result = await simulateIncomingMessage(request, {
-        senderNumber: sender,
-        body: 'Storage test message',
-        channel: 'sms',
-      })
-      getStorageIntegrityState(world).entityIds.set(entityType, result.conversationId)
-
-      // Fetch it to get the full record
-      const { status, data } = await apiGet<Record<string, unknown>>(
-        request,
-        `/conversations/${result.conversationId}`,
-      )
-      expect(status).toBe(200)
-      getStorageIntegrityState(world).apiResponses.set(entityType, data)
-      break
-    }
+    const { status, data } = await apiPost<Record<string, unknown>>(
+      request,
+      '/notes',
+      {
+        encryptedContent: ciphertextHex,
+        callId: `storage-note-${Date.now()}`,
+        authorEnvelope: volEnv,
+        adminEnvelopes: [{ pubkey: adminPubkey, ...adminEnv }],
+      },
+      volKp.seedHex,
+    )
+    expect([200, 201]).toContain(status)
+    const noteData = (data.note as Record<string, unknown> | undefined) ?? data
+    state.entityIds.set(entityType, noteData.id as string)
+    state.apiResponses.set(entityType, noteData)
+    return
   }
+
+  if (entityType === 'record blindIndexes' || entityType === 'record summaryEnvelopes') {
+    const adminPubkey = seedHexToPubkey(ADMIN_SEED)
+    state.adminPubkey = adminPubkey
+
+    // Records require a real entityTypeId (uuid) — there is no standalone
+    // /cases endpoint anymore, everything goes through the unified /records API.
+    const etRes = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
+      name: `storage_test_type_${Date.now()}`,
+      label: 'Storage Test Type',
+      labelPlural: 'Storage Test Types',
+      category: 'case',
+      fields: [],
+      statuses: [{ value: 'active', label: 'Active', isDefault: true }],
+      defaultStatus: 'active',
+    })
+    expect(etRes.status).toBe(201)
+
+    const { status, data } = await apiPost<Record<string, unknown>>(
+      request,
+      '/records',
+      {
+        entityTypeId: etRes.data.id,
+        statusHash: 'active',
+        encryptedSummary: 'storage-test-summary',
+        summaryEnvelopes: [{ pubkey: adminPubkey, enc: DUMMY_ENC, ct: 'storage-test-ct' }],
+        blindIndexes: { category: ['storage-test'] },
+      },
+    )
+    expect([200, 201]).toContain(status)
+    state.entityIds.set(entityType, data.id as string)
+    state.apiResponses.set(entityType, data)
+    return
+  }
+
+  if (entityType === 'conversation metadata') {
+    // Create a conversation via the normal inbound-webhook path. Pass the
+    // worker's isolated hub explicitly — matches how every other passing
+    // simulateIncomingMessage call in this suite scopes its conversation
+    // (see messaging.steps.ts), instead of leaving the conversation's hubId
+    // null.
+    const { simulateIncomingMessage, uniqueCallerNumber } = await import('../../simulation-helpers')
+    const sender = uniqueCallerNumber()
+    const result = await simulateIncomingMessage(request, {
+      senderNumber: sender,
+      body: 'Storage test message',
+      channel: 'sms',
+      hubId: workerHub,
+    })
+    state.entityIds.set(entityType, result.conversationId)
+
+    // Inbound webhook creation leaves `metadata` null — give it structured
+    // data so this is an actual JSONB round-trip, not a null column.
+    const patchRes = await apiPatch<Record<string, unknown>>(
+      request,
+      `/conversations/${result.conversationId}`,
+      { metadata: { source: 'storage-test', tags: ['integrity'] } },
+    )
+    expect(patchRes.status).toBe(200)
+
+    // Fetch it to get the full record
+    const { status, data } = await apiGet<Record<string, unknown>>(
+      request,
+      `/conversations/${result.conversationId}`,
+    )
+    expect(status).toBe(200)
+    state.apiResponses.set(entityType, data)
+    return
+  }
+
+  throw new Error(`Unknown entityType for JSONB round-trip: ${entityType}`)
 })
 
-Given('the {string} settings are updated via the API with structured data', async ({ request }, settingsType: string) => {
+Given('the {string} settings are updated via the API with structured data', async ({ request, world }, settingsType: string) => {
+  // There is no aggregate /settings endpoint — each settings type has its own
+  // sub-resource (GET/PATCH /settings/spam, /settings/call, /settings/messaging),
+  // validated against its own schema. The old version of this step PATCHed a
+  // non-existent /settings with field names that don't exist on any of these
+  // schemas; it 404'd and was never caught because the scenario was @wip.
+  let path: string
   let body: Record<string, unknown>
 
   switch (settingsType) {
     case 'spam':
+      path = '/settings/spam'
       body = {
-        spamSettings: {
-          enabled: true,
-          maxCallsPerMinute: 5,
-          banDurationMinutes: 60,
-          whitelist: ['+1555000111'],
-        },
+        voiceCaptchaEnabled: true,
+        rateLimitEnabled: true,
+        maxCallsPerMinute: 5,
+        blockDurationMinutes: 60,
       }
       break
     case 'call':
+      path = '/settings/call'
       body = {
-        callSettings: {
-          ringTimeout: 30,
-          maxConcurrentCalls: 10,
-          recordingEnabled: false,
-          fallbackMessage: 'Please try again later',
-        },
+        queueTimeoutSeconds: 60,
+        voicemailMaxSeconds: 90,
       }
       break
     case 'messaging':
+      path = '/settings/messaging'
       body = {
-        messagingConfig: {
-          smsEnabled: true,
-          whatsappEnabled: false,
-          signalEnabled: false,
-          autoReply: 'Thank you for your message',
-        },
+        autoAssignEnabled: true,
+        maxConcurrentPerUser: 5,
+        inactivityTimeout: 30,
+        welcomeMessage: 'A volunteer will respond shortly.',
       }
       break
     default:
       throw new Error(`Unknown settings type: ${settingsType}`)
   }
 
-  const { status } = await apiPatch(request, '/settings', body)
+  const { status } = await apiPatch(request, path, body)
   expect([200, 204]).toContain(status)
+  getStorageIntegrityState(world).settingsPath = path
 })
 
 Given('a registered volunteer {string} with a known keypair', async ({ request, world }, name: string) => {
@@ -220,85 +267,72 @@ Given('the admin keypair is known for envelope verification', async ({ world }) 
 // ── When: Fetch ─────────────────────────────────────────────────────
 
 When('the {string} is fetched via the API', async ({ request, world }, entityType: string) => {
-  const id = getStorageIntegrityState(world).entityIds.get(entityType)
+  const state = getStorageIntegrityState(world)
+  const id = state.entityIds.get(entityType)
   expect(id).toBeDefined()
 
-  switch (entityType) {
-    case 'note with envelopes': {
-      const volKp = getStorageIntegrityState(world).volunteerKp
-      const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
-        request,
-        '/notes',
-        volKp?.seedHex,
-      )
-      expect(status).toBe(200)
-      const note = data.notes.find(n => n.id === id)
-      if (note) getStorageIntegrityState(world).apiResponses.set(entityType, note)
-      break
-    }
-
-    case 'case record': {
-      const { status, data } = await apiGet<Record<string, unknown>>(
-        request,
-        `/cases/${id}`,
-      )
-      expect(status).toBe(200)
-      const record = (data as Record<string, unknown>).record ?? data
-      getStorageIntegrityState(world).apiResponses.set(entityType, record as Record<string, unknown>)
-      break
-    }
-
-    case 'conversation': {
-      const { status, data } = await apiGet<Record<string, unknown>>(
-        request,
-        `/conversations/${id}`,
-      )
-      expect(status).toBe(200)
-      getStorageIntegrityState(world).apiResponses.set(entityType, data)
-      break
-    }
+  if (entityType === 'note adminEnvelopes' || entityType === 'note authorEnvelope') {
+    const volKp = state.volunteerKp
+    const { status, data } = await apiGet<{ notes: Array<Record<string, unknown>> }>(
+      request,
+      '/notes',
+      volKp?.seedHex,
+    )
+    expect(status).toBe(200)
+    const note = data.notes.find(n => n.id === id)
+    if (note) state.apiResponses.set(entityType, note)
+    return
   }
+
+  if (entityType === 'record blindIndexes' || entityType === 'record summaryEnvelopes') {
+    const { status, data } = await apiGet<Record<string, unknown>>(request, `/records/${id}`)
+    expect(status).toBe(200)
+    state.apiResponses.set(entityType, data)
+    return
+  }
+
+  if (entityType === 'conversation metadata') {
+    const { status, data } = await apiGet<Record<string, unknown>>(request, `/conversations/${id}`)
+    expect(status).toBe(200)
+    state.apiResponses.set(entityType, data)
+    return
+  }
+
+  throw new Error(`Unknown entityType for JSONB round-trip: ${entityType}`)
 })
 
 When('the {string} row is fetched directly from the database', async ({ world }, entityType: string) => {
-  const id = getStorageIntegrityState(world).entityIds.get(entityType)
+  const state = getStorageIntegrityState(world)
+  const id = state.entityIds.get(entityType)
   expect(id).toBeDefined()
 
-  let tableName: string
-  switch (entityType) {
-    case 'note with envelopes':
-      tableName = 'notes'
-      break
-    case 'case record':
-      tableName = 'case_records'
-      break
-    case 'conversation':
-      tableName = 'conversations'
-      break
-    default:
-      throw new Error(`Unknown entity type: ${entityType}`)
-  }
-
-  const row = await TestDB.getRow(tableName, id!)
+  const row = await TestDB.getRow(tableForEntityType(entityType), id!)
   expect(row).not.toBeNull()
-  getStorageIntegrityState(world).dbRows.set(entityType, row!)
+  state.dbRows.set(entityType, row!)
 })
 
+/** Each settings sub-resource returns its settings flatly at its own path —
+ * there is no aggregate /settings envelope. Map back to the jsonbField name
+ * the feature's generic "API response {field} should be a proper object"
+ * step looks for, so that check still examines the real response body. */
+const SETTINGS_PATH_TO_JSONB_FIELD: Record<string, string> = {
+  '/settings/spam': 'spamSettings',
+  '/settings/call': 'callSettings',
+  '/settings/messaging': 'messagingConfig',
+}
+
 When('the settings are fetched via the API', async ({ request, world }) => {
-  const { status, data } = await apiGet<Record<string, unknown>>(request, '/settings')
+  const path = getStorageIntegrityState(world).settingsPath
+  expect(path).toBeDefined()
+  const { status, data } = await apiGet<Record<string, unknown>>(request, path!)
   expect(status).toBe(200)
-  getStorageIntegrityState(world).apiResponses.set('settings', data)
+  const jsonbField = SETTINGS_PATH_TO_JSONB_FIELD[path!]
+  getStorageIntegrityState(world).apiResponses.set('settings', jsonbField ? { [jsonbField]: data } : data)
 })
 
 When('the system_settings row is fetched directly from the database', async ({ world }) => {
   // system_settings has integer PK = 1
   const rows = await TestDB.getRow('system_settings', '1')
-  // system_settings may use integer id, try alternate fetch
-  if (!rows) {
-    // Use raw query since ID is integer, not text
-    // getRow expects text id but system_settings has integer id
-    // Store a placeholder — the jsonb assertion will use assertJsonbField which handles this
-  }
   getStorageIntegrityState(world).dbRows.set('settings', rows ?? {})
 })
 
@@ -387,29 +421,19 @@ Then('the API response {word} should be a proper {word}', async ({ world }, json
 Then(
   'the DB {word} should have jsonb_typeof equal to {string}',
   async ({ world }, dbColumn: string, expectedPgType: string) => {
+    const state = getStorageIntegrityState(world)
     // Find the entity type that has this column
-    for (const [entityType] of getStorageIntegrityState(world).entityIds.entries()) {
-      const id = getStorageIntegrityState(world).entityIds.get(entityType)
+    for (const [entityType, id] of state.entityIds.entries()) {
       if (!id) continue
-
       let tableName: string
-      const idColumn = 'id'
-      switch (entityType) {
-        case 'note with envelopes':
-          tableName = 'notes'
-          break
-        case 'case record':
-          tableName = 'case_records'
-          break
-        case 'conversation':
-          tableName = 'conversations'
-          break
-        default:
-          continue
+      try {
+        tableName = tableForEntityType(entityType)
+      } catch {
+        continue
       }
 
       try {
-        const result = await TestDB.assertJsonbField(tableName, idColumn, id, dbColumn)
+        const result = await TestDB.assertJsonbField(tableName, 'id', id, dbColumn)
         expect(result.pgType).toBe(expectedPgType)
         return
       } catch {
@@ -429,24 +453,15 @@ Then(
 )
 
 Then('the DB {word} should not be double-serialized', async ({ world }, dbColumn: string) => {
+  const state = getStorageIntegrityState(world)
   // Find the entity type that has this column
-  for (const [entityType] of getStorageIntegrityState(world).entityIds.entries()) {
-    const id = getStorageIntegrityState(world).entityIds.get(entityType)
+  for (const [entityType, id] of state.entityIds.entries()) {
     if (!id) continue
-
     let tableName: string
-    switch (entityType) {
-      case 'note with envelopes':
-        tableName = 'notes'
-        break
-      case 'case record':
-        tableName = 'case_records'
-        break
-      case 'conversation':
-        tableName = 'conversations'
-        break
-      default:
-        continue
+    try {
+      tableName = tableForEntityType(entityType)
+    } catch {
+      continue
     }
 
     try {

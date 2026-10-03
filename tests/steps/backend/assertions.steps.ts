@@ -23,6 +23,22 @@ Then('the response status should not be {int}', async ({ world }, unexpectedStat
   expect(getSharedState(world).lastResponse!.status).not.toBe(unexpectedStatus)
 })
 
+Then('the response Location header should contain {string}', async ({ world }, path: string) => {
+  const lastResponse = getSharedState(world).lastResponse
+  expect(lastResponse).toBeDefined()
+  const headers = lastResponse!.headers ?? {}
+  const location = headers.location ?? headers.Location ?? ''
+  expect(location).toContain(path)
+})
+
+Then('the response should include a Deprecation header', async ({ world }) => {
+  const lastResponse = getSharedState(world).lastResponse
+  expect(lastResponse).toBeDefined()
+  const headers = lastResponse!.headers ?? {}
+  const deprecation = headers.deprecation ?? headers.Deprecation
+  expect(deprecation).toBeDefined()
+})
+
 Then('the response should indicate the role is protected', async ({ world }) => {
   expect(getSharedState(world).lastResponse).toBeDefined()
   // System roles return 400 or 403 when deletion is attempted

@@ -8,7 +8,7 @@
 import { getState, setState } from './fixtures'
 
 export interface SharedResponseState {
-  lastResponse?: { status: number; data: unknown }
+  lastResponse?: { status: number; data: unknown; headers?: Record<string, string> }
   /** User created by "a registered user with a known keypair" — shared across step namespaces. */
   sharedUser?: { deviceKey: string; pubkey: string }
   /** Device IDs registered via "the user has a registered device" — shared across step namespaces. */
@@ -33,7 +33,10 @@ export function getSharedState(world: Record<string, unknown>): SharedResponseSt
   return s
 }
 
-export function setLastResponse(world: Record<string, unknown>, res: { status: number; data: unknown }): void {
+export function setLastResponse(
+  world: Record<string, unknown>,
+  res: { status: number; data: unknown; headers?: Record<string, string> },
+): void {
   getSharedState(world).lastResponse = res
 }
 
