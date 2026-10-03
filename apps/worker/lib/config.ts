@@ -86,6 +86,28 @@ export function validateConfig(env: ConfigInput = process.env): void {
   assertNonEmpty(env, 'HOTLINE_NAME')
   assertNonEmpty(env, 'ENVIRONMENT')
 
+  // Required because the server cannot boot without them, not because a
+  // feature wants them: `src/server/index.ts` builds its env with
+  // `BLOB_STORAGE: createBlobStorage()` as a plain property, and
+  // `createBlobStorage` (lib/blob-storage.ts) throws outright when either is
+  // absent.
+  //
+  // Before this, they were absent from the validator, so a deployment missing
+  // them passed every check here, logged "Database initialized", "Services
+  // initialized" and "Default settings, roles and platform admin ensured" —
+  // i.e. ran its migrations and seeded its admin — and only THEN died with a
+  // raw stack trace from a factory. The three preceding lines read as
+  // success and the only warnings were about unrelated optional features
+  // (webhooks, push), so it did not look like a configuration problem at all.
+  // Deployed configs all set these (docker-compose, Helm, the Ansible env
+  // template), which is why it never bit in CI: it bites whoever assembles
+  // their own env, i.e. a self-hoster. #1438.
+  //
+  // STORAGE_ENDPOINT stays optional — `createBlobStorage` defaults it to
+  // http://localhost:9000 and that default is harmless.
+  assertNonEmpty(env, 'STORAGE_ACCESS_KEY')
+  assertNonEmpty(env, 'STORAGE_SECRET_KEY')
+
   // --- Demo mode production gate ---
   // DEMO_MODE=true in a production environment would allow scheduled data destruction.
   // Hard-fail at startup to prevent accidental misconfiguration.
