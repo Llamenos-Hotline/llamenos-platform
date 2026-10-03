@@ -441,6 +441,13 @@ export class IdentityService {
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
     const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
+    // onConflictDoNothing (not onConflictDoUpdate): a second create for a pubkey
+    // that already belongs to a DIFFERENT person must never overwrite their row —
+    // unlike bootstrapAdmin/ensureInit above, which intentionally re-assert one
+    // known admin's fields. Without this, re-running demo-mode setup (its demo
+    // accounts have fixed pubkeys) let a bare Postgres unique-violation escape
+    // past Drizzle into app.ts's catch-all handler as an opaque 500 instead of a
+    // clean, catchable error (#1197).
     const [row] = await this.db.insert(users).values({
       pubkey: data.pubkey,
       displayName: data.name,
@@ -458,7 +465,11 @@ export class IdentityService {
       specializations: data.specializations ?? [],
       maxCaseAssignments: data.maxCaseAssignments,
       supervisorPubkey: data.supervisorPubkey,
-    }).returning()
+    })
+      .onConflictDoNothing({ target: users.pubkey })
+      .returning()
+
+    if (!row) throw new ServiceError(409, 'A user with this pubkey already exists')
 
     return { volunteer: sanitizeUser(rowToUser(row)) }
   }
