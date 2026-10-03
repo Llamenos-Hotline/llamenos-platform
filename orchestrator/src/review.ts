@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { EngineId, Lane } from './config.js'
@@ -754,34 +754,126 @@ export interface EngineRun {
  * Falls back to treating stdout as the text when it is not JSON, so an engine
  * that predates the flag still reviews rather than failing on its envelope.
  */
+/**
+ * The reviewer's own account of a session: which tools it reached for, and
+ * how often. Lifted into the check summary rather than left in the artifact,
+ * because the question an exhausted review raises — "what did it spend ten
+ * turns on?" — should be answerable from the red check itself.
+ *
+ * #1445 is the case this exists for: ten turns in 68 seconds on a three-file
+ * PR. A histogram of `Bash x7` reads very differently from `Read x7`, and
+ * differently again from a long `permission_denials` list.
+ */
+function summariseStream(events: Record<string, unknown>[]): string {
+  const tools = new Map<string, number>()
+  for (const ev of events) {
+    if (ev['type'] !== 'assistant') continue
+    const msg = ev['message']
+    if (typeof msg !== 'object' || msg === null) continue
+    const content = (msg as Record<string, unknown>)['content']
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null) continue
+      const pc = part as Record<string, unknown>
+      if (pc['type'] !== 'tool_use') continue
+      const name = typeof pc['name'] === 'string' ? pc['name'] : 'unknown'
+      tools.set(name, (tools.get(name) ?? 0) + 1)
+    }
+  }
+  if (tools.size === 0) return ''
+  return 'tools: ' + [...tools.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([n, c]) => `${n}x${c}`)
+    .join(' ')
+}
+
+/**
+ * Persists the raw event stream beside the review report, so the churn can be
+ * read after the fact and not just summarised.
+ *
+ * `FLEET_REVIEW_REPORT_DIR` is already uploaded wholesale by
+ * `fleet-review.yml`'s "Upload review report" step, so dropping a file in it
+ * needs no workflow change. Best-effort by design: a reviewer that produced a
+ * verdict must never fail because its transcript could not be written.
+ */
+async function writeSessionTranscript(stdout: string, stderr: string): Promise<void> {
+  const dir = process.env['FLEET_REVIEW_REPORT_DIR']
+  if (dir === undefined || dir === '') return
+  try {
+    await mkdir(dir, { recursive: true })
+    // One file per invocation. A review SET runs several reviewers, and a
+    // single name would leave only the last one's session behind — the same
+    // last-writer-wins shape that made the scoped cache artifact necessary.
+    const stamp = `${process.pid}-${events(stdout)}`
+    await writeFile(join(dir, `session-${stamp}.jsonl`), stdout, 'utf8')
+    if (stderr.trim() !== '') await writeFile(join(dir, `session-${stamp}.stderr.txt`), stderr, 'utf8')
+  } catch { /* never fail a review over its own diagnostics */ }
+}
+
+/** A short, stable discriminator so concurrent reviewers cannot collide. */
+function events(stdout: string): string {
+  let h = 0
+  for (let i = 0; i < stdout.length; i++) h = (h * 31 + stdout.charCodeAt(i)) | 0
+  return Math.abs(h).toString(36).slice(0, 8)
+}
+
 export function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineRun, 'reached'> {
   const diagnostics = stderr.trim().slice(-2000)
-  let envelope: Record<string, unknown>
-  try {
-    envelope = JSON.parse(stdout.trim()) as Record<string, unknown>
-  } catch {
-    // Not JSON: an engine too old for `--output-format json`, or a crash
-    // before it emitted one. Fall back to treating stdout as the assistant
-    // text, which is what this function did before the flag existed — a
-    // reviewer that still answers must not be failed over its envelope.
-    return { assistantText: stdout, diagnostics }
+  const events: Record<string, unknown>[] = []
+  for (const line of stdout.split('\n')) {
+    const t = line.trim()
+    if (t === '') continue
+    try { events.push(JSON.parse(t) as Record<string, unknown>) } catch { /* not an event line */ }
   }
-  const result = typeof envelope['result'] === 'string' ? envelope['result'] : ''
-  const subtype = typeof envelope['subtype'] === 'string' ? envelope['subtype'] : ''
-  const turns = typeof envelope['num_turns'] === 'number' ? envelope['num_turns'] : undefined
-  const denials = Array.isArray(envelope['permission_denials']) ? envelope['permission_denials'] : []
-  // Kept even on a clean PASS: `num_turns` is the only way to watch a reviewer
-  // creep toward its ceiling BEFORE it starts failing, and a non-empty denial
-  // list is a reviewer fighting its own permission mode rather than reviewing.
+  // Nothing parseable: an engine predating `--output-format`, or a crash
+  // before it emitted anything. Treat stdout as the assistant text, which is
+  // what this did before the flag existed — a reviewer that still answers
+  // must not be failed over its envelope.
+  if (events.length === 0) return { assistantText: stdout, diagnostics }
+
+  const final = [...events].reverse().find((e) => e['type'] === 'result')
+  const result = final !== undefined && typeof final['result'] === 'string' ? final['result'] : ''
+  const subtype = final !== undefined && typeof final['subtype'] === 'string' ? final['subtype'] : ''
+  const turns = final !== undefined && typeof final['num_turns'] === 'number' ? final['num_turns'] : undefined
+  const denials = final !== undefined && Array.isArray(final['permission_denials']) ? final['permission_denials'] : []
+
+  // `num_turns` is kept even on a PASS: it is the only way to see a reviewer
+  // creeping toward its ceiling BEFORE it starts failing.
   const notes = [
     subtype !== '' && subtype !== 'success' ? `subtype=${subtype}` : '',
     turns !== undefined ? `num_turns=${turns}` : '',
     denials.length > 0 ? `permission_denials=${denials.length}` : '',
+    summariseStream(events),
   ].filter((x) => x !== '').join(' ')
+
+  // On an exhausted budget there is no `result` event text at all, so the
+  // last thing the reviewer actually SAID is the best remaining evidence.
+  const lastText = result !== '' ? result : lastAssistantText(events)
   return {
-    assistantText: result,
+    assistantText: lastText,
     diagnostics: [notes, diagnostics].filter((x) => x !== '').join('\n'),
   }
+}
+
+/** The final assistant text in the stream, for a session that ended without a
+ *  `result` event. A bare `--print` discarded this; it is often the reviewer
+ *  mid-sentence, which is still more than nothing. */
+function lastAssistantText(events: Record<string, unknown>[]): string {
+  for (const ev of [...events].reverse()) {
+    if (ev['type'] !== 'assistant') continue
+    const msg = ev['message']
+    if (typeof msg !== 'object' || msg === null) continue
+    const content = (msg as Record<string, unknown>)['content']
+    if (!Array.isArray(content)) continue
+    const text = content
+      .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+      .filter((c) => c['type'] === 'text' && typeof c['text'] === 'string')
+      .map((c) => c['text'] as string)
+      .join('\n')
+      .trim()
+    if (text !== '') return text
+  }
+  return ''
 }
 
 /**
@@ -810,7 +902,7 @@ export function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineR
  * was the budget, and how it was spent.
  */
 export function verifierArgs(input: { model: string; maxTurns: number; exportDir: string }): string[] {
-  return ['--print', '--output-format', 'json',
+  return ['--print', '--output-format', 'stream-json', '--verbose',
     '--permission-mode', 'plan', '--model', input.model,
     '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
 }
@@ -898,6 +990,7 @@ export async function invokeVerifierEngine(input: {
       })
       call.child?.stdin?.end(input.prompt)
       const { stdout, stderr } = await call
+      await writeSessionTranscript(stdout, stderr ?? '')
       return { reached: true, ...decodeEngineOutput(stdout, stderr ?? '') }
     } catch (e) {
       // A crash, a timeout, a missing binary, or (see `classifyEngineFailure`)
@@ -907,6 +1000,10 @@ export async function invokeVerifierEngine(input: {
       // rather than silently falling through parseVerdict's own "no VERDICT
       // line" path.
       const err = e as { stdout?: string; stderr?: string }
+      // The transcript matters MOST here. An exhausted budget exits non-zero,
+      // so this is the arm #1445 took — and the arm that previously left a
+      // 268-byte artifact and no record of the ten turns.
+      await writeSessionTranscript(err.stdout ?? '', err.stderr ?? '')
       const decoded = decodeEngineOutput(err.stdout ?? '', err.stderr ?? '')
       const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
       return { reached: false, failureKind, ...decoded }

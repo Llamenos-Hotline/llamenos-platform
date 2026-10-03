@@ -661,14 +661,16 @@ describe('decodeEngineOutput: the engine envelope', () => {
 describe('verifierArgs: the reviewer invocation', () => {
   const args = () => verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
 
-  it('asks for the json envelope — without it an exhausted session leaves nothing behind', () => {
-    // The flag this rail exists for. Removing it previously left the entire
-    // fleet suite green while returning the reviewer to a mode where a
-    // session that ends without a final message produces no output at all,
-    // which is what made #1445 undiagnosable.
+  it('asks for the event stream — without it an exhausted session leaves nothing behind', () => {
+    // The flags this rail exists for. Removing them previously left the whole
+    // fleet suite green while returning the reviewer to a mode that emits only
+    // a final assistant message — so a session which never reaches one
+    // produced no output at all. That is what made #1445 undiagnosable.
+    // `stream-json` (not plain `json`) is what carries the per-turn events the
+    // tool histogram is built from; plain `json` gives only the final object.
     const a = args()
-    expect(a).toContain('--output-format')
-    expect(a[a.indexOf('--output-format') + 1]).toBe('json')
+    expect(a[a.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(a).toContain('--verbose')
   })
 
   it('runs in plan mode, so a reviewer can never edit the tree it is judging', () => {
@@ -687,5 +689,52 @@ describe('verifierArgs: the reviewer invocation', () => {
     const a = verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
     expect(a[a.indexOf('--add-dir') + 1]).toBe('/tmp/export')
     expect(a).not.toContain('--dir')
+  })
+})
+
+describe('summarised churn: what an exhausted review spent its turns on', () => {
+  /** A stream shaped like the real one — see the event order captured from a
+   *  live run: system/init, then assistant/tool_use and user/tool_result
+   *  pairs, then a final `result`. */
+  function stream(events: unknown[]): string {
+    return events.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  }
+  const toolUse = (name: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name }] } })
+  const say = (text: string) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+
+  it('names the tools and their counts, so churn is visible from the red check', () => {
+    const raw = stream([
+      { type: 'system', subtype: 'init' },
+      toolUse('Bash'), toolUse('Bash'), toolUse('Read'), toolUse('Bash'),
+      { type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10, permission_denials: [] },
+    ])
+    const d = decodeEngineOutput(raw, '').diagnostics
+    // `Bash x3` reads very differently from `Read x3` when asking why ten
+    // turns went nowhere — that distinction is the whole point.
+    expect(d).toMatch(/tools: Bashx3 Readx1/)
+    expect(d).toMatch(/num_turns=10/)
+    expect(d).toMatch(/subtype=error_max_turns/)
+  })
+
+  it('salvages the last thing the reviewer said when there is no result event', () => {
+    const raw = stream([
+      say('Looking at routes/shifts.ts now'),
+      toolUse('Read'),
+      say('Halfway through checking the permission guard'),
+      { type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10 },
+    ])
+    // A bare --print discarded this entirely. Mid-sentence is more than nothing.
+    expect(decodeEngineOutput(raw, '').assistantText).toBe('Halfway through checking the permission guard')
+  })
+
+  it('still reads a clean PASS out of a full stream', () => {
+    const raw = stream([
+      say('checked it'),
+      { type: 'result', subtype: 'success', is_error: false, num_turns: 2,
+        permission_denials: [], result: 'all good\nVERDICT: PASS' },
+    ])
+    const run = decodeEngineOutput(raw, '')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+    expect(run.diagnostics).toMatch(/num_turns=2/)
   })
 })
