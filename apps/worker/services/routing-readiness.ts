@@ -16,6 +16,7 @@
  */
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
+import { resolveRingableVolunteers } from './ringing'
 
 const logger = createLogger('routing-readiness')
 
@@ -86,4 +87,70 @@ export async function warnOnUnroutableHubs(services: Services): Promise<HubRouti
     })
   }
   return unroutable
+}
+
+// ---------------------------------------------------------------------------
+// "Would a call arriving right now ring anybody?"
+// ---------------------------------------------------------------------------
+
+/**
+ * The live ring decision, as a value an operator can read.
+ *
+ * Before this, the decision was unmeasurable on a deployment: nothing exposed
+ * what `resolveRingableVolunteers` would resolve to, and its only non-provider
+ * caller was `POST /demo/telephony/simulate/incoming-call`, which is demo-gated.
+ * With `DEMO_MODE=false` — what a real VM runs — five ring-eligibility checks in
+ * the live suite skipped, so R1's "that volunteer clocks in, receives a call"
+ * could only ever be verified on a demo server. A suite that skips on the one
+ * configuration that ships is not coverage.
+ *
+ * It CALLS the resolver rather than restating it, for the same reason presence
+ * does: a second copy of the eligibility rule drifts from the first. The counts
+ * either side of it (`scheduledNow`, `clockedIn`) are plain reads of the two
+ * inputs, not a re-derivation of the decision — they are what turns "nobody
+ * would ring" into a diagnosis (rostered but nobody clocked in, versus nobody
+ * rostered at all).
+ *
+ * Read-only: no provider call, no call record, no side effect of any kind.
+ */
+export interface HubRingDecision {
+  hubId: string
+  /** Would a call arriving right now ring anybody at all? */
+  wouldRing: boolean
+  /** How many phones/clients would ring. */
+  volunteerCount: number
+  /** True when those volunteers came from the hub's fallback group, not the schedule. */
+  usingFallbackGroup: boolean
+  /** Distinct volunteers the schedule puts on shift right now, before availability. */
+  scheduledNow: number
+  /** Volunteers currently clocked into this hub. */
+  clockedIn: number
+  /**
+   * Pubkeys of the volunteers that would ring. Identity-bearing: the route
+   * returns this only to a caller who may already see volunteer presence.
+   */
+  pubkeys: string[]
+}
+
+export async function currentRingDecision(
+  services: Services,
+  hubId: string,
+): Promise<HubRingDecision> {
+  const [ringable, scheduled, { activeShifts }] = await Promise.all([
+    resolveRingableVolunteers(services, hubId),
+    services.shifts.getCurrentVolunteers(hubId),
+    services.activeShifts.listActiveByHub(hubId),
+  ])
+
+  const pubkeys = (ringable?.available ?? []).map(v => v.pubkey)
+
+  return {
+    hubId,
+    wouldRing: pubkeys.length > 0,
+    volunteerCount: pubkeys.length,
+    usingFallbackGroup: ringable?.usedFallback ?? false,
+    scheduledNow: new Set(scheduled).size,
+    clockedIn: activeShifts.length,
+    pubkeys,
+  }
 }

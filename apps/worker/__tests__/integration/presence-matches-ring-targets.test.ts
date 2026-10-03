@@ -47,7 +47,7 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { createServices, type Services } from '../../services'
 import { getHubPresence } from '../../services/presence'
-import { hubRoutingReadiness } from '../../services/routing-readiness'
+import { currentRingDecision, hubRoutingReadiness } from '../../services/routing-readiness'
 import { resolveRingableVolunteers } from '../../services/ringing'
 import callsRoutes from '../../routes/calls'
 import type { AppEnv } from '../../types'
@@ -165,6 +165,24 @@ async function getPresenceViaRoute(hubId: string): Promise<{ status: number; bod
   })
   app.route('/', callsRoutes)
   const res = await app.request('/presence')
+  return { status: res.status, body: await res.json() as Record<string, unknown> }
+}
+
+/** `GET /calls/routing` — the read-only ring oracle, over the real registry. */
+async function getRoutingViaRoute(hubId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const app = new Hono<AppEnv>()
+  app.use('*', async (c, next) => {
+    c.set('pubkey', 'a'.repeat(64))
+    c.set('permissions', ['*'])
+    c.set('services', services as unknown as AppEnv['Variables']['services'])
+    c.set('allRoles', [])
+    c.set('requestId', 'routing-integration')
+    c.set('hubId', hubId)
+    c.env = {} as AppEnv['Bindings']
+    await next()
+  })
+  app.route('/', callsRoutes)
+  const res = await app.request('/routing')
   return { status: res.status, body: await res.json() as Record<string, unknown> }
 }
 
@@ -363,5 +381,100 @@ describe('hubRoutingReadiness against the production service registry', () => {
     const readiness = await hubRoutingReadiness(services, hubId)
 
     expect(readiness).toMatchObject({ canEverRing: true, rosteredVolunteers: 0, fallbackVolunteers: 1 })
+  })
+})
+
+/**
+ * The ring decision, measurable on a deployment.
+ *
+ * It was not: nothing reported what `resolveRingableVolunteers` resolves to,
+ * and its only non-provider caller is demo-gated, so with `DEMO_MODE=false` —
+ * what a real VM runs — the live suite's ring-eligibility checks skipped
+ * entirely. These drive the oracle against the production registry and real
+ * PostgreSQL, through the HTTP route an operator and the live suite call.
+ */
+describe('GET /calls/routing — the ring decision, against the production service registry', () => {
+  let hubId: string
+
+  beforeEach(async () => {
+    hubId = await createHub()
+  })
+
+  it('says a rostered, clocked-in volunteer would be rung', async () => {
+    const pubkey = await createVolunteer(hubId)
+    await rosterOnShiftNow(hubId, [pubkey])
+    await clockIn(hubId, [pubkey])
+
+    const { status, body } = await getRoutingViaRoute(hubId)
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      wouldRing: true,
+      volunteerCount: 1,
+      usingFallbackGroup: false,
+      scheduledNow: 1,
+      clockedIn: 1,
+    })
+    expect(body.volunteers).toEqual([{ pubkey }])
+  })
+
+  it('says a fresh hub would ring nobody, and the counts say why', async () => {
+    await createVolunteer(hubId)
+
+    const { body } = await getRoutingViaRoute(hubId)
+
+    expect(body).toMatchObject({
+      wouldRing: false,
+      volunteerCount: 0,
+      scheduledNow: 0,
+      clockedIn: 0,
+      usingFallbackGroup: false,
+    })
+  })
+
+  it('reports that the fallback group is carrying the hotline', async () => {
+    const fallback = await createVolunteer(hubId)
+    await services.settings.setFallbackGroup({ userPubkeys: [fallback] }, hubId)
+
+    const { body } = await getRoutingViaRoute(hubId)
+
+    expect(body).toMatchObject({ wouldRing: true, volunteerCount: 1, usingFallbackGroup: true, scheduledNow: 0 })
+  })
+
+  it('separates "rostered but unavailable" from "nobody rostered"', async () => {
+    const onBreak = await createVolunteer(hubId, { onBreak: true })
+    await rosterOnShiftNow(hubId, [onBreak])
+    await clockIn(hubId, [onBreak])
+
+    const { body } = await getRoutingViaRoute(hubId)
+
+    expect(body).toMatchObject({ wouldRing: false, volunteerCount: 0, scheduledNow: 1, clockedIn: 1 })
+  })
+
+  it('agrees with presence: both are the same resolver', async () => {
+    const ok = await createVolunteer(hubId)
+    const onBreak = await createVolunteer(hubId, { onBreak: true })
+    await rosterOnShiftNow(hubId, [ok, onBreak])
+    await clockIn(hubId, [ok, onBreak])
+
+    const decision = await currentRingDecision(services, hubId)
+    const presence = await getHubPresence(services, hubId)
+
+    expect(decision.pubkeys.sort())
+      .toEqual(presence.users.filter(u => u.status === 'available').map(u => u.pubkey).sort())
+    expect(decision.pubkeys).toEqual([ok])
+  })
+
+  it('places no call and leaves no trace — it resolves, it does not ring', async () => {
+    const pubkey = await createVolunteer(hubId)
+    await rosterOnShiftNow(hubId, [pubkey])
+    await clockIn(hubId, [pubkey])
+
+    const before = await services.calls.getTodayCount(hubId)
+    await getRoutingViaRoute(hubId)
+    await getRoutingViaRoute(hubId)
+
+    expect(await services.calls.getTodayCount(hubId)).toBe(before)
+    expect(await services.calls.getActiveCalls(hubId)).toEqual([])
   })
 })

@@ -8,8 +8,11 @@
  * that it goes quiet the moment EITHER routing path is provisioned.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { hubRoutingReadiness, warnOnUnroutableHubs } from '../../services/routing-readiness'
+import { currentRingDecision, hubRoutingReadiness, warnOnUnroutableHubs } from '../../services/routing-readiness'
+import { resolveRingableVolunteers } from '../../services/ringing'
 import type { Services } from '../../services'
+import { DEFAULT_ROLES } from '@shared/permissions'
+import type { Role } from '@shared/permissions'
 
 // vi.mock is hoisted above every const in this file, so the spies it closes
 // over have to be created in a hoisted block too.
@@ -128,5 +131,136 @@ describe('warnOnUnroutableHubs', () => {
     await expect(warnOnUnroutableHubs(services)).resolves.toEqual([])
     expect(warnLog).toHaveBeenCalled()
     expect(errorLog).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// currentRingDecision — the read-only oracle for "would a call ring anybody?"
+// ---------------------------------------------------------------------------
+
+function makeUser(overrides: { pubkey: string; active?: boolean; onBreak?: boolean }) {
+  return {
+    pubkey: overrides.pubkey,
+    name: overrides.pubkey,
+    active: overrides.active ?? true,
+    onBreak: overrides.onBreak ?? false,
+    callPreference: 'phone',
+    phone: '+15551234567',
+    roles: ['role-volunteer'],
+    hubRoles: [] as Array<{ hubId: string; roleIds: string[] }>,
+  }
+}
+
+function makeRingServices(opts: {
+  scheduledNow?: string[]
+  clockedIn?: string[]
+  fallback?: string[]
+  users?: ReturnType<typeof makeUser>[]
+  busy?: string[]
+}): Services {
+  const { scheduledNow = [], clockedIn = [], fallback = [], users = [], busy = [] } = opts
+  return {
+    shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(scheduledNow) },
+    activeShifts: {
+      listActiveByHub: vi.fn().mockResolvedValue({
+        activeShifts: clockedIn.map(pubkey => ({ pubkey, hubId: 'hub-1' })),
+      }),
+      listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(clockedIn)),
+    },
+    settings: {
+      getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: fallback }),
+      getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+    },
+    identity: { getUsers: vi.fn().mockResolvedValue({ users }) },
+    calls: { getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busy)) },
+  } as unknown as Services
+}
+
+describe('currentRingDecision', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports who would ring, from the schedule', async () => {
+    const services = makeRingServices({
+      scheduledNow: ['pk-a', 'pk-b'],
+      clockedIn: ['pk-a', 'pk-b'],
+      users: [makeUser({ pubkey: 'pk-a' }), makeUser({ pubkey: 'pk-b' })],
+    })
+
+    const decision = await currentRingDecision(services, 'hub-1')
+
+    expect(decision).toEqual({
+      hubId: 'hub-1',
+      wouldRing: true,
+      volunteerCount: 2,
+      usingFallbackGroup: false,
+      scheduledNow: 2,
+      clockedIn: 2,
+      pubkeys: ['pk-a', 'pk-b'],
+    })
+  })
+
+  it('says the fallback group is carrying the hotline when nobody is on shift', async () => {
+    const services = makeRingServices({
+      scheduledNow: [],
+      fallback: ['pk-fb'],
+      users: [makeUser({ pubkey: 'pk-fb' })],
+    })
+
+    const decision = await currentRingDecision(services, 'hub-1')
+
+    expect(decision.wouldRing).toBe(true)
+    expect(decision.usingFallbackGroup).toBe(true)
+    expect(decision.scheduledNow).toBe(0)
+  })
+
+  it('flags the fallback group even when it was reached because everyone on shift is unavailable', async () => {
+    const services = makeRingServices({
+      scheduledNow: ['pk-break'],
+      clockedIn: ['pk-break'],
+      fallback: ['pk-fb'],
+      users: [makeUser({ pubkey: 'pk-break', onBreak: true }), makeUser({ pubkey: 'pk-fb' })],
+    })
+
+    const decision = await currentRingDecision(services, 'hub-1')
+
+    expect(decision.pubkeys).toEqual(['pk-fb'])
+    expect(decision.usingFallbackGroup).toBe(true)
+    expect(decision.scheduledNow).toBe(1)
+  })
+
+  /**
+   * The diagnosis a bare `wouldRing: false` cannot give: the roster is
+   * populated and nobody is available, which is a different problem from an
+   * empty roster and has a different fix.
+   */
+  it('distinguishes "rostered but nobody available" from "nobody rostered"', async () => {
+    const unavailable = await currentRingDecision(makeRingServices({
+      scheduledNow: ['pk-break'],
+      clockedIn: ['pk-break'],
+      users: [makeUser({ pubkey: 'pk-break', onBreak: true })],
+    }), 'hub-1')
+    expect(unavailable).toMatchObject({ wouldRing: false, scheduledNow: 1, clockedIn: 1, volunteerCount: 0 })
+
+    const empty = await currentRingDecision(makeRingServices({}), 'hub-1')
+    expect(empty).toMatchObject({ wouldRing: false, scheduledNow: 0, clockedIn: 0, volunteerCount: 0 })
+  })
+
+  it('reports exactly what the ringing resolver resolves, by derivation', async () => {
+    const build = () => makeRingServices({
+      scheduledNow: ['pk-ok', 'pk-break', 'pk-busy'],
+      clockedIn: ['pk-ok', 'pk-break', 'pk-busy'],
+      busy: ['pk-busy'],
+      users: [
+        makeUser({ pubkey: 'pk-ok' }),
+        makeUser({ pubkey: 'pk-break', onBreak: true }),
+        makeUser({ pubkey: 'pk-busy' }),
+      ],
+    })
+
+    const decision = await currentRingDecision(build(), 'hub-1')
+    const ringable = await resolveRingableVolunteers(build(), 'hub-1')
+
+    expect(decision.pubkeys.sort()).toEqual((ringable?.available ?? []).map(v => v.pubkey).sort())
+    expect(decision.pubkeys).toEqual(['pk-ok'])
   })
 })

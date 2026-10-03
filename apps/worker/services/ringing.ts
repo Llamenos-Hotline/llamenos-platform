@@ -49,14 +49,21 @@ type RingableUser = Awaited<ReturnType<Services['identity']['getUsers']>>['users
  * not on break, not already on a live call in any hub, and have access to the hub. If every on-shift volunteer is unavailable the fallback group is
  * tried with the same rules.
  *
- * Shared by the ringing path and the answer path so "who may answer" can never
- * drift from "who was rung". Returns null when there is no roster at all;
+ * Shared by the ringing path, the answer path, presence (services/presence.ts)
+ * and the read-only routing diagnostic (services/routing-readiness.ts), so
+ * "who may answer", "who is shown as available" and "who would be rung" can
+ * never drift from "who was rung". Returns null when there is no roster at all;
  * `available` is empty when a roster exists but nobody is available.
+ *
+ * `usedFallback` says which of the two rosters `available` came from — the hub's
+ * fallback group, or the shift schedule. It is reported by the routing
+ * diagnostic so an operator can tell "the shift is covered" from "nobody is on
+ * shift and the fallback group is carrying the hotline"; nothing branches on it.
  */
 export async function resolveRingableVolunteers(
   services: Services,
   hubId: string,
-): Promise<{ available: RingableUser[] } | null> {
+): Promise<{ available: RingableUser[]; usedFallback: boolean } | null> {
   let onShiftPubkeys = await services.shifts.getCurrentVolunteers(hubId)
   let usedFallback = false
 
@@ -100,6 +107,7 @@ export async function resolveRingableVolunteers(
   if (available.length === 0 && !usedFallback) {
     const fallback = await services.settings.getFallbackGroup(hubId)
     available = pickAvailable(fallback.userPubkeys)
+    usedFallback = true
     logger.info('On-shift volunteers unavailable — tried fallback group', {
       hubId,
       fallbackCount: fallback.userPubkeys.length,
@@ -107,7 +115,7 @@ export async function resolveRingableVolunteers(
     })
   }
 
-  return { available }
+  return { available, usedFallback }
 }
 
 // ---------------------------------------------------------------------------

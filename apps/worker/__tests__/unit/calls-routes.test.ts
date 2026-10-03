@@ -256,6 +256,86 @@ describe('Calls Routes', () => {
     })
   })
 
+  describe('GET /routing', () => {
+    /** The read-only oracle for "would a call arriving now ring anybody?". */
+    it('answers the verdict, the counts, and who — for a caller who may see presence', async () => {
+      const onShift = ['a'.repeat(64), 'b'.repeat(64)]
+      const services = makeServices({
+        ...makeRingRoster(onShift),
+        activeShifts: {
+          listActiveByHub: vi.fn().mockResolvedValue({
+            activeShifts: onShift.map(pubkey => ({ pubkey, hubId: 'hub-1' })),
+          }),
+        },
+      })
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-presence'],
+        services,
+      })
+
+      const res = await app.request('/routing')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.wouldRing).toBe(true)
+      expect(body.volunteerCount).toBe(2)
+      expect(body.usingFallbackGroup).toBe(false)
+      expect(body.scheduledNow).toBe(2)
+      expect(body.clockedIn).toBe(2)
+      expect(body.volunteers.map((v: { pubkey: string }) => v.pubkey).sort()).toEqual([...onShift].sort())
+    })
+
+    /**
+     * A volunteer may ask whether a call would reach anyone; they may not learn
+     * WHO. Personal information is admin-only in this product, and a pubkey
+     * identifies a person.
+     */
+    it('withholds the volunteer list from a caller without calls:read-presence', async () => {
+      const onShift = ['a'.repeat(64)]
+      const services = makeServices({
+        ...makeRingRoster(onShift),
+        activeShifts: {
+          listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [{ pubkey: onShift[0], hubId: 'hub-1' }] }),
+        },
+      })
+      const { app } = createTestApp({ permissions: ['calls:read-active'], services })
+
+      const res = await app.request('/routing')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.wouldRing).toBe(true)
+      expect(body.volunteerCount).toBe(1)
+      expect(body.volunteers).toBeUndefined()
+      expect(JSON.stringify(body)).not.toContain(onShift[0])
+    })
+
+    it('reports a hub that would ring nobody, with the counts that diagnose why', async () => {
+      const services = makeServices({
+        ...makeRingRoster([]),
+        activeShifts: { listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [] }) },
+      })
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-presence'],
+        services,
+      })
+
+      const res = await app.request('/routing')
+      const body = await res.json()
+      expect(body).toMatchObject({
+        wouldRing: false,
+        volunteerCount: 0,
+        scheduledNow: 0,
+        clockedIn: 0,
+      })
+      expect(body.volunteers).toEqual([])
+    })
+
+    it('returns 403 without calls:read-active', async () => {
+      const { app } = createTestApp({ permissions: ['calls:read-presence'] })
+      const res = await app.request('/routing')
+      expect(res.status).toBe(403)
+    })
+  })
+
   describe('GET /history', () => {
     it('returns paginated call history', async () => {
       const callsSvc = makeMockCallsService()
