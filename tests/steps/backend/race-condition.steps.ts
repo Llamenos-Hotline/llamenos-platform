@@ -63,9 +63,10 @@ function createRedeemAuth(seedHex: string): { pubkey: string; timestamp: number;
 
 // ── RACE-01: Concurrent invite redemption ────────────────────────────
 
-Given('an admin creates an invite code for race testing', async ({ request, world }) => {
+Given('an admin creates an invite code for race testing', async ({ request, world, workerHub }) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: `Race Test ${Date.now()}`,
     phone: `+1555${Date.now().toString().slice(-7)}`,
     roleIds: ['role-volunteer'],
