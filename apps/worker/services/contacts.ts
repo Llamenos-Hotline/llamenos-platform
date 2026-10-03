@@ -96,7 +96,7 @@ export class ContactsService {
     const rows = await this.db
       .select()
       .from(contacts)
-      .where(eq(contacts.id, id))
+      .where(and(eq(contacts.id, id), isNull(contacts.deletedAt)))
 
     if (rows.length === 0) {
       throw new ServiceError(404, 'Contact not found')
@@ -198,7 +198,7 @@ export class ContactsService {
     const limit = Math.min(input.limit ?? 20, 100)
     const offset = (page - 1) * limit
 
-    const conditions = [eq(contacts.hubId, input.hubId)]
+    const conditions = [eq(contacts.hubId, input.hubId), isNull(contacts.deletedAt)]
 
     if (input.contactTypeHash) {
       conditions.push(eq(contacts.contactTypeHash, input.contactTypeHash))

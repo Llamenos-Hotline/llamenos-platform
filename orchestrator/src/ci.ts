@@ -1292,10 +1292,36 @@ export function ciContextFromEnv(env: NodeJS.ProcessEnv, repoDir: string): CiCon
   return { branch, repoDir, headDir, headSha, baseSha, pr: env['FLEET_CI_PR'] ?? '(unknown)' }
 }
 
+/**
+ * `git diff` flags that make the text a function of the two commits ALONE.
+ *
+ * This text is the review cache's key (`diffHash`, review-cache.ts), so any
+ * byte that varies with the machine turns an unchanged diff into a miss —
+ * and a miss on a review request is a full model review of a diff that
+ * was already judged.
+ *
+ * `--full-index` is the one that was live. Without it the `index a1b2c3d..`
+ * line carries blob ids abbreviated to `core.abbrev=auto`, whose width
+ * grows with the clone's OBJECT COUNT: 8 hex digits below 65,536 objects, 9
+ * above. The review box's persistent clone held 61,899 objects on
+ * 2026-09-30, so every cached verdict was one width change from missing at
+ * once — and a hosted runner's fresh clone and the box's grown one could
+ * disagree about the same diff. #1170's PASS was recorded under the 8-digit
+ * text; the same two commits in a clone with 101k objects hashed to a
+ * different key and missed.
+ *
+ * The rest pin the output against a runner's own git config — prefixes,
+ * colour, an external or textconv diff driver — which the operator's `HOME`
+ * on the review box may set and a hosted runner never does.
+ */
+export const CI_DIFF_FLAGS: readonly string[] = [
+  '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+]
+
 /** Read inside the trusted base checkout, over the fetched head object. */
 export async function ciDiff(ctx: CiContext): Promise<string> {
   const { stdout } = await execFileAsync(
-    'git', ['-C', ctx.repoDir, 'diff', `${ctx.baseSha}...${ctx.headSha}`],
+    'git', ['-C', ctx.repoDir, 'diff', ...CI_DIFF_FLAGS, `${ctx.baseSha}...${ctx.headSha}`],
     { maxBuffer: 32 * 1024 * 1024 },
   )
   return stdout
