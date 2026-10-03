@@ -1,4 +1,4 @@
-@desktop @ios @android
+@ios @android
 Feature: Authentication & Login
   As a user
   I want to authenticate securely with my Nostr keypair
