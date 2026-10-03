@@ -598,7 +598,11 @@ When('I compose a blast message', async ({ page }) => {
   // BlastComposer.tsx always renders both fields unconditionally.
   const nameInput = page.getByTestId(TestIds.BLAST_NAME)
   await expect(nameInput).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await nameInput.fill(`Blast ${Date.now()}`)
+  const name = `Blast ${Date.now()}`
+  await nameInput.fill(name)
+  await page.evaluate((n) => {
+    (window as unknown as Record<string, unknown>).__test_blast_name = n
+  }, name)
   await page.getByTestId(TestIds.BLAST_TEXT).fill('Test blast message content')
 })
 
@@ -611,7 +615,13 @@ When('I select recipients', async () => {
 })
 
 Then('the blast should appear in the blast list', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.BLAST_CARD).or(page.getByText(/blast/i)).first()).toBeVisible({
+  // The blast just composed, by name. The old `.or(getByText(/blast/i))` matched
+  // the page's own "Blasts" heading, so it passed with an empty list.
+  const name = await page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__test_blast_name as string | undefined,
+  )
+  expect(name, 'the compose step must record the blast name').toBeTruthy()
+  await expect(page.getByTestId(TestIds.BLAST_CARD).filter({ hasText: name as string })).toBeVisible({
     timeout: Timeouts.ELEMENT,
   })
 })

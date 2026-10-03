@@ -338,10 +338,7 @@ struct NoteCreateView: View {
         // Validate required fields
         for field in editableFields where field.required {
             if fieldValues[field.name] == nil {
-                errorMessage = String(
-                    format: NSLocalizedString("note_create_field_required", comment: "%@ is required"),
-                    field.label
-                )
+                errorMessage = L10n.format("note_create_field_required", comment: "%@ is required", field.label)
                 return
             }
         }

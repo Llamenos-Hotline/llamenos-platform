@@ -1,0 +1,31 @@
+# XCUITest classes that must run on the self-hosted Mac, never on a GitHub
+# macOS runner.
+#
+# One entry per line: `<Class>  # <evidence it needs the faster host>`
+#
+# WHY THIS FILE EXISTS. ios-e2e.yml routes shards 0 and 3 to the Mac and 1 and
+# 2 to GitHub (#1428). That routing is positional, but WHICH classes land in a
+# given shard is decided by `ui-tests.py shard`, which packs them by estimated
+# cost from ci-timings.json. So any timings change silently re-targets the
+# routing — and did: #1428's comment justified sending shard 3 to the Mac
+# because SecurityUITests' PIN test takes 313s there, while SecurityUITests
+# actually sits in shard 2, which goes to GitHub. The routing never did what it
+# claimed.
+#
+# Naming the classes fixes that. `shard --mac-shards 0,3` confines everything
+# listed here to those shard indices, so a repack cannot move them onto slower
+# hardware. The workflow passes the same indices it routes, and
+# tests/orchestrator/guards.test.ts asserts the two agree.
+#
+# THE BAR. Measured evidence that the class fails on GitHub's runners and
+# passes on the Mac — not a hunch. Each entry names the run. A class that is
+# simply slow does not belong here; a class whose waits are too tight for a
+# contended host does, until those waits are fixed (#1424), at which point it
+# should come back off this list.
+#
+# Checked by: python3 apps/ios/scripts/ui-tests.py check-mac-shards
+
+ShiftFlowUITests        # testWeeklyScheduleHeader failed 3 of 3 merge groups on hosted (26-32s against a 10s+2s anyElementExists budget); passed on the Mac in #1428
+AdminSettingsUITests    # testTelephonySettingsHasProviderPicker 51s and testCallSettingsHasSliders 53s failed on hosted; both passed on the Mac in #1428
+SecurityUITests         # testPINWipeAfterTenFailedAttempts hit XCTest's 300s allowance at 313s on hosted and passes at 168s on the Mac (#1425)
+APIConnectedUITests     # testClockInViaAPI and testShiftStatusWithAPI failed on hosted at 26-28s, passed on the Mac at 13-15s

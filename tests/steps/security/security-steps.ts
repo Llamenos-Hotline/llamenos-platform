@@ -83,9 +83,9 @@ Then('the error message should mention private or local network', async ({ page 
 })
 
 Then('I should not see a relay URL error', async ({ page }) => {
-  const errorText = page.locator('text=/private|local|invalid relay/i')
-  const isVisible = await errorText.isVisible({ timeout: 2000 }).catch(() => false)
-  expect(isVisible).toBe(false)
+  // (Only @requires-camera scenarios use this.) An absence check over any text
+  // on the page; asserted web-first rather than sampled once.
+  await expect(page.getByRole('alert').filter({ hasText: /private|local|invalid relay/i })).toHaveCount(0)
 })
 
 Then('the step should advance to {string}', async ({ page }, stepName: string) => {

@@ -3,7 +3,7 @@ import XCTest
 /// Base class for all BDD-aligned UI tests.
 /// Provides shared setup, BDD step helpers (given/when/then), and navigation utilities.
 ///
-/// Each test *class* gets one isolated hub created via POST /api/test-create-hub in
+/// Each test *class* gets one isolated hub created via POST /api/hubs in
 /// `class func setUp()`. All test methods within the class share this hub. This enables
 /// Xcode parallel testing: each parallel worker runs a different test class, and each
 /// class has its own hub — no shared state between workers.
@@ -74,19 +74,30 @@ class BaseUITest: XCTestCase {
     private class func createClassHub() -> String {
         let hubURL = ProcessInfo.processInfo.environment["TEST_HUB_URL"]
             ?? "http://127.0.0.1:3000"
-        let secret = ProcessInfo.processInfo.environment["E2E_TEST_SECRET"]
-            ?? ProcessInfo.processInfo.environment["TEST_RESET_SECRET"]
-            ?? "test-reset-secret"
         let className = String(describing: self)
         let hubName = "ios-\(className)-\(Int(Date().timeIntervalSince1970 * 1000))"
-        guard let url = URL(string: "\(hubURL)/api/test-create-hub") else {
+        // POST /api/hubs — the route an operator uses — not /api/test-create-hub.
+        // `devGuard` (apps/worker/app.ts) answers 404 for every /api/test-* outside
+        // a development server, so the dev route tied this entire suite to a dev
+        // box. The admin seed TestAdminAPI already holds carries
+        // role-super-admin (permissions: ['*']), and POST /api/hubs assigns the
+        // creator hub membership, which is what the dev route arranged by taking
+        // an `adminPubkey`. See #1423.
+        let path = "/api/hubs"
+        guard let url = URL(string: "\(hubURL)\(path)") else {
             print("BaseUITest: invalid test hub URL: \(hubURL)")
             return ""
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(secret, forHTTPHeaderField: "X-Test-Secret")
+        do {
+            request.setValue("Bearer \(try TestAdminAPI.authorization(method: "POST", path: path))",
+                             forHTTPHeaderField: "Authorization")
+        } catch {
+            print("Warning: createClassHub(\(className)) could not sign the request: \(error)")
+            return ""
+        }
         // Setup, not an assertion: the first request on a freshly booted CI runner has
         // taken 30-49s, and a class without a hub fails every connected test in it.
         request.timeoutInterval = 60
@@ -105,9 +116,12 @@ class BaseUITest: XCTestCase {
                 print("Warning: createClassHub(\(className)) returned \(code)")
                 return
             }
+            // POST /api/hubs answers 201 with `{ hub: { id } }`; the dev route
+            // answered 200 with a bare `{ id }`.
             if let data,
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let id = json["id"] as? String {
+               let hub = json["hub"] as? [String: Any],
+               let id = hub["id"] as? String {
                 hubId = id
             }
         }.resume()
@@ -453,12 +467,35 @@ class BaseUITest: XCTestCase {
 
     // MARK: - PIN Helpers
 
+    /// Taps a PIN into the pad, one digit at a time.
+    ///
+    /// Uses `app.buttons[...]` rather than this file's `find(...)`, and the
+    /// difference is the whole cost of the slowest test in the suite.
+    /// `find` is `app.descendants(matching: .any)[id]`, which walks EVERY
+    /// element type in the accessibility hierarchy. The digits are plain
+    /// SwiftUI `Button`s (`PINPadView.PINDigitButton` applies
+    /// `.accessibilityIdentifier("pin-\(digit)")`), so a typed query resolves
+    /// them without that walk — and the walk happened twice per digit, once
+    /// for the existence check and again inside `tap()`.
+    ///
+    /// `testPINWipeAfterTenFailedAttempts` calls this ten times with an
+    /// eight-digit PIN: 80 digits, 160 hierarchy walks, and essentially the
+    /// entire runtime of a test that has been taking 168-313s depending on
+    /// how fast a runner GitHub hands out.
+    ///
+    /// A missing button now fails loudly. The previous `if
+    /// button.waitForExistence { tap() }` silently skipped the digit, which
+    /// submits a DIFFERENT PIN than the test asked for — a lockout test that
+    /// quietly enters seven digits instead of eight is not testing what it
+    /// claims to.
     func enterPIN(_ pin: String) {
         for char in pin {
-            let button = find("pin-\(char)")
-            if button.waitForExistence(timeout: 2) {
-                button.tap()
+            let button = app.buttons["pin-\(char)"]
+            guard button.waitForExistence(timeout: 2) else {
+                XCTFail("PIN pad button `pin-\(char)` never appeared; the entered PIN would be incomplete")
+                return
             }
+            button.tap()
         }
     }
 
