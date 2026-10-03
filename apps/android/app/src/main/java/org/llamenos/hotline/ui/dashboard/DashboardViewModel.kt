@@ -26,6 +26,7 @@ import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
+import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
 
@@ -39,6 +40,8 @@ data class DashboardUiState(
     val answerRate: Float? = null,
     val avgDurationSeconds: Int? = null,
     val currentCall: ActiveCall? = null,
+    /** Hub the [currentCall] belongs to — may differ from the active hub. */
+    val currentCallHubId: String? = null,
     val isHangingUp: Boolean = false,
     val isReportingSpam: Boolean = false,
     val isBanning: Boolean = false,
@@ -74,11 +77,8 @@ class DashboardViewModel @Inject constructor(
         val signingPubkey = cryptoService.signingPubkeyHex ?: ""
         _uiState.value = DashboardUiState(signingPubkey = signingPubkey)
 
-        // Fetch auth info (including server event key) before connecting WebSocket
-        viewModelScope.launch {
-            fetchServerEventKey()
-            webSocketService.connect()
-        }
+        viewModelScope.launch { loadAdminDecryptionPubkey() }
+        webSocketService.connect()
 
         // Subscribe to connection state changes
         viewModelScope.launch {
@@ -87,15 +87,11 @@ class DashboardViewModel @Inject constructor(
             }
         }
 
-        // Subscribe to typed (decrypted + parsed) events from the relay.
-        // Each event carries the hub ID that was active when it arrived.
-        // Guard: skip events from non-active hubs to prevent spurious UI refreshes.
+        // Relay events from EVERY member hub. Each carries the hub the server published it
+        // to; a call ringing on a hub other than the active one must still reach the
+        // volunteer (multi-hub routing axiom) — never filter on the active hub here.
         viewModelScope.launch {
-            webSocketService.typedEvents.collect { attributed ->
-                if (attributed.hubId.isEmpty() || attributed.hubId == activeHubState.activeHubId.value) {
-                    handleEvent(attributed.event)
-                }
-            }
+            webSocketService.typedEvents.collect { attributed -> handleEvent(attributed) }
         }
 
         // Reload hub-scoped data when the active hub changes
@@ -122,24 +118,28 @@ class DashboardViewModel @Inject constructor(
     }
 
     /**
-     * React to typed application events by updating dashboard state.
+     * React to a relay event from any member hub by updating dashboard state.
+     * Call lookups go to the hub the event came from, not the active hub.
      */
-    private fun handleEvent(event: LlamenosEvent) {
-        when (event) {
+    internal fun handleEvent(attributed: AttributedHubEvent<LlamenosEvent>) {
+        val hubId = attributed.hubId
+        when (val event = attributed.event) {
             is LlamenosEvent.CallRing -> {
                 _uiState.update { it.copy(activeCallCount = it.activeCallCount + 1) }
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.CallEnded -> {
                 _uiState.update {
+                    val ended = it.currentCall?.id == event.callId
                     it.copy(
                         activeCallCount = maxOf(0, it.activeCallCount - 1),
-                        currentCall = if (it.currentCall?.id == event.callId) null else it.currentCall,
+                        currentCall = if (ended) null else it.currentCall,
+                        currentCallHubId = if (ended) null else it.currentCallHubId,
                     )
                 }
             }
             is LlamenosEvent.CallUpdate -> {
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.ShiftUpdate -> {
                 // Schedule changes do not change this device's clock-in state.
@@ -161,7 +161,7 @@ class DashboardViewModel @Inject constructor(
                 // Presence updates could refresh availability indicators
             }
             is LlamenosEvent.CallAnswered -> {
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.PresenceDetail -> {
                 // Admin-only detailed presence — dashboard could show counts
@@ -182,26 +182,15 @@ class DashboardViewModel @Inject constructor(
     }
 
     /**
-     * Fetch the server event encryption key from GET /api/auth/me.
-     * Stores it in Rust memory via CryptoService — key never touches JVM memory.
-     *
-     * The API returns hubEventKeys: Map<hubId, keyHex>. We select the key for the
-     * currently active hub, falling back to the first available key if the active
-     * hub is not yet set (e.g., during initial setup).
+     * Load the admin decryption pubkey from GET /api/auth/me into the session.
+     * (Server event keys for the relay are loaded by [WebSocketService].)
      */
-    private suspend fun fetchServerEventKey() {
+    private suspend fun loadAdminDecryptionPubkey() {
         try {
             val me = apiService.request<MeResponse>("GET", "/api/auth/me")
-            // Always persist admin decryption pubkey regardless of hub event keys
             sessionState.adminDecryptionPubkey = me.adminDecryptionPubkey
-            val hubKeys = me.hubEventKeys ?: return
-            val activeHubId = activeHubState.activeHubId.value
-            val currentKey = if (activeHubId != null) hubKeys[activeHubId] else hubKeys.values.firstOrNull()
-            currentKey ?: return
-            webSocketService.setServerEventKeys(currentKey)
         } catch (_: Exception) {
-            // Non-fatal — WebSocket will still connect but events won't decrypt.
-            // The key will be retried on next refresh.
+            // Non-fatal — retried on the next dashboard load.
         }
     }
 
@@ -285,11 +274,12 @@ class DashboardViewModel @Inject constructor(
      */
     fun hangupCall() {
         val callId = _uiState.value.currentCall?.id ?: return
+        val path = currentCallPath("/api/calls/$callId/hangup")
         viewModelScope.launch {
             _uiState.update { it.copy(isHangingUp = true) }
             try {
-                apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/hangup"))
-                _uiState.update { it.copy(currentCall = null, isHangingUp = false) }
+                apiService.requestNoContent("POST", path)
+                _uiState.update { it.copy(currentCall = null, currentCallHubId = null, isHangingUp = false) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(isHangingUp = false, errorRes = R.string.call_actions_ban_failed) }
             }
@@ -301,10 +291,11 @@ class DashboardViewModel @Inject constructor(
      */
     fun reportSpam() {
         val callId = _uiState.value.currentCall?.id ?: return
+        val path = currentCallPath("/api/calls/$callId/spam")
         viewModelScope.launch {
             _uiState.update { it.copy(isReportingSpam = true) }
             try {
-                apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/spam"))
+                apiService.requestNoContent("POST", path)
                 _uiState.update { it.copy(isReportingSpam = false) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(isReportingSpam = false, errorRes = R.string.call_actions_ban_failed) }
@@ -317,15 +308,16 @@ class DashboardViewModel @Inject constructor(
      */
     fun banAndHangup(reason: String?) {
         val callId = _uiState.value.currentCall?.id ?: return
+        val path = currentCallPath("/api/calls/$callId/ban")
         viewModelScope.launch {
             _uiState.update { it.copy(isBanning = true) }
             try {
                 if (reason != null) {
-                    apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/ban"), BanRequest(reason))
+                    apiService.requestNoContent("POST", path, BanRequest(reason))
                 } else {
-                    apiService.requestNoContent("POST", apiService.hp("/api/calls/$callId/ban"))
+                    apiService.requestNoContent("POST", path)
                 }
-                _uiState.update { it.copy(currentCall = null, isBanning = false) }
+                _uiState.update { it.copy(currentCall = null, currentCallHubId = null, isBanning = false) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(isBanning = false, errorRes = R.string.call_actions_ban_failed) }
             }
@@ -333,17 +325,30 @@ class DashboardViewModel @Inject constructor(
     }
 
     /**
-     * Fetch the volunteer's active call from the API.
+     * Path for an action on the current call, scoped to the hub the call belongs to.
+     * Falls back to the active hub for calls loaded by a dashboard refresh.
      */
-    private suspend fun fetchActiveCall() {
+    private fun currentCallPath(path: String): String {
+        val hubId = _uiState.value.currentCallHubId
+        return if (hubId != null) apiService.hubPath(hubId, path) else apiService.hp(path)
+    }
+
+    /**
+     * Fetch the volunteer's active call from the API.
+     *
+     * @param hubId the hub to query — the hub a relay event came from. Null means the
+     *   active hub (dashboard refresh).
+     */
+    private suspend fun fetchActiveCall(hubId: String? = null) {
         try {
-            val path = apiService.hp("/api/calls/active")
+            val path = if (hubId != null) apiService.hubPath(hubId, "/api/calls/active") else apiService.hp("/api/calls/active")
             val response = apiService.request<ActiveCallsResponse>("GET", path)
             val call = response.calls.firstOrNull()
             if (call != null) {
                 if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "fetchActiveCall: found call id=${call.id} status=${call.status}")
             }
-            _uiState.update { it.copy(currentCall = call) }
+            val callHubId = if (call != null) hubId ?: activeHubState.activeHubId.value else null
+            _uiState.update { it.copy(currentCall = call, currentCallHubId = callHubId) }
         } catch (e: Exception) {
             // Non-fatal — active call will be updated on next event.
             // Log for CI diagnostics — silent 401s from replay detection or

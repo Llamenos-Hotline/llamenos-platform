@@ -13,6 +13,7 @@ export const configResponseSchema = z.object({
   hubs: z.array(z.object({ id: z.string(), name: z.string(), slug: z.string(), status: z.string() })),
   defaultHubId: z.string().optional(),
   serverPubkey: z.string().optional(),
+  wsRelayUrl: z.string().optional(),
   apiVersion: z.number(),
   minApiVersion: z.number(),
   sentryDsn: z.string().optional(),

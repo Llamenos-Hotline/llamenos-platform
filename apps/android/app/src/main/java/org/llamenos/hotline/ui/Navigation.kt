@@ -11,12 +11,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
-import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.mapNotNull
 import org.llamenos.hotline.api.VersionChecker
 import org.llamenos.hotline.ui.components.UpdateBanner
 import org.llamenos.hotline.ui.components.UpdateRequiredScreen
 import org.llamenos.hotline.model.LlamenosEvent
-import org.llamenos.hotline.service.AttributedHubEvent
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -435,10 +434,14 @@ fun LlamenosNavigation(
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
+        // Match on the event itself: AttributedHubEvent's type argument is erased at
+        // runtime, so filterIsInstance<AttributedHubEvent<DeviceWipe>>() would pass every
+        // event through and the DeviceWipe cast would throw on the first call:ring.
+        // RelayEventParser never produces DeviceWipe from a relay `event`, so this does not
+        // fire today; the verified top-level wipe frame that will feed it is #1093.
         webSocketService.typedEvents
-            .filterIsInstance<AttributedHubEvent<LlamenosEvent.DeviceWipe>>()
-            .collect { attributed ->
-                val wipeEvent = attributed.event
+            .mapNotNull { it.event as? LlamenosEvent.DeviceWipe }
+            .collect { wipeEvent ->
                 // Clear ALL encrypted storage and AndroidKeyStore keys
                 keystoreService.wipeAll()
                 // Zeroize Rust crypto state (hub keys, server event keys, device keys)
