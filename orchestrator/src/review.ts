@@ -230,10 +230,10 @@ const VERDICT_LINE_RE = /^VERDICT: (?:(PASS)$|(FAIL)\b)/
 /**
  * Enforces VERIFIER_BRIEF's contract — "end your response with exactly one
  * line, and nothing after it" — by judging ONLY the final non-empty line of
- * the reviewer's ASSISTANT TEXT (see `decodeEngineOutput`: `claude --print`
- * prints only the final assistant message, so `stdout` already IS that text,
- * with nothing to separate it from — unlike the retired `opencode` reviewer,
- * whose `--format json` event stream needed its own tool-output filter).
+ * the reviewer's ASSISTANT TEXT (see `decodeEngineOutput`: the engine's
+ * `--output-format json` envelope carries that text whole in `.result`, with
+ * no tool output interleaved — unlike the retired `opencode` reviewer, whose
+ * event stream needed its own filter).
  *
  * A verdict found anywhere else is not a verdict. A reviewer that walks
  * through the diff before deciding quotes it, and this repository's own
@@ -334,7 +334,11 @@ export function classifyEngineFailure(text: string): EngineFailureKind {
   // that follows ("re-request the review") re-runs the same diff with the
   // same budget and exhausts again: a loop that costs a full session per
   // attempt and can never clear. Same lesson as #866, one layer up.
-  if (/reached max turns/i.test(text)) return 'budget-exhausted'
+  // `--output-format json` reports this structurally as
+  // `subtype: 'error_max_turns'`, which `decodeEngineOutput` surfaces into the
+  // diagnostics. The literal error text stays as a fallback for any path that
+  // still emits it plainly.
+  if (/error_max_turns|reached max turns/i.test(text)) return 'budget-exhausted'
   return 'engine-unavailable'
 }
 
@@ -734,15 +738,81 @@ export interface EngineRun {
 }
 
 /**
- * `claude --print` (text output, the only mode this reviewer ever runs in —
- * see `invokeVerifierEngine`) prints only the final assistant message; tool
- * output is never interleaved into stdout, so there is no event stream to
- * filter here the way an `opencode --format json` reviewer once needed
- * (`opencodeAssistantText`, removed with opencode itself at #812 — see
- * `verifierFor`). `stdout` IS the assistant text, in full.
+ * Reads the engine's `--output-format json` envelope (see
+ * `invokeVerifierEngine` for why that mode): `.result` is the final assistant
+ * message whole, with no tool output interleaved, so it needs none of the
+ * event-stream filtering the retired `opencode` reviewer did
+ * (`opencodeAssistantText`, removed with opencode at #812).
+ *
+ * It also lifts `subtype`, `num_turns` and `permission_denials` into
+ * `diagnostics`. That is the point of the mode: a bare `--print` returns ONLY
+ * the final message, so a session that ends without one — an exhausted turn
+ * budget — left literally nothing behind. #1445 spent ten turns in 68 seconds
+ * and the report artifact was 268 bytes, with no way to tell whether it had
+ * been reading, looping, or fighting its permission mode.
+ *
+ * Falls back to treating stdout as the text when it is not JSON, so an engine
+ * that predates the flag still reviews rather than failing on its envelope.
  */
-function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineRun, 'reached'> {
-  return { assistantText: stdout, diagnostics: stderr.trim().slice(-2000) }
+export function decodeEngineOutput(stdout: string, stderr: string): Omit<EngineRun, 'reached'> {
+  const diagnostics = stderr.trim().slice(-2000)
+  let envelope: Record<string, unknown>
+  try {
+    envelope = JSON.parse(stdout.trim()) as Record<string, unknown>
+  } catch {
+    // Not JSON: an engine too old for `--output-format json`, or a crash
+    // before it emitted one. Fall back to treating stdout as the assistant
+    // text, which is what this function did before the flag existed — a
+    // reviewer that still answers must not be failed over its envelope.
+    return { assistantText: stdout, diagnostics }
+  }
+  const result = typeof envelope['result'] === 'string' ? envelope['result'] : ''
+  const subtype = typeof envelope['subtype'] === 'string' ? envelope['subtype'] : ''
+  const turns = typeof envelope['num_turns'] === 'number' ? envelope['num_turns'] : undefined
+  const denials = Array.isArray(envelope['permission_denials']) ? envelope['permission_denials'] : []
+  // Kept even on a clean PASS: `num_turns` is the only way to watch a reviewer
+  // creep toward its ceiling BEFORE it starts failing, and a non-empty denial
+  // list is a reviewer fighting its own permission mode rather than reviewing.
+  const notes = [
+    subtype !== '' && subtype !== 'success' ? `subtype=${subtype}` : '',
+    turns !== undefined ? `num_turns=${turns}` : '',
+    denials.length > 0 ? `permission_denials=${denials.length}` : '',
+  ].filter((x) => x !== '').join(' ')
+  return {
+    assistantText: result,
+    diagnostics: [notes, diagnostics].filter((x) => x !== '').join('\n'),
+  }
+}
+
+/**
+ * The reviewer's argv, as one exported function so a rail can pin it.
+ *
+ * Extracted because the flags are load-bearing and were not covered:
+ * removing `--output-format json` left the whole fleet suite green, while
+ * silently returning the reviewer to a mode where an exhausted session
+ * leaves nothing behind at all (see `decodeEngineOutput`).
+ *
+ * `--output-format json` rather than bare `--print`. Same final assistant
+ * text (now in `.result`), plus the three facts a bare `--print` throws
+ * away and that an exhausted session leaves nothing else to go on:
+ *
+ *   subtype            'error_max_turns' — the budget ran out, reported
+ *                      structurally instead of inferred from error text
+ *   num_turns          how many it actually used
+ *   permission_denials tools it was refused. `--permission-mode plan`
+ *                      denies edits, so a reviewer that keeps reaching for
+ *                      one burns a turn per attempt — which is the shape of
+ *                      #1445: ten turns in 68 seconds, far too fast to be
+ *                      reading anything.
+ *
+ * On exhaustion the payload carries NO `result` key at all, so the
+ * session's work is lost either way; what changes is that we now know it
+ * was the budget, and how it was spent.
+ */
+export function verifierArgs(input: { model: string; maxTurns: number; exportDir: string }): string[] {
+  return ['--print', '--output-format', 'json',
+    '--permission-mode', 'plan', '--model', input.model,
+    '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
 }
 
 /**
@@ -813,8 +883,7 @@ export async function invokeVerifierEngine(input: {
   const projectRoot = await mkdtemp(join(tmpdir(), 'llamenos-fleet-reviewer-root-'))
   try {
     const env = verifierEnv()
-    const args = ['--print', '--permission-mode', 'plan', '--model', model,
-      '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
+    const args = verifierArgs({ model, maxTurns: input.maxTurns, exportDir: input.exportDir })
 
     try {
       // execFile (unlike execFileSync) has no `input` option — the prompt must

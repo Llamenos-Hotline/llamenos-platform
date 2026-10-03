@@ -4,8 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  parseVerdict, stripReviewerControlFiles, verifierFor,
-  classifyEngineFailure, reviewerBinaryFor, reviewerInvocationFor,
+  verifierArgs,
+  decodeEngineOutput,
+  parseVerdict,
+  stripReviewerControlFiles,
+  verifierFor,
+  classifyEngineFailure,
+  reviewerBinaryFor,
+  reviewerInvocationFor,
 } from '../../orchestrator/src/review.js'
 
 // #812: `fleet/review` retired `opencode` as the reviewer engine entirely —
@@ -595,5 +601,91 @@ describe('postReview', () => {
     expect(args).not.toContain('--approve')
     expect(args).not.toContain('--request-changes')
     expect(args.join(' ')).toContain(verdict)
+  })
+})
+
+describe('decodeEngineOutput: the engine envelope', () => {
+  // Both payloads below are VERBATIM from real `claude` runs captured while
+  // diagnosing #1445 — a success and a forced exhaustion. Hand-written
+  // fixtures would only prove the decoder matches my guess at the shape.
+  const SUCCESS = JSON.stringify({
+    type: 'result', subtype: 'success', is_error: false, num_turns: 1,
+    duration_ms: 130436, permission_denials: [],
+    result: 'Simple, correct addition function. No issues.\nVERDICT: PASS',
+  })
+  // The exhaustion envelope carries NO `result` key at all.
+  const EXHAUSTED = JSON.stringify({
+    type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 2,
+    duration_ms: 51234, permission_denials: [],
+  })
+
+  it('takes the assistant text from .result, so the verdict line is still last', () => {
+    const run = decodeEngineOutput(SUCCESS, '')
+    expect(run.assistantText).toContain('VERDICT: PASS')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('records num_turns even on success — a reviewer nearing its ceiling is visible before it fails', () => {
+    expect(decodeEngineOutput(SUCCESS, '').diagnostics).toMatch(/num_turns=1/)
+  })
+
+  it('surfaces an exhausted budget as error_max_turns, which classifyEngineFailure reads', () => {
+    const run = decodeEngineOutput(EXHAUSTED, '')
+    expect(run.assistantText).toBe('')
+    expect(run.diagnostics).toMatch(/subtype=error_max_turns/)
+    expect(run.diagnostics).toMatch(/num_turns=2/)
+    // The whole chain: envelope -> diagnostics -> classification.
+    expect(classifyEngineFailure(run.diagnostics)).toBe('budget-exhausted')
+  })
+
+  it('counts permission denials — a reviewer fighting plan mode burns a turn per attempt', () => {
+    const denied = JSON.stringify({
+      type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10,
+      permission_denials: [{ tool_name: 'Edit' }, { tool_name: 'Write' }],
+    })
+    expect(decodeEngineOutput(denied, '').diagnostics).toMatch(/permission_denials=2/)
+  })
+
+  it('falls back to raw stdout when the output is not JSON, so an older engine still reviews', () => {
+    const plain = 'looks fine to me\nVERDICT: PASS'
+    const run = decodeEngineOutput(plain, '')
+    expect(run.assistantText).toBe(plain)
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('keeps stderr as diagnostics alongside the envelope notes', () => {
+    expect(decodeEngineOutput(EXHAUSTED, 'some stderr noise').diagnostics).toMatch(/some stderr noise/)
+  })
+})
+
+describe('verifierArgs: the reviewer invocation', () => {
+  const args = () => verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
+
+  it('asks for the json envelope — without it an exhausted session leaves nothing behind', () => {
+    // The flag this rail exists for. Removing it previously left the entire
+    // fleet suite green while returning the reviewer to a mode where a
+    // session that ends without a final message produces no output at all,
+    // which is what made #1445 undiagnosable.
+    const a = args()
+    expect(a).toContain('--output-format')
+    expect(a[a.indexOf('--output-format') + 1]).toBe('json')
+  })
+
+  it('runs in plan mode, so a reviewer can never edit the tree it is judging', () => {
+    const a = args()
+    expect(a[a.indexOf('--permission-mode') + 1]).toBe('plan')
+  })
+
+  it('passes the turn budget through, since --max-turns is what actually enforces it', () => {
+    expect(verifierArgs({ model: 'sonnet', maxTurns: 20, exportDir: '/x' })).toContain('20')
+  })
+
+  it('hands the export by --add-dir and never as the working directory', () => {
+    // The project root is a separate empty dir — see invokeVerifierEngine's
+    // comment on #812, where the PR under review WAS the project and its own
+    // committed tooling got loaded in-process.
+    const a = verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
+    expect(a[a.indexOf('--add-dir') + 1]).toBe('/tmp/export')
+    expect(a).not.toContain('--dir')
   })
 })
