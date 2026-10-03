@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import shiftRoutes from '@worker/routes/shifts'
-import { permissionGranted, isValidPermission } from '@shared/permissions'
+import { permissionGranted, isValidPermission, DEFAULT_ROLES } from '@shared/permissions'
 
 const TEMPLATES_DIR = join(import.meta.dirname, '../../../../../packages/protocol/templates')
 
@@ -40,13 +40,15 @@ function callAnsweringTemplateRoles(): TemplateRole[] {
 const SELF = 'a'.repeat(64)
 const HUB = 'hub-1'
 
-function appFor(permissions: string[], services: Record<string, unknown>) {
+function appFor(permissions: string[], services: Record<string, unknown>, scope: 'hub' | 'global' = 'hub') {
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('pubkey', SELF)
-    c.set('permissions', [])
     // Template roles are hub-scoped: hubContext resolves them into hubPermissions.
-    c.set('hubPermissions', permissions)
+    // DEFAULT_ROLES are global, and arrive on `permissions` instead — the two
+    // paths are different, so a role that works in one can still 403 in the other.
+    c.set('permissions', scope === 'global' ? permissions : [])
+    c.set('hubPermissions', scope === 'global' ? [] : permissions)
     c.set('hubId', HUB)
     c.set('services', services as unknown as AppEnv['Variables']['services'])
     c.set('allRoles', [])
@@ -84,6 +86,44 @@ describe('shipped template roles that can answer calls (#1348)', () => {
       expect(activeShifts.clockIn).toHaveBeenCalledWith(SELF, HUB)
       expect(activeShifts.heartbeat).toHaveBeenCalledWith(SELF, HUB)
       expect(activeShifts.clockOut).toHaveBeenCalledWith(SELF, HUB)
+    })
+  })
+})
+
+/**
+ * The same invariant for the GLOBAL default roles (#1342).
+ *
+ * #1406 fixed the hub TEMPLATE roles (#1348) by granting them
+ * `shifts:set-availability`. It did not touch `DEFAULT_ROLES` in
+ * packages/shared/permissions.ts, so the role an ordinary volunteer actually
+ * gets on a default install still 403'd on clock-in: verified against a live
+ * database, `role-volunteer` had `calls:answer` and no
+ * `shifts:set-availability`.
+ *
+ * A role that can answer a call but cannot say it is available is not a
+ * coherent role, whichever list it is shipped in.
+ */
+describe('shipped DEFAULT_ROLES that can answer calls (#1342)', () => {
+  const answering = DEFAULT_ROLES.filter(r => permissionGranted(r.permissions, 'calls:answer'))
+
+  it('the default role list ships call-answering roles (guards against an empty matrix)', () => {
+    expect(answering.map(r => r.id)).toContain('role-volunteer')
+  })
+
+  describe.each(answering.map(r => ({ id: r.id, permissions: r.permissions })))('$id', ({ permissions }) => {
+    it('clocks in, heartbeats and clocks out as itself', async () => {
+      const activeShifts = {
+        clockIn: vi.fn().mockResolvedValue(undefined),
+        heartbeat: vi.fn().mockResolvedValue(undefined),
+        clockOut: vi.fn().mockResolvedValue(undefined),
+      }
+      const app = appFor(permissions, { activeShifts }, 'global')
+
+      for (const action of ['clock-in', 'heartbeat', 'clock-out'] as const) {
+        const res = await app.request(`/shifts/${action}`, { method: 'POST' })
+        expect(res.status, `${action} → ${await res.clone().text()}`).toBe(200)
+      }
+      expect(activeShifts.clockIn).toHaveBeenCalledWith(SELF, HUB)
     })
   })
 })
