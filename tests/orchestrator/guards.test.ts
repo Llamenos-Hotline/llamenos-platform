@@ -3223,37 +3223,48 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     const pkgScripts: Record<string, string> =
       JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).scripts ?? {}
 
-    // A job need not spell `--config` out on the command line. `backend-integration`
-    // runs `bun run test:worker:integration`, which is scripts/test-worker-integration.ts,
-    // which passes the config as separate argv entries so it can assert the suite
-    // actually ran afterwards (#1167). Following `bun run <script>` into package.json —
-    // and into a script file it names — keeps this rail from going blind precisely
-    // when a job stops naming the flag inline.
+    // A job need not spell `--config` out on the command line.
+    // `backend-integration` runs `bun scripts/test-worker-integration.ts`, which
+    // passes the config as separate argv entries so it can assert afterwards that
+    // the suite actually ran (#1167). So a job's configs are resolved from three
+    // places: the literal flag, any scripts/ file the job EXECUTES, and any
+    // `bun run <script>` resolved through package.json (which may itself name a
+    // scripts/ file). Without this the rail goes blind precisely when a job stops
+    // naming the flag inline.
     const configsNamedIn = (text: string): string[] =>
-      [...text.matchAll(/(vitest\.[a-z0-9-]+\.config\.ts)/g)].map((m) => m[1] as string)
+      [...stripComments(text).matchAll(/(vitest\.[a-z0-9-]+\.config\.ts)/g)].map((m) => m[1] as string)
 
-    // Comment lines are stripped before matching. A YAML comment that merely
-    // DESCRIBES the command ("# Runs `vitest run --config vitest.x.config.ts`")
-    // otherwise satisfies this rail on its own: replacing the real step with
-    // `run: echo skipped` left the pin green, which is the same class of
-    // false-green the rail exists to prevent.
-    const executable = (block: string): string =>
-      block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+    const configsInScriptsNamedBy = (text: string): string[] => {
+      const out: string[] = []
+      for (const m of text.matchAll(/(scripts\/[A-Za-z0-9._/-]+\.(?:ts|sh))/g)) {
+        const file = join(process.cwd(), m[1] as string)
+        if (existsSync(file)) out.push(...configsNamedIn(readFileSync(file, 'utf8')))
+      }
+      return out
+    }
+
+    // Comment lines are stripped before matching, in the workflow AND in any
+    // script it runs. A comment that merely DESCRIBES the command
+    // ("# Runs `vitest run --config vitest.x.config.ts`") otherwise satisfies
+    // this rail on its own: replacing the real step with `run: echo skipped`
+    // left the pin green, which is the same class of false-green the rail
+    // exists to prevent.
+    const stripComments = (text: string): string =>
+      text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
 
     const bound: Array<[string, string]> = []
     for (const job of ALL_GATED_JOBS) {
-      const block = executable(jobBlock(yaml, job))
-      for (const m of block.matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) bound.push([job, m[1] as string])
+      const block = stripComments(jobBlock(yaml, job))
+      const seen = new Set<string>()
+      for (const m of block.matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) seen.add(m[1] as string)
+      for (const c of configsInScriptsNamedBy(block)) seen.add(c)
       for (const m of block.matchAll(/bun run ([A-Za-z0-9:_-]+)/g)) {
         const cmd = pkgScripts[m[1] as string]
         if (!cmd) continue
-        const seen = new Set(configsNamedIn(cmd))
-        for (const f of cmd.matchAll(/(scripts\/[A-Za-z0-9._/-]+\.(?:ts|sh))/g)) {
-          const file = join(process.cwd(), f[1] as string)
-          if (existsSync(file)) for (const c of configsNamedIn(readFileSync(file, 'utf8'))) seen.add(c)
-        }
-        for (const c of seen) bound.push([job, c])
+        for (const c of configsNamedIn(cmd)) seen.add(c)
+        for (const c of configsInScriptsNamedBy(cmd)) seen.add(c)
       }
+      for (const c of seen) bound.push([job, c])
     }
     // Pinned so a renamed job or a moved step cannot make the loop vacuous.
     expect(bound).toEqual(expect.arrayContaining([

@@ -35,7 +35,7 @@
     "test:docker:down": "cd deploy/docker && docker compose -f docker-compose.yml -f docker-compose.test.yml down -v",
     "test:worker": "scripts/test-worker.sh",
     "test:worker:unit": "bunx vitest run --config vitest.unit.config.ts",
-    "test:worker:integration": "bun scripts/test-worker-integration.ts",
+    "test:worker:integration": "bunx vitest run --config vitest.integration.config.ts",
     "test:worker:watch": "bunx vitest --config vitest.unit.config.ts",
     "test:fleet": "bunx vitest run --config vitest.orchestrator.config.ts",
     "test:manifest": "bun test tests/manifest-npm-coherence.test.ts",

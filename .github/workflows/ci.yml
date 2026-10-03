@@ -846,13 +846,12 @@ jobs:
       - name: Build server crypto library
         run: packages/crypto/scripts/build-server.sh
 
-      # Runs `bunx vitest run --config vitest.integration.config.ts` and then
-      # asserts the suite actually ran — every *.test.ts on disk was collected,
-      # and the executed-test count cleared its floor. `passWithNoTests` used
-      # to make this suite green on an empty glob; see the script's header and
-      # #1167.
+      # The wrapper runs vitest and then asserts the suite actually ran: every
+      # *.test.ts on disk was collected, and the executed-test count cleared its
+      # floor. `passWithNoTests` used to make this suite green on an empty glob;
+      # see the script's header and #1167.
       - name: Run backend integration tests
-        run: bun run test:worker:integration
+        run: bun scripts/test-worker-integration.ts
 
       - name: Upload test results
         if: always()
