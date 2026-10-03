@@ -4,7 +4,7 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -2409,18 +2409,35 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     [
       // Round 2 of #664's review (fleet/review on PR #862): a
       // packages/test-specs/-only change (the shared BDD feature corpus)
-      // must RUN e2e, backend-bdd, and android-e2e — not skip them. Before
-      // this fix, none of the three platform regexes matched
-      // packages/test-specs/, so a PR that broke a feature file (or added
-      // one with no matching step) merged with all three suites silently
-      // skipped and ci-status green.
-      'a packages/test-specs/-only change',
+      // must RUN e2e and backend-bdd — not skip them. Before #664, none of
+      // the platform regexes matched packages/test-specs/, so a PR that broke
+      // a feature file (or added one with no matching step) merged with those
+      // suites silently skipped and ci-status green.
+      //
+      // Android is NOT in this row. `android-e2e` collects only
+      // `features/platform/mobile/**`, so a security/ feature cannot reach the
+      // Android build — see the next row, and the dedicated describe block
+      // above, for the pair that pins both directions.
+      'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
-      // dependency manifests.
+      // dependency manifests. The android jobs skip because this feature is
+      // not one Android reads.
+      ['ios-build-test', 'crypto-tests', 'audit', 'android-build-test', 'android-e2e'],
+    ],
+    [
+      // The mobile half of the same corpus DOES reach Android: ci.yml's
+      // android-e2e step finds its features under
+      // packages/test-specs/features/platform/mobile, and
+      // apps/android/app/build.gradle.kts copies that directory into
+      // androidTest assets. Deleting the android arm of the split makes this
+      // row fail, so the narrowing cannot be over-applied either.
+      'a packages/test-specs/ change INSIDE the mobile corpus',
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
     [
@@ -2488,6 +2505,53 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    * fails the pinned-text test above; dropping the OUTPUT, or inverting its
    * sense, fails here.
    */
+  describe('the BDD corpus only wakes the platforms that can read it', () => {
+    /**
+     * `android-e2e` collects exactly one directory —
+     * `packages/test-specs/features/platform/mobile/**` (ci.yml's
+     * `find packages/test-specs/features/platform/mobile ...` step, and
+     * apps/android/app/build.gradle.kts's copy task). A feature outside that
+     * directory cannot reach the Android build, so setting `android` for the
+     * whole `packages/test-specs/` prefix buys nothing and costs a lot: #1072
+     * changed `features/core/call-routing.feature` and nothing else
+     * Android-shaped, and paid `android-build-test` plus four `android-e2e`
+     * shards (~50 job-minutes) inside the strictly-serial merge queue.
+     *
+     * Reverting the split makes the first row fail.
+     */
+    it.each([
+      ['packages/test-specs/features/core/call-routing.feature', false],
+      ['packages/test-specs/features/admin/erasure.feature', false],
+      ['packages/test-specs/features/platform/desktop/misc/setup-wizard.feature', false],
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature', true],
+      ['.github/actions/bootstrap-backend/action.yml', true],
+    ])('%s → android=%s', (file, wantsAndroid) => {
+      expect(classify([file]).android).toBe(String(wantsAndroid))
+    })
+
+    it('every BDD corpus change still wakes desktop and backend', () => {
+      // The narrowing is android-only; desktop (bdd project) and backend
+      // (backend-bdd project) both read the whole corpus.
+      for (const f of [
+        'packages/test-specs/features/core/call-routing.feature',
+        'packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature',
+      ]) {
+        const out = classify([f])
+        expect(out.desktop, `${f} stopped waking desktop`).toBe('true')
+        expect(out.backend, `${f} stopped waking backend`).toBe('true')
+      }
+    })
+
+    it('the mobile directory the split trusts actually exists', () => {
+      // A typo in the regex would silently make android=false for everything,
+      // and every row above would still pass. Pin the path to the filesystem.
+      expect(
+        existsSync(join(process.cwd(), 'packages/test-specs/features/platform/mobile')),
+        'features/platform/mobile moved — E2E_INFRA_ANDROID_RE now matches nothing and android-e2e will never run on a corpus change',
+      ).toBe(true)
+    })
+  })
+
   describe('heavy suites run only where their verdict gates a merge (#1426)', () => {
     /** Every suite heavy enough that re-running it costs a scarce runner. */
     const HEAVY = ['e2e', 'backend-bdd', 'android-build-test', 'android-e2e', 'ios-build-test', 'ios-e2e']

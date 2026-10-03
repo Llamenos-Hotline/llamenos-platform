@@ -130,15 +130,30 @@ AUDIT_RE='^(package\.json$|bun\.lock)'
 ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$)'
 # The cross-platform BDD feature corpus (packages/test-specs/features/**)
 # and the one composite action every backend-bootstrapping job shares
-# (.github/actions/bootstrap-backend) — both are read directly by ci.yml's
-# `e2e` (desktop bdd + backend-bdd Playwright projects), `backend-bdd`, and
-# `android-e2e` (collects `packages/test-specs/features/platform/mobile/**`
-# into androidTest assets) jobs, and by desktop-e2e.yml's own `test` job
-# (also bootstraps via the same action). None of the three platform-specific
-# regexes above would catch either path on its own, so a change here sets
-# `desktop`, `backend`, AND `android` directly rather than relying on one of
-# them to coincidentally already be true.
+# (.github/actions/bootstrap-backend). Both are read directly by ci.yml's
+# `e2e` (desktop bdd + backend-bdd Playwright projects) and `backend-bdd`
+# jobs, and by desktop-e2e.yml's own `test` job (also bootstraps via the same
+# action). None of the platform-specific regexes above would catch either
+# path on its own, so a change here sets `desktop` and `backend` directly
+# rather than relying on one of them to coincidentally already be true.
 E2E_INFRA_RE='^(packages/test-specs/|\.github/actions/)'
+# Android's slice of the same corpus is NARROWER, and the difference is
+# expensive. `android-e2e` collects only
+# `packages/test-specs/features/platform/mobile/**` — ci.yml's
+# "FEATURES=$(find packages/test-specs/features/platform/mobile ...)" step and
+# apps/android/app/build.gradle.kts's copy task (`from(.../features/platform/
+# mobile)`) are both scoped to that one directory. A change under
+# `features/core/`, `features/admin/`, `features/security/` or
+# `features/platform/desktop/` therefore cannot reach the Android build at
+# all.
+#
+# Keying Android off the whole `packages/test-specs/` prefix cost real queue
+# time: #1072 edited `features/core/call-routing.feature` and nothing else
+# Android-shaped, and its merge_group run spent ~50 job-minutes on
+# `android-build-test` plus four `android-e2e` shards — inside the merge
+# queue, which is strictly serial and the scarcest resource we have.
+# `.github/actions/` stays in, because android-e2e does bootstrap through it.
+E2E_INFRA_ANDROID_RE='^(packages/test-specs/features/platform/mobile/|\.github/actions/)'
 # playwright.config.ts is read directly by ci.yml's `e2e` job and by
 # desktop-e2e.yml's `test` job (both invoke `bunx playwright test` against
 # it) — not by android/ios, which don't use Playwright at all.
@@ -178,7 +193,8 @@ while IFS= read -r file; do
   echo "$file" | grep -qE "$ANSIBLE_RE" && { ansible=true; echo "Ansible file changed: $file" >&2; }
   echo "$file" | grep -qE "$AUDIT_RE" && { audit=true; echo "Dependency manifest changed: $file" >&2; }
   echo "$file" | grep -qE "$ORCHESTRATOR_RE" && { orchestrator=true; echo "Fleet orchestrator file changed: $file" >&2; }
-  echo "$file" | grep -qE "$E2E_INFRA_RE" && { desktop=true; backend=true; android=true; echo "E2E test infra file changed: $file" >&2; }
+  echo "$file" | grep -qE "$E2E_INFRA_RE" && { desktop=true; backend=true; echo "E2E test infra file changed: $file" >&2; }
+  echo "$file" | grep -qE "$E2E_INFRA_ANDROID_RE" && { android=true; echo "Android-visible E2E infra file changed: $file" >&2; }
   echo "$file" | grep -qE "$PLAYWRIGHT_CONFIG_RE" && { desktop=true; backend=true; echo "Playwright config changed: $file" >&2; }
 done <<< "$CHANGED_FILES"
 
