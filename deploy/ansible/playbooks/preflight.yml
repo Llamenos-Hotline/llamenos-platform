@@ -473,16 +473,20 @@
               - "203.0.113.1/32"
       when: "'0.0.0.0/0' in (ssh_allowed_cidrs | default([]))"
 
-    - name: Validate backup_age_public_key format (if set)
+    - name: Require a valid backup_age_public_key whenever backups are enabled
       ansible.builtin.assert:
         that:
-          - backup_age_public_key | length > 0
-          - backup_age_public_key | regex_search('^age1[0-9a-z]{58}$') is truthy
+          - backup_age_public_key | default('') | length > 0
+          - backup_age_public_key | default('') | regex_search('^age1[0-9a-z]{58}$') is truthy
         fail_msg: |
-          INVALID: 'backup_age_public_key' does not appear to be a valid age public key.
+          INVALID: 'backup_age_public_key' must be set to a valid age public key
+          (format: age1... — 59 characters starting with 'age1').
 
-          Expected format: age1... (59 characters starting with 'age1')
-          Current value: {{ backup_age_public_key[:20] | default('NOT SET') }}...
+          Current value: {{ (backup_age_public_key | default(''))[:20] | default('NOT SET') }}...
+
+          backup_enabled defaults to true, and the config backup includes .env — the
+          file holding every server secret. There is no unencrypted path: either
+          configure encryption or set `backup_enabled: false` explicitly.
 
           To generate a keypair:
             age-keygen -o backup-key.txt
@@ -490,7 +494,29 @@
           Then copy the public key (starts with 'age1') to backup_age_public_key in vars.yml.
           Store the private key somewhere safe (NOT on the server).
         success_msg: "backup_age_public_key: [valid age key]"
-      when: backup_age_public_key | default('') | length > 0
+      when: backup_enabled | default(true) | bool
+
+    - name: Warn if backups have no off-site copy
+      ansible.builtin.debug:
+        msg: |
+          WARNING: 'backup_rclone_remote' is not set — backups stay on this host only.
+          Losing this host loses every backup with it. Configure rclone
+          (`rclone config`) and set backup_rclone_remote in vars.yml.
+      when:
+        - backup_enabled | default(true) | bool
+        - backup_rclone_remote | default('') | length == 0
+
+    - name: Warn if a missed backup has no alerting path
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Neither 'backup_monitor_webhook_url' nor 'llamenos_alerting_enabled'
+          is set — a missed or failed backup will not page anyone. Set
+          backup_monitor_webhook_url in vars.yml, or enable the alerting role
+          (llamenos_alerting_enabled: true), which also monitors backup staleness.
+      when:
+        - backup_enabled | default(true) | bool
+        - backup_monitor_webhook_url | default('') | length == 0
+        - not (llamenos_alerting_enabled | default(false) | bool)
 
     # DNS validation (official profile only)
     #

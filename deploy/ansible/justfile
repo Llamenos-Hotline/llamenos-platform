@@ -84,8 +84,6 @@ deploy-caddy *ARGS:
 deploy-rustfs *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags rustfs {{ARGS}}
 
-# Deploy only strfry Nostr relay
-
 # Deploy only Whisper transcription
 deploy-whisper *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags whisper {{ARGS}}
@@ -210,27 +208,27 @@ watchdog-status *ARGS:
 
 # Run maintenance cleanup manually
 maintenance-run *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/maintenance-cleanup.sh" --become --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "/opt/llamenos/scripts/maintenance-cleanup.sh" --become --ask-vault-pass {{ARGS}}
 
 # Run PostgreSQL vacuum manually
 vacuum-run *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/maintenance-vacuum.sh" --become --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "/opt/llamenos/scripts/maintenance-vacuum.sh" --become --ask-vault-pass {{ARGS}}
 
 # Check NTP drift status
 ntp-status *ARGS:
-    ansible all -m shell -a "chronyc tracking; echo '---'; tail -5 {{ app_dir | default('/opt/llamenos') }}/logs/ntp-monitor.log 2>/dev/null || echo 'No NTP monitor log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "chronyc tracking; echo '---'; tail -5 /opt/llamenos/logs/ntp-monitor.log 2>/dev/null || echo 'No NTP monitor log yet'" --ask-vault-pass {{ARGS}}
 
 # Check disk space and recent alerts
 disk-status *ARGS:
-    ansible all -m shell -a "df -h /opt/llamenos; echo '---'; tail -5 {{ app_dir | default('/opt/llamenos') }}/logs/disk-monitor.log 2>/dev/null || echo 'No disk monitor log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "df -h /opt/llamenos; echo '---'; tail -5 /opt/llamenos/logs/disk-monitor.log 2>/dev/null || echo 'No disk monitor log yet'" --ask-vault-pass {{ARGS}}
 
 # Check certificate expiry
 cert-status *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/cert-monitor.sh 2>&1 || echo 'Cert monitor not configured'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "/opt/llamenos/scripts/cert-monitor.sh 2>&1 || echo 'Cert monitor not configured'" --ask-vault-pass {{ARGS}}
 
 # View recent watchdog logs
 watchdog-logs *ARGS:
-    ansible all -m shell -a "tail -50 {{ app_dir | default('/opt/llamenos') }}/logs/watchdog.log 2>/dev/null || echo 'No watchdog log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "tail -50 /opt/llamenos/logs/watchdog.log 2>/dev/null || echo 'No watchdog log yet'" --ask-vault-pass {{ARGS}}
 
 # Deploy only auto-healing components
 deploy-auto-healing *ARGS:
@@ -239,18 +237,18 @@ deploy-auto-healing *ARGS:
 
 # ── Alerting ──────────────────────────────────────────────────────────
 
-# Test alert delivery
-test-alerts *ARGS:
+# Test alert delivery. HOST must match an ansible_host in your inventory.
+test-alerts HOST *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags alerting {{ARGS}}
-    ssh -t {{ ansible_host }} "{{ app_dir | default('/opt/llamenos') }}/alerting/test-alerts.sh"
+    ssh -t {{HOST}} "/opt/llamenos/alerting/test-alerts.sh"
 
-# View recent alerts
-alert-log *ARGS:
-    ssh {{ ansible_host }} "tail -50 {{ app_dir | default('/opt/llamenos') }}/alerting/alerts.log"
+# View recent alerts. HOST must match an ansible_host in your inventory.
+alert-log HOST:
+    ssh {{HOST}} "tail -50 /opt/llamenos/alerting/alerts.log"
 
-# View current alert state
-alert-state *ARGS:
-    ssh {{ ansible_host }} "cat {{ app_dir | default('/opt/llamenos') }}/alerting/state.json | jq ."
+# View current alert state. HOST must match an ansible_host in your inventory.
+alert-state HOST:
+    ssh {{HOST}} "cat /opt/llamenos/alerting/state.json | jq ."
 
 # Run full disaster recovery test
 dr-test *ARGS:
@@ -258,13 +256,9 @@ dr-test *ARGS:
 
 # View DR drill history and next scheduled drill
 dr-status:
-    @cat {{ app_dir }}/dr-results/*.json 2>/dev/null | jq -s 'sort_by(.date) | .[-5:]' || echo "No DR test results found"
+    @cat /opt/llamenos/dr-results/*.json 2>/dev/null | jq -s 'sort_by(.date) | .[-5:]' || echo "No DR test results found"
     @echo ""
     @echo "DR Scenarios: docs/DR_SCENARIOS.md"
-
-# Restore from latest backup (production — use with caution)
-restore *ARGS:
-    ansible-playbook playbooks/test-restore.yml --ask-vault-pass {{ARGS}}
 
 # Generate secrets for a new deployment
 generate-secrets:

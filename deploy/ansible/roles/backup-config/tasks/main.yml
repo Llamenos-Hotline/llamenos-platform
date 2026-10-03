@@ -38,10 +38,53 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-config.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_config_backup
-  changed_when: "'Backup complete' in initial_config_backup.stdout"
-  ignore_errors: true
+  changed_when: "'Config backup complete' in initial_config_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:
     msg: "{{ initial_config_backup.stdout_lines | default(['No output']) }}"
   when: initial_config_backup is defined
+
+# backup_config_ansible_dir names the control node's own deploy/ansible
+# directory — inventory, vars, and the ansible-vault file holding every
+# server secret. It lives on the operator's machine, not the server, so it
+# cannot be archived by backup-config.sh.j2 (which only ever runs on the
+# server). Archive it from here instead, on the control node, so the one
+# knob documented as backing it up actually does. Non-fatal: a control node
+# without that directory configured (or without local disk) must not fail
+# the server-side backup it has nothing to do with.
+- name: Back up the Ansible control directory (local, control-node only)
+  when: backup_config_ansible_dir | default('') | length > 0
+  delegate_to: localhost
+  become: false
+  run_once: true
+  block:
+    - name: Ensure local Ansible-config backup directory exists
+      ansible.builtin.file:
+        path: "{{ (backup_config_ansible_dir | dirname) + '/ansible-config-backups' }}"
+        state: directory
+        mode: "0700"
+
+    - name: Archive the Ansible control directory
+      ansible.builtin.shell: |
+        set -euo pipefail
+        TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
+        DEST_DIR="{{ (backup_config_ansible_dir | dirname) + '/ansible-config-backups' }}"
+        tar -czf "${DEST_DIR}/llamenos-ansible-${TIMESTAMP}.tar.gz" \
+          --exclude='.git' \
+          -C "{{ backup_config_ansible_dir | dirname }}" "{{ backup_config_ansible_dir | basename }}"
+        # Retain the 10 most recent local archives. This is a convenience
+        # copy, not the only copy -- the control node is expected to be
+        # backed up or version-controlled by its own normal means.
+        find "${DEST_DIR}" -maxdepth 1 -type f -name 'llamenos-ansible-*.tar.gz' -printf '%T@ %p\n' \
+          | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs -r rm -f
+      args:
+        executable: /bin/bash
+      changed_when: true
+  rescue:
+    - name: Report that the local Ansible-config archive failed
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: could not archive backup_config_ansible_dir
+          ({{ backup_config_ansible_dir }}) on the control node. The server-side
+          backup above still succeeded; only this local convenience copy was skipped.

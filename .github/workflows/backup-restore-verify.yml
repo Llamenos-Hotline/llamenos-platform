@@ -1,0 +1,151 @@
+name: Verify Backup Restore
+
+# Scheduled + manual: proves production backups are actually restorable,
+# instead of leaving that question unanswered until the day it matters.
+# Runs playbooks/test-restore.yml, which is explicitly documented as
+# non-destructive — it restores the latest backup into a disposable,
+# throwaway container/schema and never touches the running application or
+# its database. See deploy/ansible/playbooks/test-restore.yml.
+#
+# Required secrets (in the "production" GitHub Environment — the same ones
+# deploy-prod.yml already uses):
+#   PROD_INVENTORY_YML       — content of inventory-production.yml (Ansible inventory)
+#   ANSIBLE_VAULT_PASSWORD   — password for ansible-vault encrypted vars-production.yml
+#   PROD_VARS_YML_ENCRYPTED  — content of encrypted vars-production.yml
+#   PROD_SSH_PRIVATE_KEY     — SSH private key for the production VPS deploy user
+#
+# A red run here means restores are untested or broken — treat it the same
+# as a failed deploy, not as routine noise to re-run until green.
+
+on:
+  schedule:
+    # 05:00 UTC every Monday. Backups themselves run daily at 03:00 UTC
+    # (backup_cron_hour/backup_cron_minute, deploy/ansible/vars.yml); this
+    # gives two hours of slack and still re-verifies at least weekly.
+    - cron: "0 5 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: backup-restore-verify
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  test-restore:
+    name: Test Restore Against Production Backups
+    # Needs SSH access to the production host, same as deploy-prod.yml.
+    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
+    environment: production
+    timeout-minutes: 20
+
+    steps:
+      - name: Isolate per-job toolchain caches
+        run: |
+          {
+            echo "ANSIBLE_COLLECTIONS_PATH=$RUNNER_TEMP/ansible-collections"
+            echo "ANSIBLE_LOCAL_TEMP=$RUNNER_TEMP/ansible-tmp"
+            echo "PIP_CACHE_DIR=$RUNNER_TEMP/pip-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Same failure mode deploy-prod.yml guards against: `printf '%s'` on an
+      # unset secret succeeds and leaves a 0-byte file, which Ansible then
+      # reads as "no hosts" and exits 0 having verified nothing.
+      - name: Verify required secrets are present
+        env:
+          PROD_INVENTORY_YML: ${{ secrets.PROD_INVENTORY_YML }}
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          PROD_VARS_YML_ENCRYPTED: ${{ secrets.PROD_VARS_YML_ENCRYPTED }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in PROD_INVENTORY_YML ANSIBLE_VAULT_PASSWORD \
+                      PROD_VARS_YML_ENCRYPTED PROD_SSH_PRIVATE_KEY; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            for name in "${missing[@]}"; do
+              echo "::error::required secret $name is unset or empty"
+            done
+            echo "Set them in the repository's 'production' environment." >&2
+            exit 1
+          fi
+          echo "All 4 required secrets are present."
+
+      - name: Install Ansible
+        run: |
+          # Pinned to the same version CI validates the playbooks against.
+          pip install ansible==14.1.0
+          ansible-galaxy collection install community.docker
+
+      - name: Write Ansible inventory
+        env:
+          INVENTORY_YML: ${{ secrets.PROD_INVENTORY_YML }}
+        run: |
+          mkdir -p deploy/ansible
+          printf '%s' "$INVENTORY_YML" > deploy/ansible/inventory-production.yml
+
+      - name: Write Ansible vault password
+        env:
+          VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          printf '%s' "$VAULT_PASSWORD" > "$RUNNER_TEMP/vault-pass"
+          chmod 600 "$RUNNER_TEMP/vault-pass"
+
+      - name: Write encrypted production vars
+        env:
+          PROD_VARS: ${{ secrets.PROD_VARS_YML_ENCRYPTED }}
+        run: |
+          printf '%s' "$PROD_VARS" > deploy/ansible/vars-production.yml
+
+      - name: Load SSH key into agent
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+        run: |
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          echo "$SSH_KEY" | ssh-add -
+          ssh-keyscan -H "$(grep ansible_host deploy/ansible/inventory-production.yml | head -1 | awk '{print $2}')" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Verify the inventory resolves at least one llamenos_servers host
+        working-directory: deploy/ansible
+        run: |
+          set -euo pipefail
+          if ! ansible -i inventory-production.yml llamenos_servers --list-hosts > hosts.txt 2>err.txt; then
+            echo "::error::inventory-production.yml is not a parseable Ansible inventory"
+            sed -e 's/^/  /' err.txt >&2
+            exit 1
+          fi
+          count=$(sed -n 's/^[[:space:]]*hosts (\([0-9][0-9]*\)):.*/\1/p' hosts.txt | head -1)
+          rm -f hosts.txt err.txt
+          if [ "${count:-0}" -lt 1 ]; then
+            echo "::error::inventory-production.yml matched 0 hosts for the 'llamenos_servers' group — this job would pass having verified nothing"
+            exit 1
+          fi
+          echo "inventory-production.yml resolves $count host(s) in group 'llamenos_servers'."
+
+      - name: Run test-restore (non-destructive)
+        working-directory: deploy/ansible
+        run: |
+          ansible-playbook playbooks/test-restore.yml \
+            -i inventory-production.yml \
+            -e "@vars-production.yml" \
+            --vault-password-file "$RUNNER_TEMP/vault-pass"
+
+      - name: Stop SSH agent
+        if: always()
+        run: ssh-agent -k || true
+
+      - name: Clean up secrets
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/vault-pass"
+          rm -f deploy/ansible/inventory-production.yml
+          rm -f deploy/ansible/vars-production.yml

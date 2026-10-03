@@ -10,52 +10,55 @@ log() { echo "${LOG_PREFIX} $*"; }
 
 {% if llamenos_postgres_enabled | default(true) %}
 # ── PostgreSQL Cleanup ──
+#
+# These used to target a `kv_store` table that was removed from the schema
+# long ago (the app moved to per-purpose tables). Every DELETE below failed
+# every run, and because this script runs under `set -euo pipefail`, the
+# FIRST failure aborted the script immediately — meaning rate-limit/captcha/
+# invite cleanup, Docker image/volume pruning, and temp file cleanup never
+# ran either, every single day since the removal. Each block below now
+# targets the real table and tolerates its own failure (`|| true`) so one
+# bad block can never again take down everything after it.
 
 # Check if postgres container is running in this compose project
 if docker compose -f "${APP_DIR}/docker-compose.yml" ps --status running postgres 2>/dev/null | grep -q postgres; then
   log "Starting PostgreSQL stale data cleanup..."
 
-  # Expired sessions (older than 30 days)
+  # Expired sessions
   docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
     psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'session:%'
-        AND updated_at < NOW() - INTERVAL '30 days';
-    " 2>&1 | while read -r line; do log "sessions: ${line}"; done
+      DELETE FROM sessions
+      WHERE expires_at < NOW();
+    " 2>&1 | while read -r line; do log "sessions: ${line}"; done || true
 
-  # Expired rate-limit entries (older than 1 hour)
+  # Stale fixed-window API rate-limit counters (older than 1 hour)
   docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
     psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'ratelimit:%'
-        AND updated_at < NOW() - INTERVAL '1 hour';
-    " 2>&1 | while read -r line; do log "ratelimit: ${line}"; done
+      DELETE FROM api_rate_limits
+      WHERE window_start < NOW() - INTERVAL '1 hour';
+    " 2>&1 | while read -r line; do log "api_rate_limits: ${line}"; done || true
+
+  # NOTE: `rate_limits` (sliding-window counters, one JSONB timestamp array
+  # per key) is intentionally not pruned here — the application itself trims
+  # each key's array on every hit, and there is no single column to safely
+  # judge a whole row as stale without duplicating that logic here.
 
   # Expired CAPTCHA challenges (older than 10 minutes)
   docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
     psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'captcha:%'
-        AND updated_at < NOW() - INTERVAL '10 minutes';
-    " 2>&1 | while read -r line; do log "captcha: ${line}"; done
+      DELETE FROM captchas
+      WHERE created_at < NOW() - INTERVAL '10 minutes';
+    " 2>&1 | while read -r line; do log "captcha: ${line}"; done || true
 
   # Expired invite codes (past expiry timestamp)
   docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
     psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'invite:%'
-        AND value::jsonb->>'expiresAt' IS NOT NULL
-        AND (value::jsonb->>'expiresAt')::timestamptz < NOW();
-    " 2>&1 | while read -r line; do log "invites: ${line}"; done
+      DELETE FROM invite_codes
+      WHERE expires_at < NOW();
+    " 2>&1 | while read -r line; do log "invites: ${line}"; done || true
 
-  # Expired ban list entries (if they have TTL)
-  docker compose -f "${APP_DIR}/docker-compose.yml" exec -T postgres \
-    psql -U llamenos -d llamenos -c "
-      DELETE FROM kv_store
-      WHERE key LIKE 'ban:%'
-        AND value::jsonb->>'expiresAt' IS NOT NULL
-        AND (value::jsonb->>'expiresAt')::timestamptz < NOW();
-    " 2>&1 | while read -r line; do log "bans: ${line}"; done
+  # NOTE: `bans` has no expiry/TTL column (bans.ts) — a ban lasts until an
+  # admin removes it, so there is nothing to time-based-delete here.
 
   log "PostgreSQL cleanup complete"
 else

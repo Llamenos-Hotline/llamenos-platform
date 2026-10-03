@@ -208,6 +208,7 @@ backup_age_public_key: ""
 backup_cron_hour: "3"
 backup_cron_minute: "0"
 backup_rclone_remote: ""
+backup_min_free_mb: 1024
 
 # ─── Per-Service Backup Retention ──────────────────────────────
 backup_postgres_retain_daily: 7

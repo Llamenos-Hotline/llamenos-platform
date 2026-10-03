@@ -25,3 +25,6 @@ backup_age_public_key: ""
 
 # Remote storage via rclone
 backup_rclone_remote: ""
+
+# Minimum free space (MB) required at the backup directory before a backup starts
+backup_min_free_mb: 1024

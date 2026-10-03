@@ -15,6 +15,7 @@ set -euo pipefail
 BACKUP_DIR="{{ backup_config_dir }}"
 AGE_RECIPIENT="{{ backup_age_public_key }}"
 RCLONE_REMOTE="{{ backup_rclone_remote }}"
+MIN_FREE_MB={{ backup_min_free_mb | default(1024) }}
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 DAY_OF_WEEK="$(date -u +%u)"
 DAY_OF_MONTH="$(date -u +%d)"
@@ -39,6 +40,13 @@ STAGING="${TMPDIR}/config"
 mkdir -p "${STAGING}"
 
 log "Starting ${BACKUP_TYPE} config backup..."
+
+# Step 0: Refuse to start if the backup volume is nearly full.
+AVAILABLE_MB="$(df -Pm "${BACKUP_DIR}" | tail -1 | awk '{print $4}')"
+if [ "${AVAILABLE_MB}" -lt "${MIN_FREE_MB}" ]; then
+  log "ERROR: only ${AVAILABLE_MB}MB free at ${BACKUP_DIR} (minimum: ${MIN_FREE_MB}MB). Refusing to start a backup."
+  exit 1
+fi
 
 # Step 1: Collect configuration files
 CONFIG_PATHS=(
@@ -88,9 +96,8 @@ if [ -n "${AGE_RECIPIENT}" ]; then
   age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
   rm -f "${TAR_FILE}"
 else
-  FILENAME="llamenos-config-${TIMESTAMP}.tar.gz"
-  mv "${TAR_FILE}" "${TMPDIR}/${FILENAME}"
-  log "WARNING: No age public key configured. Backup is NOT encrypted."
+  log "ERROR: No age public key configured (AGE_RECIPIENT empty). Refusing to write an unencrypted config backup — it contains .env."
+  exit 1
 fi
 
 FINAL_SIZE="$(stat -c%s "${TMPDIR}/${FILENAME}")"

@@ -255,7 +255,6 @@ backup_postgres_retain_daily: 7
 backup_postgres_retain_weekly: 4
 backup_postgres_retain_monthly: 3
 # backup_postgres_exclude_tables: []    # Tables to skip (e.g., sessions)
-# backup_postgres_wal_enabled: false    # Enable WAL archiving for PITR
 
 # RustFS (object store mirror)
 backup_rustfs_retain_daily: 7
@@ -268,6 +267,15 @@ backup_config_retain_weekly: 8
 backup_config_retain_monthly: 6
 # Additional paths to back up (e.g., TLS certs, custom scripts)
 backup_config_extra_paths: []
+# Also archive this directory (the control node's own deploy/ansible
+# directory — inventory, vars, the ansible-vault file) to a local sibling
+# folder on the control node, separate from the server-side backups above.
+# backup_config_ansible_dir: "/path/to/deploy/ansible"
+
+# Minimum free space (MB) required at the backup directory before any
+# backup starts (postgres/rustfs/config all check this independently)
+backup_min_free_mb: 1024
+
 # ─── Backup Monitoring ────────────────────────────────────────
 # Maximum hours before a backup is considered stale
 backup_monitor_max_age_hours: 26

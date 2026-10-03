@@ -20,7 +20,7 @@
     - ../vars.yml
 
   vars:
-    test_service: all # all, postgres, config
+    test_service: all # all, postgres, rustfs, config
 
   tasks:
     - name: Skip hosts without disk encryption (this play keeps data at rest)
@@ -135,43 +135,62 @@
             - latest_pg_backup is defined
             - latest_pg_backup is not search('.dump')
 
-        - name: Validate kv_store table exists
+        - name: Validate restored schema is non-empty
           ansible.builtin.command:
             cmd: >
               docker exec llamenos-restore-test
-              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM kv_store"
-          register: kv_count
-          failed_when: kv_count.rc != 0
+              psql -U llamenos -d llamenos -t -c
+              "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+          register: table_count
+          failed_when: >-
+            table_count.rc != 0 or
+            (table_count.stdout | default('0') | trim | int(0)) <= 0
           when: latest_pg_backup is defined
 
-        - name: Validate alarms table exists
+        - name: Validate core table is queryable
           ansible.builtin.command:
             cmd: >
               docker exec llamenos-restore-test
-              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM alarms"
-          register: alarms_count
-          failed_when: alarms_count.rc != 0
+              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM users"
+          register: users_count
+          failed_when: users_count.rc != 0
           when: latest_pg_backup is defined
 
         - name: Display PostgreSQL restore results
           ansible.builtin.debug:
             msg: |
               PostgreSQL Restore Test PASSED
-              - kv_store rows: {{ kv_count.stdout | trim }}
-              - alarms rows: {{ alarms_count.stdout | trim }}
+              - tables in public schema: {{ table_count.stdout | trim }}
+              - users rows: {{ users_count.stdout | trim }}
               - Backup file: {{ latest_pg_backup }}
           when: latest_pg_backup is defined
 
-        - name: Validate strfry backup exists and is non-empty
-          ansible.builtin.debug:
-            msg: |
-              strfry Backup Test: {{ 'PASSED' if strfry_backup_files.matched > 0 else 'NO BACKUPS FOUND' }}
-              - Found {{ strfry_backup_files.matched }} backup(s)
-              {% if strfry_backup_files.matched > 0 %}
-              - Latest: {{ (strfry_backup_files.files | sort(attribute='mtime') | last).path }}
-              - Size: {{ (strfry_backup_files.files | sort(attribute='mtime') | last).size }} bytes
-              {% endif %}
-          when: test_service in ['all', 'strfry']
+        # ── RustFS restore test ──────────────────────────────────────────
+        # Non-destructive: verifies a RustFS backup exists and is non-empty.
+        # It does not extract into a scratch container, unlike the postgres
+        # test above — restoring a tar into a disposable volume is cheap
+        # enough that a real extraction belongs in dr-test.yml's full drill,
+        # not duplicated here on every run.
+
+        - name: Find latest RustFS backup
+          ansible.builtin.find:
+            paths: "{{ app_dir }}/backups/rustfs/daily"
+            patterns: "llamenos-rustfs-*.tar*"
+            file_type: file
+          register: rustfs_backup_files
+          when: test_service in ['all', 'rustfs']
+
+        - name: Validate RustFS backup exists and is non-empty
+          ansible.builtin.assert:
+            that:
+              - rustfs_backup_files.matched > 0
+              - (rustfs_backup_files.files | sort(attribute='mtime') | last).size > 0
+            fail_msg: "No non-empty RustFS backup found in {{ app_dir }}/backups/rustfs/daily"
+            success_msg: >-
+              RustFS Backup Test PASSED — found {{ rustfs_backup_files.matched }} backup(s),
+              latest: {{ (rustfs_backup_files.files | sort(attribute='mtime') | last).path }}
+              ({{ (rustfs_backup_files.files | sort(attribute='mtime') | last).size }} bytes)
+          when: test_service in ['all', 'rustfs']
 
         # ── Config restore test ────────────────────────────────────────
 

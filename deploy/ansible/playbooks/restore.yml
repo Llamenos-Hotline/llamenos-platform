@@ -240,21 +240,57 @@
           tags: [postgres]
           ignore_errors: true
 
-        - name: Validate PostgreSQL restore
+        # Validation queries are intentionally ignore_errors: true and never
+        # abort the play — a validation failure must not skip "Start full
+        # Docker Compose stack" below. Leaving the operator with a restored
+        # database AND a down application is worse than a loud warning on an
+        # unverified restore (this is exactly how kv_store — a table removed
+        # from the schema long ago — used to take the whole play down).
+        - name: Validate PostgreSQL restore (schema came back)
           ansible.builtin.command:
             cmd: >
               docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres
-              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM kv_store"
-          register: pg_validate
+              psql -U llamenos -d llamenos -t -c
+              "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+          register: pg_validate_tables
           when:
             - pg_backup_file is defined
             - not restore_dry_run
           tags: [postgres]
+          ignore_errors: true
+
+        - name: Validate PostgreSQL restore (core table is queryable)
+          ansible.builtin.command:
+            cmd: >
+              docker compose -f {{ app_dir }}/docker-compose.yml exec -T postgres
+              psql -U llamenos -d llamenos -t -c "SELECT COUNT(*) FROM users"
+          register: pg_validate_users
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
+          ignore_errors: true
+
+        - name: Warn if the restored schema looks empty
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: restore produced {{ pg_validate_tables.stdout | default('0') | trim }}
+              table(s) in the public schema — the dump may not have actually restored
+              anything. The application stack is being started anyway; verify manually
+              before trusting it.
+          when:
+            - pg_validate_tables is defined
+            - pg_validate_tables.stdout is defined
+            - (pg_validate_tables.stdout | trim | int(0)) <= 0
+          tags: [postgres]
 
         - name: Display PostgreSQL restore result
           ansible.builtin.debug:
-            msg: "PostgreSQL restore: kv_store rows = {{ pg_validate.stdout | trim }}"
-          when: pg_validate is defined and pg_validate.stdout is defined
+            msg: >-
+              PostgreSQL restore: {{ pg_validate_tables.stdout | default('unknown') | trim }}
+              tables in public schema, users table has
+              {{ pg_validate_users.stdout | default('unknown') | trim }} row(s)
+          when: pg_validate_tables is defined
           tags: [postgres]
 
         - name: "[DRY RUN] Would restore PostgreSQL from {{ pg_backup_file | default('N/A') }}"
@@ -264,8 +300,13 @@
           tags: [postgres]
 
         # ── Restore RustFS ─────────────────────────────────────────────
+        #
+        # Extracts directly into the RustFS data volume via a throwaway
+        # container, the mirror image of how backup-rustfs.sh.j2 creates the
+        # archive. This replaces shelling `aws s3 sync` inside the
+        # rustfs/rustfs image, which has no AWS CLI and silently did nothing.
 
-        - name: Start RustFS container
+        - name: Start RustFS container (so its volume exists and can be resolved)
           ansible.builtin.command:
             cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d rustfs
           when: not restore_dry_run and rustfs_backup_file is defined
@@ -282,32 +323,99 @@
           tags: [rustfs]
           ignore_errors: true
 
-        - name: Decrypt and extract RustFS backup
+        # Every task below is ignore_errors: true for the same reason the
+        # PostgreSQL validation queries are: a failure here must be loud
+        # (visible in the play recap and the warning below) but must never
+        # abort the block and skip "Start full Docker Compose stack".
+        - name: Resolve the RustFS data volume name
           ansible.builtin.shell: |
-            mkdir -p {{ restore_tmpdir.path }}/rustfs-restore
-            {% if backup_age_public_key | default('') | length > 0 %}
-            age -d -i {{ restore_age_key_path }} {{ rustfs_backup_file }} | tar -xzf - -C {{ restore_tmpdir.path }}/rustfs-restore
-            {% else %}
-            tar -xzf {{ rustfs_backup_file }} -C {{ restore_tmpdir.path }}/rustfs-restore
-            {% endif %}
-          when:
-            - rustfs_backup_file is defined
-            - not restore_dry_run
-          tags: [rustfs]
-
-        - name: Copy restored files into RustFS container
-          ansible.builtin.shell: |
-            CONTAINER_NAME="$(docker compose -f {{ app_dir }}/docker-compose.yml ps -q rustfs)"
-            docker cp {{ restore_tmpdir.path }}/rustfs-restore/. "${CONTAINER_NAME}:/tmp/rustfs-restore/"
-            docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs \
-              sh -c "aws s3 sync /tmp/rustfs-restore/ s3://{{ backup_rustfs_bucket | default('llamenos-files') }}/ --endpoint-url http://localhost:9000; \
-                     rm -rf /tmp/rustfs-restore"
-          register: rustfs_restore_result
+            CONTAINER_ID="$(docker compose -f {{ app_dir }}/docker-compose.yml ps -q rustfs)"
+            docker inspect "${CONTAINER_ID}" --format \
+              '{% raw %}{{ range .Mounts }}{{ if eq .Destination "/data" }}{{ .Name }}{{ end }}{{ end }}{% endraw %}'
+          register: rustfs_volume_name
+          changed_when: false
+          failed_when: rustfs_volume_name.stdout | trim | length == 0
           when:
             - rustfs_backup_file is defined
             - not restore_dry_run
           tags: [rustfs]
           ignore_errors: true
+
+        - name: Stop RustFS container before replacing its data (avoid concurrent writes)
+          ansible.builtin.command:
+            cmd: docker compose -f {{ app_dir }}/docker-compose.yml stop rustfs
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+            - rustfs_volume_name is defined and not (rustfs_volume_name.failed | default(false))
+          tags: [rustfs]
+          ignore_errors: true
+
+        - name: Decrypt RustFS backup
+          ansible.builtin.shell: |
+            {% if backup_age_public_key | default('') | length > 0 %}
+            age -d -i {{ restore_age_key_path }} -o {{ restore_tmpdir.path }}/rustfs-data.tar.gz {{ rustfs_backup_file }}
+            {% else %}
+            cp {{ rustfs_backup_file }} {{ restore_tmpdir.path }}/rustfs-data.tar.gz
+            {% endif %}
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+            - rustfs_volume_name is defined and not (rustfs_volume_name.failed | default(false))
+          tags: [rustfs]
+          ignore_errors: true
+
+        - name: Extract RustFS backup directly into its data volume
+          ansible.builtin.command:
+            cmd: >
+              docker run --rm
+              -v {{ rustfs_volume_name.stdout | default('') | trim }}:/data
+              -v {{ restore_tmpdir.path }}:/backup
+              alpine:3
+              sh -c "rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null; tar -xzf /backup/rustfs-data.tar.gz -C /data"
+          register: rustfs_restore_result
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+            - rustfs_volume_name is defined and not (rustfs_volume_name.failed | default(false))
+          tags: [rustfs]
+          ignore_errors: true
+
+        - name: Start RustFS container after restore
+          ansible.builtin.command:
+            cmd: docker compose -f {{ app_dir }}/docker-compose.yml up -d rustfs
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+          tags: [rustfs]
+          ignore_errors: true
+
+        - name: Wait for RustFS to be healthy after restore
+          ansible.builtin.command:
+            cmd: docker compose -f {{ app_dir }}/docker-compose.yml exec -T rustfs curl -sf http://localhost:9000/health
+          register: rustfs_ready_after
+          retries: 10
+          delay: 2
+          until: rustfs_ready_after.rc == 0
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+          tags: [rustfs]
+          ignore_errors: true
+
+        - name: Warn if the RustFS volume could not be resolved or restored
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: RustFS restore did not complete cleanly
+              (volume resolved: {{ not (rustfs_volume_name.failed | default(true)) }},
+              extract rc: {{ rustfs_restore_result.rc | default('not run') }}).
+              The application stack is being started anyway; verify attachments
+              manually before trusting this restore.
+          when:
+            - rustfs_backup_file is defined
+            - not restore_dry_run
+            - (rustfs_volume_name.failed | default(true)) or (rustfs_restore_result.rc | default(1)) != 0
+          tags: [rustfs]
 
         - name: Display RustFS restore result
           ansible.builtin.debug:
