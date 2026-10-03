@@ -297,6 +297,19 @@ export function present<T>(value: T | null | undefined, what: string): T {
   return value
 }
 
+/**
+ * The Ed25519 identity pubkey a signing seed authenticates as.
+ *
+ * The operator's own identity is the only one this suite can use as a RINGING
+ * subject: a volunteer who joined by redeeming an invite has no hub role
+ * (`IdentityService.redeemInvite` never calls `setHubRole`, TODO #1037), so
+ * `resolveRingableVolunteers`'s `hasHubAccess` filter removes them and every
+ * ring case would read "does not ring" for the wrong reason.
+ */
+export function adminPubkeyFromSeed(seedHex: string): string {
+  return bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
+}
+
 /** A label that identifies a row as this suite's, and which run made it. */
 export function liveMarker(what: string): string {
   return `r1-live-${what}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -309,59 +322,96 @@ export function freshIdentity(): { seedHex: string; pubkey: string } {
   return { seedHex, pubkey: bytesToHex(ed25519.getPublicKey(seed)) }
 }
 
-// ── The `strict` rate-limit tier ───────────────────────────────────
+// ── The rate-limit tiers a deployment applies ──────────────────────
 //
-// `/api/invites/*`, `/api/auth/*`, `/api/webauthn/*`, `/api/provision/*` and
-// `/api/recovery-group/*` all share ONE fixed-window budget on a deployment:
-// 5 requests per minute, keyed `strict:<client ip>`
-// (apps/worker/middleware/rate-limit.ts). The middleware returns early when
-// `ENVIRONMENT=development`, so CI and the BDD suite never meet it — a
-// deployment-facing suite is the first thing that does.
+// `strict` — `/api/invites/*`, `/api/auth/*`, `/api/webauthn/*`,
+// `/api/provision/*` and `/api/recovery-group/*` all share ONE fixed-window
+// budget: 5 requests per minute, keyed `strict:<client ip>`
+// (apps/worker/middleware/rate-limit.ts).
+//
+// `write` — EVERY authenticated mutation (app.ts picks the tier by method):
+// 30 per minute, keyed `write:<pubkey>`. A suite that writes as one identity
+// meets this long before it meets anything else.
+//
+// The middleware returns early when `ENVIRONMENT=development`, so CI and the
+// BDD suite never meet either — a deployment-facing suite is the first thing
+// that does.
 //
 // Pacing is not a workaround for a defect; the limit is part of the
 // deployment's contract and a suite that ignored it would report 429 as a
-// broken invite flow. What it must NOT do is retry forever: a 429 that
+// broken invite flow, or as a volunteer being refused. What it must NOT do is retry forever: a 429 that
 // outlives a full window is a real condition an operator needs told about,
 // so the last attempt's status is returned and asserted like any other.
 
-const STRICT_BUDGET = 5
-const STRICT_WINDOW_MS = 60_000
-/** Timestamps of this run's strict-tier calls, newest last. */
-let strictCalls: number[] = []
+const WINDOW_MS = 60_000
+const BUDGETS = { strict: 5, write: 30 } as const
+const TIER_DETAIL: Record<keyof typeof BUDGETS, string> = {
+  strict:
+    'The strict tier is 5 requests/minute shared across /invites, /auth, /webauthn, '
+    + '/provision and /recovery-group, keyed by client IP — something else is consuming '
+    + "this deployment's budget, or the proxy is not forwarding a client IP so every "
+    + 'caller shares one bucket.',
+  write:
+    'The write tier is 30 mutations/minute keyed by PUBKEY (app.ts: every authenticated '
+    + 'non-GET) — another client signing as this same identity is consuming the budget.',
+}
+/** Timestamps of this run's calls per tier, newest last. */
+const spent: Record<keyof typeof BUDGETS, number[]> = { strict: [], write: [] }
 
 /**
- * Run one `strict`-tier request, waiting first if this run has already spent
- * the window's budget, and once more if the server says 429 anyway (the
- * server's window is fixed and does not line up with this run's start).
+ * Run one rate-limited request, waiting first if this run has already spent the
+ * window's budget, and once more if the server says 429 anyway (the server's
+ * window is fixed and does not line up with this run's start).
  */
-export async function pacedStrict<T extends { status: number }>(
+async function paced<T extends { status: number }>(
+  tier: keyof typeof BUDGETS,
   what: string,
   call: () => Promise<T>,
 ): Promise<T> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const now = Date.now()
-    strictCalls = strictCalls.filter(t => now - t < STRICT_WINDOW_MS)
-    if (strictCalls.length >= STRICT_BUDGET) {
-      await sleep(STRICT_WINDOW_MS - (now - strictCalls[0]) + 1_000)
-      strictCalls = []
+    spent[tier] = spent[tier].filter(t => now - t < WINDOW_MS)
+    if (spent[tier].length >= BUDGETS[tier]) {
+      await sleep(WINDOW_MS - (now - spent[tier][0]) + 1_000)
+      spent[tier] = []
     }
-    strictCalls.push(Date.now())
+    spent[tier].push(Date.now())
 
     const result = await call()
     if (result.status !== 429) return result
     if (attempt === 0) {
       // Spend the rest of the server's window, then try once more.
-      strictCalls = []
-      await sleep(STRICT_WINDOW_MS + 1_000)
+      spent[tier] = []
+      await sleep(WINDOW_MS + 1_000)
     }
   }
   throw new Error(
-    `${what}: the deployment answered 429 twice, a minute apart. The strict tier is `
-    + '5 requests/minute shared across /invites, /auth, /webauthn, /provision and '
-    + '/recovery-group, keyed by client IP — something else is consuming this '
-    + "deployment's budget, or the proxy is not forwarding a client IP so every "
-    + 'caller shares one bucket.',
+    `${what}: the deployment answered 429 twice, a minute apart. ${TIER_DETAIL[tier]}`,
   )
+}
+
+/** One `strict`-tier request (5/min by IP), paced. */
+export async function pacedStrict<T extends { status: number }>(
+  what: string,
+  call: () => Promise<T>,
+): Promise<T> {
+  return paced('strict', what, call)
+}
+
+/**
+ * One `write`-tier request (30/min by pubkey), paced.
+ *
+ * Every authenticated mutation on a deployment is in this tier, so a suite
+ * that writes more than thirty times a minute as one identity reads its own
+ * 429 as the behaviour under test. The ring-decision block needs roughly that
+ * many, which is why it waits rather than failing — the limit is part of the
+ * deployment's contract, not a defect.
+ */
+export async function pacedWrite<T extends { status: number }>(
+  what: string,
+  call: () => Promise<T>,
+): Promise<T> {
+  return paced('write', what, call)
 }
 
 /** `GET /api/invites/validate/:code` — public, strict-tier, paced. */
