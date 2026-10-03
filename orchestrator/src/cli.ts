@@ -24,6 +24,7 @@ import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from '.
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
+  reviewNotRequestedAdvice,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1299,7 +1300,11 @@ async function runReviewGate(): Promise<number> {
   // payload at all. Unreadable is `undefined`, which fails closed inside
   // `decideReviewSet`.
   const facts = await readPrFacts(ctx.pr)
-  const event = reviewRequestEventFromEnv(process.env, ctx.branch)
+  // The live author is the THIRD argument, never a replacement for the
+  // event's own: `reviewRequestEventFromEnv` prefers the payload where there
+  // is one, so the `review_requested` path is unchanged and only a dispatch
+  // (no payload) leans on this read (#1471).
+  const event = reviewRequestEventFromEnv(process.env, ctx.branch, facts?.author)
   const request = reviewRequestFor(event)
   const outcome = await decideReviewGate({
     ctx,
@@ -1360,11 +1365,21 @@ async function runReviewGate(): Promise<number> {
         `${REVIEW_JOB}: this push changed the diff, so no verdict this PR has already earned covers the new head\n`,
       )
     }
+    // What to DO about it, from `reviewNotRequestedAdvice` — which refuses to
+    // print "request a review from X" when X is ALREADY a requested reviewer,
+    // because that is the loop #1471 measured as unable to terminate: GitHub
+    // emits no event for a login it already has, and re-adds a CODEOWNER's
+    // request the instant it is removed. The live list comes from the same PR
+    // read above; `undefined` (unreadable) is not "empty" and says nothing
+    // about the re-request rather than promising it works.
     const [ask] = reviewTriggerLogins(event)
-    process.stderr.write(ask === REVIEW_REQUEST_LOGIN
-      ? `${REVIEW_JOB}: review not requested — request a review from \`${REVIEW_REQUEST_LOGIN}\` to run the non-author review\n`
-      : `${REVIEW_JOB}: review not requested — this PR's author cannot be asked to review it, so request a review ` +
-        `from \`${ask}\` to run the non-author review\n`)
+    for (const line of reviewNotRequestedAdvice({
+      pr: ctx.pr,
+      branch: ctx.branch,
+      ask,
+      isAuthorStandIn: ask !== REVIEW_REQUEST_LOGIN,
+      alreadyRequested: facts?.requestedReviewers,
+    })) process.stderr.write(`${REVIEW_JOB}: ${line}\n`)
     return 1
   }
   // A cached SUBSTANTIVE verdict (#1158) — no model call either way. A
@@ -1456,11 +1471,29 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
   }
 }
 
-/** The PR's current labels and its title+body, or `undefined` when they
- *  could not be read (or the PR number is not a number) — never an empty
+interface ReviewPrFacts {
+  labels: string[]
+  description: string
+  /** The PR's author login. The gate needs it on every event, and only a
+   *  `pull_request` payload carries one — `workflow_dispatch` has no payload
+   *  at all, so this read is where a dispatch learns who wrote the PR
+   *  (#1471). Without it `reviewTriggerLogins` defaults to
+   *  `REVIEW_REQUEST_LOGIN`, which on a PR that login authored is the PR's
+   *  own author: advice GitHub answers 422. */
+  author: string | undefined
+  /** The PR's LIVE `requested_reviewers` logins — what makes the dead end
+   *  loud (`reviewNotRequestedAdvice`): "request a review from X" is a
+   *  guaranteed no-op when X is already on this list. */
+  requestedReviewers: string[]
+}
+
+/** The live PR facts the review gate needs — labels, title+body, author and
+ *  requested reviewers (`ReviewPrFacts`) — or `undefined` when they could not
+ *  be read (or the PR number is not a number) — never an empty
  *  list standing in for "could not look", which is what `decideReviewSet`
- *  refuses on. One read, so the labels and the description always describe
- *  the same PR. Needs only `pull-requests: read`.
+ *  refuses on. ONE read, so every fact always describes the same PR, and the
+ *  author and reviewer list the dispatch path needs (#1471) cost no extra
+ *  round trip. Needs only `pull-requests: read`.
  *
  *  `consequence` is what a failed read costs THIS caller, and the log line
  *  states it. The same failed read means different things to the two gates,
@@ -1469,18 +1502,30 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
  *  which fails closed" on every run, although it has no review stage, and
  *  that line — next to its trace's structural `review=not-run` — was read
  *  as a review gate failing open (#1258). */
+
 async function readPrFacts(
   pr: string,
   consequence = 'the reviews it asks for are unknown, which fails closed',
-): Promise<{ labels: string[]; description: string } | undefined> {
+): Promise<ReviewPrFacts | undefined> {
   if (!/^[0-9]+$/.test(pr)) return undefined
-  const data = await ghJson<{ labels: { name: string }[]; title?: string; body?: string | null }>(
+  const data = await ghJson<{
+    labels: { name: string }[]
+    title?: string
+    body?: string | null
+    user?: { login?: string | null } | null
+    requested_reviewers?: { login?: string | null }[] | null
+  }>(
     ['api', `repos/${REPO}/pulls/${pr}`],
     30_000,
     (detail) => ciLog(`reading PR #${pr} failed — ${consequence}: ${detail}`),
   )
   if (data === undefined) return undefined
-  return { labels: data.labels.map((l) => l.name), description: `${data.title ?? ''}\n\n${data.body ?? ''}` }
+  return {
+    labels: data.labels.map((l) => l.name),
+    description: `${data.title ?? ''}\n\n${data.body ?? ''}`,
+    author: data.user?.login ?? undefined,
+    requestedReviewers: (data.requested_reviewers ?? []).flatMap((r) => (r.login == null ? [] : [r.login])),
+  }
 }
 
 /**

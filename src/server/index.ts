@@ -26,6 +26,7 @@ import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '../../packages/shared/ev
 import type { MessagingChannelType } from '../../packages/shared/types'
 import type { Env } from '../../apps/worker/types/infra'
 import fs from 'node:fs'
+import { ed25519AuthPubkey, hpkeRecipientPubkey } from '@worker/lib/hpke-recipient'
 
 console.log('[llamenos] Starting Bun server...')
 
@@ -65,8 +66,8 @@ const services: Services = createServices(db, {
   notifierApiKey,
   notifierTokenSecret,
   env: {
-    ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-    ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+    ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+    ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
     SERVER_SECRET: serverSecret || undefined,
     ENVIRONMENT: process.env.ENVIRONMENT || undefined,
     DOMAIN: process.env.DOMAIN || undefined,
@@ -105,8 +106,11 @@ try {
 }
 
 const env: Record<string, unknown> = {
-  ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-  ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+  // The only place a raw env string becomes a typed key. Past this point the
+  // Ed25519 identity key and the X25519 HPKE recipient are different types and
+  // cannot be substituted for one another (apps/worker/lib/hpke-recipient.ts).
+  ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+  ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
   HMAC_SECRET: hmacSecret,
   HOTLINE_NAME: process.env.HOTLINE_NAME || 'Hotline',
   ENVIRONMENT: process.env.ENVIRONMENT || 'production',

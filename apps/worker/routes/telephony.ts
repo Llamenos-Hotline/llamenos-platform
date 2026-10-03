@@ -189,6 +189,13 @@ telephony.post('/language-selected',
   const { callSid, callerNumber, digits } = await adapter.parseLanguageWebhook(c.req.raw)
   const isAuto = url.searchParams.get('auto') === '1'
 
+  // Bans are enforced when the call is answered (/incoming), but a ban can be added
+  // while the caller is still in the language menu. Re-check before greeting or
+  // queueing so a newly banned caller never reaches a volunteer.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
+
   // Get hub's ordered language list for digit-to-language mapping
   const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
 
@@ -269,6 +276,11 @@ telephony.post('/captcha',
   const { digits, callerNumber } = await adapter.parseCaptchaWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
+
+  // A ban added while the caller was in the menu / CAPTCHA must still take effect.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
 
   // Look up expected digits from server-side storage (not URL params)
   const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })

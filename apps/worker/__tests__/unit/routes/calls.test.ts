@@ -28,6 +28,12 @@ vi.mock('@worker/services/ringing', async (orig) => ({
   cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
+// Dropping the caller's leg at the provider is the hang-up route's other side effect,
+// covered in call-hangup-routes.test.ts. Report it as disconnected so the route reaches
+// the projection this file is about, instead of short-circuiting on a 502.
+vi.mock('@worker/services/call-hangup', () => ({
+  hangUpCallerLeg: vi.fn().mockResolvedValue('disconnected'),
+}))
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect

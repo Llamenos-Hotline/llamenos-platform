@@ -3,6 +3,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { getTelephonyFromService } from '../lib/service-factories'
+import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
@@ -398,10 +399,25 @@ calls.post('/:callId/hangup',
     if (!call) return c.json({ error: 'Call not found' }, 404)
     if (call.answeredBy !== pubkey) return c.json({ error: 'Not your call' }, 403)
 
+    // Drop the caller at the provider FIRST. Ending only the DB row leaves the
+    // caller connected while the volunteer shows as available. If the provider
+    // could not disconnect the caller, leave the call active so the volunteer
+    // can retry instead of recording a call that is still live as ended.
+    const outcome = await hangUpCallerLeg(c.env, services, call)
+    if (outcome === 'failed') {
+      return c.json({ error: 'Failed to disconnect the caller' }, 502)
+    }
+
     try {
       const result = await services.calls.endCall(hubId, callId)
       return c.json({ call: toCallRecordResponse(result) })
-    } catch {
+    } catch (err) {
+      // The provider's status callback can end the record between our disconnect and
+      // this write. The caller is disconnected either way — return the finished record.
+      if (err instanceof ServiceError && err.status === 404) {
+        const record = await services.calls.getCallRecord(callId)
+        if (record) return c.json({ call: toCallRecordResponse(record) })
+      }
       return c.json({ error: 'Failed to hang up call' }, 500)
     }
   },
@@ -497,18 +513,23 @@ calls.post('/:callId/ban',
       // Ban failed
     }
 
-    // Hang up the call
-    try {
-      await services.calls.endCall(call.hubId ?? '', callId)
-    } catch {
-      // End call failed
+    // Hang up the call: disconnect the caller at the provider first, then end the
+    // record. If the provider could not disconnect the caller, keep the call
+    // active (it is still live) and report hungUp:false so the volunteer can retry.
+    const outcome = await hangUpCallerLeg(c.env, services, call)
+    if (outcome !== 'failed') {
+      try {
+        await services.calls.endCall(call.hubId ?? '', callId)
+      } catch {
+        // Record already ended (e.g. the provider's status callback got there first)
+      }
     }
 
     if (banned) {
       await audit(services.audit, 'numberBanned', pubkey, { callId }, undefined, call.hubId || hubId || null)
     }
 
-    return c.json({ banned, hungUp: true })
+    return c.json({ banned, hungUp: outcome !== 'failed' })
   },
 )
 

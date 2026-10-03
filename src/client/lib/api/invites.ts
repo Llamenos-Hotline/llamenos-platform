@@ -1,7 +1,7 @@
-import { request, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
+import { request, getActiveHub, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { InviteCode, User } from '@protocol/schemas'
+import type { CreateInviteBody, InviteCode, User } from '@protocol/schemas'
 
 export type { InviteCode }
 
@@ -11,10 +11,17 @@ export async function listInvites() {
   return request<{ invites: InviteCode[] }>('/invites')
 }
 
-export async function createInvite(data: { name: string; phone: string; roleIds: string[] }) {
+/**
+ * An invite names the hub it admits the redeemer into (#1037). `/invites` is
+ * not a hub-scoped route, so the hub travels in the body: the hub being
+ * browsed, or — during the setup wizard, before one is active — omitted, which
+ * lets the server resolve the deployment's single hub.
+ */
+export async function createInvite(data: CreateInviteBody) {
+  const hubId = data.hubId ?? getActiveHub() ?? undefined
   return request<{ invite: InviteCode }>('/invites', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, ...(hubId ? { hubId } : {}) }),
   })
 }
 

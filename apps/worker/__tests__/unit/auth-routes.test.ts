@@ -304,26 +304,77 @@ describe('auth routes', () => {
       expect(body.webauthnRegistered).toBe(false)
     })
 
-    it('returns adminDecryptionPubkey preferring ADMIN_DECRYPTION_PUBKEY', async () => {
+    /**
+     * `adminDecryptionPubkey` is not informational: it is the key every client
+     * seals its admin envelopes to. These three tests pin the only three
+     * answers the route may give (#1283).
+     *
+     * The X25519 and Ed25519 keys below are the real pair derived from the
+     * committed test admin seed (tests/api-helpers.ts `ADMIN_SEED`), so "a
+     * different value" here is the difference that exists in production, not an
+     * arbitrary one.
+     */
+    const ADMIN_ED25519 = '79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183'
+    const ADMIN_X25519 = '27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177'
+
+    it('returns ADMIN_DECRYPTION_PUBKEY as the admin HPKE recipient', async () => {
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
         ...defaultEnv as Record<string, string>,
-        ADMIN_DECRYPTION_PUBKEY: 'decrypt-pk',
+        ADMIN_PUBKEY: ADMIN_ED25519,
+        ADMIN_DECRYPTION_PUBKEY: ADMIN_X25519,
       } as never)
 
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.adminDecryptionPubkey).toBe('decrypt-pk')
+      expect(body.adminDecryptionPubkey).toBe(ADMIN_X25519)
     })
 
-    it('falls back to ADMIN_PUBKEY when ADMIN_DECRYPTION_PUBKEY not set', async () => {
+    /**
+     * The defect. With no X25519 key configured, the route used to hand back
+     * ADMIN_PUBKEY — the admin's Ed25519 *signing* key. DHKEM(X25519) accepts
+     * any 32 bytes as a recipient, so every client obediently sealed its notes
+     * to it, encryption "succeeded", and the notes were unreadable by the
+     * volunteer, the admin and the server alike. Nothing logged, nothing
+     * threw: the loss of a crisis call's notes showed up later, or never.
+     *
+     * Asserting `undefined` alone would not catch a regression that returns
+     * some other wrong key, so the Ed25519 key is named explicitly.
+     */
+    it('never substitutes the Ed25519 ADMIN_PUBKEY when no X25519 key is configured', async () => {
       const { app } = createApp()
 
-      const res = await app.request('/auth/me', {}, defaultEnv)
+      const res = await app.request('/auth/me', {}, {
+        ...defaultEnv as Record<string, string>,
+        ADMIN_PUBKEY: ADMIN_ED25519,
+      } as never)
+
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.adminDecryptionPubkey).toBe('admin-pk')
+      expect(body.adminDecryptionPubkey).not.toBe(ADMIN_ED25519)
+      expect(body.adminDecryptionPubkey).toBeUndefined()
+    })
+
+    /**
+     * A malformed value must not be forwarded either. A client that seals to a
+     * truncated or non-hex "key" fails or produces an envelope nobody can
+     * open; the honest answer is that this deployment has no admin recipient.
+     */
+    it('omits a malformed ADMIN_DECRYPTION_PUBKEY rather than passing it on', async () => {
+      const { app } = createApp()
+
+      for (const malformed of ['decrypt-pk', 'ABCD'.repeat(16), 'a'.repeat(63)]) {
+        const res = await app.request('/auth/me', {}, {
+          ...defaultEnv as Record<string, string>,
+          ADMIN_PUBKEY: ADMIN_ED25519,
+          ADMIN_DECRYPTION_PUBKEY: malformed,
+        } as never)
+
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.adminDecryptionPubkey, `forwarded malformed key ${malformed}`).toBeUndefined()
+      }
     })
   })
 
