@@ -81,6 +81,48 @@ jobs:
     if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
 
     outputs:
+      # Whether the heavy integration suites run at all, independent of WHICH
+      # paths changed. Path scope says *which* suites a diff could affect; this
+      # says whether this EVENT is the one that should pay for them.
+      #
+      # True only on `merge_group` (and `workflow_dispatch`, which is somebody
+      # explicitly asking). The merge queue is the only place a heavy suite's
+      # result actually decides anything: `main` cannot move except through it
+      # (ruleset 15885614), every required context is evaluated against the
+      # merge group, and the merge group's tree IS main's next tree.
+      #
+      # That makes the other two events pure duplication:
+      #
+      #   push          — the queue just ran these against this exact commit and
+      #                   merged because they passed. Re-running validates
+      #                   nothing new, and since #1407 put ios-e2e on two
+      #                   self-hosted Mac runners it actively starves the NEXT
+      #                   entry's gating run of the runners it needs, against a
+      #                   240-minute queue timeout (#1426).
+      #   pull_request  — the same suites run again in the merge group before
+      #                   anything lands, so a PR-time pass is never the thing
+      #                   that gates the merge. Each push to a PR branch paid
+      #                   for a full set; a PR with five pushes paid six times.
+      #
+      # THE TRADE, stated plainly because it is real: a break now surfaces in
+      # the queue rather than on the PR. With `grouping_strategy: ALLGREEN` and
+      # `max_entries_to_merge: 5`, a failing entry can take its group down and
+      # force a rebuild, where previously it failed alone on its own PR. The
+      # bet is that this is cheaper in aggregate than every push to every PR
+      # paying for suites whose verdict never gated anything — and that bet got
+      # materially safer with #1407, because the iOS suites now run on hardware
+      # where they actually pass (three tests failed on contended GitHub
+      # runners today and pass on the Mac).
+      #
+      # Authors are not left blind: desktop-e2e.yml's `E2E (Linux)` still runs
+      # on `pull_request` (it is deliberately NOT gated here), unit suites still
+      # run everywhere, and `lint`/`build`/`typecheck` are untouched.
+      #
+      # Unit suites (backend-unit, desktop-unit, crypto-tests) and
+      # migration-drift are deliberately NOT gated on this: they are cheap, they
+      # contend for nothing scarce, and they keep `ci-status` a real signal on
+      # main for `docker-canary` rather than a near-vacuous one.
+      revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -129,8 +171,18 @@ jobs:
             HEAD="HEAD"
           fi
 
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
+          # Three-dot on pull_request so only the PR's own changes pick
+          # platforms, not everything the base moved since the fork — see
+          # the `lint` job's "Determine changed files" step for why each
+          # event gets the diff it does (#1396).
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files ($RANGE):"
           echo "$CHANGED"
 
           printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
@@ -415,7 +467,7 @@ jobs:
     needs: [changes, build]
     # Playwright E2E exercises the desktop web frontend against a live
     # backend — relevant if either side changed (#664).
-    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -565,7 +617,7 @@ jobs:
   # ─── Backend BDD Tests ─────────────────────────────────────
   backend-bdd:
     needs: [changes]
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -792,7 +844,7 @@ jobs:
   # ─── Android Build & Test ───────────────────────────────────
   android-build-test:
     needs: changes
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -842,7 +894,7 @@ jobs:
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
     needs: [changes]
-    if: needs.changes.outputs.android == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest  # android emulator needs KVM (hosted x86_64 images provide it)
     permissions:
       contents: read
@@ -1090,13 +1142,36 @@ jobs:
 
   ios-build-test:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-latest
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
+    # The Mac mini, for the same reason `ios-e2e` moved there in this PR: this
+    # job is required via `ci-status`, and on `macos-latest` it simply does not
+    # get scheduled. Measured on this branch's own merge-queue run — queued
+    # **75 minutes** with no runner assigned, while GitHub served the whole
+    # repository a single macOS slot. Moving `ios-e2e` alone left this one job
+    # able to block every iOS PR exactly as before, which defeated the point.
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     timeout-minutes: 45
 
     steps:
+      # MANDATORY, and must stay the literal first step — same guard, same
+      # reasoning, as `ios-e2e` and `fleet/review`: a fork PR's code must never
+      # execute on a machine the operator owns. See the long note in
+      # ios-e2e.yml for why this is NOT dead code despite the workflow having
+      # no `pull_request` trigger of its own.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-build-test FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -1161,7 +1236,7 @@ jobs:
       - name: Cache DerivedData
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/llamenos-build
+          path: ${{ runner.temp }}/llamenos-build
           key: deriveddata-ios-${{ runner.os }}-${{ hashFiles('apps/ios/**/*.swift', 'apps/ios/project.yml') }}
           restore-keys: |
             deriveddata-ios-${{ runner.os }}-
@@ -1170,22 +1245,23 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      - name: Detect simulator
+      # A DEDICATED device, created here rather than taken from the pool. On a
+      # shared host "the first available iPhone" can return a simulator an
+      # `ios-e2e` shard is actively driving — they run on the same two runners.
+      - name: Create simulator
         id: sim
         run: |
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
+          set -euo pipefail
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                          print(d['name'])
-                          sys.exit(0)
-          print('iPhone 16')
+          rs = [r for r in json.load(sys.stdin)['runtimes']
+                if r.get('isAvailable') and r.get('platform') == 'iOS']
+          if not rs: sys.exit('no available iOS runtime')
+          print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
           ")
-          echo "device=$SIM" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $SIM"
+          UDID=$(xcrun simctl create "ios-build-test-${{ github.run_id }}-${{ github.run_attempt }}" "iPhone 17 Pro" "$RUNTIME")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Created simulator $UDID on $RUNTIME"
 
       - name: Build and test
         working-directory: apps/ios
@@ -1197,12 +1273,22 @@ jobs:
             -scheme Llamenos \
             -only-testing:LlamenosTests \
             -skip-testing:LlamenosUITests \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath /tmp/llamenos-build \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/llamenos-build" \
             -parallelizeTargets \
             EAGER_LINKING=YES \
             DEBUG_INFORMATION_FORMAT=dwarf \
             2>&1 | xcbeautify --report junit --report-path test-results/ios-unit.xml
+
+      - name: Delete this job's simulator
+        if: always()
+        run: |
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
 
       - name: Upload iOS test results
         if: always()
@@ -1218,7 +1304,7 @@ jobs:
   # this job is the aggregate of every job in the called workflow.
   ios-e2e:
     needs: changes
-    if: needs.changes.outputs.ios == 'true'
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/ios-e2e.yml
@@ -1380,8 +1466,30 @@ jobs:
           if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
             BASE="HEAD^"
           fi
+          if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
+            HEAD="HEAD"
+          fi
 
-          FILES=$(git diff --name-only --diff-filter=d "$BASE" "$HEAD" -- '*.ts' '*.tsx' \
+          # Three-dot on pull_request, two-dot everywhere else (#1396).
+          #  - pull_request: `base.sha` is the base branch's tip NOW, not the
+          #    PR's fork point. A two-dot diff against it also lists every
+          #    file the base changed since the fork — the PR never touched
+          #    them, yet they got linted and failed the PR on other people's
+          #    code (#1392: 48 files linted, 5 changed). `BASE...HEAD` diffs
+          #    from the merge base: exactly the PR's own changes.
+          #  - merge_group: `head_sha` is always a single commit whose only
+          #    parent is `base_sha` (the queue stacks each entry on the one
+          #    before it), so the merge base IS `base_sha` and two-dot is
+          #    already exactly the queued change.
+          #  - push (main/desktop): `after` descends from `before`, and a
+          #    push's diff genuinely is "what changed between these commits".
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="$BASE...$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+
+          FILES=$(git diff --name-only --diff-filter=d "$RANGE" -- '*.ts' '*.tsx' \
             | grep -vE '^(dist/|\.features-gen|\.features-gen-backend|packages/protocol/generated/|packages/i18n/generated/)' \
             || true)
 
@@ -1451,6 +1559,195 @@ jobs:
       # instead of silently shrinking SAST coverage.
       - name: Check CodeQL language coverage
         run: bun scripts/check-codeql-languages.ts
+
+  # Brings the PRODUCTION compose stack up and asserts a handful of
+  # unauthenticated invariants. Nothing else in CI exercises that path — every
+  # other suite runs against a dev build — which is how #1418 shipped: a
+  # deployment without the optional Signal sidecar reported `unhealthy`
+  # forever and `first-run.sh` hung, while every test stayed green.
+  #
+  # Deliberately NOT an end-to-end suite. The E2E suites bootstrap through
+  # `/api/test-reset` and `/api/test-create-hub`, which a production build
+  # correctly 404s (`devGuard`, app.ts), so they structurally cannot run here
+  # and nothing should be added to make them able to — a production database
+  # that can be reset over HTTP is a worse problem than the one this solves.
+  # What it CAN check without any test surface is that the thing starts, is
+  # ready, enforces auth, and exposes no test endpoints. That is exactly the
+  # class of defect that has slipped through.
+  production-smoke:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ansible == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Every value a production bring-up requires. Generated, never real: this
+      # stack is destroyed at the end of the job and never reachable off-runner.
+      - name: Write a production .env
+        run: |
+          set -euo pipefail
+          cat > .env <<ENVEOF
+          ADMIN_PUBKEY=0000000000000000000000000000000000000000000000000000000000000001
+          SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
+          HMAC_SECRET=$(openssl rand -hex 32)
+          PG_PASSWORD=$(openssl rand -hex 16)
+          STORAGE_ACCESS_KEY=smoketestaccess
+          STORAGE_SECRET_KEY=$(openssl rand -hex 16)
+          DOMAIN=localhost
+          HOTLINE_NAME=Llamenos
+          ENVIRONMENT=production
+          WEBHOOK_BASE_URL=https://smoke.invalid
+          BRIDGE_SECRET=$(openssl rand -hex 16)
+          TURN_SECRET=$(openssl rand -hex 32)
+          GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)
+          NOTIFIER_API_KEY=$(openssl rand -hex 16)
+          TOKEN_MAX_AGE_MS=3600000
+          PG_POOL_SIZE=10
+          ENVEOF
+          echo "wrote .env with $(grep -c . .env) values"
+
+      # No optional profiles. That is the point: the default deployment, which
+      # is what a self-hoster gets, is the one that must work.
+      - name: Bring up the production stack
+        run: |
+          set -euo pipefail
+          docker compose -p smoke --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            up -d --build app
+          echo "waiting for the app to accept connections"
+          cid=$(docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml ps -q app)
+          for i in $(seq 1 60); do
+            if docker exec "$cid" bun -e "fetch('http://localhost:3000/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+              echo "app is live after ${i} attempts"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the production stack never became live"
+          docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml logs --tail=60 app
+          exit 1
+
+      # Each assertion is a defect this repo has actually shipped or could.
+      - name: Assert production invariants
+        run: |
+          set -euo pipefail
+          cid=$(docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml ps -q app)
+          probe() { docker exec "$cid" bun -e "
+            fetch('http://localhost:3000$1', {method:'$2'})
+              .then(r => { console.log(r.status); process.exit(0) })
+              .catch(e => { console.log('ERR ' + e.message); process.exit(0) })"; }
+
+          fail=0
+          check() {
+            local path="$1" method="$2" want="$3" why="$4"
+            local got; got=$(probe "$path" "$method")
+            if [ "$got" = "$want" ]; then
+              echo "  ok    $method $path -> $got   ($why)"
+            else
+              echo "::error::$method $path returned $got, expected $want — $why"
+              fail=1
+            fi
+          }
+
+          # It starts and serves.
+          check /api/health/live GET 200 "the server is running"
+          # Readiness must not be gated on OPTIONAL services (#1418): no profile
+          # is enabled here, so anything that drags this to 503 is the bug.
+          check /api/health/ready GET 200 "readiness ignores optional, unconfigured services"
+          # Auth is enforced on a real route.
+          check /api/hubs GET 401 "authentication is required"
+          # Test surfaces must not exist in production (devGuard, app.ts).
+          check /api/test-reset POST 404 "test endpoints are absent in production"
+          check /api/test-create-hub POST 404 "test endpoints are absent in production"
+
+          exit $fail
+
+      # The container's OWN verdict, which is what an orchestrator acts on.
+      # #1418 was invisible to a plain HTTP probe but left this `unhealthy`.
+      - name: Assert the container reports healthy
+        run: |
+          set -euo pipefail
+          cid=$(docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml ps -q app)
+          for i in $(seq 1 24); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
+            [ "$status" = "healthy" ] && { echo "container healthy after ${i} checks"; exit 0; }
+            [ "$status" = "unhealthy" ] && break
+            sleep 5
+          done
+          echo "::error::the app container is '$(docker inspect -f '{{.State.Health.Status}}' "$cid")' — a default production deployment must report healthy"
+          docker inspect -f '{{range .State.Health.Log}}exit={{.ExitCode}} {{.Output}}{{end}}' "$cid" | head -c 2000
+          exit 1
+
+      # The Signal deployment, which is the one optional profile a hotline
+      # actually runs — and the one whose wiring is easiest to break without
+      # noticing, because every check above passes with Signal absent.
+      #
+      # A change that removed `NOTIFIER_URL`'s default from the production
+      # compose file reached merge-queue position 3 during this work. Nothing
+      # in CI could have caught it: the app still started, still reported
+      # ready, and still passed every assertion above — it had simply stopped
+      # being connected to its own sidecar. The `signalNotifier: ok` assertion
+      # below is the one that fails on that diff.
+      - name: Assert a Signal deployment comes up and is connected
+        run: |
+          set -euo pipefail
+          compose() { docker compose -p smoke --env-file .env \
+            -f deploy/docker/docker-compose.yml --profile signal "$@"; }
+
+          # `signal-notifier` waits on `signal-cli` being healthy, so this
+          # also proves that dependency chain resolves. signal-cli's probe is
+          # /v1/about, which needs no registered Signal account — a fresh
+          # deployment must come up before anyone registers a number.
+          compose up -d --build
+          compose ps
+
+          cid=$(docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml ps -q app)
+
+          # The app's own view. `signalNotifier: ok` can only be true if the
+          # app resolved the sidecar's URL and the shared key authenticated —
+          # the two things the compose defaults are responsible for.
+          for i in $(seq 1 30); do
+            body=$(docker exec "$cid" bun -e "
+              fetch('http://localhost:3000/api/health/ready')
+                .then(r => r.text()).then(t => { console.log(t); process.exit(0) })
+                .catch(() => { console.log('{}'); process.exit(0) })")
+            case "$body" in
+              *'"signalNotifier":{"status":"ok"'*)
+                echo "  ok    the app reports signalNotifier ok after ${i} checks"
+                echo "$body"
+                signal_ok=1
+                break ;;
+            esac
+            sleep 5
+          done
+
+          if [ "${signal_ok:-0}" != "1" ]; then
+            echo "::error::Signal profile is enabled but the app does not report signalNotifier ok — the app is not connected to its own sidecar"
+            echo "last readiness body: $body"
+            compose logs --tail=40 signal-notifier signal-cli app
+            exit 1
+          fi
+
+          # Readiness must still be 200. A hotline whose Signal sidecar is up
+          # is obviously ready; this guards against a future change making the
+          # happy path gate on something it should not.
+          code=$(docker exec "$cid" bun -e "
+            fetch('http://localhost:3000/api/health/ready')
+              .then(r => { console.log(r.status); process.exit(0) })
+              .catch(() => { console.log('ERR'); process.exit(0) })")
+          [ "$code" = "200" ] || {
+            echo "::error::/api/health/ready returned $code with Signal healthy, expected 200"
+            exit 1
+          }
+          echo "  ok    readiness is 200 with the Signal profile enabled"
+
+      - name: Tear down
+        if: always()
+        run: docker compose -p smoke --env-file .env -f deploy/docker/docker-compose.yml --profile signal down -v --remove-orphans || true
 
   docker-canary:
     needs: ci-status
@@ -1560,7 +1857,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1593,6 +1890,7 @@ jobs:
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"
+          check_job "production-smoke" "${{ needs.production-smoke.result }}"
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
 
           if [[ -n "$FAILED" ]]; then

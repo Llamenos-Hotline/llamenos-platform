@@ -17,6 +17,17 @@ import {
   callHistoryResponseSchema,
   callRecordResponseSchema,
 } from '@protocol/schemas/calls'
+import { DEFAULT_ROLES } from '@shared/permissions'
+import type { Role } from '@shared/permissions'
+
+// This file asserts the response *shape*. Ring-leg cancellation and relay publishing are
+// the answer route's side effects, covered in ringing-service.test.ts and
+// calls-routes.test.ts; stub them so neither reaches a provider from here.
+vi.mock('@worker/services/ringing', async (orig) => ({
+  ...(await orig<typeof import('@worker/services/ringing')>()),
+  cancelLosingLegs: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 
 type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
@@ -74,10 +85,38 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
   }
 }
 
+/**
+ * The volunteer is on shift and a member of hub-1, so the answer route's first-pickup
+ * guard (#1039) lets them through and the projection is what the assertions see.
+ */
+function ringRoster() {
+  return {
+    shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue([VOLUNTEER]) },
+    identity: {
+      getUsers: vi.fn().mockResolvedValue({
+        users: [{
+          pubkey: VOLUNTEER,
+          active: true,
+          onBreak: false,
+          callPreference: 'phone',
+          phone: '+1555',
+          roles: [] as string[],
+          hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
+        }],
+      }),
+    },
+    settings: {
+      getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+      getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+    },
+  }
+}
+
 function createTestApp(permissions: string[], callsService: Record<string, unknown>) {
   const services = {
-    calls: callsService,
+    calls: { getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()), ...callsService },
     audit: { log: vi.fn().mockResolvedValue(undefined) },
+    ...ringRoster(),
   }
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
@@ -202,6 +241,7 @@ describe('single-call routes — send the projected call', () => {
 
   it('POST /:callId/answer returns the answered call without the caller hash', async () => {
     const app = createTestApp(['calls:answer'], {
+      getActiveCallById: vi.fn().mockResolvedValue(activeRow({ status: 'ringing', answeredBy: null })),
       answerCall: vi.fn().mockResolvedValue(activeRow()),
     })
 

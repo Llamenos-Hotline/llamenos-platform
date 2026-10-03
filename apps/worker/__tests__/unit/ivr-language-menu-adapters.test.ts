@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { TwilioAdapter } from '@worker/telephony/twilio'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { IVR_PROMPTS, resolveIvrPrompt } from '@shared/voice-prompts'
+import { fakeSpeech, spoken } from '../helpers/fake-speech'
 
 const baseParams = { callSid: 'CA1', callerNumber: '+15550000000', hotlineName: 'Test' }
 
@@ -60,13 +61,13 @@ describe('Twilio IVR language menu (#657)', () => {
 })
 
 describe('Asterisk IVR language menu (#657)', () => {
-  it('does not offer Tagalog, which the Asterisk TTS map has no voice for', async () => {
-    const res = await asterisk().handleLanguageMenu({ ...baseParams, enabledLanguages: ['en', 'tl', 'es'] })
-    const { commands } = JSON.parse(res.body) as { commands: Array<{ action: string; text?: string; language?: string }> }
-    const speaks = commands.filter(c => c.action === 'speak')
-    expect(speaks).toEqual([
-      { action: 'speak', text: resolveIvrPrompt(IVR_PROMPTS.en, '1'), language: 'en-US' },
-      { action: 'speak', text: resolveIvrPrompt(IVR_PROMPTS.es, '3'), language: 'es' },
+  it('does not offer Tagalog, which generated speech has no voice for — and keeps the other digits', async () => {
+    const res = await asterisk().handleLanguageMenu({ ...baseParams, enabledLanguages: ['en', 'tl', 'es'], speechUrl: fakeSpeech })
+    const { commands } = JSON.parse(res.body) as { commands: Array<{ action: string; url?: string }> }
+    const announced = commands.filter((c) => c.action === 'play').map((c) => spoken(c.url!))
+    expect(announced).toEqual([
+      { locale: 'en', text: resolveIvrPrompt(IVR_PROMPTS.en, '1') },
+      { locale: 'es', text: resolveIvrPrompt(IVR_PROMPTS.es, '3') },
     ])
   })
 })
