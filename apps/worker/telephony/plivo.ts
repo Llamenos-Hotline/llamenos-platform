@@ -232,6 +232,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     return this.plivoXml(`<Hangup reason="rejected"/>`)
   }
 
+  hangupResponse(): TelephonyResponse {
+    return this.plivoXml('<Hangup/>')
+  }
+
   async hangupCall(callSid: string): Promise<void> {
     await this.plivoApi(`/Call/${callSid}/`, {
       method: 'DELETE',

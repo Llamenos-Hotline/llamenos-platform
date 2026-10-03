@@ -66,10 +66,11 @@ struct SpamSettingsView: View {
                     ))
                     .font(.brand(.body))
 
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_spam_max_calls_value",
-                        comment: "%d calls per number per hour"
-                    ), viewModel.spamSettings.maxCallsPerHour))
+                        comment: "%d calls per number per hour",
+                        viewModel.spamSettings.maxCallsPerHour
+                    ))
                     .font(.brand(.subheadline))
                     .foregroundStyle(Color.brandPrimary)
                     .fontWeight(.medium)

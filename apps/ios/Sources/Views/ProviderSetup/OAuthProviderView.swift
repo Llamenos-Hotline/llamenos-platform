@@ -98,7 +98,7 @@ struct OAuthProviderView: View {
                         .scaleEffect(0.8)
                         .padding(.trailing, 4)
                 }
-                Text(String(format: NSLocalizedString("provider_oauth_connect_button", comment: "Connect with %@"), provider.displayName))
+                Text(L10n.format("provider_oauth_connect_button", comment: "Connect with %@", provider.displayName))
                     .font(.brand(.body))
                     .fontWeight(.semibold)
             }

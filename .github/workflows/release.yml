@@ -554,7 +554,7 @@ jobs:
         # unconditionally, so there is no "scan never ran" case to guard
         # against as there was under the old Docker-Hub-configured gate.
         if: always()
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3
         with:
           sarif_file: 'trivy-results.sarif'
 

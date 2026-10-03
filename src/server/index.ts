@@ -118,7 +118,7 @@ const env: Record<string, unknown> = {
   // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
   DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
-  R2_BUCKET: createBlobStorage(),
+  BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,

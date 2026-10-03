@@ -14,7 +14,7 @@
     "themeLight": "Saq ruwach",
     "themeSystem": "Ruwach rech k'uxlab'al",
     "back": "Titzolij",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "Majun tz'ib'anela' k'o",
     "optOutFooter": "Ruk'isib'al Tzij rech Telik",
     "rateLimit": "Ruch'uyik Jachike (taq tzijob'al/segundo)",
-    "recipientCount": "%d taq winaq kak'ul",
+    "recipientCount": "{{count}} taq winaq kak'ul",
     "recipientCountOne": "1 winaq kak'ul",
     "recipients": "taq winaq kak'ul",
     "saveDraft": "Tiyak Nab'ey Tz'ib'axik",
@@ -935,19 +935,19 @@
     "dotFilled": "Nojinaq",
     "enterPin": "Tatz'ib'aj ri PIN awech",
     "keyLocked": "Ri etal tz'apital",
-    "lockoutRemaining": "Tz'apital. Tarayij chik pa %d segundos.",
+    "lockoutRemaining": "Tz'apital. Tarayij chik pa {{seconds}} segundos.",
     "mismatch": "Ri taq PIN man kijunamaj ta. Tarayij chik.",
     "setEncrypting": "Tajin ke'ewan ri awetal...",
     "setSubtitle": "Tacha' jun PIN rech 6-8 ajilab'al rech kuchajij ri awetal",
     "setTitle": "Tib'an jun PIN",
     "tooShort": "Ri PIN rajawaxik 6 ajilab'al",
-    "unlockAttempts": "%d chi re %d rayik kojo'on",
+    "unlockAttempts": "{{used}} chi re {{total}} rayik kojo'on",
     "unlockSubtitle": "Tatz'ib'aj ri PIN awech rech tijaqax",
     "unlockTitle": "Tatz'ib'aj ri PIN awech",
     "unlockVerifying": "Tajin katz'et...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1422,7 +1422,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d oyonik tajin kasamaj",
+    "activeCalls": "{{count}} oyonik tajin kasamaj",
     "assigned": "Ya'on",
     "available": "K'o",
     "clockIn": "Titikitaj Samaj",
@@ -1431,7 +1431,7 @@
     "clockOutTitle": "Tik'is ri Samaj?",
     "clockedIn": "At pa samaj chik",
     "clockedOut": "Man at pa samaj ta chik",
-    "count": "%d samaj",
+    "count": "{{count}} samaj",
     "create": "Tib'an Samaj",
     "createShift": "Tib'an Samaj",
     "days": {
@@ -1476,7 +1476,7 @@
     "selectedCount": "{{count}} ch'akon",
     "shiftName": "Rub'i' Samaj",
     "signUp": "Tatz'ib'aj Ab'i'",
-    "signedUp": "Xatz'ib'aj ab'i' rech %@",
+    "signedUp": "Xatz'ib'aj ab'i' rech {{shift}}",
     "since": "Chi rij",
     "startTime": "Rutikirisaxik Ramaj",
     "startsAt": "katikirisax pa",
@@ -2217,7 +2217,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -2228,7 +2228,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -2764,7 +2764,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -2821,7 +2821,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -3903,7 +3903,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -4135,8 +4135,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -4159,15 +4159,15 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "unlock": {
     "subtitle": "Tatz'ib'aj ri PIN awech rech tijaqax",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "callActions": {
     "openNotes": "Taq Tz'ib'atajem",
@@ -4345,7 +4345,7 @@
     "connecting": "Tajin kak'am...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "platformSettings": {
     "transcriptionEnabled": "Rutz'ib'axik Ch'ab'al",
@@ -4460,7 +4460,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4473,7 +4473,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4512,16 +4512,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4634,7 +4634,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",

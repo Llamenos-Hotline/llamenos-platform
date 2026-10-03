@@ -5,39 +5,26 @@
  *   - packages/test-specs/features/settings/lock-logout.feature
  *   - packages/test-specs/features/settings/device-link.feature
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds, sectionTestIdMap } from '../../test-ids'
 import { Timeouts } from '../../helpers'
+import { expandSettingsSection } from '../common/ui-helpers'
 
 // --- Settings display steps ---
 
 Then('I should see my npub in monospace text', async ({ page }) => {
-  // Public key is displayed as hex in the profile section code block.
-  // The profile section may take a moment to load the key from keyManager.
-  // Check for hex key in <code>, npub format, or sidebar user info (all valid).
-  const hexKey = page.locator('code').filter({ hasText: /[0-9a-f]{32,}/i }).first()
-  const isHex = await hexKey.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isHex) return
-  // Fallback: npub format
-  const npub = page.getByText(/npub1/).first()
-  const isNpub = await npub.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isNpub) return
-  // Final fallback: sidebar user info shows identity (name or pubkey prefix)
-  const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
-  await expect(sidebar).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // v3 identities are hex device pubkeys, shown in a <code> block in the profile
+  // section. The old fallbacks ended at "the sidebar is visible".
+  const profile = await expandSettingsSection(page, TestIds.SETTINGS_PROFILE)
+  await expect(profile.locator('code').filter({ hasText: /^[0-9a-f]{64}$/ })).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the copy npub button', async ({ page }) => {
-  // On desktop, the public key is shown in a <code> block within the profile section.
-  // There may be a copy button (aria-label) or the key is just displayed.
-  // Check for either a copy button or the code block with the key.
-  const copyBtn = page.locator('button[aria-label*="Copy"], button[aria-label*="copy"]')
-  const isCopy = await copyBtn.first().isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isCopy) return
-  // Fallback: verify the public key code block is visible (copyable via browser selection)
-  const hexKey = page.locator('code').filter({ hasText: /[0-9a-f]{32,}/i }).first()
-  await expect(hexKey).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Assert the claim: a copy control for the public key in the profile section.
+  // The previous fallback accepted the key's <code> block itself as the button.
+  const profile = page.getByTestId(TestIds.SETTINGS_PROFILE)
+  await expect(profile.getByRole('button', { name: /copy/i })).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the hub connection card', async ({ page }) => {
@@ -152,34 +139,14 @@ Given('camera permission is not granted', async () => {
 })
 
 Then('I should see the error state', async ({ page }) => {
-  const errorMessage = page.getByTestId(TestIds.ERROR_MESSAGE)
-  const isError = await errorMessage.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isError) return
-  const errorText = page.getByText(/error|invalid|failed/i).first()
-  const isErrorText = await errorText.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isErrorText) return
-  // Desktop device linking uses a text input flow, not QR camera — simulated QR errors
-  // may not produce visible error state. Verify the device link section is still rendered.
-  const section = page.getByTestId('linked-devices')
-  await expect(section).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // (Only @requires-camera scenarios use this; they are excluded from desktop runs.)
+  await expect(page.getByTestId(TestIds.ERROR_MESSAGE).or(page.getByRole('alert')).first())
+    .toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the error message should mention {string}', async ({ page }, text: string) => {
-  // Error message content — check for specific text, toast, or alert
-  const textEl = page.getByText(new RegExp(text, 'i')).first()
-  const isText = await textEl.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isText) return
-  // Check for error toast with matching text
-  const errorToast = page.locator('[data-sonner-toast][data-type="error"]').first()
-  const isToast = await errorToast.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isToast) return
-  // Check for alert role with matching text
-  const alertEl = page.locator('[role="alert"]').first()
-  const isAlert = await alertEl.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isAlert) return
-  // Desktop doesn't have QR-camera-based errors — verify the device link section is visible
-  const section = page.getByTestId('linked-devices')
-  await expect(section).toBeVisible({ timeout: Timeouts.ELEMENT })
+  const matching = page.getByTestId(TestIds.ERROR_MESSAGE).or(page.getByRole('alert')).filter({ hasText: new RegExp(text, 'i') })
+  await expect(matching.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the device link card should still be visible', async ({ page }) => {
@@ -206,24 +173,19 @@ When('a QR code with invalid format is scanned', async ({ page }) => {
 
 // --- Profile settings steps ---
 
-When('I change my display name', async ({ page }) => {
+When('I change my display name', async ({ page, adminWorld }) => {
   const nameInput = page.getByLabel(/name/i)
   const newName = `Admin ${Date.now()}`
   await nameInput.clear()
   await nameInput.fill(newName)
-  await page.evaluate((n) => {
-    ;(window as unknown as Record<string, unknown>).__test_new_display_name = n
-  }, newName)
+  // Scenario state, not `window`: the persistence check runs after a reload,
+  // which wiped the window stash and turned the old check into `if (undefined)`.
+  adminWorld.lastDisplayName = newName
 })
 
-Then('the new display name should persist', async ({ page }) => {
-  const newName = (await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_new_display_name,
-  )) as string
-  if (newName) {
-    const nameInput = page.getByLabel(/name/i)
-    await expect(nameInput).toHaveValue(newName)
-  }
+Then('the new display name should persist', async ({ page, adminWorld }) => {
+  expect(adminWorld.lastDisplayName, 'the rename step must record the new name').toBeTruthy()
+  await expect(page.getByLabel(/name/i)).toHaveValue(adminWorld.lastDisplayName, { timeout: Timeouts.ELEMENT })
 })
 
 When('I enter a valid phone number', async ({ page }) => {
@@ -258,10 +220,13 @@ When('they update their name and phone', async ({ page }) => {
 })
 
 When('I toggle a language option', async ({ page }) => {
-  const langOption = page.locator('[data-testid="language-option"]').first()
-  if (await langOption.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await langOption.click()
-  }
+  // Spoken-language chips in the profile section. The old step targeted a
+  // testid the app never renders, so it toggled nothing and the scenario only
+  // re-saved an unchanged profile.
+  const profile = await expandSettingsSection(page, TestIds.SETTINGS_PROFILE)
+  const chip = profile.getByRole('button', { name: /Français/ })
+  await expect(chip).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await chip.click()
 })
 
 Then('the transcription section should be expanded', async ({ page }) => {
@@ -284,37 +249,22 @@ Then('the profile section should expand', async ({ page }) => {
   await expect(nameInput).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I click the {string} header', async ({ page }, headerText: string) => {
+/** Click a settings section's collapsible header (its `{id}-trigger`). */
+async function clickSectionHeader(page: Page, headerText: string) {
   const testId = sectionTestIdMap[headerText]
-  if (testId) {
-    // Click the trigger element within the section
-    const trigger = page.getByTestId(`${testId}-trigger`)
-    if (await trigger.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await trigger.click()
-    } else {
-      // Fallback: click the card title directly
-      await page.getByTestId(testId).locator('h3, [class*="CardTitle"]').first().click()
-    }
-  } else {
-    // Fallback for unmapped section names
-    const header = page.getByRole('heading', { name: headerText }).first()
-    await header.click()
-  }
+  const header = testId
+    ? page.getByTestId(`${testId}-trigger`)
+    : page.getByRole('heading', { name: headerText })
+  await expect(header).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await header.click()
+}
+
+When('I click the {string} header', async ({ page }, headerText: string) => {
+  await clickSectionHeader(page, headerText)
 })
 
 When('I click the {string} header again', async ({ page }, headerText: string) => {
-  const testId = sectionTestIdMap[headerText]
-  if (testId) {
-    const trigger = page.getByTestId(`${testId}-trigger`)
-    if (await trigger.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await trigger.click()
-    } else {
-      await page.getByTestId(testId).locator('h3, [class*="CardTitle"]').first().click()
-    }
-  } else {
-    const header = page.getByRole('heading', { name: headerText }).first()
-    await header.click()
-  }
+  await clickSectionHeader(page, headerText)
 })
 
 Then(
@@ -377,16 +327,8 @@ When('I press {string}', async ({ page }, keys: string) => {
 })
 
 Then('I should see the command palette', async ({ page }) => {
-  // Command palette renders as a dialog or cmdk overlay.
-  // Check each selector in sequence to avoid strict mode issues.
-  const dialog = page.getByRole('dialog').first()
-  const isDialog = await dialog.isVisible({ timeout: 5000 }).catch(() => false)
-  if (isDialog) return
-  const cmdkRoot = page.locator('[cmdk-root]').first()
-  const isCmdk = await cmdkRoot.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isCmdk) return
-  const combobox = page.locator('[role="combobox"]').first()
-  await expect(combobox).toBeVisible({ timeout: 3000 })
+  // The palette is a cmdk list inside a dialog.
+  await expect(page.getByRole('dialog').locator('[cmdk-root]')).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('it should be focusable and searchable', async ({ page }) => {
