@@ -1,4 +1,4 @@
-@desktop @ios @android @security
+@ios @android @security
 Feature: Network Security
   As a security-conscious app
   I want all network connections and relay URLs to be validated
@@ -83,8 +83,7 @@ Feature: Network Security
     And I should see instructions to compare with the other device
     And I should see "Confirm" and "Reject" buttons
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
-  @desktop @wip
+  @desktop
   Scenario: SAS confirmation required before device key import
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -95,8 +94,7 @@ Feature: Network Security
     Then the device key should not be imported
     And the crypto service should not have a new key
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
-  @desktop @wip
+  @desktop
   Scenario: SAS confirmation allows device key import
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -107,8 +105,7 @@ Feature: Network Security
     Then the device key should be imported
     And I should see the import success state
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
-  @desktop @wip
+  @desktop
   Scenario: SAS rejection aborts device linking
     Given I am authenticated
     And I navigate to the device link screen from settings
@@ -267,7 +264,17 @@ Feature: Network Security
 
   # ── Certificate Pinning ───────────────────────────────────────────
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
+  # Mobile-only: these assert a static, pre-configured wildcard pin list
+  # ("*.llamenos.org"), which is the iOS/Android pinning model
+  # (apps/android network_security_config.xml + OkHttp CertificatePinner).
+  # Desktop's model is fundamentally different — TOFU per-origin SPKI
+  # capture, no wildcard support (apps/desktop/src/cert_pin.rs) — so a
+  # desktop step bound to this wording would assert a configuration desktop
+  # doesn't have. Desktop's own pinning behavior is covered by Rust unit
+  # tests in cert_pin.rs, not BDD. These were only ever tagged for desktop
+  # because the feature-level @desktop tag used to leak onto them with no
+  # desktop steps to match — #1195. They remain @wip pending real
+  # android/ios step definitions, which is outside desktop's scope.
   @android @ios @security @wip
   Scenario: App refuses connection to server with mismatched certificate
     Given the app is configured with certificate pins for "*.llamenos.org"
@@ -275,7 +282,8 @@ Feature: Network Security
     Then the connection should be refused
     And no data should be transmitted
 
-  # @wip: SAS device-key import and cert-pinning steps have no desktop definitions — #1195
+  # @wip: same mobile-only wildcard pinning model as above — desktop uses
+  # TOFU per-origin SPKI capture instead; see cert_pin.rs — #1195
   @android @ios @security @wip
   Scenario: App succeeds when server certificate matches a configured pin
     Given the app is configured with certificate pins for "*.llamenos.org"

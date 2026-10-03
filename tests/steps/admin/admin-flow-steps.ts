@@ -28,18 +28,18 @@ When('I add a new volunteer with a unique name and phone', async ({ page, adminW
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 })
 
-Then('I should see the generated nsec', async ({ page }) => {
-  const nsecCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
-  await expect(nsecCode).toBeVisible({ timeout: 15000 })
+Then('I should see the generated device key', async ({ page }) => {
+  const deviceKeyCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
+  await expect(deviceKeyCode).toBeVisible({ timeout: 15000 })
   // Verify the key looks valid: either bech32 nsec1 or hex seed (v3 API)
-  const nsecText = await nsecCode.textContent()
-  expect(nsecText).toBeTruthy()
-  const isNsec = nsecText!.startsWith('nsec1')
-  const isHexSeed = /^[0-9a-f]{64}$/i.test(nsecText!.trim())
+  const deviceKeyText = await deviceKeyCode.textContent()
+  expect(deviceKeyText).toBeTruthy()
+  const isNsec = deviceKeyText!.startsWith('nsec1')
+  const isHexSeed = /^[0-9a-f]{64}$/i.test(deviceKeyText!.trim())
   expect(isNsec || isHexSeed).toBe(true)
 })
 
-When('I close the nsec card', async ({ page }) => {
+When('I close the device key card', async ({ page }) => {
   await page.getByTestId(TestIds.DISMISS_DEVICE_KEY).click()
   await expect(page.getByTestId(TestIds.DISMISS_DEVICE_KEY)).not.toBeVisible({ timeout: 5000 })
 })

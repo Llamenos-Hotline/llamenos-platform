@@ -1,4 +1,4 @@
-@desktop @ios @android
+@ios @android
 Feature: Reports
   As a volunteer, reporter, or admin
   I want to create, view, claim, and close reports
@@ -216,24 +216,29 @@ Feature: Reports
 
   # ── Template-Driven Report Types ─────────────────────────────────────
 
-  # @wip: mobile report-type picker steps have no desktop definitions — #1195
-  @android @wip
+  # Mobile-only: these assert a tap-to-open report-type picker with an
+  # audio input button on the arrestee details field — a mobile UI pattern
+  # that has no desktop equivalent. Desktop's analogous behavior (tabs +
+  # dynamic schema fields in the create dialog) is covered separately below
+  # under "Desktop: Template-Driven Report Types". Real @android step
+  # definitions exist (apps/android/.../steps/reports/ReportTypeSteps.kt);
+  # these were only ever @wip because the feature-level @desktop tag used
+  # to leak onto them with no desktop steps to match — #1195.
+  @android
   Scenario: Report type picker shows mobile-optimized types
     Given the "jail-support" template is applied
     When I tap the create report button
     Then the report type picker should show available types
     And each type card should show a label and description
 
-  # @wip: mobile report-type picker steps have no desktop definitions — #1195
-  @android @wip
+  @android
   Scenario: Template-driven report form renders dynamic fields
     Given the "jail-support" template is applied
     And I select report type "LO Arrest Report"
     Then I should see fields for location, time, and arrestee details
     And the arrestee details field should have an audio input button
 
-  # @wip: mobile report-type picker steps have no desktop definitions — #1195
-  @android @wip
+  @android
   Scenario: Submit a template-driven report
     Given I fill in the template report form
     When I tap the submit button
