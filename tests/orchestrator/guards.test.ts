@@ -1117,13 +1117,17 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   })
 
   // The `not-requested` fail-closed message — an operator or agent reading
-  // a red `fleet/review` must be told exactly what to do (request a review
-  // from `llamenos-auto`), not left to guess why a check that "did nothing"
-  // is failing. The account name comes from `REVIEW_REQUEST_LOGIN`, never a
-  // second literal that could drift from what the gate actually accepts.
-  it('the review-gate CLI command fails with an actionable "review not requested" message naming the reviewer to request', () => {
+  // a red `fleet/review` must be told exactly what to do, not left to guess
+  // why a check that "did nothing" is failing. The advice itself is
+  // `reviewNotRequestedAdvice` (ci.ts), driven for real in
+  // tests/orchestrator/review-request-trigger.test.ts; this rail pins that
+  // the CLI gets its advice from THERE, and never from a second literal that
+  // could drift from what the gate actually accepts — which is how it came
+  // to tell a `llamenos-auto`-authored PR to request `llamenos-auto` (#1471).
+  it('the review-gate CLI command takes its "review not requested" advice from reviewNotRequestedAdvice, not a literal', () => {
     const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
-    expect(text).toContain('review not requested — request a review from \\`${REVIEW_REQUEST_LOGIN}\\`')
+    expect(text).toContain('reviewNotRequestedAdvice({')
+    expect(text).not.toContain('review not requested — request a review from')
     expect(text).not.toContain('add the \\`review\\` label')
   })
 
