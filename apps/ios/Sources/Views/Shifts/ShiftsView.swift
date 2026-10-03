@@ -152,6 +152,20 @@ struct ShiftsView: View {
                 .accessibilityIdentifier("shifts-error")
             }
 
+            // In-app calling could not be set up: calls will not ring this device.
+            if let voipWarning = vm.voipWarning {
+                Section {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "phone.down.fill")
+                            .foregroundStyle(.orange)
+                        Text(voipWarning)
+                            .font(.brand(.footnote))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityIdentifier("shifts-voip-warning")
+            }
+
             if let success = vm.successMessage {
                 Section {
                     HStack(alignment: .top, spacing: 8) {

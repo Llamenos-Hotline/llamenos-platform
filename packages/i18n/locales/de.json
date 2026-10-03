@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "bis",
     "users": "Freiwillige",
+    "voipNotEnabled": "In-App-Anrufe sind für dein Konto nicht aktiviert, daher klingeln Anrufe auf diesem Gerät nicht. Bitte die Verwaltung deines Hubs, sie zu aktivieren.",
+    "voipSetupFailed": "In-App-Anrufe konnten nicht eingerichtet werden, daher klingeln Anrufe auf diesem Gerät möglicherweise nicht. Beende den Dienst und beginne ihn erneut oder wende dich an die Verwaltung deines Hubs.",
+    "voipUnavailableInBuild": "In-App-Anrufe sind in dieser Version der App nicht enthalten, daher können Anrufe auf diesem Gerät nicht klingeln. Du bist weiterhin im Dienst.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

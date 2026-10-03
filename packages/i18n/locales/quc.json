@@ -1485,6 +1485,9 @@
     "today": "Kamik",
     "until": "k'a pa",
     "users": "Aj Samajela'",
+    "voipNotEnabled": "Ri oyonik pa ri aplicación man tzijtal ta pa ri a cuenta, rumal ri' ri oyonik man kechʼawik ta pa we chokoybʼal riʼ. Chata che ri administrador rech ri hub chutzijaj.",
+    "voipSetupFailed": "Man xkowin ta xnuk ri oyonik pa ri aplicación, rumal ri' ri oyonik rajawaxik man kechʼawik ta pa we chokoybʼal riʼ. Chakʼisa ri samaj xuqujeʼ chatikibʼa chi jumul, on chattzijon rukʼ ri administrador rech ri hub.",
+    "voipUnavailableInBuild": "Ri oyonik pa ri aplicación maj pa we versión ri', rumal ri' ri oyonik man kechʼawik ta pa we chokoybʼal riʼ. At kʼo na pa ri samaj.",
     "weeklySchedule": "Ucholajil Semana",
     "ringGroups": {
       "addMembers": "Add Members",

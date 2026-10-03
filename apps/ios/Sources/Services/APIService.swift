@@ -480,10 +480,14 @@ final class APIService: @unchecked Sendable {
 
     // MARK: - Telephony / SIP
 
-    /// Fetch short-lived SIP credentials for the given hub.
-    /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
-        return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
+    /// Fetch SIP credentials for the authenticated volunteer.
+    /// Called when the volunteer clocks in so SIP accounts can be registered with Linphone.
+    ///
+    /// The server route is `GET /api/telephony/sip-token` and is NOT hub-scoped (it is
+    /// mounted on the authenticated router, not under `/api/hubs/:hubId`). Do not wrap it
+    /// with `hp()` / `hubPath` — `/api/hubs/{id}/telephony/sip-token` does not exist and 404s.
+    func getSipToken() async throws -> SipTokenResponse {
+        return try await request(method: "GET", path: "/api/telephony/sip-token")
     }
 
     // MARK: - Version Check

@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "jiska",
     "users": "Volontè",
+    "voipNotEnabled": "Apèl andedan aplikasyon an pa aktive pou kont ou, kidonk apèl yo p ap sonnen sou aparèy sa a. Mande administratè hub ou a pou l aktive l.",
+    "voipSetupFailed": "Nou pa t kapab mete apèl andedan aplikasyon an an plas, kidonk apèl yo ka pa sonnen sou aparèy sa a. Eseye fini epi rekòmanse sèvis ou, oswa kontakte administratè hub ou a.",
+    "voipUnavailableInBuild": "Apèl andedan aplikasyon an pa enkli nan vèsyon sa a, kidonk apèl yo pa ka sonnen sou aparèy sa a. Ou toujou nan sèvis.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

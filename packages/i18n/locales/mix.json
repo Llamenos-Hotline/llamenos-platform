@@ -1485,6 +1485,9 @@
     "today": "Víchi",
     "until": "hasta",
     "users": "Ña̱yivi",
+    "voipNotEnabled": "Tu̱ nuná llamada ini aplicación nuu cuenta nuu̱n, sa̱ tu̱ kanaa llamada nuu aparato yóʼo. Ka̱ʼa̱n xíʼin administrador hub nuu̱n ná na nuná ña.",
+    "voipSetupFailed": "Tu̱ nkuu tuu llamada ini aplicación, sa̱ ná va̱ʼa tu̱ kanaa llamada nuu aparato yóʼo. Nasandíʼi turno ta nakiʼin tuku, á ka̱ʼa̱n xíʼin administrador hub nuu̱n.",
+    "voipUnavailableInBuild": "Tu̱ kúú ná ka̱ʼa̱n ini aplicación nuu versión yóʼo, sa̱ ná tu̱ kuu kanaa llamada nuu aparato yóʼo. Ñuʼu ni íyo nu̱ú turno.",
     "weeklySchedule": "Programa Semanal",
     "ringGroups": {
       "members": "Members",

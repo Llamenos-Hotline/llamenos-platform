@@ -4036,6 +4036,9 @@
     "today": "Today",
     "until": "hanggang",
     "users": "Mga Boluntaryo",
+    "voipNotEnabled": "Hindi naka-on ang pagtawag sa loob ng app para sa iyong account, kaya hindi tutunog ang mga tawag sa device na ito. Hilingin sa admin ng iyong hub na i-enable ito.",
+    "voipSetupFailed": "Hindi ma-set up ang pagtawag sa loob ng app, kaya maaaring hindi tumunog ang mga tawag sa device na ito. Subukang mag-clock out at mag-clock in muli, o makipag-ugnayan sa admin ng iyong hub.",
+    "voipUnavailableInBuild": "Hindi kasama ang pagtawag sa loob ng app sa bersyong ito, kaya hindi makakatunog ang mga tawag sa device na ito. Naka-shift ka pa rin.",
     "weeklySchedule": "Weekly Schedule"
   },
   "shortcuts": {

@@ -1485,6 +1485,9 @@
     "today": "Maanta",
     "until": "ilaa",
     "users": "Isticmaalayaal",
+    "voipNotEnabled": "Wicitaanka gudaha app-ka laguma shidin akoonkaaga, sidaa darteed wicitaannadu kuma dhici doonaan qalabkan. Weydii maamulaha xaruntaada inuu shido.",
+    "voipSetupFailed": "Wicitaanka gudaha app-ka lama diyaarin karin, sidaa darteed wicitaannadu ku dhici waayi karaan qalabkan. Isku day inaad shaqada dhammeyso oo dib u bilowdo, ama la xiriir maamulaha xaruntaada.",
+    "voipUnavailableInBuild": "Wicitaanka gudaha app-ka kuma jiro noocan, sidaa darteed wicitaannadu kuma dhici karaan qalabkan. Weli waxaad ku jirtaa shaqada.",
     "weeklySchedule": "Jadwalka Todobaadlaha",
     "overrides": {
       "date": "Taariikh",
