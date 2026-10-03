@@ -54,6 +54,22 @@ function step(jobName: string, stepName: string): WorkflowStep & { run: string }
   return { ...s, run: s.run }
 }
 
+/** A job's literal `env:` entries, read from the same YAML — what GitHub
+ *  injects into every `run:` step in that job. `${{ }}` expressions are
+ *  skipped (nothing here evaluates them); plain literals, which is what
+ *  `FLEET_REVIEWER_TOOLS` is, come through verbatim.
+ *
+ *  Read, never retyped: a hand-written value here would SUPPLY a variable
+ *  the workflow had stopped declaring, letting these steps keep passing in
+ *  the suite while the real reviewer ran with the full default tool set. */
+function jobEnv(name: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(job(name).env ?? {})) {
+    if (typeof v === 'string' && !v.includes('${{')) out[k] = v
+  }
+  return out
+}
+
 const NAMING_STEP = "Name this run's outcome"
 const ASSERT_STEP = 'Assert this run reached a real verdict'
 const SMOKE_STEP = 'Smoke-test the review engine'
@@ -360,7 +376,7 @@ describe('rail: an engine failure is named by its class, end to end', () => {
     writeFileSync(join(bin, 'claude'), '#!/usr/bin/env bash\ncat >/dev/null\necho "Claude AI usage limit reached" >&2\nexit 1\n')
     chmodSync(join(bin, 'claude'), 0o755)
     const temp = mkdtempSync(join(work, 'smoke-temp-'))
-    const r = runScript(step('fleet-review', SMOKE_STEP).run, { RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet' }, {
+    const r = runScript(step('fleet-review', SMOKE_STEP).run, { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet' }, {
       path: `${bin}${delimiter}${process.env['PATH'] ?? ''}`,
     })
     expect(r.status, r.stdout + r.stderr).toBe(1)

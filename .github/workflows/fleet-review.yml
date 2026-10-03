@@ -377,6 +377,24 @@ jobs:
     # variable being silently invisible the way an absent provider id was.
     env:
       FLEET_REVIEW_MODEL: ${{ vars.FLEET_REVIEW_MODEL || 'sonnet' }}
+      # The reviewer's tool restriction, carried BY THIS WORKFLOW rather than
+      # imported from `orchestrator/src/review.ts` at gate time. It must
+      # equal `REVIEWER_TOOLS` in that module, and
+      # `tests/orchestrator/guards.test.ts` asserts exactly that — in the
+      # TEST SUITE, where this file and that module are the same commit.
+      #
+      # It cannot be an import here, because this job executes the HEAD's
+      # copy of this YAML against a BASE checkout of the source
+      # (`ref: base_sha`, deliberate — the gate never runs the code it
+      # judges). Those two refs are different by design, so a `bun -e`
+      # import of any symbol the head ADDS resolves against a base that
+      # does not have it yet and dies with `SyntaxError: Export named
+      # 'REVIEWER_TOOLS' not found` — which deadlocks the gate for the very
+      # PR adding the symbol, and for every future one that does the same.
+      # That is not a bootstrap quirk to absorb once; it is a trap that
+      # re-arms. A literal here crosses no version boundary, and the drift
+      # it could otherwise hide is caught by the test above instead.
+      FLEET_REVIEWER_TOOLS: Read,Grep,Glob
 
     steps:
       # MANDATORY, and must stay the literal first step: a self-hosted
@@ -968,6 +986,11 @@ jobs:
           # warning line on stderr merged onto stdout would otherwise corrupt
           # every jq call after it for a reason with nothing to do with
           # engine configuration.
+          #
+          # Only symbols the BASE is known to have may be imported here. The
+          # reviewer's tool list is NOT one of them — it travels as
+          # `FLEET_REVIEWER_TOOLS` in this workflow's own `env:` instead, for
+          # the version-boundary reason documented there.
           engine_json="$(bun -e '
             import { reviewerInvocationFor } from "./orchestrator/src/review.ts"
             const inv = reviewerInvocationFor("claude")
@@ -980,6 +1003,23 @@ jobs:
           fi
           rev_binary="$(printf '%s' "$engine_json" | jq -r '.binary')"
           rev_model="$(printf '%s' "$engine_json" | jq -r '.model')"
+          # The reviewer's tool restriction, from this workflow's own `env:`
+          # — NOT imported from review.ts, because this YAML is the head's
+          # while the checkout is the base's (see FLEET_REVIEWER_TOOLS).
+          # `tests/orchestrator/guards.test.ts` pins this literal equal to
+          # `REVIEWER_TOOLS` in the source, at a commit where both are the
+          # same version, so the two still cannot drift apart silently.
+          #
+          # It is smoke-tested at all because `--tools` is the flag that
+          # withholds `Bash` from the reviewer, and a runner whose `claude`
+          # build does not accept it would otherwise pass this step (which
+          # used to pass a hand-written, flag-poorer argv) and then fail
+          # EVERY real review as an opaque `engine-unavailable`. Asserting
+          # the flag here names it as a configuration problem instead.
+          rev_tools="$FLEET_REVIEWER_TOOLS"
+          if [ -z "$rev_tools" ]; then
+            fail "engine-misconfigured" "FLEET_REVIEWER_TOOLS resolved to nothing — the reviewer would run with the full default tool set, Bash included"
+          fi
           if [ -z "$rev_binary" ] || [ "$rev_binary" = "null" ] || [ -z "$rev_model" ] || [ "$rev_model" = "null" ]; then
             fail "engine-misconfigured" "reviewerInvocationFor printed unparseable output: $engine_json"$'\n'"$engine_err"
           fi
@@ -989,7 +1029,7 @@ jobs:
           fi
 
           run_out="$(cd "$root" && printf 'Reply with exactly: VERDICT: PASS\n' \
-            | "$rev_binary" --print --permission-mode plan --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+            | "$rev_binary" --print --permission-mode plan --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then
