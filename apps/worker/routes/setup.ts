@@ -100,28 +100,29 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
     const body = c.req.valid('json')
     const services = c.get('services')
 
-    // Create default hub if none exists
-    try {
-      const { hubs } = await services.settings.getHubs()
-      if (hubs.length === 0) {
-        const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
-        const defaultHub = {
-          id: crypto.randomUUID(),
-          name: hotlineName,
-          slug: hotlineName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-          status: 'active' as const,
-          phoneNumber: c.env.TWILIO_PHONE_NUMBER || '',
-          description: '',
-          createdBy: pubkey,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }
-        await services.settings.createHub(defaultHub)
-        // Assign admin to the default hub with all roles
-        await services.identity.setHubRole({ pubkey, hubId: defaultHub.id, roleIds: ['role-super-admin'] })
+    // Create default hub if none exists. Deliberately NOT caught here: if hub
+    // creation or admin-role assignment fails, the request must fail too —
+    // `setupCompleted` is never written, so the operator lands back on the
+    // wizard instead of an empty dashboard with zero hubs and no error.
+    // (Issue #1150: this used to swallow the error and mark setup complete
+    // anyway.)
+    const { hubs } = await services.settings.getHubs()
+    if (hubs.length === 0) {
+      const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
+      const defaultHub = {
+        id: crypto.randomUUID(),
+        name: hotlineName,
+        slug: hotlineName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        status: 'active' as const,
+        phoneNumber: c.env.TWILIO_PHONE_NUMBER || '',
+        description: '',
+        createdBy: pubkey,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       }
-    } catch {
-      // Non-fatal — hub creation failing shouldn't block setup completion
+      await services.settings.createHub(defaultHub)
+      // Assign admin to the default hub with all roles
+      await services.identity.setHubRole({ pubkey, hubId: defaultHub.id, roleIds: ['role-super-admin'] })
     }
 
     const result = await services.settings.updateSetupState({ setupCompleted: true, demoMode: body.demoMode ?? false })
