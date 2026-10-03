@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import type { TelephonyResponse } from '@worker/telephony/adapter'
+import { fakeSpeech, spoken } from '@worker/__tests__/helpers/fake-speech'
 import { CommandHandler } from '../../../../sip-bridge/src/command-handler'
 import type { BridgeClient, BridgeEvent } from '../../../../sip-bridge/src/bridge-client'
 import type { WebhookSender } from '../../../../sip-bridge/src/webhook-sender'
@@ -94,7 +95,7 @@ function fakeWorker(script: WorkerScript) {
     [WORKER_PATHS.incoming]: async (req) => {
       const info = await adapter.parseIncomingWebhook(req)
       note('incoming', info)
-      return adapter.handleLanguageMenu({ ...info, hotlineName: 'Llámenos', enabledLanguages: script.enabledLanguages, hubId: HUB })
+      return adapter.handleLanguageMenu({ ...info, hotlineName: 'Llámenos', enabledLanguages: script.enabledLanguages, hubId: HUB, speechUrl: fakeSpeech })
     },
     [CALLBACK_PATHS.language_selected]: async (req, q) => {
       const info = await adapter.parseLanguageWebhook(req)
@@ -109,23 +110,24 @@ function fakeWorker(script: WorkerScript) {
         callerLanguage,
         hotlineName: 'Llámenos',
         hubId: q.hub,
+        speechUrl: fakeSpeech,
       })
     },
     [CALLBACK_PATHS.captcha_response]: async (req, q) => {
       const { digits } = await adapter.parseCaptchaWebhook(req)
       note('captcha', digits)
-      return adapter.handleCaptchaResponse({ callSid: q.callSid, digits, expectedDigits: script.captchaDigits ?? '', callerLanguage: q.lang, hubId: q.hub })
+      return adapter.handleCaptchaResponse({ callSid: q.callSid, digits, expectedDigits: script.captchaDigits ?? '', callerLanguage: q.lang, hubId: q.hub, speechUrl: fakeSpeech })
     },
     [CALLBACK_PATHS.wait_music]: async (req, q) => {
       const { queueTime } = await adapter.parseQueueWaitWebhook(req)
       note('wait-music', queueTime)
-      return adapter.handleWaitMusic(q.lang, undefined, queueTime, script.queueTimeoutSeconds ?? 90)
+      return adapter.handleWaitMusic(q.lang, undefined, queueTime, script.queueTimeoutSeconds ?? 90, fakeSpeech)
     },
     [CALLBACK_PATHS.queue_exit]: async (req, q) => {
       const { result } = await adapter.parseQueueExitWebhook(req)
       note('queue-exit', result)
       if (result === 'hangup' || result === 'bridged') return adapter.emptyResponse()
-      return adapter.handleVoicemail({ callSid: q.callSid, callerLanguage: q.lang, callbackUrl: 'http://worker:3000', hubId: q.hub })
+      return adapter.handleVoicemail({ callSid: q.callSid, callerLanguage: q.lang, callbackUrl: 'http://worker:3000', hubId: q.hub, speechUrl: fakeSpeech })
     },
     [WORKER_PATHS.userAnswer]: async (_req, q) => {
       note('user-answer', q.callToken)
@@ -146,7 +148,7 @@ function fakeWorker(script: WorkerScript) {
     },
     [WORKER_PATHS.voicemailComplete]: async (_req, q) => {
       note('voicemail-complete', q.lang)
-      return adapter.handleVoicemailComplete(q.lang)
+      return adapter.handleVoicemailComplete(q.lang, fakeSpeech)
     },
   }
 
@@ -178,7 +180,6 @@ const bridgeConfig: BridgeConfig = {
   bridgeHost: '0.0.0.0',
   stasisApp: 'llamenos',
   connectionTimeoutMs: 300_000,
-  ttsConfig: { engine: 'none', cacheDir: '' },
 }
 
 const ts = '2026-09-29T00:00:00.000Z'
@@ -225,6 +226,9 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
 
     await handler.handleEvent(incoming)
     expect(worker.parsed.incoming).toEqual([{ callSid: CALLER, callerNumber: '+15557770001', calledNumber: '+15550100' }])
+    // The menu is heard: each option played as generated speech, in its own language.
+    const menu = pbx.of('playMedia').map(([, media]) => spoken(String(media).replace(/^sound:/, '')))
+    expect(menu.map((m) => m?.locale)).toEqual(['en', 'es'])
 
     // Language menu: the caller presses 2 (Spanish). The hub rides along to the next route.
     await handler.handleEvent(dtmf('2'))
@@ -301,6 +305,12 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
     expect(worker.to(CALLBACK_PATHS.recording_complete)[0].query).toEqual({ callSid: CALLER, lang: 'es', hub: HUB })
     expect(worker.parsed['voicemail-recording']).toEqual([{ status: 'completed', recordingSid: `voicemail-${CALLER}`, callSid: CALLER }])
     expect(worker.parsed['voicemail-complete']).toEqual(['es'])
+    // The thank-you is heard to the end: the call ends once every prompt has played.
+    expect(pbx.of('hangup')).not.toContainEqual([CALLER])
+    const played = pbx.of('playMedia').length
+    for (let n = 1; n <= played; n++) {
+      await handler.handleEvent({ type: 'playback_finished', channelId: CALLER, playbackId: `pb-${n}`, failed: false, media: '', timestamp: ts })
+    }
     expect(pbx.of('hangup')).toContainEqual([CALLER])
   })
 

@@ -46,10 +46,7 @@ struct ContactTimelineView: View {
                         Text(displayIdentifier)
                             .font(.brandMono(.headline))
                             .foregroundStyle(Color.brandForeground)
-                        Text(String(
-                            format: NSLocalizedString("contact_interactions_count", comment: "%d interactions"),
-                            vm.total
-                        ))
+                        Text(L10n.format("contact_interactions_count", comment: "%d interactions", vm.total))
                         .font(.brand(.caption))
                         .foregroundStyle(Color.brandMutedForeground)
                     }
@@ -202,8 +199,8 @@ struct TimelineEventRow: View {
         let mins = seconds / 60
         let secs = seconds % 60
         if mins > 0 {
-            return String(format: NSLocalizedString("duration_min_sec", comment: "%dm %ds"), mins, secs)
+            return L10n.format("duration_min_sec", comment: "%dm %ds", mins, secs)
         }
-        return String(format: NSLocalizedString("duration_sec", comment: "%ds"), secs)
+        return L10n.format("duration_sec", comment: "%ds", secs)
     }
 }

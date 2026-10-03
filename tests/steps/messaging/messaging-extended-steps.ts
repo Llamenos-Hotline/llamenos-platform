@@ -233,18 +233,6 @@ Then('the volunteer name should appear on the conversation', async ({ page }) =>
   await expect(assigned).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('multiple volunteers are available', async () => {
-  // Precondition — verified by API in setup
-})
-
-When('a new conversation arrives', async () => {
-  // Simulated inbound message — server-side precondition
-})
-
-Then('it should be assigned to the volunteer with lowest load', async () => {
-  // Auto-assignment logic is server-side — verified by integration tests
-})
-
 Given('conversations exist across SMS and WhatsApp', async ({ page, backendRequest, workerHub }) => {
   await enableMessagingViaApi(backendRequest, ['sms', 'whatsapp'])
   await simulateIncomingMessage(backendRequest, {

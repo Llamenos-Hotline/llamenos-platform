@@ -14,6 +14,7 @@ const facts = (over: Partial<PrSnapshotFacts> = {}): PrSnapshotFacts => ({
   addedLines: 10,
   authorLogin: 'rhonda-rodododo',
   authorIsBot: false,
+  headBranch: 'fleet/infra/9',
   ...over,
 })
 
@@ -347,6 +348,22 @@ describe('runReviewAndMerge refuses a PR whose review set it does not actually r
     expect(deps.invokeReviewer).not.toHaveBeenCalled()
     expect(deps.postCheckRun, 'it must not post a fleet/review it did not earn').not.toHaveBeenCalled()
     expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  // #1232's defect, in this command's own advice: GitHub refuses to request
+  // a PR's author, so telling the author of a `llamenos-auto` PR to request
+  // `llamenos-auto` names a request that cannot be made.
+  it('on a PR llamenos-auto wrote, names the operator — the request GitHub will accept', async () => {
+    const deps = baseDeps({
+      readPr: vi.fn(async () => facts({ authorLogin: 'llamenos-auto', headBranch: 'fleet/desktop/1130' })),
+      reviewSet: vi.fn(async () => ({
+        ok: true as const, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [],
+      })),
+    })
+    const outcome = await runReviewAndMerge('1184', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('Request a review from rhonda-rodododo')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).not.toContain('Request a review from llamenos-auto')
   })
 
   it('refuses when the review set cannot be worked out at all', async () => {

@@ -401,6 +401,19 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
     ).rejects.toMatchObject({ status: 400 })
   })
 
+  it('tells a self-hosted operator which language a caller hears instead, and that recordings fix it (#1347)', async () => {
+    const { service } = setup()
+    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+      type: 'asterisk',
+      phoneNumber: '+15551234567',
+    } as any)
+
+    // Generated speech has no Tagalog or Mixtec voice (ivr-speech/voices.ts).
+    const refused = service.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
+    await expect(refused).rejects.toMatchObject({ status: 400 })
+    await expect(refused).rejects.toThrow(/cannot speak: tl, mix\. No offline voice exists for them: .*\(tl → en, mix → es\) unless you upload recordings/)
+  })
+
   it('accepts a hub override where every language is in the provider catalog', async () => {
     const { service } = setup()
     vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({

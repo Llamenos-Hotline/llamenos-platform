@@ -6,10 +6,12 @@ import type {
   VoicemailParams,
   TelephonyResponse,
   AudioUrlMap,
+  SpeechUrlBuilder,
 } from './adapter'
 import { SipBridgeAdapter } from './sip-bridge-adapter'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
+import { GENERATED_SPEECH_LOCALES } from '../services/ivr-speech/voices'
 
 /**
  * ARI command types — JSON commands sent to the sip-bridge sidecar
@@ -23,12 +25,6 @@ import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
  */
 interface AriCommandBase {
   action: string
-}
-
-interface AriSpeakCommand extends AriCommandBase {
-  action: 'speak'
-  text: string
-  language: string
 }
 
 interface AriPlayCommand extends AriCommandBase {
@@ -76,7 +72,6 @@ interface AriLeaveQueueCommand extends AriCommandBase {
 }
 
 type AriCommand =
-  | AriSpeakCommand
   | AriPlayCommand
   | AriGatherCommand
   | AriQueueCommand
@@ -112,29 +107,26 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     return 'asterisk'
   }
 
-  protected override mapLanguage(lang: string): string {
-    return getAsteriskLang(lang)
-  }
-
   // --- JSON command helpers ---
 
   private ariJson(commands: AriCommand[]): TelephonyResponse {
     return this.json(commands)
   }
 
-  private ariSpeak(text: string, lang: string): AriCommand {
-    return { action: 'speak', text, language: getAsteriskLang(lang) }
+  /** Play a prompt: the operator's upload for the caller's language, else generated speech */
+  private ariPrompt(
+    promptKey: string,
+    lang: string,
+    audioUrls: AudioUrlMap | undefined,
+    speechUrl: SpeechUrlBuilder | undefined,
+    text?: (speechLang: string) => string,
+  ): AriCommand {
+    return this.play(this.promptUrl(promptKey, lang, audioUrls, speechUrl, text))
   }
 
-  private ariPlay(url: string): AriCommand {
-    return { action: 'play', url }
-  }
-
-  private ariSpeakOrPlay(promptKey: string, lang: string, audioUrls?: AudioUrlMap, text?: string): AriCommand {
-    const audioUrl = audioUrls?.[`${promptKey}:${lang}`]
-    if (audioUrl) return this.ariPlay(audioUrl)
-    const content = text ?? getPrompt(promptKey, lang)
-    return this.ariSpeak(content, lang)
+  /** Play text no operator can upload (it varies per call, or has no prompt type) as generated speech */
+  private ariSpeech(text: (speechLang: string) => string, lang: string, speechUrl: SpeechUrlBuilder | undefined): AriCommand {
+    return this.play(this.generatedSpeechUrl(text, lang, speechUrl))
   }
 
   /** Hold the caller; wait-music and queue-exit callbacks carry the call's context */
@@ -155,7 +147,6 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
     if (menu.kind === 'single') {
       return this.ariJson([
-        this.ariSpeak(' ', menu.language),
         {
           action: 'gather',
           numDigits: 0,
@@ -167,7 +158,8 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     }
 
     return this.ariJson([
-      ...menu.options.map((o): AriCommand => ({ action: 'speak', text: o.prompt, language: o.voice })),
+      // Each option in its own language: ASTERISK_VOICES offers only languages generated speech speaks.
+      ...menu.options.map((o) => this.ariSpeech(() => o.prompt, o.language, params.speechUrl)),
       {
         action: 'gather',
         numDigits: 1,
@@ -179,21 +171,18 @@ export class AsteriskAdapter extends SipBridgeAdapter {
   }
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
-    const { rateLimited, voiceCaptchaEnabled, callerLanguage: lang, callSid, audioUrls, hubId } = params
+    const { rateLimited, voiceCaptchaEnabled, callerLanguage: lang, callSid, audioUrls, speechUrl, hubId } = params
     // The same prompts, in the same order, as every cloud adapter: an operator
-    // uploads exactly these keys (settings VALID_PROMPT_TYPES), and on the PBX
-    // a prompt nobody uploaded is silence — the bridge has no speech engine.
-    const greeting = this.ariSpeakOrPlay(
-      'greeting',
-      lang,
-      audioUrls,
-      getPrompt('greeting', lang).replace('{name}', params.hotlineName),
+    // uploads exactly these keys (settings VALID_PROMPT_TYPES); a prompt nobody
+    // uploaded is generated speech.
+    const greeting = this.ariPrompt('greeting', lang, audioUrls, speechUrl, (speechLang) =>
+      getPrompt('greeting', speechLang).replace('{name}', params.hotlineName),
     )
 
     if (rateLimited) {
       return this.ariJson([
         greeting,
-        this.ariSpeakOrPlay('rateLimited', lang, audioUrls),
+        this.ariPrompt('rateLimited', lang, audioUrls, speechUrl),
         { action: 'hangup' },
       ])
     }
@@ -202,8 +191,10 @@ export class AsteriskAdapter extends SipBridgeAdapter {
       const digits = params.captchaDigits
       return this.ariJson([
         greeting,
-        this.ariSpeakOrPlay('captchaPrompt', lang, audioUrls),
-        this.ariSpeak(digits.split('').join(' '), lang),
+        this.ariPrompt('captchaPrompt', lang, audioUrls, speechUrl),
+        // A clip per digit: ten clips a language, where a clip per CAPTCHA
+        // would add a PBX media-cache entry (never evicted) for every call.
+        ...digits.split('').map((digit) => this.ariSpeech(() => digit, lang, speechUrl)),
         {
           action: 'gather',
           numDigits: 4,
@@ -216,23 +207,23 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
     return this.ariJson([
       greeting,
-      this.ariSpeakOrPlay('pleaseHold', lang, audioUrls),
+      this.ariPrompt('pleaseHold', lang, audioUrls, speechUrl),
       this.ariQueue(callSid, lang, hubId),
     ])
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
-    const { digits, expectedDigits, callerLanguage: lang, callSid, hubId } = params
+    const { digits, expectedDigits, callerLanguage: lang, callSid, speechUrl, hubId } = params
 
     if (digits === expectedDigits) {
       return this.ariJson([
-        this.ariSpeak(getPrompt('captchaSuccess', lang), lang),
+        this.ariSpeech((speechLang) => getPrompt('captchaSuccess', speechLang), lang, speechUrl),
         this.ariQueue(callSid, lang, hubId),
       ])
     }
 
     return this.ariJson([
-      this.ariSpeak(getPrompt('captchaFail', lang), lang),
+      this.ariSpeech((speechLang) => getPrompt('captchaFail', speechLang), lang, speechUrl),
       { action: 'hangup' },
     ])
   }
@@ -249,9 +240,9 @@ export class AsteriskAdapter extends SipBridgeAdapter {
   }
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
-    const { callerLanguage: lang, audioUrls, maxRecordingSeconds, callSid, hubId } = params
+    const { callerLanguage: lang, audioUrls, speechUrl, maxRecordingSeconds, callSid, hubId } = params
     return this.ariJson([
-      this.ariSpeakOrPlay('voicemailPrompt', lang, audioUrls),
+      this.ariPrompt('voicemailPrompt', lang, audioUrls, speechUrl),
       {
         action: 'record',
         maxDuration: maxRecordingSeconds || 120,
@@ -267,21 +258,22 @@ export class AsteriskAdapter extends SipBridgeAdapter {
     audioUrls?: AudioUrlMap,
     queueTime?: number,
     queueTimeout?: number,
+    speechUrl?: SpeechUrlBuilder,
   ): Promise<TelephonyResponse> {
     const timeout = queueTimeout || 90
     if (queueTime && queueTime >= timeout) {
       return this.ariJson([{ action: 'leave_queue' }])
     }
-    return this.ariJson([this.ariSpeakOrPlay('waitMessage', lang, audioUrls)])
+    return this.ariJson([this.ariPrompt('waitMessage', lang, audioUrls, speechUrl)])
   }
 
   rejectCall(): TelephonyResponse {
     return this.ariJson([{ action: 'hangup', reason: 'rejected' }])
   }
 
-  handleVoicemailComplete(lang: string): TelephonyResponse {
+  handleVoicemailComplete(lang: string, speechUrl?: SpeechUrlBuilder): TelephonyResponse {
     return this.ariJson([
-      this.ariSpeak(getVoicemailThanks(lang), lang),
+      this.ariSpeech((speechLang) => getVoicemailThanks(speechLang), lang, speechUrl),
       { action: 'hangup' },
     ])
   }
@@ -294,22 +286,14 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 // --- Helpers ---
 
 /**
- * Asterisk TTS language codes — the explicit, ordered list of locales the
- * Asterisk TTS engine has a voice for. Absent locales are never offered in the
- * IVR menu.
+ * The locales an Asterisk IVR can speak: those generated speech has a voice
+ * for (the worker synthesises every prompt the operator did not upload).
+ * Absent locales are never offered in the IVR menu.
  */
-export const ASTERISK_VOICES = new IvrVoiceCatalog<string>('asterisk', [
-  ['en', 'en-US'],
-  ['es', 'es'],
-  ['zh', 'zh'],
-  ['vi', 'vi'],
-  ['ar', 'ar'],
-  ['fr', 'fr'],
-  ['ko', 'ko'],
-  ['ru', 'ru'],
-  ['hi', 'hi'],
-  ['pt', 'pt-BR'],
-])
+export const ASTERISK_VOICES = new IvrVoiceCatalog<string>(
+  'asterisk',
+  GENERATED_SPEECH_LOCALES.map((locale) => [locale, locale] as const),
+)
 
 /** Query params the hub-scoped telephony routes resolve the hub from */
 function hubParam(hubId: string | undefined): Record<string, string> {
@@ -319,8 +303,4 @@ function hubParam(hubId: string | undefined): Record<string, string> {
 /** Callback context for a caller leg: the routes read callSid, lang (the caller's, not the TTS voice) and hub */
 function callContext(callSid: string, lang: string, hubId: string | undefined): Record<string, string> {
   return { callSid, lang, ...hubParam(hubId) }
-}
-
-function getAsteriskLang(lang: string): string {
-  return ASTERISK_VOICES.voiceForPrompt(lang)
 }

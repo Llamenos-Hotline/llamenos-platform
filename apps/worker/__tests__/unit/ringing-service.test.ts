@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { startParallelRinging } from '../../services/ringing'
+import { startParallelRinging, cancelLosingLegs, recordRingLegs } from '../../services/ringing'
 import { hashPhone } from '../../lib/crypto'
 import type { Env } from '../../types'
 import type { Services } from '../../services'
@@ -12,11 +12,12 @@ import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
 
-const mockAdapter = (serviceFactories as unknown as { __mockAdapter: { ringVolunteers: ReturnType<typeof vi.fn> } }).__mockAdapter
+const mockAdapter = (serviceFactories as unknown as { __mockAdapter: { ringVolunteers: ReturnType<typeof vi.fn>; cancelRinging: ReturnType<typeof vi.fn> } }).__mockAdapter
 
 vi.mock('../../lib/service-factories', () => {
   const mockAdapter = {
-    ringVolunteers: vi.fn().mockResolvedValue(undefined),
+    ringVolunteers: vi.fn().mockResolvedValue([]),
+    cancelRinging: vi.fn().mockResolvedValue(undefined),
   }
   return {
     getTelephonyFromService: vi.fn().mockResolvedValue(mockAdapter),
@@ -496,5 +497,48 @@ describe('startParallelRinging', () => {
 
     // Volunteers with falsy pubkeys are filtered out before token creation
     expect(services.calls.createCallToken).not.toHaveBeenCalled()
+  })
+})
+
+describe('first-pickup-wins: cancelling losing ring legs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('records the leg SIDs returned by ringVolunteers and cancels all but the winner', async () => {
+    mockAdapter.ringVolunteers.mockResolvedValueOnce(['LEG-1', 'LEG-2', 'LEG-3'])
+    const services = makeServices({
+      onShiftPubkeys: ['pk-1', 'pk-2', 'pk-3'],
+      allUsers: ['pk-1', 'pk-2', 'pk-3'].map(pubkey => makeUser({ pubkey })),
+    })
+    await startParallelRinging('CA-legs', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-legs', 'LEG-2')
+
+    expect(mockAdapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2', 'LEG-3'], 'LEG-2')
+  })
+
+  it('cancels every leg when the winner answered in-app (no winning phone leg)', async () => {
+    recordRingLegs('CA-inapp', ['LEG-A', 'LEG-B'])
+    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-inapp')
+    expect(mockAdapter.cancelRinging).toHaveBeenCalledWith(['LEG-A', 'LEG-B'], undefined)
+  })
+
+  it('cancels a call\'s legs at most once', async () => {
+    recordRingLegs('CA-once', ['LEG-A'])
+    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-once', 'LEG-X')
+    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-once', 'LEG-X')
+    expect(mockAdapter.cancelRinging).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing for a call with no recorded legs', async () => {
+    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-unknown', 'LEG-X')
+    expect(mockAdapter.cancelRinging).not.toHaveBeenCalled()
+  })
+
+  it('does not fail the answer when the provider cancel call throws', async () => {
+    recordRingLegs('CA-boom', ['LEG-A'])
+    mockAdapter.cancelRinging.mockRejectedValueOnce(new Error('provider down'))
+    await expect(cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-boom', 'LEG-X')).resolves.toBeUndefined()
   })
 })
