@@ -1,6 +1,14 @@
 import Twilio from 'twilio'
 import { expect, type Page, type APIRequestContext } from '@playwright/test'
+import { ed25519, x25519 } from '@noble/curves/ed25519.js'
+import { gcm } from '@noble/ciphers/aes.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { LABEL_DEVICE_AUTH, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { TestIds } from '../test-ids'
+import { apiGet, apiPatch } from '../api-helpers'
+import { generateContentKey, wrapKeyForRecipient, unwrapKey } from '../crypto-helpers'
 
 // Re-export helpers that don't depend on ADMIN_SEED
 export { enterPin } from '../helpers'
@@ -14,13 +22,21 @@ function requireEnv(key: string): string {
   return val
 }
 
+/**
+ * The deployment and the Twilio account used to call it.
+ *
+ * No `E2E_TEST_SECRET`. It only ever authenticated `POST
+ * /api/test-reset-records` for the `resetStaging` helper, and that route does
+ * not exist on a deployment — `devGuard` 404s it (#1423). The helper went in
+ * #1442; requiring the secret outlived it, so a live run with valid Twilio
+ * credentials and no leftover E2E_TEST_SECRET threw before placing a call.
+ */
 export function getLiveConfig() {
   return {
     accountSid: requireEnv('TWILIO_ACCOUNT_SID'),
     authToken: requireEnv('TWILIO_AUTH_TOKEN'),
     hotlineNumber: requireEnv('TWILIO_PHONE_NUMBER'),
     testCallerNumber: requireEnv('TWILIO_TEST_CALLER'),
-    testSecret: requireEnv('E2E_TEST_SECRET'),
     adminSeed: requireEnv('STAGING_ADMIN_SEED'),
     baseURL: process.env.LIVE_BASE_URL || 'https://demo-next.llamenos-platform.com',
   }
@@ -213,4 +229,311 @@ export async function conversationCount(request: APIRequestContext): Promise<num
  */
 export function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms))
+}
+
+// ───────────────────────────────────────────────────────────────────
+// R1 acceptance helpers
+//
+// Everything below talks to a DEPLOYMENT through the same routes the
+// shipped clients use. Two rules hold throughout, and they are the reason
+// these helpers exist instead of the ones in tests/api-helpers.ts:
+//
+//  1. No dev routes. `devGuard` (apps/worker/app.ts) answers 404 for every
+//     /api/test-* unless ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true,
+//     and a deployment satisfies neither. `createHubViaApi`,
+//     `createUserViaApi`, `cleanupTestData` and friends all go through those,
+//     so none of them can be used here (#1423).
+//  2. No clean slate. There is no reset on a deployment, by design. Every
+//     assertion is therefore a delta the test caused, never "a row exists".
+// ───────────────────────────────────────────────────────────────────
+
+/** The seed an R1 live run authenticates as. Throws rather than skipping. */
+export function requireAdminSeed(): string {
+  const seed = process.env.STAGING_ADMIN_SEED
+  if (!seed) {
+    throw new Error(
+      'STAGING_ADMIN_SEED is required: the hex identity seed `bun run bootstrap-admin` '
+      + 'prints for the deployment being checked.',
+    )
+  }
+  return seed
+}
+
+/**
+ * The hub an R1 deployment serves callers from.
+ *
+ * R1 is one VM with one hotline, so there is exactly one active hub and
+ * /api/config publishes it as `defaultHubId`. Resolving it from the server
+ * rather than from an env var is deliberate: a deployment where the setup
+ * wizard never finished has no hub, and this throws there instead of
+ * silently exercising the unscoped (hubId `''`) routes, which answer 200
+ * and touch nothing a caller can reach.
+ */
+export async function resolveHubId(request: APIRequestContext): Promise<string> {
+  const res = await request.get('/api/config')
+  if (!res.ok()) throw new Error(`GET /api/config failed: ${res.status()}`)
+  const cfg = await res.json() as { defaultHubId?: string; hubs?: Array<{ id: string; status: string }> }
+  const hubId = cfg.defaultHubId ?? cfg.hubs?.find(h => h.status === 'active')?.id
+  if (!hubId) {
+    throw new Error(
+      'this deployment has no active hub — the setup wizard has not been completed, '
+      + 'so no part of the R1 flow can run (see deployment-readiness.spec.ts)',
+    )
+  }
+  return hubId
+}
+
+/**
+ * Narrow a value the test has just asserted the presence of.
+ *
+ * Preferred to `!`, which turns a missing field into a TypeError three lines
+ * later with no indication of what was missing — the failure mode #1271 and
+ * #1323 are about, read backwards.
+ */
+export function present<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`${what} is missing from the response`)
+  }
+  return value
+}
+
+/** A label that identifies a row as this suite's, and which run made it. */
+export function liveMarker(what: string): string {
+  return `r1-live-${what}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** A fresh Ed25519 identity, as a client generates for a new device. */
+export function freshIdentity(): { seedHex: string; pubkey: string } {
+  const seed = crypto.getRandomValues(new Uint8Array(32))
+  const seedHex = bytesToHex(seed)
+  return { seedHex, pubkey: bytesToHex(ed25519.getPublicKey(seed)) }
+}
+
+// ── The `strict` rate-limit tier ───────────────────────────────────
+//
+// `/api/invites/*`, `/api/auth/*`, `/api/webauthn/*`, `/api/provision/*` and
+// `/api/recovery-group/*` all share ONE fixed-window budget on a deployment:
+// 5 requests per minute, keyed `strict:<client ip>`
+// (apps/worker/middleware/rate-limit.ts). The middleware returns early when
+// `ENVIRONMENT=development`, so CI and the BDD suite never meet it — a
+// deployment-facing suite is the first thing that does.
+//
+// Pacing is not a workaround for a defect; the limit is part of the
+// deployment's contract and a suite that ignored it would report 429 as a
+// broken invite flow. What it must NOT do is retry forever: a 429 that
+// outlives a full window is a real condition an operator needs told about,
+// so the last attempt's status is returned and asserted like any other.
+
+const STRICT_BUDGET = 5
+const STRICT_WINDOW_MS = 60_000
+/** Timestamps of this run's strict-tier calls, newest last. */
+let strictCalls: number[] = []
+
+/**
+ * Run one `strict`-tier request, waiting first if this run has already spent
+ * the window's budget, and once more if the server says 429 anyway (the
+ * server's window is fixed and does not line up with this run's start).
+ */
+export async function pacedStrict<T extends { status: number }>(
+  what: string,
+  call: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const now = Date.now()
+    strictCalls = strictCalls.filter(t => now - t < STRICT_WINDOW_MS)
+    if (strictCalls.length >= STRICT_BUDGET) {
+      await sleep(STRICT_WINDOW_MS - (now - strictCalls[0]) + 1_000)
+      strictCalls = []
+    }
+    strictCalls.push(Date.now())
+
+    const result = await call()
+    if (result.status !== 429) return result
+    if (attempt === 0) {
+      // Spend the rest of the server's window, then try once more.
+      strictCalls = []
+      await sleep(STRICT_WINDOW_MS + 1_000)
+    }
+  }
+  throw new Error(
+    `${what}: the deployment answered 429 twice, a minute apart. The strict tier is `
+    + '5 requests/minute shared across /invites, /auth, /webauthn, /provision and '
+    + '/recovery-group, keyed by client IP — something else is consuming this '
+    + "deployment's budget, or the proxy is not forwarding a client IP so every "
+    + 'caller shares one bucket.',
+  )
+}
+
+/** `GET /api/invites/validate/:code` — public, strict-tier, paced. */
+export async function validateInvite(
+  request: APIRequestContext,
+  code: string,
+): Promise<{ status: number; body: { valid?: boolean; error?: string; name?: string } }> {
+  return pacedStrict(`GET /api/invites/validate/${code}`, async () => {
+    const res = await request.get(`/api/invites/validate/${code}`, { failOnStatusCode: false })
+    return { status: res.status(), body: await res.json().catch(() => ({})) }
+  })
+}
+
+/**
+ * Redeem an invite as a brand-new identity — the volunteer's half of the
+ * operator's invitation.
+ *
+ * POST /api/invites/redeem is a PUBLIC route that carries its own Ed25519
+ * proof in the BODY (code/pubkey/timestamp/token), not in an Authorization
+ * header, and the signed message has no nonce segment. `apiPost` cannot
+ * produce it, so the token is built here from LABEL_DEVICE_AUTH exactly as
+ * `buildAuthMessage` (apps/worker/lib/auth.ts) does — never from a literal.
+ */
+export async function redeemInvite(
+  request: APIRequestContext,
+  code: string,
+  seedHex: string,
+): Promise<{ status: number; body: unknown }> {
+  const seedBytes = hexToBytes(seedHex)
+  const pubkey = bytesToHex(ed25519.getPublicKey(seedBytes))
+  const timestamp = Date.now()
+  const path = '/api/invites/redeem'
+  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:${path}`)
+  const token = bytesToHex(ed25519.sign(message, seedBytes))
+
+  return pacedStrict('POST /api/invites/redeem', async () => {
+    const res = await request.post(path, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { code, pubkey, timestamp, token },
+      failOnStatusCode: false,
+    })
+    return { status: res.status(), body: await res.json().catch(() => null) as unknown }
+  })
+}
+
+/**
+ * Take a volunteer this suite created out of service.
+ *
+ * Not tidying up: `resolveRingableVolunteers`
+ * (apps/worker/services/ringing.ts) filters on `active`, so an identity left
+ * active is one a real caller could in principle be routed to if anyone later
+ * added it to a shift or the fallback group. Deactivating closes that off and
+ * leaves the row — the invite, the audit entries and the user all stay visible
+ * to an operator, which is what "write something identifiable and leave it"
+ * means. Nothing is deleted.
+ *
+ * Deliberately NOT hub-scoped. `PATCH /api/hubs/:hubId/users/:pubkey` answers
+ * 404 for a volunteer who joined by redeeming an invite, because such a user
+ * has no hubRoles and the hub-scoped router cannot see them (the defect
+ * volunteer-onboarding.spec.ts's last test reports). An earlier version of
+ * this helper used that path inside a bare try/catch and left every identity
+ * it created still active, which is precisely the silent failure this suite
+ * exists to find — so the outcome is read back and, if it did not take, said
+ * out loud with the pubkey an operator needs.
+ *
+ * Never throws: this runs in `afterAll`, where an exception would be reported
+ * as a test failure of its own and bury whatever actually failed.
+ */
+export async function retireLiveIdentity(
+  request: APIRequestContext,
+  adminSeed: string,
+  pubkey: string,
+): Promise<void> {
+  try {
+    await apiPatch(request, `/users/${pubkey}`, { active: false }, adminSeed)
+    const { status, data } = await apiGet<{ active?: boolean }>(request, `/users/${pubkey}`, adminSeed)
+    if (status === 200 && data.active === false) return
+  } catch {
+    // Fall through to the warning.
+  }
+  console.warn(
+    `[live] could not deactivate the identity this run created: ${pubkey}\n`
+    + '       It is still active and could be rung if it is ever added to a shift or '
+    + 'fallback group. Deactivate it from the volunteers screen.',
+  )
+}
+
+// ── Note envelope crypto ───────────────────────────────────────────
+
+/**
+ * The X25519 secret/public pair a client derives for a device imported from
+ * an Ed25519 signing seed: HKDF-SHA256(signingSeed, salt="",
+ * info=LABEL_DEVICE_ENCRYPTION_SEED). Mirrors
+ * `deviceEncryptionPubkeyFromSigningSeed` in tests/crypto-helpers.ts and the
+ * derivation in packages/crypto — so an envelope sealed to this public key is
+ * one the real device holding that seed could open.
+ */
+export function deviceEncryptionKeypair(signingSeedHex: string): { skHex: string; pubkeyHex: string } {
+  const encryptionSeed = hkdf(
+    sha256,
+    hexToBytes(signingSeedHex),
+    new Uint8Array(0),
+    utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED),
+    32,
+  )
+  return { skHex: bytesToHex(encryptionSeed), pubkeyHex: bytesToHex(x25519.getPublicKey(encryptionSeed)) }
+}
+
+const hexToB64url = (hex: string) =>
+  Buffer.from(hexToBytes(hex)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+const b64urlToHex = (b64url: string) =>
+  bytesToHex(new Uint8Array(Buffer.from(b64url.replace(/-/g, '+').replace(/_/g, '/'), 'base64')))
+
+/**
+ * Encrypt a note the way the desktop client's `encryptNote`
+ * (src/client/lib/platform.ts) does, byte format included:
+ *   content  — hex(iv(12) || AES-256-GCM(ct || tag)), no AAD
+ *   envelope — enc hex, ct base64url, HPKE-sealed under LABEL_NOTE_KEY
+ *
+ * The format matters. A note the server round-trips but the shipped client
+ * cannot open is not a note an admin can read, so the shapes are matched
+ * rather than invented.
+ */
+export async function sealNote(
+  plaintext: string,
+  authorSigningSeed: string,
+  adminPubkeys: Array<{ identity: string; encryption: string }>,
+): Promise<{
+  encryptedContent: string
+  authorEnvelope: { enc: string; ct: string }
+  adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }>
+}> {
+  const contentKey = generateContentKey()
+
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const sealed = gcm(contentKey, iv).encrypt(utf8ToBytes(plaintext))
+  const packed = new Uint8Array(iv.length + sealed.length)
+  packed.set(iv)
+  packed.set(sealed, iv.length)
+
+  const author = deviceEncryptionKeypair(authorSigningSeed)
+  const wrapped = await wrapKeyForRecipient(contentKey, author.pubkeyHex, '', LABEL_NOTE_KEY)
+
+  const adminEnvelopes = await Promise.all(adminPubkeys.map(async (admin) => {
+    const env = await wrapKeyForRecipient(contentKey, admin.encryption, '', LABEL_NOTE_KEY)
+    return { pubkey: admin.identity, enc: env.enc, ct: hexToB64url(env.ct) }
+  }))
+
+  return {
+    encryptedContent: bytesToHex(packed),
+    authorEnvelope: { enc: wrapped.enc, ct: hexToB64url(wrapped.ct) },
+    adminEnvelopes,
+  }
+}
+
+/** Open a note sealed by `sealNote`, as a reader holding `recipientSkHex` does. */
+export async function openNote(
+  encryptedContent: string,
+  envelope: { enc?: string; ct?: string },
+  recipientSkHex: string,
+): Promise<string> {
+  // A missing half of the envelope is a server that dropped or rewrote it, not
+  // a crypto failure — say which, because `hpke.open` would otherwise surface
+  // it as an unexplained TypeError inside a hex decoder.
+  if (!envelope?.enc || !envelope?.ct) {
+    throw new Error(
+      `the stored key envelope is incomplete (enc=${envelope?.enc ? 'present' : 'missing'}, `
+      + `ct=${envelope?.ct ? 'present' : 'missing'}) — the server did not persist what the client sent`,
+    )
+  }
+  const contentKey = await unwrapKey(b64urlToHex(envelope.ct), envelope.enc, recipientSkHex, LABEL_NOTE_KEY)
+  const data = hexToBytes(encryptedContent)
+  return new TextDecoder().decode(gcm(contentKey, data.slice(0, 12)).decrypt(data.slice(12)))
 }
