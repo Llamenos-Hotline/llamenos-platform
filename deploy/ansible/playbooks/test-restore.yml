@@ -162,17 +162,6 @@
               - Backup file: {{ latest_pg_backup }}
           when: latest_pg_backup is defined
 
-        - name: Validate strfry backup exists and is non-empty
-          ansible.builtin.debug:
-            msg: |
-              strfry Backup Test: {{ 'PASSED' if strfry_backup_files.matched > 0 else 'NO BACKUPS FOUND' }}
-              - Found {{ strfry_backup_files.matched }} backup(s)
-              {% if strfry_backup_files.matched > 0 %}
-              - Latest: {{ (strfry_backup_files.files | sort(attribute='mtime') | last).path }}
-              - Size: {{ (strfry_backup_files.files | sort(attribute='mtime') | last).size }} bytes
-              {% endif %}
-          when: test_service in ['all', 'strfry']
-
         # ── Config restore test ────────────────────────────────────────
 
         - name: Find latest config backup

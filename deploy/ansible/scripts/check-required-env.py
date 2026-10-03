@@ -17,19 +17,24 @@ again.
 Usage:
     python3 deploy/ansible/scripts/check-required-env.py
 
-When the rendered files are absent (the normal case in CI, where main's
-workflow invokes this script directly), the script renders them itself by
-running playbooks/check-env-templates.yml twice -- once for the
-production/required-vars scenario, once for the all-optional-features
-scenario. The renders can also be produced manually beforehand:
+The script ALWAYS renders its own inputs, into a fresh temporary directory
+it creates and deletes per run, by invoking playbooks/check-env-templates.yml
+twice -- once for the production/required-vars scenario, once for the
+all-optional-features scenario. It never reads a pre-existing file.
 
-    cd deploy/ansible
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e app_environment=production \\
-        -e webhook_base_url=https://example.org
-    ansible-playbook playbooks/check-env-templates.yml \\
-        -e @vars.example.yml -e @scripts/full-scenario.extra-vars.json
-    python3 scripts/check-required-env.py
+That is deliberate, and it is the fix for a real hole. This script used to
+render to fixed /tmp paths and short-circuit with `if all(p.is_file() for p in
+rendered): return`. On any machine where /tmp survives between runs -- notably
+the self-hosted runner fleet, where three runners share one box -- the second
+and every later invocation reused the FIRST run's output. Deleting SERVER_SECRET
+from templates/env/_worker-required-env.j2 still produced "PASSED, rc=0",
+because the stale render still contained it. This is the only env-var drift
+guard in the repo, so a green that means nothing is worse than no guard at all.
+A fixed path on a shared machine was also trivially guessable/poisonable by any
+other user on the box. Both problems are closed by owning a private directory
+per run: there is no longer any code path that can read another run's files.
+
+Requires ansible-playbook on PATH (CI's ansible-validate job installs it).
 
 Exits non-zero (and prints exactly what's missing, from which file) on any
 gap. Run from anywhere; pass --repo-root explicitly if the auto-computed
@@ -42,6 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Unconditionally-required vars are extracted generically from any
@@ -121,27 +127,26 @@ def rendered_keys(env_file: Path) -> set[str]:
     return keys
 
 
-def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
-    """Render the four .env outputs if they don't exist yet.
+def render_env_files(repo_root: Path, dest_dir: Path) -> None:
+    """Render the four .env outputs into `dest_dir`, unconditionally.
 
-    Main's ci.yml invokes this script directly (no separate render step), so
-    the script must be able to produce its own inputs. If the files already
-    exist (a dev ran playbooks/check-env-templates.yml manually), they are
-    used as-is.
+    There is no "already rendered, skip it" fast path and must never be one:
+    that short-circuit is exactly what let a stale render from a previous run
+    satisfy this gate on a box with a persistent /tmp (see module docstring).
+    `dest_dir` is a fresh per-run directory owned by the caller, so the only
+    files this function's consumers can read are the ones it just produced.
     """
-    if all(p.is_file() for p in rendered):
-        return
-
     ansible_dir = repo_root / "deploy" / "ansible"
     playbook = ansible_dir / "playbooks" / "check-env-templates.yml"
     if shutil.which("ansible-playbook") is None:
         raise SystemExit(
-            "[check-required-env] Rendered files missing and ansible-playbook "
-            "is not on PATH -- install ansible (pip install ansible) or run "
-            "playbooks/check-env-templates.yml yourself first (see docstring)."
+            "[check-required-env] ansible-playbook is not on PATH -- this "
+            "script renders the templates itself and cannot fall back to a "
+            "previous run's output. Install ansible (pip install ansible)."
         )
 
-    print("[check-required-env] Rendered files missing -- rendering via ansible-playbook ...")
+    print(f"[check-required-env] Rendering templates into {dest_dir} ...")
+    common = ["-e", f"env_check_dest_dir={dest_dir}"]
     commands = [
         [
             "ansible-playbook",
@@ -152,6 +157,7 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
             "app_environment=production",
             "-e",
             "webhook_base_url=https://example.org",
+            *common,
         ],
         [
             "ansible-playbook",
@@ -160,6 +166,7 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
             "@vars.example.yml",
             "-e",
             "@scripts/full-scenario.extra-vars.json",
+            *common,
         ],
     ]
     for cmd in commands:
@@ -170,13 +177,6 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
                 f"{' '.join(cmd)}"
             )
 
-    missing = [str(p) for p in rendered if not p.is_file()]
-    if missing:
-        raise SystemExit(
-            "[check-required-env] FATAL: render playbook succeeded but did not "
-            f"produce: {', '.join(missing)}"
-        )
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -186,46 +186,35 @@ def main() -> int:
         default=Path(__file__).resolve().parents[3],
         help="Path to the llamenos-platform repo root (default: computed from script location).",
     )
-    parser.add_argument(
-        "--monolithic-env",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 "
-        "(produced by playbooks/check-env-templates.yml).",
-    )
-    parser.add_argument(
-        "--app-env",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 "
-        "(produced by playbooks/check-env-templates.yml).",
-    )
-    parser.add_argument(
-        "--monolithic-env-full",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-monolithic-full.env"),
-        help="Rendered output of roles/llamenos/templates/env.j2 with every "
-        "optional feature enabled (produced by playbooks/check-env-templates.yml "
-        "-e @scripts/full-scenario.extra-vars.json).",
-    )
-    parser.add_argument(
-        "--app-env-full",
-        type=Path,
-        default=Path("/tmp/llamenos-check-env-app-full.env"),
-        help="Rendered output of roles/llamenos-app/templates/env/app.j2 with "
-        "every optional feature enabled.",
-    )
     args = parser.parse_args()
 
-    rendered = [
-        args.monolithic_env,
-        args.app_env,
-        args.monolithic_env_full,
-        args.app_env_full,
-    ]
-    ensure_rendered(args.repo_root, rendered)
+    # A fresh directory per run, removed on exit. Intentionally NOT
+    # configurable: every render destination this script reads must be one it
+    # just wrote, or the gate can pass on stale output (see module docstring).
+    with tempfile.TemporaryDirectory(prefix="llamenos-check-env-") as tmp:
+        return run_checks(args.repo_root, Path(tmp))
 
-    config_ts = args.repo_root / "apps" / "worker" / "lib" / "config.ts"
+
+def run_checks(repo_root: Path, dest_dir: Path) -> int:
+    render_env_files(repo_root, dest_dir)
+
+    monolithic_env = dest_dir / "llamenos-check-env-monolithic.env"
+    app_env = dest_dir / "llamenos-check-env-app.env"
+    monolithic_env_full = dest_dir / "llamenos-check-env-monolithic-full.env"
+    app_env_full = dest_dir / "llamenos-check-env-app-full.env"
+
+    missing_renders = [
+        str(p)
+        for p in (monolithic_env, app_env, monolithic_env_full, app_env_full)
+        if not p.is_file()
+    ]
+    if missing_renders:
+        raise SystemExit(
+            "[check-required-env] FATAL: render playbook succeeded but did not "
+            f"produce: {', '.join(missing_renders)}"
+        )
+
+    config_ts = repo_root / "apps" / "worker" / "lib" / "config.ts"
     if not config_ts.is_file():
         print(f"[check-required-env] FATAL: {config_ts} not found", file=sys.stderr)
         return 2
@@ -243,18 +232,12 @@ def main() -> int:
     required = unconditional + conditional
 
     targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role)": args.monolithic_env,
-        "roles/llamenos-app/templates/env/app.j2 (per-service app role)": args.app_env,
+        "roles/llamenos/templates/env.j2 (monolithic/demo role)": monolithic_env,
+        "roles/llamenos-app/templates/env/app.j2 (per-service app role)": app_env,
     }
 
     failures: list[str] = []
     for label, path in targets.items():
-        if not path.is_file():
-            failures.append(
-                f"{label}: rendered file {path} does not exist -- run "
-                "playbooks/check-env-templates.yml first"
-            )
-            continue
         keys = rendered_keys(path)
         missing = [v for v in required if v not in keys]
         if missing:
@@ -269,17 +252,10 @@ def main() -> int:
     print(f"  {', '.join(OPTIONAL_VARS_WITH_CONSUMERS)}")
 
     full_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": args.monolithic_env_full,
-        "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": args.app_env_full,
+        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": monolithic_env_full,
+        "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": app_env_full,
     }
     for label, path in full_targets.items():
-        if not path.is_file():
-            failures.append(
-                f"{label}: rendered file {path} does not exist -- run "
-                "playbooks/check-env-templates.yml -e @vars.example.yml "
-                "-e @scripts/full-scenario.extra-vars.json first"
-            )
-            continue
         keys = rendered_keys(path)
         missing = [v for v in OPTIONAL_VARS_WITH_CONSUMERS if v not in keys]
         if missing:
