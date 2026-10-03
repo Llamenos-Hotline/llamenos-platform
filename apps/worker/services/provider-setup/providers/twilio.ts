@@ -4,7 +4,7 @@ import type {
   NumberSearchQuery,
   NumberProvisionRequest,
 } from '@protocol/schemas/provider-setup'
-import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig, WebhookUrls } from '../types'
+import type { ProviderCapabilityImpl, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest, WebhookUrls } from '../types'
 import { ProviderApiError } from '../types'
 import { basicAuth, nowISO } from '../utils'
 import { safeFetch } from '../../../lib/safe-fetch'
@@ -225,7 +225,7 @@ export const twilioProvider: ProviderCapabilityImpl = {
 
   async createSipTrunk(
     credentials: Record<string, unknown>,
-    domain: string,
+    { domain }: SipTrunkRequest,
   ): Promise<SipTrunkConfig> {
     if (isTestCredentials(credentials)) {
       return {

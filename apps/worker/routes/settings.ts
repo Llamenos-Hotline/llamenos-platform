@@ -43,6 +43,7 @@ import { audit } from '../services/audit'
 import { invalidateRolesCache } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
+import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } from '../lib/helpers'
 
 const settings = new Hono<AppEnv>()
 
@@ -696,6 +697,30 @@ settings.get('/ivr-audio',
   },
 )
 
+settings.get('/ivr-audio/:promptType/:language',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Download an IVR audio prompt (for the operator to listen back)',
+    responses: {
+      200: { description: 'The prompt as 8 kHz mono PCM WAV', content: { 'audio/wav': {} } },
+      404: { description: 'No prompt uploaded for this type and language' },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-ivr'),
+  async (c) => {
+    const promptType = c.req.param('promptType')
+    const language = c.req.param('language')
+    if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) {
+      return c.json({ error: 'Invalid parameters' }, 400)
+    }
+    const services = c.get('services')
+    const result = await services.settings.getIvrAudio(promptType, language)
+    if (!result) return c.json({ error: 'Not found' }, 404)
+    return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })
+  },
+)
+
 settings.put('/ivr-audio/:promptType/:language',
   describeRoute({
     tags: ['Settings'],
@@ -717,12 +742,17 @@ settings.put('/ivr-audio/:promptType/:language',
     const pubkey = c.get('pubkey')
     const promptType = c.req.param('promptType')
     const language = c.req.param('language')
-    const body = await c.req.arrayBuffer()
+    if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) {
+      return c.json({ error: 'Invalid parameters' }, 400)
+    }
+    const bytes = new Uint8Array(await c.req.arrayBuffer())
+    // Stored and served as audio/wav, and played by every provider: accept only
+    // what they can play, judged by the bytes rather than the declared type.
+    const formatError = ivrAudioFormatError(bytes)
+    if (formatError) return c.json({ error: formatError }, 400)
     const services = c.get('services')
-    // Convert to base64 for storage
-    const bytes = new Uint8Array(body)
-    const audioBase64 = btoa(String.fromCharCode(...bytes))
-    const result = await services.settings.uploadIvrAudio(promptType, language, audioBase64, body.byteLength)
+    const audioBase64 = Buffer.from(bytes).toString('base64')
+    const result = await services.settings.uploadIvrAudio(promptType, language, audioBase64, bytes.byteLength)
     await audit(services.audit, 'ivrAudioUploaded', pubkey, { promptType, language }, undefined, targetHubId(c) ?? null)
     return c.json(result)
   },

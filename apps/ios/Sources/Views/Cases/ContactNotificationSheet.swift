@@ -23,10 +23,7 @@ struct ContactNotificationSheet: View {
 
     private var renderedMessage: String {
         let cn = caseNumber ?? "N/A"
-        return String(
-            format: NSLocalizedString("notifications_status_change_template", comment: ""),
-            cn, hubName, statusLabel
-        )
+        return L10n.format("notifications_status_change_template", comment: "", cn, hubName, statusLabel)
     }
 
     var body: some View {

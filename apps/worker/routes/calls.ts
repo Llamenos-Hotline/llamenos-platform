@@ -5,6 +5,10 @@ import type { AppEnv } from '../types'
 import { getTelephonyFromService } from '../lib/service-factories'
 
 import { audit } from '../services/audit'
+import { ServiceError } from '../services/settings'
+import { resolveRingableVolunteers, cancelLosingLegs } from '../services/ringing'
+import { publishEvent } from '../lib/ws-events'
+import { KIND_CALL_UPDATE, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
 import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema } from '@protocol/schemas/calls'
 import { okResponseSchema } from '@protocol/schemas/common'
@@ -275,18 +279,49 @@ calls.post('/:callId/answer',
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
 
+    const existing = await services.calls.getActiveCallById(hubId, callId)
+    if (!existing) return c.json({ error: 'Call not found' }, 404)
+    if (existing.status !== 'ringing' || existing.answeredBy) {
+      return c.json({ error: 'Call already answered' }, 409)
+    }
+
+    // Only a volunteer who was actually rung for this call may answer it.
+    const ringable = await resolveRingableVolunteers(services, hubId)
+    if (!ringable?.available.some(v => v.pubkey === pubkey)) {
+      return c.json({ error: 'Not rung for this call' }, 403)
+    }
+
+    let result
     try {
-      const result = await services.calls.answerCall(hubId, callId, pubkey)
-      await audit(services.audit, 'callAnswered', pubkey, {
-        callerLast4: result.callerLast4 || '',
-      }, undefined, result.hubId || hubId || null)
-      return c.json({ call: result })
+      result = await services.calls.answerCall(hubId, callId, pubkey)
     } catch (err) {
-      if (err instanceof Error && 'status' in err && (err as { status: number }).status === 409) {
+      if (err instanceof ServiceError && err.status === 409) {
         return c.json({ error: 'Call already answered' }, 409)
+      }
+      if (err instanceof ServiceError && err.status === 404) {
+        return c.json({ error: 'Call not found' }, 404)
       }
       return c.json({ error: 'Failed to answer call' }, 500)
     }
+
+    await audit(services.audit, 'callAnswered', pubkey, {
+      callerLast4: result.callerLast4 || '',
+    }, undefined, result.hubId || hubId || null)
+
+    publishEvent(c.env, KIND_CALL_UPDATE, {
+      type: 'call:update',
+      callId,
+      status: 'in-progress',
+    }, hubId)
+    publishEvent(c.env, KIND_PRESENCE_UPDATE, {
+      type: 'presence:summary',
+      callId,
+    }, hubId)
+
+    // First pickup wins: stop every phone that is still ringing.
+    await cancelLosingLegs(c.env, services, hubId, callId)
+
+    return c.json({ call: result })
   },
 )
 

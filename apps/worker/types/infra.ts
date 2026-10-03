@@ -36,8 +36,10 @@ export interface Env {
   // Transcription (CF: Ai binding, Node: Whisper HTTP client)
   AI: TranscriptionService
 
-  // Blob storage (CF: R2Bucket, Node: S3-compatible storage)
-  R2_BUCKET: BlobStorage
+  // S3-compatible object storage — RustFS in every deployment
+  // (apps/worker/lib/blob-storage.ts). Constructed at startup, never read
+  // from the environment, so this name is internal only.
+  BLOB_STORAGE: BlobStorage
 
   // Hub-scoped storage manager (RustFS with per-hub IAM)
   STORAGE_MANAGER?: import('../lib/storage-manager').StorageManager
@@ -340,7 +342,7 @@ export interface EncryptedMessage {
   // Per-reader key envelopes (HPKE-wrapped message key)
   readerEnvelopes: RecipientEnvelope[]
   hasAttachments: boolean
-  attachmentIds?: string[]         // references to R2 encrypted blobs
+  attachmentIds?: string[]         // references to encrypted blobs in object storage
   createdAt: string
   externalId?: string              // provider's message ID
   // Delivery status tracking (Epic 71)

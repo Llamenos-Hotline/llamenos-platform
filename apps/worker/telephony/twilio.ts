@@ -217,6 +217,10 @@ export class TwilioAdapter implements TelephonyAdapter {
     return this.twiml('<Response><Reject reason="rejected"/></Response>')
   }
 
+  hangupResponse(): TelephonyResponse {
+    return this.twiml('<Response><Hangup/></Response>')
+  }
+
   async hangupCall(callSid: string): Promise<void> {
     await this.twilioApi(`/Calls/${callSid}.json`, {
       method: 'POST',

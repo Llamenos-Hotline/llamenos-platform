@@ -73,7 +73,11 @@ enum TestAdminAPI {
     }
 
     /// `{"pubkey","timestamp","token"}` for the Authorization header.
-    private static func authorization(method: String, path: String) throws -> String {
+    /// Internal rather than private: `BaseUITest.createClassHub` signs its own
+    /// request so it can keep a 60s timeout (a first request on a freshly
+    /// booted CI runner has taken 30-49s, where `send` allows 15s). Sharing
+    /// the signing keeps one implementation of the token format.
+    static func authorization(method: String, path: String) throws -> String {
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hexString: seedHex))
         let pubkey = key.publicKey.rawRepresentation.hexString
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)

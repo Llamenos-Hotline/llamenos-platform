@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { generateWebRtcToken, isWebRtcConfigured } from '../telephony/webrtc-tokens'
-import { generateSipParams, isSipConfigured } from '../telephony/sip-tokens'
+import { generateSipParams, isSipConfigured, sipCredentialsMayBeIssued } from '../telephony/sip-tokens'
 import { webrtcTokenResponseSchema, sipTokenResponseSchema, telephonyStatusResponseSchema } from '@protocol/schemas/webrtc'
 import { authErrors } from '../openapi/helpers'
 import { createLogger } from '../lib/logger'
@@ -108,6 +108,22 @@ webrtc.get('/sip-token',
       return c.json({ error: 'SIP is not configured for the current provider.' }, 400)
     }
 
+    // Refused at the source, not left to clients not to ask. Issuing here
+    // would hand this volunteer the hub's OWN trunk credential — identical for
+    // every volunteer, unrevocable individually, and registered against the
+    // vendor's SIP domain so the vendor observes each volunteer's IP and
+    // presence. See sipCredentialsMayBeIssued (#1203); the fix is #1173's own
+    // registrar, not a different credential at the same vendor.
+    if (!sipCredentialsMayBeIssued(config)) {
+      logger.warn('SIP token refused: per-volunteer credentials not available (#1203)', {
+        provider: config.type,
+      })
+      return c.json({
+        error: 'In-app SIP audio is unavailable: the server will not issue a shared trunk credential. ' +
+          'Use the phone call preference until per-volunteer SIP identities exist.',
+      }, 503)
+    }
+
     try {
       const identity = `vol_${pubkey.slice(0, 16)}`
       const sipParams = generateSipParams(config, identity)
@@ -141,8 +157,11 @@ webrtc.get('/sip-status',
   async (c) => {
     const services = c.get('services')
     const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
+    // Must agree with /sip-token, which refuses while the credential would be
+    // shared (#1203). Reporting available:true here and then refusing there
+    // would make clients retry a door that is deliberately shut.
     return c.json({
-      available: isSipConfigured(config),
+      available: isSipConfigured(config) && sipCredentialsMayBeIssued(config),
       provider: config?.type ?? null,
     })
   })
