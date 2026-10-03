@@ -75,6 +75,15 @@ services:
       # Optional: GlitchTip/Sentry DSN for client crash reporting (profile: monitoring)
       - GLITCHTIP_DSN=${GLITCHTIP_DSN:-}
       # Signal notification sidecar (profile: signal)
+      # Points at the sidecar the `signal` profile starts. Keeping this
+      # default is what makes `--profile signal` work without extra operator
+      # configuration — removing it silently disconnects a deployment that
+      # DOES use Signal, which is worse than the problem it would solve.
+      #
+      # It does mean the variable is set even when the profile is off, so the
+      # health route cannot use "is the URL set?" to decide whether Signal is
+      # deployed. That is handled where it belongs — readiness no longer lets
+      # an OPTIONAL integration gate the verdict (#1418, routes/health.ts).
       - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)
@@ -218,15 +227,24 @@ services:
 
   # ── Optional: Asterisk PBX ───────────────────────────────
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
     # entirely (pre-existing bug, found while verifying #722's fix)
     profiles: ["asterisk", "telephony"]
     restart: unless-stopped
+    # No call can route until the app provisions the SIP trunk
+    # (POST /api/provider-setup/create-sip-trunk). The trunk lives in astdb on
+    # the asterisk-db volume — see asterisk-config/sorcery.conf.
+    # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
+    # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
+    user: root
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+      - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - asterisk-db:/var/lib/asterisk/astdb
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -455,6 +473,7 @@ configs:
       password = ${ARI_PASSWORD:-changeme}
 
 volumes:
+  asterisk-db:
   postgres-data:
   caddy-data:
   caddy-config:

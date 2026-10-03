@@ -175,18 +175,37 @@ export async function hangUp(sid: string) {
 }
 
 /**
- * Light reset: clears call records, shifts, conversations — preserves admin account and settings.
+ * How many calls this hub has recorded today.
+ *
+ * This replaces a global reset. The suite used to POST /api/test-reset-records
+ * before the run and then assert "some call row is visible", which a row left
+ * over from a previous run satisfied just as well — so the assertion could not
+ * fail. A DELTA proves the call this test placed is the one that landed, and
+ * needs no clean slate at all.
+ *
+ * That matters beyond assertion strength: there is no way to reset a
+ * production-shaped deployment through any route, by design. `devGuard`
+ * (app.ts) answers 404 for every /api/test-* outside a development server, and
+ * `demoResetRefusal` gates /api/demo/reset on exactly the same condition. A
+ * suite that needs a wipe can only ever run against a development box, which
+ * is the opposite of what a LIVE suite is for. See #1423.
  */
-export async function resetStaging(request: APIRequestContext) {
-  const config = getLiveConfig()
-  const res = await request.post('/api/test-reset-records', {
-    headers: {
-      'X-Test-Secret': config.testSecret,
-    },
-  })
+export async function callCount(request: APIRequestContext): Promise<number> {
+  const res = await request.get('/api/calls/today-count')
   if (!res.ok()) {
-    throw new Error(`Failed to reset staging records: ${res.status()} ${await res.text()}`)
+    throw new Error(`GET /api/calls/today-count failed: ${res.status()} ${await res.text()}`)
   }
+  return (await res.json()).count as number
+}
+
+/** Total conversations the hub can see — same delta technique as callCount. */
+export async function conversationCount(request: APIRequestContext): Promise<number> {
+  const res = await request.get('/api/conversations')
+  if (!res.ok()) {
+    throw new Error(`GET /api/conversations failed: ${res.status()} ${await res.text()}`)
+  }
+  const body = await res.json()
+  return Array.isArray(body) ? body.length : (body.conversations?.length ?? 0)
 }
 
 /**

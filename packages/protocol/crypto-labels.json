@@ -99,6 +99,7 @@
     "LABEL_FIREHOSE_AGENT_SEAL": "llamenos:firehose:agent-seal",
     "LABEL_FIREHOSE_BUFFER_ENCRYPT": "llamenos:firehose:buffer-encrypt",
     "LABEL_FIREHOSE_REPORT_WRAP": "llamenos:firehose:report-wrap",
+    "HMAC_IVR_MEDIA_URL": "llamenos:ivr-media-url:v1",
     "LABEL_DEVICE_PROVISION_BUNDLE": "llamenos:device-provision-bundle:v1"
   }
 }

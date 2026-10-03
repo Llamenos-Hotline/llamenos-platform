@@ -4,7 +4,7 @@
  * Tests: permission enforcement (system:manage-instance), health aggregation,
  * service status derivation from env vars, graceful fallback on service errors.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import systemRoutes from '@worker/routes/system'
@@ -113,7 +113,7 @@ describe('GET /system/health', () => {
   })
 
   it('marks blob storage as down when not configured', async () => {
-    const { app } = makeApp({ env: {} }) // no R2_BUCKET or STORAGE_MANAGER
+    const { app } = makeApp({ env: {} }) // no BLOB_STORAGE or STORAGE_MANAGER
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -122,8 +122,8 @@ describe('GET /system/health', () => {
     expect(blobService?.status).toBe('down')
   })
 
-  it('marks blob storage as ok when R2_BUCKET configured', async () => {
-    const { app } = makeApp({ env: { R2_BUCKET: 'my-bucket' } })
+  it('marks blob storage as ok when BLOB_STORAGE configured', async () => {
+    const { app } = makeApp({ env: { BLOB_STORAGE: 'my-bucket' } })
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -230,8 +230,8 @@ describe('GET /system/health', () => {
     expect(['ok', 'degraded']).toContain(server.status)
   })
 
-  it('includes storage blobStorage:Connected when R2_BUCKET configured', async () => {
-    const { app } = makeApp({ env: { R2_BUCKET: 'my-bucket' } })
+  it('includes storage blobStorage:Connected when BLOB_STORAGE configured', async () => {
+    const { app } = makeApp({ env: { BLOB_STORAGE: 'my-bucket' } })
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -239,7 +239,7 @@ describe('GET /system/health', () => {
     expect(storage.blobStorage).toBe('Connected')
   })
 
-  it('includes storage blobStorage:Not configured without R2_BUCKET', async () => {
+  it('includes storage blobStorage:Not configured without BLOB_STORAGE', async () => {
     const { app } = makeApp({ env: {} })
 
     const res = await app.request('/health')

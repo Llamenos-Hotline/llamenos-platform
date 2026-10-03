@@ -28,13 +28,13 @@ type FileRecordLike = {
   encryptedMetadata?: Array<{ pubkey: string; blob: string }>
 }
 
-const R2_STUB = {
+const BLOB_STUB = {
   get: vi.fn(),
   put: vi.fn(),
 }
 
-// Hono bindings — passed as 3rd arg to app.request() so that c.env.R2_BUCKET resolves
-const R2_BINDINGS = { R2_BUCKET: R2_STUB }
+// Hono bindings — passed as 3rd arg to app.request() so that c.env.BLOB_STORAGE resolves
+const BLOB_BINDINGS = { BLOB_STORAGE: BLOB_STUB }
 
 function makeApp(opts: {
   permissions?: string[]
@@ -72,9 +72,9 @@ function makeApp(opts: {
   })
   app.route('/', filesRouter)
 
-  // Wrap app.request to always inject R2_BUCKET as Hono bindings (c.env.R2_BUCKET)
+  // Wrap app.request to always inject BLOB_STORAGE as Hono bindings (c.env.BLOB_STORAGE)
   const request = (input: string, init?: RequestInit) =>
-    app.request(input, init, R2_BINDINGS)
+    app.request(input, init, BLOB_BINDINGS)
 
   return { app, request, mockConversations, mockAudit }
 }
@@ -107,7 +107,7 @@ describe('GET /files/:id/content', () => {
   })
 
   it('allows the uploader to download their own file', async () => {
-    R2_STUB.get.mockResolvedValueOnce({
+    BLOB_STUB.get.mockResolvedValueOnce({
       body: new ReadableStream(),
       size: 10,
     })
@@ -125,7 +125,7 @@ describe('GET /files/:id/content', () => {
   })
 
   it('allows recipient in envelopes to download', async () => {
-    R2_STUB.get.mockResolvedValueOnce({
+    BLOB_STUB.get.mockResolvedValueOnce({
       body: new ReadableStream(),
       size: 5,
     })
@@ -143,7 +143,7 @@ describe('GET /files/:id/content', () => {
   })
 
   it('allows user with files:download-all to bypass envelope check', async () => {
-    R2_STUB.get.mockResolvedValueOnce({
+    BLOB_STUB.get.mockResolvedValueOnce({
       body: new ReadableStream(),
       size: 5,
     })
@@ -161,8 +161,8 @@ describe('GET /files/:id/content', () => {
     expect([200, 404]).toContain(res.status)
   })
 
-  it('returns 404 when R2 object not found', async () => {
-    R2_STUB.get.mockResolvedValueOnce(null)
+  it('returns 404 when the blob is not found', async () => {
+    BLOB_STUB.get.mockResolvedValueOnce(null)
     const { request } = makeApp({
       pubkey: 'uploader-pub',
       fileRecord: {

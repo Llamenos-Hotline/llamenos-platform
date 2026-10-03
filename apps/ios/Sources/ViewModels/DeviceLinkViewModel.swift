@@ -516,10 +516,11 @@ final class DeviceLinkViewModel {
             cleanup()
         } catch {
             await MainActor.run {
-                currentStep = .error(String(format: NSLocalizedString(
+                currentStep = .error(L10n.format(
                     "device_link_import_failed",
-                    comment: "Failed to import key: %@"
-                ), error.localizedDescription))
+                    comment: "Failed to import key: %@",
+                    error.localizedDescription
+                ))
             }
         }
     }

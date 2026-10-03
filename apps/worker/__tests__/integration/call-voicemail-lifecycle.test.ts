@@ -56,6 +56,14 @@ const DDL = `
     admin_envelopes JSONB NOT NULL DEFAULT '[]',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  -- endCall deletes the call's volunteer-leg tokens in the same transaction (#1073).
+  CREATE TABLE ${TEST_SCHEMA}.call_tokens (
+    token TEXT PRIMARY KEY,
+    call_sid TEXT NOT NULL,
+    volunteer_pubkey TEXT NOT NULL,
+    hub_id TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 `
 
 const JSONB_TYPE = {

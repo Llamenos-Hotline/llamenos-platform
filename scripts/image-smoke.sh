@@ -103,8 +103,21 @@ native_smoke() {
       # emulated) that lag is visible, and reading immediately here saw an
       # incomplete log while the post-loop dump showed the marker. Wait for the
       # container to be fully reaped, then re-read with a bounded retry.
+      # The 5x1s window this replaces was still too short: on 2026-09-27
+      # (run 36356918832, PR #1252) the FAIL line was logged 3ms BEFORE the
+      # post-loop dump that contained the very marker it said was missing,
+      # and 9 of the last 30 Image Smoke runs failed exactly this way — a
+      # 30% false-failure rate on a check that gates every Dockerfile change.
+      # Flush lag is seconds, not minutes, so poll for up to 60s (and never
+      # past the job's own deadline). A genuine never-started container now
+      # costs that extra minute; a flushed-late one costs nothing, and the
+      # old window was turning the common case into a red check.
       docker wait "$app" >/dev/null 2>&1 || true
-      for _ in 1 2 3 4 5; do
+      local flush_deadline=$(( $(date +%s) + 60 ))
+      # `if`, not `[ ... ] && ...`: under `set -euo pipefail` (line 23) a bare
+      # && list whose test is false returns 1 and aborts the whole script.
+      if [ "$flush_deadline" -gt "$deadline" ]; then flush_deadline="$deadline"; fi
+      while [ "$(date +%s)" -le "$flush_deadline" ]; do
         if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
         sleep 1
       done

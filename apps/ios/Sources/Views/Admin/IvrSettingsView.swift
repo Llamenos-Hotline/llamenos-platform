@@ -75,10 +75,11 @@ struct IvrSettingsView: View {
             Text(NSLocalizedString("admin_ivr_languages_header", comment: "Supported Languages"))
         } footer: {
             let enabledCount = viewModel.ivrLanguages.values.filter { $0 }.count
-            Text(String(format: NSLocalizedString(
+            Text(L10n.format(
                 "admin_ivr_languages_footer",
-                comment: "%d of %d languages enabled for the IVR voice menu."
-            ), enabledCount, AdminViewModel.supportedLanguages.count))
+                comment: "%d of %d languages enabled for the IVR voice menu.",
+                enabledCount, AdminViewModel.supportedLanguages.count
+            ))
             .font(.brand(.caption))
         }
     }

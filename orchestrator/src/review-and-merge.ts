@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO, gh, ghJson } from './gh.js'
-import { decideReviewSet, REVIEW_JOB, REVIEW_REQUEST_LOGIN, type ReviewSetDecision } from './ci.js'
+import { decideReviewSet, reviewTriggerLogins, REVIEW_JOB, type ReviewSetDecision } from './ci.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR } from './specialist.js'
 import { classifyImpact } from './impact.js'
 import type { VerifyReport } from './verify.js'
@@ -121,17 +121,21 @@ export interface PrSnapshotFacts {
   addedLines: number
   authorLogin: string
   authorIsBot: boolean
+  /** The head branch — with the author, it decides whom a review may be
+   *  requested from (`reviewTriggerLogins`). */
+  headBranch: string
 }
 
 interface GhPrViewForReview {
   headRefOid: string
   baseRefOid: string
+  headRefName: string
   files: { path: string; additions: number; deletions: number }[]
   author: { login: string; is_bot?: boolean }
 }
 
 async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefined> {
-  const view = await ghJson<GhPrViewForReview>(['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,files,author'])
+  const view = await ghJson<GhPrViewForReview>(['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,headRefName,files,author'])
   if (view === undefined) return undefined
   return {
     headSha: view.headRefOid,
@@ -140,6 +144,7 @@ async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefi
     addedLines: view.files.reduce((n, f) => n + f.additions, 0),
     authorLogin: view.author.login,
     authorIsBot: view.author.is_bot === true,
+    headBranch: view.headRefName,
   }
 }
 
@@ -399,7 +404,11 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
       kind: 'not-mergeable', pr,
       reason: `PR ${pr} needs ${reviewSet.profiles.join(', ')} as well as the general non-author review, and this ` +
         `command only runs the general one — it will not post a ${REVIEW_JOB} that claims otherwise. ` +
-        `Request a review from ${REVIEW_REQUEST_LOGIN} and let the CI gate run the whole set.`,
+        // Whom to ask depends on who wrote the PR: GitHub refuses to request
+        // a PR's own author, so naming one fixed login here sent every PR
+        // `llamenos-auto` wrote to a request that cannot be made (#1232).
+        `Request a review from ${reviewTriggerLogins({ prAuthor: facts.authorLogin, branch: facts.headBranch })[0]} ` +
+        'and let the CI gate run the whole set.',
     }
   }
 

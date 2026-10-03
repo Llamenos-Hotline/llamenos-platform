@@ -14,7 +14,7 @@
     "themeLight": "Dirba ronahî",
     "themeSystem": "Dirba pergalê",
     "back": "Paş",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "Hêj tu abonetî tune",
     "optOutFooter": "Binivîsa Betalkirinê",
     "rateLimit": "Sînorkirina Rêjeyê (peyam/çirke)",
-    "recipientCount": "%d wergir",
+    "recipientCount": "{{count}} wergir",
     "recipientCountOne": "1 wergir",
     "recipients": "wergir",
     "saveDraft": "Reşnivîs Tomar Bike",
@@ -935,19 +935,19 @@
     "dotFilled": "Tijî",
     "enterPin": "PIN a xwe binivîse",
     "keyLocked": "Kilîd kilîtkirî ye",
-    "lockoutRemaining": "Hatiye kilîtkirin. Piştî %d çirkeyan dîsa biceribîne.",
+    "lockoutRemaining": "Hatiye kilîtkirin. Piştî {{seconds}} çirkeyan dîsa biceribîne.",
     "mismatch": "PIN li hev nakin. Dîsa biceribîne.",
     "setEncrypting": "Kilîda te tê şîfrekirin...",
     "setSubtitle": "PIN ek 6-8 jimareyî hilbijêre da ku kilîda xwe biparêzî",
     "setTitle": "PIN ek Biafirîne",
     "tooShort": "Divê PIN 6 jimare be",
-    "unlockAttempts": "Ji %d hewldanan %d hatine bikaranîn",
+    "unlockAttempts": "Ji {{used}} hewldanan {{total}} hatine bikaranîn",
     "unlockSubtitle": "Ji bo vekirinê PIN a xwe binivîse",
     "unlockTitle": "PIN a xwe binivîse",
     "unlockVerifying": "Tê piştrastkirin...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1422,7 +1422,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d bang(ên) çalak",
+    "activeCalls": "{{count}} bang(ên) çalak",
     "assigned": "Hatiye Destnîşankirin",
     "available": "Amade",
     "clockIn": "Dest bi Şiftê Bike",
@@ -1431,7 +1431,7 @@
     "clockOutTitle": "Şiftê Biqedîne?",
     "clockedIn": "Tu niha di şiftê de yî",
     "clockedOut": "Tu niha ji şiftê derketî",
-    "count": "%d şift",
+    "count": "{{count}} şift",
     "create": "Şift Biafirîne",
     "createShift": "Şift Biafirîne",
     "days": {
@@ -1476,7 +1476,7 @@
     "selectedCount": "{{count}} hatine hilbijartin",
     "shiftName": "Navê Şiftê",
     "signUp": "Tomar Bibe",
-    "signedUp": "Ji bo %@ tomar bûyî",
+    "signedUp": "Ji bo {{shift}} tomar bûyî",
     "since": "Ji",
     "startTime": "Dema Destpêkê",
     "startsAt": "dest pê dike",
@@ -3120,7 +3120,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -3714,7 +3714,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -3743,7 +3743,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -3962,7 +3962,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -3973,7 +3973,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -4014,8 +4014,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -4038,9 +4038,9 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "actionSave": "Tomar bike",
   "save": "Tomar bike",
@@ -4221,7 +4221,7 @@
     "subtitle": "Ji bo vekirinê PIN a xwe binivîse",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "activeCalls": "Bangên Çalak",
   "yes": "Erê",
@@ -4271,7 +4271,7 @@
     "connecting": "Tê girêdan...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "continueButton": "Bidomîne",
   "providerSetup": {
@@ -4460,7 +4460,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4473,7 +4473,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4512,16 +4512,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4634,7 +4634,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",

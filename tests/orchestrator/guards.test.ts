@@ -4,12 +4,13 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   runReviewCi, decideReviewGate,
+  isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
 import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS } from '../../orchestrator/src/review.js'
@@ -477,10 +478,27 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     expect(fleetReviewJobText().length).toBeGreaterThan(500)
   })
 
-  it('runs on the self-hosted fleet-review runner, never a GitHub-hosted one', () => {
+  // #1284 made `runs-on` conditional, and this rail is the reason it can be
+  // trusted. EVERY event that can reach the review engine still lands on
+  // `llamenos-review-box`; the ONE hosted arm is the republish-only
+  // `synchronize` event, which `decideReviewGate` refuses `run-engine` on
+  // (pinned separately, below). The assertion is on the exact expression,
+  // not on "ubuntu-latest appears somewhere": an unconditional hosted
+  // `runs-on` would move the reviewer — and the operator's logged-in claude
+  // session — onto a GitHub runner, which is what the original rail existed
+  // to prevent, and that is what the second assertion here still catches.
+  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on the republish-only push arm', () => {
     const block = fleetReviewJobText()
-    expect(block).toMatch(/\n {4}runs-on:\s*\[\s*self-hosted\s*,\s*fleet-review\s*\]/)
-    expect(block).not.toMatch(/\n {4}runs-on:\s*ubuntu-latest/)
+    const runsOn = block.match(/\n {4}runs-on:.*/)?.[0] ?? ''
+    expect(runsOn.length, 'runs-on: not found in the fleet-review job').toBeGreaterThan(0)
+    expect(runsOn, 'the self-hosted fleet-review labels must still be the default arm')
+      .toMatch(/fromJSON\('\["self-hosted","fleet-review"\]'\)/)
+    // `ubuntu-latest` may appear here, but ONLY as the value guarded by the
+    // synchronize condition — never as the fallback, and never alone.
+    expect(runsOn, 'a hosted runner is only ever the synchronize arm')
+      .toMatch(/github\.event\.action == 'synchronize' && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
+    expect(block, 'runs-on must never be an unconditional GitHub-hosted runner')
+      .not.toMatch(/\n {4}runs-on:\s*ubuntu-latest\s*$/m)
   })
 
   it('reads FLEET_REVIEW_MODEL from vars with a sonnet default', () => {
@@ -802,13 +820,55 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     }
   })
 
+  /**
+   * #1124: a bare `pull_request:` means `[opened, synchronize, reopened]`,
+   * and `fleet/verify` is where a `scope:<lane>` grant is actually read
+   * (`resolveGrantedLanes` in ci.ts reads the PR's labels inside this gate,
+   * #1117). Applying a grant is none of those three events, so before this
+   * fix nothing re-evaluated the PR afterwards and the pre-grant
+   * `scope=fail` verdict simply stood — observed live on #1060, #1064 and
+   * #1072, all three carrying their grants and all three still red.
+   *
+   * Pinned as a rail because the regression is invisible: dropping
+   * `review_requested` (or reverting to a bare `pull_request:`) breaks
+   * nothing that any other test or any workflow run would notice — the
+   * gate keeps working perfectly, on stale input. The `types:` list must
+   * also stay EXPLICIT: re-bare-ing the trigger silently drops
+   * `review_requested` along with the explicitness.
+   */
+  it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+    const onBlock = fleetVerifyYaml().split(/\njobs:\n/)[0] ?? ''
+    // Scoped to the literal `pull_request:` trigger sub-block, not the whole
+    // pre-`jobs:` text: this file's `on:` block carries prose comments that
+    // legitimately name these events while explaining them, and a
+    // whole-text match would pass on the explanation alone.
+    const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?: {4,}.*\n|\n)*)/)?.[0] ?? ''
+    expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
+    expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
+      .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
+    for (const type of ['opened', 'synchronize', 'reopened', 'review_requested']) {
+      expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
+    }
+  })
+
   // The load-bearing assertion for fleet-review.yml's own trigger list:
-  // `pull_request` scoped to `types: [review_requested]` ONLY (never
-  // `synchronize`, which would reopen the every-push bug #812 fixed the
-  // first time, and never `labeled`, which #1158 retired), plus
-  // `workflow_dispatch` for manual debugging, plus `merge_group` (#1187 —
-  // see fleet-review-merge-group.test.ts for the arm that makes it safe),
-  // and specifically never `push`.
+  // `pull_request` scoped to EXACTLY `types: [review_requested, synchronize]`
+  // — never `labeled` (which #1158 retired) and never `opened` (which
+  // re-enters through CODEOWNERS requesting the operator on almost every PR)
+  // — plus `workflow_dispatch` for manual debugging, plus `merge_group`
+  // (#1187 — see fleet-review-merge-group.test.ts for the arm that makes it
+  // safe), and specifically never `push`.
+  //
+  // `synchronize` used to be forbidden here for the same reason `labeled`
+  // and `opened` still are: every run was a model call, so one per push was
+  // the quota burn #812 fixed. #1284 added it, and the reason it is safe is
+  // NOT that the assertion was loosened — it is that a `synchronize` run
+  // cannot reach the engine at all. That half is pinned by the
+  // `republishOnly` rails further down this file, which assert
+  // `decideReviewGate` refuses `run-engine` on such an event even when
+  // `requested` is true. Both halves have to hold: this rail says the
+  // trigger list is exactly these two actions, those rails say the second
+  // one can only republish.
   //
   // `merge_group` used to be forbidden here, because a trigger with no
   // matching arm inside the job is the fail-open shape this whole rail
@@ -817,9 +877,9 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // REQUIRED instead: without it `fleet/review` cannot report on the queue's
   // synthetic commit at all, and a required context that never reports
   // leaves every entry at `AWAITING_CHECKS` forever.
-  it('fleet-review.yml triggers on pull_request (review_requested only), workflow_dispatch AND merge_group, and NEVER push', () => {
+  it('fleet-review.yml triggers on pull_request (review_requested + synchronize), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
@@ -829,8 +889,14 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     // `types:` entry.
     const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?:\n| {4,}.*\n)*)/)?.[0] ?? ''
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
-    for (const forbiddenType of ['synchronize', 'labeled', 'opened']) {
-      expect(pullRequestBlock, `fleet-review.yml pull_request trigger must be review_requested-only — adding ${forbiddenType} reopens the every-push/every-label bug`)
+    // Scoped to the `types:` LINE itself, not the trigger sub-block: the
+    // block's own prose legitimately explains why `synchronize` is there and
+    // why `opened`/`labeled` are not, and a substring check over the whole
+    // block would trip on that explanation rather than on a real entry.
+    const typesLine = pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? ''
+    expect(typesLine.length, 'pull_request types: line not found').toBeGreaterThan(0)
+    for (const forbiddenType of ['labeled', 'opened']) {
+      expect(typesLine, `fleet-review.yml pull_request trigger must be review_requested + synchronize only — adding ${forbiddenType} reopens the every-label/CODEOWNERS bug`)
         .not.toContain(forbiddenType)
     }
     expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
@@ -1147,7 +1213,15 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
     return !(headCommitMessage ?? '').startsWith(prefix)
   }
 
-  for (const file of ['ci.yml', 'ios-e2e.yml']) {
+  // ios-e2e.yml is NOT in this list any more, and that is the point. It used
+  // to carry its own `changes` job whose `ios_related` flag gated `build`;
+  // that flag could never be false when it mattered (ci.yml already gates the
+  // whole `uses:` call on `changes.outputs.ios`, and schedule /
+  // workflow_dispatch ran regardless), so the job was deleted to stop
+  // serialising an ubuntu run ahead of every macOS one. With no `changes` job
+  // there is no release guard in that file and nothing for #812 to bite. The
+  // rail below holds that line.
+  for (const file of ['ci.yml']) {
     it(`${file}'s "changes" job guard names github.event_name — not just the message`, () => {
       const ifLine = jobLevelIf(jobBlock(workflowYaml(file), 'changes'))
       expect(ifLine, `no if: found on ${file}'s changes job`).not.toBe('')
@@ -1170,6 +1244,25 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
       }
     })
   }
+
+  /**
+   * The other half of removing ios-e2e.yml's `changes` job: #812's hazard is
+   * a release-commit guard that forgets to scope itself to `push`. The file
+   * is now free of one entirely, which is strictly safer than a correct
+   * guard — there is nothing to get wrong.
+   *
+   * Re-adding any `head_commit.message` check there must fail here rather
+   * than quietly reintroduce the shape #812 was filed for. If a future change
+   * genuinely needs one, put it back in the loop above so it is checked for
+   * the `event_name` clause, instead of deleting this test.
+   */
+  it('ios-e2e.yml carries no release-commit guard at all — nothing for #812 to bite', () => {
+    const text = workflowYaml('ios-e2e.yml')
+    expect(text, 'ios-e2e.yml must not gate on a push payload it may not have')
+      .not.toContain('head_commit.message')
+    expect(() => jobBlock(text, 'changes'), 'ios-e2e.yml should have no `changes` job; ci.yml already decided')
+      .toThrow(/no "changes:" job found/)
+  })
 })
 
 /**
@@ -1692,7 +1785,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1702,7 +1795,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes not-requested on a cache miss when this event did not request a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1712,7 +1805,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
   it('concludes run-engine on a cache miss when this event requested a review', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1726,12 +1819,12 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       record: async () => {},
     }
     const requestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(requestedOutcome.kind).toBe('run-engine')
 
     const unrequestedOutcome = await decideReviewGate({
-      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(unrequestedOutcome.kind).toBe('not-requested')
   })
@@ -1745,7 +1838,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
       verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
     })
     const outcome = await decideReviewGate({
-      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      ctx: { ...ctx(), pr: '7' }, prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1761,7 +1854,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') {
@@ -1774,7 +1867,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.editorconfig'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
     if (outcome.kind === 'low-tier') expect(outcome.tier).toBe(1)
@@ -1794,7 +1887,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['eslint.config.js'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1811,7 +1904,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['.claude/agents/backend-supervisor.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('not-requested')
   })
@@ -1828,7 +1921,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => [f],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
   })
@@ -1840,7 +1933,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('low-tier')
   })
@@ -1855,7 +1948,7 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     })
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
-      cacheFor: () => cache, requested: false, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: false, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('cache-hit')
   })
@@ -1868,9 +1961,179 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff,
       changedFiles: async () => ['docs/epics/EP01-foo.md', 'packages/crypto/src/lib.rs'],
-      cacheFor: () => cache, requested: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => cache, requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
     })
     expect(outcome.kind).toBe('run-engine')
+  })
+
+  // ── #1284: the republish arm ───────────────────────────────────────────
+  //
+  // `fleet-review.yml` now also triggers on `pull_request: synchronize`, so
+  // that a rebase — which moves the head SHA and strands the earned verdict
+  // on the old one — gets the required `fleet/review` context back on the
+  // new head without a human removing and re-adding the reviewer.
+  //
+  // The whole safety of that trigger is this: such an event may REPUBLISH a
+  // verdict, and may never START one. The rails below are the enforcement.
+  // They deliberately pass `requested: true` — the case a mutation would
+  // reach — so that deleting `deps.republishOnly ||` from the gate's
+  // not-requested branch (which is exactly the mutation that reopens the
+  // every-push quota burn #812 fixed) fails here rather than in production.
+
+  it('a push with an unchanged diff republishes the cached PASS — the whole point of the trigger', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('cache-hit')
+  })
+
+  it('a push with an unchanged diff republishes a cached FAIL too — republishing is not synthesising a green', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'FAIL', text: 'VERDICT: FAIL — unsafe unwrap' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('cache-hit')
+    if (outcome.kind !== 'cache-hit') throw new Error('unreachable')
+    expect(outcome.verdict.verdict).toBe('FAIL')
+  })
+
+  // The load-bearing one. A push that CHANGED the diff has nothing to
+  // republish, and must never spend a model call — no matter what
+  // `requested` says. Without the `republishOnly ||` guard in the gate this
+  // returns `run-engine`, which is one model review per push on every open
+  // PR.
+  it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('not-requested')
+  })
+
+  // A named reviewer profile must not be the loophole either: a labelled PR
+  // outranks the tier heuristic, but it still cannot make a PUSH start a
+  // review.
+  it('a push never reaches run-engine even with a reviewer profile in the set', async () => {
+    const cache = fakeCache()
+    const withProfile = async (): Promise<ReviewSetDecision> => ({
+      ok: true, profiles: ['crypto-security-reviewer'], fromLabels: ['crypto-security-reviewer'], reasons: ['label'],
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
+    })
+    expect(outcome.kind).toBe('not-requested')
+  })
+
+  // A docs-only push still concludes green on its own terms — the tier
+  // branch sits ahead of the request/republish branch and must stay there,
+  // or an ordinary push to a docs PR would go red for no reason.
+  it('a docs-only push still concludes low-tier, not not-requested', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
+      cacheFor: () => cache, requested: false, republishOnly: true, reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('low-tier')
+  })
+
+  // #1275's short-circuit survives the new arm, and this is the case it was
+  // written for: Dependabot force-pushes on every rebase, which is precisely
+  // a `synchronize`. Before #1284 that push orphaned the verdict and GitHub
+  // emitted no new event, so the required context stayed absent forever.
+  it('a Dependabot force-push still takes the bot-authored short-circuit', async () => {
+    const cache = fakeCache()
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => cache, requested: false, republishOnly: true, prAuthor: 'dependabot[bot]',
+      reviewSet: generalOnly, log: () => {},
+    })
+    expect(outcome.kind).toBe('bot-authored')
+  })
+
+  // An unresolvable review set still fails closed ahead of everything, on a
+  // push exactly as on a review request — "we could not work out what to
+  // review" never becomes "nothing needed reviewing", and never becomes a
+  // republished green either.
+  it('a push with an unresolvable review set still concludes review-set-unresolved', async () => {
+    const cache = fakeCache({
+      key: { pr: '42', diffHash: diffHash(diff) },
+      verdict: { verdict: 'PASS', text: 'VERDICT: PASS (cached)' },
+    })
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files, cacheFor: () => cache,
+      requested: false, republishOnly: true,
+      reviewSet: async () => ({ ok: false, reason: 'labels unreadable' }),
+      log: () => {},
+    })
+    expect(outcome.kind).toBe('review-set-unresolved')
+  })
+})
+
+/**
+ * `isRepublishOnlyEvent` and `reviewRequestFor` over a `synchronize` event
+ * (#1284) — the two functions that decide, from the raw workflow event
+ * fields alone, that a push may republish but never start a review.
+ *
+ * Asserted directly rather than only through `decideReviewGate` because the
+ * workflow hands these fields over as opaque `env:` strings: a rename of
+ * `FLEET_REVIEW_EVENT_ACTION`, or a `reviewRequestFor` that stops noticing
+ * the action, would leave the gate deciding a push was an ordinary
+ * `pull_request` event with no reviewer named — the same red check, for the
+ * wrong reason, and one `requested_reviewer` away from a model call.
+ */
+describe('rail: a push republishes a verdict and never starts one (#1284)', () => {
+  const push = { eventName: 'pull_request', action: 'synchronize', requestedReviewer: undefined, branch: 'fleet/ios/1' }
+
+  it('recognises a pull_request/synchronize as republish-only', () => {
+    expect(isRepublishOnlyEvent(push)).toBe(true)
+  })
+
+  it('does not treat a review request, a dispatch or a merge_group as republish-only', () => {
+    expect(isRepublishOnlyEvent({ eventName: 'pull_request', action: 'review_requested' })).toBe(false)
+    expect(isRepublishOnlyEvent({ eventName: 'workflow_dispatch', action: undefined })).toBe(false)
+    expect(isRepublishOnlyEvent({ eventName: 'merge_group', action: 'checks_requested' })).toBe(false)
+    // The ACTION alone is never enough — a same-named action on another
+    // event must not turn that event into a push.
+    expect(isRepublishOnlyEvent({ eventName: 'merge_group', action: 'synchronize' })).toBe(false)
+  })
+
+  it('reviewRequestFor refuses a push, and says it is a push rather than blaming a missing reviewer', () => {
+    const decision = reviewRequestFor(push)
+    expect(decision.requested).toBe(false)
+    if (decision.requested) throw new Error('unreachable')
+    expect(decision.reason).toContain('push')
+    expect(decision.reason).not.toContain('named no user')
+  })
+
+  // Even if GitHub ever put a `requested_reviewer` on a synchronize payload,
+  // a push is still not a request. The action is checked BEFORE the login.
+  it('a push naming a real trigger login is still not a review request', () => {
+    const decision = reviewRequestFor({ ...push, requestedReviewer: REVIEW_REQUEST_LOGIN })
+    expect(decision.requested).toBe(false)
+  })
+
+  it('reads the action from FLEET_REVIEW_EVENT_ACTION — the name fleet-review.yml sets', () => {
+    const event = reviewRequestEventFromEnv(
+      { FLEET_REVIEW_EVENT_NAME: 'pull_request', FLEET_REVIEW_EVENT_ACTION: 'synchronize' },
+      'fleet/ios/1',
+    )
+    expect(isRepublishOnlyEvent(event)).toBe(true)
+  })
+
+  it('fleet-review.yml passes FLEET_REVIEW_EVENT_ACTION from github.event.action', () => {
+    const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'fleet-review.yml'), 'utf8')
+    expect(yaml).toMatch(/FLEET_REVIEW_EVENT_ACTION:\s*\$\{\{\s*github\.event\.action\s*\}\}/)
   })
 })
 
@@ -2005,6 +2268,10 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     return readFileSync(CI_YAML_PATH, 'utf8')
   }
 
+  function workflowText(file: string): string {
+    return readFileSync(join(process.cwd(), '.github', 'workflows', file), 'utf8')
+  }
+
   /** Same job-block-slicing convention as the rail above — from a job's own
    *  `  <name>:` line up to (but not including) the next job at the same
    *  two-space indentation. */
@@ -2041,6 +2308,12 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       if (eq === -1) continue
       outputs[line.slice(0, eq)] = line.slice(eq + 1)
     }
+    // `revalidate` is published by ci.yml's `changes` job, not by the path
+    // classifier — it answers "does this EVENT need the heavy suites at all",
+    // which has nothing to do with which files changed. Default it to the
+    // pull_request/merge_group answer so the path-scope cases below read as
+    // pure path tests; the push case is asserted separately and explicitly.
+    outputs.revalidate = 'true'
     return outputs
   }
 
@@ -2051,11 +2324,55 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    *  loudly, not silently evaluate to "always runs" or "always skips". */
   function evalJobIf(ifExpr: string, outputs: Record<string, string>): boolean {
     if (ifExpr.trim() === '') return true
-    return ifExpr.split('||').map((t) => t.trim()).some((term) => {
-      const m = term.match(/^needs\.changes\.outputs\.([a-z_]+) == 'true'$/)
-      if (m === null) throw new Error(`unrecognized if: term "${term}" — evalJobIf must not guess`)
-      return outputs[m[1] as string] === 'true'
-    })
+
+    // Recursive descent over the subset ci.yml actually uses:
+    //   expr    := or
+    //   or      := and ('||' and)*
+    //   and     := primary ('&&' primary)*
+    //   primary := '(' or ')' | term
+    //   term    := needs.changes.outputs.<flag> == 'true'
+    // `&&` binds tighter than `||`, matching GitHub's own precedence — which
+    // is the whole reason this is a parser and not a `split('||')`. Written
+    // flat, `revalidate && backend || orchestrator` means
+    // `(revalidate && backend) || orchestrator`, so an orchestrator change
+    // would bypass the revalidate gate entirely. That exact mistake was made
+    // while writing this change and caught here.
+    //
+    // Anything outside the grammar still throws rather than being guessed at:
+    // an unrecognized condition must fail loudly, never silently evaluate to
+    // "always runs" or "always skips".
+    const tokens = ifExpr.match(/\(|\)|\|\||&&|needs\.changes\.outputs\.[a-z_]+ == '[a-z]+'/g) ?? []
+    if (tokens.join(' ').replace(/\s+/g, '') !== ifExpr.replace(/\s+/g, '')) {
+      throw new Error(`unrecognized if: "${ifExpr}" — evalJobIf must not guess`)
+    }
+    let i = 0
+    const peek = () => tokens[i]
+    const parseOr = (): boolean => {
+      let v = parseAnd()
+      while (peek() === '||') { i++; v = parseAnd() || v }
+      return v
+    }
+    const parseAnd = (): boolean => {
+      let v = parsePrimary()
+      while (peek() === '&&') { i++; v = parsePrimary() && v }
+      return v
+    }
+    const parsePrimary = (): boolean => {
+      if (peek() === '(') {
+        i++
+        const v = parseOr()
+        if (tokens[i] !== ')') throw new Error(`unbalanced parens in if: "${ifExpr}"`)
+        i++
+        return v
+      }
+      const term = tokens[i++]
+      const m = term?.match(/^needs\.changes\.outputs\.([a-z_]+) == '([a-z]+)'$/)
+      if (!m) throw new Error(`unrecognized if: term "${term}" — evalJobIf must not guess`)
+      return outputs[m[1] as string] === m[2]
+    }
+    const result = parseOr()
+    if (i !== tokens.length) throw new Error(`trailing tokens in if: "${ifExpr}"`)
+    return result
   }
 
   const ALL_GATED_JOBS = [
@@ -2092,19 +2409,53 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     [
       // Round 2 of #664's review (fleet/review on PR #862): a
       // packages/test-specs/-only change (the shared BDD feature corpus)
-      // must RUN e2e, backend-bdd, and android-e2e — not skip them. Before
-      // this fix, none of the three platform regexes matched
-      // packages/test-specs/, so a PR that broke a feature file (or added
-      // one with no matching step) merged with all three suites silently
-      // skipped and ci-status green.
-      'a packages/test-specs/-only change',
+      // must RUN e2e and backend-bdd — not skip them. Before #664, none of
+      // the platform regexes matched packages/test-specs/, so a PR that broke
+      // a feature file (or added one with no matching step) merged with those
+      // suites silently skipped and ci-status green.
+      //
+      // Android is NOT in this row. `android-e2e` collects only
+      // `features/platform/mobile/**`, so a security/ feature cannot reach the
+      // Android build — see the next row, and the dedicated describe block
+      // above, for the pair that pins both directions.
+      'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
-      // dependency manifests.
+      // dependency manifests. The android jobs skip because this feature is
+      // not one Android reads.
+      ['ios-build-test', 'crypto-tests', 'audit', 'android-build-test', 'android-e2e'],
+    ],
+    [
+      // The mobile half of the same corpus DOES reach Android: ci.yml's
+      // android-e2e step finds its features under
+      // packages/test-specs/features/platform/mobile, and
+      // apps/android/app/build.gradle.kts copies that directory into
+      // androidTest assets. Deleting the android arm of the split makes this
+      // row fail, so the narrowing cannot be over-applied either.
+      'a packages/test-specs/ change INSIDE the mobile corpus',
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
+    ],
+    [
+      // PR #1284's real diff (#1170): 32 jobs ran on it, including all four
+      // `e2e` shards and desktop-e2e.yml's E2E (Linux), because DESKTOP_RE's
+      // blanket `tests/` prefix set `desktop` for tests/orchestrator/. The
+      // fleet's own tests run in backend-unit and nowhere else.
+      "PR #1284's shape (orchestrator/, tests/orchestrator/, one non-ci.yml workflow, a doc)",
+      [
+        '.github/workflows/fleet-review.yml',
+        'docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md',
+        'orchestrator/src/ci.ts',
+        'orchestrator/src/cli.ts',
+        'tests/orchestrator/ci.test.ts',
+        'tests/orchestrator/guards.test.ts',
+      ],
+      ['backend-unit'],
+      ALL_GATED_JOBS.filter((j) => j !== 'backend-unit'),
     ],
   ])('%s: the right ci.yml jobs run and skip', (_name, files, expectRun, expectSkip) => {
     const outputs = classify(files as string[])
@@ -2125,19 +2476,220 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   // whose flag happens to already be true in every scenario tested — this
   // pins the exact if: text instead, independent of any scenario.
   it.each([
-    ['ios-build-test', "needs.changes.outputs.ios == 'true'"],
-    ['android-build-test', "needs.changes.outputs.android == 'true'"],
-    ['android-e2e', "needs.changes.outputs.android == 'true'"],
+    ['ios-build-test', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'"],
+    ['ios-e2e', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'"],
+    ['android-build-test', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
+    ['android-e2e', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
     ['desktop-unit', "needs.changes.outputs.desktop == 'true'"],
     ['crypto-tests', "needs.changes.outputs.crypto == 'true'"],
     ['migration-drift', "needs.changes.outputs.backend == 'true'"],
-    ['backend-bdd', "needs.changes.outputs.backend == 'true'"],
-    ['e2e', "needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'"],
+    ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],
+    ['e2e', "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"],
     ['backend-unit', "needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"],
     ['ansible-validate', "needs.changes.outputs.ansible == 'true' || needs.changes.outputs.backend == 'true'"],
     ['audit', "needs.changes.outputs.audit == 'true'"],
   ])('"%s" carries exactly the expected job-level if: — removing it must fail this test', (job, expected) => {
     expect(jobLevelIf(jobBlock(ciYaml(), job))).toBe(expected)
+  })
+
+  /**
+   * #1426: the heavy integration suites must not re-run on a `push` to main.
+   *
+   * main cannot move except through the merge queue, and a merge group's tree
+   * IS main's next tree — the queue ran these suites against that exact commit
+   * and merged because they passed. Re-running them validates nothing and, since
+   * #1407 put ios-e2e on two self-hosted Mac runners, actively starves the NEXT
+   * entry's gating merge_group run of the runners it needs.
+   *
+   * These rails pin both directions. Dropping `revalidate` from a job's `if:`
+   * fails the pinned-text test above; dropping the OUTPUT, or inverting its
+   * sense, fails here.
+   */
+  describe('the BDD corpus only wakes the platforms that can read it', () => {
+    /**
+     * `android-e2e` collects exactly one directory —
+     * `packages/test-specs/features/platform/mobile/**` (ci.yml's
+     * `find packages/test-specs/features/platform/mobile ...` step, and
+     * apps/android/app/build.gradle.kts's copy task). A feature outside that
+     * directory cannot reach the Android build, so setting `android` for the
+     * whole `packages/test-specs/` prefix buys nothing and costs a lot: #1072
+     * changed `features/core/call-routing.feature` and nothing else
+     * Android-shaped, and paid `android-build-test` plus four `android-e2e`
+     * shards (~50 job-minutes) inside the strictly-serial merge queue.
+     *
+     * Reverting the split makes the first row fail.
+     */
+    it.each([
+      ['packages/test-specs/features/core/call-routing.feature', false],
+      ['packages/test-specs/features/admin/erasure.feature', false],
+      ['packages/test-specs/features/platform/desktop/misc/setup-wizard.feature', false],
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature', true],
+      ['.github/actions/bootstrap-backend/action.yml', true],
+    ])('%s → android=%s', (file, wantsAndroid) => {
+      expect(classify([file]).android).toBe(String(wantsAndroid))
+    })
+
+    it('every BDD corpus change still wakes desktop and backend', () => {
+      // The narrowing is android-only; desktop (bdd project) and backend
+      // (backend-bdd project) both read the whole corpus.
+      for (const f of [
+        'packages/test-specs/features/core/call-routing.feature',
+        'packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature',
+      ]) {
+        const out = classify([f])
+        expect(out.desktop, `${f} stopped waking desktop`).toBe('true')
+        expect(out.backend, `${f} stopped waking backend`).toBe('true')
+      }
+    })
+
+    it('the mobile directory the split trusts actually exists', () => {
+      // A typo in the regex would silently make android=false for everything,
+      // and every row above would still pass. Pin the path to the filesystem.
+      expect(
+        existsSync(join(process.cwd(), 'packages/test-specs/features/platform/mobile')),
+        'features/platform/mobile moved — E2E_INFRA_ANDROID_RE now matches nothing and android-e2e will never run on a corpus change',
+      ).toBe(true)
+    })
+  })
+
+  describe('heavy suites run only where their verdict gates a merge (#1426)', () => {
+    /** Every suite heavy enough that re-running it costs a scarce runner. */
+    const HEAVY = ['e2e', 'backend-bdd', 'android-build-test', 'android-e2e', 'ios-build-test', 'ios-e2e']
+    /** Cheap, and deliberately still run on push so `ci-status` on main keeps
+     *  a real signal for `docker-canary` rather than a near-vacuous one. */
+    const STILL_RUNS_EVERYWHERE = ['backend-unit', 'desktop-unit', 'crypto-tests', 'migration-drift']
+
+    /** Everything true: isolates the EVENT dimension from the PATH dimension. */
+    const allPathsTrue = (revalidate: string) => ({
+      revalidate, app: 'true', ios: 'true', ios_tier: 'full', android: 'true',
+      desktop: 'true', backend: 'true', crypto: 'true', ansible: 'true',
+      audit: 'true', orchestrator: 'true', docs_only: 'false',
+    })
+
+    it.each(HEAVY)('"%s" SKIPS outside the merge queue even with every path flag set', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('false'))
+      expect(runs, `"${job}" ran on an event where its verdict gates nothing (push, or pull_request)`).toBe(false)
+    })
+
+    it.each(HEAVY)('"%s" RUNS in the merge queue when its paths changed', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('true'))
+      expect(runs, `"${job}" stopped running in the one place it actually gates a merge`).toBe(true)
+    })
+
+    it.each(STILL_RUNS_EVERYWHERE)('"%s" is NOT suppressed — cheap, and keeps PRs and main a real signal', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('false'))
+      expect(runs, `"${job}" was swept into the revalidate gate; only the heavy suites belong there`).toBe(true)
+    })
+
+    it('`revalidate` is derived from the event, never from a path flag', () => {
+      const block = jobBlock(ciYaml(), 'changes')
+      const line = block.match(/\n {6}revalidate: (.+)/)?.[1] ?? ''
+      expect(line, 'ci.yml `changes` must publish a `revalidate` output').not.toBe('')
+      // merge_group is the ONLY event where a heavy suite's verdict gates
+      // anything; workflow_dispatch is somebody explicitly asking for a run.
+      expect(line).toContain("github.event_name == 'merge_group'")
+      expect(line).toContain("github.event_name == 'workflow_dispatch'")
+      // A path-derived revalidate would make it a second, redundant copy of the
+      // platform map — the thing detect-changed-platforms.sh exists to prevent.
+      expect(line).not.toContain('steps.filter.outputs')
+    })
+
+    it('`ci-status` treats a skipped job as success, so suppressing these does not fail main', () => {
+      const block = jobBlock(ciYaml(), 'ci-status')
+      // Without this, every push to main would fail ci-status and block
+      // docker-canary — the suppression above depends on it entirely.
+      expect(block).toContain('"$2" != "skipped"')
+      for (const job of HEAVY) expect(block, `ci-status must still NEED "${job}"`).toContain(`check_job "${job}"`)
+    })
+
+    it('evalJobIf honours && over || — the precedence bug this change nearly shipped', () => {
+      // `revalidate && backend || orchestrator` parsed left-to-right would let
+      // an orchestrator-only change bypass the revalidate gate. It must not.
+      const expr = "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"
+      expect(evalJobIf(expr, { revalidate: 'false', backend: 'true', orchestrator: 'true' })).toBe(true)
+      expect(evalJobIf(expr, { revalidate: 'false', backend: 'true', orchestrator: 'false' })).toBe(false)
+      expect(evalJobIf(expr, { revalidate: 'true', backend: 'true', orchestrator: 'false' })).toBe(true)
+      // and parenthesised grouping, which is what `e2e` actually uses
+      const grouped = "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"
+      expect(evalJobIf(grouped, { revalidate: 'false', desktop: 'true', backend: 'true' })).toBe(false)
+      expect(evalJobIf(grouped, { revalidate: 'true', desktop: 'false', backend: 'true' })).toBe(true)
+      expect(evalJobIf(grouped, { revalidate: 'true', desktop: 'false', backend: 'false' })).toBe(false)
+    })
+
+    /**
+   * #1428 routes some ui shards to the self-hosted Mac and the rest to GitHub.
+   * WHICH classes land in a given shard is decided by `ui-tests.py shard`,
+   * which packs by cost from ci-timings.json — so the routing is positional and
+   * a timings change silently re-targets it.
+   *
+   * It already did. #1428's own comment justified sending shard 3 to the Mac
+   * because SecurityUITests' PIN test takes 313s on a hosted runner, while
+   * SecurityUITests actually sat in shard 2, which goes to GitHub. The routing
+   * never did what it claimed, and ShiftFlowUITests then failed 3 of 3 merge
+   * groups on hosted shards, blocking every iOS-touching PR.
+   *
+   * `--mac-shards` fixes that by confining ci-mac-shards.txt's classes to the
+   * routed indices. These rails hold the two halves together: the indices
+   * passed to the packer must be exactly the matrix entries routed to the Mac.
+   * Changing one without the other is the silent mismatch this prevents.
+   */
+  describe('Mac-pinned classes land only on Mac-routed shards (#1428, #1424)', () => {
+    const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+
+    /** The shard indices the `ui` matrix routes to the self-hosted Mac. */
+    function macShardsFromMatrix(): number[] {
+      const m = iosYaml().match(/include: \$\{\{ fromJSON\(inputs\.tier == 'smoke'\s*\n\s*&& '(.+?)'\s*\n\s*\|\| '(.+?)'\) \}\}/s)
+      if (m === null) throw new Error('could not find the ui matrix include expression')
+      return (JSON.parse(m[2] as string) as Array<{ shard: number; host: string }>)
+        .filter((e) => e.host === 'mac').map((e) => e.shard).sort((a, b) => a - b)
+    }
+
+    /** The indices actually handed to `ui-tests.py shard`. */
+    function macShardsPassedToPacker(): number[] {
+      const m = iosYaml().match(/--mac-shards ([0-9,]+)/)
+      if (m === null) throw new Error('ios-e2e.yml does not pass --mac-shards to ui-tests.py')
+      return (m[1] as string).split(',').map(Number).sort((a, b) => a - b)
+    }
+
+    it('the indices passed to the packer are exactly the matrix entries routed to the Mac', () => {
+      expect(macShardsPassedToPacker()).toEqual(macShardsFromMatrix())
+    })
+
+    it('ci-mac-shards.txt names at least one class, each with its evidence', () => {
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const entries = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+      expect(entries.length, 'an empty pin list silently returns every class to hosted runners').toBeGreaterThan(0)
+      for (const e of entries) {
+        expect(e, `"${e}" must carry a comment giving the measured evidence`).toMatch(/\S\s+#\s+\S/)
+      }
+    })
+
+    it('every pinned class is actually selected by the packer onto a Mac shard', () => {
+      const macShards = macShardsFromMatrix()
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const pinned = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+        .map((l) => (l.split('#')[0] as string).trim())
+      const onMac = new Set<string>()
+      for (const i of macShards) {
+        const out = execFileSync('python3', [
+          join(process.cwd(), 'apps', 'ios', 'scripts', 'ui-tests.py'),
+          'shard', '--index', String(i), '--total', '4', '--mac-shards', macShards.join(','),
+        ], { encoding: 'utf8' })
+        for (const line of out.split('\n')) {
+          const cls = line.trim().split('/').pop()
+          if (cls) onMac.add(cls)
+        }
+      }
+      for (const cls of pinned) {
+        expect(onMac.has(cls), `${cls} is pinned to the Mac but the packer did not place it on shards ${macShards}`).toBe(true)
+      }
+    })
+  })
+
+  it('evalJobIf still refuses to guess at a condition outside its grammar', () => {
+      expect(() => evalJobIf("github.ref == 'refs/heads/main'", {})).toThrow(/must not guess/)
+      expect(() => evalJobIf("!cancelled() && needs.changes.outputs.ios == 'true'", {})).toThrow(/must not guess/)
+    })
   })
 
   /**
@@ -2173,6 +2725,167 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(runs, `expected "${job}" to RUN when only "${file}" changes; outputs=${JSON.stringify(outputs)}`).toBe(true)
   })
 
+  /**
+   * #1170: the NEGATIVE direction. The rails above prove a job runs when its
+   * own input changes; nothing proved a job does NOT run when only something it
+   * cannot observe changes. That gap let DESKTOP_RE's blanket `tests/` prefix
+   * send every orchestrator-only PR through four `e2e` shards and E2E (Linux)
+   * — five Docker Compose stacks for a change no Playwright project loads.
+   *
+   * Every job gated on `desktop`: ci.yml's `e2e` (bootstrap + bdd projects;
+   * also runs on `backend`) and `desktop-unit`, and desktop-e2e.yml's `build`
+   * and `test` — the latter is E2E (Linux) (bootstrap + chromium projects).
+   */
+  const DESKTOP_GATED: Array<[string, string]> = [
+    ['ci.yml', 'e2e'],
+    ['ci.yml', 'desktop-unit'],
+    ['desktop-e2e.yml', 'build'],
+    ['desktop-e2e.yml', 'test'],
+  ]
+
+  function runsIn(file: string, job: string, outputs: Record<string, string>): boolean {
+    return evalJobIf(jobLevelIf(jobBlock(workflowText(file), job)), outputs)
+  }
+
+  it.each([
+    ['tests/orchestrator/guards.test.ts'],
+    ['tests/live/telephony.spec.ts'],
+    ['tests/load/burst.js'],
+    ['tests/iso-builder/build-iso.bats'],
+    ['tests/eslint/no-inline-api-shape.test.ts'],
+  ])('"%s" alone runs no desktop-gated job — no Playwright project or desktop-unit loads it', (file) => {
+    const outputs = classify([file])
+    for (const [wf, job] of DESKTOP_GATED) {
+      expect(runsIn(wf, job, outputs), `${wf} "${job}" ran for ${file}; outputs=${JSON.stringify(outputs)}`).toBe(false)
+    }
+  })
+
+  // The other half of the same carve-out: DESKTOP_EXCLUDE_RE is an exclude
+  // list precisely so it cannot swallow real e2e input. Widening it to all of
+  // tests/, or to any of these, must fail here.
+  it.each([
+    ['tests/steps/fixtures.ts'],
+    ['tests/steps/auth/login.steps.ts'],
+    ['tests/mocks/tauri-core.ts'],
+    ['tests/pages/index.ts'],
+    ['tests/fixtures/auth.ts'],
+    ['tests/helpers/relay-capture.ts'],
+    ['tests/e2e/recovery-group.spec.ts'],
+    ['tests/smoke.spec.ts'],
+    ['tests/bootstrap.spec.ts'],
+    ['tests/global-setup.ts'],
+    ['tests/desktop/specs/launch.wdio.ts'],
+  ])('"%s" alone still runs every desktop-gated job', (file) => {
+    const outputs = classify([file])
+    for (const [wf, job] of DESKTOP_GATED) {
+      expect(runsIn(wf, job, outputs), `${wf} "${job}" skipped for ${file}; outputs=${JSON.stringify(outputs)}`).toBe(true)
+    }
+  })
+
+  /**
+   * The script's own comment names the evidence for each carved-out directory.
+   * This makes that evidence load-bearing: a directory stays excluded only while
+   * Playwright's chromium project ignores every spec/test file in it, no path in
+   * playwright.config.ts points into it, and nothing an e2e run loads imports
+   * from it. Change any of those and this fails, rather than the exclusion
+   * silently hiding a directory that became e2e.
+   */
+  it('every directory DESKTOP_EXCLUDE_RE carves out of tests/ is one no Playwright project collects and no e2e code imports', () => {
+    const listed = readFileSync(SCRIPT_PATH, 'utf8').match(/^DESKTOP_EXCLUDE_RE='\^tests\/\(([a-z0-9|-]+)\)\/'$/m)?.[1]
+    expect(listed, 'DESKTOP_EXCLUDE_RE is no longer a single ^tests/(a|b|…)/ alternation — this rail cannot read it').toBeDefined()
+    const prefixes = (listed as string).split('|').map((d) => `tests/${d}/`)
+
+    const pw = readFileSync(join(process.cwd(), 'playwright.config.ts'), 'utf8')
+    const chromiumIgnore = pw.match(/name: "chromium",[\s\S]*?testIgnore: \[([^\]]*)\]/)?.[1]
+    expect(chromiumIgnore, 'playwright.config.ts has no chromium testIgnore to check against').toBeDefined()
+    const ignored = [...(chromiumIgnore as string).matchAll(/"([^"]+)"/g)].map((m) => m[1] as string)
+    // Step globs, feature roots, globalSetup — every tests/ path the config loads.
+    const configPaths = [...pw.matchAll(/["'`](?:\.\/)?(tests\/[^"'`]*)["'`]/g)].map((m) => m[1] as string)
+    expect(configPaths.length, 'found no tests/ paths in playwright.config.ts — this rail would pass vacuously').toBeGreaterThan(0)
+
+    const files = trackedFiles()
+    for (const prefix of prefixes) {
+      const dir = prefix.slice('tests/'.length, -1)
+      const under = files.filter((f) => f.startsWith(prefix))
+      expect(under.length, `${prefix} tracks no files — a stale exclusion; drop it from DESKTOP_EXCLUDE_RE`).toBeGreaterThan(0)
+      // Playwright's default testMatch, which the chromium project keeps.
+      for (const f of under.filter((x) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(x))) {
+        const isIgnored = ignored.includes(`**/${dir}/**`) || (/\.test\.ts$/.test(f) && ignored.includes('**/*.test.ts'))
+        expect(isIgnored, `${f} is collected by Playwright's chromium project (E2E (Linux)) — ${prefix} is e2e and must not be excluded`).toBe(true)
+      }
+      for (const p of configPaths) {
+        expect(p.startsWith(prefix), `playwright.config.ts loads "${p}" — ${prefix} is e2e and must not be excluded`).toBe(false)
+      }
+    }
+
+    // What an e2e run loads: the rest of tests/, the app under test, and the
+    // configs that assemble them (vite.config.ts aliases tests/mocks/ in).
+    const e2eSources = files
+      .filter((f) => /\.(ts|tsx|js|mjs)$/.test(f) && (f.startsWith('tests/') || f.startsWith('src/')))
+      .filter((f) => !prefixes.some((p) => f.startsWith(p)))
+      .concat(['playwright.config.ts', 'vite.config.ts'])
+    expect(e2eSources.length).toBeGreaterThan(100)
+    for (const src of e2eSources) {
+      const text = readFileSync(join(process.cwd(), src), 'utf8')
+      const specifiers = [...text.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*)["'`]([^"'`]+)["'`]/g)].map((m) => m[1] as string)
+      for (const spec of specifiers) {
+        const target = spec.startsWith('.') ? posix.normalize(posix.join(posix.dirname(src), spec)) : spec
+        for (const prefix of prefixes) {
+          expect(`${target}/`.startsWith(prefix), `${src} imports "${spec}" from ${prefix} — an e2e run loads it`).toBe(false)
+        }
+      }
+      for (const prefix of prefixes) {
+        expect(new RegExp(`["'\`](?:\\./)?${prefix}`).test(text), `${src} names a path under ${prefix} — an e2e run loads it`).toBe(false)
+      }
+    }
+  })
+
+  // vitest files map to the one job that loads them, not to SHARED_DEPS_RE's
+  // whole matrix. Derived from ci.yml, not listed here: whatever config a job
+  // passes to `--config`, and whatever that config lists in `setupFiles`, must
+  // run that job when changed alone — and must not run a platform that never
+  // loads a vitest file.
+  it('every vitest config a ci.yml job runs, and each of its setupFiles, runs that job when changed alone — and no iOS/Android/crypto job', () => {
+    const yaml = ciYaml()
+    const bound: Array<[string, string]> = []
+    for (const job of ALL_GATED_JOBS) {
+      for (const m of jobBlock(yaml, job).matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) bound.push([job, m[1] as string])
+    }
+    // Pinned so a renamed job or a moved step cannot make the loop vacuous.
+    expect(bound).toEqual(expect.arrayContaining([
+      ['backend-unit', 'vitest.unit.config.ts'],
+      ['backend-unit', 'vitest.orchestrator.config.ts'],
+      ['desktop-unit', 'vitest.desktop.config.ts'],
+    ]))
+    for (const [job, config] of bound) {
+      const setupList = readFileSync(join(process.cwd(), config), 'utf8').match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''
+      const setups = [...setupList.matchAll(/["']([^"']+)["']/g)].map((m) => (m[1] as string).replace(/^\.\//, ''))
+      for (const file of [config, ...setups]) {
+        const outputs = classify([file])
+        expect(evalJobIf(jobLevelIf(jobBlock(yaml, job)), outputs),
+          `"${job}" loads ${file} but does not run when it changes alone; outputs=${JSON.stringify(outputs)}`).toBe(true)
+        for (const other of ['ios-build-test', 'android-build-test', 'android-e2e', 'crypto-tests']) {
+          expect(evalJobIf(jobLevelIf(jobBlock(yaml, other)), outputs),
+            `"${other}" never loads ${file} but runs when it changes alone; outputs=${JSON.stringify(outputs)}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it.each([['vitest.newsuite.config.ts'], ['vitest.newsuite.setup.ts']])(
+    'an unrecognised vitest file "%s" still runs every platform — the carve-out is a named list, never a prefix',
+    (file) => {
+      const outputs = classify([file])
+      for (const flag of ['ios', 'android', 'desktop', 'backend', 'crypto']) {
+        expect(outputs[flag], `${flag} for ${file}; outputs=${JSON.stringify(outputs)}`).toBe('true')
+      }
+    },
+  )
+
+  it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop gate — removing it must fail this test', (job) => {
+    expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
+  })
+
   it('the changes job diffs against the PR/merge-group base sha, not HEAD^', () => {
     const block = jobBlock(ciYaml(), 'changes')
     expect(block).toContain('github.event.pull_request.base.sha')
@@ -2205,6 +2918,8 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['scripts/dev-bun.sh', 'smoke'],
     ['package.json', 'smoke'],
     ['tsconfig.json', 'smoke'],
+    ['vitest.newsuite.config.ts', 'smoke'],
+    ['vitest.orchestrator.config.ts', 'none'],
     ['apps/worker/routes/foo.ts', 'none'],
     ['README.md', 'none'],
   ])('"%s" alone earns iOS tier "%s"', (file, tier) => {
@@ -2255,6 +2970,76 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       expect(classes, `smoke tier must cover ${required} — onboarding, calls, notes and shifts are the day-one flows`)
         .toContain(required)
     }
+  })
+
+  /**
+   * Dependabot auto-approval. The approval itself merges nothing — all five
+   * required contexts and strict-up-to-date still gate the merge — so these
+   * rails guard the two things that WOULD matter: that the approver cannot be
+   * rewritten by the PR it is approving, and that it waits for `fleet/review`
+   * (which is what keeps a `.github/workflows/` bump, Tier 2 via
+   * HIGH_IMPACT_PATHS, from sailing through unreviewed).
+   */
+  const autoApproveYaml = (): string =>
+    readFileSync(join(process.cwd(), '.github', 'workflows', 'dependabot-auto-approve.yml'), 'utf8')
+
+  it('the Dependabot approver runs from the base branch, never the PR it is approving', () => {
+    const yaml = autoApproveYaml()
+    const onBlock = yaml.split(/\njobs:\n/)[0] ?? ''
+    expect(onBlock, 'must trigger on workflow_run — every open Dependabot PR edits .github/workflows/, so a pull_request trigger would let a bump rewrite its own approver')
+      .toContain('workflow_run:')
+    expect(onBlock, 'a pull_request trigger would run the PR\'s own copy of this file')
+      .not.toMatch(/\n {2}pull_request(_target)?:/)
+  })
+
+  it('the Dependabot approver approves only Dependabot PRs', () => {
+    expect(autoApproveYaml(), 'missing the author guard').toContain('dependabot[bot]')
+  })
+
+  it('the Dependabot approver judges the LATEST COMPLETED fleet/review, not an arbitrary one', () => {
+    // A head commit routinely carries several fleet/review runs (every
+    // re-request adds one). Taking [0] can read a stale PASS that a later
+    // FAIL supersedes — the same hazard fleet-review.yml's queue check
+    // already guards with sort_by(.completed_at)|last.
+    const yaml = autoApproveYaml()
+    expect(yaml, 'must sort by completed_at and take the last, not index [0]')
+      .toMatch(/sort_by\(\.completed_at\)/)
+    expect(yaml, 'must filter to completed runs before judging').toMatch(/status == "completed"/)
+    const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
+    expect(runLines.join('\n'), 'indexing [0] into the check-run list is the stale-verdict bug')
+      .not.toMatch(/select\(\.name == "fleet\/review"\)\]\[0\]/)
+  })
+
+  it('the Dependabot approver waits for a green fleet/review', () => {
+    const yaml = autoApproveYaml()
+    expect(yaml, 'must read the fleet/review check').toContain('fleet/review')
+    // The guard must compare against success specifically — "not failure"
+    // would treat an ABSENT review (the normal state of an unreviewed Tier 2
+    // bump) as permission to approve.
+    expect(yaml, 'must require fleet/review == success, not merely "not failed"')
+      .toMatch(/"\$review" != "success"/)
+  })
+
+  it('the Dependabot approver never merges — a human lands the supply-chain update', () => {
+    // fleet/review refused the auto-merging version twice. The second refusal
+    // was the substantive one: every Dependabot bump IS Tier 2 and does get a
+    // model review, but a model reading a lockfile diff sees version numbers
+    // and hashes, never the code the registry publishes. Diff-level review is
+    // structurally blind to supply-chain payloads, so the human Merge press is
+    // the real checkpoint. Re-adding auto-merge re-opens that.
+    const yaml = autoApproveYaml()
+    const runLines = yaml.split('\n').filter((l) => !l.trim().startsWith('#'))
+    expect(runLines.join('\n'), 'auto-merge must not come back — approve only')
+      .not.toMatch(/gh pr merge/)
+    expect(runLines.join('\n'), '--auto would let a bump land with no human decision')
+      .not.toMatch(/--auto\b/)
+  })
+
+  it('the Dependabot approver uses the collaborator PAT — github-actions[bot] cannot satisfy the unattributed-changes rule', () => {
+    const yaml = autoApproveYaml()
+    expect(yaml).toContain('secrets.RELEASE_BOT_TOKEN')
+    expect(yaml, 'GITHUB_TOKEN as GH_TOKEN would post an approval that does not count')
+      .not.toMatch(/GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN/)
   })
 
   it('desktop-e2e.yml carries no workflow-level pull_request paths: filter — that shape breaks a future required check', () => {

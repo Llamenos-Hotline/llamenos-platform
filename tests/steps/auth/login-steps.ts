@@ -40,12 +40,10 @@ When('I enter a valid 63-character device key', async ({ page }) => {
   // recognizes the derived pubkey and getMe() succeeds after signIn().
   const { ADMIN_SEED } = await import('../../helpers')
   await page.getByTestId(TestIds.DEVICE_KEY_INPUT).fill(ADMIN_SEED)
-  // The login form requires a PIN alongside the device key — fill the PIN field if present
+  // The device-key form always pairs the key with a new PIN (#device-key-pin).
   const pinField = page.locator('#device-key-pin')
-  const pinVisible = await pinField.isVisible({ timeout: 1000 }).catch(() => false)
-  if (pinVisible) {
-    await pinField.fill('12345678')
-  }
+  await expect(pinField).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await pinField.fill('12345678')
 })
 
 // 'I start typing in the device key field' is defined in key-import-steps.ts (shared)
