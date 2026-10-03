@@ -179,6 +179,41 @@ jobs:
 
       # Tier 2 — opt-in. Stages the age private key on the remote host only
       # for this step, so test-restore.yml's server-side decrypt can run.
+      # Two throwaway playbooks (not a bare `ansible -m copy`) so staging
+      # goes through the SAME `tasks/skip-unencrypted-host.yml` gate every
+      # other backup/restore play uses — a bare ad-hoc command would have
+      # silently placed the decryption key on an unencrypted-tier host too.
+      # Written to tmpfs (/dev/shm), never /tmp, so the key is never
+      # disk-backed on the remote host either.
+      - name: Write throwaway stage/unstage playbooks
+        if: steps.restore_key.outputs.present == 'true'
+        working-directory: deploy/ansible/playbooks
+        run: |
+          cat > _ci-stage-restore-key.yml <<'YAML'
+          - name: Stage restore-test decryption key (encrypted hosts only)
+            hosts: llamenos_servers
+            become: true
+            tasks:
+              - name: Skip hosts without disk encryption
+                ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
+                tags: always
+              - name: Copy the restore-test key to tmpfs
+                ansible.builtin.copy:
+                  src: "{{ restore_key_src }}"
+                  dest: /dev/shm/.llamenos-restore-test-key
+                  mode: "0600"
+          YAML
+          cat > _ci-unstage-restore-key.yml <<'YAML'
+          - name: Remove restore-test decryption key (all hosts, unconditionally)
+            hosts: llamenos_servers
+            become: true
+            tasks:
+              - name: Remove the restore-test key from tmpfs
+                ansible.builtin.file:
+                  path: /dev/shm/.llamenos-restore-test-key
+                  state: absent
+          YAML
+
       - name: Stage restore key on remote host
         if: steps.restore_key.outputs.present == 'true'
         env:
@@ -188,12 +223,9 @@ jobs:
           set -euo pipefail
           printf '%s' "$RESTORE_AGE_KEY" > "$RUNNER_TEMP/restore-key.txt"
           chmod 600 "$RUNNER_TEMP/restore-key.txt"
-          # `src=` (not an inlined `content=`) so the key value never appears
-          # in a shell command line / process listing on the runner.
-          ansible -i inventory-production.yml llamenos_servers \
-            -m ansible.builtin.copy \
-            -a "src=$RUNNER_TEMP/restore-key.txt dest=/tmp/.llamenos-restore-test-key mode=0600" \
-            --become
+          ansible-playbook playbooks/_ci-stage-restore-key.yml \
+            -i inventory-production.yml \
+            -e "restore_key_src=$RUNNER_TEMP/restore-key.txt"
           rm -f "$RUNNER_TEMP/restore-key.txt"
 
       - name: Run test-restore (non-destructive)
@@ -203,17 +235,17 @@ jobs:
           ansible-playbook playbooks/test-restore.yml \
             -i inventory-production.yml \
             -e "@vars-production.yml" \
-            -e "backup_age_private_key_path=/tmp/.llamenos-restore-test-key" \
+            -e "backup_age_private_key_path=/dev/shm/.llamenos-restore-test-key" \
             --vault-password-file "$RUNNER_TEMP/vault-pass"
 
+      # No `|| true`: a key that fails to delete must fail this job loudly,
+      # not get silently left on the host.
       - name: Remove staged restore key from remote host
         if: always() && steps.restore_key.outputs.present == 'true'
         working-directory: deploy/ansible
         run: |
-          ansible -i inventory-production.yml llamenos_servers \
-            -m ansible.builtin.file \
-            -a "path=/tmp/.llamenos-restore-test-key state=absent" \
-            --become || true
+          ansible-playbook playbooks/_ci-unstage-restore-key.yml \
+            -i inventory-production.yml
 
       - name: Note that restore testing did not run
         if: steps.restore_key.outputs.present != 'true'
@@ -238,3 +270,5 @@ jobs:
           rm -f "$RUNNER_TEMP/vault-pass" "$RUNNER_TEMP/restore-key.txt"
           rm -f deploy/ansible/inventory-production.yml
           rm -f deploy/ansible/vars-production.yml
+          rm -f deploy/ansible/playbooks/_ci-stage-restore-key.yml
+          rm -f deploy/ansible/playbooks/_ci-unstage-restore-key.yml
