@@ -702,6 +702,190 @@ jobs:
             test-results/
           retention-days: 7
 
+  # ─── Backend BDD Opt-in Projects (demo-mode + signed-webhooks) ──────────
+  # #1210: two Playwright projects need server-wide config the `backend-bdd`
+  # job's server above does not carry, so neither one had ever run in CI:
+  #
+  #   - backend-bdd-demo-mode (@demo-mode, #723): core/demo-mock-telephony.feature
+  #     is the only BDD suite that drives the real startParallelRinging path
+  #     (every other suite uses the /api/test-simulate/* shortcut). It needs a
+  #     server started with DEMO_MODE=true + DEMO_MODE_CONFIRM, which makes the
+  #     MockTelephonyAdapter constructible (apps/worker/telephony/mock.ts).
+  #   - backend-bdd-signed-webhooks (@signed-webhooks, #1036): real
+  #     provider-signed Twilio webhooks, regression coverage for a bug where a
+  #     genuine signed webhook was swallowed as a replay before its handler
+  #     ran. A signature can only be computed with the provider's auth token,
+  #     so the server needs the env-var Twilio provider
+  #     (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER) and the test
+  #     process needs the same (fake, CI-only) values to sign like Twilio does.
+  #
+  # Both run here, in ONE job against ONE dedicated server, instead of two.
+  # Splitting them would mean paying for the shared Docker Compose bring-up
+  # twice for no behavioral benefit — this fleet's self-hosted runners are a
+  # known contention point (3 runners share one box), so an extra full job is
+  # not free. Neither project needs the signal/telephony sidecars (neither
+  # feature file carries @signal/@telephony), so this job skips them.
+  #
+  # This intentionally does NOT go through `bun run test:backend:bdd`'s
+  # BDD_DEMO_MODE/BDD_SIGNED_WEBHOOKS flags (that would also re-run the entire
+  # default `backend-bdd` + `backend-bdd-global-setting` suites a second
+  # time). It mirrors the `e2e` job above instead: bring up the backend,
+  # bddgen, then invoke Playwright directly with `--no-deps` and let
+  # tests/global-setup.ts (which always runs, regardless of --no-deps) do
+  # backend-readiness wait + admin bootstrap, exactly as it does for the
+  # `e2e` job's `--project=bootstrap --project=bdd` run above.
+  #
+  # This job creates its own `.env` and brings Compose up directly rather than
+  # calling `./.github/actions/bootstrap-backend` — that shared action has no
+  # input for the extra DEMO_MODE/TWILIO_* values this job needs, and it is
+  # out of this PR's scope to extend (not under .github/workflows/).
+  backend-bdd-opt-in:
+    needs: [changes]
+    if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Playwright deps (cached browsers)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+
+      # Inlined rather than calling ./.github/actions/bootstrap-backend — see the
+      # job header comment above. This is the same core-services bring-up that
+      # action performs (.env creation + `up --build --wait app`), plus the
+      # DEMO_MODE/TWILIO_* values neither the action nor the regular backend-bdd
+      # job's .env carries. No sidecars: neither opt-in project is @signal/@telephony.
+      - name: Create .env for Docker Compose
+        run: |
+          printf '%s\n' \
+            "ADMIN_PUBKEY=${{ env.TEST_ADMIN_PUBKEY }}" \
+            "DOMAIN=localhost" \
+            "PG_POOL_SIZE=40" \
+            "PG_PASSWORD=ci-test-password" \
+            "HMAC_SECRET=$(openssl rand -hex 32)" \
+            "STORAGE_ACCESS_KEY=testaccess" \
+            "STORAGE_SECRET_KEY=testsecret123456" \
+            "HOTLINE_NAME=Llámenos" \
+            "WEBHOOK_BASE_URL=http://localhost:3000" \
+            "BRIDGE_SECRET=ci-test-bridge-secret" \
+            "ARI_PASSWORD=changeme" \
+            "SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001" \
+            "NOTIFIER_API_KEY=ci-test-notifier-key" \
+            "SIGNAL_REGISTERED_NUMBER=+15550000000" \
+            "PBX_TYPE=asterisk" \
+            "GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)" \
+            "TOKEN_MAX_AGE_MS=3600000" \
+            "TURN_SECRET=$(openssl rand -hex 32)" \
+            "DEMO_MODE=true" \
+            "DEMO_MODE_CONFIRM=DESTROY_ALL_DATA" \
+            "TWILIO_ACCOUNT_SID=ACtest0000000000000000000000000000" \
+            "TWILIO_AUTH_TOKEN=ci-test-twilio-auth-token-not-a-real-secret" \
+            "TWILIO_PHONE_NUMBER=+15559876543" \
+            > .env
+
+      - name: Build and start Docker Compose (core services)
+        run: |
+          timeout 600 docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            up -d --build --wait app
+
+      - name: Wait for backend health
+        run: |
+          echo "Waiting for backend to be ready..."
+          for i in $(seq 1 60); do
+            HTTP_CODE=$(curl -s -o /tmp/health.json -w "%{http_code}" http://localhost:3000/api/health/ready 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Backend is fully ready"
+              break
+            elif [ "$HTTP_CODE" = "503" ]; then
+              PG_STATUS=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('checks',{}).get('postgres',{}).get('status','unknown'))" < /tmp/health.json 2>/dev/null || echo "unknown")
+              if [ "$PG_STATUS" = "ok" ]; then
+                echo "Backend degraded but postgres is ok — proceeding (no sidecars running, expected)"
+                break
+              fi
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::Backend did not become healthy after 120s"
+              cat /tmp/health.json 2>/dev/null || true
+              docker compose --env-file .env \
+                -f deploy/docker/docker-compose.yml \
+                -f deploy/docker/docker-compose.test.yml \
+                logs --tail=50 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Generate BDD test files
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
+      - name: Run opt-in backend BDD projects
+        run: bunx playwright test --project=backend-bdd-demo-mode --project=backend-bdd-signed-webhooks --no-deps
+        timeout-minutes: 12
+        env:
+          TEST_HUB_URL: http://localhost:3000
+          TEST_RELAY_URL: ws://127.0.0.1:3000/ws
+          DEV_RESET_SECRET: test-reset-secret
+          E2E_TEST_SECRET: test-reset-secret
+          DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+          SERVER_SECRET: "0000000000000000000000000000000000000000000000000000000000000001"
+          # Must match the values the server was bootstrapped with above — the
+          # @signed-webhooks steps sign requests with this token themselves,
+          # the same way Twilio would with its real one.
+          TWILIO_ACCOUNT_SID: ACtest0000000000000000000000000000
+          TWILIO_AUTH_TOKEN: ci-test-twilio-auth-token-not-a-real-secret
+          TWILIO_PHONE_NUMBER: "+15559876543"
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: |
+          docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            down -v || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-bdd-opt-in-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   # ─── Backend Unit Tests ────────────────────────────────────
   backend-unit:
     needs: changes
@@ -1857,7 +2041,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-bdd-opt-in, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1881,6 +2065,7 @@ jobs:
           check_job "crypto-tests" "${{ needs.crypto-tests.result }}"
           check_job "e2e" "${{ needs.e2e.result }}"
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
+          check_job "backend-bdd-opt-in" "${{ needs.backend-bdd-opt-in.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
