@@ -5,7 +5,8 @@
 # This is the SINGLE source of truth for the platform path map. Before this
 # script existed, the same map was maintained independently in three places
 # that had already drifted from each other: ci.yml's `changes` job (an
-# `android` regex only), desktop-e2e.yml's `on.pull_request.paths:` list, and
+# `android` regex only), the since-removed desktop-e2e.yml's
+# `on.pull_request.paths:` list, and
 # ios-e2e.yml's own `ios_related` regex. Extending or fixing platform scope
 # happens HERE, once — every workflow that needs it calls this script instead
 # of re-deriving its own copy (see #664).
@@ -64,11 +65,13 @@ IOS_RE='^apps/ios/'
 # tier: still a real iOS gate, 2 runners instead of 4.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
-# desktop-e2e.yml is here for the same reason ios-e2e.yml is in IOS_FULL_RE:
-# its `build` and `test` (E2E (Linux)) jobs gate on this flag, so without it a
-# PR that edits only that workflow skips the very jobs it changes. #910 (the
-# E2E (Linux) Rust cache) merged that way, never having run E2E (Linux).
-DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$|\.github/workflows/desktop-e2e\.yml$)'
+# No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
+# exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in
+# SHARED_DEPS_RE, so editing the file that defines the job already sets this
+# flag. The under-trigger that term was written for (#910 merged a change to
+# the E2E (Linux) Rust cache without ever running E2E (Linux)) is now
+# structurally impossible — there is no second file to edit.
+DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$)'
 # Carved out of DESKTOP_RE's blanket `tests/` prefix: directories under tests/
 # that are NOT desktop e2e. Without this, `ci.yml`'s `e2e` job
 # (`if: desktop == 'true' || backend == 'true'`) runs four Playwright shards,
@@ -142,18 +145,33 @@ AUDIT_RE='^(package\.json$|bun\.lock)'
 ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$|\.claude/agents/)'
 # The cross-platform BDD feature corpus (packages/test-specs/features/**)
 # and the one composite action every backend-bootstrapping job shares
-# (.github/actions/bootstrap-backend) — both are read directly by ci.yml's
-# `e2e` (desktop bdd + backend-bdd Playwright projects), `backend-bdd`, and
-# `android-e2e` (collects `packages/test-specs/features/platform/mobile/**`
-# into androidTest assets) jobs, and by desktop-e2e.yml's own `test` job
-# (also bootstraps via the same action). None of the three platform-specific
-# regexes above would catch either path on its own, so a change here sets
-# `desktop`, `backend`, AND `android` directly rather than relying on one of
-# them to coincidentally already be true.
+# (.github/actions/bootstrap-backend). Both are read directly by ci.yml's
+# `e2e` (desktop bdd + backend-bdd Playwright projects), `desktop-e2e`
+# (bootstrap + chromium projects) and `backend-bdd` jobs — all three
+# bootstrap via the same action. None of the platform-specific regexes above would catch either
+# path on its own, so a change here sets `desktop` and `backend` directly
+# rather than relying on one of them to coincidentally already be true.
 E2E_INFRA_RE='^(packages/test-specs/|\.github/actions/)'
-# playwright.config.ts is read directly by ci.yml's `e2e` job and by
-# desktop-e2e.yml's `test` job (both invoke `bunx playwright test` against
-# it) — not by android/ios, which don't use Playwright at all.
+# Android's slice of the same corpus is NARROWER, and the difference is
+# expensive. `android-e2e` collects only
+# `packages/test-specs/features/platform/mobile/**` — ci.yml's
+# "FEATURES=$(find packages/test-specs/features/platform/mobile ...)" step and
+# apps/android/app/build.gradle.kts's copy task (`from(.../features/platform/
+# mobile)`) are both scoped to that one directory. A change under
+# `features/core/`, `features/admin/`, `features/security/` or
+# `features/platform/desktop/` therefore cannot reach the Android build at
+# all.
+#
+# Keying Android off the whole `packages/test-specs/` prefix cost real queue
+# time: #1072 edited `features/core/call-routing.feature` and nothing else
+# Android-shaped, and its merge_group run spent ~50 job-minutes on
+# `android-build-test` plus four `android-e2e` shards — inside the merge
+# queue, which is strictly serial and the scarcest resource we have.
+# `.github/actions/` stays in, because android-e2e does bootstrap through it.
+E2E_INFRA_ANDROID_RE='^(packages/test-specs/features/platform/mobile/|\.github/actions/)'
+# playwright.config.ts is read directly by ci.yml's `e2e` and `desktop-e2e`
+# jobs (both invoke `bunx playwright test` against it) — not by android/ios,
+# which don't use Playwright at all.
 PLAYWRIGHT_CONFIG_RE='^playwright\.config\.ts$'
 DOCS_ONLY_EXEMPT_RE='\.md$|^site/'
 
@@ -190,7 +208,8 @@ while IFS= read -r file; do
   echo "$file" | grep -qE "$ANSIBLE_RE" && { ansible=true; echo "Ansible file changed: $file" >&2; }
   echo "$file" | grep -qE "$AUDIT_RE" && { audit=true; echo "Dependency manifest changed: $file" >&2; }
   echo "$file" | grep -qE "$ORCHESTRATOR_RE" && { orchestrator=true; echo "Fleet orchestrator file changed: $file" >&2; }
-  echo "$file" | grep -qE "$E2E_INFRA_RE" && { desktop=true; backend=true; android=true; echo "E2E test infra file changed: $file" >&2; }
+  echo "$file" | grep -qE "$E2E_INFRA_RE" && { desktop=true; backend=true; echo "E2E test infra file changed: $file" >&2; }
+  echo "$file" | grep -qE "$E2E_INFRA_ANDROID_RE" && { android=true; echo "Android-visible E2E infra file changed: $file" >&2; }
   echo "$file" | grep -qE "$PLAYWRIGHT_CONFIG_RE" && { desktop=true; backend=true; echo "Playwright config changed: $file" >&2; }
 done <<< "$CHANGED_FILES"
 

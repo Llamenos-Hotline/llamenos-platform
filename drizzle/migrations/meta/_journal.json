@@ -365,6 +365,13 @@
       "when": 1782585239919,
       "tag": "0051_webauthn_challenge_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1782671639919,
+      "tag": "0052_volunteer_can_set_availability",
+      "breakpoints": true
     }
   ]
 }

@@ -20,7 +20,7 @@
 # find-and-replace of an existing pin; it does not add the first one (adding
 # a `container:` block via scripted YAML editing is exactly the kind of
 # blind mutation this repo's determinism rules warn about). Wiring
-# desktop-e2e.yml's `build` job and ci.yml's `build` / `crypto-tests` jobs
+# ci.yml's `build`, `desktop-e2e` and `crypto-tests` jobs
 # onto the published digest — the actual "start with the non-compose jobs"
 # rollout — is a short, hand-reviewed follow-up once this workflow has
 # published at least once. See #903 for the full design and the E2E-job

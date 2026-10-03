@@ -1,7 +1,6 @@
 # Llámenos
 
 [![CI](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml)
-[![Desktop E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml)
 [![iOS E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml)
 [![Docker](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml)
 

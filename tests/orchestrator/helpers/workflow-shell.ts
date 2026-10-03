@@ -53,24 +53,33 @@ export function getStep(j: WorkflowJob, name: string): WorkflowStep {
 }
 
 /**
- * Substitutes the runner-supplied `${{ ... }}` values an env block may read.
- * An expression with no fixture throws rather than quietly handing the shell
- * an unexpanded literal, which would make any assertion on the result
- * meaningless.
+ * Substitutes the runner-supplied `${{ ... }}` values in `text` — an env
+ * value, or a `run:` block that interpolates them inline. An expression with
+ * no fixture throws rather than quietly handing the shell an unexpanded
+ * literal, which would make any assertion on the result meaningless.
  */
+export function resolveExpressions(
+  text: string,
+  fixtures: Readonly<Record<string, string>>,
+  where: string,
+): string {
+  return text.replaceAll(/\$\{\{\s*([^}\s]+)\s*\}\}/g, (_m, path: string) => {
+    const fixture = fixtures[path]
+    if (fixture === undefined) {
+      throw new Error(`${where} reads \${{ ${path} }}, which this rail has no fixture for`)
+    }
+    return fixture
+  })
+}
+
+/** {@link resolveExpressions} over every value of an `env:` block. */
 export function resolveEnv(
   raw: Record<string, string> | undefined,
   fixtures: Readonly<Record<string, string>>,
 ): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(raw ?? {})) {
-    out[k] = String(v).replaceAll(/\$\{\{\s*([^}\s]+)\s*\}\}/g, (_m, path: string) => {
-      const fixture = fixtures[path]
-      if (fixture === undefined) {
-        throw new Error(`env "${k}" reads \${{ ${path} }}, which this rail has no fixture for`)
-      }
-      return fixture
-    })
+    out[k] = resolveExpressions(String(v), fixtures, `env "${k}"`)
   }
   return out
 }

@@ -13,7 +13,8 @@
 # The fix is always the same one-line, single-`run:`-step form:
 #   bunx bddgen export > /dev/null && bunx bddgen
 # This script only recognizes that exact form. It has been missed twice
-# already (#1211, then desktop-e2e.yml) — this rail exists so a third bare
+# already (#1211, then the since-folded desktop-e2e.yml) — this rail exists
+# so a third bare
 # call site fails CI instead of flaking in the wild.
 #
 # Scope: only the surfaces that actually execute bddgen (workflows, scripts,

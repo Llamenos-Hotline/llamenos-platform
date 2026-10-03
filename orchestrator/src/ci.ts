@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
+import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind } from './review.js'
 import { diffHash, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -368,7 +368,7 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    `export-unsafe`: refused before any reviewer ran, for the reason named.
  */
 export const REVIEW_CI_RESULTS = [
-  'pass', 'fail', 'unreadable', 'cache-pass', 'cache-fail',
+  'pass', 'fail', 'unreadable', 'budget-exhausted', 'cache-pass', 'cache-fail',
   'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
 ] as const
 export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
@@ -417,7 +417,7 @@ export const REVIEW_OUTCOME_TOKENS = [
   'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:unclassified',
   'REJECTED:reviewed', 'REJECTED:cached',
   'NO-VERDICT:not-requested', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
-  'NO-VERDICT:unreadable', 'NO-VERDICT:did-not-run',
+  'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:did-not-run',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable',
   'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
@@ -963,7 +963,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     const who = name === GENERAL_REVIEWER ? 'review' : name
     if (s.status === 'rejected') {
       const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail }
+      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined as EngineFailureKind | undefined }
     }
     const r = s.value
     // UNREADABLE and FAIL both fail, but they are different facts and the
@@ -977,11 +977,13 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     // `review unavailable: {"name":"UnknownError",...}` for what was,
     // underneath, a bad model id — the wrong diagnostic sent whoever read
     // it looking for an outage that was never happening.
-    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured` : `${who} unavailable`
+    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
+      : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
+      : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
       : verdictSummary(r.text)
-    return { name, verdict: r.verdict, headline, text: r.text }
+    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind }
   })
 
   const ok = results.every((r) => r.verdict === 'PASS')
@@ -998,7 +1000,16 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // A substantive rejection outranks an UNREADABLE beside it: somebody DID
   // read this diff and reject it, so the outcome to report is "fix the
   // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
-  const result: ReviewCiResult = ok ? 'pass' : results.some((r) => r.verdict === 'FAIL') ? 'fail' : 'unreadable'
+  // A substantive FAIL still outranks everything. Among the non-FAIL
+  // failures, an exhausted budget is reported as itself: it is the one whose
+  // remedy is NOT "re-request" (that re-runs the same diff under the same
+  // budget), so collapsing it into `unreadable` hands the reader advice that
+  // cannot work.
+  const result: ReviewCiResult = ok
+    ? 'pass'
+    : results.some((r) => r.verdict === 'FAIL') ? 'fail'
+    : results.some((r) => r.failureKind === 'budget-exhausted') ? 'budget-exhausted'
+    : 'unreadable'
   const verdict: ReviewCiVerdict = { ok, summary, result }
 
   // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
@@ -1281,10 +1292,36 @@ export function ciContextFromEnv(env: NodeJS.ProcessEnv, repoDir: string): CiCon
   return { branch, repoDir, headDir, headSha, baseSha, pr: env['FLEET_CI_PR'] ?? '(unknown)' }
 }
 
+/**
+ * `git diff` flags that make the text a function of the two commits ALONE.
+ *
+ * This text is the review cache's key (`diffHash`, review-cache.ts), so any
+ * byte that varies with the machine turns an unchanged diff into a miss —
+ * and a miss on a review request is a full model review of a diff that
+ * was already judged.
+ *
+ * `--full-index` is the one that was live. Without it the `index a1b2c3d..`
+ * line carries blob ids abbreviated to `core.abbrev=auto`, whose width
+ * grows with the clone's OBJECT COUNT: 8 hex digits below 65,536 objects, 9
+ * above. The review box's persistent clone held 61,899 objects on
+ * 2026-09-30, so every cached verdict was one width change from missing at
+ * once — and a hosted runner's fresh clone and the box's grown one could
+ * disagree about the same diff. #1170's PASS was recorded under the 8-digit
+ * text; the same two commits in a clone with 101k objects hashed to a
+ * different key and missed.
+ *
+ * The rest pin the output against a runner's own git config — prefixes,
+ * colour, an external or textconv diff driver — which the operator's `HOME`
+ * on the review box may set and a hosted runner never does.
+ */
+export const CI_DIFF_FLAGS: readonly string[] = [
+  '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+]
+
 /** Read inside the trusted base checkout, over the fetched head object. */
 export async function ciDiff(ctx: CiContext): Promise<string> {
   const { stdout } = await execFileAsync(
-    'git', ['-C', ctx.repoDir, 'diff', `${ctx.baseSha}...${ctx.headSha}`],
+    'git', ['-C', ctx.repoDir, 'diff', ...CI_DIFF_FLAGS, `${ctx.baseSha}...${ctx.headSha}`],
     { maxBuffer: 32 * 1024 * 1024 },
   )
   return stdout

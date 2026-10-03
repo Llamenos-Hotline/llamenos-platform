@@ -4,7 +4,7 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -820,6 +820,37 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     }
   })
 
+  /**
+   * #1124: a bare `pull_request:` means `[opened, synchronize, reopened]`,
+   * and `fleet/verify` is where a `scope:<lane>` grant is actually read
+   * (`resolveGrantedLanes` in ci.ts reads the PR's labels inside this gate,
+   * #1117). Applying a grant is none of those three events, so before this
+   * fix nothing re-evaluated the PR afterwards and the pre-grant
+   * `scope=fail` verdict simply stood — observed live on #1060, #1064 and
+   * #1072, all three carrying their grants and all three still red.
+   *
+   * Pinned as a rail because the regression is invisible: dropping
+   * `review_requested` (or reverting to a bare `pull_request:`) breaks
+   * nothing that any other test or any workflow run would notice — the
+   * gate keeps working perfectly, on stale input. The `types:` list must
+   * also stay EXPLICIT: re-bare-ing the trigger silently drops
+   * `review_requested` along with the explicitness.
+   */
+  it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+    const onBlock = fleetVerifyYaml().split(/\njobs:\n/)[0] ?? ''
+    // Scoped to the literal `pull_request:` trigger sub-block, not the whole
+    // pre-`jobs:` text: this file's `on:` block carries prose comments that
+    // legitimately name these events while explaining them, and a
+    // whole-text match would pass on the explanation alone.
+    const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?: {4,}.*\n|\n)*)/)?.[0] ?? ''
+    expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
+    expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
+      .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
+    for (const type of ['opened', 'synchronize', 'reopened', 'review_requested']) {
+      expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
+    }
+  })
+
   // The load-bearing assertion for fleet-review.yml's own trigger list:
   // `pull_request` scoped to EXACTLY `types: [review_requested, synchronize]`
   // — never `labeled` (which #1158 retired) and never `opened` (which
@@ -1182,7 +1213,15 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
     return !(headCommitMessage ?? '').startsWith(prefix)
   }
 
-  for (const file of ['ci.yml', 'ios-e2e.yml']) {
+  // ios-e2e.yml is NOT in this list any more, and that is the point. It used
+  // to carry its own `changes` job whose `ios_related` flag gated `build`;
+  // that flag could never be false when it mattered (ci.yml already gates the
+  // whole `uses:` call on `changes.outputs.ios`, and schedule /
+  // workflow_dispatch ran regardless), so the job was deleted to stop
+  // serialising an ubuntu run ahead of every macOS one. With no `changes` job
+  // there is no release guard in that file and nothing for #812 to bite. The
+  // rail below holds that line.
+  for (const file of ['ci.yml']) {
     it(`${file}'s "changes" job guard names github.event_name — not just the message`, () => {
       const ifLine = jobLevelIf(jobBlock(workflowYaml(file), 'changes'))
       expect(ifLine, `no if: found on ${file}'s changes job`).not.toBe('')
@@ -1205,6 +1244,25 @@ describe('rail: the release-commit guard never starves a pull_request/merge_grou
       }
     })
   }
+
+  /**
+   * The other half of removing ios-e2e.yml's `changes` job: #812's hazard is
+   * a release-commit guard that forgets to scope itself to `push`. The file
+   * is now free of one entirely, which is strictly safer than a correct
+   * guard — there is nothing to get wrong.
+   *
+   * Re-adding any `head_commit.message` check there must fail here rather
+   * than quietly reintroduce the shape #812 was filed for. If a future change
+   * genuinely needs one, put it back in the loop above so it is checked for
+   * the `event_name` clause, instead of deleting this test.
+   */
+  it('ios-e2e.yml carries no release-commit guard at all — nothing for #812 to bite', () => {
+    const text = workflowYaml('ios-e2e.yml')
+    expect(text, 'ios-e2e.yml must not gate on a push payload it may not have')
+      .not.toContain('head_commit.message')
+    expect(() => jobBlock(text, 'changes'), 'ios-e2e.yml should have no `changes` job; ci.yml already decided')
+      .toThrow(/no "changes:" job found/)
+  })
 })
 
 /**
@@ -2235,8 +2293,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   }
 
   /** Runs the REAL classification script against a synthetic changed-file
-   *  list — the exact script ci.yml's, ios-e2e.yml's, and desktop-e2e.yml's
-   *  own `changes` jobs all pipe their diff into. This is what makes the
+   *  list — the exact script ci.yml's `changes` job pipes its diff into. This is what makes the
    *  scenarios below assertions about the actual shipped script, not a
    *  reimplementation of it that could drift from what CI runs. */
   function classify(files: string[]): Record<string, string> {
@@ -2250,6 +2307,12 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       if (eq === -1) continue
       outputs[line.slice(0, eq)] = line.slice(eq + 1)
     }
+    // `revalidate` is published by ci.yml's `changes` job, not by the path
+    // classifier — it answers "does this EVENT need the heavy suites at all",
+    // which has nothing to do with which files changed. Default it to the
+    // pull_request/merge_group answer so the path-scope cases below read as
+    // pure path tests; the push case is asserted separately and explicitly.
+    outputs.revalidate = 'true'
     return outputs
   }
 
@@ -2260,11 +2323,55 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    *  loudly, not silently evaluate to "always runs" or "always skips". */
   function evalJobIf(ifExpr: string, outputs: Record<string, string>): boolean {
     if (ifExpr.trim() === '') return true
-    return ifExpr.split('||').map((t) => t.trim()).some((term) => {
-      const m = term.match(/^needs\.changes\.outputs\.([a-z_]+) == 'true'$/)
-      if (m === null) throw new Error(`unrecognized if: term "${term}" — evalJobIf must not guess`)
-      return outputs[m[1] as string] === 'true'
-    })
+
+    // Recursive descent over the subset ci.yml actually uses:
+    //   expr    := or
+    //   or      := and ('||' and)*
+    //   and     := primary ('&&' primary)*
+    //   primary := '(' or ')' | term
+    //   term    := needs.changes.outputs.<flag> == 'true'
+    // `&&` binds tighter than `||`, matching GitHub's own precedence — which
+    // is the whole reason this is a parser and not a `split('||')`. Written
+    // flat, `revalidate && backend || orchestrator` means
+    // `(revalidate && backend) || orchestrator`, so an orchestrator change
+    // would bypass the revalidate gate entirely. That exact mistake was made
+    // while writing this change and caught here.
+    //
+    // Anything outside the grammar still throws rather than being guessed at:
+    // an unrecognized condition must fail loudly, never silently evaluate to
+    // "always runs" or "always skips".
+    const tokens = ifExpr.match(/\(|\)|\|\||&&|needs\.changes\.outputs\.[a-z_]+ == '[a-z]+'/g) ?? []
+    if (tokens.join(' ').replace(/\s+/g, '') !== ifExpr.replace(/\s+/g, '')) {
+      throw new Error(`unrecognized if: "${ifExpr}" — evalJobIf must not guess`)
+    }
+    let i = 0
+    const peek = () => tokens[i]
+    const parseOr = (): boolean => {
+      let v = parseAnd()
+      while (peek() === '||') { i++; v = parseAnd() || v }
+      return v
+    }
+    const parseAnd = (): boolean => {
+      let v = parsePrimary()
+      while (peek() === '&&') { i++; v = parsePrimary() && v }
+      return v
+    }
+    const parsePrimary = (): boolean => {
+      if (peek() === '(') {
+        i++
+        const v = parseOr()
+        if (tokens[i] !== ')') throw new Error(`unbalanced parens in if: "${ifExpr}"`)
+        i++
+        return v
+      }
+      const term = tokens[i++]
+      const m = term?.match(/^needs\.changes\.outputs\.([a-z_]+) == '([a-z]+)'$/)
+      if (!m) throw new Error(`unrecognized if: term "${term}" — evalJobIf must not guess`)
+      return outputs[m[1] as string] === m[2]
+    }
+    const result = parseOr()
+    if (i !== tokens.length) throw new Error(`trailing tokens in if: "${ifExpr}"`)
+    return result
   }
 
   const ALL_GATED_JOBS = [
@@ -2301,23 +2408,40 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     [
       // Round 2 of #664's review (fleet/review on PR #862): a
       // packages/test-specs/-only change (the shared BDD feature corpus)
-      // must RUN e2e, backend-bdd, and android-e2e — not skip them. Before
-      // this fix, none of the three platform regexes matched
-      // packages/test-specs/, so a PR that broke a feature file (or added
-      // one with no matching step) merged with all three suites silently
-      // skipped and ci-status green.
-      'a packages/test-specs/-only change',
+      // must RUN e2e and backend-bdd — not skip them. Before #664, none of
+      // the platform regexes matched packages/test-specs/, so a PR that broke
+      // a feature file (or added one with no matching step) merged with those
+      // suites silently skipped and ci-status green.
+      //
+      // Android is NOT in this row. `android-e2e` collects only
+      // `features/platform/mobile/**`, so a security/ feature cannot reach the
+      // Android build — see the next row, and the dedicated describe block
+      // above, for the pair that pins both directions.
+      'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
-      // dependency manifests.
+      // dependency manifests. The android jobs skip because this feature is
+      // not one Android reads.
+      ['ios-build-test', 'crypto-tests', 'audit', 'android-build-test', 'android-e2e'],
+    ],
+    [
+      // The mobile half of the same corpus DOES reach Android: ci.yml's
+      // android-e2e step finds its features under
+      // packages/test-specs/features/platform/mobile, and
+      // apps/android/app/build.gradle.kts copies that directory into
+      // androidTest assets. Deleting the android arm of the split makes this
+      // row fail, so the narrowing cannot be over-applied either.
+      'a packages/test-specs/ change INSIDE the mobile corpus',
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
     [
       // PR #1284's real diff (#1170): 32 jobs ran on it, including all four
-      // `e2e` shards and desktop-e2e.yml's E2E (Linux), because DESKTOP_RE's
+      // `e2e` shards and the E2E (Linux) chromium tier, because DESKTOP_RE's
       // blanket `tests/` prefix set `desktop` for tests/orchestrator/. The
       // fleet's own tests run in backend-unit and nowhere else.
       "PR #1284's shape (orchestrator/, tests/orchestrator/, one non-ci.yml workflow, a doc)",
@@ -2351,19 +2475,220 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   // whose flag happens to already be true in every scenario tested — this
   // pins the exact if: text instead, independent of any scenario.
   it.each([
-    ['ios-build-test', "needs.changes.outputs.ios == 'true'"],
-    ['android-build-test', "needs.changes.outputs.android == 'true'"],
-    ['android-e2e', "needs.changes.outputs.android == 'true'"],
+    ['ios-build-test', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'"],
+    ['ios-e2e', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'"],
+    ['android-build-test', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
+    ['android-e2e', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
     ['desktop-unit', "needs.changes.outputs.desktop == 'true'"],
     ['crypto-tests', "needs.changes.outputs.crypto == 'true'"],
     ['migration-drift', "needs.changes.outputs.backend == 'true'"],
-    ['backend-bdd', "needs.changes.outputs.backend == 'true'"],
-    ['e2e', "needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'"],
+    ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],
+    ['e2e', "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"],
     ['backend-unit', "needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"],
     ['ansible-validate', "needs.changes.outputs.ansible == 'true' || needs.changes.outputs.backend == 'true'"],
     ['audit', "needs.changes.outputs.audit == 'true'"],
   ])('"%s" carries exactly the expected job-level if: — removing it must fail this test', (job, expected) => {
     expect(jobLevelIf(jobBlock(ciYaml(), job))).toBe(expected)
+  })
+
+  /**
+   * #1426: the heavy integration suites must not re-run on a `push` to main.
+   *
+   * main cannot move except through the merge queue, and a merge group's tree
+   * IS main's next tree — the queue ran these suites against that exact commit
+   * and merged because they passed. Re-running them validates nothing and, since
+   * #1407 put ios-e2e on two self-hosted Mac runners, actively starves the NEXT
+   * entry's gating merge_group run of the runners it needs.
+   *
+   * These rails pin both directions. Dropping `revalidate` from a job's `if:`
+   * fails the pinned-text test above; dropping the OUTPUT, or inverting its
+   * sense, fails here.
+   */
+  describe('the BDD corpus only wakes the platforms that can read it', () => {
+    /**
+     * `android-e2e` collects exactly one directory —
+     * `packages/test-specs/features/platform/mobile/**` (ci.yml's
+     * `find packages/test-specs/features/platform/mobile ...` step, and
+     * apps/android/app/build.gradle.kts's copy task). A feature outside that
+     * directory cannot reach the Android build, so setting `android` for the
+     * whole `packages/test-specs/` prefix buys nothing and costs a lot: #1072
+     * changed `features/core/call-routing.feature` and nothing else
+     * Android-shaped, and paid `android-build-test` plus four `android-e2e`
+     * shards (~50 job-minutes) inside the strictly-serial merge queue.
+     *
+     * Reverting the split makes the first row fail.
+     */
+    it.each([
+      ['packages/test-specs/features/core/call-routing.feature', false],
+      ['packages/test-specs/features/admin/erasure.feature', false],
+      ['packages/test-specs/features/platform/desktop/misc/setup-wizard.feature', false],
+      ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature', true],
+      ['.github/actions/bootstrap-backend/action.yml', true],
+    ])('%s → android=%s', (file, wantsAndroid) => {
+      expect(classify([file]).android).toBe(String(wantsAndroid))
+    })
+
+    it('every BDD corpus change still wakes desktop and backend', () => {
+      // The narrowing is android-only; desktop (bdd project) and backend
+      // (backend-bdd project) both read the whole corpus.
+      for (const f of [
+        'packages/test-specs/features/core/call-routing.feature',
+        'packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature',
+      ]) {
+        const out = classify([f])
+        expect(out.desktop, `${f} stopped waking desktop`).toBe('true')
+        expect(out.backend, `${f} stopped waking backend`).toBe('true')
+      }
+    })
+
+    it('the mobile directory the split trusts actually exists', () => {
+      // A typo in the regex would silently make android=false for everything,
+      // and every row above would still pass. Pin the path to the filesystem.
+      expect(
+        existsSync(join(process.cwd(), 'packages/test-specs/features/platform/mobile')),
+        'features/platform/mobile moved — E2E_INFRA_ANDROID_RE now matches nothing and android-e2e will never run on a corpus change',
+      ).toBe(true)
+    })
+  })
+
+  describe('heavy suites run only where their verdict gates a merge (#1426)', () => {
+    /** Every suite heavy enough that re-running it costs a scarce runner. */
+    const HEAVY = ['e2e', 'desktop-e2e', 'backend-bdd', 'android-build-test', 'android-e2e', 'ios-build-test', 'ios-e2e']
+    /** Cheap, and deliberately still run on push so `ci-status` on main keeps
+     *  a real signal for `docker-canary` rather than a near-vacuous one. */
+    const STILL_RUNS_EVERYWHERE = ['backend-unit', 'desktop-unit', 'crypto-tests', 'migration-drift']
+
+    /** Everything true: isolates the EVENT dimension from the PATH dimension. */
+    const allPathsTrue = (revalidate: string) => ({
+      revalidate, app: 'true', ios: 'true', ios_tier: 'full', android: 'true',
+      desktop: 'true', backend: 'true', crypto: 'true', ansible: 'true',
+      audit: 'true', orchestrator: 'true', docs_only: 'false',
+    })
+
+    it.each(HEAVY)('"%s" SKIPS outside the merge queue even with every path flag set', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('false'))
+      expect(runs, `"${job}" ran on an event where its verdict gates nothing (push, or pull_request)`).toBe(false)
+    })
+
+    it.each(HEAVY)('"%s" RUNS in the merge queue when its paths changed', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('true'))
+      expect(runs, `"${job}" stopped running in the one place it actually gates a merge`).toBe(true)
+    })
+
+    it.each(STILL_RUNS_EVERYWHERE)('"%s" is NOT suppressed — cheap, and keeps PRs and main a real signal', (job) => {
+      const runs = evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), allPathsTrue('false'))
+      expect(runs, `"${job}" was swept into the revalidate gate; only the heavy suites belong there`).toBe(true)
+    })
+
+    it('`revalidate` is derived from the event, never from a path flag', () => {
+      const block = jobBlock(ciYaml(), 'changes')
+      const line = block.match(/\n {6}revalidate: (.+)/)?.[1] ?? ''
+      expect(line, 'ci.yml `changes` must publish a `revalidate` output').not.toBe('')
+      // merge_group is the ONLY event where a heavy suite's verdict gates
+      // anything; workflow_dispatch is somebody explicitly asking for a run.
+      expect(line).toContain("github.event_name == 'merge_group'")
+      expect(line).toContain("github.event_name == 'workflow_dispatch'")
+      // A path-derived revalidate would make it a second, redundant copy of the
+      // platform map — the thing detect-changed-platforms.sh exists to prevent.
+      expect(line).not.toContain('steps.filter.outputs')
+    })
+
+    it('`ci-status` treats a skipped job as success, so suppressing these does not fail main', () => {
+      const block = jobBlock(ciYaml(), 'ci-status')
+      // Without this, every push to main would fail ci-status and block
+      // docker-canary — the suppression above depends on it entirely.
+      expect(block).toContain('"$2" != "skipped"')
+      for (const job of HEAVY) expect(block, `ci-status must still NEED "${job}"`).toContain(`check_job "${job}"`)
+    })
+
+    it('evalJobIf honours && over || — the precedence bug this change nearly shipped', () => {
+      // `revalidate && backend || orchestrator` parsed left-to-right would let
+      // an orchestrator-only change bypass the revalidate gate. It must not.
+      const expr = "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"
+      expect(evalJobIf(expr, { revalidate: 'false', backend: 'true', orchestrator: 'true' })).toBe(true)
+      expect(evalJobIf(expr, { revalidate: 'false', backend: 'true', orchestrator: 'false' })).toBe(false)
+      expect(evalJobIf(expr, { revalidate: 'true', backend: 'true', orchestrator: 'false' })).toBe(true)
+      // and parenthesised grouping, which is what `e2e` actually uses
+      const grouped = "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"
+      expect(evalJobIf(grouped, { revalidate: 'false', desktop: 'true', backend: 'true' })).toBe(false)
+      expect(evalJobIf(grouped, { revalidate: 'true', desktop: 'false', backend: 'true' })).toBe(true)
+      expect(evalJobIf(grouped, { revalidate: 'true', desktop: 'false', backend: 'false' })).toBe(false)
+    })
+
+    /**
+   * #1428 routes some ui shards to the self-hosted Mac and the rest to GitHub.
+   * WHICH classes land in a given shard is decided by `ui-tests.py shard`,
+   * which packs by cost from ci-timings.json — so the routing is positional and
+   * a timings change silently re-targets it.
+   *
+   * It already did. #1428's own comment justified sending shard 3 to the Mac
+   * because SecurityUITests' PIN test takes 313s on a hosted runner, while
+   * SecurityUITests actually sat in shard 2, which goes to GitHub. The routing
+   * never did what it claimed, and ShiftFlowUITests then failed 3 of 3 merge
+   * groups on hosted shards, blocking every iOS-touching PR.
+   *
+   * `--mac-shards` fixes that by confining ci-mac-shards.txt's classes to the
+   * routed indices. These rails hold the two halves together: the indices
+   * passed to the packer must be exactly the matrix entries routed to the Mac.
+   * Changing one without the other is the silent mismatch this prevents.
+   */
+  describe('Mac-pinned classes land only on Mac-routed shards (#1428, #1424)', () => {
+    const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+
+    /** The shard indices the `ui` matrix routes to the self-hosted Mac. */
+    function macShardsFromMatrix(): number[] {
+      const m = iosYaml().match(/include: \$\{\{ fromJSON\(inputs\.tier == 'smoke'\s*\n\s*&& '(.+?)'\s*\n\s*\|\| '(.+?)'\) \}\}/s)
+      if (m === null) throw new Error('could not find the ui matrix include expression')
+      return (JSON.parse(m[2] as string) as Array<{ shard: number; host: string }>)
+        .filter((e) => e.host === 'mac').map((e) => e.shard).sort((a, b) => a - b)
+    }
+
+    /** The indices actually handed to `ui-tests.py shard`. */
+    function macShardsPassedToPacker(): number[] {
+      const m = iosYaml().match(/--mac-shards ([0-9,]+)/)
+      if (m === null) throw new Error('ios-e2e.yml does not pass --mac-shards to ui-tests.py')
+      return (m[1] as string).split(',').map(Number).sort((a, b) => a - b)
+    }
+
+    it('the indices passed to the packer are exactly the matrix entries routed to the Mac', () => {
+      expect(macShardsPassedToPacker()).toEqual(macShardsFromMatrix())
+    })
+
+    it('ci-mac-shards.txt names at least one class, each with its evidence', () => {
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const entries = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+      expect(entries.length, 'an empty pin list silently returns every class to hosted runners').toBeGreaterThan(0)
+      for (const e of entries) {
+        expect(e, `"${e}" must carry a comment giving the measured evidence`).toMatch(/\S\s+#\s+\S/)
+      }
+    })
+
+    it('every pinned class is actually selected by the packer onto a Mac shard', () => {
+      const macShards = macShardsFromMatrix()
+      const text = readFileSync(join(process.cwd(), 'apps', 'ios', 'Tests', 'UI', 'ci-mac-shards.txt'), 'utf8')
+      const pinned = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+        .map((l) => (l.split('#')[0] as string).trim())
+      const onMac = new Set<string>()
+      for (const i of macShards) {
+        const out = execFileSync('python3', [
+          join(process.cwd(), 'apps', 'ios', 'scripts', 'ui-tests.py'),
+          'shard', '--index', String(i), '--total', '4', '--mac-shards', macShards.join(','),
+        ], { encoding: 'utf8' })
+        for (const line of out.split('\n')) {
+          const cls = line.trim().split('/').pop()
+          if (cls) onMac.add(cls)
+        }
+      }
+      for (const cls of pinned) {
+        expect(onMac.has(cls), `${cls} is pinned to the Mac but the packer did not place it on shards ${macShards}`).toBe(true)
+      }
+    })
+  })
+
+  it('evalJobIf still refuses to guess at a condition outside its grammar', () => {
+      expect(() => evalJobIf("github.ref == 'refs/heads/main'", {})).toThrow(/must not guess/)
+      expect(() => evalJobIf("!cancelled() && needs.changes.outputs.ios == 'true'", {})).toThrow(/must not guess/)
+    })
   })
 
   /**
@@ -2406,22 +2731,27 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    * send every orchestrator-only PR through four `e2e` shards and E2E (Linux)
    * — five Docker Compose stacks for a change no Playwright project loads.
    *
-   * Every job gated on `desktop`: ci.yml's `e2e` (bootstrap + bdd projects)
-   * and `desktop-unit`, and desktop-e2e.yml's `build` and `test` — the latter
-   * is E2E (Linux) (bootstrap + chromium projects). All but `desktop-unit`
-   * also run on `backend`: they drive the app against a PR-built server.
+   * Every job gated on `desktop`, all three now in ci.yml: `e2e`
+   * (bootstrap + bdd projects, sharded x4), `desktop-e2e` (bootstrap +
+   * chromium projects, reported as `E2E (Linux)`) and `desktop-unit`. The two
+   * e2e tiers also run on `backend`: they drive the app against a PR-built
+   * server. `desktop-e2e` arrived here from the standalone desktop-e2e.yml
+   * workflow, which this file's gate-equality rail below used to compare
+   * across two files and now pins inside one.
    */
   const DESKTOP_GATED: Array<[string, string]> = [
     ['ci.yml', 'e2e'],
+    ['ci.yml', 'desktop-e2e'],
     ['ci.yml', 'desktop-unit'],
-    ['desktop-e2e.yml', 'build'],
-    ['desktop-e2e.yml', 'test'],
   ]
 
-  /** The flags a workflow's `changes` job actually exports. A job can only
-   *  observe these: `needs.changes.outputs.<flag>` for any other flag is ''
+  /** The flags a workflow's `changes` job actually exports, or `undefined`
+   *  for a workflow that has no `changes` job at all (ios-e2e.yml, since
+   *  #1420/#1428 removed its own filter). A job can only observe the
+   *  declared flags: `needs.changes.outputs.<flag>` for any other flag is ''
    *  at runtime, even when the script printed `<flag>=true`. */
-  function declaredOutputs(text: string): Set<string> {
+  function declaredOutputs(text: string): Set<string> | undefined {
+    if (!/\n {2}changes:\n/.test(text)) return undefined
     const block = jobBlock(text, 'changes')
     const outputsBlock = block.match(/\n {4}outputs:\n((?: {6}.*\n| *#.*\n)+)/)?.[1] ?? ''
     return new Set([...outputsBlock.matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1] as string))
@@ -2432,6 +2762,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   function runsIn(file: string, job: string, outputs: Record<string, string>): boolean {
     const text = workflowText(file)
     const declared = declaredOutputs(text)
+    if (declared === undefined) throw new Error(`${file} has no "changes" job — runsIn cannot model its gate`)
     const visible = Object.fromEntries(Object.entries(outputs).filter(([k]) => declared.has(k)))
     return evalJobIf(jobLevelIf(jobBlock(text, job)), visible)
   }
@@ -2571,36 +2902,102 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     },
   )
 
-  // E2E (Linux) and ci.yml's `e2e` both run Playwright against a backend built
-  // from the PR (`bootstrap-backend` runs `up --build`), so both gate on
-  // `desktop` OR `backend`. Before this, a server-only PR (#1160) skipped E2E
-  // (Linux) while ci.yml's `e2e` ran. Pinned verbatim: dropping either term,
-  // or the whole `if:`, must fail here.
-  it.each([['build'], ['test']])('desktop-e2e.yml "%s" carries exactly the desktop-or-backend gate — removing either term must fail this test', (job) => {
-    const gate = jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))
-    expect(gate).toBe("needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true'")
-    expect(gate, 'E2E (Linux) and ci.yml e2e drive the same app against the same PR-built backend').toBe(jobLevelIf(jobBlock(ciYaml(), 'e2e')))
+  // The two e2e tiers both run Playwright against a backend built from the PR
+  // (`bootstrap-backend` runs `up --build`) and both are heavy, so they carry
+  // ONE gate between them. They used to live in two workflows under two
+  // different gates: `e2e` here gained the `revalidate` term and became
+  // queue-only, while `E2E (Linux)` sat in desktop-e2e.yml gated on `desktop`
+  // alone and ran on every desktop-touching PR. Nothing could see the drift,
+  // because nothing compared the two files. `desktop-e2e` is now that job, in
+  // this file, and this pins the gates character-identical in both
+  // directions: dropping `revalidate` from either, dropping either path term,
+  // or deleting an `if:` outright must fail here.
+  const E2E_GATE = "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"
+
+  it.each([['e2e'], ['desktop-e2e']])('ci.yml "%s" carries exactly the shared e2e gate — changing either term must fail this test', (job) => {
+    expect(jobLevelIf(jobBlock(ciYaml(), job))).toBe(E2E_GATE)
+  })
+
+  it('both e2e tiers are governed by the same gate, and no e2e tier runs on pull_request', () => {
+    expect(jobLevelIf(jobBlock(ciYaml(), 'desktop-e2e'))).toBe(jobLevelIf(jobBlock(ciYaml(), 'e2e')))
+    // The property the `revalidate` term exists for, asserted rather than
+    // read off the text: on a `pull_request` event neither tier runs, even
+    // with every path flag on.
+    const everyPath = { revalidate: 'false', desktop: 'true', backend: 'true' }
+    for (const job of ['e2e', 'desktop-e2e']) {
+      expect(evalJobIf(jobLevelIf(jobBlock(ciYaml(), job)), everyPath), `${job} runs on pull_request`).toBe(false)
+    }
+  })
+
+  // The consolidation's failure mode is losing a surface while calling the
+  // job "moved". These two tiers partition the Playwright projects: `e2e`
+  // runs bdd sharded x4, `desktop-e2e` runs chromium in one job. Neither
+  // covers the other's specs, and `desktop-e2e` keeps the matrix it arrived
+  // with — `os_label` included, so the check still reports as `E2E (Linux)`
+  // and re-adding an OS is an added row rather than a rewritten job.
+  it('the two e2e tiers still partition the Playwright projects, with the shard count and the OS matrix intact', () => {
+    const e2e = jobBlock(ciYaml(), 'e2e')
+    const chromium = jobBlock(ciYaml(), 'desktop-e2e')
+
+    expect(e2e, '`e2e` must still run the bdd projects, sharded').toContain('--project=bootstrap --project=bdd --shard=${{ matrix.shard }}/${{ strategy.job-total }}')
+    expect(e2e.match(/\n {8}shard: \[([0-9, ]+)\]/)?.[1], '`e2e` shard count changed').toBe('1, 2, 3, 4')
+    expect(e2e, '`e2e` must not absorb the chromium project').not.toContain('--project=chromium')
+
+    expect(chromium, '`desktop-e2e` must still run the chromium project').toContain('--project=bootstrap --project=chromium')
+    expect(chromium, '`desktop-e2e` must not absorb the bdd project').not.toContain('--project=bdd')
+
+    // The matrix, by value: every os_label present must stay present.
+    const labels = [...chromium.matchAll(/^ {12}os_label: (.+)$/gm)].map((m) => (m[1] as string).trim())
+    expect(labels, 'an os_label disappeared from the desktop-e2e matrix — that is lost coverage, not a simplification').toEqual(['Linux'])
+    expect(chromium, 'the check must keep reporting as `E2E (<os_label>)`').toContain('name: E2E (${{ matrix.os_label }})')
+    expect(chromium.match(/\n {4}timeout-minutes: (\d+)/)?.[1], '`desktop-e2e` timeout changed').toBe('45')
+
+    // It consumes `build`'s artifact rather than building its own — the
+    // second `build` job desktop-e2e.yml carried is gone, and the artifact
+    // name both sides agree on is the contract.
+    expect(jobBlock(ciYaml(), 'build')).toContain('name: app-build')
+    expect(chromium).toContain('name: app-build')
+    expect(chromium.match(/\n {4}needs: (.+)/)?.[1]).toBe('[changes, build]')
+  })
+
+  // desktop-e2e.yml is gone: its chromium tier moved into ci.yml above. The
+  // consolidation is the fix for (b) below — there is no longer a second
+  // workflow file whose edits could skip the jobs it defines — so this pins
+  // the file's absence rather than leaving a dead rail that reads as green.
+  it('desktop-e2e.yml no longer exists — its tier is ci.yml\'s `desktop-e2e` job', () => {
+    expect(trackedFiles()).not.toContain('.github/workflows/desktop-e2e.yml')
+    expect(jobBlock(ciYaml(), 'desktop-e2e')).toContain('--project=bootstrap --project=chromium')
+  })
+
+  // `desktop-e2e` is only a real gate if `ci-status` fails on it. desktop-e2e.yml
+  // was never a required check and nothing aggregated it; folding it in here is
+  // what makes a chromium failure block the merge (the #664 follow-up).
+  it('ci-status needs `desktop-e2e` and fails on it', () => {
+    const block = jobBlock(ciYaml(), 'ci-status')
+    expect(block).toMatch(/\n {4}needs: \[[^\]]*\bdesktop-e2e\b[^\]]*\]/)
+    expect(block).toContain('check_job "desktop-e2e" "${{ needs.desktop-e2e.result }}"')
   })
 
   /**
    * The same property as the ci.yml table above, for jobs in any workflow —
    * evaluated through `runsIn`, so a flag the workflow's `changes` job never
    * exports reads as '' exactly as it does on a runner.
-   *  (a) a server-only change runs E2E (Linux) — #1160 changed only
-   *      apps/worker/** and src/server/index.ts and it skipped;
-   *  (b) editing desktop-e2e.yml runs the jobs it defines — #910 changed only
-   *      that file and merged without ever running them;
+   *  (a) a server-only change runs the chromium tier — #1160 changed only
+   *      apps/worker/** and src/server/index.ts and E2E (Linux) skipped while
+   *      ci.yml's `e2e` ran;
+   *  (b) editing the workflow that defines a job runs that job — #910 changed
+   *      only desktop-e2e.yml and merged without ever running them. ci.yml is
+   *      in SHARED_DEPS_RE, so with the job living here this holds by
+   *      construction;
    *  (c) a .claude/agents/** change runs backend-unit, where the fleet tests
    *      that parse the agent fragments live — #981 changed only
    *      .claude/agents/*.md and backend-unit skipped.
    */
   it.each([
-    ['desktop-e2e.yml', 'build', 'apps/worker/app.ts'],
-    ['desktop-e2e.yml', 'test', 'apps/worker/app.ts'],
-    ['desktop-e2e.yml', 'build', 'src/server/index.ts'],
-    ['desktop-e2e.yml', 'test', 'src/server/index.ts'],
-    ['desktop-e2e.yml', 'build', '.github/workflows/desktop-e2e.yml'],
-    ['desktop-e2e.yml', 'test', '.github/workflows/desktop-e2e.yml'],
+    ['ci.yml', 'desktop-e2e', 'apps/worker/app.ts'],
+    ['ci.yml', 'desktop-e2e', 'src/server/index.ts'],
+    ['ci.yml', 'desktop-e2e', '.github/workflows/ci.yml'],
+    ['ci.yml', 'e2e', '.github/workflows/ci.yml'],
     ['ci.yml', 'backend-unit', '.claude/agents/fragments/backend-supervisor.md'],
     ['ci.yml', 'backend-unit', '.claude/agents/backend-supervisor.md'],
     ['ci.yml', 'backend-unit', '.claude/agents/build-agents.sh'],
@@ -2623,15 +3020,32 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   // An `if:` that names a flag its own `changes` job does not export compares
   // '' to 'true' and skips forever, while every script-level check stays green.
   // desktop-e2e.yml exported only `desktop`, so gating it on `backend` alone
-  // would have shipped as a silent no-op.
-  it.each([['ci.yml'], ['desktop-e2e.yml'], ['ios-e2e.yml']])('every needs.changes.outputs.* flag %s references is declared by its changes job', (wf) => {
-    const text = workflowText(wf)
-    const declared = declaredOutputs(text)
-    expect(declared.size, `${wf}: found no declared changes outputs — this rail would pass vacuously`).toBeGreaterThan(0)
-    const referenced = new Set([...text.matchAll(/needs\.changes\.outputs\.([a-z_]+)/g)].map((m) => m[1] as string))
-    expect(referenced.size).toBeGreaterThan(0)
-    for (const flag of referenced) {
-      expect(declared.has(flag), `${wf} gates on needs.changes.outputs.${flag}, which its changes job never exports`).toBe(true)
+  // would have shipped as a silent no-op — the near-miss this rail is for.
+  //
+  // The workflow list is DERIVED, not written down: every workflow that
+  // references `needs.changes.outputs.*` must have a `changes` job declaring
+  // every flag it names. A workflow with no such reference (ios-e2e.yml today
+  // — #1420/#1428 removed its filter, so ci.yml gates the `uses:` call
+  // instead) has nothing to check and is correctly out of scope, while one
+  // that GAINS a reference is pulled in automatically.
+  it('every needs.changes.outputs.* flag any workflow references is declared by that workflow\'s changes job', () => {
+    const dir = join(process.cwd(), '.github', 'workflows')
+    const gated = readdirSync(dir)
+      .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+      .map((f) => [f, workflowText(f)] as const)
+      .filter(([, text]) => /needs\.changes\.outputs\./.test(text))
+    // ci.yml is the one workflow that must always be in this set; if the
+    // derivation ever returns nothing, the rail would pass vacuously.
+    expect(gated.map(([f]) => f), 'no workflow references needs.changes.outputs.* — this rail would pass vacuously').toContain('ci.yml')
+    for (const [wf, text] of gated) {
+      const declared = declaredOutputs(text)
+      expect(declared, `${wf} gates on needs.changes.outputs.* but has no "changes" job to declare them`).toBeDefined()
+      expect((declared as Set<string>).size, `${wf}: its changes job declares no outputs`).toBeGreaterThan(0)
+      const referenced = new Set([...text.matchAll(/needs\.changes\.outputs\.([a-z_]+)/g)].map((m) => m[1] as string))
+      expect(referenced.size).toBeGreaterThan(0)
+      for (const flag of referenced) {
+        expect((declared as Set<string>).has(flag), `${wf} gates on needs.changes.outputs.${flag}, which its changes job never exports`).toBe(true)
+      }
     }
   })
 
@@ -2641,11 +3055,19 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(block).toContain('github.event.merge_group.base_sha')
   })
 
-  it('ci.yml, ios-e2e.yml and desktop-e2e.yml all call the one shared classification script — no second copy of the path map', () => {
-    for (const file of ['ci.yml', 'ios-e2e.yml', 'desktop-e2e.yml']) {
-      const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', file), 'utf8')
-      expect(yaml, `${file} does not call detect-changed-platforms.sh`).toContain('detect-changed-platforms.sh')
-    }
+  // #664's original point: ONE copy of the path map. It used to be stated as
+  // "each of these three workflows calls the script", which three workflows
+  // satisfied with a comment mentioning the filename. Both of the other two
+  // have since lost their own `changes` job — ios-e2e.yml to #1420/#1428,
+  // desktop-e2e.yml to the consolidation above — so the property worth
+  // pinning is the stronger one: exactly one workflow EXECUTES the
+  // classifier, and it is ci.yml. A second copy anywhere fails here.
+  it('exactly one workflow executes the shared classification script — no second copy of the path map', () => {
+    const dir = join(process.cwd(), '.github', 'workflows')
+    const callers = readdirSync(dir)
+      .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+      .filter((f) => /bash \.github\/scripts\/detect-changed-platforms\.sh/.test(workflowText(f)))
+    expect(callers).toEqual(['ci.yml'])
   })
 
   /**
@@ -2791,10 +3213,18 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       .not.toMatch(/GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN/)
   })
 
-  it('desktop-e2e.yml carries no workflow-level pull_request paths: filter — that shape breaks a future required check', () => {
-    const yaml = readFileSync(join(process.cwd(), '.github', 'workflows', 'desktop-e2e.yml'), 'utf8')
-    const onBlock = yaml.split(/\njobs:\n/)[0] ?? ''
+  // Inherited from desktop-e2e.yml, which this now covers in its place: a
+  // workflow-level `paths:` filter means the workflow never triggers at all
+  // on a PR it does not match, and a required check whose workflow never
+  // triggers never reports — the PR becomes unmergeable rather than green
+  // (#664). ci.yml owns every required context in the ruleset's aggregate
+  // (`ci-status`), so the platform decision must stay a job-level `if:`,
+  // which reports `skipped`, and never become an `on.pull_request.paths:`
+  // list.
+  it('ci.yml carries no workflow-level pull_request paths: filter — that shape breaks a required check', () => {
+    const onBlock = ciYaml().split(/\njobs:\n/)[0] ?? ''
     const pullRequestBlock = onBlock.match(/\n {2}pull_request:\n((?:\n| {4,}.*\n)*)/)?.[0] ?? '\n  pull_request:\n'
     expect(pullRequestBlock).not.toContain('paths:')
+    expect(onBlock, 'ci.yml must still trigger on every pull request').toMatch(/\n {2}pull_request:/)
   })
 })
