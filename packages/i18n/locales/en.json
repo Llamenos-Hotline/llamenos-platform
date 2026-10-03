@@ -495,7 +495,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "I have an invite code",
+    "redeemInviteCodeLabel": "Invite code",
+    "redeemInviteCodePlaceholder": "Paste your invite code",
+    "redeemInviteSubmit": "Continue"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

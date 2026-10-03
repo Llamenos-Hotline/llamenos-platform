@@ -11,7 +11,7 @@ import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
 import { DemoAccountPicker } from '@/components/demo-account-picker'
 import { AccountRecoveryFlow } from '@/components/account-recovery-flow'
-import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Smartphone, Upload, ArrowRight } from 'lucide-react'
+import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Smartphone, Upload, ArrowRight, Mail } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { LogoMark } from '@/components/logo-mark'
 import { LanguageSelect } from '@/components/language-select'
@@ -60,6 +60,20 @@ function LoginPage() {
   const [pinError, setPinError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null)
+
+  // --- Invite redemption entry point (#1128) ---
+  // A volunteer holding an invite code has no address bar in a Tauri webview —
+  // this is the only in-app way to reach /onboarding?code=... without a working
+  // deep link or a hub-served onboarding page.
+  const [showRedeemInvite, setShowRedeemInvite] = useState(false)
+  const [inviteCodeInput, setInviteCodeInput] = useState('')
+
+  function handleRedeemInviteSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const code = inviteCodeInput.trim()
+    if (!code) return
+    navigate({ to: '/onboarding', search: { code } })
+  }
 
   // --- PIN unlock (primary flow when key exists) ---
   async function handlePinUnlock(pin: string): Promise<boolean> {
@@ -569,6 +583,57 @@ function LoginPage() {
                 {t('deviceLink.linkThisDevice')}
               </Button>
             </Link>
+          )}
+
+          {/* Redeem an invite (#1128) — the only in-app entry point to onboarding */}
+          {recoveryStep === 'upload' && !showRedeemInvite && (
+            <Button
+              variant="outline"
+              className="w-full"
+              type="button"
+              data-testid="redeem-invite-btn"
+              onClick={() => setShowRedeemInvite(true)}
+            >
+              <Mail className="h-4 w-4" />
+              {t('auth.redeemInvite')}
+            </Button>
+          )}
+
+          {recoveryStep === 'upload' && showRedeemInvite && (
+            <form onSubmit={handleRedeemInviteSubmit} className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="redeem-invite-code">{t('auth.redeemInviteCodeLabel')}</Label>
+                <Input
+                  id="redeem-invite-code"
+                  data-testid="redeem-invite-code-input"
+                  value={inviteCodeInput}
+                  onChange={(e) => setInviteCodeInput(e.target.value)}
+                  placeholder={t('auth.redeemInviteCodePlaceholder')}
+                  autoComplete="off"
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="flex-1"
+                  data-testid="redeem-invite-cancel-btn"
+                  onClick={() => { setShowRedeemInvite(false); setInviteCodeInput('') }}
+                >
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  type="submit"
+                  className="flex-1"
+                  data-testid="redeem-invite-submit-btn"
+                  disabled={!inviteCodeInput.trim()}
+                >
+                  {t('auth.redeemInviteSubmit')}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </form>
           )}
 
           {/* Back to PIN login */}

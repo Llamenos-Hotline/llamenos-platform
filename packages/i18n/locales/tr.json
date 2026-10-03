@@ -191,7 +191,11 @@
     "selectBackupFile": "Yedek dosyası seçin",
     "passkeyLoginFailed": "Geçiş anahtarı ile giriş başarısız",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Davet kodum var",
+    "redeemInviteCodeLabel": "Davet kodu",
+    "redeemInviteCodePlaceholder": "Davet kodunuzu yapıştırın",
+    "redeemInviteSubmit": "Devam et"
   },
   "banList": {
     "add": "Engel Ekle",

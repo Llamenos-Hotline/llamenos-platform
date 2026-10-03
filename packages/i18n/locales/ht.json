@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Mwen gen yon kòd envitasyon",
+    "redeemInviteCodeLabel": "Kòd envitasyon",
+    "redeemInviteCodePlaceholder": "Kole kòd envitasyon ou",
+    "redeemInviteSubmit": "Kontinye"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

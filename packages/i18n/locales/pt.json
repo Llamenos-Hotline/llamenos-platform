@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Tenho um código de convite",
+    "redeemInviteCodeLabel": "Código de convite",
+    "redeemInviteCodePlaceholder": "Cole seu código de convite",
+    "redeemInviteSubmit": "Continuar"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

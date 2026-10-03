@@ -191,7 +191,11 @@
     "selectBackupFile": "Tacha' ri ruyakb'al wuj",
     "passkeyLoginFailed": "Man xtikir ta xok rik'in ewan etal",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Kʼo jun invite code wukʼin",
+    "redeemInviteCodeLabel": "Invite code",
+    "redeemInviteCodePlaceholder": "Taqeʼ ri invite code",
+    "redeemInviteSubmit": "Chatakejaʼ"
   },
   "banList": {
     "add": "Titz'aqatisax Q'atoj",

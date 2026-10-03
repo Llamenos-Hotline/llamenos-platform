@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
@@ -17,6 +17,9 @@ import { Globe, KeyRound, ShieldCheck, ArrowRight, ArrowLeft, Check, Copy, Downl
 import { LogoMark } from '@/components/logo-mark'
 
 export const Route = createFileRoute('/onboarding')({
+  validateSearch: (search: Record<string, unknown>) => ({
+    code: typeof search.code === 'string' ? search.code : undefined,
+  }),
   component: OnboardingPage,
 })
 
@@ -29,9 +32,10 @@ function OnboardingPage() {
   const { toast } = useToast()
   const navigate = useNavigate()
 
-  // Get invite code from URL
-  const params = new URLSearchParams(window.location.search)
-  const inviteCode = params.get('code') || ''
+  // Get invite code from the route's typed search params (set either by the
+  // "Redeem an invite" entry on /login or a direct ?code= navigation).
+  const { code } = useSearch({ from: '/onboarding' })
+  const inviteCode = code || ''
 
   const [step, setStep] = useState<Step>('loading')
   const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)

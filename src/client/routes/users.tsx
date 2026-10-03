@@ -16,6 +16,7 @@ import {
   type RoleDefinition,
 } from '@/lib/api'
 import { generateEphemeralKeypair } from '@/lib/platform'
+import { getOnboardingUrl } from '@/lib/api-config'
 import { useToast } from '@/lib/toast'
 import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -155,7 +156,7 @@ function UsersPage() {
           roles={roles}
           onCreated={(invite) => {
             setInvites(prev => [...prev, invite])
-            setInviteLink(`${window.location.origin}/onboarding?code=${invite.code}`)
+            setInviteLink(getOnboardingUrl(invite.code))
             setShowInviteForm(false)
           }}
           onCancel={() => setShowInviteForm(false)}
