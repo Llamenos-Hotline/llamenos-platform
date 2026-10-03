@@ -327,6 +327,59 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
     const hits = orchestratorSources().filter(({ text }) => CHECK_RUNS_CREATE.test(text))
     expect(hits.map((h) => h.file)).toEqual([REVIEW_AND_MERGE_FILE])
+
+    // And that one file must ACTUALLY post there. Deleting the request and
+    // leaving the module comment behind kept this rail green when it was
+    // deliberately sabotaged — the same false-green shape as a check once
+    // satisfied by a YAML *comment* naming a config file. The endpoint in
+    // prose is not the endpoint in a request.
+    expect(hits[0]?.text, 'the one permitted file mentions the endpoint but does not POST to it')
+      .toMatch(/method:\s*'POST'[\s\S]{0,200}check-runs`/)
+  })
+
+  /**
+   * #1483 added the only credential in this orchestrator that is not the
+   * operator's own `gh` auth: a GitHub App private key, exchanged for a
+   * short-lived installation token so the Checks API (which refuses a PAT)
+   * will accept the verdict above.
+   *
+   * These two rails bound that capability to one file each, in the same
+   * spirit as the one above and for the same reason: the check-run POST is
+   * the one local write path this design trusts, and a SECOND place that can
+   * mint an App token — or a second place that reads the key off disk — is a
+   * second ungoverned way to write a verdict, with the added property that
+   * whoever added it would also be handling key material.
+   *
+   * Note the division: `github-app.ts` holds the AUTH and never names the
+   * endpoint, `review-and-merge.ts` holds the one CALL and never reads the
+   * key. That is what keeps both rails satisfiable at once rather than one
+   * being traded for the other.
+   */
+  it('mints a GitHub App installation token from exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /access_tokens/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  it('reads the GitHub App private key in exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /review-app\.pem|createSign\(/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  /**
+   * The rejected shortcut, kept rejected. `POST /statuses/<sha>` accepts a
+   * PAT and satisfies a required context — which is exactly why it must not
+   * exist here: a PAT-written green status under the `fleet/review` context
+   * name could override a red check run. Fail-open, and explicitly rejected
+   * on #1483. `ci.ts`'s own comment above `VERIFY_JOB`/`REVIEW_JOB` rejected
+   * a same-named STATUS once already, for the separate reason that it makes
+   * fork PRs unmergeable; this is the second, independent reason.
+   */
+  it('never writes a commit status as an alternative to a check-run', () => {
+    for (const { file, text } of orchestratorSources()) {
+      expect(text, `${file} writes a commit status — see #1483`).not.toMatch(/\/statuses\//)
+    }
   })
 })
 

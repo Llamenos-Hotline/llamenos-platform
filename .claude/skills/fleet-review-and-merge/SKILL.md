@@ -43,19 +43,46 @@ planned follow-up, once this command is proven on real PRs.
    `review.ts`'s own prompt construction and export/strip helpers rather than a second copy.
 3. **Records the verdict.** Posts a real check-run named `fleet/review` on that head SHA —
    `success` only for a PASS verdict; `failure` for FAIL or an unreadable/ambiguous verdict.
+   This is the one call that cannot use the operator's `gh` credentials: the Checks API
+   refuses a PAT, so it authenticates as the `llamenos-fleet-review` GitHub App (#1483) —
+   see "Credentials" below.
 4. **Merges, if ready.** Re-reads the PR's required checks (`gh pr checks <pr> --required`)
    and merges (`--squash --delete-branch`) only if: the head has not moved since the review,
    `fleet/review` itself is passing, and every OTHER required check is green. A bot-authored
    PR (the fleet's own workers) always stops here with a message instead of merging — a
    human code-owner must approve it; this command never approves on the operator's behalf.
 
+## Credentials — and why the command is non-functional without them (#1483)
+
+The Checks API will not accept a personal access token
+(`You must authenticate via a GitHub App. (HTTP 403)`), so recording the verdict needs the
+`llamenos-fleet-review` GitHub App. Two values, documented with the fleet's other
+credentials in `orchestrator/README.md` ("Recording a verdict"):
+
+- `FLEET_REVIEW_APP_ID` — the App's numeric ID, a line in `~/.llamenos-fleet/env`. Not secret.
+- `~/.llamenos-fleet/review-app.pem` — the App's private key, **mode 600**. Secret.
+  Path overridable with `FLEET_REVIEW_APP_KEY_PATH`.
+
+Until both exist, **`review-and-merge` does nothing useful**: it refuses *before* invoking
+the reviewer (`cannot-record`), posts nothing, and exits non-zero. Use the CI gate instead
+— request a review on the PR. If the credentials are present but the post fails anyway, the
+command reports `review-unrecorded`: the review RAN, its verdict is LOST, nothing was
+posted and nothing was merged. It never prints "posted" for a post that did not happen.
+
+There is deliberately **no fallback**. `POST …/statuses` on a commit does accept a PAT and
+does satisfy a required context, but a PAT-written green status under the `fleet/review`
+name could override a red check run — fail-open, and rejected permanently on #1483. Rails
+in `tests/orchestrator/guards.test.ts` bind the App token to one file, the key to one file,
+and forbid a commit-status write anywhere in `orchestrator/src`.
+
 ## Idempotency and failure modes
 
 Running the command twice against an unchanged head does no second review and no second
 merge attempt — an already-merged PR is detected up front and the command exits
 immediately. Every other early return is an explicit refusal with a stated reason (head
-moved, checks unreadable, a required check red, an unreadable review verdict) — there is no
-path that merges on a guess.
+moved, checks unreadable, a required check red, an unreadable review verdict, no usable App
+credentials, a verdict that could not be recorded) — there is no path that merges on a
+guess, and none that loses a verdict quietly.
 
 ## Usage
 
