@@ -1,0 +1,16 @@
+---
+# llamenos-asterisk defaults.
+
+# Host-local health-check port for the sip-bridge sidecar (127.0.0.1 only —
+# never exposed off-box). The bridge's own listener inside the container
+# always binds 3000 (BRIDGE_PORT in templates/env/asterisk.j2); this is only
+# the host-side publish port. Picked to sit next to the Signal Notifier
+# sidecar's 3100 (roles/llamenos-signal) without colliding with the app's own
+# 127.0.0.1:3000 (roles/llamenos-app) when both run on the same host.
+sip_bridge_local_port: 3101
+
+# Which PBX backend sip-bridge talks to (PBX_TYPE names the PBX, not the
+# protocol). Only "asterisk" is wired up by this role today — ESL/Kamailio
+# are PBX_TYPE values sip-bridge itself supports, but this role doesn't yet
+# deploy either backend.
+pbx_type: asterisk

@@ -72,7 +72,7 @@ llamenos_postgres_image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2
 llamenos_caddy_image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
 llamenos_rustfs_image: rustfs/rustfs:latest
 llamenos_whisper_image: fedirz/faster-whisper-server:0.4.0-cpu@sha256:f77aaf85e2e811aae96a60b04c85ff7cb0e0f2be6729c6fd7600340842412539 # see #722
-llamenos_asterisk_image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+llamenos_asterisk_image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
 llamenos_signal_image: bbernhard/signal-cli-rest-api:0.92@sha256:702db336aa1a87611595e66755c9ccf65b24c25589857301eabef1d46056b3c5
 llamenos_ntfy_image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
 
@@ -167,10 +167,14 @@ compose_profiles: []
 whisper_model: Systran/faster-whisper-base
 whisper_device: cpu
 
-# Asterisk PBX settings (only used if asterisk is enabled)
+# Asterisk PBX settings (only used if asterisk is enabled). sip-bridge is
+# deployed alongside asterisk automatically — see roles/llamenos-asterisk —
+# there is no separate toggle for it.
 ari_username: llamenos
 ari_password: ""
 bridge_secret: ""
+# pbx_type: asterisk              # roles/llamenos-asterisk/defaults/main.yml
+# sip_bridge_local_port: 3101     # roles/llamenos-asterisk/defaults/main.yml
 
 # Signal bridge settings (only used if signal is enabled).
 # Must match the token configured in the signal-notifier sidecar.

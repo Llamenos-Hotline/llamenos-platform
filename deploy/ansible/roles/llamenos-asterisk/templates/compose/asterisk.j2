@@ -2,10 +2,17 @@ name: llamenos-asterisk
 
 services:
   asterisk:
-    image: {{ llamenos_asterisk_image | default('andrius/asterisk:latest') }}
+    image: {{ llamenos_asterisk_image | default('andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015') }} # 22.x
     restart: unless-stopped
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+    # ari.conf #includes this file for the ARI user's password — Asterisk
+    # cannot read ARI_PASSWORD from its own environment. Mirrors the
+    # `ari_credentials` config in deploy/docker/docker-compose.yml, just
+    # Jinja-rendered here instead of shell-interpolated.
+    configs:
+      - source: ari_credentials
+        target: /run/llamenos/ari-credentials.conf
     networks:
       - llamenos-internal
     healthcheck:
@@ -19,6 +26,43 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Translates ARI events from `asterisk` into the app's webhook format — no
+  # call can route without this (issue #1119). Env comes from .env.asterisk
+  # (templates/env/asterisk.j2), the single source shared with asterisk's
+  # ari_credentials config above.
+  sip-bridge:
+    image: {{ llamenos_app_image }}-sip-bridge
+    restart: unless-stopped
+    env_file:
+      - .env.asterisk
+    # Loopback-only, for the smoke-check health probe — public telephony
+    # traffic reaches this host over SIP/RTP to `asterisk`, never this port.
+    ports:
+      - "127.0.0.1:{{ sip_bridge_local_port | default(3101) }}:3000"
+    networks:
+      - llamenos-internal
+    depends_on:
+      asterisk:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+configs:
+  # Rendered from ari_password so asterisk and sip-bridge share one
+  # credential (see the `asterisk` service's configs: above).
+  ari_credentials:
+    content: |
+      password = {{ ari_password }}
 
 networks:
   llamenos-internal:

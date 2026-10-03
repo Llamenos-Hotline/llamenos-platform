@@ -26,6 +26,7 @@
     _smoke_serves_db: "{{ groups.get('llamenos_db', []) | length == 0 or inventory_hostname in groups.get('llamenos_db', []) }}"
     _smoke_serves_storage: "{{ groups.get('llamenos_storage', []) | length == 0 or inventory_hostname in groups.get('llamenos_storage', []) }}"
     _smoke_serves_ntfy: "{{ groups.get('llamenos_ntfy', []) | length == 0 or inventory_hostname in groups.get('llamenos_ntfy', []) }}"
+    _smoke_serves_asterisk: "{{ groups.get('llamenos_asterisk', []) | length == 0 or inventory_hostname in groups.get('llamenos_asterisk', []) }}"
 
   tasks:
     - name: Initialize smoke-check results
@@ -330,6 +331,37 @@
         smoke_results: "{{ smoke_results + [{'check': 'Signal Notifier sidecar health (port 3100)', 'status': 'PASS' if signal_notifier_check is succeeded else 'FAIL'
           if signal_notifier_check is failed else 'SKIP'}] }}"
       when: llamenos_signal_enabled | default(false) | bool
+      tags: always
+
+    # Catches the class of bug in issue #1119: preflight could report
+    # self-hosted telephony as configured while no call could ever actually
+    # route (no sip-bridge service, no config on disk). A probe that only
+    # checked Asterisk's own health would have passed throughout — Asterisk
+    # came up fine with an empty config directory, it just couldn't route
+    # anything. This hits the bridge, which can only be healthy if it
+    # connected to Asterisk's ARI over the config that was placed on disk.
+    - name: Check SIP bridge health (self-hosted telephony)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ sip_bridge_local_port | default(3101) }}/health"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: sip_bridge_check
+      retries: 3
+      delay: 3
+      ignore_errors: true
+      when:
+        - llamenos_asterisk_enabled | default(false) | bool
+        - _smoke_serves_asterisk | bool
+      tags: always
+
+    - name: Record SIP bridge result
+      ansible.builtin.set_fact:
+        smoke_results: "{{ smoke_results + [{'check': 'SIP bridge health (self-hosted telephony, port ' + (sip_bridge_local_port | default(3101) | string) + ')',
+          'status': 'PASS' if sip_bridge_check is succeeded else 'FAIL' if sip_bridge_check is failed else 'SKIP'}] }}"
+      when:
+        - llamenos_asterisk_enabled | default(false) | bool
+        - _smoke_serves_asterisk | bool
       tags: always
 
     - name: Check update server health (official only)

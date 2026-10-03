@@ -23,6 +23,22 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+# compose/asterisk.j2 bind-mounts ./asterisk-config:/etc/asterisk:ro — without
+# this, Docker silently creates an empty directory and Asterisk starts with no
+# ARI listener, no PJSIP trunk, and no config at all (issue #1119). These are
+# static files, not templates — the ARI password is NOT in here (it comes
+# from the ari_credentials config, templated separately in compose/asterisk.j2
+# from the same ari_password var the sip-bridge env uses).
+- name: Place static Asterisk config (ari.conf, pjsip.conf, extensions.conf, ...)
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../docker/asterisk-config/"
+    dest: "{{ app_dir }}/services/asterisk/asterisk-config/"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0640"
+    directory_mode: "0750"
+  notify: Restart asterisk service
+
 - name: Template asterisk compose file
   ansible.builtin.template:
     src: compose/asterisk.j2

@@ -1,3 +1,15 @@
+# Single source of truth for both services in compose/asterisk.j2 — sip-bridge
+# loads this whole file via env_file (same convention as
+# roles/llamenos-app/templates/env/app.j2; see issue #716). `asterisk` itself
+# gets ARI_PASSWORD via the ari_credentials config instead (it does not read
+# its own environment), but the value must match ARI_PASSWORD here.
 ARI_USERNAME={{ ari_username | default('llamenos') }}
 ARI_PASSWORD={{ ari_password }}
 BRIDGE_SECRET={{ bridge_secret }}
+# PBX_TYPE names the PBX, not the protocol: `asterisk`, never `ari`.
+PBX_TYPE={{ pbx_type | default('asterisk') }}
+ARI_URL=ws://asterisk:8088/ari/events
+ARI_REST_URL=http://asterisk:8088/ari
+WORKER_WEBHOOK_URL=http://app:3000
+BRIDGE_HOST=0.0.0.0
+BRIDGE_PORT=3000
