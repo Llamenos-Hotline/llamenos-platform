@@ -239,6 +239,10 @@ export class BandwidthAdapter implements TelephonyAdapter {
     return this.bxml('<Response><Hangup/></Response>')
   }
 
+  hangupResponse(): TelephonyResponse {
+    return this.bxml('<Response><Hangup/></Response>')
+  }
+
   emptyResponse(): TelephonyResponse {
     return this.bxml('<Response/>')
   }

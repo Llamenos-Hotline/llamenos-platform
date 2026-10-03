@@ -4,7 +4,7 @@
  * Implements step definitions for:
  * - Call simulation lifecycle (incoming call, answer, end, voicemail)
  * - Telephony adapter validation (Twilio, SignalWire, Vonage)
- * - Shift routing (ring groups, busy exclusion, fallback)
+ * - Shift routing (ring groups, fallback)
  * - Incoming message simulation (SMS, WhatsApp)
  */
 import { expect } from '@playwright/test'
@@ -25,6 +25,7 @@ import {
   simulateIncomingMessage,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Local State ──────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ interface CallSimState {
   providerConfig?: Record<string, unknown>
   validationResult?: { valid: boolean; error?: string }
   adapterInstance?: string
-  shiftVolunteers: Array<{ pubkey: string; deviceKey: string; busy?: boolean }>
+  shiftVolunteers: Array<{ pubkey: string; deviceKey: string }>
   ringGroup: string[]
 }
 
@@ -169,39 +170,11 @@ Given('a shift is currently active with {int} volunteers', async ({ request, wor
   }
   const shift = await createShiftViaApi(request, {
     name: uniqueName('Active Shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: getCallSimState(world).shiftVolunteers.map(v => v.pubkey),
     hubId,
   })
   getScenarioState(world).shiftIds.push(shift.id)
-})
-
-Given('a shift with {int} volunteers and {int} is on a call', async ({ request, world }, total: number, busyCount: number) => {
-  const hubId = getScenarioState(world).hubId
-  getCallSimState(world).shiftVolunteers = []
-  for (let i = 0; i < total; i++) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName(`Busy Shift Vol ${i}`) })
-    getCallSimState(world).shiftVolunteers.push({ pubkey: vol.pubkey, deviceKey: vol.deviceKey, busy: i < busyCount })
-    getScenarioState(world).volunteers.push({ ...vol, onShift: true })
-  }
-  const shift = await createShiftViaApi(request, {
-    name: uniqueName('Busy Shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
-    userPubkeys: getCallSimState(world).shiftVolunteers.map(v => v.pubkey),
-    hubId,
-  })
-  getScenarioState(world).shiftIds.push(shift.id)
-
-  // Simulate busy volunteer(s) being on a call
-  for (let i = 0; i < busyCount; i++) {
-    const caller = uniqueCallerNumber()
-    const { callId } = await simulateIncomingCall(request, { callerNumber: caller, hubId })
-    await simulateAnswerCall(request, callId, getCallSimState(world).shiftVolunteers[i].pubkey)
-  }
 })
 
 Given('no shift is active and no fallback is configured', async ({ request, world }) => {
@@ -233,17 +206,13 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
   const hubId = getScenarioState(world).hubId
   await createShiftViaApi(request, {
     name: uniqueName('Overlap Shift A'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol1.pubkey],
     hubId,
   })
   await createShiftViaApi(request, {
     name: uniqueName('Overlap Shift B'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol2.pubkey],
     hubId,
   })
@@ -296,13 +265,6 @@ Then('all {int} volunteers should be in the ring group', async ({ world }, count
   expect(getCallSimState(world).shiftVolunteers.length).toBeGreaterThanOrEqual(count)
 })
 
-Then('only {int} volunteers should be in the ring group', async ({ world }, count: number) => {
-  // The busy volunteer(s) should be excluded
-  expect(getCallSimState(world).callStatus).toBe('ringing')
-  const availableCount = getCallSimState(world).shiftVolunteers.filter(v => !v.busy).length
-  expect(availableCount).toBe(count)
-})
-
 Then('volunteers from both shifts should be in the ring group', async ({ world }) => {
   expect(getCallSimState(world).callStatus).toBe('ringing')
   expect(getCallSimState(world).shiftVolunteers.length).toBeGreaterThanOrEqual(2)
@@ -334,9 +296,7 @@ Given('an incoming call from {string}', async ({ request, world }, callerNumber:
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Sim Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })
@@ -355,9 +315,7 @@ Given('an incoming call from {string} in {string}', async ({ request, world }, c
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Lang Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })
@@ -378,9 +336,7 @@ Given('an incoming call from {string} for hub {string}', async ({ request, world
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Hub Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId: workerHubId,
     })

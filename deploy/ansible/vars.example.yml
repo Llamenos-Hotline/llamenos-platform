@@ -58,7 +58,12 @@ llamenos_signal_enabled: false
 # Pin all images to specific versions + digests for reproducible deployments.
 # Image digests must be re-verified when updating tags.
 # Use: docker inspect --format='{{index .RepoDigests 0}}' <image>:<tag>
-llamenos_app_image: docker.io/llamenos/llamenos:latest # Update on each release
+# REQUIRED. No default: `docker.io/llamenos/llamenos:latest` used to sit here
+# and has never existed — nothing in this project publishes to Docker Hub.
+# Use a fully-qualified reference with an explicit tag, e.g.
+#   ghcr.io/<owner>/llamenos-platform:0.19.18
+# or a tag you side-loaded onto the host with `docker save | ssh ... docker load`.
+llamenos_app_image: ""
 # Pull policy for the app image only: missing (default; use a docker-loaded image,
 # pull only if absent) | always (refresh from a registry every run) | never.
 # Leave unset unless you publish the image to a registry and want `always`.
@@ -104,6 +109,11 @@ webhook_base_url: ""
 # Admin public key (generate with: bun run bootstrap-admin)
 # Ed25519 pubkey of the admin account
 admin_pubkey: ""
+# The admin's X25519 ENCRYPTION public key — a different value from
+# admin_pubkey (which is the Ed25519 SIGNING key). Both are printed by
+# `bun run bootstrap-admin`. Leaving this empty makes the app fall back to
+# admin_pubkey, which seals admin envelopes to a key that cannot open them.
+admin_decryption_pubkey: ""
 
 # HMAC secret for hashing phone numbers and IPs
 # Generate with: openssl rand -hex 32

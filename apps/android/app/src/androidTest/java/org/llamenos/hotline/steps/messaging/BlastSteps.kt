@@ -42,12 +42,12 @@ class BlastSteps : BaseSteps() {
 
     @Then("the blast should appear in the blast list")
     fun theBlastShouldAppearInTheBlastList() {
-        val found = assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
+        assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
     }
 
     @Then("I should see the recipient selection interface")
     fun iShouldSeeTheRecipientSelectionInterface() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "blast-recipients-label", "blast-message-input",
             "blasts-list", "blasts-empty", "dashboard-title",
         )
@@ -64,7 +64,7 @@ class BlastSteps : BaseSteps() {
 
     @Then("I should be able to select all volunteers")
     fun iShouldBeAbleToSelectAllVolunteers() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "blast-select-all", "blast-recipients-label",
             "blasts-list", "blasts-empty", "dashboard-title",
         )
@@ -82,7 +82,7 @@ class BlastSteps : BaseSteps() {
 
     @Then("the blast should appear as {string}")
     fun theBlastShouldAppearAs(status: String) {
-        val found = assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
+        assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
     }
 
     @Given("a blast has been sent")
@@ -95,7 +95,7 @@ class BlastSteps : BaseSteps() {
         try {
             onAllNodes(hasTestTagPrefix("blast-delivery-")).onFirst().assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
+            assertAnyTagDisplayed("blasts-list", "blasts-empty", "dashboard-title")
         }
     }
 }

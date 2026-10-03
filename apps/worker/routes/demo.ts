@@ -19,15 +19,15 @@ let resetInFlight = false
 /**
  * POST /api/demo/reset — wipe all data and re-seed the fixed fictional dataset.
  *
- * Authenticated, instance-admin only, and live only when the deployment opted in
- * with DEMO_MODE=true + DEMO_MODE_CONFIRM=DESTROY_ALL_DATA. Always refused under
- * ENVIRONMENT=production. Lives outside the /test-* dev router on purpose: the
- * dev guard is not widened for demo instances.
+ * Authenticated, instance-admin only, and live only on a development server
+ * that opted in with DEMO_MODE=true + DEMO_MODE_CONFIRM=DESTROY_ALL_DATA: the
+ * reset registers the demo accounts, and their keys exist nowhere else
+ * (lib/demo-identities.ts). Always refused under ENVIRONMENT=production.
  */
 demo.post('/reset',
   describeRoute({
     tags: ['Demo'],
-    summary: 'Wipe all data and re-seed the demo dataset (demo instances only)',
+    summary: 'Wipe all data and re-seed the demo dataset (development servers only)',
     responses: {
       ...authErrors,
       200: { description: 'Data wiped and demo dataset seeded' },

@@ -136,6 +136,20 @@ describe('SettingsService.ensureInit', () => {
     const secondInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
+
+  it('still applies demo seeding after a default-mode init (server boot, then demo seeder)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow()],
+      [makeRole()],
+      [makeSettingsRow({ setupState: null, messagingConfig: null })],
+      [makeRole()],
+    ])
+    await service.ensureInit() // boot
+    const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
+    await service.ensureInit({ DEMO_MODE: 'true' })
+    expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -385,6 +399,19 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
     await expect(
       service.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('tells a self-hosted operator which language a caller hears instead, and that recordings fix it (#1347)', async () => {
+    const { service } = setup()
+    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+      type: 'asterisk',
+      phoneNumber: '+15551234567',
+    } as any)
+
+    // Generated speech has no Tagalog or Mixtec voice (ivr-speech/voices.ts).
+    const refused = service.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
+    await expect(refused).rejects.toMatchObject({ status: 400 })
+    await expect(refused).rejects.toThrow(/cannot speak: tl, mix\. No offline voice exists for them: .*\(tl → en, mix → es\) unless you upload recordings/)
   })
 
   it('accepts a hub override where every language is in the provider catalog', async () => {

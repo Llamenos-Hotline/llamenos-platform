@@ -6,7 +6,7 @@
  * Requires a server started with DEMO_MODE=true + DEMO_MODE_CONFIRM (project backend-bdd-demo-mode).
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then, After } from './fixtures'
+import { Given, When, Then, After, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { setLastResponse } from './shared-state'
 import {
@@ -16,17 +16,32 @@ import {
   apiPost,
   apiPut,
   createHubViaApi,
+  createShiftViaApi,
   createVolunteerViaApi,
   deleteHubViaApi,
   listAuditLogViaApi,
   setFallbackGroupViaApi,
 } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 interface SimulatedCallResponse {
   ok?: boolean
   callId?: string
   volunteersNotified?: number
 }
+
+const SECOND_HUB_KEY = 'demoTelephonySecondHub'
+
+function secondHubId(world: Record<string, unknown>): string {
+  const id = getState<string | undefined>(world, SECOND_HUB_KEY)
+  if (!id) throw new Error('second hub has not been created')
+  return id
+}
+
+After({ tags: '@demo-mode' }, async ({ request, world }) => {
+  const id = getState<string | undefined>(world, SECOND_HUB_KEY)
+  if (id) await deleteHubViaApi(request, id).catch(() => {})
+})
 
 function demoPath(hubId: string, suffix: string): string {
   return `/hubs/${hubId}/demo/telephony${suffix}`
@@ -38,6 +53,25 @@ Given('the hub uses the mock telephony provider', async ({ request, world }) => 
   // Fail loudly when the server is not in demo mode — never pass vacuously.
   expect(res.status, `enabling the mock failed (is the server running with DEMO_MODE=true?): ${JSON.stringify(res.data)}`).toBe(200)
 })
+
+Given(
+  'a second hub with the same {int} volunteers on shift uses the mock telephony provider',
+  async ({ request, world }, count: number) => {
+    const { volunteers } = getScenarioState(world)
+    expect(volunteers.length).toBe(count)
+    const hubId = await createHubViaApi(request, `bdd-demo-b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    setState(world, SECOND_HUB_KEY, hubId)
+    for (const vol of volunteers) await addHubMemberViaApi(request, hubId, vol.pubkey)
+    await createShiftViaApi(request, {
+      name: `BDD Shift B ${Date.now()}`,
+      ...ALWAYS_ON_SHIFT,
+      userPubkeys: volunteers.map(v => v.pubkey),
+      hubId,
+    })
+    const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
+    expect(res.status, `enabling the mock on the second hub failed: ${JSON.stringify(res.data)}`).toBe(200)
+  },
+)
 
 async function setOnBreak(
   request: Parameters<typeof apiPatch>[0],
@@ -106,9 +140,10 @@ async function simulate(
   request: Parameters<typeof apiPost>[0],
   body: Record<string, unknown>,
   seedHex?: string,
+  hubId?: string,
 ) {
   const state = getScenarioState(world)
-  const res = await apiPost<SimulatedCallResponse>(request, demoPath(state.hubId, '/simulate/incoming-call'), body, seedHex)
+  const res = await apiPost<SimulatedCallResponse>(request, demoPath(hubId ?? state.hubId, '/simulate/incoming-call'), body, seedHex)
   state.lastApiResponse = res
   setLastResponse(world, res)
   if (res.status === 200 && res.data.callId) state.callId = res.data.callId
@@ -116,6 +151,10 @@ async function simulate(
 
 When('the admin simulates an incoming call', async ({ request, world }) => {
   await simulate(world, request, {})
+})
+
+When('the admin simulates an incoming call in the second hub', async ({ request, world }) => {
+  await simulate(world, request, {}, undefined, secondHubId(world))
 })
 
 When('the admin simulates an incoming call from {string}', async ({ request, world }, callerNumber: string) => {

@@ -387,63 +387,164 @@ passing one — never counts toward a PR's required contexts. `gh pr view 848
 "the base branch policy prohibits the merge", despite the dispatched run
 having succeeded against the PR's own head SHA.
 
-The fix: `fleet-review.yml` now triggers on `pull_request`, scoped to
-`types: [labeled]`. Applying the `review` label to a PR is the real trigger —
-a `pull_request`-triggered run's check result attaches to the PR's head SHA
-automatically, the same mechanism `fleet/verify` (`fleet-verify.yml`) already
-relies on.
+The fix: `fleet-review.yml` triggers on `pull_request`, scoped to
+`types: [review_requested]` (#1158). **Requesting — or re-requesting — a
+review from `llamenos-auto` is the trigger**, and `rhonda-rodododo` counts on
+the `release` PR. A `pull_request`-triggered run's check result attaches to
+the PR's head SHA automatically, the same mechanism `fleet/verify` relies on.
+
+**`synchronize` was added alongside it at #1284, and it starts nothing.**
+That trigger was forbidden outright until then, for a reason that was true
+when it was written: every run was a model call, so running one per push is
+the provider-quota burn #812 fixed. What changed is that the check run
+attaches to a *commit*. `fleet/review` is required under
+`strict_required_status_checks_policy`, so a rebase moved the head, stranded
+the earned verdict on the old SHA, and left the new head with no
+`fleet/review` at all — a permanent block nothing could clear but removing
+and re-adding the reviewer by hand, ten times in one morning. **"The check
+must EXIST on this head" and "a review is WARRANTED" are two different
+questions, and a rebase changes only the first.**
+
+#1158's verdict cache is what makes answering the first one free: it is keyed
+on the DIFF HASH, so a rebase whose diff is unchanged is a `cache-hit` —
+the stored verdict republished on the new head, with no engine call. A push
+that *did* change the diff has nothing cached and concludes `not-requested`:
+a red check saying so, still no engine call. `run-engine` is unreachable on a
+push, and structurally so rather than incidentally:
+`isRepublishOnlyEvent` (`orchestrator/src/ci.ts`) is passed to
+`decideReviewGate` as `republishOnly`, which refuses `run-engine` outright
+instead of resting on a `synchronize` payload happening to carry no
+`requested_reviewer`. `opened`, `labeled` and `push` remain forbidden.
+
+The republish arm also does not run on `llamenos-review-box`. It cannot reach
+the engine, so it must not queue in front of the reviews that can (one
+machine, `cancel-in-progress: false`), and it must not add PR-triggered runs
+to the host holding the operator's logged-in `claude` session. `runs-on`
+picks the hosted runner from `github.event.action` alone, so it resolves
+before the job starts.
+
+That trigger was `types: [labeled]` until #1158, on the `review` label. Two
+things were wrong with it. Requesting a review is a real, human-meaningful
+act that already means "look at this now"; a label never meant that. And a
+required context producible *only* by a label event has no path forward
+whenever labelling fails — the release PR was never labelled by anything, so
+it could never satisfy the gate at all, while showing no red check (#1114).
 
 #848's own first fix reintroduced the same bug class: it narrowed the
-`labeled` trigger back down with a job-level `if: github.event_name ==
-'workflow_dispatch' || github.event.label.name == 'review'`. GitHub cannot
-filter a `pull_request` trigger by label *value* — only by `types:` — so
-applying any *other* label (e.g. the fleet's own `agent-dispatchable`) still
-instantiated the job, which the `if:` then skipped. `fleet/review`'s own
-verdict caught this on #848 itself, before #848 merged.
+`labeled` trigger back down with a job-level `if:`. GitHub cannot filter a
+`pull_request` trigger by label *value* — nor by *who* a review was requested
+from — only by `types:`, so any other label still instantiated the job, which
+the `if:` then skipped. `fleet/review`'s own verdict caught this on #848
+itself, before #848 merged.
 
-The job now carries **no job-level `if:` at all** — it always runs and always
-reaches a real conclusion, on every `labeled` event. What used to be the
-job's `if:` is instead the **"Decide whether to run the review engine" step**
-— the `review-gate` CLI subcommand (`orchestrator/src/cli.ts`), which wraps
-`decideReviewGate` (`orchestrator/src/ci.ts`) — whose exit code and `outcome`
-output gate every step after it via their own step-level `if:
-steps.gate.outputs.outcome == 'run-engine'`:
+The job therefore carries **no job-level `if:` at all** — it always runs and
+always reaches a real conclusion. What used to be the job's `if:` is the
+**"Decide whether to run the review engine" step** — the `review-gate` CLI
+subcommand (`orchestrator/src/cli.ts`), wrapping `decideReviewGate`
+(`orchestrator/src/ci.ts`) — whose exit code and `outcome` output gate every
+step after it:
 
-- **`cache-hit`** — a prior PASS is cached for this exact diff content
-  (`review-cache.ts`). The gate step exits 0 with `outcome=cache-hit`; every
-  later step (engine install, auth, smoke test, the real review) is skipped
-  by its own `if:`, and the job concludes **SUCCESS** with no engine call at
-  all. This is what makes applying an unrelated label to an already-reviewed
-  PR cheap and non-destructive, instead of either a wasted model call or (the
-  old bug) a silently-satisfied skip.
-- **`run-engine`** — no cached PASS, and this event is the `review` label (or
-  a manual `workflow_dispatch`). The gate step exits 0 with
-  `outcome=run-engine`, and the pipeline runs exactly as before: install the
-  engine, authenticate, smoke-test it, then the real review.
-- **`not-requested`** — no cached PASS, and this event is any other label.
-  The gate step **fails** (exit 1) with "review not requested — add the
-  `review` label to run the non-author review". No engine call, no skip — the
-  job goes red, which is the correct, honest state for a PR nobody has asked
-  to be reviewed yet.
+- **`review-set-unresolved`** — checked first: the PR's labels could not be
+  read, or a review it asks for does not resolve to a known agent. The step
+  **fails**. "We could not work out what to review" never becomes "nothing
+  needed reviewing".
+- **`cache-hit`** — a prior *substantive* verdict is cached for this exact
+  diff content *and* this exact review set (`reviewSetTag`,
+  `review-cache.ts`). No model call either way: a cached PASS exits 0 and the
+  job concludes **SUCCESS**; a cached FAIL exits 1 with the original verdict
+  restated. This is what makes a second review request on an
+  already-reviewed PR cheap.
+
+  Caching only the PASS was measurably expensive (#1158): in one 12-hour
+  window there were 60 Fleet Review runs, 10 on one PR and 8 on another —
+  the two that were *failing*. Every branch-freshness rebase re-fired the
+  gate and the identical diff was reviewed again to reach the identical
+  conclusion. The diff hash is the natural bound: the moment the author
+  pushes anything, the cache is bypassed, which is exactly when a re-review
+  is warranted. **An UNREADABLE is never cached** — a parsed `VERDICT: FAIL`
+  means the reviewer looked and decided, an UNREADABLE means it could not
+  look at all, and pinning an outage to a diff hash would hold the PR red
+  until someone pushed a commit for a reason that had already gone away.
+  One UNREADABLE anywhere in the set suppresses the whole record.
+- **`low-tier`** — the review set is the general reviewer alone, and
+  `tierFor` (`impact.ts`) classifies every changed file Tier 0/1. Exits 0,
+  same as a cached PASS, so a docs-only PR never sits red waiting for a
+  review it will never need. Any *profile* in the set overrides this,
+  whichever input put it there: a tier heuristic does not get to drop a
+  named reviewer without a word.
+- **`not-requested`** — Tier 2, no cached PASS, and this review request was
+  not for us (a human colleague, a team, or not a review-request event). The
+  step **fails** with "request a review from `llamenos-auto`". No model call,
+  no skip.
+- **`run-engine`** — the real review, carrying the resolved review set.
+
+**One check, N reviews (#1158).** The general non-author review always runs.
+Reviewer *profiles* run **concurrently with it, inside the same job**, and
+`fleet/review` is the only check any of them produce. The set is decided from
+two inputs, by `decideReviewSet` (`ci.ts`):
+
+1. the PR's **labels** — a label ending `-reviewer` names an agent in
+   `.claude/agents/`, resolved against the trusted BASE checkout;
+2. the **PR itself** — `requiredAdditionalReviewers` (`review.ts`) puts the
+   crypto reviewer on any crypto diff, by changed path or by the PR's own
+   prose, so a crypto change gets that review whether or not anyone
+   remembered the label.
+
+Labels are a hint and an override, never the only input. The set is decided
+in BASE code, from a live read of the PR, in both the gate step and the
+review step independently — never handed between them through the workflow
+file, which on a `pull_request` event is the PR's own copy and could
+therefore shrink its own review set. Composition is **any FAIL fails**, and
+an UNREADABLE is a FAIL.
+
+**The findings are posted on the PR.** A separate GitHub-hosted job — the
+only one here with write access — posts each reviewer's full text as a PR
+comment, on a FAIL as well as a PASS, and only *then* removes the
+`-reviewer` labels whose review passed. A comment, never a GitHub *review*:
+an approving review from the fleet is one GitHub counts, which is one
+ruleset edit from being an approval the fleet grants itself. Comments carry
+a marker keyed to `(reviewer, diff hash)`, so re-requesting a review on an
+unchanged diff re-posts nothing.
+
+This was a real gap, not a nicety: two `run-engine` reviews ran on #1117 and
+left `pulls/1117/reviews` and `issues/1117/comments` both empty. Both
+substantive findings existed only inside Actions logs, readable via
+`gh run view --log`, while anyone opening the PR saw a red check with no
+reason on it. Leaving actual reviews is also the premise label removal
+depends on — a worklist that clears with no visible trace is worse than one
+that never clears.
+
+A FAIL clears nothing, deliberately: the label is what makes the next request
+re-run that reviewer.
+
+This replaces #1092's per-specialist design, which gave each specialist its
+own job and its own `fleet/review/<agent>` check: N jobs and N
+required-looking contexts for one decision, and a coupling that left #1086
+unmergeable behind `fleet/review/crypto-security-reviewer has no PASS for
+this diff` with no way forward. Those checks are deleted; the ruleset's
+required contexts (`ci-status`, `gitleaks`, `CodeQL`, `fleet/verify`,
+`fleet/review`) never included them, so no ruleset change was needed.
+
+**Adding a reviewer profile** takes an agent definition whose frontmatter
+`name:` equals the profile name and ends `-reviewer`, merged to `main` first
+(the registry is read from the PR's base), plus a label of the same name if
+you want to request it by hand. No workflow change.
 
 A step failing mid-job still reaches a real job conclusion (failure) — unlike
 a job-level `if:`, which can make the whole job report "skipped" and pass
 branch protection regardless (invariant #1, §11). `tests/orchestrator/guards.test.ts`
 pins that no job-level `if:` exists on this job again.
 
-With no label applied at all, the workflow's `on: pull_request: types:
-[labeled]` trigger never fires and the `fleet/review` context stays ABSENT —
-fail closed, same semantics as before. Re-adding the label to unchanged
-content reuses the prior PASS via the diff-content review cache
-(`review-cache.ts`); a FAIL is never cached, so a re-label after a real fix
-reviews again for real. `workflow_dispatch` remains as a manual escape hatch
-(see step 3 above) but is no longer positioned as the primary path, since a
-`workflow_dispatch` run has no PR of its own and cannot satisfy a required
-context on its own. `merge_group` is dropped as a trigger entirely: this
-repo's GitHub merge queue is unavailable today (owner type `User` — the
+With no review ever requested, no `review_requested` event fires. A push may
+still instantiate the job (above), but with nothing cached it concludes
+`not-requested` — red, fail closed — and on a PR that has never been pushed
+since it opened the `fleet/review` context stays ABSENT, which blocks a merge
+exactly as a red check does.
+`workflow_dispatch` remains a manual escape hatch but cannot satisfy a
+required context on its own. `merge_group` is dropped as a trigger entirely:
+this repo's GitHub merge queue is unavailable today (owner type `User` — the
 ruleset's `merge_queue` rule is rejected outright), and re-adding it later
-needs its own request-detection arm and its own rail, not a trigger sitting
-ahead of a queue that does not exist yet.
+needs its own request-detection arm and its own rail.
 
 ### 5.6 Agent-to-agent messaging
 
@@ -692,7 +793,7 @@ via `.claude/agents/fragments/_worker-rules.md`.
 
 **Gating and merges**
 1. A skipped required check counts as SATISFIED — never gate with a job-level `if:` inside a workflow that also triggers on `pull_request` (#844 merged with `fleet/review` reporting "skipping" and no review ever run; §5.5).
-2. Freshness is keyed to the head SHA, never a time window (a clock lets a push slip past a stale PASS).
+2. Freshness is keyed to CONTENT, never a time window (a clock lets a push slip past a stale PASS). A required check must also EXIST on the current head — two different questions, and a rebase changes only the second: `fleet/review` republishes a diff-hash-keyed verdict onto a moved head (#1284) and starts a new review only when the diff itself changed.
 3. Anything a gate calls must already exist on `main` — gate jobs run base-ref code (a PR adding the CLI subcommand a gate invokes would break the gate on itself if not landed first, additively).
 4. Re-run policy is exhaustive, not ad hoc: UNREADABLE verdicts and named Playwright probe-races get one re-run each; infra/network errors get one; a substantive FAIL, lint, typecheck, backend, or build failure never does (re-running is not a bypass; merging past red is).
 5. Never `--admin`, `--force`, `--approve`, `--no-verify`, or a ruleset edit to land a PR (bot-authored PRs need a code-owner approval, given only after the gate passes).

@@ -4,6 +4,29 @@ import XCTest
 /// Maps to scenarios from: emergency-wipe.feature, panic-wipe.feature, Epic 260 hardening
 final class SecurityUITests: BaseUITest {
 
+    /// XCTest kills a test at 180s by default and xcodebuild raises that to
+    /// 300s; this suite drives the PIN lockout policy, which is defined in
+    /// failed ATTEMPTS and cannot be made to need fewer of them.
+    /// `testPINWipeAfterTenFailedAttempts` must enter a full wrong PIN ten
+    /// times to reach `PINLockout.maxAttempts`, and the two lockout tests do
+    /// the same five and six times.
+    ///
+    /// Measured on one commit, one shard, the same 62 tests: 168s on a fast
+    /// GitHub macOS runner and 313s on a slow one — a 1.86x spread in the
+    /// machine alone. The 300s default sits inside that spread, so the suite
+    /// failed whenever the macOS pool was contended, killing the runner
+    /// mid-test and taking the whole shard with it ("** TEST EXECUTE
+    /// FAILED **"), while every other test in the shard passed.
+    ///
+    /// The allowance is raised rather than the work reduced because the work
+    /// IS the behaviour under test. `enterPIN` was also made substantially
+    /// cheaper in the same change; this exists so the outcome does not depend
+    /// on that saving being larger than the runner-to-runner variance.
+    override func setUp() {
+        super.setUp()
+        executionTimeAllowance = 900
+    }
+
     // MARK: - Emergency Wipe (emergency-wipe.feature)
 
     func testEmergencyWipeFromLoginScreen() {
@@ -329,8 +352,11 @@ final class SecurityUITests: BaseUITest {
         when("I open the Device Link view") {
             navigateToAccountSettings()
             scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
+            XCTAssertTrue(
+                find("device-link-view").waitForExistence(timeout: 5),
+                "The Device Link view should open from Account settings"
+            )
+            app.answerSystemPromptOnce(.camera)
         }
         then("the SAS confirm and reject buttons should be defined in the app") {
             // The verifying step is only rendered when a SAS code is received.
@@ -365,8 +391,11 @@ final class SecurityUITests: BaseUITest {
         when("I open the Device Link view") {
             navigateToAccountSettings()
             scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
+            XCTAssertTrue(
+                find("device-link-view").waitForExistence(timeout: 5),
+                "The Device Link view should open from Account settings"
+            )
+            app.answerSystemPromptOnce(.camera)
         }
         then("the error step UI elements should be properly defined") {
             // The error step ("device-link-error") is shown when processQRCode

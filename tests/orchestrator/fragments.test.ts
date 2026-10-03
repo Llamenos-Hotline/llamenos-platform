@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { parseOwnedPaths, matchesPath, loadLaneScopes } from '../../orchestrator/src/fragments.js'
+import {
+  parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES,
+  TEMPLATED_SECRET_PATTERNS, loadLaneScopes,
+} from '../../orchestrator/src/fragments.js'
 
 // Verbatim excerpt of .claude/agents/fragments/ios-supervisor.md
 const IOS = `
@@ -175,6 +178,95 @@ describe('matchesPath', () => {
   })
 })
 
+describe('matchesSecretPath — the never-write matcher (#1253)', () => {
+  // The defect: `.env` is a basename PREFIX pattern, so `matchesPath` judged
+  // `deploy/docker/.env.example` a secret and `fleet/review` refused the PR
+  // that makes a first deploy possible. Five committed templates were caught.
+
+  it('still forbids a real secret at every depth and under every environment name', () => {
+    for (const f of [
+      '.env',
+      'apps/worker/config/.env',
+      'deploy/docker/.env',
+      '.env.local',
+      '.env.production',
+      'deploy/docker/.env.production',
+      // The environment name nobody has added yet: the whole reason this is a
+      // suffix EXCLUSION and not an enumeration of known environments.
+      'deploy/docker/.env.1984',
+      '.env.flokinet',
+    ]) {
+      expect(matchesSecretPath(f, '.env'), `${f} must still be refused`).toBe(true)
+    }
+    expect(matchesSecretPath('apps/android/keystore.properties', 'keystore.properties')).toBe(true)
+    expect(matchesSecretPath('deploy/secrets/prod.pem', '*.pem')).toBe(true)
+    expect(matchesSecretPath('scripts/id_ed25519', 'id_ed25519')).toBe(true)
+  })
+
+  it('permits a committed template of that same secret', () => {
+    expect(matchesSecretPath('deploy/docker/.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('.env.live.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/ios/fastlane/.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/android/keystore.properties.example', 'keystore.properties')).toBe(false)
+  })
+
+  it('exempts only the three documented suffixes, case-sensitively', () => {
+    expect(SECRET_TEMPLATE_SUFFIXES).toEqual(['.example', '.sample', '.template'])
+    expect(matchesSecretPath('.env.sample', '.env')).toBe(false)
+    expect(matchesSecretPath('.env.template', '.env')).toBe(false)
+    // Every one of these is a spelling a real secret could hide behind, so
+    // none of them is exempt.
+    for (const f of ['.env.Example', '.env.EXAMPLE', '.env.exemple', '.env.dist', '.env.tpl', '.env.example.local']) {
+      expect(matchesSecretPath(f, '.env'), `${f} must not be treated as a template`).toBe(true)
+    }
+  })
+
+  it('requires the suffix to be a suffix OF something — a file named only `.example` is not a template', () => {
+    expect(isSecretTemplatePath('.example')).toBe(false)
+    expect(isSecretTemplatePath('deploy/.template')).toBe(false)
+    expect(isSecretTemplatePath('deploy/docker/.env.example')).toBe(true)
+  })
+
+  it('looks at the basename only — a secret inside a directory named `*.example` is still a secret', () => {
+    expect(matchesSecretPath('deploy/docker.example/.env', '.env')).toBe(true)
+  })
+
+  // Break-test 5 (#1256 review): the carve-out is scoped to the two patterns
+  // that a tracked template actually justifies. A template SUFFIX on any
+  // other secret pattern buys nothing today and must not be exempt, so that
+  // a future loosening of `globToRegExp` — or a new directory-shaped secret
+  // pattern — cannot silently inherit an exemption nobody analysed.
+  it('does NOT exempt a template suffix on a pattern with no tracked template to justify it', () => {
+    expect(TEMPLATED_SECRET_PATTERNS).toEqual(['.env', 'keystore.properties'])
+    const notCarvedOut: Array<[string, string]> = [
+      ['.npmrc.example', '.npmrc'],
+      ['deploy/.dev.vars.example', '.dev.vars'],
+      ['scripts/id_rsa.example', 'id_rsa'],
+      ['scripts/id_ed25519.template', 'id_ed25519'],
+      ['home/authorized_keys.template', 'authorized_keys'],
+      ['deploy/.pgpass.sample', '.pgpass'],
+    ]
+    for (const [file, pattern] of notCarvedOut) {
+      expect(matchesSecretPath(file, pattern), `${file} must still be refused by ${pattern}`).toBe(true)
+    }
+  })
+
+  it('carves out only the two justified patterns, so a same-named file under another pattern is unaffected', () => {
+    // `.env.example` is exempt from `.env` and from nothing else.
+    expect(matchesSecretPath('.env.example', '.env')).toBe(false)
+    expect(matchesSecretPath('apps/android/keystore.properties.example', 'keystore.properties')).toBe(false)
+    expect(matchesSecretPath('.npmrc.example', '.npmrc')).toBe(true)
+  })
+
+  it('leaves `matchesPath` itself untouched, so lane OWNERSHIP of a template is unchanged', () => {
+    // If the carve-out had gone into `matchesPath`, a template would stop
+    // matching the `deploy/` its owning lane declares, and the same PR would
+    // fail the same gate as `strayed` instead of `forbidden`.
+    expect(matchesPath('deploy/docker/.env.example', '.env')).toBe(true)
+    expect(matchesPath('deploy/docker/.env.example', 'deploy/')).toBe(true)
+  })
+})
+
 describe('loadLaneScopes against the real fragments', () => {
   // backend and desktop keep their exact-content pin: they're the one pair
   // whose owned/notOwned lists actually overlap (each excludes a path the
@@ -217,6 +309,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'src/server/',
         'tests/steps/backend/',
         'tests/steps/fixtures.ts',
+        'tests/api-helpers.ts',
+        'tests/simulation-helpers.ts',
         '.github/ci/*-baseline.json',
         'eslint.config.js',
         'lefthook.yml',
@@ -224,6 +318,8 @@ describe('loadLaneScopes against the real fragments', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
+        'drizzle/',
+        'drizzle.config.ts',
       ],
       notOwned: [
         'tests/',

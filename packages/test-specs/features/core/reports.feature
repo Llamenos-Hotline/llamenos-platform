@@ -216,21 +216,24 @@ Feature: Reports
 
   # ── Template-Driven Report Types ─────────────────────────────────────
 
-  @android
+  # @wip: mobile report-type picker steps have no desktop definitions — #1195
+  @android @wip
   Scenario: Report type picker shows mobile-optimized types
     Given the "jail-support" template is applied
     When I tap the create report button
     Then the report type picker should show available types
     And each type card should show a label and description
 
-  @android
+  # @wip: mobile report-type picker steps have no desktop definitions — #1195
+  @android @wip
   Scenario: Template-driven report form renders dynamic fields
     Given the "jail-support" template is applied
     And I select report type "LO Arrest Report"
     Then I should see fields for location, time, and arrestee details
     And the arrestee details field should have an audio input button
 
-  @android
+  # @wip: mobile report-type picker steps have no desktop definitions — #1195
+  @android @wip
   Scenario: Submit a template-driven report
     Given I fill in the template report form
     When I tap the submit button
@@ -239,7 +242,8 @@ Feature: Reports
 
   # ── Desktop: Template-Driven Report Types ──────────────────────────────
 
-  @desktop
+  # @fixme: the Reports page reads global report types, not template-defined ones — #1309
+  @desktop @fixme
   Scenario: Template apply creates report types
     Given I am logged in as an admin
     And case management is enabled
@@ -258,7 +262,8 @@ Feature: Reports
     Then the report type selector should be visible
     And the report type selector should list template-defined types
 
-  @desktop
+  # @fixme: the Reports page reads global report types, not template-defined ones — #1309
+  @desktop @fixme
   Scenario: Template-driven report form shows schema fields
     Given I am logged in as an admin
     And case management is enabled

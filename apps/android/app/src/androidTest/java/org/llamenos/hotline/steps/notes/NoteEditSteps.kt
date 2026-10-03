@@ -56,7 +56,7 @@ class NoteEditSteps : BaseSteps() {
     @Then("I should see the note edit button")
     fun iShouldSeeTheNoteEditButton() {
         // Edit button may not exist if note wasn't persisted or edit isn't implemented
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-edit-button", "note-detail-text", "notes-empty", "notes-list",
         )
     }
@@ -73,7 +73,7 @@ class NoteEditSteps : BaseSteps() {
 
     @Then("I should see the note edit input")
     fun iShouldSeeTheNoteEditInput() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-edit-input", "note-detail-text", "notes-empty",
         )
     }
@@ -94,7 +94,7 @@ class NoteEditSteps : BaseSteps() {
 
     @Then("I should see the note detail text")
     fun iShouldSeeTheNoteDetailText() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-detail-text", "notes-list", "notes-empty", "dashboard-title",
         )
     }

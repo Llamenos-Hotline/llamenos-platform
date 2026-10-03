@@ -4,7 +4,7 @@ import SwiftUI
 /// or the request form if not. Accessible from Account Settings.
 struct ErasureRequestView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: ErasureViewModel?
+    @State private var viewModelBox = ViewModelBox<ErasureViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -147,9 +147,9 @@ struct ErasureRequestView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ErasureViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = ErasureViewModel(apiService: appState.apiService)
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

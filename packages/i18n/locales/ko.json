@@ -2,7 +2,7 @@
   "a11y": {
     "clearFilters": "필터 지우기",
     "closeSidebar": "사이드바 닫기",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "copyToClipboard": "클립보드에 복사",
     "deleteItem": "삭제",
     "editItem": "편집",
@@ -633,7 +633,7 @@
     "progressSent": "Sent",
     "progressTitle": "Live Progress",
     "rateLimit": "Rate Limit (msgs/sec)",
-    "recipientCount": "%d recipients",
+    "recipientCount": "{{count}} recipients",
     "recipientCountOne": "1 recipient",
     "recipients": "recipients",
     "retriedCount": "Reset {{count}} deliveries",
@@ -1465,7 +1465,7 @@
   "connectionFailed": "Connection failed",
   "connectionSuccess": "Connection successful",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "contactDirectory": {
     "addIdentifier": "추가",
@@ -1675,7 +1675,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -1861,8 +1861,8 @@
   },
   "dismiss": "Dismiss",
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
@@ -2055,8 +2055,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlRequired": "Hub URL is required",
@@ -2080,9 +2080,9 @@
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
     "title": "Error",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@",
+    "wakeRegisterFailed": "Device registration failed: {{reason}}",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection"
   },
   "eventType": {
@@ -2099,7 +2099,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "{{time}}에 생성",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "description": "Description",
     "descriptionPlaceholder": "Description (optional)",
@@ -2134,6 +2134,7 @@
     "noFields": "맞춤 필드 없음.",
     "noLinkedCases": "연결된 사건 없음.",
     "noLinkedReports": "연결된 보고서 없음.",
+    "noSubEvents": "하위 이벤트 없음.",
     "noTimeline": "No timeline entries yet.",
     "reports": "Reports",
     "searchCases": "사건 검색...",
@@ -2186,10 +2187,10 @@
     "visibleUsers": "Visible to volunteers"
   },
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -2608,7 +2609,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createFieldsLabel": "Details",
     "createSave": "Save",
     "createSaving": "Encrypting & saving...",
@@ -2860,15 +2861,15 @@
     "enterPin": "Enter your PIN",
     "keyLocked": "Key is locked",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
-    "lockoutRemaining": "Locked out. Try again in %d seconds.",
+    "lengthOption": "{{count}} digits",
+    "lockoutRemaining": "Locked out. Try again in {{seconds}} seconds.",
     "mismatch": "PIN이 일치하지 않습니다. 다시 시도해 주세요.",
     "placeholder": "PIN or passphrase (8+ characters)",
     "setEncrypting": "Encrypting your key...",
     "setSubtitle": "Choose a 6-8 digit PIN to protect your key",
     "setTitle": "Create a PIN",
     "tooShort": "PIN은 6자리여야 합니다",
-    "unlockAttempts": "%d of %d attempts used",
+    "unlockAttempts": "{{used}} of {{total}} attempts used",
     "unlockSubtitle": "Enter your PIN to unlock",
     "unlockTitle": "Enter your PIN",
     "unlockVerifying": "Verifying..."
@@ -3291,7 +3292,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option",
@@ -3510,7 +3511,7 @@
     "default": "Default",
     "description": "Description",
     "fields": "Fields",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "fieldsLabel": "Fields",
     "fileAttachments": "File Attachments",
     "interactions": "Interactions",
@@ -3525,7 +3526,7 @@
     "required": "Required",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -3918,7 +3919,7 @@
       "since": "Clocked in since {{time}}",
       "title": "Active Volunteers"
     },
-    "activeCalls": "%d active call(s)",
+    "activeCalls": "{{count}} active call(s)",
     "assignUsers": "자원봉사자 배정",
     "assigned": "Assigned",
     "availability": {
@@ -3939,7 +3940,7 @@
     "clockOutTitle": "End Shift?",
     "clockedIn": "You are now on shift",
     "clockedOut": "You are now off shift",
-    "count": "%d shift(s)",
+    "count": "{{count}} shift(s)",
     "create": "Create Shift",
     "createShift": "교대 생성",
     "days": {
@@ -4026,7 +4027,7 @@
     "selectedCount": "{{count}}명 선택됨",
     "shiftName": "교대 이름",
     "signUp": "Sign Up",
-    "signedUp": "Signed up for %@",
+    "signedUp": "Signed up for {{shift}}",
     "since": "Since",
     "startTime": "시작 시간",
     "startsAt": "시작 시각",
@@ -4464,7 +4465,7 @@
     "biometricReason": "Unlock Llamenos",
     "subtitle": "Enter your PIN to unlock",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "unregisterSignal": "Unregister Signal",
   "updateRequired": {
@@ -4626,7 +4627,7 @@
     "connected": "Connected",
     "connecting": "Connecting...",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "yes": "Yes",
   "yourIdentity": "Your Identity",
@@ -4659,7 +4660,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "deepLinkConfirmCancel": "Cancel"
 }

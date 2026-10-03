@@ -5,7 +5,7 @@
  * and volunteer presence derived from shifts + active calls.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, desc, sql, gte, lte, count, or, lt } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { ServiceError } from './settings'
@@ -92,6 +92,28 @@ export class CallsService {
     }
 
     return active
+  }
+
+  /**
+   * Pubkeys of every user who is currently on a live call in ANY hub.
+   *
+   * A volunteer has one phone and one pair of ears, so "busy" is instance-wide: being
+   * `answeredBy` on an in-progress call in hub A makes them unavailable for hub B's calls.
+   * In-progress rows past the stale TTL are ignored (they are reaped by getActiveCalls).
+   */
+  async getBusyPubkeys(): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ answeredBy: activeCalls.answeredBy })
+      .from(activeCalls)
+      .where(
+        and(
+          eq(activeCalls.status, 'in-progress'),
+          gte(activeCalls.startedAt, new Date(Date.now() - IN_PROGRESS_TTL_MS)),
+        ),
+      )
+    const busy = new Set<string>()
+    for (const row of rows) if (row.answeredBy) busy.add(row.answeredBy)
+    return busy
   }
 
   /** Count calls started today (active + historical) */
@@ -186,7 +208,13 @@ export class CallsService {
     return row
   }
 
-  /** Mark a call as answered by a volunteer */
+  /**
+   * Mark a call as answered by a volunteer — first pickup wins.
+   *
+   * The UPDATE is conditional on the call still ringing and unanswered, so of any
+   * number of concurrent answers exactly one gets a row back. Everyone else gets
+   * 409 (call exists but is already taken/ended) or 404 (no such call).
+   */
   async answerCall(hubId: string, callId: string, pubkey: string): Promise<ActiveCallRow> {
     const [row] = await this.db
       .update(activeCalls)
@@ -199,15 +227,17 @@ export class CallsService {
         and(
           eq(activeCalls.callId, callId),
           eq(activeCalls.hubId, hubId),
+          eq(activeCalls.status, 'ringing'),
+          isNull(activeCalls.answeredBy),
         ),
       )
       .returning()
 
-    if (!row) {
-      throw new ServiceError(404, 'Call not found')
-    }
+    if (row) return row
 
-    return row
+    const existing = await this.getActiveCallById(hubId, callId)
+    if (!existing) throw new ServiceError(404, 'Call not found')
+    throw new ServiceError(409, 'Call already answered')
   }
 
   /**

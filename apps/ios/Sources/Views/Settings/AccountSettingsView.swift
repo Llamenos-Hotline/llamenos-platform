@@ -28,7 +28,9 @@ struct AccountSettingsView: View {
         .navigationTitle(NSLocalizedString("settings_account_title", comment: "Account"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showDeviceLink) {
-            DeviceLinkView()
+            NavigationStack {
+                DeviceLinkView()
+            }
         }
         .overlay(alignment: .bottom) {
             if showCopyConfirmation {
@@ -94,6 +96,9 @@ struct AccountSettingsView: View {
                             .foregroundStyle(Color.brandPrimary)
                     }
                 }
+                // Keep the copy button's own identifier: without this the row's
+                // identifier is pushed onto every child, the button included.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-signing-pubkey")
             }
 
@@ -125,6 +130,9 @@ struct AccountSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                // Keep the copy button's own identifier: without this the row's
+                // identifier is pushed onto every child, the button included.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-encryption-pubkey")
             }
 

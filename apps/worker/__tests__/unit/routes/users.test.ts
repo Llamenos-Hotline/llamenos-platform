@@ -116,7 +116,7 @@ describe('users routes', () => {
 
       const res = await app.request('/users/u1')
       expect(res.status).toBe(200)
-      expect(getUserSpy).toHaveBeenCalledWith('u1')
+      expect(getUserSpy).toHaveBeenCalledWith('u1', undefined)
     })
   })
 
@@ -221,7 +221,7 @@ describe('users routes', () => {
       })
 
       expect(res.status).toBe(200)
-      expect(updateUserSpy).toHaveBeenCalledWith('u1', { name: 'Updated' }, true)
+      expect(updateUserSpy).toHaveBeenCalledWith('u1', { name: 'Updated' }, true, undefined)
     })
 
     it('revokes sessions when deactivating user', async () => {

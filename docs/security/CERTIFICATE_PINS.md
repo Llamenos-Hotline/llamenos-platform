@@ -2,9 +2,20 @@
 
 ## Production SPKI Hashes
 
+The production API is served from `api.<domain>` (`api.llamenos-hotline.org` for the reference
+deployment). Caddy on that host terminates TLS itself with a Let's Encrypt certificate — there is no
+CDN in front of it, so the chain these commands print is the chain clients actually pin against.
+`app.<domain>` has no DNS record and no Caddy vhost; see `docs/deployment/first-deploy.md`.
+
+Note that the commands below print the **leaf** and **intermediate** SPKI hashes. The pins actually
+shipped (below) are **root CA** pins, regenerated from the published ISRG root certificates — see the
+`curl https://letsencrypt.org/certs/isrgrootx1.pem | ...` recipe in
+`apps/android/app/src/main/res/xml/network_security_config.xml`. Use the commands below to inspect a
+deployed chain, not to produce the pin-set values.
+
 Extract with:
 ```bash
-openssl s_client -connect app.llamenos-hotline.org:443 </dev/null 2>/dev/null \
+openssl s_client -connect api.llamenos-hotline.org:443 </dev/null 2>/dev/null \
   | openssl x509 -pubkey -noout \
   | openssl pkey -pubin -outform der \
   | openssl dgst -sha256 -binary \
@@ -13,7 +24,7 @@ openssl s_client -connect app.llamenos-hotline.org:443 </dev/null 2>/dev/null \
 
 For intermediate CA (pin this as backup, rotate leaf pin independently):
 ```bash
-openssl s_client -connect app.llamenos-hotline.org:443 -showcerts </dev/null 2>/dev/null \
+openssl s_client -connect api.llamenos-hotline.org:443 -showcerts </dev/null 2>/dev/null \
   | awk '/BEGIN CERT/{c++} c==2{print}' \
   | openssl x509 -pubkey -noout \
   | openssl pkey -pubin -outform der \

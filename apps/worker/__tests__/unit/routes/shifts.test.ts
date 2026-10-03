@@ -24,6 +24,7 @@ function createTestApp(opts: {
     shifts: serviceMock.shifts || {},
     settings: serviceMock.settings || {},
     activeShifts: serviceMock.activeShifts || {},
+    shiftAvailability: serviceMock.shiftAvailability || {},
     audit: serviceMock.audit || { log: vi.fn().mockResolvedValue(undefined) },
   }
 
@@ -204,6 +205,57 @@ describe('shifts routes', () => {
       const { app } = createTestApp({ permissions: ['other:read'] })
       const res = await app.request('/shifts')
       expect(res.status).toBe(403)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // DELETE /shifts/availability/:id — self-service unless shifts:manage
+  // -------------------------------------------------------------------------
+
+  describe('DELETE /shifts/availability/:id', () => {
+    const block = (userPubkey: string) => ({
+      id: 'blk-1', hubId: 'hub-1', userPubkey, startDate: '2026-09-01', endDate: '2026-09-07',
+      encryptedReason: null, createdAt: new Date(),
+    })
+
+    it('deletes the caller\'s own block', async () => {
+      const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const { app } = createTestApp({
+        permissions: ['shifts:set-availability'],
+        hubId: 'hub-1',
+        serviceMock: { shiftAvailability: { get: vi.fn().mockResolvedValue(block('a'.repeat(64))), delete: deleteSpy } },
+      })
+
+      const res = await app.request('/shifts/availability/blk-1', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-1', 'blk-1')
+    })
+
+    it('reports another user\'s block as not found and leaves it in place', async () => {
+      const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const { app } = createTestApp({
+        permissions: ['shifts:set-availability'],
+        hubId: 'hub-1',
+        serviceMock: { shiftAvailability: { get: vi.fn().mockResolvedValue(block('b'.repeat(64))), delete: deleteSpy } },
+      })
+
+      const res = await app.request('/shifts/availability/blk-1', { method: 'DELETE' })
+      expect(res.status).toBe(404)
+      expect(deleteSpy).not.toHaveBeenCalled()
+    })
+
+    it('lets shifts:manage delete any user\'s block', async () => {
+      const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const getSpy = vi.fn().mockResolvedValue(block('b'.repeat(64)))
+      const { app } = createTestApp({
+        permissions: ['shifts:set-availability', 'shifts:manage'],
+        hubId: 'hub-1',
+        serviceMock: { shiftAvailability: { get: getSpy, delete: deleteSpy } },
+      })
+
+      const res = await app.request('/shifts/availability/blk-1', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-1', 'blk-1')
     })
   })
 

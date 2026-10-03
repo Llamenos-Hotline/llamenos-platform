@@ -17,6 +17,7 @@ import {
   ADMIN_SEED,
   apiGet,
   apiPost,
+  apiPatch,
   apiPut,
   apiDelete,
   createHubViaApi,
@@ -26,6 +27,7 @@ import {
   addHubMemberViaApi,
   generateTestKeypair,
   uniqueName,
+  uniquePhone,
 } from '../../api-helpers'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -34,6 +36,13 @@ interface HubWithAdmin {
   hubId: string
   adminSeed: string
   adminPubkey: string
+}
+
+/** A user created by a scenario, addressed by its Gherkin label */
+interface NamedUser {
+  pubkey: string
+  seedHex: string
+  name: string
 }
 
 interface IsolationState {
@@ -45,12 +54,65 @@ interface IsolationState {
   hubAPhoneNumber?: string
   /** Whether acting as super admin (ADMIN_SEED) */
   isSuperAdmin: boolean
+  /** Users created by the hub user-directory scenarios, by label */
+  users: Record<string, NamedUser>
+}
+
+interface ListedUser {
+  pubkey: string
+  name: string
+  hubRoles?: Array<{ hubId: string; roleIds: string[] }>
 }
 
 const KEY = 'hub_isolation'
 
 function getIS(world: Record<string, unknown>): IsolationState {
   return getState<IsolationState>(world, KEY)
+}
+
+function hubOf(state: IsolationState, hubName: string): HubWithAdmin {
+  return hubName === 'hub-a' ? state.hubA : state.hubB
+}
+
+function namedUser(state: IsolationState, label: string): NamedUser {
+  const user = state.users[label]
+  expect(user, `user "${label}" was never created by this scenario`).toBeDefined()
+  return user
+}
+
+/** Signing seed for a Gherkin actor: a hub's admin, or a user the scenario created */
+function actorSeed(state: IsolationState, actor: string): string {
+  if (actor === 'admin-a') return state.hubA.adminSeed
+  if (actor === 'admin-b') return state.hubB.adminSeed
+  return namedUser(state, actor).seedHex
+}
+
+/** Add `pubkey` to a hub, failing the scenario if the membership was not written */
+async function addMember(
+  request: Parameters<typeof apiPost>[0],
+  hubId: string,
+  pubkey: string,
+  roleIds: string[],
+): Promise<void> {
+  const res = await apiPost(request, `/hubs/${hubId}/members`, { pubkey, roleIds })
+  expect(res.status, `adding ${pubkey.slice(0, 8)} to hub ${hubId}`).toBe(200)
+}
+
+function record(world: Record<string, unknown>, res: { status: number; data: unknown }): void {
+  getIS(world).lastRes = res
+  setLastResponse(world, res)
+}
+
+/**
+ * The users of the last successful list response. Asserts the 200 first, so a
+ * "does not contain" check can never pass vacuously on an error response.
+ */
+function listedUsers(state: IsolationState): ListedUser[] {
+  expect(state.lastRes).toBeDefined()
+  expect(state.lastRes!.status).toBe(200)
+  const users = (state.lastRes!.data as { users?: ListedUser[] }).users
+  expect(Array.isArray(users)).toBe(true)
+  return users!
 }
 
 // ── Hooks ──────────────────────────────────────────────────────────
@@ -99,6 +161,7 @@ Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
     hubA: { hubId: hubAId, adminSeed: adminA.seedHex, adminPubkey: adminA.pubkey },
     hubB: { hubId: hubBId, adminSeed: adminB.seedHex, adminPubkey: adminB.pubkey },
     isSuperAdmin: false,
+    users: {},
   } satisfies IsolationState)
 
   // Register hub mappings for shared steps
@@ -163,6 +226,33 @@ Given('{string} does not have permission {string}', async () => {
 Given('{string} is authenticated for hub {string}', async () => {
   // Authentication is handled per-request via the seed hex
 })
+
+// ── Hub user directory (#1044) ─────────────────────────────────────
+
+Given('{string} is a hub admin of hub {string}', async ({ request, world }, adminName: string, hubName: string) => {
+  const state = getIS(world)
+  const admin = adminName === 'admin-a' ? state.hubA : state.hubB
+  await addMember(request, hubOf(state, hubName).hubId, admin.adminPubkey, ['role-hub-admin'])
+})
+
+Given('user {string} is a member of hub {string} only', async ({ request, world }, label: string, hubName: string) => {
+  const state = getIS(world)
+  const user = await createUserViaApi(request, { name: uniqueName(label), roleIds: ['role-volunteer'] })
+  await addMember(request, hubOf(state, hubName).hubId, user.pubkey, ['role-volunteer'])
+  state.users[label] = { pubkey: user.pubkey, seedHex: user.seedHex, name: user.name }
+})
+
+Given(
+  'user {string} is a member of hubs {string} and {string}',
+  async ({ request, world }, label: string, firstHub: string, secondHub: string) => {
+    const state = getIS(world)
+    const user = await createUserViaApi(request, { name: uniqueName(label), roleIds: ['role-volunteer'] })
+    await addMember(request, hubOf(state, firstHub).hubId, user.pubkey, ['role-volunteer'])
+    await addMember(request, hubOf(state, secondHub).hubId, user.pubkey, ['role-volunteer'])
+    state.users[label] = { pubkey: user.pubkey, seedHex: user.seedHex, name: user.name }
+  },
+)
+
 
 // ── When ───────────────────────────────────────────────────────────
 
@@ -284,7 +374,126 @@ When('I GET provider status for all hubs', async ({ request, world }) => {
   setLastResponse(world, state.lastRes)
 })
 
+When('{string} lists the users of hub {string}', async ({ request, world }, actor: string, hubName: string) => {
+  const state = getIS(world)
+  record(world, await apiGet(request, `/hubs/${hubOf(state, hubName).hubId}/users`, actorSeed(state, actor)))
+})
+
+When('the super admin lists the users of hub {string}', async ({ request, world }, hubName: string) => {
+  record(world, await apiGet(request, `/hubs/${hubOf(getIS(world), hubName).hubId}/users`, ADMIN_SEED))
+})
+
+When(
+  '{string} gets user {string} through hub {string}',
+  async ({ request, world }, actor: string, label: string, hubName: string) => {
+    const state = getIS(world)
+    const target = namedUser(state, label)
+    record(world, await apiGet(
+      request,
+      `/hubs/${hubOf(state, hubName).hubId}/users/${target.pubkey}`,
+      actorSeed(state, actor),
+    ))
+  },
+)
+
+When(
+  '{string} renames user {string} through hub {string}',
+  async ({ request, world }, actor: string, label: string, hubName: string) => {
+    const state = getIS(world)
+    const target = namedUser(state, label)
+    record(world, await apiPatch(
+      request,
+      `/hubs/${hubOf(state, hubName).hubId}/users/${target.pubkey}`,
+      { name: 'Renamed across hubs' },
+      actorSeed(state, actor),
+    ))
+  },
+)
+
+When(
+  '{string} deletes user {string} through hub {string}',
+  async ({ request, world }, actor: string, label: string, hubName: string) => {
+    const state = getIS(world)
+    const target = namedUser(state, label)
+    record(world, await apiDelete(
+      request,
+      `/hubs/${hubOf(state, hubName).hubId}/users/${target.pubkey}`,
+      actorSeed(state, actor),
+    ))
+  },
+)
+
+When(
+  '{string} lists the cases of user {string} through hub {string} for hub {string}',
+  async ({ request, world }, actor: string, label: string, hubName: string, queryHub: string) => {
+    const state = getIS(world)
+    const target = namedUser(state, label)
+    record(world, await apiGet(
+      request,
+      `/hubs/${hubOf(state, hubName).hubId}/users/${target.pubkey}/cases?hubId=${hubOf(state, queryHub).hubId}`,
+      actorSeed(state, actor),
+    ))
+  },
+)
+
+When(
+  '{string} creates user {string} through hub {string}',
+  async ({ request, world }, actor: string, label: string, hubName: string) => {
+    const state = getIS(world)
+    const { seedHex, pubkey } = generateTestKeypair()
+    const name = uniqueName(label)
+    record(world, await apiPost(
+      request,
+      `/hubs/${hubOf(state, hubName).hubId}/users`,
+      { name, phone: uniquePhone(), roleIds: ['role-volunteer'], pubkey },
+      actorSeed(state, actor),
+    ))
+    state.users[label] = { pubkey, seedHex, name }
+  },
+)
+
 // ── Then ───────────────────────────────────────────────────────────
+
+Then('the user list contains {string}', async ({ world }, label: string) => {
+  const state = getIS(world)
+  const pubkeys = listedUsers(state).map(u => u.pubkey)
+  expect(pubkeys).toContain(namedUser(state, label).pubkey)
+})
+
+Then('the user list does not contain {string}', async ({ world }, label: string) => {
+  const state = getIS(world)
+  const users = listedUsers(state)
+  const target = namedUser(state, label)
+  expect(users.map(u => u.pubkey)).not.toContain(target.pubkey)
+  // Name and phone are the protected fields — neither may appear anywhere in the body
+  expect(JSON.stringify(state.lastRes!.data)).not.toContain(target.name)
+})
+
+Then(
+  '{string} is listed with role assignments for hub {string} only',
+  async ({ world }, label: string, hubName: string) => {
+    const state = getIS(world)
+    const target = namedUser(state, label)
+    const listed = listedUsers(state).find(u => u.pubkey === target.pubkey)
+    expect(listed).toBeDefined()
+    expect((listed!.hubRoles ?? []).map(hr => hr.hubId)).toEqual([hubOf(state, hubName).hubId])
+  },
+)
+
+Then('the returned user has role assignments for hub {string} only', async ({ world }, hubName: string) => {
+  const state = getIS(world)
+  expect(state.lastRes).toBeDefined()
+  expect(state.lastRes!.status).toBe(200)
+  const returned = state.lastRes!.data as ListedUser
+  expect((returned.hubRoles ?? []).map(hr => hr.hubId)).toEqual([hubOf(state, hubName).hubId])
+})
+
+Then('user {string} still exists with their original name', async ({ request, world }, label: string) => {
+  const target = namedUser(getIS(world), label)
+  const res = await apiGet<{ pubkey: string; name: string }>(request, `/users/${target.pubkey}`, ADMIN_SEED)
+  expect(res.status).toBe(200)
+  expect(res.data.name).toBe(target.name)
+})
 
 Then('the response does not contain hub-a config', async ({ world }) => {
   const state = getIS(world)

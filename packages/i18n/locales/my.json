@@ -14,7 +14,7 @@
     "themeLight": "လင်းသောအပြင်အဆင်",
     "themeSystem": "စနစ်အပြင်အဆင်",
     "back": "နောက်သို့",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "စာရင်းသွင်းသူ မရှိသေးပါ",
     "optOutFooter": "ရပ်ဆိုင်းခြင်း အောက်ခြေစာသား",
     "rateLimit": "ပို့နှုန်းကန့်သတ်ချက် (မက်ဆေ့ချ်/စက္ကန့်)",
-    "recipientCount": "လက်ခံသူ %d ဦး",
+    "recipientCount": "လက်ခံသူ {{count}} ဦး",
     "recipientCountOne": "လက်ခံသူ ၁ ဦး",
     "recipients": "လက်ခံသူများ",
     "saveDraft": "မူကြမ်းသိမ်းမည်",
@@ -935,19 +935,19 @@
     "dotFilled": "ဖြည့်ပြီး",
     "enterPin": "သင့် PIN ကို ရိုက်ထည့်ပါ",
     "keyLocked": "သော့ကို သော့ခတ်ထားသည်",
-    "lockoutRemaining": "သော့ခတ်ထားသည်။ %d စက္ကန့်အကြာ ထပ်ကြိုးစားပါ။",
+    "lockoutRemaining": "သော့ခတ်ထားသည်။ {{seconds}} စက္ကန့်အကြာ ထပ်ကြိုးစားပါ။",
     "mismatch": "PIN များ မကိုက်ညီပါ။ ထပ်ကြိုးစားပါ။",
     "setEncrypting": "သင့်သော့ကို စာဝှက်နေသည်...",
     "setSubtitle": "သင့်သော့ကို ကာကွယ်ရန် ဂဏန်း ၆-၈ လုံး PIN ရွေးချယ်ပါ",
     "setTitle": "PIN ဖန်တီးပါ",
     "tooShort": "PIN သည် ဂဏန်း ၆ လုံး ဖြစ်ရမည်",
-    "unlockAttempts": "ကြိုးစားမှု %d/%d အသုံးပြုပြီး",
+    "unlockAttempts": "ကြိုးစားမှု {{used}}/{{total}} အသုံးပြုပြီး",
     "unlockSubtitle": "ဖွင့်ရန် သင့် PIN ကို ရိုက်ထည့်ပါ",
     "unlockTitle": "သင့် PIN ကို ရိုက်ထည့်ပါ",
     "unlockVerifying": "စစ်ဆေးနေသည်...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1422,7 +1422,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "လက်ရှိခေါ်ဆိုမှု %d ခု",
+    "activeCalls": "လက်ရှိခေါ်ဆိုမှု {{count}} ခု",
     "assigned": "သတ်မှတ်ပြီး",
     "available": "ရရှိနိုင်သည်",
     "clockIn": "အလှည့်ဝင်မည်",
@@ -1431,7 +1431,7 @@
     "clockOutTitle": "အလှည့်ပြီးဆုံးမည်လား?",
     "clockedIn": "သင်သည် ယခု အလှည့်တွင် ရှိနေပါပြီ",
     "clockedOut": "သင်သည် ယခု အလှည့်ပြင်ပတွင် ရှိပါပြီ",
-    "count": "အလှည့် %d ခု",
+    "count": "အလှည့် {{count}} ခု",
     "create": "အလှည့်ဖန်တီးမည်",
     "createShift": "အလှည့်ဖန်တီးမည်",
     "days": {
@@ -1476,7 +1476,7 @@
     "selectedCount": "{{count}} ခု ရွေးချယ်ပြီး",
     "shiftName": "အလှည့်အမည်",
     "signUp": "စာရင်းသွင်းမည်",
-    "signedUp": "%@ အတွက် စာရင်းသွင်းပြီး",
+    "signedUp": "{{shift}} အတွက် စာရင်းသွင်းပြီး",
     "since": "မှစ၍",
     "startTime": "စတင်ချိန်",
     "startsAt": "စတင်ချိန်",
@@ -3607,7 +3607,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -3819,7 +3819,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -3846,6 +3846,7 @@
     "noFields": "No custom fields defined for this event type.",
     "noLinkedCases": "No cases linked to this event.",
     "noLinkedReports": "No reports linked to this event.",
+    "noSubEvents": "No sub-events for this event.",
     "noTimeline": "No timeline entries yet.",
     "searchCases": "Search cases...",
     "searchPlaceholder": "Search events...",
@@ -3874,7 +3875,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -3976,7 +3977,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -3987,7 +3988,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -4230,8 +4231,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -4254,9 +4255,9 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "select": {
     "placeholder": "ရွေးချယ်ပါ..."
@@ -4304,7 +4305,7 @@
     "connecting": "ချိတ်ဆက်နေသည်...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "methodSms": "SMS",
   "verificationCodeLabel": "စစ်ဆေးကုဒ်",
@@ -4332,7 +4333,7 @@
     "subtitle": "ဖွင့်ရန် သင့် PIN ကို ရိုက်ထည့်ပါ",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "notificationChannelGeneral": "အထွေထွေ",
   "adminEntityType": {
@@ -4459,7 +4460,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4472,7 +4473,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4511,16 +4512,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4633,7 +4634,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",

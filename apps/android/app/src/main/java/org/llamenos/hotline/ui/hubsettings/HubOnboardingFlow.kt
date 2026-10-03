@@ -38,14 +38,17 @@ import org.llamenos.protocol.HubOnboardingState
 import org.llamenos.protocol.ProviderTemplate
 
 /**
- * Steps in the onboarding wizard.
+ * Steps in the onboarding wizard. [key] is the server step each screen completes
+ * (ONBOARDING_STEPS in apps/worker/services/provider-setup/hub-onboard.ts); the
+ * summary screen completes `channel_setup`, after which the server marks the
+ * onboarding complete.
  */
 private enum class OnboardingStep(val key: String, val labelResId: Int) {
     TEMPLATE("template_selection", R.string.hub_onboarding_step_template),
     CHANNELS("channel_selection", R.string.hub_onboarding_step_channels),
     PROVIDER("provider_connection", R.string.hub_onboarding_step_provider),
     PHONE_NUMBER("phone_number", R.string.hub_onboarding_step_phone_number),
-    SUMMARY("summary", R.string.hub_onboarding_step_summary),
+    SUMMARY("channel_setup", R.string.hub_onboarding_step_summary),
 }
 
 /**
@@ -68,7 +71,7 @@ fun HubOnboardingFlow(
     channels: ChannelConfig,
     onSelectTemplate: (String?) -> Unit,
     onToggleChannel: (String, Boolean) -> Unit,
-    onCompleteStep: (String, Map<String, String>) -> Unit,
+    onCompleteStep: (step: String, channelConfig: ChannelConfig?) -> Unit,
     onNavigateToProviderSetup: () -> Unit,
     onNavigateToPhoneNumbers: () -> Unit,
     onDismiss: () -> Unit,
@@ -153,7 +156,7 @@ fun HubOnboardingFlow(
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                onCompleteStep("channel_selection", emptyMap())
+                                onCompleteStep(OnboardingStep.CHANNELS.key, channels)
                                 currentStep = OnboardingStep.PROVIDER
                             },
                             modifier = Modifier
@@ -208,7 +211,7 @@ fun HubOnboardingFlow(
                             Spacer(modifier = Modifier.width(8.dp))
                             Button(
                                 onClick = {
-                                    onCompleteStep("provider_connection", emptyMap())
+                                    onCompleteStep(OnboardingStep.PROVIDER.key, null)
                                     currentStep = OnboardingStep.PHONE_NUMBER
                                 },
                                 modifier = Modifier
@@ -258,7 +261,7 @@ fun HubOnboardingFlow(
                             Spacer(modifier = Modifier.width(8.dp))
                             Button(
                                 onClick = {
-                                    onCompleteStep("phone_number", emptyMap())
+                                    onCompleteStep(OnboardingStep.PHONE_NUMBER.key, null)
                                     currentStep = OnboardingStep.SUMMARY
                                 },
                                 modifier = Modifier
@@ -304,7 +307,7 @@ fun HubOnboardingFlow(
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
-                            onClick = { onCompleteStep("summary", emptyMap()) },
+                            onClick = { onCompleteStep(OnboardingStep.SUMMARY.key, null) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("onboarding-complete"),

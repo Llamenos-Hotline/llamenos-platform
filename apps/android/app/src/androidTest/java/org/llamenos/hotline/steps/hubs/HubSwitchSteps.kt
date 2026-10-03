@@ -60,9 +60,11 @@ class HubSwitchSteps : BaseSteps() {
         // Launch the app (creates identity and navigates to dashboard).
         navigateToMainScreen()
 
-        // Promote the test user to super-admin so GET /api/hubs returns hubs
-        // (test-create-hub doesn't add the test user as member, and non-member
-        // users can't see hubs they don't belong to).
+        // Promote the test user to super-admin so GET /api/hubs returns hubs.
+        // POST /api/hubs grants membership to its CREATOR, which is the harness's
+        // admin identity — not this device's identity, which the app generated at
+        // launch a moment ago. Non-member users cannot see hubs they don't belong
+        // to, so the device identity still needs a role to list them.
         val entryPoint = EntryPointAccessors.fromApplication(
             LlamenosApp.instance,
             CryptoEntryPoint::class.java,

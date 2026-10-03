@@ -74,6 +74,18 @@ const services: Services = createServices(db, {
 })
 console.log('[llamenos] Services initialized')
 
+// --- Seed defaults and the configured admin before anything serves ---
+// Settings first: the roles table must be populated before the admin user
+// exists, or a request authenticating in between resolves role-super-admin
+// against an empty table and is refused (see the ordering note in
+// routes/dev.ts test-reset). Both only fill what is missing, so they are safe
+// on every boot against an existing database. Mode-specific seeding (demo
+// accounts, a pre-completed setup) stays with the demo/dev flows that own it.
+// A failure here must stop the boot: a server without roles cannot authorise.
+await services.settings.ensureInit()
+await services.identity.ensurePlatformAdmin()
+console.log('[llamenos] Default settings, roles and platform admin ensured')
+
 // --- Startup: warn if any plaintext (un-encrypted) contacts exist ---
 try {
   const [result] = await db
@@ -103,8 +115,10 @@ const env: Record<string, unknown> = {
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || '',
   DEMO_MODE: process.env.DEMO_MODE || undefined,
   DEMO_MODE_CONFIRM: process.env.DEMO_MODE_CONFIRM || undefined,
+  // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
+  DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
-  R2_BUCKET: createBlobStorage(),
+  BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,
@@ -124,6 +138,31 @@ const env: Record<string, unknown> = {
   NOTIFIER_TOKEN_SECRET: notifierTokenSecret || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
+  // --- Push delivery ---
+  // This object IS the request env: anything absent here is permanently
+  // undefined to every route, no matter what the deploy writes into the
+  // container. These eight were written by the deploy templates and read by
+  // the push code, but never bridged, so both push transports were inert on
+  // every deployment. `validateConfig()` could not surface it either — it
+  // reads process.env directly, so startup reported push as configured while
+  // the routes saw nothing. Keep this literal explicit (no ...process.env
+  // spread, which would widen what routes can read) and add a key here
+  // whenever a route starts reading a new variable.
+  //
+  // iOS APNs — apps/worker/lib/voip-push.ts:37,76-78,
+  //            apps/worker/lib/push-dispatch.ts:82,209-211
+  APNS_KEY_P8: process.env.APNS_KEY_P8 || undefined,
+  APNS_KEY_ID: process.env.APNS_KEY_ID || undefined,
+  APNS_TEAM_ID: process.env.APNS_TEAM_ID || undefined,
+  // Android UnifiedPush/ntfy — apps/worker/lib/voip-push.ts:38,115,
+  //   apps/worker/lib/push-dispatch.ts:83,143-144,
+  //   apps/worker/lib/ntfy-origin.ts:74-79 (device endpoints are accepted only
+  //   on these origins, so without NTFY_PUBLIC_URL every device registered on
+  //   the public vhost is rejected).
+  NTFY_URL: process.env.NTFY_URL || undefined,
+  NTFY_AUTH_TOKEN: process.env.NTFY_AUTH_TOKEN || undefined,
+  NTFY_PUBLIC_URL: process.env.NTFY_PUBLIC_URL || undefined,
+  NTFY_ALLOWED_ORIGINS: process.env.NTFY_ALLOWED_ORIGINS || undefined,
 }
 
 // --- Initialize WebSocket relay ---

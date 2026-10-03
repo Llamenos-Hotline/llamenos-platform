@@ -17,6 +17,15 @@ on:
         default: false
         required: false
 
+# Two Ansible runs against one VPS interleave their `docker compose up` and
+# their sshd restarts. `release.yml` dispatches this workflow on every
+# release while an operator can also dispatch it by hand, so the overlap is
+# reachable, not theoretical. deploy-prod.yml has always had this block;
+# this one was missing it.
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: read
@@ -24,7 +33,10 @@ permissions:
 jobs:
   deploy-demo:
     name: Deploy to Demo VPS
-    runs-on: [self-hosted, linux, x64]
+    # `[self-hosted, linux, x64]` alone also matches llamenos-review-box,
+    # which is not provisioned to deploy. Every other self-hosted job in
+    # this repo pins the full label set; this one did not.
+    runs-on: [self-hosted, linux, x64, hetzner, llamenos]
     environment: demo
     timeout-minutes: 30
 
@@ -49,9 +61,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Each secret below is later written to a file with `printf '%s' "$VAR"`,
+      # which SUCCEEDS on an unset secret and leaves a 0-byte file. Ansible
+      # then reads the empty inventory, matches no hosts, and EXITS 0 — so a
+      # missing secret does not fail this workflow, it makes it report success
+      # having deployed nothing. Fail here, before anything is written, and
+      # name every missing secret at once rather than one per re-run.
+      #
+      # Only names are printed. Never echo a secret's value.
+      - name: Verify required secrets are present
+        env:
+          DEMO_INVENTORY_YML: ${{ secrets.DEMO_INVENTORY_YML }}
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          DEMO_VARS_YML_ENCRYPTED: ${{ secrets.DEMO_VARS_YML_ENCRYPTED }}
+          DEMO_SSH_PRIVATE_KEY: ${{ secrets.DEMO_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in DEMO_INVENTORY_YML ANSIBLE_VAULT_PASSWORD \
+                      DEMO_VARS_YML_ENCRYPTED DEMO_SSH_PRIVATE_KEY; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            for name in "${missing[@]}"; do
+              echo "::error::required secret $name is unset or empty"
+            done
+            echo "Set them in the repository's 'demo' environment, then re-dispatch." >&2
+            exit 1
+          fi
+          echo "All 4 required secrets are present."
+
       - name: Install Ansible
         run: |
-          pip install ansible
+          # Pinned to the same version CI validates the playbooks against
+          # (ci.yml's ansible-lint job). Unpinned, an upstream ansible release
+          # could change collection behaviour under a deploy with nothing in
+          # this repo having changed — ansible.cfg's header already documents
+          # one such breakage from a community.general bump.
+          pip install ansible==14.1.0
           ansible-galaxy collection install community.docker
 
       - name: Write Ansible inventory
@@ -83,6 +130,29 @@ jobs:
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
           echo "$SSH_KEY" | ssh-add -
           ssh-keyscan -H "$(grep ansible_host deploy/ansible/inventory-demo.yml | head -1 | awk '{print $2}')" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # `ansible-playbook` against an inventory that matches no hosts prints
+      # two WARNINGs and exits 0, so every play is skipped and the job goes
+      # green having done nothing. The secret guard above stops the empty-file
+      # case; this stops the subtler one — a syntactically valid inventory
+      # that simply has no `demo` group (the shipped inventory.example.yml
+      # defines `llamenos_servers`, not `demo`, so this is an easy mistake).
+      - name: Verify the inventory resolves at least one demo host
+        working-directory: deploy/ansible
+        run: |
+          set -euo pipefail
+          if ! ansible -i inventory-demo.yml demo --list-hosts > hosts.txt 2>err.txt; then
+            echo "::error::inventory-demo.yml is not a parseable Ansible inventory"
+            sed -e 's/^/  /' err.txt >&2
+            exit 1
+          fi
+          count=$(sed -n 's/^[[:space:]]*hosts (\([0-9][0-9]*\)):.*/\1/p' hosts.txt | head -1)
+          rm -f hosts.txt err.txt
+          if [ "${count:-0}" -lt 1 ]; then
+            echo "::error::inventory-demo.yml matched 0 hosts for the 'demo' group — every play would be skipped and this job would pass having deployed nothing"
+            exit 1
+          fi
+          echo "inventory-demo.yml resolves $count host(s) in group 'demo'."
 
       - name: Deploy demo instance
         working-directory: deploy/ansible

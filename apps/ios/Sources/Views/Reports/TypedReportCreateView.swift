@@ -209,16 +209,10 @@ struct TypedReportCreateView: View {
         case .text, .textarea:
             if case .string(let str) = value {
                 if let minLen = validation.minLength, Double(str.count) < minLen {
-                    return String(
-                        format: NSLocalizedString("field_validation_min_length", comment: "Must be at least %d characters"),
-                        Int(minLen)
-                    )
+                    return L10n.format("field_validation_min_length", comment: "Must be at least %d characters", Int(minLen))
                 }
                 if let maxLen = validation.maxLength, Double(str.count) > maxLen {
-                    return String(
-                        format: NSLocalizedString("field_validation_max_length", comment: "Must be at most %d characters"),
-                        Int(maxLen)
-                    )
+                    return L10n.format("field_validation_max_length", comment: "Must be at most %d characters", Int(maxLen))
                 }
                 if let pattern = validation.pattern {
                     let regex = try? NSRegularExpression(pattern: pattern)
@@ -232,16 +226,10 @@ struct TypedReportCreateView: View {
         case .number:
             if case .int(let num) = value {
                 if let min = validation.min, Double(num) < min {
-                    return String(
-                        format: NSLocalizedString("field_validation_min", comment: "Must be at least %d"),
-                        Int(min)
-                    )
+                    return L10n.format("field_validation_min", comment: "Must be at least %d", Int(min))
                 }
                 if let max = validation.max, Double(num) > max {
-                    return String(
-                        format: NSLocalizedString("field_validation_max", comment: "Must be at most %d"),
-                        Int(max)
-                    )
+                    return L10n.format("field_validation_max", comment: "Must be at most %d", Int(max))
                 }
             }
 
@@ -890,10 +878,7 @@ struct TypedReportCreateView: View {
             }
 
             if !hasValue {
-                errorMessage = String(
-                    format: NSLocalizedString("note_create_field_required", comment: "%@ is required"),
-                    field.label
-                )
+                errorMessage = L10n.format("note_create_field_required", comment: "%@ is required", field.label)
                 return
             }
         }

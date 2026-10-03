@@ -44,7 +44,7 @@ class ReportClaimSteps : BaseSteps() {
     @Then("I should see the report claim button")
     fun iShouldSeeTheReportClaimButton() {
         // Claim button only appears on reports with "waiting" status — may not exist
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-claim-button", "report-detail-title", "reports-empty", "reports-list",
         )
     }

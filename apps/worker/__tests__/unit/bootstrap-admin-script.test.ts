@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes } from '@noble/hashes/utils.js'
-import { deriveAdminKeys, generateAdminKeys, formatBootstrapOutput } from '../../../../scripts/lib/bootstrap-admin-keys'
+import { deriveAdminKeys, generateAdminKeys, formatBootstrapOutput } from '../../../../scripts/bootstrap-admin'
 import { deviceEncryptionPubkeyFromSigningSeed } from '../../../../tests/crypto-helpers'
 
 const SCRIPT = path.resolve(__dirname, '../../../../scripts/bootstrap-admin.ts')
@@ -104,15 +104,15 @@ describe('bootstrap-admin output (CLI)', () => {
 describe('deriveAdminKeys', () => {
   it('derives both public keys from one seed, distinct from the seed and each other', () => {
     const keys = generateAdminKeys()
-    expect(new Set([keys.seedHex, keys.signingPubkeyHex, keys.encryptionPubkeyHex]).size).toBe(3)
-    expect(keys.signingPubkeyHex).toMatch(HEX64)
-    expect(keys.encryptionPubkeyHex).toMatch(HEX64)
+    expect(new Set([keys.seedHex, keys.identityPubkey, keys.decryptionPubkey]).size).toBe(3)
+    expect(keys.identityPubkey).toMatch(HEX64)
+    expect(keys.decryptionPubkey).toMatch(HEX64)
   })
 
   it('matches the client-side derivation for arbitrary seeds', () => {
     for (let i = 0; i < 5; i++) {
       const keys = generateAdminKeys()
-      expect(keys.encryptionPubkeyHex).toBe(deviceEncryptionPubkeyFromSigningSeed(keys.seedHex))
+      expect(keys.decryptionPubkey).toBe(deviceEncryptionPubkeyFromSigningSeed(keys.seedHex))
     }
   })
 
