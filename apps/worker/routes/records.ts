@@ -45,12 +45,16 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
   if (checkPermission(permissions, 'cases:read-all')) return 'all'
   if (checkPermission(permissions, 'cases:read-assigned')) return 'assigned'
   if (checkPermission(permissions, 'cases:read-own')) return 'own'
-  // Backward-compat alias: before the entity-unification migration, `events:read`
-  // granted unscoped read access to every event in the hub — there was no
-  // row-level scoping on the old events table. Events are now records with
-  // category:"event", so the alias preserves that unscoped access instead of
-  // silently locking out anyone who still carries the legacy permission.
-  if (checkPermission(permissions, 'events:read')) return 'all'
+  // Backward-compat alias: a caller who still only carries the legacy
+  // `events:read` permission (pre-entity-unification) is not locked out of
+  // /records entirely, but is NOT granted hub-wide read access either —
+  // `events:read` never implied visibility into every case record (PII,
+  // medical cases, etc.), only into the old events table. Map it to the
+  // most restrictive real level ('own': assigned-to/created-by only) so the
+  // permission check passes without widening what the caller can actually
+  // see. See entity-unification.feature "events:read permission maps to
+  // cases:read".
+  if (checkPermission(permissions, 'events:read')) return 'own'
   return null
 }
 
