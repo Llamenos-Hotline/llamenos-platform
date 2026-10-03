@@ -145,6 +145,12 @@ private func ffiMobileSetHubKey(hubId: String, keyHex: String) throws {
     try mobileSetHubKey(hubId: hubId, keyHex: keyHex)
 }
 
+// Rust builds the envelope (version + LABEL_HUB_KEY_WRAP's registry id) and opens it;
+// the unwrapped key goes straight into Rust state.
+private func ffiMobileLoadHubKey(hubId: String, enc: String, ct: String) throws {
+    try mobileLoadHubKey(hubId: hubId, enc: enc, ct: ct)
+}
+
 private func ffiMobileHasHubKey(hubId: String) -> Bool {
     mobileHasHubKey(hubId: hubId)
 }
@@ -244,6 +250,25 @@ final class CryptoService: @unchecked Sendable {
         return try ffiMobileCreateAuthToken(timestamp: timestamp, method: method, path: path)
     }
 
+    // MARK: - Wire Envelopes
+
+    /// HPKE envelope format version (`ENVELOPE_VERSION` in packages/crypto/src/hpke_envelope.rs).
+    private static let hpkeEnvelopeVersion: UInt8 = 3
+
+    /// Rebuild an HPKE envelope from the `{enc, ct}` pair stored on the server.
+    ///
+    /// The wire format drops `labelId`, so the reader supplies it — and it must be the
+    /// registry ID of the SAME label the envelope is then opened with. `hpke_open`
+    /// rejects an envelope whose `labelId` resolves to any other label (the Albrecht
+    /// check), so a wrong ID is not a harmless default: it makes every open fail
+    /// (#1328). The ID comes from the generated `CryptoLabelIds`, never a literal.
+    static func wireEnvelope(enc: String, ct: String, label: String) throws -> HpkeEnvelope {
+        guard let labelId = CryptoLabelIds.id(for: label) else {
+            throw CryptoServiceError.decryptionFailed("Unregistered crypto label")
+        }
+        return HpkeEnvelope(v: hpkeEnvelopeVersion, labelId: labelId, enc: enc, ct: ct)
+    }
+
     // MARK: - Note Encryption (HPKE)
 
     func encryptNote(payload: String, recipientPubkeys: [String]) throws -> (ciphertextHex: String, envelopes: [(pubkey: String, envelope: HpkeEnvelope)]) {
@@ -262,9 +287,12 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - Note Decryption (HPKE)
 
-    func decryptNote(ciphertextHex: String, envelope: HpkeEnvelope) throws -> String {
+    /// Decrypt a note from its ciphertext and this reader's wire envelope `{enc, ct}`.
+    func decryptNote(ciphertextHex: String, enc: String, ct: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: CryptoLabels.LABEL_NOTE_KEY, aadHex: "")
+        let label = CryptoLabels.LABEL_NOTE_KEY
+        let envelope = try Self.wireEnvelope(enc: enc, ct: ct, label: label)
+        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: label, aadHex: "")
         let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex)
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted note")
@@ -291,9 +319,13 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - Message Decryption (HPKE)
 
-    func decryptMessage(encryptedContent: String, envelope: HpkeEnvelope) throws -> String {
+    /// Decrypt a message-pattern payload (`LABEL_MESSAGE`) from its ciphertext and
+    /// this reader's wire envelope `{enc, ct}`.
+    func decryptMessage(encryptedContent: String, enc: String, ct: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: CryptoLabels.LABEL_MESSAGE, aadHex: "")
+        let label = CryptoLabels.LABEL_MESSAGE
+        let envelope = try Self.wireEnvelope(enc: enc, ct: ct, label: label)
+        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: label, aadHex: "")
         let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: encryptedContent, keyHex: keyHex)
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted message")
@@ -433,9 +465,7 @@ final class CryptoService: @unchecked Sendable {
     func loadHubKey(hubId: String, envelope: HubKeyEnvelopeResponse) throws {
         guard !hasHubKey(hubId: hubId) else { return }
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: envelope.envelope.enc, ct: envelope.envelope.ct)
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: hpkeEnvelope, expectedLabel: CryptoLabels.LABEL_HUB_KEY_WRAP, aadHex: "")
-        try ffiMobileSetHubKey(hubId: hubId, keyHex: keyHex)
+        try ffiMobileLoadHubKey(hubId: hubId, enc: envelope.envelope.enc, ct: envelope.envelope.ct)
     }
 
     /// Evict all hub keys from Rust memory. Called on lock and logout.
@@ -562,10 +592,11 @@ final class CryptoService: @unchecked Sendable {
         guard let myEnv = adminEnvelopes.first(where: { $0.pubkey == ourPubkey }) else { return nil }
 
         do {
-            let hpkeEnvelope = HpkeEnvelope(v: 3, labelId: 0, enc: myEnv.enc, ct: myEnv.ct)
+            let label = CryptoLabels.LABEL_CALL_META
+            let hpkeEnvelope = try Self.wireEnvelope(enc: myEnv.enc, ct: myEnv.ct, label: label)
             let keyHex = try ffiMobileHpkeOpenKey(
                 envelope: hpkeEnvelope,
-                expectedLabel: CryptoLabels.LABEL_CALL_META,
+                expectedLabel: label,
                 aadHex: ""
             )
             let plaintextHex = try ffiMobileSymmetricDecrypt(

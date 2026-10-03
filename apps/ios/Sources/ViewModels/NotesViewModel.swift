@@ -170,37 +170,28 @@ final class NotesViewModel {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
         // Find our envelope — check author envelope first (volunteer's own note)
-        var envelope: HpkeEnvelope?
+        var wire: (enc: String, ct: String)?
 
         if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-            envelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: authorEnv.enc,
-                ct: authorEnv.ct
-            )
+            wire = (authorEnv.enc, authorEnv.ct)
         }
 
         // Then check admin envelopes
-        if envelope == nil, let adminEnvs = encrypted.adminEnvelopes {
+        if wire == nil, let adminEnvs = encrypted.adminEnvelopes {
             if let ourEnvelope = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                envelope = HpkeEnvelope(
-                    v: 3,
-                    labelId: 0,
-                    enc: ourEnvelope.enc,
-                    ct: ourEnvelope.ct
-                )
+                wire = (ourEnvelope.enc, ourEnvelope.ct)
             }
         }
 
-        guard let hpkeEnvelope = envelope else {
+        guard let wire else {
             return nil
         }
 
         do {
             let decryptedJSON = try cryptoService.decryptNote(
                 ciphertextHex: encrypted.encryptedContent,
-                envelope: hpkeEnvelope
+                enc: wire.enc,
+                ct: wire.ct
             )
 
             let decoder = JSONDecoder()
