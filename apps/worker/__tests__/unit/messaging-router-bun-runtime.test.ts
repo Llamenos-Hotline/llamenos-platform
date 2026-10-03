@@ -61,6 +61,8 @@ function makeServices(auditLog: ReturnType<typeof vi.fn>) {
         isNew: false,
         status: 'active',
       }),
+      // A hub-scoped webhook dispatches a push to the assignee; nobody is assigned here.
+      getById: vi.fn().mockResolvedValue({ assignedTo: null, channelType: 'sms' }),
     },
   } as unknown as Services
 }
@@ -80,8 +82,8 @@ async function createBunShapedApp(services: Services) {
   return app
 }
 
-function postWebhook(app: Awaited<ReturnType<typeof createBunShapedApp>>) {
-  return app.request('/api/messaging/sms/webhook', {
+function postWebhook(app: Awaited<ReturnType<typeof createBunShapedApp>>, query = '') {
+  return app.request(`/api/messaging/sms/webhook${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 'SM-1132' }),
@@ -142,5 +144,25 @@ describe('messaging webhook on a runtime with no ExecutionContext (Bun) — #113
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+})
+
+describe('messaging webhook files the conversation under the webhook hub', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(getMessagingAdapterFromService).mockResolvedValue(makeAdapter())
+  })
+
+  // The router scoped every event, assignment, push and audit entry to ?hub= but
+  // created the conversation itself with no hub, so the hub-scoped conversation
+  // list of every member of that hub never showed it.
+  it('passes ?hub= through to the conversation it creates', async () => {
+    const services = makeServices(vi.fn().mockResolvedValue(undefined))
+    const app = await createBunShapedApp(services)
+
+    const res = await postWebhook(app, '?hub=hub-inbound')
+
+    expect(res.status).toBe(200)
+    expect(services.conversations.handleIncoming).toHaveBeenCalledWith(incoming, 'a'.repeat(64), 'hub-inbound')
   })
 })

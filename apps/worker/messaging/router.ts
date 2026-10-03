@@ -254,8 +254,9 @@ messaging.post('/:channel/webhook',
     }
   }
 
-  // Forward to ConversationsService for processing
-  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_PUBKEY)
+  // Forward to ConversationsService for processing, filed under the webhook's hub —
+  // the same hub every event, assignment, push and audit entry below is scoped to.
+  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_PUBKEY, hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {

@@ -2,11 +2,12 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { listNotes, createNote, updateNote, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
+import { resolveCallHubId } from '@/lib/call-hubs'
 import { useToast } from '@/lib/toast'
 import type { NotePayload } from '@shared/types'
 import { StickyNote, Plus, Pencil, Lock, Mic, X, Search, ChevronLeft, ChevronRight, Download, MessageCircle, Send } from 'lucide-react'
@@ -177,6 +178,8 @@ function NotesPage() {
 
   async function handleCreateNote(callId: string, text: string, fields: Record<string, string | number | boolean>) {
     if (!hasDeviceKey || !publicKey || !text.trim() || !callId.trim()) return
+    // A note about a call belongs to the call's hub, which may not be the active one.
+    const hubId = resolveCallHubId(callId, getActiveHub())
     setSaving(true)
     try {
       const payload: NotePayload = { text }
@@ -184,7 +187,7 @@ function NotesPage() {
       const authorPub = publicKey
       const adminPub = adminDecryptionPubkey || authorPub
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
-      const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes })
+      const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
       setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
       setTotal(prev => prev + 1)
       setShowNewNote(false)

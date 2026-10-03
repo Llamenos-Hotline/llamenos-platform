@@ -22,9 +22,12 @@ export async function createNote(data: {
   encryptedContent: string
   authorEnvelope?: import('@shared/types').KeyEnvelope
   adminEnvelopes?: import('@shared/types').RecipientEnvelope[]
-}, hubId?: string) {
-  // A note about a call belongs to the call's hub, which may not be the active one.
-  return request<{ note: EncryptedNote }>(hubId ? hubPath(hubId, '/notes') : hp('/notes'), {
+}, hubId: string | null) {
+  // A note belongs to the hub of the call/conversation it is about, which may not be
+  // the active one (multi-hub axiom). `hubId` is therefore required: omitting it is a
+  // type error instead of a silent filing into the active hub. `null` is only for an
+  // instance with no hub scope at all.
+  return request<{ note: EncryptedNote }>(hubId ? hubPath(hubId, '/notes') : '/notes', {
     method: 'POST',
     body: JSON.stringify(data),
   })
