@@ -39,7 +39,8 @@ SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/
 # codegen — so no iOS, Android, crypto or other-platform job can observe a
 # change to one. Each maps to its own consumer's flag instead of the matrix:
 #   vitest.unit.*          -> backend       (backend-unit)
-#   vitest.integration.*   -> backend       (no CI job runs it yet — #1167)
+#   vitest.integration.*   -> backend       (backend-integration, which runs it
+#                                           against a real postgres service; #1167)
 #   vitest.desktop.*       -> desktop       (desktop-unit)
 #   vitest.orchestrator.*  -> orchestrator  (backend-unit's fleet-tests step)
 # Before this, the two fleet PRs that touched only vitest.orchestrator.config.ts
@@ -95,8 +96,10 @@ DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.
 #
 # This stays an EXCLUDE list rather than becoming an include list on purpose.
 # An include list makes "a new test directory gates nothing" the default, which
-# is the same silent-non-execution failure this repo already has three open
-# issues for (#1126, #1153, #1167). Excluding fails toward running too much,
+# is the same silent-non-execution failure this repo has filed repeatedly
+# (#1126 and #1153 still open; #1167 was this exact failure for the worker
+# integration suite, and took five months to notice). Excluding fails toward
+# running too much,
 # which costs minutes; including fails toward running nothing, which costs a
 # regression nobody sees.
 #
