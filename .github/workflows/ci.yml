@@ -1596,11 +1596,19 @@ jobs:
 
       # Every value a production bring-up requires. Generated, never real: this
       # stack is destroyed at the end of the job and never reachable off-runner.
+      # The admin keys are a real derived pair, not two placeholders: ADMIN_PUBKEY is
+      # Ed25519 and ADMIN_DECRYPTION_PUBKEY is the X25519 HPKE recipient derived from
+      # the same seed. Both are required once either is set, and they must differ —
+      # the app refuses to boot otherwise rather than seal admin envelopes to a
+      # signing key, which succeeds and makes every note undecryptable (#1283).
+      # This job asserts the DEFAULT deployment boots, so its .env must carry exactly
+      # what a self-hoster is told to set.
       - name: Write a production .env
         run: |
           set -euo pipefail
           cat > .env <<ENVEOF
-          ADMIN_PUBKEY=0000000000000000000000000000000000000000000000000000000000000001
+          ADMIN_PUBKEY=${{ env.TEST_ADMIN_PUBKEY }}
+          ADMIN_DECRYPTION_PUBKEY=${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
           SERVER_SECRET=0000000000000000000000000000000000000000000000000000000000000001
           HMAC_SECRET=$(openssl rand -hex 32)
           PG_PASSWORD=$(openssl rand -hex 16)
