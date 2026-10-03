@@ -163,6 +163,69 @@ describe('KamailioClient', () => {
     })
   })
 
+  describe('setDispatcherState', () => {
+    it('sends state code 0 (active) for the configured set, scoped to the given URI', async () => {
+      let sentBody: { method: string; params: unknown[] } | undefined
+      mockFetch((_url, init) => {
+        sentBody = JSON.parse(String(init?.body))
+        return jsonRpcResponse(null)
+      })
+
+      await client.setDispatcherState('sip:10.0.0.1:5060', 'active')
+
+      expect(sentBody?.method).toBe('dispatcher.set_state')
+      expect(sentBody?.params).toEqual([0, 1, 'sip:10.0.0.1:5060'])
+    })
+
+    it('sends state code 1 (inactive)', async () => {
+      let sentBody: { params: unknown[] } | undefined
+      mockFetch((_url, init) => {
+        sentBody = JSON.parse(String(init?.body))
+        return jsonRpcResponse(null)
+      })
+
+      await client.setDispatcherState('sip:10.0.0.1:5060', 'inactive')
+
+      expect(sentBody?.params).toEqual([1, 1, 'sip:10.0.0.1:5060'])
+    })
+
+    it('scopes set_state to a non-default dispatcher set', async () => {
+      const scoped = new KamailioClient({ jsonrpcUrl: 'http://kamailio:5060/jsonrpc', dispatcherSetId: 7 })
+      let sentBody: { params: unknown[] } | undefined
+      mockFetch((_url, init) => {
+        sentBody = JSON.parse(String(init?.body))
+        return jsonRpcResponse(null)
+      })
+
+      await scoped.setDispatcherState('sip:10.0.0.1:5060', 'active')
+
+      expect(sentBody?.params).toEqual([0, 7, 'sip:10.0.0.1:5060'])
+    })
+
+    it('propagates a JSONRPC error (e.g. unknown URI)', async () => {
+      mockFetch(() => jsonRpcError(-32000, 'target not found'))
+
+      await expect(client.setDispatcherState('sip:unknown:5060', 'active')).rejects.toThrow(
+        'target not found',
+      )
+    })
+  })
+
+  describe('reloadDispatchers', () => {
+    it('calls dispatcher.reload with no params', async () => {
+      let sentBody: { method: string; params: unknown[] } | undefined
+      mockFetch((_url, init) => {
+        sentBody = JSON.parse(String(init?.body))
+        return jsonRpcResponse(null)
+      })
+
+      await client.reloadDispatchers()
+
+      expect(sentBody?.method).toBe('dispatcher.reload')
+      expect(sentBody?.params).toEqual([])
+    })
+  })
+
   describe('connect', () => {
     it('succeeds when health check passes', async () => {
       mockFetch(() => jsonRpcResponse({ version: '5.7' }))
