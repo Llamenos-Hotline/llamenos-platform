@@ -1,5 +1,11 @@
 Llamenos has been deployed!
 
+IMPORTANT: this chart runs exactly 1 replica of the app, by design. Call
+routing, ringing state, and WebSocket/relay sessions are process-local —
+there is no shared pub/sub or sticky routing, so a second replica silently
+breaks call handling instead of failing loudly. Do not edit app.replicas or
+reintroduce autoscaling without first adding that shared state.
+
 1. Get the application URL:
 {{- if .Values.ingress.enabled }}
 {{- range $host := .Values.ingress.hosts }}

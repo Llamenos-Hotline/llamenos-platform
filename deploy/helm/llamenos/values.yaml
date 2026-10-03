@@ -2,10 +2,22 @@
 
 app:
   image:
-    repository: ghcr.io/your-org/llamenos
+    # REQUIRED — no default. `.github/workflows/docker.yml` publishes the app
+    # image to Docker Hub (`docker.io/<DOCKERHUB_USERNAME>/llamenos`), not
+    # GHCR — set this to wherever your own build actually pushed it. A chart
+    # that filled in a plausible-looking default here (as this one used to:
+    # `ghcr.io/your-org/llamenos`) fails with a silent, confusing
+    # ImagePullBackOff instead of a clear error at install time (#1120).
+    repository: ""
     tag: ""  # Defaults to Chart.appVersion
     pullPolicy: IfNotPresent
-  replicas: 2
+  # Llamenos is NOT safe to run with more than one replica yet: call routing,
+  # ringing state, and WebSocket/relay sessions are process-local, and there
+  # is no shared pub/sub or sticky routing in front of them (#1120). A second
+  # pod silently drops calls rung on the first and misses events published by
+  # it. templates/deployment-app.yaml refuses to render above 1 — change both
+  # together, and only once that shared state exists.
+  replicas: 1
   port: 3000
   resources:
     requests:
@@ -68,6 +80,13 @@ whisper:
       cpu: "2"
       memory: 4Gi
 
+# NOT YET WIRED: asterisk, sipBridge, ntfy and signal below are declared here
+# (and sipBridge.bridgeSecret is even rendered into the Secret, see
+# templates/secret.yaml) but none of them has a Deployment/StatefulSet
+# template. Enabling any of them creates config and no workload — it deploys
+# nothing. Tracked as follow-up work, separate from #1120; left in place
+# rather than deleted so the intent and required secret shape aren't lost.
+
 # Asterisk PBX
 asterisk:
   enabled: false
@@ -112,13 +131,10 @@ signal:
   persistence:
     size: 1Gi
 
-# Autoscaling
-autoscaling:
-  enabled: false
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
+# Autoscaling is deliberately NOT an option: every mechanism for running more
+# than one `app` replica is removed together (#1120) — see the comment on
+# `app.replicas` above. Re-add only alongside the shared session/call state
+# that would make a second replica safe, not before.
 
 # Prometheus metrics scraping
 # metrics.enabled gates the ServiceMonitor; set metrics.scrapeTokenSecret to the K8s

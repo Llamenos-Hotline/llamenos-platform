@@ -1,3 +1,15 @@
+{{- /*
+  Llamenos is not multi-instance safe: call routing, ringing state and
+  WebSocket/relay sessions are process-local, and this chart has no shared
+  pub/sub or sticky routing in front of them. A second replica silently drops
+  calls rung on one pod and misses events published by the other — no crash,
+  no error, just broken call handling (#1120). Refuse to render rather than
+  let that ship quietly; autoscaling was removed from this chart for the same
+  reason (see values.yaml).
+*/}}
+{{- if ne (int .Values.app.replicas) 1 }}
+{{- fail (printf "app.replicas is %d, but this chart only supports 1: Llamenos's call routing and WebSocket/relay sessions are process-local with no shared state across pods. See values.yaml's comment on app.replicas and issue #1120." (int .Values.app.replicas)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,7 +46,7 @@ spec:
       serviceAccountName: {{ include "llamenos.serviceAccountName" . }}
       containers:
         - name: app
-          image: "{{ .Values.app.image.repository }}:{{ include "llamenos.appImageTag" . }}"
+          image: "{{ required "app.image.repository is required — set it to the registry/repo your own build actually publishes to (docker.io/<your-dockerhub-username>/llamenos by default, see .github/workflows/docker.yml; NOT ghcr.io)" .Values.app.image.repository }}:{{ include "llamenos.appImageTag" . }}"
           imagePullPolicy: {{ .Values.app.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.app.port }}
