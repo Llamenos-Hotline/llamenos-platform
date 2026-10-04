@@ -6,6 +6,11 @@ import { createMockDb } from './mock-db'
 
 function setup() {
   const { db, reset } = createMockDb()
+  // updateHubSettings (#1144) now reads its merged result back via
+  // `.returning()` instead of computing it purely in JS — give it a
+  // non-empty default row so tests that don't care about the exact
+  // persisted shape don't have to set one up themselves.
+  db.$setInsertResult([{ settings: {} }])
   const providerSetup = new ProviderSetup(db as any, 'secret', 'localhost')
   const settings = new SettingsService(db as any)
   const service = new HubOnboardService(db as any, providerSetup, settings)

@@ -2255,18 +2255,44 @@ export class SettingsService {
       }
     }
 
-    const existing = await this.getHubSettings(hubId)
-    const merged = { ...existing, ...sanitized }
-
-    await this.db
+    // Atomic top-level JSONB merge (#1144). The previous implementation was
+    // read-modify-write: SELECT the whole settings blob, spread it with the
+    // new keys in JS, write the whole object back. Two admins changing
+    // *different* keys concurrently (or one admin with two tabs) both read
+    // the same blob and the last write silently discarded the other's
+    // change — including spam-mitigation toggles and the fallback ring
+    // group, which live in this same blob.
+    //
+    // The `||` jsonb concatenation operator merges at the top level only:
+    // every key in the right operand overwrites the corresponding key on
+    // the left, and every key absent from the right operand is preserved.
+    // It is evaluated by Postgres against the row this statement just
+    // locked for the UPDATE — not a value read earlier in JS — so
+    // concurrent writers touching disjoint (or even the same) keys are
+    // serialised by the row lock instead of clobbering each other.
+    //
+    // Pass `sanitized` as a raw object, not JSON.stringify'd: Bun's native
+    // SQL driver (what production and `bun run dev:server` use) already
+    // JSON.stringifies a JS value bound to a jsonb-typed parameter
+    // position. Pre-stringifying it here double-encodes — Postgres then
+    // sees a quoted JSON *string scalar* instead of an object, and `||`
+    // between an object and a scalar boxes both into a 2-element array
+    // instead of merging keys (confirmed live via #1144's own BDD
+    // coverage: "Shift and fallback group are independent" silently lost
+    // the fallback group). Mirrors the existing `metadata` merge in
+    // conversations.ts#update.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: merged })
+      .values({ hubId, settings: sanitized })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: merged },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sanitized}::jsonb`,
+        },
       })
+      .returning({ settings: hubSettingsTable.settings })
 
-    return merged
+    return row.settings as Record<string, unknown>
   }
 
   async getHubProviderSettings(
@@ -2287,32 +2313,42 @@ export class SettingsService {
     hubId: string,
     quotas: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const current = await this.getHubSettings(hubId)
-    const updated = { ...current, quotas }
-    await this.db
+    // Atomic — see updateHubSettings (#1144). Only the `quotas` key is
+    // touched, so a concurrent updateHubSettings/updateHubUsage call on a
+    // different key cannot be clobbered by this one. Raw object, not
+    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
+      .values({ hubId, settings: { quotas } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: updated },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('quotas', ${quotas}::jsonb)`,
+        },
       })
-    return updated.quotas as Record<string, unknown>
+      .returning({ settings: hubSettingsTable.settings })
+
+    return (row.settings as Record<string, unknown>).quotas as Record<string, unknown>
   }
 
   async updateHubUsage(
     hubId: string,
     usage: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
-    const current = await this.getHubSettings(hubId)
-    const updated = { ...current, usage }
-    await this.db
+    // Atomic — see updateHubSettings (#1144). Raw value, not
+    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    const [row] = await this.db
       .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
+      .values({ hubId, settings: { usage } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
-        set: { settings: updated },
+        set: {
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('usage', ${usage}::jsonb)`,
+        },
       })
-    return updated.usage as Record<string, unknown>[]
+      .returning({ settings: hubSettingsTable.settings })
+
+    return (row.settings as Record<string, unknown>).usage as Record<string, unknown>[]
   }
 
   async incrementHubUsage(
@@ -2320,29 +2356,54 @@ export class SettingsService {
     resource: string,
     amount = 1,
   ): Promise<Record<string, unknown>> {
-    const settings = await this.getHubSettings(hubId)
-    const usage = (settings.usage as Record<string, unknown>[]) ?? []
-    const now = new Date()
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    // No production caller today, but fixed proactively (#1144) since the
+    // read-modify-write shape here is identical to updateHubSettings and
+    // would silently clobber a concurrent admin edit the moment it gains
+    // one. A simple top-level `||` merge isn't enough because the mutation
+    // is nested (find-or-create the current month inside the `usage`
+    // array, then increment one field on it) — so this takes a row lock
+    // with SELECT ... FOR UPDATE inside a transaction and recomputes
+    // against the value Postgres just handed it under that lock, the same
+    // pattern used by registerDevice/sigchain elsewhere in this codebase.
+    return await this.db.transaction(async (tx) => {
+      // Ensure a row exists to lock — an UPDATE/SELECT FOR UPDATE against a
+      // missing row takes no lock at all, which would let two concurrent
+      // "first increment for this hub" calls both race past the check.
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId, settings: {} })
+        .onConflictDoNothing()
 
-    let currentMonth = usage.find((u) => u.month === month)
-    if (!currentMonth) {
-      currentMonth = { month, year: now.getFullYear() }
-      usage.push(currentMonth)
-    }
+      const [row] = await tx
+        .select({ settings: hubSettingsTable.settings })
+        .from(hubSettingsTable)
+        .where(eq(hubSettingsTable.hubId, hubId))
+        .for('update')
 
-    currentMonth[resource] = ((currentMonth[resource] as number) ?? 0) + amount
+      const settings = (row?.settings as Record<string, unknown>) ?? {}
+      const usage = [...((settings.usage as Record<string, unknown>[]) ?? [])]
+      const now = new Date()
+      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
-    const updated = { ...settings, usage }
-    await this.db
-      .insert(hubSettingsTable)
-      .values({ hubId, settings: updated })
-      .onConflictDoUpdate({
-        target: hubSettingsTable.hubId,
-        set: { settings: updated },
-      })
+      const idx = usage.findIndex((u) => u.month === month)
+      let currentMonth: Record<string, unknown>
+      if (idx === -1) {
+        currentMonth = { month, year: now.getFullYear() }
+        usage.push(currentMonth)
+      } else {
+        currentMonth = { ...usage[idx] }
+        usage[idx] = currentMonth
+      }
 
-    return currentMonth
+      currentMonth[resource] = ((currentMonth[resource] as number) ?? 0) + amount
+
+      await tx
+        .update(hubSettingsTable)
+        .set({ settings: { ...settings, usage } })
+        .where(eq(hubSettingsTable.hubId, hubId))
+
+      return currentMonth
+    })
   }
 
   /**

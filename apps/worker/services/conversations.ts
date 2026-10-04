@@ -267,12 +267,18 @@ export class ConversationsService {
 
   // --- Claim (assign to volunteer) ---
 
+  /**
+   * Atomic claim (#1144). The previous implementation read the conversation,
+   * checked `status !== 'waiting'` in JS, then did an UNCONDITIONAL UPDATE —
+   * two concurrent claimants (two volunteers clicking "claim", or manual
+   * claim racing auto-assign) both passed the check and both got a 200; the
+   * later writer's UPDATE won and silently displaced the earlier volunteer
+   * mid-reply. The `AND status = 'waiting'` predicate on the UPDATE itself
+   * is what actually serialises this: Postgres's row lock means only one
+   * concurrent claimant's UPDATE can match it, and the loser gets zero rows
+   * back and a 409 instead of a false 200.
+   */
   async claim(id: string, pubkey: string): Promise<ConversationRow> {
-    const existing = await this.getById(id)
-    if (existing.status !== 'waiting') {
-      throw new ServiceError(400, 'Conversation is not in waiting state')
-    }
-
     const [row] = await this.db
       .update(conversations)
       .set({
@@ -280,8 +286,15 @@ export class ConversationsService {
         status: 'active',
         updatedAt: new Date(),
       })
-      .where(eq(conversations.id, id))
+      .where(and(eq(conversations.id, id), eq(conversations.status, 'waiting')))
       .returning()
+
+    if (!row) {
+      // Distinguish "doesn't exist" (404) from "already claimed" (409) by
+      // re-reading — this read is informational only, not a race guard.
+      await this.getById(id)
+      throw new ServiceError(409, 'Conversation is not in waiting state')
+    }
 
     return row
   }
@@ -292,32 +305,41 @@ export class ConversationsService {
     // Verify conversation exists (throws 404 if not found)
     await this.getById(input.conversationId)
 
-    const [msg] = await this.db
-      .insert(messages)
-      .values({
-        id: input.id ?? undefined,
-        conversationId: input.conversationId,
-        direction: input.direction,
-        authorPubkey: input.authorPubkey,
-        encryptedContent: input.encryptedContent ?? '',
-        readerEnvelopes: input.readerEnvelopes,
-        hasAttachments: input.hasAttachments ?? false,
-        attachmentIds: input.attachmentIds,
-        externalId: input.externalId,
-        status: input.direction === 'outbound' ? (input.status ?? 'pending') : (input.status ?? 'sent'),
-        failureReason: input.failureReason,
-      })
-      .returning()
+    // Atomic pair (#1144): the increment itself (`messageCount + 1`) is
+    // SQL-atomic, but the insert-then-update pair was not — a failure
+    // between the two statements left messageCount permanently drifted
+    // from the actual row count. Wrapping both in one transaction makes
+    // the pair all-or-nothing.
+    const [msg] = await this.db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(messages)
+        .values({
+          id: input.id ?? undefined,
+          conversationId: input.conversationId,
+          direction: input.direction,
+          authorPubkey: input.authorPubkey,
+          encryptedContent: input.encryptedContent ?? '',
+          readerEnvelopes: input.readerEnvelopes,
+          hasAttachments: input.hasAttachments ?? false,
+          attachmentIds: input.attachmentIds,
+          externalId: input.externalId,
+          status: input.direction === 'outbound' ? (input.status ?? 'pending') : (input.status ?? 'sent'),
+          failureReason: input.failureReason,
+        })
+        .returning()
 
-    // Update conversation timestamps and count
-    await this.db
-      .update(conversations)
-      .set({
-        lastMessageAt: new Date(),
-        updatedAt: new Date(),
-        messageCount: sql`${conversations.messageCount} + 1`,
-      })
-      .where(eq(conversations.id, input.conversationId))
+      // Update conversation timestamps and count
+      await tx
+        .update(conversations)
+        .set({
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+          messageCount: sql`${conversations.messageCount} + 1`,
+        })
+        .where(eq(conversations.id, input.conversationId))
+
+      return [inserted]
+    })
 
     return msg
   }
@@ -349,16 +371,7 @@ export class ConversationsService {
   async updateMessageStatus(
     update: MessageStatusUpdate,
   ): Promise<{ conversationId: string; messageId: string; status: string } | { found: false }> {
-    // Look up message by external ID
-    const [msg] = await this.db
-      .select()
-      .from(messages)
-      .where(eq(messages.externalId, update.externalId))
-      .limit(1)
-
-    if (!msg) return { found: false }
-
-    // Only update if the new status is "more advanced" than current
+    // Status rank, used to guard against moving status backwards.
     const statusOrder: Record<string, number> = {
       pending: 0,
       sent: 1,
@@ -366,13 +379,7 @@ export class ConversationsService {
       read: 3,
       failed: 3,
     }
-
-    const currentOrder = statusOrder[msg.status ?? 'pending']
     const newOrder = statusOrder[update.status]
-
-    if (newOrder <= currentOrder && update.status !== 'failed') {
-      return { conversationId: msg.conversationId, messageId: msg.id, status: msg.status ?? 'pending' }
-    }
 
     const updateFields: Record<string, unknown> = {
       status: update.status,
@@ -382,19 +389,53 @@ export class ConversationsService {
       updateFields.deliveredAt = new Date(update.timestamp)
     } else if (update.status === 'read') {
       updateFields.readAt = new Date(update.timestamp)
-      if (!msg.deliveredAt) {
-        updateFields.deliveredAt = new Date(update.timestamp)
-      }
+      // Backfill from the row's CURRENT value via COALESCE, not a value
+      // read earlier in JS — only fills deliveredAt in if it's still unset.
+      updateFields.deliveredAt = sql`COALESCE(${messages.deliveredAt}, ${new Date(update.timestamp)})`
     } else if (update.status === 'failed') {
       updateFields.failureReason = update.failureReason
     }
 
-    await this.db
+    // Atomic status-advance guard (#1144). The previous implementation
+    // read the message, computed `newOrder <= currentOrder` in JS, then
+    // did an UNCONDITIONAL UPDATE. Two delivery-receipt callbacks
+    // (`delivered` and `read`) racing on the same message both read
+    // `status = 'sent'`, both pass the check, and whichever UPDATE commits
+    // last wins — so a message can end up at `delivered` after it was
+    // already `read`. The CASE expression below is evaluated against the
+    // row this UPDATE just locked, so the loser of the race affects zero
+    // rows instead of regressing the status.
+    const rankGuard = update.status === 'failed'
+      ? sql`true`
+      : sql`(CASE ${messages.status}
+          WHEN 'pending' THEN 0
+          WHEN 'sent' THEN 1
+          WHEN 'delivered' THEN 2
+          WHEN 'read' THEN 3
+          WHEN 'failed' THEN 3
+          ELSE 0
+        END) < ${newOrder}`
+
+    const [row] = await this.db
       .update(messages)
       .set(updateFields)
-      .where(eq(messages.id, msg.id))
+      .where(and(eq(messages.externalId, update.externalId), rankGuard))
+      .returning()
 
-    return { conversationId: msg.conversationId, messageId: msg.id, status: update.status }
+    if (row) {
+      return { conversationId: row.conversationId, messageId: row.id, status: row.status ?? update.status }
+    }
+
+    // Either the message doesn't exist, or the status didn't advance.
+    // Both need the current row to answer correctly.
+    const [existing] = await this.db
+      .select()
+      .from(messages)
+      .where(eq(messages.externalId, update.externalId))
+      .limit(1)
+
+    if (!existing) return { found: false }
+    return { conversationId: existing.conversationId, messageId: existing.id, status: existing.status ?? 'pending' }
   }
 
   // --- External ID lookup ---

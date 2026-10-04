@@ -71,6 +71,11 @@ function makeRole(overrides: Record<string, unknown> = {}) {
 
 function setup() {
   const { db } = createMockDb()
+  // updateHubSettings (#1144) now reads its merged result back via
+  // `.returning()` instead of computing it purely in JS — give it a
+  // non-empty default row so tests that don't care about the exact
+  // persisted shape don't have to set one up themselves.
+  db.$setInsertResult([{ settings: {} }])
   const service = new SettingsService(db as any)
   return { db, service }
 }
@@ -287,10 +292,13 @@ describe('SettingsService per-hub call settings (#1051)', () => {
 
   it('hub update clamps, persists to hub_settings and never touches system_settings', async () => {
     const { db, service } = setup()
+    // updateHubSettings (#1144) no longer reads the existing blob before
+    // writing — it merges atomically in SQL — so only the caller's own
+    // read (existing overrides) and the post-update re-read consume
+    // SELECTs now.
     db.$setSelectResults([
-      [{ hubId: 'hub-a', settings: {} }],
-      [{ hubId: 'hub-a', settings: {} }],
-      [makeSettingsRow()],
+      [{ hubId: 'hub-a', settings: {} }], // updateCallSettings -> getHubSettings (existing overrides)
+      [makeSettingsRow()], // re-read effective: system_settings
       [{ hubId: 'hub-a', settings: { callSettings: { queueTimeoutSeconds: 30 } } }],
     ])
     await service.updateCallSettings({ queueTimeoutSeconds: 5 }, 'hub-a')

@@ -6,7 +6,7 @@
  * from the shift's (or ring group's) user list.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { shiftJoinRequests, shifts, ringGroupMembers } from '../db/schema'
 import { ServiceError } from './settings'
@@ -93,26 +93,17 @@ export class ShiftRequestsService {
       throw new ServiceError(404, 'Shift not found')
     }
 
-    // Check for existing pending request for same shift/user/type
-    const [existing] = await this.db
-      .select({ id: shiftJoinRequests.id })
-      .from(shiftJoinRequests)
-      .where(
-        and(
-          eq(shiftJoinRequests.shiftId, data.shiftId),
-          eq(shiftJoinRequests.userPubkey, data.userPubkey),
-          eq(shiftJoinRequests.type, data.type),
-          eq(shiftJoinRequests.status, 'pending'),
-        ),
-      )
-      .limit(1)
-
-    if (existing) {
-      throw new ServiceError(409, 'A pending request already exists for this shift and user')
-    }
-
     const id = crypto.randomUUID()
 
+    // Atomic dedup (#1144). The previous implementation was SELECT-check
+    // for an existing pending request, THEN insert — two concurrent requests
+    // for the same shift/user/type both pass the check and both insert, so
+    // the "Duplicate pending request is rejected" guarantee silently failed
+    // under concurrency. `shift_join_requests_pending_unique_idx` (a partial
+    // unique index on (shift_id, user_pubkey, type) WHERE status = 'pending')
+    // is the conflict target, so the DB itself — not a racy JS check — is
+    // what rejects the duplicate: the loser's INSERT is a no-op and reports
+    // 409 below.
     const [row] = await this.db
       .insert(shiftJoinRequests)
       .values({
@@ -123,7 +114,19 @@ export class ShiftRequestsService {
         type: data.type,
         status: 'pending',
       })
+      .onConflictDoNothing({
+        target: [
+          shiftJoinRequests.shiftId,
+          shiftJoinRequests.userPubkey,
+          shiftJoinRequests.type,
+        ],
+        where: sql`status = 'pending'`,
+      })
       .returning()
+
+    if (!row) {
+      throw new ServiceError(409, 'A pending request already exists for this shift and user')
+    }
 
     return row
   }
@@ -136,66 +139,142 @@ export class ShiftRequestsService {
    * Approve a pending request.
    * When approved, the volunteer is added to or removed from the shift's
    * userPubkeys list (or ring group members if the shift references one).
+   *
+   * Atomic (#1144): the status flip is conditioned on `status = 'pending'`
+   * and runs in the same transaction as the roster mutation. The previous
+   * implementation read the request, checked status in JS, applied the
+   * roster change, and only then did an UNCONDITIONAL status update — two
+   * admins approving the same request both passed the check and both
+   * mutated the roster, and a crash between the two steps left the request
+   * stuck at 'pending' with the roster already mutated. Here, the loser of
+   * the race sees zero rows affected by the conditional UPDATE and never
+   * touches the roster at all.
    */
   async approve(
     hubId: string,
     requestId: string,
     reviewedBy: string,
   ): Promise<ShiftJoinRequestRow> {
-    const request = await this.get(hubId, requestId)
+    return await this.db.transaction(async (tx) => {
+      const [request] = await tx
+        .update(shiftJoinRequests)
+        .set({
+          status: 'approved',
+          reviewedBy,
+          reviewedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(shiftJoinRequests.id, requestId),
+            eq(shiftJoinRequests.hubId, hubId),
+            eq(shiftJoinRequests.status, 'pending'),
+          ),
+        )
+        .returning()
 
-    if (request.status !== 'pending') {
-      throw new ServiceError(400, `Request is already ${request.status}`)
-    }
+      if (!request) {
+        throw await this.notPendingError(tx, hubId, requestId)
+      }
 
-    // Apply the approval — modify shift userPubkeys
-    await this.applyApproval(request, reviewedBy)
+      const [shift] = await tx
+        .select({ id: shifts.id, ringGroupId: shifts.ringGroupId })
+        .from(shifts)
+        .where(eq(shifts.id, request.shiftId))
+        .limit(1)
 
-    // Update request status
-    const now = new Date()
-    const [row] = await this.db
-      .update(shiftJoinRequests)
-      .set({
-        status: 'approved',
-        reviewedBy,
-        reviewedAt: now,
-      })
-      .where(eq(shiftJoinRequests.id, requestId))
-      .returning()
+      if (!shift) {
+        throw new ServiceError(404, 'Referenced shift not found')
+      }
 
-    return row
+      if (request.type === 'join') {
+        if (shift.ringGroupId) {
+          // Ring-group-based shift — add member to the ring group
+          await tx
+            .insert(ringGroupMembers)
+            .values({
+              ringGroupId: shift.ringGroupId,
+              userPubkey: request.userPubkey,
+              addedBy: reviewedBy,
+            })
+            .onConflictDoNothing()
+        } else {
+          // Direct pubkey shift — atomic array mutation (#1144).
+          // array_append is evaluated against the row this UPDATE just
+          // locked, not a JS array read earlier, and the CASE guard makes
+          // it idempotent so a retried/duplicate approval can't append the
+          // same volunteer twice.
+          await tx
+            .update(shifts)
+            .set({
+              userPubkeys: sql`CASE WHEN ${request.userPubkey} = ANY(${shifts.userPubkeys}) THEN ${shifts.userPubkeys} ELSE array_append(${shifts.userPubkeys}, ${request.userPubkey}) END`,
+            })
+            .where(eq(shifts.id, request.shiftId))
+        }
+      } else if (request.type === 'leave') {
+        if (shift.ringGroupId) {
+          // Ring-group-based shift — remove member from the ring group
+          await tx
+            .delete(ringGroupMembers)
+            .where(
+              and(
+                eq(ringGroupMembers.ringGroupId, shift.ringGroupId),
+                eq(ringGroupMembers.userPubkey, request.userPubkey),
+              ),
+            )
+        } else {
+          // Direct pubkey shift — atomic array mutation (#1144).
+          await tx
+            .update(shifts)
+            .set({
+              userPubkeys: sql`array_remove(${shifts.userPubkeys}, ${request.userPubkey})`,
+            })
+            .where(eq(shifts.id, request.shiftId))
+        }
+      }
+
+      return request
+    })
   }
 
   /**
    * Reject a pending request.
+   *
+   * Atomic (#1144): conditioned on `status = 'pending'` in the UPDATE
+   * itself rather than a prior read-then-check.
    */
   async reject(
     hubId: string,
     requestId: string,
     reviewedBy: string,
   ): Promise<ShiftJoinRequestRow> {
-    const request = await this.get(hubId, requestId)
-
-    if (request.status !== 'pending') {
-      throw new ServiceError(400, `Request is already ${request.status}`)
-    }
-
-    const now = new Date()
     const [row] = await this.db
       .update(shiftJoinRequests)
       .set({
         status: 'rejected',
         reviewedBy,
-        reviewedAt: now,
+        reviewedAt: new Date(),
       })
-      .where(eq(shiftJoinRequests.id, requestId))
+      .where(
+        and(
+          eq(shiftJoinRequests.id, requestId),
+          eq(shiftJoinRequests.hubId, hubId),
+          eq(shiftJoinRequests.status, 'pending'),
+        ),
+      )
       .returning()
+
+    if (!row) {
+      throw await this.notPendingError(this.db, hubId, requestId)
+    }
 
     return row
   }
 
   /**
    * Cancel a pending request (by the requester).
+   *
+   * Atomic (#1144): conditioned on `status = 'pending'` in the UPDATE
+   * itself rather than a prior read-then-check.
    */
   async cancel(
     hubId: string,
@@ -203,29 +282,36 @@ export class ShiftRequestsService {
     userPubkey: string,
   ): Promise<{ ok: true }> {
     const [row] = await this.db
-      .select()
-      .from(shiftJoinRequests)
+      .update(shiftJoinRequests)
+      .set({ status: 'cancelled' })
       .where(
         and(
           eq(shiftJoinRequests.id, requestId),
           eq(shiftJoinRequests.hubId, hubId),
           eq(shiftJoinRequests.userPubkey, userPubkey),
+          eq(shiftJoinRequests.status, 'pending'),
         ),
       )
-      .limit(1)
+      .returning()
 
     if (!row) {
-      throw new ServiceError(404, 'Request not found')
-    }
+      const [existing] = await this.db
+        .select({ id: shiftJoinRequests.id })
+        .from(shiftJoinRequests)
+        .where(
+          and(
+            eq(shiftJoinRequests.id, requestId),
+            eq(shiftJoinRequests.hubId, hubId),
+            eq(shiftJoinRequests.userPubkey, userPubkey),
+          ),
+        )
+        .limit(1)
 
-    if (row.status !== 'pending') {
+      if (!existing) {
+        throw new ServiceError(404, 'Request not found')
+      }
       throw new ServiceError(400, 'Can only cancel pending requests')
     }
-
-    await this.db
-      .update(shiftJoinRequests)
-      .set({ status: 'cancelled' })
-      .where(eq(shiftJoinRequests.id, requestId))
 
     return { ok: true }
   }
@@ -260,77 +346,33 @@ export class ShiftRequestsService {
   }
 
   // =========================================================================
-  // Internal: Apply Approval
+  // Internal
   // =========================================================================
 
   /**
-   * Apply the approved action to the shift's userPubkeys or ring group.
-   *
-   * For direct-pubkey shifts: add/remove the userPubkey from shift.userPubkeys.
-   * For ring-group-based shifts: add/remove the userPubkey from the ring group's
-   * member list.
+   * Builds the error for a failed conditional "still pending" UPDATE,
+   * distinguishing "doesn't exist" (404) from "already decided" (400) by
+   * re-reading the row's current status.
    */
-  private async applyApproval(
-    request: ShiftJoinRequestRow,
-    reviewedBy: string,
-  ): Promise<void> {
-    const [shift] = await this.db
-      .select()
-      .from(shifts)
-      .where(eq(shifts.id, request.shiftId))
+  private async notPendingError(
+    db: Database,
+    hubId: string,
+    requestId: string,
+  ): Promise<ServiceError> {
+    const [existing] = await db
+      .select({ status: shiftJoinRequests.status })
+      .from(shiftJoinRequests)
+      .where(
+        and(
+          eq(shiftJoinRequests.id, requestId),
+          eq(shiftJoinRequests.hubId, hubId),
+        ),
+      )
       .limit(1)
 
-    if (!shift) {
-      throw new ServiceError(404, 'Referenced shift not found')
+    if (!existing) {
+      return new ServiceError(404, 'Shift request not found')
     }
-
-    if (request.type === 'join') {
-      if (shift.ringGroupId) {
-        // Ring-group-based shift — add member to the ring group
-        await this.db
-          .insert(ringGroupMembers)
-          .values({
-            ringGroupId: shift.ringGroupId,
-            userPubkey: request.userPubkey,
-            addedBy: reviewedBy,
-          })
-          .onConflictDoNothing()
-      } else {
-        // Direct pubkey shift — add to userPubkeys array
-        const currentPubkeys = shift.userPubkeys ?? []
-        if (!currentPubkeys.includes(request.userPubkey)) {
-          await this.db
-            .update(shifts)
-            .set({
-              userPubkeys: [...currentPubkeys, request.userPubkey],
-            })
-            .where(eq(shifts.id, request.shiftId))
-        }
-      }
-    } else if (request.type === 'leave') {
-      if (shift.ringGroupId) {
-        // Ring-group-based shift — remove member from the ring group
-        await this.db
-          .delete(ringGroupMembers)
-          .where(
-            and(
-              eq(ringGroupMembers.ringGroupId, shift.ringGroupId),
-              eq(ringGroupMembers.userPubkey, request.userPubkey),
-            ),
-          )
-      } else {
-        // Direct pubkey shift — remove from userPubkeys array
-        const currentPubkeys = shift.userPubkeys ?? []
-        const updatedPubkeys = currentPubkeys.filter(
-          (pk) => pk !== request.userPubkey,
-        )
-        await this.db
-          .update(shifts)
-          .set({
-            userPubkeys: updatedPubkeys,
-          })
-          .where(eq(shifts.id, request.shiftId))
-      }
-    }
+    return new ServiceError(400, `Request is already ${existing.status}`)
   }
 }

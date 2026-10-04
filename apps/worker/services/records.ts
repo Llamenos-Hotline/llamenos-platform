@@ -51,6 +51,15 @@ export interface UpdateNoteInput {
   adminEnvelopes?: unknown[]
   encryptedFields?: string
   fieldEnvelopes?: unknown
+  /**
+   * Optimistic-concurrency token (#1144): the `updatedAt` the caller last
+   * read for this note. When supplied, the write only applies if the note
+   * hasn't changed since — otherwise it's rejected with 409 rather than
+   * silently overwriting a concurrent edit. Optional and backward
+   * compatible: omitting it preserves the previous last-write-wins
+   * behavior for callers that haven't adopted it yet.
+   */
+  expectedUpdatedAt?: Date
 }
 
 export interface CreateReplyInput {
@@ -175,11 +184,29 @@ export class RecordsService {
     if (input.encryptedFields !== undefined) updates.encryptedFields = input.encryptedFields
     if (input.fieldEnvelopes !== undefined) updates.fieldEnvelopes = input.fieldEnvelopes
 
+    // Optimistic concurrency (#1144). The previous implementation was an
+    // unconditional UPDATE: two edits from one author's two devices, or a
+    // double-submit, silently destroyed the first with no error and no
+    // trace. Notes are E2EE-opaque, so there is no server-side merge or
+    // recovery once that happens. When the caller supplies the `updatedAt`
+    // it last read, the WHERE below is evaluated against the row's CURRENT
+    // value at UPDATE time, not the stale value read above — so a
+    // concurrent writer that changed the row in between makes this match
+    // nothing, and the caller gets a 409 instead of a silent loss.
+    const conditions = [eq(notes.id, id)]
+    if (input.expectedUpdatedAt) {
+      conditions.push(eq(notes.updatedAt, input.expectedUpdatedAt))
+    }
+
     const [updated] = await this.db
       .update(notes)
       .set(updates)
-      .where(eq(notes.id, id))
+      .where(and(...conditions))
       .returning()
+
+    if (!updated) {
+      throw new ServiceError(409, 'Note was modified since it was last read')
+    }
 
     return updated
   }
@@ -203,26 +230,33 @@ export class RecordsService {
     // Verify the parent note exists
     await this.getNote(noteId)
 
-    const [reply] = await this.db
-      .insert(noteReplies)
-      .values({
-        noteId,
-        authorPubkey: input.authorPubkey,
-        encryptedContent: input.encryptedContent,
-        readerEnvelopes: input.readerEnvelopes,
-      })
-      .returning()
+    // Atomic pair (#1144): the increment itself (`replyCount + 1`) is
+    // SQL-atomic, but the insert-then-update pair was not — a failure
+    // between the two statements left replyCount permanently drifted from
+    // the actual reply row count. Wrapping both in one transaction makes
+    // the pair all-or-nothing.
+    return await this.db.transaction(async (tx) => {
+      const [reply] = await tx
+        .insert(noteReplies)
+        .values({
+          noteId,
+          authorPubkey: input.authorPubkey,
+          encryptedContent: input.encryptedContent,
+          readerEnvelopes: input.readerEnvelopes,
+        })
+        .returning()
 
-    // Increment reply count on parent note
-    await this.db
-      .update(notes)
-      .set({
-        replyCount: sql`${notes.replyCount} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(notes.id, noteId))
+      // Increment reply count on parent note
+      await tx
+        .update(notes)
+        .set({
+          replyCount: sql`${notes.replyCount} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(notes.id, noteId))
 
-    return reply
+      return reply
+    })
   }
 
   async listReplies(noteId: string): Promise<NoteReplyRow[]> {
@@ -241,33 +275,56 @@ export class RecordsService {
   // -----------------------------------------------------------------------
 
   async addBan(input: AddBanInput): Promise<BanRow> {
-    // Idempotent: if already banned, return existing
-    const conditions = [eq(bans.phone, input.phone)]
-    if (input.hubId) {
-      conditions.push(eq(bans.hubId, input.hubId))
-    } else {
-      conditions.push(sql`${bans.hubId} IS NULL`)
-    }
+    const hubId = input.hubId || null  // normalize empty string to null
 
-    const [existing] = await this.db
-      .select()
-      .from(bans)
-      .where(and(...conditions))
-
-    if (existing) return existing
-
+    // Atomic idempotent insert (#1144). The previous implementation was
+    // SELECT-then-INSERT with no DB-level guard for the hub_id IS NULL
+    // case: the existing unique index is on (hub_id, phone), and in
+    // Postgres NULL <> NULL for uniqueness purposes, so platform-wide bans
+    // (hub_id IS NULL) were never deduped by the index at all — two
+    // concurrent bans for the same phone both inserted. Hub-scoped bans
+    // WERE covered by the index, but the insert itself was unguarded, so a
+    // concurrent duplicate there surfaced as an unhandled 23505 -> 500
+    // instead of the intended idempotent return.
+    //
+    // `bans_platform_phone_hash_idx` (a partial unique index on `phone`
+    // WHERE hub_id IS NULL, added alongside this fix) closes the first
+    // gap; onConflictDoNothing against whichever index actually applies
+    // closes the second.
     const [ban] = await this.db
       .insert(bans)
       .values({
-        hubId: input.hubId || null,  // normalize empty string to null
+        hubId,
         phone: input.phone,
         phoneDisplay: input.phoneDisplay ?? null,
         reason: input.reason,
         bannedBy: input.bannedBy,
       })
+      .onConflictDoNothing(
+        hubId
+          ? { target: [bans.hubId, bans.phone] }
+          : { target: [bans.phone], where: sql`hub_id IS NULL` },
+      )
       .returning()
 
-    return ban
+    if (ban) return ban
+
+    // Conflict — the ban already exists; return it (idempotent).
+    const conditions = [
+      eq(bans.phone, input.phone),
+      hubId ? eq(bans.hubId, hubId) : sql`${bans.hubId} IS NULL`,
+    ]
+    const [existing] = await this.db
+      .select()
+      .from(bans)
+      .where(and(...conditions))
+
+    if (!existing) {
+      // Should be unreachable — a conflict means a matching row exists —
+      // but fail loudly rather than silently if it somehow doesn't.
+      throw new ServiceError(500, 'Ban conflict reported but no existing ban found')
+    }
+    return existing
   }
 
   async listBans(hubId?: string): Promise<{ bans: Array<{ phone: string; phoneHash: string; reason: string | null; bannedBy: string | null; bannedAt: Date }> }> {
