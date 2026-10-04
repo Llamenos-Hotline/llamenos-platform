@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve as resolvePath, sep } from 'node:path'
+import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeAcross } from './scope.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
@@ -268,6 +268,86 @@ function vitestArgv(route: TestRoute, config: string, testRoot: string, outputFi
   return ['run', '--config', config, '--root', testRoot, route.target, '--reporter=json', `--outputFile=${outputFile}`]
 }
 
+/** One `resolve.alias` entry: a package name, and the directory inside the
+ *  test root that its imports must resolve to. */
+export interface WorkspaceAlias {
+  /** The package name exactly as it is imported (`@llamenos/i18n`). Vite
+   *  matches a string `find` against the whole specifier or against a
+   *  `<find>/…` subpath, so one entry covers `@llamenos/i18n/languages` too. */
+  find: string
+  replacement: string
+}
+
+/**
+ * Every workspace package the TRUSTED install links into `node_modules`,
+ * re-pointed at the same relative directory inside `testRoot` (#1525).
+ *
+ * The `__dirname` aliases in the vitest configs (`@shared/*`, `@worker/*`,
+ * `@protocol/*`, `@/*`) already follow the export, because `prepareTestRoot`
+ * installs the trusted config's BYTES into the export root and `__dirname` is
+ * then the export. A workspace package has no alias at all: `@llamenos/i18n`
+ * is a real package name, resolved through `node_modules/@llamenos/i18n`,
+ * which `bun install` writes as the relative symlink `../../packages/i18n` —
+ * relative to the checkout holding the install, which under this gate is the
+ * BASE. So every bare workspace import under the gate loaded the base's copy,
+ * and the gate judged the PR's code against `main`'s `packages/i18n`,
+ * `packages/crypto`, `apps/worker` and so on. That fails a PR which ADDS to a
+ * workspace package (#1510) and — the direction that matters — silently
+ * PASSES one that breaks it.
+ *
+ * DERIVED, never enumerated. The list is read off the trusted install itself,
+ * so a sixth workspace package, a rename, a new scope, or a package whose
+ * directory does not match its name (`@llamenos/worker` → `apps/worker`) is
+ * covered the moment `bun install` links it — there is no list for anyone to
+ * forget to extend. A `tests/orchestrator` rail re-derives the expected set
+ * from the root `package.json` workspaces and fails if any linked workspace
+ * package comes back without an alias.
+ *
+ * A link is a workspace package iff its REALPATH lands inside the trusted
+ * worktree and outside its `node_modules`. Realpath, not `readlink` resolved
+ * against the directory walked into: a scope directory can itself be a
+ * symlink, in which case the relative target is relative to the link's real
+ * parent and resolving it against the walked path names a directory that does
+ * not exist. Everything else in `node_modules` — every published dependency —
+ * realpaths outside the worktree and is left alone: this re-points the PR's
+ * OWN packages, never the dependency tree, which must keep coming from the
+ * trusted install.
+ */
+export async function workspaceAliases(worktree: string, testRoot: string): Promise<WorkspaceAlias[]> {
+  const modules = join(resolvePath(worktree), 'node_modules')
+  const [realWorktree, realModules] = await Promise.all([
+    realpath(worktree).catch(() => undefined),
+    realpath(modules).catch(() => undefined),
+  ])
+  if (realWorktree === undefined || realModules === undefined) return []
+
+  const specifiers: string[] = []
+  for (const entry of await readdir(modules, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('@')) {
+      for (const scoped of await readdir(join(modules, entry.name)).catch(() => [])) {
+        specifiers.push(`${entry.name}/${scoped}`)
+      }
+      continue
+    }
+    specifiers.push(entry.name)
+  }
+
+  const out: WorkspaceAlias[] = []
+  for (const specifier of specifiers) {
+    const target = await realpath(join(modules, specifier)).catch(() => undefined)
+    if (target === undefined) continue
+    if (!target.startsWith(realWorktree + sep)) continue
+    if (target === realModules || target.startsWith(realModules + sep)) continue
+    out.push({ find: specifier, replacement: resolvePath(testRoot, relative(realWorktree, target)) })
+  }
+  // Longest name first, so a package whose name prefixes another's
+  // (`@scope/a` and `@scope/ab` are both legal) can never shadow it, and the
+  // order is stable rather than filesystem-dependent.
+  out.sort((a, b) => b.find.length - a.find.length || a.find.localeCompare(b.find))
+  return out
+}
+
 type Prepared = { ok: true; config: string } | { ok: false; reason: string }
 
 /**
@@ -336,11 +416,29 @@ async function prepareTestRoot(
     }
   }
 
+  // Appended, never prepended: vite's alias list is first-match-wins, so a
+  // more specific entry the trusted config already carries — notably
+  // `@llamenos/crypto/ffi` → the pure-TS mock, since the real module loads a
+  // native .so through `bun:ffi` — must keep winning over the whole-package
+  // entry generated here.
+  const aliases = await workspaceAliases(worktree, testRoot)
+
   const wrapper = join(resultDir, `${route.target.replaceAll('/', '_')}.vitest.config.mjs`)
   await writeFile(wrapper, [
     `import loaded from ${JSON.stringify(rootConfig)}`,
+    `const workspace = ${JSON.stringify(aliases)}`,
+    '// Vite accepts `resolve.alias` as either an array of {find,replacement}',
+    '// or an object; normalised to the array form so the workspace entries can',
+    '// be appended in a defined order.',
+    'const entries = (a) => Array.isArray(a) ? a : Object.entries(a ?? {}).map(([find, replacement]) => ({ find, replacement }))',
     '// Inline PostCSS options: vite never searches the test root for a PostCSS config.',
-    'const pin = (c) => ({ ...c, css: { ...(c.css ?? {}), postcss: {} } })',
+    '// Workspace aliases: bare `@scope/pkg` imports resolve into the test root,',
+    '// not through node_modules into the trusted checkout that holds the install.',
+    'const pin = (c) => ({',
+    '  ...c,',
+    '  css: { ...(c.css ?? {}), postcss: {} },',
+    '  resolve: { ...(c.resolve ?? {}), alias: [...entries(c.resolve?.alias), ...workspace] },',
+    '})',
     "export default typeof loaded === 'function' ? async (env) => pin(await loaded(env)) : pin(loaded)",
     '',
   ].join('\n'), { flag: 'wx' })
