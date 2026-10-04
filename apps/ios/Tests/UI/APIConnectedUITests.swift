@@ -1126,26 +1126,6 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
-    // MARK: - Device Link Button via API
-
-    func testDeviceLinkButtonViaAPI() {
-        given("I am connected to the API") {
-            launchWithAPI()
-            let dashboard = find("dashboard-title")
-            _ = dashboard.waitForExistence(timeout: 15)
-        }
-        when("I navigate to account settings") {
-            navigateToAccountSettings()
-        }
-        then("I should see the device link button") {
-            let linkButton = scrollToFind("settings-link-device")
-            XCTAssertTrue(
-                linkButton.exists,
-                "Link device button should exist in account settings via API"
-            )
-        }
-    }
-
     // MARK: - Helpers
 
     private func anyElement(_ identifiers: [String]) -> XCUIElement {

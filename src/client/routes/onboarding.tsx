@@ -7,7 +7,7 @@ import { validateInvite, redeemInvite } from '@/lib/api'
 import { getApiBase, isAbsoluteUrl, isPackagedTauri } from '@/lib/api-config'
 import { leaveServer } from '@/lib/server-switch'
 import { INVITE_CODE_LENGTH, normalizeInviteCode } from '@/lib/invite-code'
-import { generateKeypairAndLoad, generateBackupFromState, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
+import { generateKeypairAndLoad, generateBackupFromState, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin } from '@/lib/key-manager'
 import { generateRecoveryKey, downloadBackupFile } from '@/lib/backup'
 import { useToast } from '@/lib/toast'
@@ -225,8 +225,12 @@ function OnboardingPage() {
       setGenResult(result)
       setConfirmedPin(pin)
 
-      // Prove key ownership: sign redeem request using CryptoState (device key stays in Rust/WASM)
-      const tokenJson = await createAuthToken(Date.now(), 'POST', '/api/invites/redeem')
+      // Prove key ownership: sign the redeem request using CryptoState (device
+      // key stays in Rust). `/api/invites/redeem` has no `nonce` field in its
+      // body schema, so the nonce-less signer is the one that matches what the
+      // server can rebuild — signing a nonce here and dropping it in transit is
+      // a hard 401 (#1389).
+      const tokenJson = await createNoncelessAuthToken(Date.now(), 'POST', '/api/invites/redeem')
       const parsed = JSON.parse(tokenJson) as { timestamp: number; token: string }
       await redeemInvite(inviteCode, result.publicKey, parsed.timestamp, parsed.token)
 

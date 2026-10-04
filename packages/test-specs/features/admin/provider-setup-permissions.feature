@@ -39,6 +39,8 @@ Feature: Provider Setup PBAC Permission Enforcement
     When I POST to create a SIP trunk
     Then the provider setup response is 403
 
+  # Writes the instance-wide provider every hub without its own falls back to (#1071).
+  @global-setting
   Scenario: Admin can configure webhooks
     Given I am a provider setup admin
     And provider "twilio" is configured for tests

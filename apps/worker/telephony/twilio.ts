@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
+import { assertHangupResponse } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -222,10 +223,13 @@ export class TwilioAdapter implements TelephonyAdapter {
   }
 
   async hangupCall(callSid: string): Promise<void> {
-    await this.twilioApi(`/Calls/${callSid}.json`, {
+    const res = await this.twilioApi(`/Calls/${callSid}.json`, {
       method: 'POST',
       body: new URLSearchParams({ Status: 'completed' }),
     })
+    // 21220: "Call is not in-progress" — the call already completed, i.e. disconnected.
+    if (res.status === 400 && (await res.clone().text().catch(() => '')).includes('21220')) return
+    await assertHangupResponse(res, 'Twilio')
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {

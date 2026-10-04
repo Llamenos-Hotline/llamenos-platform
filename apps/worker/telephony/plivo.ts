@@ -1,5 +1,6 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
+import { assertHangupResponse } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -237,9 +238,10 @@ export class PlivoAdapter implements TelephonyAdapter {
   }
 
   async hangupCall(callSid: string): Promise<void> {
-    await this.plivoApi(`/Call/${callSid}/`, {
+    const res = await this.plivoApi(`/Call/${callSid}/`, {
       method: 'DELETE',
     })
+    await assertHangupResponse(res, 'Plivo')
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {

@@ -9,7 +9,10 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek;
-use llamenos_core::auth::{create_auth_token_from_signing_key, verify_auth_token, AuthToken};
+use llamenos_core::auth::{
+    build_auth_message, create_auth_token_from_signing_key,
+    create_auth_token_from_signing_key_without_nonce, verify_auth_token, AuthToken,
+};
 use llamenos_core::encryption::{
     decrypt_call_record, decrypt_draft, decrypt_message, decrypt_note, decrypt_with_pin,
     encrypt_draft, encrypt_export, encrypt_message, encrypt_note, encrypt_with_pin,
@@ -139,6 +142,14 @@ struct AuthVectors {
     path: String,
     token: AuthToken,
     valid: bool,
+    /// The exact canonical message bytes (hex) that `token` signs — the
+    /// nonce-bearing shape. Other platforms rebuild this and must match byte
+    /// for byte; that equality is what keeps the layout from drifting.
+    message_hex: String,
+    /// The nonce-less shape for the same (timestamp, method, path), signed
+    /// under `LABEL_DEVICE_AUTH_NO_NONCE`.
+    nonceless_token: AuthToken,
+    nonceless_message_hex: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -356,6 +367,31 @@ fn generate_and_verify_test_vectors() {
         create_auth_token_from_signing_key(TEST_SECRET_KEY, timestamp, method, path).unwrap();
     let valid = verify_auth_token(&auth_token, method, path).unwrap();
     assert!(valid);
+    let auth_message = build_auth_message(
+        &auth_token.pubkey,
+        timestamp,
+        method,
+        path,
+        auth_token.nonce.as_deref(),
+    );
+
+    // --- Nonce-less auth token (the shape `/api/invites/redeem` signs) ---
+    let nonceless_token =
+        create_auth_token_from_signing_key_without_nonce(TEST_SECRET_KEY, timestamp, method, path)
+            .unwrap();
+    assert!(nonceless_token.nonce.is_none());
+    assert!(verify_auth_token(&nonceless_token, method, path).unwrap());
+    let nonceless_message =
+        build_auth_message(&nonceless_token.pubkey, timestamp, method, path, None);
+
+    // The two shapes are different domains, so neither signature verifies as
+    // the other — asserted here, in the file other platforms consume.
+    assert_ne!(auth_message, nonceless_message);
+    let stripped = AuthToken {
+        nonce: None,
+        ..auth_token.clone()
+    };
+    assert!(!verify_auth_token(&stripped, method, path).unwrap());
 
     // --- PIN encryption roundtrip ---
     let test_nsec = "nsec1test1234567890abcdef1234567890abcdef1234567890";
@@ -546,6 +582,9 @@ fn generate_and_verify_test_vectors() {
             path: path.to_string(),
             token: auth_token,
             valid: true,
+            message_hex: hex::encode(&auth_message),
+            nonceless_token,
+            nonceless_message_hex: hex::encode(&nonceless_message),
         },
         pin_encryption: PinEncryptionVectors {
             pin: TEST_PIN.to_string(),
