@@ -9,13 +9,13 @@ private struct EntityTypeCustomizeBody: Codable {
 struct EntityTypeEditorView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State var entityType: CaseEntityTypeDefinition
-    var onSave: (CaseEntityTypeDefinition) -> Void
+    @State var entityType: EntityType
+    var onSave: (EntityType) -> Void
     @State private var isSaving = false
     @State private var fields: [EditableField] = []
     @State private var saveError: String?
 
-    // Mutable copies for editing (CaseEntityTypeDefinition has let properties)
+    // Mutable copies for editing (generated `EntityType` has let properties)
     @State private var editLabel: String = ""
     @State private var editLabelPlural: String = ""
     @State private var editShowInNav: Bool = true
@@ -55,7 +55,7 @@ struct EntityTypeEditorView: View {
             .onAppear {
                 editLabel = entityType.label
                 editLabelPlural = entityType.labelPlural
-                editShowInNav = entityType.showInNavigation ?? true
+                editShowInNav = entityType.showInNavigation
             }
         }
     }
@@ -70,7 +70,7 @@ struct EntityTypeEditorView: View {
                     labelPlural: editLabelPlural,
                     showInNavigation: editShowInNav
                 )
-                let updated: CaseEntityTypeDefinition = try await appState.apiService.request(
+                let updated: EntityType = try await appState.apiService.request(
                     method: "PATCH",
                     path: appState.apiService.hp("/api/settings/cms/entity-types/\(entityType.id)/customize"),
                     body: body

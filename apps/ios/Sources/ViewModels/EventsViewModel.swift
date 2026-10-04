@@ -18,13 +18,13 @@ final class EventsViewModel {
     let pageSize: Int = 50
 
     var selectedEvent: AppCaseEvent?
-    var selectedEntityType: CaseEntityTypeDefinition?
+    var selectedEntityType: EntityType?
 
     /// Entity types with category='event' only.
-    var eventEntityTypes: [CaseEntityTypeDefinition] = []
+    var eventEntityTypes: [EntityType] = []
 
     /// All entity types (for reference).
-    var allEntityTypes: [CaseEntityTypeDefinition] = []
+    var allEntityTypes: [EntityType] = []
 
     /// Whether CMS is enabled.
     var cmsEnabled: Bool?
@@ -56,7 +56,7 @@ final class EventsViewModel {
         max(1, Int(ceil(Double(totalEvents) / Double(pageSize))))
     }
 
-    func entityType(for id: String) -> CaseEntityTypeDefinition? {
+    func entityType(for id: String) -> EntityType? {
         allEntityTypes.first { $0.id == id }
     }
 
@@ -93,7 +93,7 @@ final class EventsViewModel {
 
         // Load entity types
         do {
-            let response: EntityTypesResponse = try await apiService.request(
+            let response: EntityTypeListResponse = try await apiService.request(
                 method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
             )
             allEntityTypes = response.entityTypes.filter { $0.isArchived != true }

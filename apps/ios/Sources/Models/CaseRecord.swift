@@ -1,41 +1,5 @@
 import Foundation
 
-// MARK: - CaseRecord
-// Client-only: generated `RecordListResponseRecord` uses `Double` for counts,
-// `BlindIndex` enum for blind indexes, and quicktype envelope names. This client
-// model uses `Int` for counts and `String` for identifiers.
-
-/// A case record from the CMS — an encrypted, structured entity stored in CaseDO.
-/// Summary tier is decryptable by assigned volunteers; fields/PII by admins only.
-struct CaseRecord: Codable, Identifiable, Sendable {
-    let id: String
-    let hubId: String?
-    let entityTypeId: String
-    let caseNumber: String?
-    let statusHash: String
-    let severityHash: String?
-    let categoryHash: String?
-    let assignedTo: [String]
-    let blindIndexes: [String: String]?
-    let encryptedSummary: String?
-    let summaryEnvelopes: [CaseEnvelope]?
-    let encryptedFields: String?
-    let fieldEnvelopes: [CaseEnvelope]?
-    let encryptedPII: String?
-    let piiEnvelopes: [CaseEnvelope]?
-    let contactCount: Int?
-    let interactionCount: Int?
-    let fileCount: Int?
-    let reportCount: Int?
-    let eventIds: [String]?
-    let reportIds: [String]?
-    let parentRecordId: String?
-    let createdAt: String
-    let updatedAt: String
-    let closedAt: String?
-    let createdBy: String?
-}
-
 // MARK: - CaseEnvelope
 // Typealias to generated `RecipientEnvelope` — both have identical shape: {ct, enc, pubkey}.
 // Many generated envelope types (PurpleFieldEnvelope, StickyPiiEnvelope, EventDetailEnvelope,
@@ -44,11 +8,33 @@ struct CaseRecord: Codable, Identifiable, Sendable {
 typealias CaseEnvelope = RecipientEnvelope
 
 // MARK: - CaseEnumOption
-// Typealias to generated `EnumOption` — identical fields:
-// {value, label, color?, icon?, order, isClosed?, isDefault?, isDeprecated?}.
-// Used for statuses, severities, categories, and contact roles in entity type definitions.
+// Typealias to generated `SharedStatus` — the entity type definition schema's
+// enum option shape ({value, label, color?, icon?, order, isClosed?, isDefault?,
+// isDeprecated?}), used for statuses, severities, categories, and contact roles.
 
-typealias CaseEnumOption = EnumOption
+typealias CaseEnumOption = SharedStatus
+
+extension SharedStatus: Identifiable {
+    public var id: String { value }
+}
+
+extension SharedStatus: Equatable {
+    public static func == (lhs: SharedStatus, rhs: SharedStatus) -> Bool {
+        lhs.value == rhs.value && lhs.label == rhs.label
+    }
+}
+
+extension SharedStatus {
+    /// Convenience init matching the old `CaseEnumOption` argument order.
+    init(value: String, label: String, color: String? = nil, icon: String? = nil,
+         order: Int = 0, isDefault: Bool? = nil, isClosed: Bool? = nil, isDeprecated: Bool? = nil) {
+        self.init(color: color, icon: icon, isClosed: isClosed, isDefault: isDefault,
+                  isDeprecated: isDeprecated, label: label, order: order, value: value)
+    }
+}
+
+// The report-types schema generates the structurally identical `EnumOption`
+// (aliased as `StatusOption` in ReportType.swift); keep its UI conveniences here.
 
 extension EnumOption: Identifiable {
     public var id: String { value }
@@ -61,7 +47,7 @@ extension EnumOption: Equatable {
 }
 
 extension EnumOption {
-    /// Convenience init matching the old `CaseEnumOption` / `StatusOption` argument order.
+    /// Convenience init matching the old `StatusOption` argument order.
     init(value: String, label: String, color: String? = nil, icon: String? = nil,
          order: Int = 0, isDefault: Bool? = nil, isClosed: Bool? = nil, isDeprecated: Bool? = nil) {
         self.init(color: color, icon: icon, isClosed: isClosed, isDefault: isDefault,
@@ -69,101 +55,86 @@ extension EnumOption {
     }
 }
 
-// MARK: - EntityTypeDefinition
-// Client-only: generated `EntityTypeDefinition` uses typed enums for `category`,
-// `defaultAccessLevel`, non-optional booleans, `hubID` (CodingKey renamed), and
-// `EntityTypeDefinitionField` sub-types. This client model has iOS-specific optionality
-// and uses `CaseEnumOption` (= EnumOption) for all option arrays.
+// MARK: - Entity type UI extensions
+// Entity type lists decode to generated `EntityTypeListResponse` whose elements
+// are generated `EntityType` (packages/protocol/schemas/entity-schema.ts; the
+// item schema generates the structurally identical `EntityTypeDefinition`).
+// Only the display helpers below are client-side.
 
-/// Template-driven schema defining a case type: fields, statuses, severities, numbering.
-struct CaseEntityTypeDefinition: Codable, Identifiable, Sendable {
-    let id: String
-    let hubId: String?
-    let name: String
-    let label: String
-    let labelPlural: String
-    let description: String?
-    let icon: String?
-    let color: String?
-    let category: String?
-    let templateId: String?
-    let templateVersion: String?
-    let fields: [CaseFieldDefinition]
-    let statuses: [CaseEnumOption]
-    let defaultStatus: String
-    let closedStatuses: [String]?
-    let severities: [CaseEnumOption]?
-    let defaultSeverity: String?
-    let categories: [CaseEnumOption]?
-    let contactRoles: [CaseEnumOption]?
-    let numberPrefix: String?
-    let numberingEnabled: Bool?
-    let defaultAccessLevel: String?
-    let piiFields: [String]?
-    let allowSubRecords: Bool?
-    let allowFileAttachments: Bool?
-    let allowInteractionLinks: Bool?
-    let showInNavigation: Bool?
-    let showInDashboard: Bool?
-    let accessRoles: [String]?
-    let editRoles: [String]?
-    let isArchived: Bool?
-    let isSystem: Bool?
-    let createdAt: String?
-    let updatedAt: String?
+extension EntityType: Identifiable {}
+
+extension SharedEntityTypeDefinitionField: Identifiable {}
+
+extension SharedEntityTypeDefinitionField {
+    /// Field type mapped onto the client's display enum (same raw values as
+    /// generated `SharedType`, minus `location` which renders as text).
+    var fieldType: CaseFieldType {
+        CaseFieldType(rawValue: type.rawValue) ?? .text
+    }
+
+    /// Convenience init for previews — accepts the client-era argument shapes
+    /// and maps them onto the generated memberwise init.
+    init(id: String, name: String, label: String, type: String,
+         required: Bool?, options: [SharedEntityTypeDefinitionFieldOption]?,
+         lookupId: String?, validation: SharedEntityTypeDefinitionFieldValidation?,
+         section: String?, helpText: String?, placeholder: String?,
+         defaultValue: FieldValue?, order: Int, indexable: Bool, indexType: String?,
+         accessLevel: String, accessRoles: [String]?, visibleToUsers: Bool,
+         editableByUsers: Bool, templateId: String?, hubEditable: Bool?) {
+        self.init(accessLevel: SharedAccessLevel(rawValue: accessLevel) ?? .all,
+                  accessRoles: accessRoles, createdAt: nil, defaultValue: defaultValue,
+                  editableByUsers: editableByUsers, helpText: helpText,
+                  hubEditable: hubEditable ?? false, id: id, indexable: indexable,
+                  indexType: SharedIndexType(rawValue: indexType ?? "none") ?? .none,
+                  label: label, locationOptions: nil, lookupID: lookupId, name: name,
+                  options: options, order: order, placeholder: placeholder,
+                  sharedEntityTypeDefinitionFielRequired: required ?? false,
+                  section: section, showWhen: nil, templateID: templateId,
+                  type: SharedType(rawValue: type) ?? .text, validation: validation,
+                  visibleToUsers: visibleToUsers)
+    }
 }
 
-// MARK: - CaseFieldDefinition
-// Client-only: generated `EntityTypeDefinitionField` uses `JoinFieldType` enum
-// and different optionality patterns.
-
-/// A field within an entity type schema.
-struct CaseFieldDefinition: Codable, Identifiable, Sendable {
-    let id: String
-    let name: String
-    let label: String
-    let type: String
-    let required: Bool?
-    let options: [CaseFieldOption]?
-    let lookupId: String?
-    let validation: CaseFieldValidation?
-    let section: String?
-    let helpText: String?
-    let placeholder: String?
-    let defaultValue: String?
-    let order: Int?
-    let indexable: Bool?
-    let indexType: String?
-    let accessLevel: String?
-    let accessRoles: [String]?
-    let visibleToVolunteers: Bool?
-    let editableByVolunteers: Bool?
-    let templateId: String?
-    let hubEditable: Bool?
-
-    var fieldType: CaseFieldType {
-        CaseFieldType(rawValue: type) ?? .text
+extension EntityType {
+    /// Convenience init for previews — accepts the client-era argument shapes
+    /// and maps them onto the generated memberwise init, defaulting the
+    /// assignment-intelligence fields the client doesn't model.
+    init(id: String, name: String, label: String, labelPlural: String, description: String,
+         icon: String?, color: String?, category: String,
+         templateId: String?, templateVersion: String?,
+         fields: [SharedEntityTypeDefinitionField],
+         statuses: [SharedStatus], defaultStatus: String, closedStatuses: [String],
+         severities: [SharedStatus]?, defaultSeverity: String?,
+         categories: [SharedStatus]?, contactRoles: [SharedStatus]?,
+         numberPrefix: String?, numberingEnabled: Bool,
+         defaultAccessLevel: String, piiFields: [String]?,
+         allowSubRecords: Bool, allowFileAttachments: Bool, allowInteractionLinks: Bool,
+         showInNavigation: Bool, showInDashboard: Bool,
+         accessRoles: [String]?, editRoles: [String]?,
+         isArchived: Bool, isSystem: Bool, createdAt: String, updatedAt: String) {
+        self.init(accessRoles: accessRoles, allowFileAttachments: allowFileAttachments,
+                  allowInteractionLinks: allowInteractionLinks, allowSubRecords: allowSubRecords,
+                  autoAssign: false, autoAssignThreshold: 30, categories: categories,
+                  category: SharedEntityTypeDefinitionCategory(rawValue: category) ?? .categoryCase,
+                  closedStatuses: closedStatuses, color: color, contactRoles: contactRoles,
+                  createdAt: createdAt,
+                  defaultAccessLevel: SharedDefaultAccessLevel(rawValue: defaultAccessLevel) ?? .assigned,
+                  defaultDisplayType: nil, defaultSeverity: defaultSeverity, defaultStatus: defaultStatus,
+                  description: description, displayTypes: nil, editRoles: editRoles, fields: fields,
+                  hubID: "", icon: icon, id: id, isArchived: isArchived, isSystem: isSystem,
+                  label: label, labelPlural: labelPlural, name: name,
+                  notifyContactsOnStatusChange: false, numberingEnabled: numberingEnabled,
+                  numberPrefix: numberPrefix, piiFields: piiFields ?? [],
+                  requiredSpecializations: [], severities: severities,
+                  showInDashboard: showInDashboard, showInNavigation: showInNavigation,
+                  statuses: statuses, templateID: templateId, templateVersion: templateVersion,
+                  updatedAt: updatedAt)
     }
 }
 
 /// Field type enum matching the protocol field types.
 enum CaseFieldType: String, Sendable {
     case text, textarea, number, select, multiselect, checkbox, date, file
-}
-
-/// Key-label option for select/multiselect fields.
-struct CaseFieldOption: Codable, Sendable {
-    let key: String
-    let label: String
-}
-
-/// Validation constraints for a field.
-struct CaseFieldValidation: Codable, Sendable {
-    let minLength: Int?
-    let maxLength: Int?
-    let min: Int?
-    let max: Int?
-    let pattern: String?
 }
 
 // MARK: - Generated type extensions
@@ -174,6 +145,8 @@ extension CaseInteraction: Identifiable {}
 extension Interaction: Identifiable {}
 extension Evidence: Identifiable {}
 
+extension SharedRecordListResponseRecord: Identifiable {}
+
 extension RecordContact: Identifiable {
     public var id: String { contactID }
 
@@ -181,45 +154,11 @@ extension RecordContact: Identifiable {
     var contactId: String { contactID }
 }
 
-// MARK: - EvidenceItem
-// Client-only: generated `Evidence` uses typed enums (`SharedClassification`,
-// `HashAlgorithm`) while this client model uses raw strings for flexibility.
-
-/// Evidence metadata for a file attached to a case.
-struct EvidenceItem: Codable, Identifiable, Sendable {
-    let id: String
-    let caseId: String
-    let fileId: String
-    let filename: String
-    let mimeType: String
-    let sizeBytes: Int?
-    let classification: String
-    let integrityHash: String
-    let hashAlgorithm: String?
-    let source: String?
-    let sourceDescription: String?
-    let encryptedDescription: String?
-    let descriptionEnvelopes: [CaseEnvelope]?
-    let uploadedAt: String
-    let uploadedBy: String?
-    let custodyEntryCount: Int?
-}
-
 // MARK: - API Response Wrappers
 
-struct RecordsListResponse: Codable, Sendable {
-    let records: [CaseRecord]
-    let total: Int
-    let page: Int?
-    let limit: Int?
-    let hasMore: Bool?
-}
-
-struct EntityTypesResponse: Codable, Sendable {
-    let entityTypes: [CaseEntityTypeDefinition]
-}
-
-// InteractionsResponse and EvidenceListResponse are defined in generated Types.swift.
+// Record/evidence/interaction list responses decode directly to the generated
+// types: `RecordListResponse`, `EvidenceListResponse`, `InteractionsResponse`.
+// Entity type lists decode to generated `EntityTypeListResponse`.
 
 struct RecordContactsResponse: Codable, Sendable {
     let contacts: [RecordContact]
@@ -238,11 +177,4 @@ struct UpdateRecordRequest: Codable, Sendable {
 
 struct AssignRecordRequest: Codable, Sendable {
     let pubkeys: [String]
-}
-
-struct CreateInteractionRequest: Codable, Sendable {
-    let interactionType: String
-    let encryptedContent: String?
-    let contentEnvelopes: [CaseEnvelope]?
-    let interactionTypeHash: String
 }
