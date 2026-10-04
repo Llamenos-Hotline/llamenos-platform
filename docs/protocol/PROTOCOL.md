@@ -1,6 +1,6 @@
 # Llamenos Interoperability Protocol Specification
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Status:** Canonical reference for all client implementations
 **Audience:** Desktop (Tauri), Mobile (Native Swift/Kotlin), and any third-party client implementors
 
@@ -15,7 +15,7 @@ This document is the definitive wire-format specification for interoperating wit
 3. [WebSocket Event Schema](#3-WebSocket-event-schema)
 4. [REST API Endpoints](#4-rest-api-endpoints)
 5. [Push Notification Protocol](#5-push-notification-protocol)
-6. [Device Provisioning Protocol](#6-device-provisioning-protocol)
+6. [Device Linking Protocol](#6-device-linking-protocol)
 7. [Permission Model](#7-permission-model)
 - [Appendix A: Library Dependencies](#appendix-a-library-dependencies-for-implementors)
 - [Appendix B: Type Definitions Reference](#appendix-b-type-definitions-reference)
@@ -187,7 +187,8 @@ Every HPKE/ECIES derivation, HKDF context, HMAC key, and signature binding uses 
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `LABEL_DEVICE_PROVISION` | `llamenos:device-provision` | Device provisioning ECDH shared key derivation |
+| `LABEL_DEVICE_PROVISION` | `llamenos:device-provision` | Device provisioning ECDH shared key derivation (HKDF info) |
+| `LABEL_DEVICE_PROVISION_BUNDLE` | `llamenos:device-provision-bundle:v1` | AEAD associated data for the v1 device key bundle (§6.7); ships with PR #1382 |
 
 #### SAS Verification
 
@@ -2136,27 +2137,42 @@ Response: { "available": boolean, "provider": "twilio"|"signalwire"|null }
 ```
 POST /api/provision/rooms
 Auth: None (new device has no auth)
-Body: { "ephemeralPubkey": hex66 }
+Body: { "ephemeralPubkey": hex64 }
 Response: { "roomId": "uuid", "token": "random_string" }
+
+POST /api/provision/rooms/:id/claim
+Auth: Required (primary device — the interim authorization proof, §6.1)
+Body: { "token": string, "primaryEncryptionPubkey": hex64 }
+Response: { "ok": true }
+Effect: room remains "waiting"; GET responses begin including
+"primaryEncryptionPubkey" so the new device can display the SAS (§6.6)
+before the payload exists.
 
 GET /api/provision/rooms/:id?token=<token>
 Auth: None
-Response: {
-  "status": "waiting" | "ready" | "expired",
-  "encryptedNsec"?: hex,
-  "primaryPubkey"?: hex64,
-  "ephemeralPubkey"?: hex66
-}
+Response (shape depends on room state, §6.8):
+  { "status": "waiting", "ephemeralPubkey": hex64 }
+  { "status": "waiting", "ephemeralPubkey": hex64,
+    "primaryEncryptionPubkey": hex64 }
+  { "status": "ready", "ephemeralPubkey": hex64,
+    "primaryEncryptionPubkey": hex64,
+    "encryptedNsec": hex186,
+    "primaryPubkey": hex64 }
+Expired or wrong token: 404 / 410; per-room token-guess cap: 429.
 
 POST /api/provision/rooms/:id/payload
 Auth: Required (primary device must be authenticated)
 Body: {
   "token": string,
-  "encryptedNsec": hex,
-  "primaryPubkey": hex64
+  "encryptedNsec": hex186,   // hex(nonce||ct||tag) of the v1 key bundle, §6.7
+  "primaryPubkey": hex64     // primary Ed25519 signing pubkey
 }
 Response: { "ok": true }
 ```
+
+The full linking ceremony — QR format, roles, SAS verification, payload
+layout, failure modes — is specified in Section 6. The server relays
+ciphertext only; it cannot decrypt the payload or compute the SAS.
 
 ### 4.20 Telephony Webhooks
 
@@ -4365,140 +4381,126 @@ This constraint preserves the multi-hub axiom: a user browsing Hub A must not ha
 
 ---
 
-## 6. Device Provisioning Protocol
+## 6. Device Linking Protocol
 
-New devices can be linked to an existing account using a Signal-style provisioning protocol with ephemeral X25519 ECDH key exchange and Short Authentication String (SAS) verification.
+Llamenos has exactly **one** device-linking protocol. Desktop (Tauri), iOS, and Android MUST implement this section and only this section; per-client variants of the QR format, transport, role assignment, or payload are protocol violations (issue #1027).
 
-> **Migration Note (v2.0):** The server currently accepts the `encryptedNsec` field for backward compatibility with pre-Phase-6 clients. The protocol described below reflects the Phase 6 target using per-device keypairs. New implementations MUST implement the Phase 6 protocol. The server field is named `encryptedNsec` but carries the Phase 6 device key bundle payload described here.
+This section reconciles the three divergent implementations that #1027 replaced:
 
-### 6.1 Protocol Flow
+| Retired implementation | Disposition |
+|---|---|
+| Desktop raw-JSON QR `{"r":roomId,"t":token}` | **Dropped** — no deep-link registration on mobile; replaced by the URI form in §6.4 |
+| Android `llamenos:provision:<roomId>:<relayUrl>` QR | **Dropped** — the relay URL is obsolete; HTTP rooms are the only transport |
+| iOS `llamenos-link://<relay>/<roomId>` QR | **Kept prefix**, canonicalized to the §6.4 URI form; the relay authority position is obsolete |
+| iOS Nostr-relay WebSocket transport (`kind 20001`) | **Dropped** — collided with the typing-indicator kind in `packages/shared/event-kinds.ts`; the server implements only the HTTP room API |
+| Android mock flow (ECDH against `SecureRandom`, `delay(2000)` success) | **Dropped** — never a protocol; the §6.10 success-reporting rule exists to make this class of defect impossible |
+| Desktop HTTP-room transport, new device displays QR | **Kept** — matches Signal's role assignment and the deployed server API |
+| Two-seed key-bundle payload (PR #1382) | **Kept** — the interim payload, specified normatively in §6.7 |
+
+> **Profile split (interim vs. target).** The roles (§6.1), transport, and SAS ceremony (§6.3–§6.6) in this section are **final**. The payload in §6.7 is the **interim seed-transport profile**, in force until the identity layer (§2.11 "Device Authorization (Sigchain)") has a PUK and a sigchain with application call sites. §6.12 defines the **target profile**, which replaces only the payload — the QR format, room transport, SAS ceremony, and failure rules do not change.
+
+### 6.1 Roles
+
+- **New device** — the device being linked. It holds no account credentials yet. It generates the ephemeral ECDH keypair, creates the room, and **displays** the QR code. This is Signal's role assignment and the desktop's existing flow; clients whose link screens only scanned (iOS, Android) MUST implement the display side on the new device.
+- **Primary device** — an already-authorized device holding the user's device keys (§2.11). It **scans** the QR, drives the SAS ceremony, and posts the encrypted key bundle. The payload endpoint requires an authenticated session — that authentication, plus the SAS ceremony, is the interim authorization proof. See §6.12 for what the identity layer adds.
+- **Server** — untrusted relay. It stores the ephemeral pubkey, the claimed primary encryption pubkey, and the encrypted payload. It never sees plaintext key material, the provisioning key, or the SAS.
+
+Both devices MUST execute the flow with a human present: the SAS comparison (§6.6) is a user action, not a background check. An implementation that "links" without one is non-conformant.
+
+### 6.2 Primitives and Domain Separation
+
+All cryptography is X25519 ECDH (32-byte Montgomery u-coordinate keys, hex-encoded on the wire; implementations MUST reject the all-zero shared secret, which indicates a low-order peer key), HKDF-SHA256, and AES-256-GCM (12-byte nonce, 16-byte tag).
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `LABEL_PROVISIONING_SALT` | `llamenos:provisioning:v1` | HKDF salt for the payload AEAD key |
+| `LABEL_DEVICE_PROVISION` | `llamenos:device-provision` | HKDF info for the payload AEAD key |
+| `LABEL_DEVICE_PROVISION_BUNDLE` | `llamenos:device-provision-bundle:v1` | AEAD associated data binding payload-format v1 — a payload built for any other format fails the GCM tag check (downgrade defence) |
+| `SAS_SALT` | `llamenos:sas` | SAS HKDF salt |
+| `SAS_INFO` | `llamenos:provisioning-sas` | SAS HKDF info |
+
+`LABEL_DEVICE_PROVISION_BUNDLE` is added by the seed-transport fix (PR #1382); until that lands, conforming implementations pre-register the constant. The authoritative source for all domain-separation constants is `packages/protocol/crypto-labels.json` (§2.1).
+
+### 6.3 Protocol Flow
 
 ```
-New Device                          Server                     Primary Device
------------                         ------                     ---------------
-1. Generate ephemeral keypair (X25519):
-   eSK, ePK = X25519.generateKey()
-   // eSK: 32 bytes (private), ePK: 32 bytes (public)
+New Device                           Server                    Primary Device
+----------                           ------                    ----------------
+1. eSK, ePK = X25519.generate()
+   (fresh per linking attempt)
 
 2. POST /api/provision/rooms
    { ephemeralPubkey: hex(ePK) }
-                                    Creates room with
-                                    roomId + token
+                                  creates room: roomId, token
    <-- { roomId, token }
 
-3. Display QR code:
-   JSON.stringify({ r: roomId, t: token })
-   (or short code: roomId[0..8])
+3. Display QR: llamenos-link://provision?r=<roomId>&t=<token> (§6.4)
 
-4. Poll: GET /api/provision/rooms/:id
-   ?token=<token>
-                                                               Scans QR / enters code
+4. Poll GET /api/provision/rooms/:id?token
+                                                           5. Scan QR; GET room (token)
+                                                              <-- { ephemeralPubkey: hex(ePK) }
+                                                           6. shared = X25519(encSK, ePK)
+                                                              sas = derive (§6.6)
+                                                              DISPLAY sas on primary screen
+                                                           7. POST /api/provision/rooms/:id/claim
+                                                              { token, primaryEncryptionPubkey: hex(encPK) }
+                                  stores primaryEncryptionPubkey
+   <-- poll now returns primaryEncryptionPubkey
+8. shared = X25519(eSK, encPK)
+   sas = derive (§6.6)
+   DISPLAY sas on new-device screen
 
-                                                        5. GET /api/provision/rooms/:id
-                                                           ?token=<token>
-                                                           <-- { ephemeralPubkey: hex(ePK) }
+9. USER COMPARES BOTH SCREENS (§6.6)
+   match → continue;  mismatch → ABORT (§6.10)
 
-                                                        6. Compute shared secret (X25519):
-                                                           shared = X25519(primarySK, ePK)
-                                                           // shared: 32 bytes (raw X25519 output)
-                                                           // X25519 is symmetric: X25519(eSK, primaryPK)
-                                                           //   = X25519(primarySK, ePK)
+                                                           10. bundle = 0x01 || signing_seed || encryption_seed (§6.7)
+                                                               prov_key = HKDF(SHA-256, shared,
+                                                                 salt=LABEL_PROVISIONING_SALT,
+                                                                 info=LABEL_DEVICE_PROVISION, len=32)
+                                                               nonce = random(12)
+                                                               ct = AES-256-GCM(prov_key, nonce, bundle,
+                                                                 aad=LABEL_DEVICE_PROVISION_BUNDLE)
+                                                           11. POST /api/provision/rooms/:id/payload (authenticated)
+                                                               { token, encryptedNsec: hex(nonce||ct),
+                                                                 primaryPubkey: hex(ed25519 signing pubkey) }
 
-                                                        7. Compute SAS:
-                                                           sasBytes = HKDF(SHA-256, shared,
-                                                             salt=UTF-8("llamenos:sas"),
-                                                             info=UTF-8("llamenos:provisioning-sas"),
-                                                             length=4)
-                                                           num = (sasBytes[0]<<24 | sasBytes[1]<<16 |
-                                                                  sasBytes[2]<<8  | sasBytes[3]) >>> 0
-                                                           code = (num % 1000000).padStart(6, '0')
-                                                           Display: "XXX XXX"
-
-8. Also compute SAS (new device side):
-   shared = X25519(eSK, primaryPK)
-   // Same X25519 shared secret → same HKDF → same SAS
-   Same HKDF derivation → same code
-   Display: "XXX XXX"
-
-9. User visually compares                                    User visually compares
-   both codes match? -->                                     <-- both codes match?
-
-                                                        10. Derive provisioning key via HKDF:
-                                                            prov_key = HKDF(SHA-256, shared,
-                                                              salt=UTF-8("llamenos:provisioning:v1"),
-                                                              info=UTF-8("llamenos:provisioning:v1"),
-                                                              length=32)
-                                                            // Uses LABEL_PROVISIONING_SALT
-
-                                                        11. Build device key bundle:
-                                                            bundle = JSON.stringify({
-                                                              signingPubkey: hex(primary_ed25519_pubkey),
-                                                              encPubkey: hex(primary_x25519_pubkey),
-                                                              pukEncrypted: <HPKE-wrapped PUK seed for
-                                                                             new device's X25519 key>
-                                                            })
-
-                                                        12. Encrypt device key bundle:
-                                                            iv = random(12)
-                                                            ct_with_tag = AES-256-GCM.encrypt(
-                                                              key = prov_key,
-                                                              iv  = iv,
-                                                              message = UTF-8(bundle)
-                                                            )
-                                                            encryptedPayload = hex(iv || ct_with_tag)
-
-                                                        13. POST /api/provision/rooms/:id/payload
-                                                            Auth: Required (primary device)
-                                                            {
-                                                              token,
-                                                              encryptedNsec: encryptedPayload,
-                                                              // Note: field named "encryptedNsec" for
-                                                              // backward compat; payload is device bundle
-                                                              primaryPubkey: hex(primary_ed25519_pubkey)
-                                                            }
-
-14. Poll returns status: "ready"
-    { encryptedNsec: encryptedPayload, primaryPubkey }
-
-15. Derive provisioning key (same as step 10):
-    shared = X25519(eSK, primaryPK)
-    prov_key = HKDF(SHA-256, shared,
-      salt=UTF-8("llamenos:provisioning:v1"),
-      info=UTF-8("llamenos:provisioning:v1"),
-      length=32)
-
-16. Decrypt device key bundle:
-    data = hex_to_bytes(encryptedPayload)
-    iv   = data[0..12]
-    ct   = data[12..]
-    bundle_json = UTF-8_decode(AES-256-GCM.decrypt(prov_key, iv, ct))
-    bundle = JSON.parse(bundle_json)
-
-17. New device now has:
-    - Primary device's signing + encryption pubkeys (for sigchain verification)
-    - PUK (Per-User Key) encrypted for new device's X25519 key
-    New device decrypts PUK using its own X25519 secret key via HPKE.Open
-    with label LABEL_PUK_WRAP_TO_DEVICE.
-
-18. New device generates its own Ed25519 + X25519 keypairs (Section 2.11)
-    and registers via sigchain with primary device's authorization.
+   <-- poll returns status "ready" + encryptedNsec + primaryPubkey
+12. data = hex_decode(encryptedNsec)
+    bundle' = AES-256-GCM.decrypt(prov_key, nonce=data[0..12], ct=data[12..],
+      aad=LABEL_DEVICE_PROVISION_BUNDLE)
+    CHECK: tag authenticates, bundle'.len == 65, bundle'[0] == 0x01
+13. re-derive sas from shared; assert equal to the code confirmed in step 9
+14. import BOTH seeds into §2.11 PIN-encrypted device storage
+    report success (§6.10 rule)
 ```
+
+Notes:
+
+- `encSK`/`encPK` are the primary device's long-term X25519 encryption keypair (§2.11). The ECDH uses the long-term encryption key so the new device can compute the same SAS from the claimed `primaryEncryptionPubkey` before any payload exists.
+- The `primaryPubkey` field of the payload post is the primary's **Ed25519 signing** pubkey — a different key from the `primaryEncryptionPubkey` claimed in step 7. Servers and clients MUST NOT conflate them.
+- The JSON envelope schemas (`createRoomBody`, `roomPayloadBody`, the claim body, and the room-status response) are Zod schemas in `packages/protocol/schemas/provisioning`; the binary bundle (§6.7) is not JSON and has no Zod schema.
 
 #### Server Implementation
 
 Cross-reference: `apps/worker/routes/provisioning.ts`, `apps/worker/services/identity.ts`.
 
-The server stores only the ephemeral pubkey and encrypted payload — it cannot decrypt the payload. The `encryptedNsec` field in the server API carries the Phase 6 device key bundle described above.
+The server stores only the ephemeral pubkey, the claimed primary encryption pubkey, and the encrypted payload — it cannot decrypt the payload or compute the SAS. The `encryptedNsec` field name is retained for backward compatibility with pre-Phase-6 clients; it carries the v1 key bundle ciphertext described in §6.7.
 
-### 6.2 QR Code Format
+### 6.4 QR Code Format
 
-```json
-{"r":"<roomId>","t":"<token>"}
+One canonical form on all platforms:
+
+```
+llamenos-link://provision?r=<roomId>&t=<token>
 ```
 
-Compact JSON. The `r` and `t` keys are shortened for QR code density.
+- `r` — the server-issued room ID.
+- `t` — the server-issued opaque token, presented by both devices on every room request.
+- `s` — OPTIONAL base64url-encoded server origin, for clients linking against a non-default server. Implementations MUST default to their configured server when `s` is absent.
 
-### 6.3 Short Code (Manual Entry)
+Parsing rules: the scheme is case-insensitive; unknown query parameters are ignored; any other QR content (raw JSON, `llamenos:provision:…`, a relay host in the authority position, wrong scheme) MUST be rejected with a parse error, never interpreted.
+
+### 6.5 Short Code (Manual Entry)
 
 For users who cannot scan a QR code:
 
@@ -4507,21 +4509,190 @@ short_code = roomId[0..8].toUpperCase()
 // e.g., "A1B2C3D4"
 ```
 
-### 6.4 SAS Display Format
+The short code is a UX fallback for locating the room, not a secret; the token still comes from the primary scanning the full QR or from the user transcribing it. (Until transcribed-token UX lands, the short code flow is desktop-only; mobile surfaces scan-only.)
+
+### 6.6 SAS Verification Ceremony
+
+Derivation (both sides, independently):
 
 ```
-"XXX XXX"
-// e.g., "847 293"
-// Two groups of three digits separated by a space
+sasBytes = HKDF(SHA-256, ikm=shared,
+           salt=UTF-8("llamenos:sas"),
+           info=UTF-8("llamenos:provisioning-sas"),
+           length=4)
+num  = sasBytes[0]<<24 | sasBytes[1]<<16 | sasBytes[2]<<8 | sasBytes[3]   // unsigned big-endian
+code = (num % 1000000), zero-padded to 6 digits
+display = "XXX XXX"   // two groups of three digits, space-separated
 ```
 
-The SAS code is derived deterministically from the ECDH shared secret. Both devices compute it independently. If the codes match, no man-in-the-middle attack is present.
+Ceremony rules:
 
-### 6.5 Room Lifecycle
+1. Each device displays the code **on its own screen**. The SAS or its derivative MUST NOT travel through the relay.
+2. The primary device MUST NOT post the payload (step 11) until the user confirms the codes match. The claim step (step 7) is the only pre-confirmation write the primary makes, and it exposes only the primary's public encryption key.
+3. The new device MUST NOT import keys (step 14) until the user has confirmed the code it displayed in step 8. A payload that arrives before confirmation is held, unimported.
+4. After decryption, the new device re-derives the SAS from the ECDH shared secret and asserts equality with the confirmed code before importing (step 13). Because the payload AEAD key derives from the same shared secret the SAS attests, a party that fails the comparison cannot produce a payload the new device accepts.
+5. A mismatch at any point aborts the attempt (§6.10). Both devices discard the ephemeral state and, if the user retries, start a fresh room with fresh ephemeral keys.
 
-- Rooms expire after a configurable timeout (typically 5 minutes).
-- Status transitions: `waiting` -> `ready` -> (consumed)
-- Polling returns `expired` (status 404 or 410) when the room has timed out.
+Security note: 6 digits is ~20 bits of verification entropy. The 80-bit emoji SAS in `packages/crypto/src/sas.rs` (EP02) is a planned upgrade; migrating the ceremony to it changes only §6.6 and is wire-compatible with the same transport.
+
+### 6.7 Device Key Bundle (Interim Payload, v1)
+
+The AEAD plaintext is a 65-byte binary bundle — not JSON:
+
+```
+byte  0      : 0x01                                (PROVISIONING_BUNDLE_VERSION)
+bytes 1..33  : primary Ed25519 signing seed        (32 bytes)
+bytes 33..65 : primary X25519 encryption seed      (32 bytes)
+```
+
+Both seeds are carried, and the new device adopts them exactly as transported. Rationale: the two seeds are independently random (§2.11) and neither is derivable from the other; a payload carrying only one seed forces the receiver to re-derive the other, which yields a different X25519 key than the one existing ciphertext was wrapped to — decryption then fails silently, on every existing note, with no error on either side (the defect fixed by PR #1382, issue #1026). Implementations MUST NOT re-derive one seed from the other during linking, and MUST NOT invent a new derivation to shrink the bundle.
+
+Sealing:
+
+```
+prov_key = HKDF(SHA-256, ikm=shared,
+             salt=UTF-8("llamenos:provisioning:v1"),
+             info=UTF-8("llamenos:device-provision"),
+             length=32)
+nonce    = random(12)                                   // fresh per payload, never reused under one prov_key
+ct       = AES-256-GCM(key=prov_key, nonce=nonce, message=bundle,
+             aad=UTF-8("llamenos:device-provision-bundle:v1"))
+wire     = hex(nonce || ct)                             // 12 + 65 + 16 = 93 bytes = 186 hex chars
+```
+
+The associated data binds the payload to format v1: a payload built for any other provisioning format fails the GCM tag check rather than being accepted, so format changes cannot be silently downgraded. The version byte is checked only **after** the tag verifies, so distinguishing tag failures from version failures leaks nothing. The server field is named `encryptedNsec` for backward compatibility but carries exactly this `wire` value.
+
+### 6.8 Wire Payloads
+
+Room creation (new device, unauthenticated):
+
+```
+POST /api/provision/rooms
+Body:   { "ephemeralPubkey": hex64 }        // hex(ePK), 32-byte X25519 pubkey
+Response: { "roomId": string, "token": string }
+```
+
+Room claim (primary device, authenticated):
+
+```
+POST /api/provision/rooms/:id/claim
+Auth:   Required (primary device session)
+Body:   { "token": string, "primaryEncryptionPubkey": hex64 }   // primary X25519 encryption pubkey
+Response: { "ok": true }
+Effect: room status stays "waiting"; GET responses begin including primaryEncryptionPubkey
+```
+
+Payload post (primary device, authenticated):
+
+```
+POST /api/provision/rooms/:id/payload
+Auth:   Required (primary device session)
+Body:   { "token": string,
+          "encryptedNsec": hex186,           // hex(nonce||ct||tag), §6.7
+          "primaryPubkey": hex64 }           // primary Ed25519 signing pubkey
+Response: { "ok": true }
+```
+
+Room poll (either device, token required; per-room brute-force cap of 3 wrong tokens per 10 minutes):
+
+```
+GET /api/provision/rooms/:id?token=<token>
+Response, status "waiting" (unclaimed):  { "status": "waiting", "ephemeralPubkey": hex64 }
+Response, status "waiting" (claimed):    { "status": "waiting", "ephemeralPubkey": hex64,
+                                           "primaryEncryptionPubkey": hex64 }
+Response, status "ready":                { "status": "ready", "ephemeralPubkey": hex64,
+                                           "primaryEncryptionPubkey": hex64,
+                                           "encryptedNsec": hex186,
+                                           "primaryPubkey": hex64 }
+Expired or wrong token: 404 or 410 with an error body; brute-force cap: 429 + Retry-After
+```
+
+Implementations MUST validate field lengths before decoding: `hex64` = 64 hex chars (32 bytes), `hex186` = 186 hex chars (93 bytes). The primary needs only the token from the QR; the new device needs `primaryEncryptionPubkey` from the poll before it can display the SAS, which is why the claim step exists.
+
+### 6.9 Ordering, Freshness, and Nonce Rules
+
+- **Room TTL.** Rooms expire after a configurable timeout (typically 5 minutes). Status transitions: `waiting` → `ready` → `consumed`. Polling an expired room returns 404 or 410.
+- **Single use.** A room is consumed once the new device has fetched the payload, and MUST NOT be reused. A failed or aborted ceremony starts over: fresh room, fresh token, fresh ephemeral keypair on the new device.
+- **No timestamps on the wire.** Freshness is enforced by room TTL plus single-use rooms, not by comparing clocks — device clocks cannot be assumed correct, and no linking message carries a timestamp.
+- **Nonce discipline.** The 12-byte GCM nonce MUST be fresh random per payload. Since each room has a fresh ECDH shared secret, `prov_key` is per-room; nonce reuse across rooms is impossible for an honest implementation and catastrophic within one.
+- **Token entropy.** The server-issued token MUST be unguessable (≥128 bits); it is the room's only access control after creation. The `t` parameter travels in the QR, so the QR itself is the secret — treat displayed-linking screens like a password prompt (auto-hide, no screenshots where the platform supports blocking them).
+- **Key zeroization.** Ephemeral keys and the shared secret are zeroized after the attempt terminates, success or failure (§2.11 storage applies to the imported seeds).
+
+### 6.10 Failure Modes and the Success-Reporting Rule
+
+The success-reporting rule (issue #1028) is normative:
+
+> **A client MUST NOT report linking success, transition to a success state, enable account access, or persist any "linked" flag unless it has (a) authenticated the payload AEAD tag, (b) validated the bundle length (65 bytes) and version byte (0x01), and (c) persisted both imported seeds in §2.11 PIN-encrypted storage.** Every other terminal outcome MUST surface as an explicit failure to the user. A success screen for an exchange that did not happen — including simulated delays standing in for cryptography — is a protocol violation, not a UX choice.
+
+Required behaviour per failure:
+
+| Failure | Detected by | Required behaviour |
+|---|---|---|
+| SAS mismatch | user comparison (§6.6) | Abort. Primary MUST NOT post the payload; new device MUST NOT import. Discard ephemeral state. |
+| SAS re-derivation mismatch after decrypt | new device, step 13 | Treat as tampering: failure, no import, no success state. |
+| GCM tag failure | new device decrypt | Failure. Never import partial plaintext. A payload from another format is indistinguishable from tampering at this layer — that is the downgrade defence working. |
+| Wrong bundle version byte | new device, after tag verifies | Failure; no partial import; no downgrade to "best effort". |
+| Bundle length ≠ 65 after decrypt | new device | Failure. |
+| All-zero ECDH output (low-order peer key) | either device | Failure; reject the peer key. |
+| Room expired / wrong token (404/410) | either device, polling | Explicit failure UI; offer retry with a fresh room. |
+| Brute-force cap (429 + Retry-After) | either device | Stop polling; do not retry-loop. |
+| Payload arrives before user confirms SAS | new device | Hold unimported until confirmation; the import gate is step 13–14, not payload arrival. |
+| Unauthenticated metadata in any envelope | either device | Security decisions MUST be made only on AEAD-authenticated content (inside the tag) or server-authenticated session state. Fields outside the ciphertext are advisory at best — "verify a signature only if the field is present" is a known vulnerability class (the retired iOS implementation), not an acceptable pattern. |
+
+### 6.11 Revocation Interplay
+
+The interim profile gives every linked device the primary's keypair. Consequences, stated so no client over-promises:
+
+- **Revoking one linked device is impossible without rotating the user's keys.** Under §4.24, device records can be removed, but because linked devices share one Ed25519/X25519 identity, the only response to a suspected compromise of any linked device is rotating the user's device keypair — which invalidates every linked device — and re-linking. Clients MUST say "revoke this device and rotate keys", not "revoke this device".
+- **Device-level audit cannot distinguish linked devices** under the interim profile; per-device revocation and audit arrive with the target profile (§6.12) and the per-device hub-key envelopes work (#1106).
+- **Logout / delete-all-devices** (the device-lifecycle BDD scenarios) removes device records and push tokens; it does not rotate keys and does not unlink other devices by itself.
+
+### 6.12 Relationship to the Identity Layer (Target Profile)
+
+This spec's transport **assumes an authorized device set**: the primary is an authenticated, already-authorized device, and linking copies that authorized identity to a new device under SAS verification. Linking does not create authorization.
+
+The target profile — to be specified as a payload revision once the identity layer (§2.11 "Device Authorization (Sigchain)", issues #1050/#1029/#1146) has a PUK and sigchain in active use — changes only the payload:
+
+1. The new device generates its **own** Ed25519 + X25519 keypairs (§2.11) and publishes its pubkeys via the claim step (a `devicePubkey` field added to the claim body).
+2. The payload becomes an HPKE-wrapped PUK (`LABEL_PUK_WRAP_TO_DEVICE`, §2.1) to the new device's X25519 key, **plus a mandatory primary-signed sigchain entry** authorizing the new device. The sigchain entry travels inside the AEAD; there is no optional authorization field, and a missing entry is a hard failure — never a skipped check.
+3. The new device opens the PUK, verifies the sigchain entry against the primary's signing key, appends the entry to its local chain view, and only then reports success (the §6.10 rule is unchanged: success means imported keys **and** verified authorization).
+
+Until the identity layer lands, the PUK and sigchain modules have no application call sites, and shipping half the target — a PUK wrap with no sigchain entry — would create an unauthorized device the system accepts: a live cryptographic hole traded for today's honest limitation. Interim implementations MUST therefore implement the §6.7 seed-transport payload and MUST NOT improvise authorization proofs.
+
+Wire compatibility: the payload field is opaque, versioned hex with AAD-bound format identity. The target profile mints a new AAD label and bundle version and changes only the §6.7 payload and the claim body; the QR format (§6.4), room transport (§6.8), SAS ceremony (§6.6), and all failure rules (§6.10) are unchanged.
+
+### 6.13 Worked Example (Test Vector)
+
+Fixed inputs (test vector only — never real keys):
+
+| Value | Hex |
+|---|---|
+| Primary X25519 encryption seed | `0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20` |
+| Primary Ed25519 signing seed | `2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40` |
+| Ephemeral secret key eSK | `65666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384` |
+| GCM nonce | `c9cacbcccdcecfd0d1d2d3d4` |
+
+Derived values an implementation must reproduce:
+
+| Value | Hex / result |
+|---|---|
+| Primary encryption pubkey encPK | `07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c` |
+| Ephemeral pubkey ePK | `5714769d116bf76436ae74bc793d2c30ad1903c59ac5273805c7e2698b410c36` |
+| ECDH shared secret | `c9ea6a3f79a000b60b076d4afc990b272f3f0b5aaa3f0b8713c209273e363863` |
+| `prov_key` (HKDF, §6.7) | `27daf7f82e9d4b2403fdc17443328eb86392ae64a4fac8685f3f3c65057c643c` |
+| SAS HKDF output (4 bytes) | `e4751a4b` (= 3832879691 unsigned big-endian; `3832879691 % 1000000 = 879691`) |
+| SAS code | **`879 691`** |
+| Ciphertext with tag | `11c4829e104980493b01f8cf4a480a3e736afb8eb3fe72b4cee1b15987cce0c73f461cd2912f7b48fa0a7ca96122c00a7f25065905402ac27d9efcc201bb98825d7c072b748c37c2db0bd9a07da456e8ad` |
+| Wire payload `encryptedNsec` (hex, 186 chars) | `c9cacbcccdcecfd0d1d2d3d411c4829e104980493b01f8cf4a480a3e736afb8eb3fe72b4cee1b15987cce0c73f461cd2912f7b48fa0a7ca96122c00a7f25065905402ac27d9efcc201bb98825d7c072b748c37c2db0bd9a07da456e8ad` |
+
+Verification procedure:
+
+1. Recompute the ECDH shared secret from either side (`X25519(encSK, ePK)` or `X25519(eSK, encPK)`) — both give the value above.
+2. Derive `prov_key` and the SAS per §6.6/§6.7; both devices must display `879 691`.
+3. Decrypt `encryptedNsec` with `prov_key`, nonce `c9cacbcccdcecfd0d1d2d3d4`, AAD `llamenos:device-provision-bundle:v1`; the plaintext must be `01` followed by the signing seed and encryption seed in the table above.
+4. Downgrade check: decryption under the legacy AAD `llamenos:device-provision` MUST fail the tag check.
+
+Implementations MUST pin this vector in their crypto test suites (the Rust reference pins it in `packages/crypto/tests/fixtures/test-vectors.json`, generated by `cargo test --test interop`).
 
 ---
 
