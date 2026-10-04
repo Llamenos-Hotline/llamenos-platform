@@ -73,14 +73,10 @@ private struct WsChallengeFields: Decodable {
     let nonce: String
 }
 
-private struct WsIncomingEvent: Decodable, Sendable {
-    let v: Int
-    let hubId: String
-    let kind: Int
-    let payload: String
-    let epoch: Int
-    let ts: Int
-}
+// WebSocket event messages map to the generated `WsEventMessage`
+// (packages/protocol/schemas/firehose.ts). The envelope is still dispatched
+// manually because the relay also sends non-event frames (challenge,
+// authenticated, subscribed, pong) that are not `WsEventMessage`s.
 
 // MARK: - WebSocketService
 
@@ -356,7 +352,16 @@ final class WebSocketService: @unchecked Sendable {
                 let epoch = obj["epoch"] as? Int,
                 let ts = obj["ts"] as? Int
             else { return }
-            let msg = WsIncomingEvent(v: v, hubId: hubId, kind: kind, payload: payload, epoch: epoch, ts: ts)
+            let msg = WsEventMessage(
+                epoch: Double(epoch),
+                hubID: hubId,
+                kind: Double(kind),
+                payload: payload,
+                sig: obj["sig"] as? String ?? "",
+                ts: Double(ts),
+                type: .event,
+                v: Double(v)
+            )
             handleEvent(msg)
 
         case "subscribed", "unsubscribed", "pong":
@@ -460,9 +465,9 @@ final class WebSocketService: @unchecked Sendable {
 
     // MARK: - Event Handling
 
-    private func handleEvent(_ msg: WsIncomingEvent) {
+    private func handleEvent(_ msg: WsEventMessage) {
         eventCount += 1
-        if let attributed = decryptPayload(msg.payload, epoch: msg.epoch, hubId: msg.hubId) {
+        if let attributed = decryptPayload(msg.payload, epoch: Int(msg.epoch), hubId: msg.hubID) {
             emit(attributed)
         }
     }
