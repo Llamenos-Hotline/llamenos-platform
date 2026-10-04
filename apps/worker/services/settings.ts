@@ -2521,7 +2521,13 @@ export class SettingsService {
       enc: string
       ct: string
     }>
+    /** Generation of the hub key these wraps belong to (hubs.hub_key_generation). */
+    generation: number
   }> {
+    const [hub] = await this.db
+      .select({ generation: hubsTable.hubKeyGeneration })
+      .from(hubsTable)
+      .where(eq(hubsTable.id, hubId))
     const rows = await this.db
       .select()
       .from(hubKeys)
@@ -2533,9 +2539,16 @@ export class SettingsService {
         enc: r.enc,
         ct: r.ct,
       })),
+      generation: hub?.generation ?? 0,
     }
   }
 
+  /**
+   * Replace all hub-key envelopes. A caller that read the wraps earlier MUST
+   * pass `expectedGeneration`: if the generation moved on (a rotation, or a
+   * crypto-shred that destroyed the key), the cached wraps no longer describe
+   * the hub's current key and re-installing them would be a replay.
+   */
   async setHubKeyEnvelopes(
     hubId: string,
     data: {
@@ -2544,6 +2557,7 @@ export class SettingsService {
         enc: string
         ct: string
       }>
+      expectedGeneration?: number
     },
   ): Promise<{ ok: true }> {
     // Validate hub exists
@@ -2553,6 +2567,18 @@ export class SettingsService {
       .where(eq(hubsTable.id, hubId))
     if (!hub) {
       throw new ServiceError(404, 'Hub not found')
+    }
+    if (hub.status === 'shredded') {
+      throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
+    }
+    if (
+      data.expectedGeneration !== undefined &&
+      data.expectedGeneration !== hub.hubKeyGeneration
+    ) {
+      throw new ServiceError(
+        409,
+        `Hub key generation mismatch: expected ${data.expectedGeneration}, current ${hub.hubKeyGeneration}`,
+      )
     }
 
     // Replace all envelopes in a transaction

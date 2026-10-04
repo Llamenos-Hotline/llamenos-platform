@@ -94,6 +94,29 @@ async function seedHubKey(hubId: string): Promise<void> {
   })
 }
 
+/** A K-of-N recovery group with real share rows — the hub-key reconstruction path. */
+async function seedRecoveryGroup(
+  hubId: string,
+  opts: { threshold: number; totalShares: number },
+): Promise<void> {
+  await fresh.db.insert(schema.hubRecoveryGroups).values({
+    hubId,
+    groupPublicKey: 'group-pubkey',
+    threshold: opts.threshold,
+    totalShares: opts.totalShares,
+    shareCommitments: [],
+    sigchainLinkHash: 'sigchain-hash',
+  })
+  for (let i = 0; i < opts.totalShares; i++) {
+    const holder = reader()
+    await fresh.db.insert(schema.hubRecoveryGroupShares).values({
+      hubId,
+      holderPubkey: holder.pubkey,
+      shareEnvelope: 'share-envelope',
+    })
+  }
+}
+
 describe('hub isolation', () => {
   it("leaves the same user's access to another hub completely intact", async () => {
     const user = reader()
@@ -142,6 +165,48 @@ describe('hub isolation', () => {
     expect(gone!.authorEnvelope).toEqual([])
     expect(
       await fresh.db.select().from(schema.hubKeys).where(eq(schema.hubKeys.hubId, hubA)),
+    ).toEqual([])
+  })
+
+  it('destroys the recovery shares that could reconstruct the hub key', async () => {
+    const hubId = await createHub()
+    await seedRecoveryGroup(hubId, { threshold: 3, totalShares: 5 })
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+    expect(
+      await fresh.db
+        .select()
+        .from(schema.hubRecoveryGroupShares)
+        .where(eq(schema.hubRecoveryGroupShares.hubId, hubId)),
+      'a threshold of these reconstructs the hub key — destroying hub_keys without them is not a shred',
+    ).toEqual([])
+    expect(
+      await fresh.db
+        .select()
+        .from(schema.hubRecoveryGroups)
+        .where(eq(schema.hubRecoveryGroups.hubId, hubId)),
+    ).toEqual([])
+  })
+
+  it('cannot be undone by replaying a cached hub-key envelope write', async () => {
+    const hubId = await createHub()
+    await seedHubKey(hubId)
+    const { generation } = await fresh.settings.getHubKeyEnvelopes(hubId)
+    const cached = await fresh.db
+      .select()
+      .from(schema.hubKeys)
+      .where(eq(schema.hubKeys.hubId, hubId))
+
+    await fresh.shred.execute(hubId, EXECUTOR, fresh.audit)
+
+    await expect(
+      fresh.settings.setHubKeyEnvelopes(hubId, {
+        expectedGeneration: generation,
+        envelopes: cached.map((r) => ({ pubkey: r.recipientPubkey, enc: r.enc, ct: r.ct })),
+      }),
+      'a replayed envelope write resurrected the shredded key',
+    ).rejects.toThrow(/shredded|generation/)
+    expect(
+      await fresh.db.select().from(schema.hubKeys).where(eq(schema.hubKeys.hubId, hubId)),
     ).toEqual([])
   })
 })
