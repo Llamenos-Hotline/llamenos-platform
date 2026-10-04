@@ -405,6 +405,11 @@ App container keeps restarting or exits immediately
     |
     +-- "ADMIN_PUBKEY is required"
     |   => Run: bun run bootstrap-admin, set ADMIN_PUBKEY in .env
+    +-- "ADMIN_PUBKEY is set but ADMIN_DECRYPTION_PUBKEY is missing"
+    |   => bootstrap-admin prints TWO public keys. Set both. The second is
+    |      X25519 and is what notes are encrypted to; the server will not
+    |      substitute the Ed25519 one, because notes sealed to it are
+    |      permanently undecryptable.
     |
     +-- "HMAC_SECRET is required"
     |   => Run: openssl rand -hex 32, set HMAC_SECRET in .env
@@ -619,7 +624,9 @@ This is the most severe scenario. See the full procedure in [Key Revocation Runb
 Summary:
 1. Take the application offline: `docker compose stop app`
 2. Generate new admin keypair on a trusted machine: `bun run bootstrap-admin`
-3. Update `ADMIN_PUBKEY` in `.env`
+3. Update `ADMIN_PUBKEY` **and** `ADMIN_DECRYPTION_PUBKEY` in `.env` — rotating
+   the seed changes both derived public keys, and a stale
+   `ADMIN_DECRYPTION_PUBKEY` would seal new notes to the old admin key
 4. Rotate ALL secrets
 5. Restart and verify
 6. Re-wrap note encryption keys (requires volunteers to be online)

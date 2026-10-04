@@ -29,6 +29,7 @@ import {
 } from '../messaging/signal/failover'
 import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -1001,7 +1002,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   const senderHash = hashPhone(body.senderNumber, c.env.HMAC_SECRET)
 
   const services = c.get('services')
-  const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY
+  const adminDecryptionPubkey = adminHpkeRecipient(c.env)
   const result = await services.conversations.handleIncoming({
     channelType: channel,
     externalId: crypto.randomUUID(),
