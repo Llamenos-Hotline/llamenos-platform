@@ -26,6 +26,7 @@ import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
 import { permissionGranted, resolvePermissions, resolveHubPermissions } from '@shared/permissions'
+import { removeAllVolunteerEndpoints } from '../telephony/registrar'
 
 /**
  * When a non-hub-scoped route receives hubId from the request body/query,
@@ -460,12 +461,27 @@ providerSetup.post('/configure',
 
     try {
       const hubId = validateBodyHubAccess(c, body.hubId, 'telephony:manage-providers')
+      // Endpoint cleanup when the GLOBAL provider moves away from Asterisk:
+      // the gate stops issuing, but provisioned PJSIP objects on the PBX
+      // would keep accepting registrations from old credentials — tear them
+      // down with the config that can still reach the PBX. Best-effort per
+      // endpoint; the outcome is logged by removeAllVolunteerEndpoints.
+      const previous = hubId
+        ? null
+        : await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
       await services.providerSetup.configure(
         body.provider,
         body.credentials ?? {},
         hubId,
         body.phoneNumber,
       )
+      if (previous?.type === 'asterisk' && body.provider !== 'asterisk') {
+        const { users } = await services.identity.getUsers()
+        await removeAllVolunteerEndpoints(
+          previous,
+          users.map((u) => u.pubkey),
+        )
+      }
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ProviderApiError) {

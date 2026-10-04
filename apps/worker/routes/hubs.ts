@@ -13,6 +13,7 @@ import { ServiceError } from '../services/settings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
 import type { StorageManager } from '../lib/storage-manager'
+import { revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 const routes = new Hono<AppEnv>()
 
@@ -286,6 +287,23 @@ routes.delete('/:hubId/members/:pubkey',
 
     try {
       await services.identity.removeHubRole({ pubkey: targetPubkey, hubId })
+      // Role loss: when the volunteer holds no hub role anywhere left, their
+      // per-volunteer SIP identity on our own PBX must die with it (a no-op
+      // for vendor providers). Over-revoking is self-healing — the next
+      // /sip-token re-provisions; under-revoking is a live credential for
+      // someone who may no longer be a volunteer at all.
+      let stillHasARole = false
+      try {
+        const remaining = await services.identity.getUserInternal(targetPubkey)
+        stillHasARole = (remaining?.hubRoles ?? []).some((hr) => hr.roleIds.length > 0)
+      } catch {
+        // The remaining roles are unreadable: revoke anyway — the safe
+        // direction. A member wrongly stripped of SIP re-provisions on their
+        // next /sip-token; a credential left live does not come back.
+      }
+      if (!stillHasARole) {
+        await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
+      }
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
     } catch {

@@ -3,6 +3,14 @@ import { describeRoute, resolver } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { generateWebRtcToken, isWebRtcConfigured } from '../telephony/webrtc-tokens'
 import { generateSipParams, isSipConfigured, sipCredentialsMayBeIssued } from '../telephony/sip-tokens'
+import {
+  buildVolunteerSipParams,
+  deriveVolunteerSipSecret,
+  mintTurnCredentials,
+  provisionVolunteerEndpoint,
+  volunteerSipUsername,
+  type TurnCredentials,
+} from '../telephony/registrar'
 import { webrtcTokenResponseSchema, sipTokenResponseSchema, telephonyStatusResponseSchema } from '@protocol/schemas/webrtc'
 import { authErrors } from '../openapi/helpers'
 import { createLogger } from '../lib/logger'
@@ -108,12 +116,13 @@ webrtc.get('/sip-token',
       return c.json({ error: 'SIP is not configured for the current provider.' }, 400)
     }
 
-    // Refused at the source, not left to clients not to ask. Issuing here
-    // would hand this volunteer the hub's OWN trunk credential — identical for
-    // every volunteer, unrevocable individually, and registered against the
-    // vendor's SIP domain so the vendor observes each volunteer's IP and
-    // presence. See sipCredentialsMayBeIssued (#1203); the fix is #1173's own
-    // registrar, not a different credential at the same vendor.
+    // Refused at the source for every vendor, not left to clients not to ask:
+    // their generators would hand this volunteer the hub's OWN trunk
+    // credential — identical for every volunteer, unrevocable individually,
+    // and registered against the vendor's SIP domain so the vendor observes
+    // each volunteer's IP and presence (#1203). Only our own Asterisk passes
+    // the gate, because only it hosts real per-volunteer identities (see
+    // sipCredentialsMayBeIssued and telephony/registrar.ts).
     if (!sipCredentialsMayBeIssued(config)) {
       logger.warn('SIP token refused: per-volunteer credentials not available (#1203)', {
         provider: config.type,
@@ -125,6 +134,23 @@ webrtc.get('/sip-token',
     }
 
     try {
+      // The only provider past the gate is our own Asterisk: issue a REAL
+      // per-volunteer identity (never generateSipParams — that path returns
+      // the hub's shared credential, which is what the gate exists to refuse).
+      if (config.type === 'asterisk') {
+        const username = volunteerSipUsername(pubkey)
+        const turn = turnCredentialsFor(c.env, username)
+        try {
+          const sipParams = await issueVolunteerSipParams(c.env, config, username, turn)
+          return c.json(sipParams)
+        } catch (err) {
+          // The registrar is ours: a PBX that will not provision means the
+          // credential would be dead on arrival — refuse rather than let the
+          // client retry an identity nothing accepts.
+          logger.error('SIP registrar unreachable — refusing to issue an unusable credential', err)
+          return c.json({ error: 'SIP registrar is unreachable — try again shortly.' }, 503)
+        }
+      }
       const identity = `vol_${pubkey.slice(0, 16)}`
       const sipParams = generateSipParams(config, identity)
       return c.json(sipParams)
@@ -194,5 +220,43 @@ webrtc.get('/webrtc-status',
       provider: config?.type ?? null,
     })
   })
+
+type RegistrarEnv = {
+  HMAC_SECRET: string
+  SIP_REGISTRAR_SECRET?: string
+  TURN_HOST?: string
+  TURN_SECRET?: string
+}
+
+/**
+ * Time-limited TURN credentials for this volunteer, or undefined when no
+ * CoTURN static-auth secret is provisioned (STUN-only ICE servers then).
+ * Both TURN_HOST and TURN_SECRET must be set — one without the other means
+ * the deployment never wired the relay and must not half-configure clients.
+ */
+function turnCredentialsFor(
+  env: RegistrarEnv,
+  identity: string,
+): { host: string; credentials: TurnCredentials } | undefined {
+  if (!env.TURN_HOST || !env.TURN_SECRET) return undefined
+  return { host: env.TURN_HOST, credentials: mintTurnCredentials(env.TURN_SECRET, identity) }
+}
+
+/**
+ * Issue the per-volunteer SIP identity against our own PBX: ensure the
+ * volunteer's PJSIP objects exist (idempotent — re-issuance after a PBX
+ * restart re-provisions and self-heals), then build the connection params.
+ */
+async function issueVolunteerSipParams(
+  env: RegistrarEnv,
+  config: Parameters<typeof buildVolunteerSipParams>[0],
+  username: string,
+  turn: { host: string; credentials: TurnCredentials } | undefined,
+) {
+  const masterSecret = env.SIP_REGISTRAR_SECRET || env.HMAC_SECRET
+  const secret = deriveVolunteerSipSecret(masterSecret, username)
+  await provisionVolunteerEndpoint(config, username, secret)
+  return buildVolunteerSipParams(config, username, secret, turn)
+}
 
 export default webrtc

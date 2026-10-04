@@ -102,6 +102,17 @@ services:
       # Set NTFY_URL explicitly when you run `--profile push`.
       - NTFY_URL=${NTFY_URL:-}
       - NTFY_AUTH_TOKEN=${NTFY_AUTH_TOKEN:-}
+      # Per-volunteer SIP registrar (profile: asterisk/telephony). Master
+      # secret the worker derives each volunteer's unique PJSIP endpoint
+      # secret from (telephony/registrar.ts) — NOT the hub credential and
+      # not the ARI password. Falls back to HMAC_SECRET when unset; set it
+      # separately to rotate SIP secrets independently.
+      - "SIP_REGISTRAR_SECRET=${SIP_REGISTRAR_SECRET:-}"
+      # CoTURN relay (profile: telephony). Both must be set for /sip-token
+      # to return time-limited TURN credentials; TURN_SECRET must equal the
+      # coturn --static-auth-secret above. Unset = STUN-only ICE servers.
+      - TURN_HOST=${TURN_HOST:-}
+      - TURN_SECRET=${TURN_SECRET:-}
     networks:
       - web
       - internal
@@ -306,13 +317,19 @@ services:
     image: ghcr.io/kamailio/kamailio:5.7.1-bookworm@sha256:a5c0564fe4bf12315ec3aed97303bc63207c0cec0c5b1150ea6500f4747163e9  # pinned 2026-09-19
     profiles: ["telephony"]
     restart: unless-stopped
+    # Generates the self-signed certificate the TLS listener binds when the
+    # operator has not mounted a real one, then starts Kamailio with the
+    # image's own flags (see kamailio/kamailio-entrypoint.sh).
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/kamailio-entrypoint.sh"]
     ports:
       - "${SIP_UDP_PORT:-5060}:5060/udp"
       - "${SIP_TCP_PORT:-5060}:5060/tcp"
       - "${SIPS_PORT:-5061}:5061/tcp"
     volumes:
       - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      - ./kamailio/tls.cfg:/etc/kamailio/tls.cfg:ro
       - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
+      - ./kamailio/kamailio-entrypoint.sh:/usr/local/share/llamenos/kamailio-entrypoint.sh:ro
     networks:
       - internal
     depends_on:
@@ -333,17 +350,26 @@ services:
     ports:
       - "${TURN_UDP_PORT:-3478}:3478/udp"
       - "${TURN_TCP_PORT:-3478}:3478/tcp"
+    # Time-limited per-volunteer TURN credentials (RFC 8489 long-term
+    # credential scheme): the worker mints `username = <expiry>:<vol_…>` /
+    # `credential = base64(HMAC-SHA1(TURN_SECRET, username))` tokens for
+    # /api/telephony/sip-token, and coturn verifies them against the shared
+    # --static-auth-secret below. The secret stays server-side; a seized
+    # client credential dies at its expiry.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
-      --lt-cred-mech
-      --user=llamenos:${TURN_SECRET:-changeme}
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET:-changeme}
       --no-tls
       --no-dtls
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "turnutils_uclient", "-T", "localhost"]
+      # No unauthenticated probe answers in use-auth-secret mode; check the
+      # server process itself. (turnutils_uclient cannot mint a valid
+      # time-limited credential from compose config.)
+      test: ["CMD-SHELL", "pgrep -f turnserver >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

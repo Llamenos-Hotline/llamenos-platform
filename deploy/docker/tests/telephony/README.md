@@ -62,6 +62,35 @@ ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other w
 `audio-match.test.ts` proves the instrument itself: it finds a clip that was
 played through µ-law and rejects one that was not.
 
+## The per-volunteer SIP registrar
+
+`run-register-e2e.sh` proves the safe half of #1435 against the same stack
+(own compose project `ll-telephony-register-e2e`): `/api/telephony/sip-token`
+issues a REAL per-volunteer identity — username `vol_<pubkey16>`, a derived
+per-endpoint secret, time-limited TURN credentials — and that identity
+actually registers against the live PBX:
+
+1. The operator configures the Asterisk provider through the API
+   (`sipDomain` is the public registrar host clients REGISTER against).
+2. A volunteer fetches `/api/telephony/sip-token`; the worker provisions
+   `auth`/`aor`/`endpoint` on the PBX over ARI (the #1327 trunk path) and
+   returns the credential plus RFC 8489 TURN credentials.
+3. `sip-register.ts` — a minimal hand-rolled SIP REGISTER client — answers
+   the digest challenge over TCP and registers: 200 OK with the issued
+   credential, 401 with a wrong one, 401 again after the volunteer's account
+   is deleted (the revocation hook removes the PJSIP objects; the e2e checks
+   they are gone over ARI).
+
+The TLS (`:5061`) and WSS (`:8089`) transports the mobile/desktop clients use
+are enabled in `asterisk-config/pjsip.conf` with an entrypoint-generated
+self-signed certificate; this e2e exercises the same registrar over TCP,
+which is transport-agnostic as far as the endpoint objects are concerned.
+
+```sh
+deploy/docker/tests/telephony/run-register-e2e.sh                       # needs only Docker and bun
+deploy/docker/tests/telephony/run-register-e2e.sh --keep                # leave the stack up
+```
+
 ```sh
 deploy/docker/tests/telephony/run-call-e2e.sh                         # needs only Docker and bun
 deploy/docker/tests/telephony/run-call-e2e.sh --keep -g 'hears the prompt'   # one scenario; leave the stack up

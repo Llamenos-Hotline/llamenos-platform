@@ -106,8 +106,8 @@ services:
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
-      --lt-cred-mech
-      --user=llamenos:${TURN_SECRET:-ci-turn-secret}
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET:-ci-turn-secret}
       --no-tls
       --no-dtls
       --verbose

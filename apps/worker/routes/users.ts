@@ -9,6 +9,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
+import { revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
 // Under a hub, every read and write is confined to that hub's members.
@@ -176,6 +177,9 @@ users.delete('/:targetPubkey',
     // (orphaned sessions will expire naturally via TTL)
     await services.identity.revokeAllSessions(targetPubkey).catch(() => {})
     await services.identity.deleteUser(targetPubkey)
+    // Best-effort: strip any per-volunteer SIP identity provisioned on our own
+    // PBX (a no-op for vendor providers — nothing was ever issued there).
+    await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
     const hubId = c.get('hubId') || null
     await audit(services.audit, 'userRemoved', pubkey, { target: targetPubkey }, undefined, hubId)
     return c.json({ ok: true })
