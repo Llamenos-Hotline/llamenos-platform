@@ -12,6 +12,7 @@ import type {
   AriPlayback,
   BridgeConfig,
   ChannelDestroyedEvent,
+  ChannelHangupRequestEvent,
   ChannelDtmfReceivedEvent,
   ChannelStateChangeEvent,
   PlaybackFinishedEvent,
@@ -208,6 +209,11 @@ export class AriClient implements BridgeClient {
         }
       }
 
+      case 'ChannelHangupRequest': {
+        const e = ariEvent as ChannelHangupRequestEvent
+        return { type: 'hangup_requested', channelId: e.channel.id, timestamp }
+      }
+
       case 'ChannelDestroyed': {
         const e = ariEvent as ChannelDestroyedEvent
         return {
@@ -258,6 +264,8 @@ export class AriClient implements BridgeClient {
           type: 'playback_finished',
           channelId: e.playback.target_uri.replace(/^channel:/, ''),
           playbackId: e.playback.id,
+          failed: e.playback.state === 'failed',
+          media: e.playback.media_uri,
           timestamp,
         }
       }

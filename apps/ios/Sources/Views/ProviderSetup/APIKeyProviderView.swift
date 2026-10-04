@@ -149,7 +149,13 @@ struct APIKeyProviderView: View {
                                 .foregroundStyle(.secondary)
                         }
                         if let ms = result.latencyMs {
-                            Text(String(format: NSLocalizedString("provider_test_latency", comment: "%.0f ms"), ms))
+                            // `ms` is a Double: L10n.format takes only stringifiable arguments, so the
+                            // precision is chosen here rather than inferred from the format string.
+                            Text(L10n.format(
+                                "provider_test_latency",
+                                comment: "Latency: {{ms}}ms",
+                                String(format: "%.0f", ms)
+                            ))
                                 .font(.brand(.caption2))
                                 .foregroundStyle(.secondary)
                         }

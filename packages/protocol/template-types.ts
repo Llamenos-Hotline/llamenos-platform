@@ -140,6 +140,19 @@ export const templateManifestSchema = z.object({
   })).optional().default([]),
   recommendedProvider: z.string().optional(),
 
+  /**
+   * The role a user receives when they join a hub built from this template and
+   * nobody named one for them — the id or slug of a role in `suggestedRoles`,
+   * or of a shipped role such as `role-volunteer`.
+   *
+   * Absent means the joiner gets no role. That must stay the behaviour: on a
+   * crisis line, a member who silently acquires call-answering permission is a
+   * worse failure than one an operator has to grant a role to (#1446). Note
+   * this names a ROLE only — it never places anyone on a shift roster or in a
+   * ring group, which stay explicit operator actions.
+   */
+  defaultMemberRole: z.string().optional(),
+
   entityTypes: z.array(entityTypeTemplateSchema),
   relationshipTypes: z.array(relationshipTypeTemplateSchema).default([]),
   reportTypes: z.array(reportTypeTemplateSchema).default([]),

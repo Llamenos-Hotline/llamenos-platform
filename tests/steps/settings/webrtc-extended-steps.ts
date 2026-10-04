@@ -15,6 +15,7 @@
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
+import { Timeouts } from '../../helpers'
 
 Then('the {string} option should be selected', async ({ page }, optionText: string) => {
   const option = page.locator('button').filter({ hasText: optionText })
@@ -57,76 +58,37 @@ When('I switch the provider to {string}', async ({ page }, provider: string) => 
 })
 
 When('I fill in Twilio credentials with WebRTC config', async ({ page }) => {
-  // Fill Account SID (may use placeholder or testid)
-  const sidInput = page.getByTestId(TestIds.ACCOUNT_SID)
-  if (await sidInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // Must match ^AC[0-9a-f]{32}$ — AC prefix + exactly 32 lowercase hex chars
-    await sidInput.fill('AC00000000000000000000000000000001')
-  }
-  const tokenInput = page.getByTestId(TestIds.AUTH_TOKEN)
-  if (await tokenInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await tokenInput.fill('webrtc-auth-token')
-  }
+  // Must match ^AC[0-9a-f]{32}$ — AC prefix + exactly 32 lowercase hex chars
+  await page.getByTestId(TestIds.ACCOUNT_SID).fill('AC00000000000000000000000000000001')
+  await page.getByTestId(TestIds.AUTH_TOKEN).fill('webrtc-auth-token')
 
-  // Fill provider phone number (required for save button to be enabled).
-  // Use pressSequentially to trigger react-phone-number-input onChange correctly.
-  const phoneInput = page.locator('input[type="tel"]').first()
-  if (await phoneInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await phoneInput.clear()
-    await phoneInput.pressSequentially('+12121234567', { delay: 30 })
-    await phoneInput.blur()
-  }
+  // Provider phone number (required for the save button to be enabled).
+  // react-phone-number-input needs typed input to fire onChange.
+  const phoneInput = page.locator('#provider-phone')
+  await expect(phoneInput).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await phoneInput.click({ clickCount: 3 })
+  await phoneInput.pressSequentially('+12121234567', { delay: 30 })
+  await phoneInput.blur()
 
-  // Enable WebRTC toggle — check current state first to avoid toggling it OFF.
-  // If a previous test already saved webrtcEnabled=true, the toggle starts ON.
-  const telephonySection = page.getByTestId(TestIds.TELEPHONY_PROVIDER)
-  const hasSect = await telephonySection.isVisible({ timeout: 3000 }).catch(() => false)
-  if (hasSect) {
-    const toggle = telephonySection.getByRole('switch').first()
-    const hasToggle = await toggle.isVisible({ timeout: 3000 }).catch(() => false)
-    if (hasToggle) {
-      // Only click if WebRTC is currently disabled (data-state=unchecked / aria-checked=false)
-      const isAlreadyOn = await toggle.evaluate((el) =>
-        el.getAttribute('data-state') === 'checked' || el.getAttribute('aria-checked') === 'true'
-      ).catch(() => false)
-      if (!isAlreadyOn) {
-        await toggle.click()
-      }
-    }
+  // Turn WebRTC on without toggling it OFF when a previous scenario left it on.
+  const toggle = page.getByTestId(TestIds.WEBRTC_ENABLED_SWITCH)
+  await expect(toggle).toHaveAttribute('aria-checked', /^(true|false)$/, { timeout: Timeouts.ELEMENT })
+  if ((await toggle.getAttribute('aria-checked')) !== 'true') {
+    await toggle.click()
   }
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
 
-  // Wait for the WebRTC API key fields to appear after enabling the toggle
-  const apiKeySid = page.getByTestId(TestIds.API_KEY_SID)
-  if (await apiKeySid.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await apiKeySid.fill('SKtestkey123')
-  }
-  const twimlSid = page.getByTestId(TestIds.TWIML_APP_SID)
-  if (await twimlSid.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await twimlSid.fill('APtestapp456')
-  }
+  // The API key fields render only once WebRTC is on.
+  await page.getByTestId(TestIds.API_KEY_SID).fill('SKtestkey123')
+  await page.getByTestId(TestIds.TWIML_APP_SID).fill('APtestapp456')
 })
 
 Then('the WebRTC API key fields should be populated', async ({ page }) => {
-  // The api-key-sid and twiml-app-sid fields only render when the WebRTC toggle is on.
-  // If the toggle was saved as enabled, it should already be on after section expansion.
-  // If not (persistence issue), enable it to reveal the fields before asserting values.
-  const apiKeySid = page.getByTestId(TestIds.API_KEY_SID)
-  const isVisible = await apiKeySid.isVisible({ timeout: 3000 }).catch(() => false)
-  if (!isVisible) {
-    // WebRTC toggle may not have persisted — enable it to reveal fields
-    const telephonySection = page.getByTestId(TestIds.TELEPHONY_PROVIDER)
-    const toggle = telephonySection.getByRole('switch').first()
-    if (await toggle.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await toggle.click()
-    }
-  }
-  // Now assert the saved values are present
-  const apiKeySidVisible = await apiKeySid.isVisible({ timeout: 5000 }).catch(() => false)
-  if (apiKeySidVisible) {
-    await expect(apiKeySid).toHaveValue('SKtestkey123')
-    await expect(page.getByTestId(TestIds.TWIML_APP_SID)).toHaveValue('APtestapp456')
-  } else {
-    // Backend did not persist WebRTC config — verify section is loaded as a fallback
-    await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: 5000 })
-  }
+  // This runs after a reload: the saved config must come back with WebRTC still
+  // enabled and both values intact. The previous version switched WebRTC back
+  // on itself when it had not persisted, and passed on the page title when the
+  // fields were missing — i.e. it passed precisely when persistence failed.
+  await expect(page.getByTestId(TestIds.WEBRTC_ENABLED_SWITCH)).toHaveAttribute('aria-checked', 'true', { timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.API_KEY_SID)).toHaveValue('SKtestkey123')
+  await expect(page.getByTestId(TestIds.TWIML_APP_SID)).toHaveValue('APtestapp456')
 })

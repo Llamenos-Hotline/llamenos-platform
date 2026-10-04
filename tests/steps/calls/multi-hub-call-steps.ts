@@ -4,16 +4,22 @@
  * Matches packages/test-specs/features/platform/desktop/calls/multi-hub-incoming-calls.feature.
  * The volunteer + second hub come from the shared step
  * "a volunteer assigned to multiple hubs" (tests/steps/hub/hub-steps.ts), which
- * records the second hub id on `window.__test_second_hub_id`.
+ * records the second hub id and the volunteer pubkey on `window`.
  *
  * The call is created with the real simulation API on the SECOND hub while the
  * worker hub is active in the UI; the UI is then driven with testid selectors only.
+ *
+ * First pickup wins (#1039): only a volunteer in the call's ring set (on shift, or in
+ * the hub's fallback group) may answer it — the answer route 403s everyone else. Real
+ * routing never registers a ringing call nobody can answer, so the volunteer is put in
+ * the second hub's fallback group and the simulation is asked to refuse a call that
+ * would ring nobody (`checkVolunteers`), keeping the precondition loud.
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds, Timeouts } from '../../helpers'
 import { rowTestId } from '../../test-ids'
-import { apiGet } from '../../api-helpers'
+import { apiGet, setFallbackGroupViaApi } from '../../api-helpers'
 import { simulateIncomingCall, uniqueCallerNumber } from '../../simulation-helpers'
 
 /**
@@ -24,13 +30,18 @@ const RING_TIMEOUT = 30_000
 
 interface MultiHubCallWindow {
   __test_second_hub_id?: string
+  __test_multi_hub_volunteer_pubkey?: string
   __test_multi_hub_call_id?: string
 }
 
 async function recordedIds(page: import('@playwright/test').Page) {
   const ids = await page.evaluate(() => {
     const w = window as unknown as MultiHubCallWindow
-    return { hubId: w.__test_second_hub_id, callId: w.__test_multi_hub_call_id }
+    return {
+      hubId: w.__test_second_hub_id,
+      volunteerPubkey: w.__test_multi_hub_volunteer_pubkey,
+      callId: w.__test_multi_hub_call_id,
+    }
   })
   return ids
 }
@@ -38,12 +49,18 @@ async function recordedIds(page: import('@playwright/test').Page) {
 When('a call comes in on the volunteer\'s second hub while the first hub is active', async ({ page, backendRequest, $test }) => {
   // Ringing is bounded by the 15s poll fallback, on top of login: budget for it explicitly.
   $test.slow()
-  const { hubId } = await recordedIds(page)
+  const { hubId, volunteerPubkey } = await recordedIds(page)
   expect(hubId, 'the multi-hub Given step must record the second hub id').toBeTruthy()
+  expect(volunteerPubkey, 'the multi-hub Given step must record the volunteer pubkey').toBeTruthy()
+
+  // The call rings the volunteer on the second hub: nobody is on shift there, so the
+  // hub's fallback group is its ring set.
+  await setFallbackGroupViaApi(backendRequest, [volunteerPubkey!], hubId)
 
   const { callId, status } = await simulateIncomingCall(backendRequest, {
     callerNumber: uniqueCallerNumber(),
     hubId,
+    checkVolunteers: true,
   })
   expect(status).toBe('ringing')
   await page.evaluate((id) => {

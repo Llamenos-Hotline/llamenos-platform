@@ -174,22 +174,35 @@ describe('CallsService', () => {
       expect(result.answeredBy).toBe('pk1') // mock returns 'pk1'
     })
 
-    it('throws 404 when call does not exist', async () => {
-      createServiceWithData()
-      // Mock update to return empty array
-      const db = {
-        update: vi.fn().mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([]),
+    function dbWith(updated: unknown[], existing: unknown[]) {
+      const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue(updated) })
+      return {
+        where,
+        db: {
+          update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where }) }),
+          select: vi.fn().mockReturnValue({
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(existing) }),
             }),
           }),
-        }),
+        },
       }
-      const emptySvc = new CallsService(db as never)
+    }
+
+    it('throws 404 when call does not exist', async () => {
+      const { db } = dbWith([], [])
       await expect(
-        emptySvc.answerCall('hub-1', 'nonexistent', 'pk1'),
-      ).rejects.toThrow('Call not found')
+        new CallsService(db as never).answerCall('hub-1', 'nonexistent', 'pk1'),
+      ).rejects.toMatchObject({ status: 404, message: 'Call not found' })
+    })
+
+    it('throws 409 when the call exists but was already answered (first pickup wins)', async () => {
+      // The conditional UPDATE matched no row (status != ringing / answered_by set),
+      // but the call is still there → someone else won.
+      const { db } = dbWith([], [{ callId: 'call-1', status: 'in-progress', answeredBy: 'pk-first' }])
+      await expect(
+        new CallsService(db as never).answerCall('hub-1', 'call-1', 'pk-second'),
+      ).rejects.toMatchObject({ status: 409, message: 'Call already answered' })
     })
   })
 
@@ -402,85 +415,14 @@ describe('CallsService', () => {
     })
   })
 
-  describe('getPresence', () => {
-    it('marks volunteers as on-call when they have an active in-progress call', async () => {
-      const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([
-              {
-                callId: 'call-1',
-                hubId: 'hub-1',
-                status: 'in-progress',
-                startedAt: new Date(),
-                answeredBy: 'pk-busy',
-                callerLast4: '1234',
-              },
-            ]),
-          }),
-        }),
-        transaction: vi.fn(),
-      }
-
-      const shiftsService = {
-        getCurrentVolunteers: vi.fn().mockResolvedValue(['pk-busy', 'pk-free']),
-      }
-
-      const svc = new CallsService(db as never, shiftsService as never)
-      const presence = await svc.getPresence('hub-1')
-
-      expect(presence.activeCalls).toBe(1)
-      expect(presence.availableVolunteers).toBe(1) // pk-free only
-      expect(presence.users).toHaveLength(2)
-
-      const busy = presence.users.find(u => u.pubkey === 'pk-busy')
-      const free = presence.users.find(u => u.pubkey === 'pk-free')
-      expect(busy?.status).toBe('on-call')
-      expect(free?.status).toBe('available')
-    })
-
-    it('returns all available when no active calls', async () => {
-      const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-        transaction: vi.fn(),
-      }
-
-      const shiftsService = {
-        getCurrentVolunteers: vi.fn().mockResolvedValue(['pk1', 'pk2']),
-      }
-
-      const svc = new CallsService(db as never, shiftsService as never)
-      const presence = await svc.getPresence('hub-1')
-
-      expect(presence.activeCalls).toBe(0)
-      expect(presence.availableVolunteers).toBe(2)
-      expect(presence.users.every(u => u.status === 'available')).toBe(true)
-    })
-
-    it('works without shifts service', async () => {
-      const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-        transaction: vi.fn(),
-      }
-
-      // No shifts service provided
-      const svc = new CallsService(db as never)
-      const presence = await svc.getPresence('hub-1')
-
-      expect(presence.activeCalls).toBe(0)
-      expect(presence.availableVolunteers).toBe(0)
-      expect(presence.users).toHaveLength(0)
-    })
-  })
-
+  // `getPresence` moved to services/presence.ts (getHubPresence). It was gated
+  // on an OPTIONAL `ShiftsService` that `createServices` never passed, so these
+  // tests — which supplied a stub — were green while every deployment answered
+  // "nobody on shift". One of them, "works without shifts service", asserted the
+  // broken answer was correct. Presence now has no optional dependency to
+  // forget: __tests__/unit/presence.test.ts covers the composition and
+  // __tests__/integration/presence-matches-ring-targets.test.ts drives the real
+  // services the production factory builds, against real PostgreSQL.
   describe('reportSpam stores reporter pubkey', () => {
     it('sets status to spam and records reportedBy', async () => {
       const updateSet = vi.fn().mockReturnValue({
