@@ -402,7 +402,7 @@ function firstNonBlank(...values: readonly (string | undefined)[]): string | und
  * #1471: a review SUBMITTED by the requested reviewer clears the request list
  * (CODEOWNERS does not undo a submitted review the way it undoes a REST
  * DELETE), after which a fresh POST is a true add and DOES emit
- * `review_requested`. `--comment`, never `--approve` — a comment asserts
+ * `review_requested`. `--comment`, never an approving review — a comment asserts
  * nothing about the code, so it clears the list without standing in for the
  * gate's verdict.
  */
@@ -438,7 +438,8 @@ export function reviewNotRequestedAdvice(input: {
         'is not from just now, nothing fired and `reviewRequests` is telling you nothing.',
       `the recovery that DOES work, as \`${ask}\`'s identity: submit a comment review (` +
         `gh pr review ${pr} --comment --body "procedural: clearing the request to re-trigger the gate" — ` +
-        'NEVER `--approve`, a comment asserts nothing about the code), which genuinely empties the ' +
+        'never an APPROVING review, which asserts the code is good and which the ruleset would count; a ' +
+        'comment asserts nothing about the code), which genuinely empties the ' +
         'requested-reviewer list, then re-add it (`gh api --method POST repos/<owner>/<repo>/pulls/' +
         `${pr}/requested_reviewers -f 'reviewers[]=${ask}') — that POST is a true add, emits ` +
         '`review_requested`, and the run it starts enters this PR\'s status-check rollup. ' +
