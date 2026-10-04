@@ -1,23 +1,11 @@
 import Foundation
 
 // MARK: - Volunteer suggestion model
+// Suggestions decode to generated `SuggestAssigneesResponse` whose elements
+// are generated `Suggestion` (packages/protocol/schemas/records.ts).
 
-struct VolunteerSuggestion: Decodable, Identifiable, Sendable {
-    var id: String { pubkey }
-    let pubkey: String
-    let score: Int
-    let workloadScore: Int
-    let languageScore: Int
-    let specializationScore: Int
-    let availabilityScore: Int
-    let reasons: [String]
-    let activeCaseCount: Int
-    let maxCases: Int
-    let matchedSpecializations: [String]
-}
-
-struct AppSuggestAssigneesResponse: Decodable, Sendable {
-    let suggestions: [VolunteerSuggestion]
+extension Suggestion: Identifiable {
+    public var id: String { pubkey }
 }
 
 // MARK: - AssignmentViewModel
@@ -26,7 +14,7 @@ struct AppSuggestAssigneesResponse: Decodable, Sendable {
 final class AssignmentViewModel {
     private let apiService: APIService
 
-    var suggestions: [VolunteerSuggestion] = []
+    var suggestions: [Suggestion] = []
     var isLoading = false
     var isAssigning = false
     var errorMessage: String?
@@ -44,7 +32,7 @@ final class AssignmentViewModel {
             if let lang = language {
                 path += "?language=\(lang)"
             }
-            let response: AppSuggestAssigneesResponse = try await apiService.request(method: "GET", path: path)
+            let response: SuggestAssigneesResponse = try await apiService.request(method: "GET", path: path)
             suggestions = response.suggestions
         } catch {
             errorMessage = error.localizedDescription

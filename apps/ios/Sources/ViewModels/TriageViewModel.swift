@@ -135,12 +135,12 @@ final class TriageViewModel {
         errorMessage = nil
 
         do {
-            let body = AppConvertFromReportBody(
-                reportId: report.id,
-                entityTypeId: entityTypeId,
-                additionalFields: nil
+            let body = ConvertFromReportBody(
+                additionalFields: [:],
+                entityTypeID: entityTypeId,
+                reportID: report.id
             )
-            let _: AppConvertFromReportResponse = try await apiService.request(
+            let _: ConvertFromReportResponse = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/records/convert-from-report"),
                 body: body
@@ -164,18 +164,5 @@ final class TriageViewModel {
 }
 
 // MARK: - Request/Response Types
-
-struct AppConvertFromReportBody: Encodable, Sendable {
-    let reportId: String
-    let entityTypeId: String
-    let additionalFields: [String: String]?
-}
-
-struct AppConvertFromReportResponse: Codable, Sendable {
-    let recordId: String
-    let reportId: String
-    let entityTypeId: String
-    let caseNumber: String?
-    let autoAssigned: Bool
-    let assignedTo: [String]
-}
+// Convert-from-report uses the generated `ConvertFromReportBody` /
+// `ConvertFromReportResponse` (packages/protocol/schemas/records.ts).
