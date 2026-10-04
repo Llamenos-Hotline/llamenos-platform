@@ -17,7 +17,7 @@ struct FileAttachment {
 // MARK: - TypedReportCreateView
 
 /// Template-driven report creation form. Renders fields dynamically from a
-/// `ClientReportTypeDefinition`. Each field type maps to a native SwiftUI control.
+/// `CMSReportTypeListResponseReportType`. Each field type maps to a native SwiftUI control.
 /// Textarea fields with `supportAudioInput: true` show a mic button for
 /// speech-to-text dictation.
 ///
@@ -27,7 +27,7 @@ struct FileAttachment {
 /// - Placeholder text from field definitions
 /// - Default values from field definitions
 struct TypedReportCreateView: View {
-    let reportType: ClientReportTypeDefinition
+    let reportType: CMSReportTypeListResponseReportType
     let onSubmit: (String, [String: AnyCodableValue]) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -46,20 +46,20 @@ struct TypedReportCreateView: View {
     @State private var isUploadingFile: Bool = false
 
     /// Fields sorted by order, grouped by section.
-    private var sortedFields: [ClientReportFieldDefinition] {
+    private var sortedFields: [SharedField] {
         reportType.fields.sorted { $0.order < $1.order }
     }
 
     /// Visible fields after evaluating `showWhen` conditions against current values.
-    private var visibleFields: [ClientReportFieldDefinition] {
+    private var visibleFields: [SharedField] {
         sortedFields.filter { $0.isVisible(given: fieldValues) }
     }
 
     /// Visible fields grouped by section (nil section = default group).
-    private var fieldSections: [(section: String?, fields: [ClientReportFieldDefinition])] {
+    private var fieldSections: [(section: String?, fields: [SharedField])] {
         let grouped = Dictionary(grouping: visibleFields) { $0.section }
         // Preserve order: nil section first, then named sections in field order
-        var result: [(section: String?, fields: [ClientReportFieldDefinition])] = []
+        var result: [(section: String?, fields: [SharedField])] = []
         if let defaultFields = grouped[nil], !defaultFields.isEmpty {
             result.append((section: nil, fields: defaultFields))
         }
@@ -171,7 +171,7 @@ struct TypedReportCreateView: View {
                 fieldValues[field.name] = .int(Int(val))
             case (.checkbox, .bool(let val)):
                 fieldValues[field.name] = .bool(val)
-            default:
+            case (_, .bool), (_, .double), (_, .string):
                 break
             }
         }
@@ -202,7 +202,7 @@ struct TypedReportCreateView: View {
 
     /// Validate a field value against its validation constraints.
     /// Returns an error message string if validation fails, nil if valid.
-    private func validateField(_ field: ClientReportFieldDefinition, value: AnyCodableValue?) -> String? {
+    private func validateField(_ field: SharedField, value: AnyCodableValue?) -> String? {
         guard let validation = field.validation else { return nil }
 
         switch field.fieldType {
@@ -241,7 +241,7 @@ struct TypedReportCreateView: View {
     }
 
     /// Run validation for a specific field and update the validation errors map.
-    private func runValidation(for field: ClientReportFieldDefinition) {
+    private func runValidation(for field: SharedField) {
         let error = validateField(field, value: fieldValues[field.name])
         if let error {
             validationErrors[field.name] = error
@@ -253,7 +253,7 @@ struct TypedReportCreateView: View {
     // MARK: - Field Rendering
 
     @ViewBuilder
-    private func fieldInput(for field: ClientReportFieldDefinition) -> some View {
+    private func fieldInput(for field: SharedField) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             switch field.fieldType {
             case .text:
@@ -321,7 +321,7 @@ struct TypedReportCreateView: View {
     // MARK: - Text Field
 
     @ViewBuilder
-    private func textField(for field: ClientReportFieldDefinition) -> some View {
+    private func textField(for field: SharedField) -> some View {
         TextField(
             field.placeholder ?? field.label,
             text: validatedTextBinding(for: field)
@@ -332,7 +332,7 @@ struct TypedReportCreateView: View {
     // MARK: - Textarea Field
 
     @ViewBuilder
-    private func textareaField(for field: ClientReportFieldDefinition) -> some View {
+    private func textareaField(for field: SharedField) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(field.label)
@@ -392,7 +392,7 @@ struct TypedReportCreateView: View {
     // MARK: - Number Field
 
     @ViewBuilder
-    private func numberField(for field: ClientReportFieldDefinition) -> some View {
+    private func numberField(for field: SharedField) -> some View {
         HStack {
             Text(field.label)
                 .font(.brand(.body))
@@ -418,7 +418,7 @@ struct TypedReportCreateView: View {
     // MARK: - Select Field
 
     @ViewBuilder
-    private func selectField(for field: ClientReportFieldDefinition) -> some View {
+    private func selectField(for field: SharedField) -> some View {
         Picker(selection: selectBinding(for: field.name)) {
             Text(field.placeholder ?? NSLocalizedString("select_placeholder", comment: "Select..."))
                 .tag("")
@@ -442,7 +442,7 @@ struct TypedReportCreateView: View {
     // MARK: - Multiselect Field
 
     @ViewBuilder
-    private func multiselectField(for field: ClientReportFieldDefinition) -> some View {
+    private func multiselectField(for field: SharedField) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 2) {
                 Text(field.label)
@@ -467,7 +467,7 @@ struct TypedReportCreateView: View {
     // MARK: - Checkbox Field
 
     @ViewBuilder
-    private func checkboxField(for field: ClientReportFieldDefinition) -> some View {
+    private func checkboxField(for field: SharedField) -> some View {
         Toggle(field.label, isOn: checkboxBinding(for: field.name))
             .font(.brand(.body))
     }
@@ -475,7 +475,7 @@ struct TypedReportCreateView: View {
     // MARK: - Date Field
 
     @ViewBuilder
-    private func dateField(for field: ClientReportFieldDefinition) -> some View {
+    private func dateField(for field: SharedField) -> some View {
         DatePicker(
             selection: dateBinding(for: field.name),
             displayedComponents: [.date, .hourAndMinute]
@@ -494,7 +494,7 @@ struct TypedReportCreateView: View {
     // MARK: - File Attachment Field
 
     @ViewBuilder
-    private func fileAttachmentField(for field: ClientReportFieldDefinition) -> some View {
+    private func fileAttachmentField(for field: SharedField) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 2) {
                 Text(field.label)
@@ -639,7 +639,7 @@ struct TypedReportCreateView: View {
     }
 
     /// Text binding that also triggers validation on change.
-    private func validatedTextBinding(for field: ClientReportFieldDefinition) -> Binding<String> {
+    private func validatedTextBinding(for field: SharedField) -> Binding<String> {
         Binding<String>(
             get: {
                 if case .string(let val) = fieldValues[field.name] {
@@ -677,7 +677,7 @@ struct TypedReportCreateView: View {
     }
 
     /// Number binding that also triggers validation on change.
-    private func validatedNumberBinding(for field: ClientReportFieldDefinition) -> Binding<String> {
+    private func validatedNumberBinding(for field: SharedField) -> Binding<String> {
         Binding<String>(
             get: {
                 if case .int(let val) = fieldValues[field.name] {
@@ -937,14 +937,14 @@ struct TypedReportCreateView: View {
 #if DEBUG
 #Preview("Typed Report Form") {
     TypedReportCreateView(
-        reportType: ClientReportTypeDefinition(
+        reportType: CMSReportTypeListResponseReportType(
             id: "1", name: "arrest_report", label: "Arrest Report",
             labelPlural: "Arrest Reports",
             description: "Document an arrest observed in the field",
             icon: "exclamationmark.shield.fill", color: "#E74C3C",
             category: "report",
             fields: [
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f1", name: "location", label: "Location",
                     type: "text", required: true, options: nil,
                     section: nil, helpText: "Street address or intersection",
@@ -955,37 +955,37 @@ struct TypedReportCreateView: View {
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f2", name: "description", label: "Description",
                     type: "textarea", required: true, options: nil,
                     section: nil, helpText: "Describe what you observed",
                     order: 1, accessLevel: "all", supportAudioInput: true,
                     placeholder: nil, defaultValue: nil,
-                    validation: FieldValidation(min: nil, max: nil, minLength: 10, maxLength: 2000, pattern: nil),
+                    validation: SharedFieldValidation(min: nil, max: nil, minLength: 10, maxLength: 2000, pattern: nil),
                     showWhen: nil, indexable: nil, indexType: nil,
                     hubEditable: nil, editableByVolunteers: nil,
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f3", name: "num_arrested", label: "Number Arrested",
                     type: "number", required: false, options: nil,
                     section: "Details", helpText: nil,
                     order: 2, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil,
-                    validation: FieldValidation(min: 0, max: 1000, minLength: nil, maxLength: nil, pattern: nil),
+                    validation: SharedFieldValidation(min: 0, max: 1000, minLength: nil, maxLength: nil, pattern: nil),
                     showWhen: nil, indexable: nil, indexType: nil,
                     hubEditable: nil, editableByVolunteers: nil,
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f4", name: "arrest_type", label: "Arrest Type",
                     type: "select", required: true,
                     options: [
-                        FieldOption(key: "mass", label: "Mass Arrest"),
-                        FieldOption(key: "targeted", label: "Targeted"),
-                        FieldOption(key: "unknown", label: "Unknown"),
+                        SharedFieldOption(key: "mass", label: "Mass Arrest"),
+                        SharedFieldOption(key: "targeted", label: "Targeted"),
+                        SharedFieldOption(key: "unknown", label: "Unknown"),
                     ],
                     section: "Details", helpText: nil,
                     order: 3, accessLevel: "all", supportAudioInput: false,
@@ -995,7 +995,7 @@ struct TypedReportCreateView: View {
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f5", name: "force_used", label: "Force Used",
                     type: "checkbox", required: false, options: nil,
                     section: "Details", helpText: nil,
@@ -1006,32 +1006,32 @@ struct TypedReportCreateView: View {
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f6", name: "force_type", label: "Type of Force",
                     type: "select", required: false,
                     options: [
-                        FieldOption(key: "physical", label: "Physical"),
-                        FieldOption(key: "chemical", label: "Chemical (pepper spray, tear gas)"),
-                        FieldOption(key: "taser", label: "Taser/ECD"),
-                        FieldOption(key: "firearm", label: "Firearm"),
+                        SharedFieldOption(key: "physical", label: "Physical"),
+                        SharedFieldOption(key: "chemical", label: "Chemical (pepper spray, tear gas)"),
+                        SharedFieldOption(key: "taser", label: "Taser/ECD"),
+                        SharedFieldOption(key: "firearm", label: "Firearm"),
                     ],
                     section: "Details", helpText: nil,
                     order: 5, accessLevel: "all", supportAudioInput: false,
                     placeholder: nil, defaultValue: nil, validation: nil,
-                    showWhen: FieldShowWhen(field: "force_used", operator: "equals", value: .bool(true)),
+                    showWhen: SharedFieldShowWhen(field: "force_used", operator: "equals", value: .bool(true)),
                     indexable: nil, indexType: nil,
                     hubEditable: nil, editableByVolunteers: nil,
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f7", name: "charges", label: "Charges",
                     type: "multiselect", required: false,
                     options: [
-                        FieldOption(key: "trespass", label: "Trespass"),
-                        FieldOption(key: "disorderly", label: "Disorderly Conduct"),
-                        FieldOption(key: "resisting", label: "Resisting Arrest"),
-                        FieldOption(key: "other", label: "Other"),
+                        SharedFieldOption(key: "trespass", label: "Trespass"),
+                        SharedFieldOption(key: "disorderly", label: "Disorderly Conduct"),
+                        SharedFieldOption(key: "resisting", label: "Resisting Arrest"),
+                        SharedFieldOption(key: "other", label: "Other"),
                     ],
                     section: "Details", helpText: nil,
                     order: 6, accessLevel: "all", supportAudioInput: false,
@@ -1041,7 +1041,7 @@ struct TypedReportCreateView: View {
                     visibleToVolunteers: nil, accessRoles: nil, templateId: nil,
                     lookupId: nil
                 ),
-                ClientReportFieldDefinition(
+                SharedField(
                     id: "f8", name: "arrest_time", label: "Time of Arrest",
                     type: "date", required: false, options: nil,
                     section: "Details", helpText: nil,
@@ -1053,7 +1053,7 @@ struct TypedReportCreateView: View {
                     lookupId: nil
                 ),
             ],
-            statuses: [StatusOption(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
+            statuses: [SharedStatus(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
             defaultStatus: "open",
             allowFileAttachments: true, allowCaseConversion: true,
             mobileOptimized: true, isArchived: false,

@@ -5,8 +5,8 @@ import SwiftUI
 /// Shows available mobile-optimized report types as cards. Tapping a card
 /// navigates to the template-driven report form for that type.
 struct ReportTypePicker: View {
-    let reportTypes: [ClientReportTypeDefinition]
-    let onSelect: (ClientReportTypeDefinition) -> Void
+    let reportTypes: [CMSReportTypeListResponseReportType]
+    let onSelect: (CMSReportTypeListResponseReportType) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -37,7 +37,7 @@ struct ReportTypePicker: View {
     // MARK: - Report Type Card
 
     @ViewBuilder
-    private func reportTypeCard(_ reportType: ClientReportTypeDefinition) -> some View {
+    private func reportTypeCard(_ reportType: CMSReportTypeListResponseReportType) -> some View {
         Button {
             onSelect(reportType)
         } label: {
@@ -91,7 +91,7 @@ struct ReportTypePicker: View {
     // MARK: - Helpers
 
     /// Parse hex color from the report type definition, falling back to brand primary.
-    private func typeColor(_ reportType: ClientReportTypeDefinition) -> Color {
+    private func typeColor(_ reportType: CMSReportTypeListResponseReportType) -> Color {
         if let hex = reportType.color {
             return Color(hex: hex) ?? .brandPrimary
         }
@@ -125,13 +125,13 @@ extension Color {
 #Preview("Report Type Picker") {
     ReportTypePicker(
         reportTypes: [
-            ClientReportTypeDefinition(
+            CMSReportTypeListResponseReportType(
                 id: "1", name: "arrest_report", label: "Arrest Report",
                 labelPlural: "Arrest Reports",
                 description: "Document an arrest observed in the field",
                 icon: "exclamationmark.shield.fill", color: "#E74C3C",
                 category: "report",
-                fields: [], statuses: [StatusOption(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
+                fields: [], statuses: [SharedStatus(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
                 defaultStatus: "open",
                 allowFileAttachments: true, allowCaseConversion: true,
                 mobileOptimized: true, isArchived: false,
@@ -139,13 +139,13 @@ extension Color {
                 templateId: nil, templateVersion: nil, closedStatuses: nil,
                 createdAt: nil, updatedAt: nil
             ),
-            ClientReportTypeDefinition(
+            CMSReportTypeListResponseReportType(
                 id: "2", name: "misconduct_report", label: "Misconduct Report",
                 labelPlural: "Misconduct Reports",
                 description: "Report police misconduct or use of force",
                 icon: "hand.raised.slash.fill", color: "#F39C12",
                 category: "report",
-                fields: [], statuses: [StatusOption(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
+                fields: [], statuses: [SharedStatus(value: "open", label: "Open", color: nil, icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil)],
                 defaultStatus: "open",
                 allowFileAttachments: true, allowCaseConversion: false,
                 mobileOptimized: true, isArchived: false,
