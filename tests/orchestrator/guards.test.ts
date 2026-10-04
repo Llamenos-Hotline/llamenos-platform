@@ -759,6 +759,74 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     expect(fleetReviewYamlText()).not.toContain('--dangerously-skip-permissions')
   })
 
+  // The kimi fallback (fleet-review.yml's file header): the operator dial
+  // must be a repo variable read through the job env, exactly like
+  // FLEET_REVIEW_MODEL — and review.ts must read the identical env var so
+  // the smoke step's tolerance arm and the real review's fallback can never
+  // disagree about whether the fallback is armed.
+  it('declares FLEET_REVIEW_FALLBACK (kimi default, off disables) and review.ts reads the identical env var', () => {
+    const text = fleetReviewJobText()
+    const m = /^\s*FLEET_REVIEW_FALLBACK:\s*(.+?)\s*$/m.exec(text)
+    if (m === null) throw new Error('FLEET_REVIEW_FALLBACK not set in the fleet-review job env')
+    expect(m[1]).toBe("${{ vars.FLEET_REVIEW_FALLBACK || 'kimi' }}")
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review).toContain("process.env['FLEET_REVIEW_FALLBACK']")
+  })
+
+  // The fallback reviewer must be a READ-ONLY reviewer in fact, not in name:
+  // kimi's `-p` mode runs a full agent CLI (shell included) with no --tools
+  // flag, so the only thing standing between "fallback reviewer" and
+  // "arbitrary code execution next to the review key" is the committed
+  // agent profile's tool allowlist, enforced again at execution time. These
+  // rails pin the profile's shape the same way FLEET_REVIEWER_TOOLS is
+  // pinned for claude.
+  it('the committed fallback agent profile exists, allows exactly REVIEWER_TOOLS, and disallows the shell', () => {
+    const profilePath = join(process.cwd(), 'orchestrator', 'reviewer-readonly.agent.md')
+    expect(existsSync(profilePath), 'orchestrator/reviewer-readonly.agent.md is missing').toBe(true)
+    const profile = readFileSync(profilePath, 'utf8')
+    const toolsM = /^tools:\s*\n((?:\s*-\s*\S+\n)*)/m.exec(profile)
+    if (toolsM === null) throw new Error('the fallback agent profile has no tools: allowlist — it would run with every tool, Bash included')
+    const allowed = [...toolsM[1].matchAll(/^\s*-\s*(\S+)\s*$/gm)].map((x) => x[1])
+    expect(allowed, 'the fallback profile\'s tool allowlist has drifted from REVIEWER_TOOLS')
+      .toEqual([...REVIEWER_TOOLS])
+    expect(profile, 'the fallback profile must disallow Bash even as a belt-and-braces deny')
+      .toMatch(/^disallowedTools:/m)
+    expect(profile).toMatch(/^\s*-\s*Bash\s*$/m)
+    // The profile must not silently re-grow delegation: a reviewer that can
+    // dispatch sub-agents is not the tool set the prompt promises.
+    expect(profile).not.toMatch(/^subagents:\s*\*\s*$/m)
+  })
+
+  // And the fallback must actually RUN under that profile, in the smoke
+  // step's tolerance arm and in review.ts's real fallback invocation alike.
+  it('the smoke step\'s fallback arm invokes kimi under the committed profile with the stream-json envelope', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke step\'s fallback arm does not invoke kimi').toContain('kimi --output-format stream-json -p "$smoke_prompt"')
+    expect(text, 'the smoke step\'s fallback arm does not pass the read-only agent profile')
+      .toMatch(/--agent-file "\$fallback_agent"/)
+    expect(text, 'the fallback arm\'s profile path has drifted from the committed file')
+      .toContain('orchestrator/reviewer-readonly.agent.md')
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review, 'kimiArgs does not install the read-only agent profile').toContain("'--agent-file', REVIEWER_AGENT_FILE")
+    // The fallback never receives a claude model id or an auto/yolo mode.
+    const argsM = /export function kimiArgs[\s\S]*?\n\}/.exec(review)
+    if (argsM === null) throw new Error('kimiArgs not found in review.ts')
+    expect(argsM[0]).not.toContain('--model')
+    expect(argsM[0]).not.toMatch(/\byolo\b|--auto\b/)
+  })
+
+  // The tolerance arm's three guards, pinned: never on engine-auth (an
+  // expired runner login stays loud), never when the operator dial is off,
+  // never without a kimi binary on PATH (no half-run). Removing any guard
+  // makes this rail fail — the arm is what keeps a claude quota from
+  // stopping the merge train AND what keeps it from becoming a silent pass.
+  it('the smoke step\'s fallback arm is gated on not-auth, the operator dial, and kimi being on PATH', () => {
+    const text = fleetReviewJobText()
+    expect(text).toContain('[ "$engine_class" != "engine-auth" ]')
+    expect(text).toContain('[ "${FLEET_REVIEW_FALLBACK:-kimi}" != "off" ]')
+    expect(text).toMatch(/command -v kimi >\/dev\/null 2>&1/)
+  })
+
   it('review.ts reads the reviewer model from FLEET_REVIEW_MODEL, defaulting to sonnet, not a bare literal', () => {
     const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
     expect(text).toMatch(/const REVIEWER_MODEL = process\.env\['FLEET_REVIEW_MODEL'\] \|\| 'sonnet'/)

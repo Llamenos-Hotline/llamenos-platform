@@ -1,19 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import {
   verifierArgs,
   reviewFilesSection,
   REVIEWER_TOOLS,
   decodeEngineOutput,
+  decodeKimiOutput,
   parseVerdict,
   stripReviewerControlFiles,
   verifierFor,
   classifyEngineFailure,
   reviewerBinaryFor,
   reviewerInvocationFor,
+  canFallbackAfterFailure,
+  fallbackReviewerEnabled,
+  kimiArgs,
+  kimiBinaryOnPath,
+  toSecondOpinion,
+  FALLBACK_PROMPT_MAX_CHARS,
+  FALLBACK_REVIEWER_ENGINE,
+  REVIEWER_AGENT_FILE,
 } from '../../orchestrator/src/review.js'
 
 // #812: `fleet/review` retired `opencode` as the reviewer engine entirely —
@@ -803,5 +812,344 @@ describe('reviewFilesSection: how the reviewer is told to reach the export', () 
 
   it('tells the reviewer a tool call costs a turn — the budget is not free', () => {
     expect(section()).toMatch(/every tool call spends one turn/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The kimi fallback (see the doc comments above `verifierFor` and
+// `invokeVerifierEngine` in review.ts, and fleet-review.yml's file header):
+// claude first, kimi only when claude CANNOT RUN; every fallback verdict
+// labelled; a substantive FAIL never retried.
+// ---------------------------------------------------------------------------
+
+describe('canFallbackAfterFailure: the cannot-run taxonomy', () => {
+  it('falls back on the whole cannot-run family: quota, weekly limit, overload, timeouts, crashes, missing binaries', () => {
+    for (const text of [
+      '429 Too Many Requests',
+      'usage limit reached — quota exceeded',
+      'weekly limit reached, resets on Monday',
+      'provider overloaded, retry later',
+      'connect ETIMEDOUT',
+      'spawn ENOENT',
+      'simulated: Unexpected server error from provider',
+      '',
+    ]) {
+      expect(canFallbackAfterFailure('engine-unavailable', text), text).toBe(true)
+    }
+  })
+
+  it('falls back on a claude model-id rejection — kimi resolves its own model', () => {
+    expect(canFallbackAfterFailure('engine-misconfigured',
+      '"bogus" isn\'t described by this version\'s model catalog; [claude-code:unrecognized_model]')).toBe(true)
+  })
+
+  it('does NOT fall back on auth-failure-shaped text — an expired login must stay loud', () => {
+    for (const text of [
+      'Error: not logged in. Please run /login to authenticate.',
+      '401 Unauthorized',
+      'invalid api key',
+      'authentication failed',
+    ]) {
+      expect(canFallbackAfterFailure('engine-unavailable', text), text).toBe(false)
+    }
+  })
+
+  it('does NOT fall back on an exhausted turn budget — the brief, not the engine, failed', () => {
+    expect(canFallbackAfterFailure('budget-exhausted', 'Reached max turns (10)')).toBe(false)
+  })
+})
+
+describe('fallbackReviewerEnabled: the FLEET_REVIEW_FALLBACK operator dial', () => {
+  const ENV = 'FLEET_REVIEW_FALLBACK'
+  let saved: string | undefined
+  beforeEach(() => { saved = process.env[ENV] })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
+  })
+
+  it('defaults to enabled (kimi) when unset', () => {
+    delete process.env[ENV]
+    expect(fallbackReviewerEnabled()).toBe(true)
+  })
+  it('stays enabled for the explicit value', () => {
+    process.env[ENV] = 'kimi'
+    expect(fallbackReviewerEnabled()).toBe(true)
+  })
+  it('only the literal "off" disables it', () => {
+    process.env[ENV] = 'off'
+    expect(fallbackReviewerEnabled()).toBe(false)
+  })
+})
+
+describe('kimiBinaryOnPath: command -v kimi as code', () => {
+  let dir: string
+  afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined as never })
+
+  it('finds an executable kimi on the given PATH', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    writeFileSync(join(dir, FALLBACK_REVIEWER_ENGINE), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(dir, FALLBACK_REVIEWER_ENGINE), 0o755)
+    expect(kimiBinaryOnPath(dir)).toBe(FALLBACK_REVIEWER_ENGINE)
+  })
+
+  it('returns undefined when kimi is absent — the fallback must never half-run', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    expect(kimiBinaryOnPath(dir)).toBeUndefined()
+    expect(kimiBinaryOnPath('')).toBeUndefined()
+    expect(kimiBinaryOnPath(undefined)).toBeUndefined()
+  })
+
+  it('ignores a non-executable file named kimi', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    writeFileSync(join(dir, FALLBACK_REVIEWER_ENGINE), 'not executable')
+    expect(kimiBinaryOnPath(dir)).toBeUndefined()
+  })
+})
+
+describe('decodeKimiOutput: the kimi stream-json envelope', () => {
+  // VERBATIM shape from the installed kimi binary (`kimi --output-format
+  // stream-json -p`), captured live while building this fallback: meta
+  // events around role:"assistant" messages whose string content is the
+  // assistant text. Hand-written fixtures would only prove the decoder
+  // matches a guess at the shape.
+  const PASS_STREAM = [
+    JSON.stringify({ role: 'meta', type: 'system.version', version: '2.1.1' }),
+    JSON.stringify({ role: 'assistant', content: 'VERDICT: PASS' }),
+    JSON.stringify({ role: 'meta', type: 'session.resume_hint', session_id: 's', command: 'kimi -r s', content: 'To resume this session: kimi -r s' }),
+  ].join('\n')
+
+  it('extracts the assistant text so the VERDICT final-line contract is identical to the claude path', () => {
+    const run = decodeKimiOutput(PASS_STREAM, '')
+    expect(run.assistantText).toBe('VERDICT: PASS')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('reads a FAIL verdict with its reason the same way', () => {
+    const stream = PASS_STREAM.replace('VERDICT: PASS', 'VERDICT: FAIL — leaks the hub key into the log')
+    const run = decodeKimiOutput(stream, '')
+    expect(parseVerdict(run.assistantText)).toBe('FAIL')
+  })
+
+  it('takes the LAST assistant message — an intermediate reasoning message cannot supply the verdict', () => {
+    const stream = [
+      JSON.stringify({ role: 'assistant', content: 'My first read said the diff was fine.' }),
+      JSON.stringify({ role: 'assistant', content: 'On closer inspection:\nVERDICT: FAIL — weakens the session check' }),
+    ].join('\n')
+    expect(parseVerdict(decodeKimiOutput(stream, '').assistantText)).toBe('FAIL')
+  })
+
+  it('falls back to raw stdout when the output is not JSON, so an engine that changes its envelope still reviews', () => {
+    const plain = 'looks fine to me\nVERDICT: PASS'
+    const run = decodeKimiOutput(plain, '')
+    expect(run.assistantText).toBe(plain)
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('keeps stderr as diagnostics', () => {
+    expect(decodeKimiOutput(PASS_STREAM, 'some stderr noise').diagnostics).toMatch(/some stderr noise/)
+  })
+})
+
+describe('kimiArgs: the fallback invocation', () => {
+  it('carries the SAME brief as one -p argument, the read-only agent profile, and the export grant', () => {
+    const prompt = 'the full review brief\n## Diff\n...'
+    const args = kimiArgs({ prompt, exportDir: '/tmp/export' })
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(args[args.indexOf('-p') + 1]).toBe(prompt)
+    expect(args[args.indexOf('--add-dir') + 1]).toBe('/tmp/export')
+    expect(args[args.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
+  })
+
+  it('never asks for an auto/yolo permission mode and never names a claude model', () => {
+    const joined = kimiArgs({ prompt: 'x', exportDir: '/x' }).join(' ')
+    expect(joined).not.toMatch(/\byolo\b|\bauto\b|--dangerously/)
+    expect(joined).not.toContain('--model')
+  })
+
+  it('points --agent-file at a committed profile whose tool allowlist matches REVIEWER_TOOLS and disallows the shell', () => {
+    const profile = readFileSync(REVIEWER_AGENT_FILE, 'utf8')
+    for (const tool of REVIEWER_TOOLS) expect(profile).toMatch(new RegExp(`^\\s+- ${tool}$`, 'm'))
+    expect(profile).toMatch(/^tools:/m)
+    expect(profile).toMatch(/Bash/)
+    // And the workflow's smoke step references this exact committed file.
+    const yml = readFileSync(join(process.cwd(), '.github', 'workflows', 'fleet-review.yml'), 'utf8')
+    expect(yml).toContain('orchestrator/reviewer-readonly.agent.md')
+  })
+})
+
+describe('toSecondOpinion: engine attribution', () => {
+  it('labels a fallback verdict "reviewed by kimi (claude unavailable)" without disturbing the verdict line itself', () => {
+    const r = toSecondOpinion({ reached: true, engine: 'kimi', assistantText: 'looks fine\nVERDICT: PASS', diagnostics: '' })
+    expect(r.verdict).toBe('PASS')
+    expect(r.engine).toBe('kimi')
+    expect(r.text).toMatch(/^reviewed by kimi \(claude unavailable\)\n\n/)
+    // The attribution sits ABOVE the reviewer's text, so the same final-line
+    // selection every consumer uses still lands on the verdict line, never
+    // on the attribution.
+    expect(finalLineOf(r.text)).toBe('VERDICT: PASS')
+  })
+
+  it('never labels an ordinary claude verdict', () => {
+    const r = toSecondOpinion({ reached: true, engine: 'claude', assistantText: 'VERDICT: PASS', diagnostics: '' })
+    expect(r.engine).toBe('claude')
+    expect(r.text).not.toContain('kimi')
+  })
+
+  it('names both engines when the fallback also failed', () => {
+    const r = toSecondOpinion({ reached: false, engine: 'kimi', assistantText: '', diagnostics: 'quota text', failureKind: 'engine-unavailable' })
+    expect(r.verdict).toBe('UNREADABLE')
+    expect(r.text).toContain('both reviewer engines failed')
+  })
+
+  function finalLineOf(text: string): string | undefined {
+    return text.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0).at(-1)
+  }
+})
+
+describe('secondOpinion: the kimi fallback end to end (mocked engines)', () => {
+  const ENV = 'FLEET_REVIEW_FALLBACK'
+  let savedFallback: string | undefined
+  let savedPath: string | undefined
+  let kimiDir: string
+  let snapshotDir: string
+
+  const okReport = {
+    passed: true as const, reasons: [], changedFiles: ['apps/worker/x.ts'], addedLines: 1,
+    impact: 'low' as const, impactReasons: [],
+  }
+
+  const QUOTA_ERR = Object.assign(new Error('Command failed'), {
+    stdout: '', stderr: '429 Too Many Requests — usage limit reached for this account',
+  })
+  const AUTH_ERR = Object.assign(new Error('Command failed'), {
+    stdout: '', stderr: 'Error: not logged in. Please run /login to authenticate.',
+  })
+  const KIMI_PASS_STREAM = JSON.stringify({ role: 'assistant', content: 'checked the diff\nVERDICT: PASS' })
+
+  beforeEach(() => {
+    savedFallback = process.env[ENV]
+    savedPath = process.env['PATH']
+    process.env[ENV] = 'kimi'
+    kimiDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-bin-'))
+    writeFileSync(join(kimiDir, 'kimi'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(kimiDir, 'kimi'), 0o755)
+    process.env['PATH'] = `${kimiDir}${delimiter}${savedPath ?? ''}`
+    snapshotDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-review-snapshot-'))
+  })
+
+  afterEach(() => {
+    if (savedFallback === undefined) delete process.env[ENV]
+    else process.env[ENV] = savedFallback
+    process.env['PATH'] = savedPath
+    rmSync(kimiDir, { recursive: true, force: true })
+    rmSync(snapshotDir, { recursive: true, force: true })
+    mockExecFile.mockReset()
+  })
+
+  async function runSecondOpinion(diff = 'diff --git a/x b/x'){
+    const { secondOpinion } = await import('../../orchestrator/src/review.js')
+    return secondOpinion({
+      authorEngine: 'claude', pr: '1', snapshotDir, diff, report: okReport,
+    })
+  }
+
+  it('retries the SAME brief through kimi when claude cannot run, and labels the verdict', async () => {
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    mockExecFile.mockResolvedValueOnce({ stdout: KIMI_PASS_STREAM, stderr: '' })
+
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toMatch(/^reviewed by kimi \(claude unavailable\)\n\n/)
+
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+    const [claudeBinary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
+    const [kimiBinary, kimiArgv] = mockExecFile.mock.calls[1] as [string, string[], ...unknown[]]
+    expect(claudeBinary).toBe('claude')
+    expect(kimiBinary).toBe('kimi')
+    // The SAME brief: the -p argument carries the diff and the reviewer's
+    // contract, not a summary or a fresh prompt.
+    const brief = kimiArgv[kimiArgv.indexOf('-p') + 1] as string
+    expect(brief).toContain('diff --git a/x b/x')
+    expect(brief).toContain('non-author reviewer')
+    expect(brief).toContain('VERDICT: PASS')
+    expect(kimiArgv[kimiArgv.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
+    expect(kimiArgv[kimiArgv.indexOf('--add-dir') + 1]).toBe(snapshotDir)
+  })
+
+  it('with the fallback disabled, a claude cannot-run reports engine-unavailable exactly as today — kimi never invoked', async () => {
+    process.env[ENV] = 'off'
+    mockExecFileRejects(QUOTA_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-unavailable')
+    expect(result.engine).toBe('claude')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('an auth-failure-shaped claude error does NOT fall back — it stays loud as engine-unavailable', async () => {
+    mockExecFileRejects(AUTH_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-unavailable')
+    expect(result.engine).toBe('claude')
+    expect(result.text).toContain('not logged in')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('a substantive claude FAIL is never retried through another engine', async () => {
+    mockExecFileResolves('VERDICT: FAIL — writes the hub key to the log')
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('FAIL')
+    expect(result.engine).toBe('claude')
+    expect(result.text).not.toContain('kimi')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('a claude-side model-id rejection falls back (kimi resolves its own model)', async () => {
+    const err = Object.assign(new Error('Command failed'), {
+      stdout: "There's an issue with the selected model (bogus). It may not exist or you may not have access to it.",
+      stderr: '"bogus" isn\'t described by this version\'s model catalog; [claude-code:unrecognized_model]',
+    })
+    mockExecFile.mockRejectedValueOnce(err)
+    mockExecFile.mockResolvedValueOnce({ stdout: KIMI_PASS_STREAM, stderr: '' })
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('kimi')
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('when kimi is not on PATH, the claude failure is reported unchanged — never a half-run', async () => {
+    // A PATH with NO kimi at all — kimiDir itself holds the fake, so it
+    // cannot stand in for the absent case.
+    const bareDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-no-kimi-'))
+    process.env['PATH'] = bareDir
+    mockExecFileRejects(QUOTA_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-unavailable')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+    rmSync(bareDir, { recursive: true, force: true })
+  })
+
+  it('when the fallback also cannot run, the UNREADABLE names both engines and carries kimi\'s classification', async () => {
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    mockExecFile.mockRejectedValueOnce(Object.assign(new Error('Command failed'), {
+      stdout: '', stderr: 'kimi provider unreachable',
+    }))
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toContain('both reviewer engines failed')
+    expect(result.text).toContain('usage limit reached')
+    expect(result.text).toContain('kimi provider unreachable')
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips the fallback when the brief alone would exceed one argv element (E2BIG guard)', async () => {
+    mockExecFileRejects(QUOTA_ERR)
+    await runSecondOpinion(`diff --git a/x b/x\n${'x'.repeat(FALLBACK_PROMPT_MAX_CHARS + 1)}`)
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
   })
 })

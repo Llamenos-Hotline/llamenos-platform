@@ -376,7 +376,13 @@ describe('rail: an engine failure is named by its class, end to end', () => {
     writeFileSync(join(bin, 'claude'), '#!/usr/bin/env bash\ncat >/dev/null\necho "Claude AI usage limit reached" >&2\nexit 1\n')
     chmodSync(join(bin, 'claude'), 0o755)
     const temp = mkdtempSync(join(work, 'smoke-temp-'))
-    const r = runScript(step('fleet-review', SMOKE_STEP).run, { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet' }, {
+    // FLEET_REVIEW_FALLBACK=off: this rail pins the naming of the failure
+    // CLASS, so the step must take its ordinary failure arm — with the
+    // fallback enabled, a quota text would be tolerated (smoke the kimi
+    // fallback instead) and no engine-failure file would be written at all.
+    // The tolerance arm itself is railed end to end in
+    // fleet-review-smoke-step.test.ts.
+    const r = runScript(step('fleet-review', SMOKE_STEP).run, { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet', FLEET_REVIEW_FALLBACK: 'off' }, {
       path: `${bin}${delimiter}${process.env['PATH'] ?? ''}`,
     })
     expect(r.status, r.stdout + r.stderr).toBe(1)

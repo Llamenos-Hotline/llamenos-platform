@@ -458,10 +458,13 @@ export const UNSCOPED_LANE: Lane = {
   id: '(no lane — not a fleet branch)',
   mode: 'off',
   cap: 0,
-  // `verifierFor` (review.ts) resolves the reviewer to `claude` regardless
-  // of this value now (#812 retired the "other engine" bijection along with
-  // opencode) — this field stays `claude` only because `Lane.engine` still
-  // means "who authored this", and a human PR has no fleet author at all.
+  // `verifierFor` (review.ts) resolves the PRIMARY reviewer to `claude`
+  // regardless of this value now (#812 retired the "other engine" bijection
+  // along with opencode; when claude cannot run, the kimi fallback in
+  // `invokeVerifierEngine` reviews instead — see the comment above
+  // `verifierFor`) — this field stays `claude` only because `Lane.engine`
+  // still means "who authored this", and a human PR has no fleet author at
+  // all.
   engine: 'claude',
   requireLabel: '',
   vetoLabels: [],

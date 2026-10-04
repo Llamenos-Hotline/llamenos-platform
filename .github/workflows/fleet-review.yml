@@ -204,6 +204,69 @@
 # shared context, but no longer an independent VENDOR. `FLEET_REVIEW_MODEL`
 # (a repo variable, never a code change) is the dial for running the reviewer
 # on a different model tier than the lanes use.
+#
+# THE KIMI FALLBACK (measured need, 2026-10-04): every Fleet Review run was
+# failing `NO-VERDICT:engine-unavailable` because the operator's claude
+# account hit its WEEKLY QUOTA — one vendor's quota stopped the ENTIRE merge
+# train, because the review engine was hard-pinned to claude. The review
+# engine is now fallback-ordered, exactly as this repo's own design notes
+# already named ("Kimi-primary with Claude fallback on unreachable, so a
+# flaky reviewer costs a retry rather than a blocked merge" — this file
+# implements the same shape with the order preserved: CLAUDE FIRST, so
+# today's behavior is unchanged; kimi only when claude CANNOT RUN):
+#   - `invokeVerifierEngine` (orchestrator/src/review.ts) attempts claude
+#     exactly as before; only a CANNOT-RUN failure — quota, weekly limit,
+#     overload, timeout, crash, missing binary, a `--model` id claude itself
+#     refuses — retries the SAME brief through `kimi --output-format
+#     stream-json -p` under a committed read-only agent profile
+#     (`orchestrator/reviewer-readonly.agent.md`, the fallback's equivalent
+#     of `--tools Read,Grep,Glob` — enforced at execution, so the fallback
+#     reviewer has no shell and no edit tools either).
+#   - NEVER on anything else: a substantive PASS/FAIL from claude is
+#     returned as-is (a FAIL is never "retried" through another engine); an
+#     AUTH-failure-shaped error does not fall back (it is ambiguous — most
+#     often an expired runner login the operator must see, per this file's
+#     own `engine-auth` classification, not paper over); an exhausted turn
+#     budget does not fall back (the brief, not the engine, failed).
+#     See `canFallbackAfterFailure` (review.ts) for the taxonomy.
+#   - EVERY fallback verdict is labelled: the check output and the PR comment
+#     carry "reviewed by kimi (claude unavailable)", so a green check's
+#     provenance is never invisible — the label is what stops the fallback
+#     silently becoming primary.
+#   - THE VENDOR-DIVERSITY CAVEAT, stated not alarmed: when the fallback
+#     fires for a diff a Kimi-authored (opencode) lane wrote, reviewer and
+#     author share a vendor — a Kimi model reviewing Kimi output shares its
+#     blind spots the way the ordinary claude/claude pairing does. That is a
+#     rare state by design (claude first; kimi only when claude cannot run)
+#     and strictly better than the alternative it replaces, which was NO
+#     review at all — a required check failing closed stops every merge.
+#   - ONE containment difference from the claude path, honest because #1460
+#     taught this file to be: claude's reviewer runs under a GATE-OWNED HOME
+#     holding exactly one provisioned credential file. Kimi's authentication
+#     is entangled across its own config directory (`~/.kimi-code`: config,
+#     OAuth tokens, credentials) in a way that has no one-file equivalent,
+#     so the fallback runs with the runner's real HOME and may see the
+#     operator's user-level kimi configuration — the pre-#1460 claude
+#     posture. What bounds it regardless: the read-only agent profile (no
+#     shell, no writes, no MCP tools, no sub-agents), the stripped export,
+#     the empty scratch project root, and GitHub's per-SHA required statuses
+#     as the actual defense against a tampering reviewer (review.ts, above
+#     `gitState`).
+#
+# Operator dials (both repo variables, never code changes):
+#   FLEET_REVIEW_MODEL     — the claude model tier (default sonnet).
+#   FLEET_REVIEW_FALLBACK  — `kimi` (default) | `off`. `off` disables the
+#                          fallback: cannot-run failures report exactly as
+#                          they did before it existed.
+#
+# Runner prerequisite (llamenos-review-box): the `kimi` CLI must be on the
+# PATH the job inherits — one line if it is not (runner infrastructure
+# itself is deliberately untouched by this file):
+#   sudo ln -sf "$HOME/.kimi-code/bin/kimi" /usr/local/bin/kimi
+# and logged in once as the operator (`kimi login`). If `kimi` is absent the
+# fallback simply never fires — claude's cannot-run result is reported
+# exactly as today (review.ts, `kimiBinaryOnPath`) — so a runner without
+# kimi is a working, fallback-less gate, never a half-run one.
 name: Fleet Review
 
 on:
@@ -418,9 +481,20 @@ jobs:
     # variable), never a code change or a PR. The smoke-test step below and
     # the "Review" step both key off this; `review.ts`'s `REVIEWER_MODEL`
     # reads the identical env var with the identical default, so a variable
-    # change moves the smoke test and the real review together. There is no
-    # `FLEET_REVIEW_PROVIDER` any more — `claude`, pre-authenticated on this
-    # runner, is the only provider now (see the file header).
+    # change moves the smoke test and the real review together.
+    #
+    # `FLEET_REVIEW_FALLBACK` rides the same mechanism: `kimi` (the default)
+    # keeps the cannot-run fallback armed; `off` disables it. The smoke step
+    # and `invokeVerifierEngine` (review.ts) both read this env var, so the
+    # variable moves them together too — the smoke step must never be more
+    # tolerant of a claude outage than the review it gates (it is not: both
+    # consult the same variable and the same `kimi`-on-PATH check).
+    #
+    # There is no `FLEET_REVIEW_PROVIDER` any more — `claude`, pre-authenticated
+    # on this runner, is the only PRIMARY provider now (see the file header
+    # for the kimi fallback and its honest costs; the fallback is not a
+    # "provider" the operator selects, it is what happens when the primary
+    # cannot run).
     #
     # #891 banned a silent literal default for the review engine, but that
     # was about a swappable PROVIDER id going stale and being guessed at
@@ -428,7 +502,7 @@ jobs:
     # the comment above `DEFAULT_OPENCODE_MODEL` in `orchestrator/src/
     # review.ts`, kept for that history even though it no longer drives this
     # job). This job has no provider left to guess at: `claude` is the only
-    # engine (`reviewerBinaryFor` hard-fails for anything else), and
+    # primary engine (`reviewerBinaryFor` hard-fails for anything else), and
     # `'sonnet'` is a real, always-valid model tier, not a dead id someone
     # forgot to update — the smoke test below still classifies a bad
     # `FLEET_REVIEW_MODEL` as `engine-misconfigured` before the real review
@@ -436,6 +510,7 @@ jobs:
     # variable being silently invisible the way an absent provider id was.
     env:
       FLEET_REVIEW_MODEL: ${{ vars.FLEET_REVIEW_MODEL || 'sonnet' }}
+      FLEET_REVIEW_FALLBACK: ${{ vars.FLEET_REVIEW_FALLBACK || 'kimi' }}
       # The reviewer's tool restriction, carried BY THIS WORKFLOW rather than
       # imported from `orchestrator/src/review.ts` at gate time. It must
       # equal `REVIEWER_TOOLS` in that module, and
@@ -988,13 +1063,20 @@ jobs:
       # trailing line must fail HERE, not pass the smoke step and then make
       # every real review UNREADABLE.
       #
-      # A failure here is ALWAYS a job failure — nothing below turns a bad
-      # engine call into a pass. A failure names WHY, on one line, before the
-      # job goes red, distinguishing three causes so an operator never has to
-      # open the log to tell "the account hit a usage limit" (`engine-quota`)
-      # from "the runner's claude login expired" (`engine-auth`) from
-      # everything else (`engine-unavailable` — a bad model id, a missing
-      # binary, or the engine running but never producing a valid verdict).
+      # A failure here is a job failure — nothing below turns a bad engine
+      # call into a pass — with exactly ONE tolerated exception, the kimi
+      # fallback arm below: a claude failure in the CANNOT-RUN family (quota,
+      # overload, timeout, crash, a model-id rejection — everything except
+      # `engine-auth`, deliberately) re-runs the same health question through
+      # the kimi fallback before the step fails, because a cannot-run claude
+      # is precisely the state the fallback exists for and failing the smoke
+      # there would stop the review that could still run (file header). A
+      # failure names WHY, on one line, before the job goes red,
+      # distinguishing three causes so an operator never has to open the log
+      # to tell "the account hit a usage limit" (`engine-quota`) from "the
+      # runner's claude login expired" (`engine-auth`) from everything else
+      # (`engine-unavailable` — a bad model id, a missing binary, or the
+      # engine running but never producing a valid verdict).
       - name: Smoke-test the review engine
         id: smoke
         if: steps.gate.outputs.outcome == 'run-engine'
@@ -1211,7 +1293,85 @@ jobs:
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then
-            fail "$(classify "$run_out"$'\n'"$run_err")" "$run_out"$'\n'"$run_err"
+            engine_class="$(classify "$run_out"$'\n'"$run_err")"
+            # KIMI FALLBACK TOLERANCE. A claude failure in the CANNOT-RUN
+            # family is exactly the state the fallback exists for (file
+            # header): failing the smoke on claude quota would stop the
+            # review that could still run on kimi, and the merge train would
+            # stay stopped by one vendor's quota — the measured failure
+            # (2026-10-04) this fallback exists to end. So when, and only
+            # when, the class is a fallback-eligible cannot-run, the fallback
+            # is not disabled, and a kimi binary is on PATH, the smoke holds
+            # the fallback to the SAME health question and the SAME verdict
+            # contract before the step fails. `engine-auth` NEVER tolerates:
+            # an expired runner login must stay loud (see the file header and
+            # `canFallbackAfterFailure` in review.ts — the real review
+            # applies the identical rule, so the smoke can never be more
+            # tolerant than the gate it guards).
+            if [ "$engine_class" != "engine-auth" ] \
+                && [ "${FLEET_REVIEW_FALLBACK:-kimi}" != "off" ] \
+                && command -v kimi >/dev/null 2>&1; then
+              # The fallback's read-only agent profile, committed at the base
+              # checkout this job runs from (the same relative-path
+              # discipline as the `bun -e` imports above, for the same
+              # version-boundary reason — never import a symbol the base may
+              # not have). Without this profile the fallback reviewer would
+              # run kimi's full default tool set, shell included — a
+              # read-only reviewer in name only — so a missing profile is a
+              # hard configuration failure, not a degradation.
+              fallback_agent="orchestrator/reviewer-readonly.agent.md"
+              if [ ! -f "$fallback_agent" ]; then
+                fail "engine-misconfigured" "the kimi fallback is enabled (FLEET_REVIEW_FALLBACK=${FLEET_REVIEW_FALLBACK:-kimi}) but the read-only agent profile $fallback_agent is missing from this checkout — refusing to run a fallback reviewer with its full default tool set (shell included)"
+              fi
+              # The fallback runs under the RUNNER'S OWN HOME, NOT the
+              # gate-owned claude HOME built above: kimi authenticates from
+              # its own login state under its own config directory, which
+              # the gate-owned HOME does not provision (file header, "ONE
+              # containment difference"). The read-only agent profile — not
+              # HOME isolation — is what bounds the fallback's tool set.
+              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              fb_status=$?
+              fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+              if [ "$fb_status" -ne 0 ]; then
+                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+              fi
+              # Extract the fallback's final assistant message from the kimi
+              # stream-json envelope (one JSON object per line; assistant
+              # text is the string `content` of the LAST `role:"assistant"`
+              # event — `decodeKimiOutput` in review.ts is the base-code
+              # twin of this extraction, and the version-boundary rule above
+              # is why THIS arm uses jq instead of importing it: this step
+              # must be able to smoke-test the very PR that introduces the
+              # decoder). The VERDICT contract itself is still judged by the
+              # base's own `parseVerdict` — same function, same final line,
+              # same rule as the claude path.
+              fb_text="$(printf '%s' "$fb_out" | jq -rs '[.[] | select(type == "object" and .role == "assistant") | .content | select(type == "string")] | last // ""' 2>/dev/null)"
+              verdict_out="$(printf '%s' "$fb_text" | bun -e '
+                import { parseVerdict } from "./orchestrator/src/review.ts"
+                const text = await Bun.stdin.text()
+                console.log(text)
+                const verdict = parseVerdict(text)
+                console.log("smoke verdict (parseVerdict of kimi fallback output): " + verdict)
+                process.exit(verdict === "PASS" ? 0 : 1)
+              ')"
+              verdict_status=$?
+              if [ "$verdict_status" -ne 0 ]; then
+                # Same scrubbed-excerpt discipline as the claude arm below:
+                # this text is the model's own prose printed into a public
+                # job log and must not become a way for engine output to
+                # carry a credential into one.
+                excerpt="$(printf '%s' "$fb_text" | tr -d '\000' | tr '\n\r\t' '   ' \
+                  | sed -E 's#(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9._-]{16,}|[A-Za-z0-9+/]{40,}={0,2})#[redacted]#g' \
+                  | cut -c1-300)"
+                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
+              fi
+              printf '%s\n' "$verdict_out"
+              echo "review engine smoke test OK (engine=kimi fallback; claude unavailable: $engine_class)"
+              # The claude verdict check below must not run: claude's output
+              # is its failure text, and the step has already concluded.
+              exit 0
+            fi
+            fail "$engine_class" "$run_out"$'\n'"$run_err"
           fi
 
           verdict_out="$(printf '%s' "$run_out" | bun -e '
