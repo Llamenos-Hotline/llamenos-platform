@@ -452,17 +452,33 @@ co-approval prompt, archive/unarchive, and the retention-floor refusal.
   `apps/worker/__tests__/integration/`
 - `drizzle/migrations/` — one migration
 
-## 14. Open questions for review
+## 14. Decisions taken at review
 
-1. **Force override and the window.** The operator's decision is that force *skips* the
-   window, so a forced hub shred sets `execute_at = NOW()`. The user-erasure model it
-   reuses instead clamps to a hard `EMERGENCY_MIN_HOURS = 4` floor
-   (`services/erasure.ts:32`). This spec follows the operator's decision and leaves the
-   4-hour floor as a user-scope constant. Flagged because it is a deliberate divergence
-   from the reused model, not an oversight.
-2. **Scrubbing `audit_log.actor_pubkey`.** §4 Class E scrubs it, on the grounds that it
-   would otherwise be the last surviving proof of hub membership. The cost is that a
-   shredded hub's chain no longer attributes actions to anyone. Confirm that trade.
-3. **`re_encryption_jobs` is misnamed already.** It re-encrypts nothing;
-   `processReEncryptionJob` only strips envelopes. Reused as-is here; a rename would touch
-   the protocol schemas and every platform, so it belongs in its own change.
+Resolved 2026-10-04. Recorded here so a later reader does not mistake any of them for
+an oversight.
+
+1. **Force override sets `execute_at = NOW()`, diverging from `EMERGENCY_MIN_HOURS = 4`.**
+   Accepted. An override that still waits four hours is not an override, and that
+   4-hour floor exists for a different operation with a different rationale; it stays a
+   user-scope constant. **The co-approval requirement is unchanged** — the override skips
+   the *wait*, never the *second pair of eyes*. A forced shred therefore still needs a
+   valid Ed25519 co-approver signature over `LABEL_ERASURE_OVERRIDE_SIG`, from a
+   registered admin device that is not the requester, with
+   `erasure_config.emergency_override_enabled` true.
+2. **`audit_log.actor_pubkey` is scrubbed.** Accepted. Who-did-what inside a hub that has
+   been deliberately destroyed is exactly the implicating data the shred exists to
+   remove, and in this product a pubkey is a person. The chain's value here is
+   tamper-evidence, which survives intact: no hash is ever touched and `erased_at` is
+   stamped. Attribution within a shredded hub is not worth retaining at the cost of the
+   thing being shredded.
+3. **`re_encryption_jobs` is reused under its wrong name.** Accepted for this change —
+   renaming a table mid-feature is scope creep and a migration risk. Follow-up issue **#1527** is filed, because a name asserting a property the code lacks is the pattern catalogued in
+   #1495, and this one already misled the author of this spec.
+
+## 15. A note on evidence
+
+`fleet/verify` has been judging PRs against the **base's** workspace packages (#1525,
+fix in #1526). Any test here that resolves a bare `@llamenos/*` specifier can therefore
+go green under the gate for the wrong reason. The evidence for every claim in §7 is a
+**local run against real PostgreSQL on this worktree's isolated database**, and that is
+what the PR will cite — not a green check.
