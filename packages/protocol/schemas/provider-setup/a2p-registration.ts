@@ -7,6 +7,11 @@ export const a2pBrandStatusSchema = z.enum([
   'approved',
   'rejected',
   'suspended',
+  // Server state machine (apps/worker/services/provider-setup/a2p-registration.ts
+  // BrandStatus) also emits these — the enum must cover them or clients fail
+  // to decode skipped/failed registrations.
+  'failed',
+  'skipped',
 ])
 export type A2pBrandStatus = z.infer<typeof a2pBrandStatusSchema>
 
@@ -16,6 +21,8 @@ export const a2pCampaignStatusSchema = z.enum([
   'approved',
   'rejected',
   'suspended',
+  'failed',
+  'skipped',
 ])
 export type A2pCampaignStatus = z.infer<typeof a2pCampaignStatusSchema>
 

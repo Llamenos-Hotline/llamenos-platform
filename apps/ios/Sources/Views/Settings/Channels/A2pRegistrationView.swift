@@ -27,10 +27,10 @@ struct A2pRegistrationView: View {
     @State private var sampleMessage2 = ""
 
     var body: some View {
-        let brandStatus = service.a2pRegistration?.brandStatus ?? "not_submitted"
-        let campaignStatus = service.a2pRegistration?.campaignStatus ?? "not_submitted"
-        let isApproved = brandStatus == "approved" && campaignStatus == "approved"
-        let isSkipped = brandStatus == "skipped"
+        let brandStatus = service.a2pRegistration?.brandStatus ?? .notSubmitted
+        let campaignStatus = service.a2pRegistration?.campaignStatus ?? .notSubmitted
+        let isApproved = brandStatus == .approved && campaignStatus == .approved
+        let isSkipped = brandStatus == .skipped
 
         Section(header: Text(NSLocalizedString("channels_a2p_title", comment: "A2P 10DLC Registration"))) {
             Text(NSLocalizedString("channels_a2p_description", comment: ""))
@@ -40,25 +40,19 @@ struct A2pRegistrationView: View {
             HStack {
                 Text(NSLocalizedString("channels_a2p_brand_status", comment: "Brand"))
                 Spacer()
-                Text(brandStatus.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .foregroundStyle(brandStatus == "approved" ? .green : brandStatus == "failed" ? .red : .secondary)
+                Text(brandStatus.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .foregroundStyle(brandStatus == .approved ? .green : brandStatus == .failed ? .red : .secondary)
             }
 
             HStack {
                 Text(NSLocalizedString("channels_a2p_campaign_status", comment: "Campaign"))
                 Spacer()
-                Text(campaignStatus.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .foregroundStyle(campaignStatus == "approved" ? .green : campaignStatus == "failed" ? .red : .secondary)
+                Text(campaignStatus.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .foregroundStyle(campaignStatus == .approved ? .green : campaignStatus == .failed ? .red : .secondary)
             }
 
-            if let error = service.a2pRegistration?.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            if brandStatus == "not_submitted" || brandStatus == "failed" {
-                Button(brandStatus == "failed"
+            if brandStatus == .notSubmitted || brandStatus == .failed {
+                Button(brandStatus == .failed
                     ? NSLocalizedString("channels_a2p_resubmit_brand", comment: "Re-submit Brand")
                     : NSLocalizedString("channels_a2p_submit_brand", comment: "Register Brand")) {
                     showBrandForm = true
@@ -180,7 +174,7 @@ struct A2pRegistrationView: View {
             "country": country,
         ]
         do {
-            let result = try await service.submitBrand(hubId: service.a2pRegistration?.hubId ?? "", brandInfo: brandInfo)
+            let result = try await service.submitBrand(hubId: service.a2pRegistration?.hubID ?? "", brandInfo: brandInfo)
             service.a2pRegistration = result
             showBrandForm = false
         } catch {
@@ -205,7 +199,7 @@ struct A2pRegistrationView: View {
         do {
             let result = try await service.submitCampaign(
                 registrationId: regId,
-                hubId: service.a2pRegistration?.hubId ?? "",
+                hubId: service.a2pRegistration?.hubID ?? "",
                 campaignInfo: campaignInfo
             )
             service.a2pRegistration = result
