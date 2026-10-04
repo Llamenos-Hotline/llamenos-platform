@@ -687,6 +687,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_build_auth_message(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_hub_keys(
@@ -700,6 +702,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_create_auth_token(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_create_auth_token_from_signing_key(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_draft(
     ): Short
@@ -787,6 +791,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_unlock(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_verify_auth_token(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_wake_key_pubkey(
     ): Short
     external fun ffi_llamenos_core_uniffi_contract_version(
@@ -854,6 +860,8 @@ external fun uniffi_llamenos_core_fn_func_get_public_key(`secretKeyHex`: RustBuf
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(`b64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_build_auth_message(`pubkeyHex`: RustBuffer.ByValue,`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`nonce`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_clear_ephemeral_key(uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_clear_hub_keys(uniffi_out_err: UniffiRustCallStatus, 
@@ -867,6 +875,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_content_aad_hex(`label`: RustBu
 external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token(`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_key(`signingKeyHex`: RustBuffer.ByValue,`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_draft(`packedHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -954,6 +964,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(`plaintextHex
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_unlock(`data`: RustBuffer.ByValue,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_verify_auth_token(`token`: RustBuffer.ByValue,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_wake_key_pubkey(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun ffi_llamenos_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1153,6 +1165,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key() != 9718.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1172,6 +1187,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_create_auth_token_from_signing_key() != 63368.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700.toShort()) {
@@ -1301,6 +1319,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_verify_auth_token() != 22646.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_wake_key_pubkey() != 39092.toShort()) {
@@ -1545,6 +1566,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
     }
 }
 
@@ -3269,6 +3309,24 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Build the canonical auth message bytes — the one construction path, exposed
+         * so platform code never hand-builds the signed string.
+         *
+         * `nonce: None` selects the nonce-less shape (a different label); `Some(n)`
+         * the nonce-bearing one. Platform tests use this to pin byte-equality against
+         * the interop vectors.
+         */ fun `mobileBuildAuthMessage`(`pubkeyHex`: kotlin.String, `timestamp`: kotlin.ULong, `method`: kotlin.String, `path`: kotlin.String, `nonce`: kotlin.String?): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_build_auth_message(
+    
+        FfiConverterString.lower(`pubkeyHex`),FfiConverterULong.lower(`timestamp`),FfiConverterString.lower(`method`),FfiConverterString.lower(`path`),FfiConverterOptionalString.lower(`nonce`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Clear the ephemeral key from state without performing ECDH.
          * Called when the device linking flow is cancelled.
          */ fun `mobileClearEphemeralKey`()
@@ -3364,6 +3422,27 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_key(
     
         FfiConverterString.lower(`signingKeyHex`),FfiConverterULong.lower(`timestamp`),FfiConverterString.lower(`method`),FfiConverterString.lower(`path`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Create an Ed25519 auth token with NO nonce, using the device signing key in
+         * mobile state.
+         *
+         * For the routes whose wire schema has no `nonce` field — today only
+         * `POST /api/invites/redeem`, whose body is `{ code, pubkey, timestamp, token }`.
+         * The message is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the
+         * server accepts only on routes that opt in, so this token is useless
+         * anywhere else. Every other call site must use `mobile_create_auth_token`.
+         */
+    @Throws(CryptoException::class) fun `mobileCreateAuthTokenWithoutNonce`(`timestamp`: kotlin.ULong, `method`: kotlin.String, `path`: kotlin.String): AuthToken {
+            return FfiConverterTypeAuthToken.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(
+    
+        FfiConverterULong.lower(`timestamp`),FfiConverterString.lower(`method`),FfiConverterString.lower(`path`),_status)
 }
     )
     }
@@ -4019,6 +4098,24 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_unlock(
     
         FfiConverterTypeEncryptedDeviceKeys.lower(`data`),FfiConverterString.lower(`pin`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify an Ed25519 auth token (stateless).
+         *
+         * Exposed so platform tests can assert the domain-separation property
+         * directly: a nonce-less token verifies only under its own label, and a
+         * nonce-bearing token whose nonce was dropped does not verify at all.
+         */
+    @Throws(CryptoException::class) fun `mobileVerifyAuthToken`(`token`: AuthToken, `method`: kotlin.String, `path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_verify_auth_token(
+    
+        FfiConverterTypeAuthToken.lower(`token`),FfiConverterString.lower(`method`),FfiConverterString.lower(`path`),_status)
 }
     )
     }

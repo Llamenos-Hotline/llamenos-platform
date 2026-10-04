@@ -529,6 +529,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 /**
  * A signed Ed25519 authentication token.
@@ -2612,6 +2630,25 @@ public func mobileBase64urlToHex(b64: String)throws  -> String  {
 })
 }
 /**
+ * Build the canonical auth message bytes — the one construction path, exposed
+ * so platform code never hand-builds the signed string.
+ *
+ * `nonce: None` selects the nonce-less shape (a different label); `Some(n)`
+ * the nonce-bearing one. Platform tests use this to pin byte-equality against
+ * the interop vectors.
+ */
+public func mobileBuildAuthMessage(pubkeyHex: String, timestamp: UInt64, method: String, path: String, nonce: String?) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_llamenos_core_fn_func_mobile_build_auth_message(
+        FfiConverterString.lower(pubkeyHex),
+        FfiConverterUInt64.lower(timestamp),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),
+        FfiConverterOptionString.lower(nonce),$0
+    )
+})
+}
+/**
  * Clear the ephemeral key from state without performing ECDH.
  * Called when the device linking flow is cancelled.
  */
@@ -2683,6 +2720,25 @@ public func mobileCreateAuthTokenFromSigningKey(signingKeyHex: String, timestamp
     return try  FfiConverterTypeAuthToken_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_key(
         FfiConverterString.lower(signingKeyHex),
+        FfiConverterUInt64.lower(timestamp),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+/**
+ * Create an Ed25519 auth token with NO nonce, using the device signing key in
+ * mobile state.
+ *
+ * For the routes whose wire schema has no `nonce` field — today only
+ * `POST /api/invites/redeem`, whose body is `{ code, pubkey, timestamp, token }`.
+ * The message is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the
+ * server accepts only on routes that opt in, so this token is useless
+ * anywhere else. Every other call site must use `mobile_create_auth_token`.
+ */
+public func mobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String, path: String)throws  -> AuthToken  {
+    return try  FfiConverterTypeAuthToken_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(
         FfiConverterUInt64.lower(timestamp),
         FfiConverterString.lower(method),
         FfiConverterString.lower(path),$0
@@ -3207,6 +3263,22 @@ public func mobileUnlock(data: EncryptedDeviceKeys, pin: String)throws  -> Devic
 })
 }
 /**
+ * Verify an Ed25519 auth token (stateless).
+ *
+ * Exposed so platform tests can assert the domain-separation property
+ * directly: a nonce-less token verifies only under its own label, and a
+ * nonce-bearing token whose nonce was dropped does not verify at all.
+ */
+public func mobileVerifyAuthToken(token: AuthToken, method: String, path: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_verify_auth_token(
+        FfiConverterTypeAuthToken_lower(token),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+/**
  * Derive the public key from the stored wake key secret.
  */
 public func mobileWakeKeyPubkey()throws  -> String  {
@@ -3309,6 +3381,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key() != 9718) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3328,6 +3403,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_from_signing_key() != 63368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce() != 37994) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700) {
@@ -3457,6 +3535,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_verify_auth_token() != 22646) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_wake_key_pubkey() != 39092) {
