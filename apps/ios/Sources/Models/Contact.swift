@@ -1,20 +1,13 @@
 import SwiftUI
 
-// MARK: - Contact Summary
-// Client-only: generated `ContactTimelineListResponseContact` uses `Double` for counts
-// and `contactHash` as identifier. This client model uses `Int` for counts and provides
-// UI computed properties (displayIdentifier, totalInteractions).
+// MARK: - Contact summary UI extensions
+// Contact lists decode to generated `ContactTimelineListResponse` whose
+// elements are generated `SharedContactTimelineListResponseContact`
+// (packages/protocol/schemas/contacts.ts — contactTimelineSummarySchema).
+// Only the display helpers below are client-side.
 
-struct ContactSummary: Identifiable, Codable, Sendable {
-    var id: String { contactHash }
-    let contactHash: String
-    let last4: String?
-    let firstSeen: String
-    let lastSeen: String
-    let callCount: Int
-    let conversationCount: Int
-    let noteCount: Int
-    let reportCount: Int
+extension SharedContactTimelineListResponseContact: Identifiable {
+    public var id: String { contactHash }
 
     var displayIdentifier: String {
         if let last4 { return "***\(last4)" }
@@ -22,13 +15,8 @@ struct ContactSummary: Identifiable, Codable, Sendable {
     }
 
     var totalInteractions: Int {
-        callCount + conversationCount + noteCount + reportCount
+        Int(callCount + conversationCount + noteCount + reportCount)
     }
-}
-
-struct ContactsListResponse: Codable, Sendable {
-    let contacts: [ContactSummary]
-    let total: Int
 }
 
 // MARK: - Timeline Event
@@ -52,8 +40,12 @@ struct ContactTimelineResponse: Codable, Sendable {
 }
 
 // MARK: - Contact Detail
-// Client-only: generated `Contact` has encrypted PII/summary fields and envelope arrays.
-// This client model is the decrypted/simplified view for display.
+// SKIPPED (#1329): no server endpoint returns this shape. GET /api/contacts/:hash
+// returns the timeline detail ({notes, conversations} — generated
+// `ContactTimelineDetailResponse`), and the CMS directory lives at
+// /api/directory/:id with the encrypted `Contact` shape. This model and its
+// screen are kept as-is pending a product decision on which wire shape the
+// contact detail screen should consume; do not extend.
 
 /// Full contact profile including linked cases and identifiers.
 struct ContactDetail: Codable, Sendable {
@@ -94,6 +86,8 @@ struct ContactIdentifier: Codable, Identifiable, Sendable {
     let addedAt: String?
 }
 
+/// SKIPPED (#1329): kept with `ContactDetail` — no server endpoint returns
+/// this wrapper shape today.
 struct ContactDetailResponse: Codable, Sendable {
     let contact: ContactDetail
 }
@@ -121,10 +115,8 @@ struct AppContactRelationshipsResponse: Codable, Sendable {
 
 // MARK: - Contact Search Response
 
-struct ContactSearchResponse: Codable, Sendable {
-    let contacts: [ContactSummary]
-    let total: Int
-}
+// Contact list and search responses both decode to generated
+// `ContactTimelineListResponse`.
 
 // MARK: - Event Type
 // Client-only: UI display properties (icon, color, displayName).
