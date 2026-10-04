@@ -26,8 +26,9 @@ const asteriskConfig: TelephonyProviderConfig = {
   type: 'asterisk',
   phoneNumber: '+15550000002',
   sipDomain: 'pbx.example.com',
-  sipUsername: 'volunteer',
-  sipPassword: 's3cr3t',
+  ariUrl: 'http://pbx.example.com:8088/ari',
+  ariUsername: 'llamenos',
+  ariPassword: 'ari-secret',
 }
 
 const plivoConfig: TelephonyProviderConfig = {
@@ -57,8 +58,13 @@ describe('isSipConfigured', () => {
     expect(isSipConfigured(asteriskConfig)).toBe(true)
   })
 
-  it('returns false for Asterisk missing password', () => {
-    const cfg = { ...asteriskConfig, sipPassword: undefined }
+  it('returns false for Asterisk missing ARI credentials', () => {
+    const cfg = { ...asteriskConfig, ariPassword: undefined }
+    expect(isSipConfigured(cfg as TelephonyProviderConfig)).toBe(false)
+  })
+
+  it('returns false for Asterisk missing the registrar domain', () => {
+    const cfg = { ...asteriskConfig, sipDomain: undefined }
     expect(isSipConfigured(cfg as TelephonyProviderConfig)).toBe(false)
   })
 
@@ -89,11 +95,10 @@ describe('generateSipParams', () => {
     expect(params.sip.iceServers[0].url).toMatch(/^stun:/)
   })
 
-  it('Asterisk: returns ZRTP media encryption', () => {
-    const params = generateSipParams(asteriskConfig, 'vol')
-    expect(params.provider).toBe('asterisk')
-    expect(params.sip.mediaEncryption).toBe('zrtp')
-    expect(params.sip.domain).toBe('pbx.example.com')
+  it('Asterisk: no shared-credential branch — the per-volunteer registrar path is the only credential', () => {
+    expect(() => generateSipParams(asteriskConfig, 'vol')).toThrow(
+      'SIP not supported for provider: asterisk',
+    )
   })
 
   it('Plivo: uses phone.plivo.com domain', () => {

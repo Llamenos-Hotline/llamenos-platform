@@ -149,6 +149,11 @@ const env: Record<string, unknown> = {
   NOTIFIER_URL: notifierUrl || undefined,
   NOTIFIER_API_KEY: notifierApiKey || undefined,
   NOTIFIER_TOKEN_SECRET: notifierTokenSecret || undefined,
+  // Per-volunteer SIP registrar — apps/worker/routes/webrtc.ts (/sip-token
+  // issuance against our own Asterisk) and telephony/registrar.ts.
+  SIP_REGISTRAR_SECRET: process.env.SIP_REGISTRAR_SECRET || undefined,
+  TURN_HOST: process.env.TURN_HOST || undefined,
+  TURN_SECRET: process.env.TURN_SECRET || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
   // --- Push delivery ---

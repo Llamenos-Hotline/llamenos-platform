@@ -19,11 +19,12 @@ export interface SipConnectionParams {
 /**
  * Whether SIP credentials may be issued to a volunteer at all.
  *
- * Currently ALWAYS false, deliberately. Every provider generator below takes
- * `identity` and declares it `_identity` — the credentials returned are the
- * hub's own `sipUsername`/`sipPassword` from its `TelephonyProviderConfig`,
- * which is hub-scoped. So every volunteer in a hub would receive the same
- * credential: the hub's trunk account at the telephony vendor (#1203).
+ * True for `provider: asterisk` ONLY, and that is the whole point. Every
+ * vendor generator below takes `identity` and declares it `_identity` — the
+ * credentials returned are the hub's own `sipUsername`/`sipPassword` from its
+ * `TelephonyProviderConfig`, which is hub-scoped. So every volunteer in a hub
+ * would receive the same credential: the hub's trunk account at the telephony
+ * vendor (#1203).
  *
  * Three consequences, in increasing order of seriousness:
  *
@@ -37,18 +38,21 @@ export interface SipConnectionParams {
  *      passive, invisible. Under a threat model naming nation states and
  *      private hacking firms this is the one that matters.
  *
- * The leak is latent today only because no client completes SIP registration
+ * The leak is latent only because no client completes SIP registration
  * (#1188). Finishing that work would activate it, which is why this refuses
- * at the source rather than relying on clients not asking.
+ * at the source rather than relying on clients not to ask.
  *
- * The real fix is per-volunteer identities against OUR OWN registrar (#1173's
- * Kamailio design). A per-volunteer credential at the vendor would still leak
- * (3). So this does not return true when some provider gains per-user
- * credentials — it returns true when registration targets infrastructure we
- * run.
+ * Asterisk passes the bar the vendors cannot: registration targets the PBX we
+ * run, and the issued credential is a REAL per-volunteer identity —
+ * `vol_<pubkey16>` with a derived per-endpoint secret, provisioned on the PBX
+ * over ARI (see telephony/registrar.ts) and individually revocable on role
+ * loss or account deletion. The vendor generators are untouched and stay
+ * unreachable: a per-volunteer credential AT the vendor would still leak (3),
+ * so this does not return true when some provider gains per-user credentials
+ * — it returns true when registration targets infrastructure we run.
  */
-export function sipCredentialsMayBeIssued(_config: TelephonyProviderConfig | null): boolean {
-  return false
+export function sipCredentialsMayBeIssued(config: TelephonyProviderConfig | null): boolean {
+  return config?.type === 'asterisk'
 }
 
 /**
@@ -69,8 +73,12 @@ export function isSipConfigured(config: TelephonyProviderConfig | null): boolean
       // Plivo SIP endpoint credentials
       return !!(config.sipEndpointUsername && config.sipEndpointPassword)
     case 'asterisk':
-      // Direct Asterisk PJSIP endpoint
-      return !!(config.sipDomain && config.sipUsername && config.sipPassword)
+      // Per-volunteer identities are provisioned on OUR OWN PBX over ARI —
+      // issuance needs the registrar's public SIP domain plus ARI access to
+      // provision the endpoint. The hub-scoped sipUsername/sipPassword are the
+      // vendor-style shared credential this path exists to avoid and are NOT
+      // required (or used) here.
+      return !!(config.sipDomain && config.ariUrl && config.ariUsername && config.ariPassword)
     default:
       return false
   }
@@ -93,9 +101,10 @@ export function generateSipParams(
       return generateVonageSipParams(config, identity)
     case 'plivo':
       return generatePlivoSipParams(config, identity)
-    case 'asterisk':
-      return generateAsteriskSipParams(config, identity)
     default:
+      // asterisk has no branch here deliberately: its issuable credential is
+      // the per-volunteer identity from telephony/registrar.ts — never the
+      // hub-scoped config this shared-credential generator would return.
       throw new Error(`SIP not supported for provider: ${config.type}`)
   }
 }
@@ -193,29 +202,6 @@ function generatePlivoSipParams(
         { url: 'stun:stun.plivo.com:3478' },
       ],
       mediaEncryption: 'srtp',
-    },
-  }
-}
-
-function generateAsteriskSipParams(
-  config: TelephonyProviderConfig,
-  _identity: string,
-): SipConnectionParams {
-  if (!config.sipDomain || !config.sipUsername || !config.sipPassword) {
-    throw new Error('Missing Asterisk SIP config')
-  }
-
-  return {
-    provider: 'asterisk',
-    sip: {
-      domain: config.sipDomain,
-      transport: 'tls',
-      username: config.sipUsername,
-      password: config.sipPassword,
-      iceServers: [
-        { url: `stun:${config.sipDomain}:3478` },
-      ],
-      mediaEncryption: 'zrtp', // Asterisk supports ZRTP for E2E
     },
   }
 }

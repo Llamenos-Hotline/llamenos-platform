@@ -20,6 +20,11 @@ debug={{ kamailio_log_level }}
 children=4
 
 # === Network Interfaces ===
+# TLS needs the explicit global switch in 5.7 (the tls module logs "tls
+# support is disabled (set enable_tls=1)" and the listener fails otherwise).
+{% if kamailio_tls_enabled | default(true) | bool %}
+enable_tls=yes
+{% endif %}
 listen=udp:0.0.0.0:{{ kamailio_http_port }}
 listen=tcp:0.0.0.0:{{ kamailio_http_port }}
 {% if kamailio_tls_enabled | default(true) | bool %}
@@ -119,13 +124,13 @@ request_route {
         exit;
     }
 
-    # Handle retransmissions
+    # Handle retransmissions. t_check_trans absorbs retransmits of earlier
+    # transactional replies and exits; there is no t_precheck_trans in 5.7
+    # (the old call never parsed — Kamailio would not boot on this config).
     if (!is_method("ACK")) {
-        if(t_precheck_trans()) {
-            t_check_trans();
+        if (t_check_trans()) {
             exit;
         }
-        t_check_trans();
     }
 
     # Record routing for dialog-forming requests

@@ -94,6 +94,19 @@ export interface Env {
   NOTIFIER_API_KEY?: string
   NOTIFIER_TOKEN_SECRET?: string  // HMAC secret for signing client registration tokens (falls back to HMAC_SECRET)
 
+  // Per-volunteer SIP registrar (profile: asterisk/telephony — see telephony/registrar.ts).
+  // Master secret from which each volunteer's unique PJSIP endpoint secret is
+  // derived (HMAC-SHA256, domain-separated by HMAC_SIP_VOLUNTEER_SECRET). Not
+  // the hub credential and not the ARI password: rotating it rotates every
+  // volunteer's SIP secret at once.
+  SIP_REGISTRAR_SECRET?: string // Falls back to HMAC_SECRET when unset
+  // CoTURN relay (profile: telephony). Both must be set to mint the
+  // time-limited TURN credentials /sip-token returns (RFC 8489 long-term
+  // credentials against the coturn --static-auth-secret); either unset means
+  // no relay is wired and clients get STUN-only ICE servers.
+  TURN_HOST?: string            // Public host of the CoTURN server (also serves STUN on :3478)
+  TURN_SECRET?: string          // The coturn --static-auth-secret (never the SIP secret)
+
   // GlitchTip/Sentry DSN for client-side crash reporting (Epic 293)
   GLITCHTIP_DSN?: string
 
