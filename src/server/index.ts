@@ -212,7 +212,7 @@ const outboxCleanupTimer = setInterval(() => {
 console.log('[llamenos] Event outbox initialized (drain: 30s, cleanup: 5m)')
 
 // --- Start scheduled task poller with blast delivery worker ---
-// `schedulerServiceDeps` supplies every service the six background workers
+// `schedulerServiceDeps` supplies every service the background workers
 // need, with a type that is required in every field — so an omission here is a
 // compile error, not a worker that never runs. It was three workers, silently:
 // retention purge and erasure expiry (#1127) and, with `hubShred` missing, the

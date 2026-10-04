@@ -1458,35 +1458,40 @@ describe('SettingsService.deleteHub', () => {
 // ---------------------------------------------------------------------------
 
 describe('SettingsService.runCleanup', () => {
+  // The rate-limit trim+delete now runs as a single SQL CTE (issue #1127 —
+  // `select().from(rateLimits)` with no limit used to pull every distinct
+  // rate-limit key in the table into Node memory on every tick), so what
+  // this layer owns is the metrics bookkeeping around the row count the
+  // statement returns. db.$setExecuteResult represents the deleted-key rows
+  // the CTE's RETURNING clause produces.
+
   it('deletes expired rate limit entries and returns metrics', async () => {
     const { db, service } = setup()
-    const now = Date.now()
-    const oldTs = now - 999_999_999 // far in the past — well beyond any TTL
-    const recentTs = now - 1000 // 1 second ago — within TTL
 
-    // Select sequence: getSettings → select rateLimits
+    // Select sequence: getSettings only — rate limits are no longer
+    // selected into app memory.
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [
-        { key: 'stale-key', timestamps: [oldTs] },
-        { key: 'active-key', timestamps: [recentTs] },
-      ],
     ])
-    db.$setDeleteResult([{ key: 'stale-key' }])
+    db.$setExecuteResult([{ key: 'stale-key' }])
+    db.$setDeleteResult([])
 
     const metrics = await service.runCleanup()
 
     expect(metrics.rateLimitEntriesDeleted).toBe(1)
-    expect(db.delete).toHaveBeenCalled()
+    expect(db.execute).toHaveBeenCalled()
+    // getSettings() is the only select — the rate_limits table is no
+    // longer pulled into app memory, only trimmed/deleted via the execute
+    // CTE above.
+    expect(db.select).toHaveBeenCalledTimes(1)
   })
 
   it('deletes expired CAPTCHA challenges', async () => {
     const { db, service } = setup()
-    // Select: getSettings + empty rateLimits
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }, { id: 'cap-2' }])
 
     const metrics = await service.runCleanup()
@@ -1503,8 +1508,8 @@ describe('SettingsService.runCleanup', () => {
     }
     db.$setSelectResults([
       [makeSettingsRow({ cleanupMetrics: existing })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }])
 
     const metrics = await service.runCleanup()
@@ -1519,8 +1524,8 @@ describe('SettingsService.runCleanup', () => {
     const before = new Date().toISOString()
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([])
 
     const metrics = await service.runCleanup()
@@ -1533,8 +1538,8 @@ describe('SettingsService.runCleanup', () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow({ ttlOverrides: null, cleanupMetrics: null })],
-      [],
     ])
+    db.$setExecuteResult([])
     db.$setDeleteResult([])
 
     await service.runCleanup()
@@ -1551,5 +1556,20 @@ describe('SettingsService.runCleanup', () => {
     })
 
     await expect(service.runCleanup()).rejects.toThrow('DB connection failed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// clearExpiredApiRateLimits
+// ---------------------------------------------------------------------------
+
+describe('SettingsService.clearExpiredApiRateLimits', () => {
+  it('deletes api_rate_limits rows older than the expiry window', async () => {
+    const { db, service } = setup()
+    db.$setDeleteResult([{ key: 'strict:1.2.3.4' }])
+
+    await service.clearExpiredApiRateLimits()
+
+    expect(db.delete).toHaveBeenCalled()
   })
 })

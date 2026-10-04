@@ -114,6 +114,10 @@ function createMockDb() {
     delete: vi.fn().mockReturnValue({ where }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue(valuesChain) }),
     transaction: vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(createMockDb())),
+    // runCleanup()'s rate-limit trim/delete is a single raw SQL CTE
+    // (issue #1127 — the previous select-the-whole-table loop pulled every
+    // distinct rate-limit key into app memory on every tick).
+    execute: vi.fn().mockResolvedValue([]),
   }
 }
 
