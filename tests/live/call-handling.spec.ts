@@ -346,7 +346,17 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
    */
   let demoOracleOff: string | null = 'not resolved yet'
   let mockWasEnabled = false
+  /**
+   * The hub's fallback group as it was found, and whether it was ever read.
+   *
+   * The flag is load-bearing, not defensive noise: `afterAll` restores this
+   * list, and if `beforeAll` failed before the read it would restore the
+   * EMPTY default and wipe the operator's fallback group — turning a setup
+   * failure into a hotline that rings nobody. Nothing is written back unless
+   * something was read.
+   */
   let originalFallback: string[] = []
+  let fallbackRead = false
   let shiftId: string | null = null
   /** Whether THIS block has the subject clocked in — avoids a redundant write. */
   let clockedIn = false
@@ -359,6 +369,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     const fb = await apiGet<{ userPubkeys?: string[] }>(request, `/hubs/${hubId}/shifts/fallback`, seed)
     expect(fb.status, 'GET /api/hubs/:id/shifts/fallback').toBe(200)
     originalFallback = fb.data.userPubkeys ?? []
+    fallbackRead = true
 
     // The subject must be reachable ONLY through the path each case is about.
     // Left in the fallback group, "scheduled but not clocked in" would ring via
@@ -373,7 +384,8 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
   })
 
   test.afterAll(async ({ request }) => {
-    if (!seed) return
+    // No hub means beforeAll never got far enough to write anything.
+    if (!seed || !hubId) return
     if (clockedIn) {
       await pacedWrite('POST /api/hubs/:id/shifts/clock-out', () =>
         apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, seed))
@@ -384,7 +396,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
         apiDelete(request, `/hubs/${hubId}/shifts/${shiftId}`, seed))
       shiftId = null
     }
-    await setFallback(request, originalFallback)
+    if (fallbackRead) await setFallback(request, originalFallback)
     if (demoOracleOff === null && !mockWasEnabled) {
       await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () =>
         apiPut(request, `/hubs/${hubId}/demo/telephony/mock`, { enabled: false }, seed))
