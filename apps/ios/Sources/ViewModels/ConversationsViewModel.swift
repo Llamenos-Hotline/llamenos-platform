@@ -264,17 +264,10 @@ final class ConversationsViewModel {
         }
 
         do {
-            // Reconstruct HPKE envelope from the protocol wire format
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: ourEnvelope.enc,
-                ct: ourEnvelope.ct
-            )
-
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                envelope: hpkeEnvelope
+                enc: ourEnvelope.enc,
+                ct: ourEnvelope.ct
             )
 
             return DecryptedMessage(
