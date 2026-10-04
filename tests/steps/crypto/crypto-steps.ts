@@ -362,12 +362,19 @@ When('I encrypt the same payload as two separate notes', async ({ page }) => {
     // same key still differ byte-for-byte. Only the unwrapped key is evidence.
     // Verified by mutation: pinning encryptNote to a constant content key left
     // a wrapped-ciphertext comparison green.
+    // A stored envelope is hex in BOTH fields (PROTOCOL.md §2.4); the IPC
+    // `HpkeEnvelope` is base64url in both. Converting `enc` and passing `ct`
+    // through was the same defect the production code carried, so this step
+    // would have stayed green while the desktop wrote envelopes nothing else
+    // could read.
+    const hexToB64url = (hex: string) =>
+      btoa(String.fromCharCode(...(hex.match(/../g) ?? []).map(h => parseInt(h, 16))))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     const toEnv = (e: { enc: string; ct: string }) => ({
       v: 3,
       labelId: 0, // LABEL_NOTE_KEY
-      enc: btoa(String.fromCharCode(...(e.enc.match(/../g) ?? []).map(h => parseInt(h, 16))))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
-      ct: e.ct,
+      enc: hexToB64url(e.enc),
+      ct: hexToB64url(e.ct),
     })
     const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', '')
     const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', '')

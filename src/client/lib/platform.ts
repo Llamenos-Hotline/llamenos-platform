@@ -12,6 +12,7 @@
  */
 
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
+import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -878,24 +879,45 @@ function hexToBase64url(hex: string): string {
 
 // ── AES-256-GCM content encryption (WebCrypto) ─────────────────────
 
-export async function aesGcmEncrypt(plaintext: string, keyHex: string): Promise<string> {
+/**
+ * WebCrypto AES-GCM parameters, binding `aadHex` as `additionalData`.
+ *
+ * `aadHex` is required at every call site rather than defaulted: the server
+ * binds a non-empty AAD to every envelope it writes (see `@shared/envelope-aad`),
+ * and a silently-defaulted empty AAD is exactly how the desktop came to be
+ * unable to decrypt anything the server produced. An explicit `''` is a
+ * deliberate statement that this ciphertext carries no AAD.
+ */
+function aesGcmParams(iv: Uint8Array<ArrayBuffer>, aadHex: string): AesGcmParams {
+  const params: AesGcmParams = { name: 'AES-GCM', iv }
+  if (aadHex.length > 0) {
+    const pairs = aadHex.match(/.{2}/g) ?? []
+    const aad = new Uint8Array(pairs.length)
+    pairs.forEach((b, i) => { aad[i] = parseInt(b, 16) })
+    params.additionalData = aad
+  }
+  return params
+}
+
+export async function aesGcmEncrypt(plaintext: string, keyHex: string, aadHex: string): Promise<string> {
   const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(plaintext)))
+  const params = aesGcmParams(iv, aadHex)
+  const ct = new Uint8Array(await crypto.subtle.encrypt(params, cryptoKey, new TextEncoder().encode(plaintext)))
   const packed = new Uint8Array(iv.length + ct.length)
   packed.set(iv)
   packed.set(ct, iv.length)
   return Array.from(packed, b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string): Promise<string> {
+export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string, aadHex: string): Promise<string> {
   const data = new Uint8Array((ciphertextHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const iv = data.slice(0, 12)
   const ct = data.slice(12)
   const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
   const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, ct)
+  const plaintext = await crypto.subtle.decrypt(aesGcmParams(iv, aadHex), cryptoKey, ct)
   return new TextDecoder().decode(plaintext)
 }
 
@@ -915,6 +937,29 @@ async function resolveEncryptionPubkey(signingOrEncPubkey: string): Promise<stri
 }
 
 /**
+ * The wire form of a sealed key envelope: `enc` and `ct` BOTH hex.
+ *
+ * `docs/protocol/PROTOCOL.md` §2.4 specifies hex for both, and that is what
+ * `encryptMessageForStorage` writes and what `decryptMessage` is specified to
+ * read. The Tauri IPC `HpkeEnvelope` carries base64url instead (see
+ * `packages/crypto/src/hpke_envelope.rs`), so the two always need converting —
+ * and the conversion used to be written out per call site, which converted
+ * `enc` and left `ct` in whichever encoding it happened to arrive in. The
+ * desktop therefore wrote base64url `ct` and read base64url `ct`:
+ * self-consistent, and unreadable to every other implementation.
+ *
+ * These two functions are now the only crossing of that boundary.
+ */
+function toIpcEnvelope(labelId: number, wire: { enc: string; ct: string }): HpkeEnvelope {
+  return { v: 3, labelId, enc: hexToBase64url(wire.enc), ct: hexToBase64url(wire.ct) }
+}
+
+/** The wire form of an IPC envelope: hex `enc`, hex `ct`. */
+function toWireEnvelope(ipc: HpkeEnvelope): { enc: string; ct: string } {
+  return { enc: base64urlToHex(ipc.enc), ct: base64urlToHex(ipc.ct) }
+}
+
+/**
  * Wrap a symmetric key for a recipient using HPKE.
  * Resolves signing pubkey to encryption pubkey if needed,
  * and returns hex-encoded enc/ct wire format.
@@ -926,7 +971,20 @@ export async function hpkeWrapKey(
 ): Promise<KeyEnvelope> {
   const encPubkey = await resolveEncryptionPubkey(recipientPubkey)
   const envelope = await hpkeSealKey(keyHex, encPubkey, label, '')
-  return { enc: base64urlToHex(envelope.enc), ct: envelope.ct }
+  return toWireEnvelope(envelope)
+}
+
+/**
+ * Log an envelope that was addressed to this device and still would not open.
+ *
+ * The callers return `null` so one unreadable row cannot blank a whole screen,
+ * but the failure must leave a trace: a crypto mismatch that produces no
+ * console output is indistinguishable from "you are not a reader of this", and
+ * that is how the server/desktop AAD disagreement survived undetected.
+ */
+function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
+  const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  console.error(`[crypto] ${kind} envelope addressed to this device failed to open — ${reason}`)
 }
 
 /**
@@ -944,26 +1002,19 @@ export async function encryptNote(
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
   // AES-256-GCM encrypt content
-  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex)
+  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, '')
 
   // HPKE-wrap key for author
   const authorEncPub = await resolveEncryptionPubkey(authorPubkey)
   const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, '')
-  const authorEnvelope: KeyEnvelope = {
-    enc: base64urlToHex(authorHpke.enc),
-    ct: authorHpke.ct,
-  }
+  const authorEnvelope: KeyEnvelope = toWireEnvelope(authorHpke)
 
   // HPKE-wrap key for each admin
   const adminEnvelopes: RecipientEnvelope[] = await Promise.all(
     adminPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
       const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, '')
-      return {
-        pubkey,
-        enc: base64urlToHex(hpke.enc),
-        ct: hpke.ct,
-      }
+      return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
 
@@ -979,15 +1030,11 @@ export async function decryptNote(
 ): Promise<string | null> {
   try {
     // Reconstruct HpkeEnvelope from the stored key envelope
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 0, // LABEL_NOTE_KEY index
-      enc: hexToBase64url(envelope.enc),
-      ct: envelope.ct,
-    }
+    const hpkeEnvelope = toIpcEnvelope(0 /* LABEL_NOTE_KEY */, envelope)
     const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, '')
-    return await aesGcmDecrypt(encryptedContent, keyHex)
-  } catch {
+    return await aesGcmDecrypt(encryptedContent, keyHex, '')
+  } catch (err) {
+    reportEnvelopeOpenFailure('note', err)
     return null
   }
 }
@@ -1011,17 +1058,13 @@ export async function encryptMessage(
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
-  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex)
+  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, contentAadHex(LABEL_MESSAGE))
 
   const readerEnvelopes: RecipientEnvelope[] = await Promise.all(
     readerPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, '')
-      return {
-        pubkey,
-        enc: base64urlToHex(hpke.enc),
-        ct: hpke.ct,
-      }
+      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, keyWrapAadHex(LABEL_MESSAGE))
+      return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
 
@@ -1045,15 +1088,15 @@ export async function decryptMessage(
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 5, // LABEL_MESSAGE index
-      enc: hexToBase64url(myEnvelope.enc),
-      ct: myEnvelope.ct,
-    }
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, '')
-    return await aesGcmDecrypt(encryptedContent, keyHex)
-  } catch {
+    const hpkeEnvelope = toIpcEnvelope(5 /* LABEL_MESSAGE */, myEnvelope)
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, keyWrapAadHex(LABEL_MESSAGE))
+    return await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_MESSAGE))
+  } catch (err) {
+    // An envelope addressed to this device that will not open is a defect, not
+    // a permission boundary: either the writer sealed to the wrong key or the
+    // two sides disagree on the AAD. Returning a bare null made both look like
+    // "not a reader" and rendered as `[Encrypted]` with nothing in the console.
+    reportEnvelopeOpenFailure('message', err)
     return null
   }
 }
@@ -1075,16 +1118,12 @@ export async function decryptCallRecord(
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope: HpkeEnvelope = {
-      v: 3,
-      labelId: 6, // LABEL_CALL_META index
-      enc: hexToBase64url(myEnvelope.enc),
-      ct: myEnvelope.ct,
-    }
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, '')
-    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex)
+    const hpkeEnvelope = toIpcEnvelope(6 /* LABEL_CALL_META */, myEnvelope)
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, keyWrapAadHex(LABEL_CALL_META))
+    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_CALL_META))
     return JSON.parse(plaintext)
-  } catch {
+  } catch (err) {
+    reportEnvelopeOpenFailure('call-record', err)
     return null
   }
 }

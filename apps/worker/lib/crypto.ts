@@ -8,6 +8,7 @@ import {
   randomBytes,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
+import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
@@ -126,9 +127,10 @@ export function encryptMessageForStorage(
 ): { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] } {
   const messageKey = randomBytes(32)
   const labelBytes = utf8ToBytes(label)
-  const aadKeyWrap = utf8ToBytes(`${label}:key-wrap`)
+  const aadContent = contentAad(label)
+  const aadKeyWrap = keyWrapAad(label)
 
-  const encryptedContent = bytesToHex(symmetricEncrypt(messageKey, utf8ToBytes(plaintext), labelBytes))
+  const encryptedContent = bytesToHex(symmetricEncrypt(messageKey, utf8ToBytes(plaintext), aadContent))
 
   const readerEnvelopes: RecipientEnvelope[] = readerPubkeys.map(pk => {
     const sealed = hpkeSeal(hexToBytes(pk), messageKey, labelBytes, aadKeyWrap)
@@ -153,10 +155,11 @@ export function encryptCallRecordForStorage(
 ): { encryptedContent: string; adminEnvelopes: RecipientEnvelope[] } {
   const recordKey = randomBytes(32)
   const labelBytes = utf8ToBytes(LABEL_CALL_META)
-  const aadKeyWrap = utf8ToBytes(`${LABEL_CALL_META}:key-wrap`)
+  const aadContent = contentAad(LABEL_CALL_META)
+  const aadKeyWrap = keyWrapAad(LABEL_CALL_META)
 
   const encryptedContent = bytesToHex(
-    symmetricEncrypt(recordKey, utf8ToBytes(JSON.stringify(metadata)), labelBytes),
+    symmetricEncrypt(recordKey, utf8ToBytes(JSON.stringify(metadata)), aadContent),
   )
 
   const adminEnvelopes: RecipientEnvelope[] = adminPubkeys.map(pk => {

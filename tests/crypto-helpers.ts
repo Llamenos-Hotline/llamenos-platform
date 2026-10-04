@@ -7,6 +7,7 @@
  * - Wire format: hex(nonce_12 || ciphertext || tag_16)
  */
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
+import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -55,40 +56,48 @@ export function deviceEncryptionPubkeyFromSigningSeed(signingSeedHex: string): s
 /** Reader envelope in the wire shape the desktop client's `decryptMessage` consumes. */
 export interface DesktopReaderEnvelope {
   pubkey: string
-  /** Hex-encoded HPKE encapsulated key. */
+  /** Hex-encoded HPKE encapsulated key (PROTOCOL.md §2.4). */
   enc: string
-  /** Base64url-encoded wrapped content key. */
+  /** Hex-encoded wrapped content key (PROTOCOL.md §2.4). */
   ct: string
 }
 
 /**
- * Encrypt `plaintext` exactly as the desktop client's `encryptMessage` does, so
- * the UI can decrypt what a test seeds through the API:
- *   - content: hex(iv(12) || AES-256-GCM(ct || tag)), no AAD
- *   - key wrap: HPKE seal under LABEL_MESSAGE with empty AAD, one envelope per reader
+ * Encrypt `plaintext` exactly as the server and the desktop client do, so the
+ * UI can decrypt what a test seeds through the API:
+ *   - content:  hex(iv(12) || AES-256-GCM(ct || tag)), AAD = UTF-8(label)
+ *   - key wrap: HPKE seal under LABEL_MESSAGE, AAD = UTF-8(label + ':key-wrap'),
+ *               one envelope per reader
  *
- * The seal primitive is the one the Playwright Tauri IPC mock opens with
- * (`tests/mocks/hpke-mock.ts`); it is not the RFC 9180 suite, so this output is
- * only meaningful to the mocked desktop client, never to a real device.
+ * The AAD comes from `@shared/envelope-aad`, the same module `apps/worker/lib/crypto.ts`
+ * and `src/client/lib/platform.ts` use — a seeder that spells the wire format
+ * out for itself is a seeder that can pass while production is broken.
+ *
  * Readers are given as Ed25519 signing seeds (the identity a test logs in with).
  */
-export function encryptMessageForDesktop(
+export async function encryptMessageForDesktop(
   plaintext: string,
   readerSigningSeedHexes: string[],
-): { encryptedContent: string; readerEnvelopes: DesktopReaderEnvelope[] } {
+): Promise<{ encryptedContent: string; readerEnvelopes: DesktopReaderEnvelope[] }> {
   const contentKey = generateContentKey()
   const iv = new Uint8Array(12)
   crypto.getRandomValues(iv)
-  const sealed = gcm(contentKey, iv).encrypt(utf8ToBytes(plaintext))
+  const sealed = gcm(contentKey, iv, contentAad(LABEL_MESSAGE)).encrypt(utf8ToBytes(plaintext))
   const packed = new Uint8Array(iv.length + sealed.length)
   packed.set(iv)
   packed.set(sealed, iv.length)
 
-  const readerEnvelopes = readerSigningSeedHexes.map((seedHex) => {
-    const pubkey = deviceEncryptionPubkeyFromSigningSeed(seedHex)
-    const envelope = hpkeSealMock(contentKey, pubkey, LABEL_MESSAGE, new Uint8Array(0))
-    return { pubkey, enc: bytesToHex(base64urlDecode(envelope.enc)), ct: envelope.ct }
-  })
+  const readerEnvelopes = await Promise.all(
+    readerSigningSeedHexes.map(async (seedHex) => {
+      const pubkey = deviceEncryptionPubkeyFromSigningSeed(seedHex)
+      const envelope = await hpkeSealMock(contentKey, pubkey, LABEL_MESSAGE, keyWrapAad(LABEL_MESSAGE))
+      return {
+        pubkey,
+        enc: bytesToHex(base64urlDecode(envelope.enc)),
+        ct: bytesToHex(base64urlDecode(envelope.ct)),
+      }
+    }),
+  )
   return { encryptedContent: bytesToHex(packed), readerEnvelopes }
 }
 
@@ -173,7 +182,7 @@ export async function wrapKeyForRecipient(
 ): Promise<{ ct: string; enc: string }> {
   const recipientPub = await hpkeSuite.importKey('raw', Uint8Array.from(hexToBytes(recipientPubkeyHex)).buffer, true)
   const info = utf8ToBytes(label)
-  const aad = utf8ToBytes(`${label}:key-wrap`)
+  const aad = keyWrapAad(label)
 
   const result = await hpkeSuite.seal(
     { recipientPublicKey: recipientPub, info },
@@ -203,7 +212,7 @@ export async function unwrapKey(
   const enc = hexToBytes(encHex)
   const ct = hexToBytes(ctHex)
   const info = utf8ToBytes(label)
-  const aad = utf8ToBytes(`${label}:key-wrap`)
+  const aad = keyWrapAad(label)
 
   const plaintext = await hpkeSuite.open(
     { recipientKey: recipientSk, enc, info },

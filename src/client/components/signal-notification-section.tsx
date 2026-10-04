@@ -79,7 +79,7 @@ async function encryptIdentifier(
   const keyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
   // AES-256-GCM encrypt the identifier
-  const ciphertext = await aesGcmEncrypt(plaintext, keyHex)
+  const ciphertext = await aesGcmEncrypt(plaintext, keyHex, '')
 
   // HPKE-wrap the key for each admin
   const envelope = await Promise.all(

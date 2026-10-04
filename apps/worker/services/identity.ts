@@ -51,6 +51,8 @@ import {
   decideSessionRenewal,
 } from '../lib/session-renewal'
 import { decideDeviceRegistration } from '../lib/device-eviction'
+import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { getUserHpkeRecipients } from '../lib/device-recipients'
 const INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 const CHALLENGE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 const PROVISION_ROOM_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -1135,9 +1137,11 @@ export class IdentityService {
    * Register (upsert) a device. Enforces max 5 devices per volunteer.
    */
   async registerDevice(pubkey: string, data: {
-    platform: 'ios' | 'android'
-    pushToken: string
-    wakeKeyPublic: string
+    platform: 'ios' | 'android' | 'desktop'
+    /** Absent on clients with no push distributor (the Tauri desktop). */
+    pushToken?: string
+    /** Only meaningful alongside a pushToken. */
+    wakeKeyPublic?: string
     /** Phase 6: Ed25519 signing public key (hex, optional for legacy clients) */
     ed25519Pubkey?: string
     /** Phase 6: X25519 key-agreement public key (hex, optional for legacy clients) */
@@ -1162,17 +1166,26 @@ export class IdentityService {
 
       const now = new Date()
       const allDevices = await tx
-        .select({ id: devices.id, lastSeenAt: devices.lastSeenAt, pushToken: devices.pushToken })
+        .select({
+          id: devices.id,
+          lastSeenAt: devices.lastSeenAt,
+          pushToken: devices.pushToken,
+          ed25519Pubkey: devices.ed25519Pubkey,
+        })
         .from(devices)
         .where(eq(devices.pubkey, pubkey))
 
-      const decision = decideDeviceRegistration(allDevices, data.pushToken)
+      const decision = decideDeviceRegistration(allDevices, {
+        ed25519Pubkey: data.ed25519Pubkey,
+        pushToken: data.pushToken,
+      })
 
       if (decision.action === 'update_existing') {
         await tx
           .update(devices)
           .set({
-            wakeKeyPublic: data.wakeKeyPublic,
+            ...(data.pushToken !== undefined && { pushToken: data.pushToken }),
+            ...(data.wakeKeyPublic !== undefined && { wakeKeyPublic: data.wakeKeyPublic }),
             ...(data.ed25519Pubkey !== undefined && { ed25519Pubkey: data.ed25519Pubkey }),
             ...(data.x25519Pubkey !== undefined && { x25519Pubkey: data.x25519Pubkey }),
             ...(data.deviceName !== undefined && { deviceName: data.deviceName }),
@@ -1204,6 +1217,24 @@ export class IdentityService {
         lastSeenAt: now,
       })
     })
+  }
+
+  /**
+   * The X25519 keys of every device a user has registered — the only keys
+   * anything may HPKE-seal to for that user.
+   *
+   * A user's `users.pubkey` is their **Ed25519** identity key. Sealing to it
+   * produces a well-formed envelope no secret key can open (#1283), which is
+   * why the return type is branded: there is no path from a user id to a
+   * recipient key except through this lookup.
+   *
+   * An empty array is a real and meaningful answer — the user has no device
+   * carrying an X25519 key, so nobody can address E2EE content to them. Callers
+   * must treat it as "this reader cannot be served" and say so, never
+   * substitute another key and never pretend the content was delivered.
+   */
+  async getHpkeRecipients(pubkey: string): Promise<HpkeRecipientPubkey[]> {
+    return getUserHpkeRecipients(this.db, pubkey)
   }
 
   /**

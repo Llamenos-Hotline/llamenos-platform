@@ -19,7 +19,11 @@ import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { getUserHpkeRecipients } from '../lib/device-recipients'
 import { ServiceError } from './settings'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('services.conversations')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -495,9 +499,26 @@ export class ConversationsService {
 
     // Encrypt the message content using envelope pattern. An absent admin
     // recipient means one fewer reader, never a substituted key (#1283).
-    const readerPubkeys: string[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
+    const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
+
+    // `conv.assignedTo` is the volunteer's Ed25519 *identity* key. Sealing to
+    // it succeeds and yields an envelope nobody can open, so resolve the
+    // X25519 keys of the devices they actually registered.
+    if (conv.assignedTo) {
+      const assigneeRecipients = await getUserHpkeRecipients(this.db, conv.assignedTo)
+      if (assigneeRecipients.length === 0) {
+        // Never silent: the assigned volunteer will not be able to read this
+        // message, and the only way they ever will is by registering a device.
+        // The message is still stored — dropping an inbound crisis message
+        // would be worse than one an admin has to relay.
+        logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
+          conversationId: conv.id,
+          messageReadableBy: readerPubkeys.length,
+        })
+      }
+      for (const recipient of assigneeRecipients) {
+        if (!readerPubkeys.includes(recipient)) readerPubkeys.push(recipient)
+      }
     }
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)

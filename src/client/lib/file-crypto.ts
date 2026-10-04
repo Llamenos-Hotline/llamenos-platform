@@ -101,9 +101,12 @@ export async function encryptFile(
   const fileKeyHex = bytesToHex(randomBytes(32))
 
   // AES-256-GCM encrypt file content
+  // Empty AAD: the file key is wrapped under LABEL_FILE_KEY, which already
+  // domain-separates it; no server path writes this format.
   const encryptedContentHex = await aesGcmEncrypt(
     bytesToHex(plaintextBytes),
     fileKeyHex,
+    '',
   )
   const encryptedContent = hexToBytes(encryptedContentHex)
 
@@ -120,7 +123,7 @@ export async function encryptFile(
   const encryptedMetadataList = await Promise.all(
     recipientPubkeys.map(async (pubkey) => {
       const metadataKeyHex = bytesToHex(randomBytes(32))
-      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex)
+      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex, '')
       const { enc, ct } = await hpkeWrapKey(metadataKeyHex, pubkey, LABEL_FILE_METADATA)
       return { pubkey, encryptedContent: encContent, enc, ct }
     })
@@ -145,7 +148,7 @@ export async function decryptFile(
 
   const data = new Uint8Array(encryptedContent)
   const encryptedHex = bytesToHex(data)
-  const plaintextHex = await aesGcmDecrypt(encryptedHex, fileKeyHex)
+  const plaintextHex = await aesGcmDecrypt(encryptedHex, fileKeyHex, '')
   const plaintext = hexToBytes(plaintextHex)
 
   // Compute checksum for verification
