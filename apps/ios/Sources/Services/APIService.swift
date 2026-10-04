@@ -586,11 +586,11 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: hp("/api/recovery-group/enroll"), rawBody: jsonData)
     }
 
-    func getRecoveryGroup(hubId: String) async throws -> AppRecoveryGroupInfo {
+    func getRecoveryGroup(hubId: String) async throws -> RecoveryGroupInfo {
         try await request(method: "GET", path: hp("/api/recovery-group/\(hubId)"))
     }
 
-    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> AppRecoveryInitiateResponse {
+    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> RecoveryInitiateResponse {
         let body: [String: String] = [
             "hubId": hubId,
             "userIdentifier": userIdentifier,
@@ -607,7 +607,7 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: "/api/recovery-group/initiate/verify", body: body)
     }
 
-    func listRecoverySessions() async throws -> [RecoverySessionStatus] {
+    func listRecoverySessions() async throws -> [RecoverySessionStatusResponse] {
         guard let hubId = hubContext.activeHubId else { throw APIError.noBaseURL }
         return try await request(method: "GET", path: hp("/api/recovery-group/sessions?hubId=\(hubId)"))
     }
@@ -618,11 +618,11 @@ final class APIService: @unchecked Sendable {
         try await request(method: "GET", path: hp("/api/recovery-group/shares/my"))
     }
 
-    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatus {
+    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatusResponse {
         try await request(method: "GET", path: hp("/api/recovery-group/session/\(sessionId)"))
     }
 
-    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> ContributeResponse {
+    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> RecoveryContributeResponse {
         let body: [String: String] = [
             "encryptedShare": encryptedShare,
             "contributorSignature": contributorSignature,

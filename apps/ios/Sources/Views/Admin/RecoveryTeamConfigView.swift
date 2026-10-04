@@ -17,7 +17,7 @@ struct RecoveryTeamConfigView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var groupInfo: AppRecoveryGroupInfo?
+    @State private var groupInfo: RecoveryGroupInfo?
     @State private var showRotateConfirmation = false
 
     var body: some View {
@@ -117,30 +117,30 @@ struct RecoveryTeamConfigView: View {
 
     // MARK: - Configured State
 
-    private func configuredState(info: AppRecoveryGroupInfo) -> some View {
+    private func configuredState(info: RecoveryGroupInfo) -> some View {
         List {
             // Status section
             Section {
                 LabeledContent(
                     NSLocalizedString("recovery_group_required_approvals", comment: ""),
-                    value: "\(info.threshold)"
+                    value: "\(Int(info.threshold))"
                 )
                 .accessibilityIdentifier("recovery-threshold")
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_total_contacts", comment: ""),
-                    value: "\(info.totalShares)"
+                    value: "\(Int(info.totalShares))"
                 )
                 .accessibilityIdentifier("recovery-total-shares")
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_delay_config", comment: ""),
-                    value: "\(info.delayHours)h"
+                    value: "\(Int(info.delayHours))h"
                 )
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_emergency_floor_config", comment: ""),
-                    value: "\(info.emergencyFloorHours)h"
+                    value: "\(Int(info.emergencyFloorHours))h"
                 )
 
                 if let rotated = info.rotatedAt {
@@ -343,10 +343,10 @@ struct RecoveryTeamConfigView: View {
 
     private func rotateRecoveryGroup() async {
         guard let info = groupInfo else { return }
-        threshold = info.threshold
-        totalShares = info.totalShares
-        delayHours = info.delayHours
-        emergencyFloorHours = info.emergencyFloorHours
+        threshold = Int(info.threshold)
+        totalShares = Int(info.totalShares)
+        delayHours = Int(info.delayHours)
+        emergencyFloorHours = Int(info.emergencyFloorHours)
         await setupRecoveryGroup()
     }
 }

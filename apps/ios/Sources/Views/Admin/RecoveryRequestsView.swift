@@ -9,9 +9,9 @@ struct RecoveryRequestsView: View {
     @Environment(HubContext.self) private var hubContext
     @Environment(AppState.self) private var appState
 
-    @State private var sessions: [RecoverySessionStatus] = []
+    @State private var sessions: [RecoverySessionStatusResponse] = []
     @State private var isLoading = true
-    @State private var selectedSession: RecoverySessionStatus?
+    @State private var selectedSession: RecoverySessionStatusResponse?
     @State private var showUrgentSheet = false
     @State private var isApproving = false
     @State private var errorMessage: String?
@@ -228,7 +228,7 @@ struct RecoveryRequestsView: View {
 // MARK: - RecoveryRequestRow
 
 struct RecoveryRequestRow: View {
-    let request: RecoverySessionStatus
+    let request: RecoverySessionStatusResponse
     let onTap: () -> Void
 
     var body: some View {
@@ -239,7 +239,7 @@ struct RecoveryRequestRow: View {
                         .font(.brandMono(.body))
                         .lineLimit(1)
                     Spacer()
-                    RecoveryStatusBadge(status: request.status)
+                    RecoveryStatusBadge(status: request.status.rawValue)
                 }
 
                 HStack(spacing: 16) {
@@ -252,9 +252,10 @@ struct RecoveryRequestRow: View {
                     .font(.brand(.caption))
                     .foregroundStyle(Color.brandMutedForeground)
 
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
+                    if request.delayRemainingMS > 0 {
+                        let remaining = request.delayRemainingMS
                         Label {
-                            Text(formatDelay(ms: remaining))
+                            Text(formatDelay(ms: Int(remaining)))
                         } icon: {
                             Image(systemName: "clock")
                                 .font(.caption)
@@ -321,7 +322,7 @@ struct RecoveryStatusBadge: View {
 // MARK: - RecoveryRequestDetailSheet
 
 struct RecoveryRequestDetailSheet: View {
-    let request: RecoverySessionStatus
+    let request: RecoverySessionStatusResponse
     @Binding var isApproving: Bool
     @Binding var errorMessage: String?
     let onApprove: () async -> Void
@@ -335,13 +336,14 @@ struct RecoveryRequestDetailSheet: View {
                 // Status
                 Section {
                     LabeledContent("Status") {
-                        RecoveryStatusBadge(status: request.status)
+                        RecoveryStatusBadge(status: request.status.rawValue)
                     }
                     LabeledContent(
                         NSLocalizedString("recovery_group_requests_approval_progress", comment: ""),
                         value: "\(request.contributionCount) / \(request.threshold)"
                     )
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
+                    if request.delayRemainingMS > 0 {
+                        let remaining = Int(request.delayRemainingMS)
                         let hours = remaining / 3_600_000
                         let minutes = (remaining % 3_600_000) / 60_000
                         LabeledContent(
@@ -355,7 +357,7 @@ struct RecoveryRequestDetailSheet: View {
                 Section {
                     LabeledContent("User", value: String(request.userPubkey.prefix(24)) + "...")
                     LabeledContent("New Device", value: String(request.newDevicePubkey.prefix(24)) + "...")
-                    LabeledContent("Session", value: request.sessionId)
+                    LabeledContent("Session", value: request.sessionID)
                 }
 
                 // Actions
