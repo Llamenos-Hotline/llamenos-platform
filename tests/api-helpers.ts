@@ -207,10 +207,12 @@ export async function apiDelete<T = unknown>(
   request: APIRequestContext,
   path: string,
   seedHex: string = ADMIN_SEED,
+  body?: Record<string, unknown>,
 ): Promise<{ status: number; data: T }> {
   const fullPath = `/api${path}`
   const res = await request.delete(fullPath, {
     headers: authHeaders(seedHex, 'DELETE', fullPath),
+    ...(body !== undefined ? { data: body } : {}),
   })
   const data = await safeJson(res)
   return { status: res.status(), data: data as T }

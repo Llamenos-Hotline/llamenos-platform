@@ -1,5 +1,4 @@
-# @wip: Background steps and REST vocabulary have no backend definitions — #1122
-@backend @desktop @ios @wip
+@backend @desktop @ios
 Feature: Availability Blocks
   As a volunteer
   I want to set availability blocks
@@ -19,7 +18,7 @@ Feature: Availability Blocks
     And the response body "endDate" should equal "2026-07-07"
 
   Scenario: List my availability blocks
-    Given I have an availability block from 2026-07-01 to 2026-07-07
+    Given I have an availability block from "2026-07-01" to "2026-07-07"
     When I GET "/hubs/{hubId}/shifts/availability/my"
     Then the response status should be 200
     And the response body "blocks" should be an array
@@ -33,7 +32,7 @@ Feature: Availability Blocks
 
   Scenario: Admin can list all availability blocks by date range
     Given I am authenticated as an admin
-    And a volunteer has an availability block in 2026-07-01 to 2026-07-31
+    And a volunteer has an availability block in "2026-07-01" to "2026-07-31"
     When I GET "/hubs/{hubId}/shifts/availability?from=2026-07-01&to=2026-07-31"
     Then the response status should be 200
     And the response body "blocks" should be an array
