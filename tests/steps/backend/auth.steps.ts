@@ -12,8 +12,8 @@ import {
   createRoleViaApi,
 } from '../../api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes, bytesToHex } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -47,11 +47,15 @@ function createRawAuthToken(
   method: string,
   path: string,
   timestampOverride?: number,
-): { pubkey: string; timestamp: number; token: string } {
+): { pubkey: string; timestamp: number; token: string; nonce: string } {
   const timestamp = timestampOverride ?? Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}`)
+  // Nonce-bearing: header auth lives in that domain, and these scenarios must
+  // be rejected for the reason they name (tampering, expiry, unknown pubkey) —
+  // not incidentally for a missing nonce.
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, method, path, nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
-  return { pubkey, timestamp, token: bytesToHex(sig) }
+  return { pubkey, timestamp, token: bytesToHex(sig), nonce }
 }
 
 // ── Auth Verification Steps ──────────────────────────────────────

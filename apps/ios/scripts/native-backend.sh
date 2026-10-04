@@ -98,6 +98,9 @@ cmd_start() {
     export DATABASE_URL
     export PG_POOL_SIZE=10
     export ADMIN_PUBKEY
+    # X25519 HPKE recipient from the same test seed. The server refuses to boot
+    # with ADMIN_PUBKEY set and this missing (#1283).
+    export ADMIN_DECRYPTION_PUBKEY="${ADMIN_DECRYPTION_PUBKEY:-27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177}"
     export HOTLINE_NAME="Llámenos"
     export ENVIRONMENT=development
     export DEV_ROUTES_ENABLED=true

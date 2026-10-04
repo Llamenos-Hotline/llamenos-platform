@@ -38,6 +38,9 @@ BASE_EMU_PORT=5554       # Emulator ports: 5554, 5556, 5558, ...
 BASE_APP_PORT=3001       # Docker backend ports: 3001, 3002, 3003, ...
 DOCKER_PROJECT_PREFIX="llamenos-test"
 TEST_ADMIN_PUBKEY="79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
+# The X25519 HPKE recipient derived from the same seed. Required whenever
+# ADMIN_PUBKEY is set (#1283) — the two are different keys for different algorithms.
+TEST_ADMIN_DECRYPTION_PUBKEY="27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
 AVD_PREFIX="llamenos_e2e"  # AVDs: llamenos_e2e_1, llamenos_e2e_2, llamenos_e2e_3
 BOOT_TIMEOUT=300         # Seconds to wait for emulator boot
 BACKEND_TIMEOUT=120      # Seconds to wait for Docker backend health
@@ -130,6 +133,7 @@ start_docker_backend() {
     local env_file=".env.shard-${shard_idx}"
     cat > "$env_file" << ENV
 ADMIN_PUBKEY=${TEST_ADMIN_PUBKEY}
+ADMIN_DECRYPTION_PUBKEY=${TEST_ADMIN_DECRYPTION_PUBKEY}
 DOMAIN=localhost
 PG_PASSWORD=test-shard-${shard_idx}
 HMAC_SECRET=$(openssl rand -hex 32)

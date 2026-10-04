@@ -47,6 +47,7 @@ export type TauriIpcCommand =
   | 'is_crypto_unlocked'
   | 'get_device_pubkeys'
   | 'create_auth_token_from_state'
+  | 'create_nonceless_auth_token_from_state'
   | 'ed25519_sign_from_state'
   | 'ed25519_verify'
   | 'hpke_seal'
@@ -265,19 +266,47 @@ export async function getDevicePubkeys(): Promise<DeviceKeyState | null> {
 
 /**
  * Create an Ed25519 auth token using the device signing key in CryptoState.
+ *
+ * Rust generates the nonce and signs it into the message, so the returned JSON
+ * carries a `nonce` field that MUST be forwarded to the server alongside
+ * `timestamp` and `token` — dropping it means verifying a message that was
+ * never signed, which is a hard 401 (#1389). There is no nonce parameter:
+ * callers cannot supply one, and cannot ask for it to be left out.
  */
 export async function createAuthToken(
   timestamp: number,
   method: string,
   path: string,
-  nonce?: string,
 ): Promise<string> {
   if (useTauri) {
     return tauriInvoke<string>('create_auth_token_from_state', {
       timestamp,
       method,
       path,
-      nonce,
+    })
+  }
+  throw new Error('WASM auth token not yet implemented')
+}
+
+/**
+ * Create an Ed25519 auth token with NO nonce.
+ *
+ * Only for routes whose wire schema has no `nonce` field — today just
+ * `POST /api/invites/redeem`. The message is signed under a separate
+ * domain-separation label (`LABEL_DEVICE_AUTH_NO_NONCE`) that the server
+ * accepts on that route alone, so the token is useless elsewhere. Use
+ * `createAuthToken` for everything else.
+ */
+export async function createNoncelessAuthToken(
+  timestamp: number,
+  method: string,
+  path: string,
+): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('create_nonceless_auth_token_from_state', {
+      timestamp,
+      method,
+      path,
     })
   }
   throw new Error('WASM auth token not yet implemented')
