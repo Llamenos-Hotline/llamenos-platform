@@ -42,15 +42,28 @@ Feature: Invite Lifecycle
     Then the invite is not valid with error "already_used"
 
   @backend
-  Scenario: An existing member redeeming a second invite is rejected with 409, not 500
+  Scenario: Redeeming an invite makes the volunteer a member of the hub it named
+    # Without the membership grant the volunteer is invisible to the operator:
+    # not in the hub user list, so not selectable for a shift or a ring group,
+    # so never rung. #1037.
+    Given I am logged in as an admin
+    And an invite exists for "Hub Member" with phone "+15551234590"
+    And the invite has been redeemed by a user
+    Then the redeemed user is a member of the hub
+
+  @backend
+  Scenario: An existing user redeeming a second invite is admitted, not rejected
+    # Being invited again is not an error — the grant merges into the user's
+    # existing hub roles. It used to answer 409 and admit nobody.
     Given I am logged in as an admin
     And an invite exists for "First Invite" with phone "+15551234580"
     And the invite has been redeemed by a user
     And an invite exists for "Second Invite" with phone "+15551234581"
     When the same user redeems the invite
-    Then the response status is 409
+    Then the response status is 200
+    And the redeemed user is a member of the hub
     When the invite code is validated
-    Then the invite is valid
+    Then the invite is not valid with error "already_used"
 
   @backend
   Scenario: Admin can list invites

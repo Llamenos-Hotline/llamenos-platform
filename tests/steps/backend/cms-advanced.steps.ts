@@ -356,6 +356,26 @@ Then('the deleted contacts are no longer returned in the contact list', async ({
   }
 })
 
+Then('the merged-away secondary contact is no longer returned in the contact list', async ({ world, request }) => {
+  const hubId = getScenarioState(world).hubId
+  const adv = getAdv(world)
+  const [, secondaryId] = adv.contactIds
+
+  const data = await listContactsViaApi(request, { hubId })
+  const returnedIds = data.contacts.map((c) => String(c.id))
+  expect(returnedIds).not.toContain(secondaryId)
+})
+
+Then('the primary contact is still returned in the contact list', async ({ world, request }) => {
+  const hubId = getScenarioState(world).hubId
+  const adv = getAdv(world)
+  const [primaryId] = adv.contactIds
+
+  const data = await listContactsViaApi(request, { hubId })
+  const returnedIds = data.contacts.map((c) => String(c.id))
+  expect(returnedIds).toContain(primaryId)
+})
+
 Then('the bulk create response shows {int} contacts created', ({ world }, count: number) => {
   const adv = getAdv(world)
   expect(adv.lastStatusCode).toBe(201)

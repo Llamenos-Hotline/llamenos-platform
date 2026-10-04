@@ -527,8 +527,11 @@ This is the most severe account compromise scenario.
 
 3. Update the server configuration:
    ```bash
-   # Update ADMIN_PUBKEY in .env with the new public key
+   # Update BOTH derived public keys in .env. bootstrap-admin prints both;
+   # rotating the seed changes both, and a stale ADMIN_DECRYPTION_PUBKEY would
+   # seal new notes to the OLD admin key.
    sed -i "s|^ADMIN_PUBKEY=.*|ADMIN_PUBKEY=<new_pubkey>|" .env
+   sed -i "s|^ADMIN_DECRYPTION_PUBKEY=.*|ADMIN_DECRYPTION_PUBKEY=<new_decryption_pubkey>|" .env
    ```
 
 4. Rotate all secrets (database, HMAC, RustFS, telephony).
@@ -713,6 +716,8 @@ docker compose exec postgres pg_isready -U llamenos
 |-------|-------|----------|
 | `PG_PASSWORD is required` | Missing `.env` variable | Set `PG_PASSWORD` in `.env` |
 | `ADMIN_PUBKEY is required` | Missing admin key | Run `bun run bootstrap-admin` and set the key |
+| `ADMIN_PUBKEY is set but ADMIN_DECRYPTION_PUBKEY is missing or empty` | Only one of the admin's two public keys is configured | `bun run bootstrap-admin` prints both. Set `ADMIN_DECRYPTION_PUBKEY` to the X25519 one — a different value. The server refuses to boot rather than encrypt notes to the Ed25519 key, which succeeds and makes them permanently unreadable |
+| `ADMIN_DECRYPTION_PUBKEY is identical to ADMIN_PUBKEY` | One key pasted into both slots | They are different keys for different algorithms; copy both values from `bootstrap-admin` |
 | `HMAC_SECRET is required` | Missing HMAC secret | Generate with `openssl rand -hex 32` |
 | `Connection refused` (postgres) | Database not ready | Wait for postgres health check; check `docker compose ps` |
 | `ECONNREFUSED` (rustfs) | RustFS not ready | Wait for RustFS health check |

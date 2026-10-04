@@ -5,9 +5,17 @@
  * which uses the capability registry. Tests configure providers using mock credentials
  * and verify the API-level behavior (permissions, error codes, response structure)
  * rather than live provider calls.
+ *
+ * `POST /api/provider-setup/configure` without a hub writes the INSTANCE-WIDE provider,
+ * and every hub with no provider of its own falls back to it — including the hubs the
+ * parallel call scenarios run on. A fake Twilio config left there turns their in-app
+ * hang-up into a real Twilio request that 401s (#1071). So the steps that write it only
+ * run in scenarios tagged @global-setting (the serial project, #676), refuse to run
+ * anywhere else, and the `After` hook below deletes what they wrote.
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then, getState, setState } from './fixtures'
+import { Given, When, Then, After, getState, setState } from './fixtures'
+import { TestDB } from '../../db-helpers'
 import {
   ADMIN_SEED,
   apiGet,
@@ -25,6 +33,8 @@ interface ProviderSetupState {
   lastData: unknown
   currentStateId?: string
   hubId?: string
+  /** Set before a step writes the instance-wide provider, so `After` always removes it. */
+  wroteGlobalProvider?: boolean
 }
 
 const KEY = 'providerSetup'
@@ -33,6 +43,21 @@ function getPS(world: Record<string, unknown>): ProviderSetupState {
   const existing = getState<Partial<ProviderSetupState>>(world, KEY)
   return { lastStatus: 0, lastData: null, ...existing }
 }
+
+/** Refuse to write the instance-wide provider from a scenario the parallel project runs. */
+function markGlobalProviderWrite(world: Record<string, unknown>, tags: string[]): void {
+  if (!tags.includes('@global-setting')) {
+    throw new Error(
+      'This step configures the instance-wide telephony provider, which every hub without its own '
+      + 'provider falls back to. Tag the scenario @global-setting so it runs in the serial project.',
+    )
+  }
+  setState(world, KEY, { ...getPS(world), wroteGlobalProvider: true })
+}
+
+After(async ({ world }) => {
+  if (getPS(world).wroteGlobalProvider) await TestDB.deleteGlobalProviderConfigs()
+})
 
 // ── Shared mock credentials ────────────────────────────────────────────────
 const MOCK_TWILIO_CREDS = {
@@ -70,11 +95,13 @@ Given('I am a volunteer with telephony:view-providers permission', async ({ requ
   setState(world, KEY, state)
 })
 
-Given('provider {string} is configured for tests', async ({ request }, provider: string) => {
-  await apiPost(request, '/provider-setup/configure', {
+Given('provider {string} is configured for tests', async ({ request, world, $tags }, provider: string) => {
+  markGlobalProviderWrite(world, $tags)
+  const { status } = await apiPost(request, '/provider-setup/configure', {
     provider,
     credentials: MOCK_TWILIO_CREDS,
   })
+  expect(status, `configuring provider "${provider}" must succeed`).toBe(200)
 })
 
 Given('a provider setup hub exists', async ({ workerHub, world }) => {
@@ -188,8 +215,11 @@ When('I GET the OAuth status for state {string}', async ({ request, world }, sta
   setState(world, KEY, ps)
 })
 
-When('I POST to configure provider {string} with credentials', async ({ request, world }, provider: string) => {
-  const seed = getPS(world).volunteerSeed ?? ADMIN_SEED
+When('I POST to configure provider {string} with credentials', async ({ request, world, $tags }, provider: string) => {
+  const volunteerSeed = getPS(world).volunteerSeed
+  // Only the admin can write it; a volunteer's attempt is refused and writes nothing.
+  if (!volunteerSeed) markGlobalProviderWrite(world, $tags)
+  const seed = volunteerSeed ?? ADMIN_SEED
   const { status, data } = await apiPost(request, '/provider-setup/configure', {
     provider,
     credentials: MOCK_TWILIO_CREDS,

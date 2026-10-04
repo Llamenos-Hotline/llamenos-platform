@@ -18,11 +18,8 @@ import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
 import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
+import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { ServiceError } from './settings'
-import { resolveHpkeRecipients } from './reader-keys'
-import { createLogger } from '../lib/logger'
-
-const logger = createLogger('services.conversations')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -417,7 +414,13 @@ export class ConversationsService {
 
   async handleIncoming(
     incoming: IncomingMessage,
-    adminDecryptionPubkey: string,
+    /**
+     * The platform admin's X25519 HPKE recipient, or `undefined` when the
+     * deployment has none. Typed as a brand so an Ed25519 auth key — which is
+     * also 64 hex characters, and which the messaging router used to pass here
+     * — cannot be supplied by mistake (#1283).
+     */
+    adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
     hubId?: string,
   ): Promise<{
     conversationId: string
@@ -490,14 +493,22 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern — for the admin and
-    // the assignee, each resolved to X25519 recipient keys (never an auth key).
-    const readerPubkeys = await resolveHpkeRecipients(this.db, [adminDecryptionPubkey, conv.assignedTo])
-    if (readerPubkeys.length === 0) {
-      logger.warn('Inbound message sealed for no reader: set ADMIN_DECRYPTION_PUBKEY or register a device X25519 key', {
-        conversationId: conv.id,
-      })
-    }
+    // Encrypt the message content using envelope pattern. An absent admin
+    // recipient means one fewer reader, never a substituted key (#1283).
+    //
+    // `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // pubkey — the key that signs their auth tokens (see `claim()` and
+    // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
+    // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
+    // accepts any 32 bytes, so it neither threw nor warned. This is the same
+    // defect as #1283, at a second site.
+    //
+    // The server cannot seal to the assignee instead: `users` carries only the
+    // Ed25519 `pubkey`, and `devices.x25519_pubkey` — the one column that could
+    // supply a real HPKE recipient — is not populated by any client today. So
+    // the honest list is the admin alone. The type below makes re-adding a
+    // non-X25519 key a compile error rather than silent, permanent data loss.
+    const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 
