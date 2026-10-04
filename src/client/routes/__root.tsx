@@ -101,7 +101,7 @@ function RootLayout() {
 
   useEffect(() => {
     // Wait for both auth and config to finish loading before redirecting
-    if (serverAddressConfigured && !isLoading && !configLoading && !isAuthenticated && location.pathname !== '/login' && location.pathname !== '/onboarding' && location.pathname !== '/link-device' && location.pathname !== '/setup') {
+    if (serverAddressConfigured && !isLoading && !configLoading && !isAuthenticated && location.pathname !== '/login' && location.pathname !== '/onboarding' && location.pathname !== '/setup') {
       // If no admin exists, redirect to setup wizard (which includes bootstrap)
       if (needsBootstrap) {
         navigate({ to: '/setup' })
@@ -166,7 +166,7 @@ function RootLayout() {
   } else if (!isAuthenticated || !profileCompleted) {
     // Only render Outlet for public routes — prevent protected route components
     // from mounting and making API calls before the redirect effect fires
-    const publicPaths = ['/login', '/onboarding', '/profile-setup', '/setup', '/link-device', '/preferences']
+    const publicPaths = ['/login', '/onboarding', '/profile-setup', '/setup', '/preferences']
     if (!publicPaths.includes(location.pathname)) {
       content = (
         <div className="flex h-screen items-center justify-center">
