@@ -395,10 +395,18 @@ class CryptoService @Inject constructor() {
             if (!isUnlocked) throw CryptoException("No key loaded")
             val pubkey = signingPubkeyHex ?: throw CryptoException("No device identity")
             val timestamp = System.currentTimeMillis()
-            val message = "${CryptoLabels.LABEL_DEVICE_AUTH}:$pubkey:$timestamp:POST:$path"
             try {
+                // The canonical nonce-less builder (#1509) — never hand-assemble the
+                // signed string.
+                val message = org.llamenos.core.mobileBuildAuthMessage(
+                    pubkeyHex = pubkey,
+                    timestamp = timestamp.toULong(),
+                    method = "POST",
+                    path = path,
+                    nonce = null,
+                )
                 val signature = org.llamenos.core.mobileSign(
-                    messageHex = message.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) },
+                    messageHex = message.joinToString("") { "%02x".format(it) },
                 )
                 AuthToken(pubkey = pubkey, timestamp = timestamp, token = signature)
             } catch (e: org.llamenos.core.CryptoException) {
