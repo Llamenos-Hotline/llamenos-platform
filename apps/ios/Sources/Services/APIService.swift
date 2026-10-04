@@ -61,54 +61,14 @@ struct AppConfig: Decodable {
 }
 
 // MARK: - Recovery Group Response Types
+// Recovery group/session responses decode to the generated types from
+// packages/protocol/schemas/recovery-group.ts: `RecoveryGroupInfo`,
+// `RecoveryInitiateResponse`, `RecoverySessionStatusResponse`,
+// `RecoveryContributeResponse`, `EmergencyOverride`, `Contribution`.
+// `RecoverySessionStatusResponse` gains `Identifiable` below for list UI.
 
-struct AppRecoveryGroupInfo: Decodable {
-    let publicKey: String
-    let threshold: Int
-    let totalShares: Int
-    let commitments: [String]
-    let sigchainLinkHash: String
-    let delayHours: Int
-    let emergencyFloorHours: Int
-    let createdAt: String
-    let rotatedAt: String?
-    let shareHolderLiveness: [ShareHolderLiveness]
-}
-
-
-struct RecoverySessionStatus: Decodable, Identifiable {
-    let sessionId: String
-    let hubId: String
-    let userPubkey: String
-    let newDevicePubkey: String
-    let status: String
-    let contributionCount: Int
-    let threshold: Int
-    let delayRemainingMs: Int?
-    let expiresAt: String
-    let createdAt: String
-    let contributions: [RecoveryContribution]?
-    let emergencyOverride: AppRecoveryEmergencyOverride?
-
-    var id: String { sessionId }
-}
-
-struct RecoveryContribution: Decodable {
-    let contributorPubkey: String
-    let encryptedShare: String
-    let contributorSignature: String
-    let contributedAt: String
-}
-
-struct AppRecoveryEmergencyOverride: Decodable {
-    let justification: String
-    let approverPubkey: String
-    let approverSignature: String
-}
-
-struct AppRecoveryInitiateResponse: Decodable {
-    let sessionId: String
-    let verificationSent: Bool
+extension RecoverySessionStatusResponse: Identifiable {
+    public var id: String { sessionID }
 }
 
 struct RecoveryVerifyResponse: Decodable {
@@ -125,12 +85,6 @@ struct ShareEnvelopeResponse: Decodable {
 
 struct OkResponse: Decodable {
     let ok: Bool
-}
-
-struct ContributeResponse: Decodable {
-    let ok: Bool
-    let status: String
-    let contributionCount: Int
 }
 
 // MARK: - APIService
@@ -869,19 +823,6 @@ final class CertificatePinningDelegate: NSObject, URLSessionDelegate {
 }
 
 // MARK: - Dynamic Pin Update
-
-/// Response from `GET /api/config/pins` — server-signed pin list for rotation
-/// without requiring an app update.
-struct PinListResponse: Decodable {
-    let pins: [PinEntry]
-    let signature: String
-    let notBefore: String
-    let notAfter: String
-
-    struct PinEntry: Decodable {
-        let algorithm: String
-        let hash: String
-        let label: String
-    }
-}
+// The pin list response is the generated `ConfigPinsResponse`
+// (packages/protocol/schemas/config.ts): pins, signature, notBefore, notAfter.
 
