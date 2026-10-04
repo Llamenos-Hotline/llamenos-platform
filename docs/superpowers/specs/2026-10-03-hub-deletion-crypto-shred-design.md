@@ -221,6 +221,9 @@ is undeterminable. It is excluded and flagged.
 to any hub, so no hub-scoped sweep can reach it. Shred does not reach them, states so,
 and gets its own issue; it does not guess.
 
+Tracked as #1530 — "envelope-bearing rows with a NULL hub_id are unreachable by
+hub shred and by hub purge".
+
 ### Isolation as a checked invariant, not careful review
 
 Every statement is generated from one declaration, `HUB_SHRED_TARGETS`, in which each
@@ -401,6 +404,8 @@ work. `purgeHub` is left in place as the demo-reset path.
    - Its `assertCoversExactly` covers only `tags` and `teams`. That is correct **today**
      precisely because the other `encrypted_*` columns are not actually encrypted
      (§4 Class A), and becomes wrong the moment they are.
+     Tracked as #1506 — "encrypted_name columns hold plaintext for ring groups and
+     shifts, while the same field name holds a real envelope elsewhere".
 3. **Sequencing.** Shred needs `hubs.hub_key_generation` and a server-side refusal of
    hub-key writes to a shredded hub. Preferred: land `fix-1042` first and build on it. If
    it is not sequenced ahead, this work adds only the column and the refusal guard — not
