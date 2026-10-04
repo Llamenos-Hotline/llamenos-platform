@@ -1,10 +1,12 @@
 package org.llamenos.hotline.api
 
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,54 +15,44 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.OkHttpClient
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.llamenos.hotline.BuildConfig
+import org.llamenos.hotline.RelayUrlValidator
+import org.llamenos.hotline.api.relay.RelayEventDeduplicator
+import org.llamenos.hotline.api.relay.RelaySession
 import org.llamenos.hotline.crypto.CryptoService
-import org.llamenos.hotline.crypto.KeyValueStore
-import org.llamenos.hotline.crypto.KeystoreService
-import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubActivityService
 import org.llamenos.hotline.model.LlamenosEvent
+import org.llamenos.hotline.model.MeResponse
 import org.llamenos.hotline.service.AttributedHubEvent
-import org.llamenos.protocol.CryptoLabels
-import java.util.concurrent.TimeUnit
+import org.llamenos.protocol.ConfigResponse
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Nostr relay WebSocket connection for real-time event delivery.
+ * Foreground connection to the server's authenticated WebSocket relay.
  *
- * Connects to the hub's Nostr relay and subscribes to encrypted events
- * tagged with `["t", "llamenos:event"]`. All event content is encrypted
- * with the hub key — the relay cannot distinguish event types.
+ * Connects to the relay the server advertises in `GET /api/config` (`wsRelayUrl`, i.e.
+ * `/ws`), answers the Ed25519 challenge with the device key, and subscribes to every hub
+ * the server reports this user as a member of. The wire protocol lives in [RelaySession].
  *
- * Implements automatic reconnection with exponential backoff.
+ * Events are delivered for ALL member hubs, each attributed to the hub named in its
+ * server-signed envelope. The active hub is browsing context only: nothing here reads or
+ * changes it (multi-hub routing axiom, CLAUDE.md).
+ *
+ * Reconnects with exponential backoff and asks the server to replay what it missed.
  */
 @Singleton
 class WebSocketService @Inject constructor(
     private val cryptoService: CryptoService,
-    private val keystoreService: KeyValueStore,
-    private val activeHubState: ActiveHubState,
+    private val apiService: ApiService,
     private val hubActivityService: HubActivityService,
 ) {
-
-    @Serializable
-    data class NostrEvent(
-        val id: String = "",
-        val pubkey: String = "",
-        val created_at: Long = 0,
-        val kind: Int = 0,
-        val tags: List<List<String>> = emptyList(),
-        val content: String = "",
-        val sig: String = "",
-    )
 
     enum class ConnectionState {
         DISCONNECTED,
@@ -70,238 +62,243 @@ class WebSocketService @Inject constructor(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val json = Json { ignoreUnknownKeys = true }
-
-    private var webSocket: WebSocket? = null
-    private var reconnectJob: Job? = null
-    private var reconnectAttempt = 0
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _events = MutableSharedFlow<NostrEvent>(extraBufferCapacity = 64)
-    val events: SharedFlow<NostrEvent> = _events.asSharedFlow()
+    /** [ConnectionState.CONNECTED] only once the server has accepted our authentication. */
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private val _typedEvents = MutableSharedFlow<AttributedHubEvent<LlamenosEvent>>(extraBufferCapacity = 64)
 
     /**
-     * Typed application events parsed from Nostr relay messages.
+     * Verified, decrypted relay events from every member hub.
      *
-     * Each event is wrapped in [AttributedHubEvent] carrying the [ActiveHubState.activeHubId]
-     * that was current at the moment the event was received. Subscribers should use
-     * [AttributedHubEvent.hubId] to route or discard events from non-active hubs.
+     * [AttributedHubEvent.hubId] is the hub the server published the event to, taken from
+     * the signed envelope. Subscribers must handle events from every hub — never drop or
+     * relabel one because it does not match the active hub.
      */
     val typedEvents: SharedFlow<AttributedHubEvent<LlamenosEvent>> = _typedEvents.asSharedFlow()
 
-    /**
-     * Store server event keys in Rust memory after authentication.
-     * Replaces the old `serverEventKeyHex` property — keys never touch JVM memory.
-     */
-    fun setServerEventKeys(currentHex: String, previousHex: String = "") {
-        cryptoService.setServerEventKeys(currentHex, previousHex)
-    }
+    private val deduplicator = RelayEventDeduplicator()
+    private val eventKeyMutex = Mutex()
 
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS) // No read timeout for WebSocket
-        .pingInterval(30, TimeUnit.SECONDS)
-        .build()
+    @Volatile private var eventKeyEpoch: Long? = null
+    @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var wantConnected = false
+    @Volatile private var disconnectedAtMs: Long? = null
+    private var connectJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
 
     /**
-     * Connect to the Nostr relay at the hub's WebSocket endpoint.
-     * Automatically subscribes to llamenos events after connection.
+     * Open the relay connection if it is not already open or opening.
+     * Safe to call repeatedly.
      */
+    @Synchronized
     fun connect() {
-        if (_connectionState.value == ConnectionState.CONNECTED ||
-            _connectionState.value == ConnectionState.CONNECTING
-        ) {
-            return
-        }
-
-        val hubUrl = keystoreService.retrieve(KeystoreService.KEY_HUB_URL) ?: return
-        // Only HTTPS hub URLs are permitted in release builds — HTTP would produce
-        // an unencrypted ws:// relay connection that exposes all communications (H33).
-        // Debug builds allow HTTP for local development and CI emulator testing.
-        val relayUrl = if (hubUrl.startsWith("https://")) {
-            hubUrl.replace("https://", "wss://").trimEnd('/') + "/relay"
-        } else if (hubUrl.startsWith("http://") && org.llamenos.hotline.BuildConfig.DEBUG) {
-            hubUrl.replace("http://", "ws://").trimEnd('/') + "/relay"
-        } else {
-            android.util.Log.e("WebSocketService", "Refusing relay connection: hub URL is not HTTPS")
-            return
-        }
-
+        val state = _connectionState.value
+        if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) return
+        wantConnected = true
+        reconnectJob?.cancel()
+        reconnectJob = null
         _connectionState.value = ConnectionState.CONNECTING
-
-        val request = Request.Builder()
-            .url(relayUrl)
-            .build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                _connectionState.value = ConnectionState.CONNECTED
-                reconnectAttempt = 0
-                subscribe(webSocket)
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                handleMessage(text)
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(1000, null)
-                _connectionState.value = ConnectionState.DISCONNECTED
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                _connectionState.value = ConnectionState.DISCONNECTED
-                scheduleReconnect()
-            }
-        })
+        connectJob = scope.launch { openSocket() }
     }
 
-    /**
-     * Disconnect from the relay and cancel any pending reconnection.
-     */
+    /** Close the relay connection and cancel any pending reconnection. */
+    @Synchronized
     fun disconnect() {
-        scope.launch {
-            reconnectJob?.cancelAndJoin()
-            reconnectJob = null
-        }
-        webSocket?.close(1000, "Client disconnect")
+        wantConnected = false
+        connectJob?.cancel()
+        connectJob = null
+        reconnectJob?.cancel()
+        reconnectJob = null
+        webSocket?.close(NORMAL_CLOSURE, "Client disconnect")
         webSocket = null
-        _connectionState.value = ConnectionState.DISCONNECTED
+        disconnectedAtMs = null
         reconnectAttempt = 0
+        eventKeyEpoch = null
+        _connectionState.value = ConnectionState.DISCONNECTED
     }
 
-    /**
-     * Send a Nostr event to the relay.
-     */
-    fun send(event: NostrEvent): Boolean {
-        val ws = webSocket ?: return false
-        val eventJson = json.encodeToString(NostrEvent.serializer(), event)
-        val message = """["EVENT",$eventJson]"""
-        return ws.send(message)
-    }
+    private suspend fun openSocket() {
+        val endpoint = try {
+            resolveEndpoint()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Relay endpoint lookup failed: ${e.message}")
+            onConnectionLost(null)
+            return
+        }
+        if (endpoint == null) {
+            // The server has no relay (no SERVER_SECRET) or the hub URL is not allowed.
+            // Nothing to retry until the configuration changes.
+            _connectionState.value = ConnectionState.DISCONNECTED
+            return
+        }
 
-    private fun subscribe(ws: WebSocket) {
-        // Subscribe to Llamenos event kinds tagged for this hub
-        val subscriptionId = "llamenos-${System.currentTimeMillis()}"
-        val filter = """{"kinds":[1000,1001,1002,1010,1011,20000],"#t":["${CryptoLabels.NOSTR_EVENT_TAG}"]}"""
-        val message = """["REQ","$subscriptionId",$filter]"""
-        ws.send(message)
-    }
+        refreshEventKeys()
 
-    private fun handleMessage(text: String) {
-        try {
-            // Nostr relay messages are JSON arrays: ["EVENT", <sub_id>, <event>]
-            val parsed = json.parseToJsonElement(text)
-            val array = parsed as? kotlinx.serialization.json.JsonArray ?: return
-
-            if (array.size < 3) return
-
-            val type = (array[0] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
-            if (type != "EVENT") return
-
-            val eventElement = array[2]
-            val event = json.decodeFromJsonElement(NostrEvent.serializer(), eventElement)
-
-            scope.launch {
-                _events.emit(event)
-                // Attribute the event to its hub via key-trial decryption across all cached hub keys.
-                val attributed = decryptEvent(event.content) ?: return@launch
-                _typedEvents.emit(attributed)
-                hubActivityService.handle(attributed)
+        val session = RelaySession(
+            crypto = cryptoService,
+            serverPubkeyHex = endpoint.serverPubkeyHex,
+            deduplicator = deduplicator,
+            replaySinceMs = disconnectedAtMs,
+            ensureEventKeys = ::ensureEventKeys,
+        )
+        val frames = Channel<String>(Channel.UNLIMITED)
+        val request = Request.Builder().url(endpoint.url).build()
+        val ws = apiService.relayHttpClient().newWebSocket(request, Listener(frames))
+        synchronized(this) {
+            if (!wantConnected) {
+                ws.close(NORMAL_CLOSURE, "Client disconnect")
+                return
             }
-        } catch (_: Exception) {
-            // Malformed messages are silently dropped — relay may send
-            // NOTICE or other non-EVENT messages we don't need to handle.
-        }
-    }
-
-    /**
-     * Attribute an encrypted Nostr event to its hub by trial-decrypting in Rust.
-     *
-     * All hub keys and server event keys are held in Rust memory. The trial decrypt
-     * iterates keys inside Rust — no key material ever enters JVM memory.
-     *
-     * Falls back to server event keys (current + previous epoch) if no hub key matches
-     * (e.g. during early auth before hub keys are loaded).
-     *
-     * @param encryptedContent Hex-encoded ciphertext from the Nostr event content field
-     * @return [AttributedHubEvent] with the originating hub ID, or null if no key works
-     */
-    private fun decryptEvent(encryptedContent: String): AttributedHubEvent<LlamenosEvent>? {
-        // Try all hub keys in Rust — first successful decryption identifies the hub.
-        val hubResult = cryptoService.decryptHubEventTrial(encryptedContent)
-        if (hubResult != null) {
-            val event = parseTypedEvent(hubResult.second) ?: return null
-            return AttributedHubEvent(hubId = hubResult.first, event = event)
+            webSocket = ws
         }
 
-        // Fall back to Rust-stored server event keys (current + previous epoch).
-        val plaintext = cryptoService.decryptServerEventWithStoredKeys(encryptedContent) ?: return null
-        val event = parseTypedEvent(plaintext) ?: return null
-        val hubId = activeHubState.activeHubId.value ?: ""
-        return AttributedHubEvent(hubId = hubId, event = event)
-    }
-
-    /**
-     * Parse the decrypted event content JSON into a typed [LlamenosEvent].
-     * Returns null for unparseable content (graceful forward compatibility).
-     */
-    private fun parseTypedEvent(content: String): LlamenosEvent? {
-        return try {
-            val obj = json.parseToJsonElement(content).jsonObject
-            val type = obj["type"]?.jsonPrimitive?.content ?: return null
-
-            when (type) {
-                "call:ring" -> LlamenosEvent.CallRing(
-                    obj["callId"]?.jsonPrimitive?.content ?: return null
-                )
-                "call:update" -> {
-                    val callId = obj["callId"]?.jsonPrimitive?.content ?: return null
-                    val status = obj["status"]?.jsonPrimitive?.content ?: return null
-                    if (status == "completed") LlamenosEvent.CallEnded(callId)
-                    else LlamenosEvent.CallUpdate(callId, status)
+        // Frames are processed strictly in arrival order on one coroutine.
+        for (frame in frames) {
+            for (action in session.onFrame(frame)) {
+                when (action) {
+                    is RelaySession.Action.Send -> ws.send(action.frame)
+                    is RelaySession.Action.Authenticated -> {
+                        synchronized(this) { reconnectAttempt = 0 }
+                        disconnectedAtMs = null
+                        _connectionState.value = ConnectionState.CONNECTED
+                    }
+                    is RelaySession.Action.Deliver -> {
+                        hubActivityService.handle(action.event)
+                        _typedEvents.emit(action.event)
+                    }
+                    is RelaySession.Action.AuthFailed -> {
+                        Log.w(TAG, "Relay authentication failed: ${action.reason}")
+                        ws.close(NORMAL_CLOSURE, "Authentication failed")
+                    }
+                    is RelaySession.Action.ServerError ->
+                        Log.w(TAG, "Relay error ${action.code}: ${action.message}")
                 }
-                "voicemail:new" -> LlamenosEvent.VoicemailNew(
-                    obj["callId"]?.jsonPrimitive?.content ?: return null
-                )
-                "presence:summary" -> LlamenosEvent.PresenceSummary(
-                    obj["hasAvailable"]?.jsonPrimitive?.content?.toBoolean() ?: false
-                )
-                "message:new" -> LlamenosEvent.MessageNew(
-                    obj["conversationId"]?.jsonPrimitive?.content ?: return null
-                )
-                "conversation:assigned" -> LlamenosEvent.ConversationAssigned(
-                    obj["conversationId"]?.jsonPrimitive?.content ?: return null,
-                    obj["assignedTo"]?.jsonPrimitive?.content
-                )
-                "conversation:closed" -> LlamenosEvent.ConversationClosed(
-                    obj["conversationId"]?.jsonPrimitive?.content ?: return null
-                )
-                "device:wipe" -> LlamenosEvent.DeviceWipe(
-                    targetDevicePubkey = obj["targetDevicePubkey"]?.jsonPrimitive?.content ?: "",
-                    reason = obj["reason"]?.jsonPrimitive?.content ?: "",
-                    serverSignature = obj["serverSignature"]?.jsonPrimitive?.content ?: "",
-                )
-                else -> LlamenosEvent.Unknown(type)
             }
-        } catch (_: Exception) {
-            null
+        }
+        onConnectionLost(ws, wasAuthenticated = session.isAuthenticated)
+    }
+
+    private inner class Listener(private val frames: Channel<String>) : WebSocketListener() {
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            frames.trySend(text)
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            webSocket.close(NORMAL_CLOSURE, null)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            frames.close()
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            Log.w(TAG, "Relay connection failed: ${t.message}")
+            frames.close()
         }
     }
 
-    private fun scheduleReconnect() {
+    @Synchronized
+    private fun onConnectionLost(ws: WebSocket?, wasAuthenticated: Boolean = false) {
+        // A socket we already replaced or deliberately closed is not a lost connection.
+        if (ws != null && webSocket !== ws) return
+        webSocket = null
+        if (wasAuthenticated) disconnectedAtMs = System.currentTimeMillis()
+        if (!wantConnected) {
+            _connectionState.value = ConnectionState.DISCONNECTED
+            return
+        }
+        _connectionState.value = ConnectionState.RECONNECTING
+        reconnectAttempt++
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, then 30s.
+        val delayMs = minOf(1000L * (1L shl minOf(reconnectAttempt - 1, 5)), MAX_RECONNECT_DELAY_MS)
         reconnectJob = scope.launch {
-            _connectionState.value = ConnectionState.RECONNECTING
-            reconnectAttempt++
-
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-            val delayMs = minOf(1000L * (1L shl minOf(reconnectAttempt - 1, 4)), 30_000L)
             delay(delayMs)
+            synchronized(this@WebSocketService) {
+                if (!wantConnected) return@launch
+                _connectionState.value = ConnectionState.CONNECTING
+                connectJob = scope.launch { openSocket() }
+            }
+        }
+    }
 
-            connect()
+    private data class RelayEndpoint(val url: String, val serverPubkeyHex: String)
+
+    /**
+     * Read the relay path and server signing pubkey from `GET /api/config`.
+     * Returns null when the server advertises no relay.
+     */
+    private suspend fun resolveEndpoint(): RelayEndpoint? {
+        val config = apiService.request<ConfigResponse>("GET", "/api/config")
+        val serverPubkey = config.serverPubkey ?: return null
+        val relayPath = config.wsRelayURL ?: return null
+        val url = relayUrl(apiService.hubBaseUrl(), relayPath, allowCleartext = BuildConfig.DEBUG)
+        if (url == null) {
+            Log.e(TAG, "Refusing relay connection: relay URL is not an encrypted URL on the hub server")
+            return null
+        }
+        return RelayEndpoint(url, serverPubkey)
+    }
+
+    /**
+     * Fetch the server event keys (current + previous epoch) from `GET /api/auth/me` into
+     * Rust memory. On failure events stay undecryptable until the next attempt.
+     */
+    private suspend fun refreshEventKeys() {
+        eventKeyMutex.withLock { loadEventKeys() }
+    }
+
+    /** Refetch the event keys if [epoch] is newer than the keys we hold (daily rotation). */
+    private suspend fun ensureEventKeys(epoch: Long) {
+        if ((eventKeyEpoch ?: -1L) >= epoch) return
+        eventKeyMutex.withLock {
+            if ((eventKeyEpoch ?: -1L) < epoch) loadEventKeys()
+        }
+    }
+
+    private suspend fun loadEventKeys() {
+        try {
+            val me = apiService.request<MeResponse>("GET", "/api/auth/me")
+            val current = me.serverEventKeyHex ?: return
+            cryptoService.setServerEventKeys(current, me.serverEventKeyPrevHex)
+            eventKeyEpoch = me.eventKeyEpoch?.toLong()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not load server event keys: ${e.message}")
+        }
+    }
+
+    companion object {
+        private const val TAG = "WebSocketService"
+        private const val NORMAL_CLOSURE = 1000
+        private const val MAX_RECONNECT_DELAY_MS = 30_000L
+
+        /**
+         * Resolve the server-advertised relay location against the configured hub URL.
+         *
+         * A relative path (the server sends `/ws`) is joined to the hub URL with `https` →
+         * `wss`; `http` → `ws` only when [allowCleartext] (debug builds, for local
+         * development). An absolute URL must be `wss` on the hub's own host (H33).
+         * Returns null for anything else.
+         */
+        internal fun relayUrl(hubBaseUrl: String, relayPath: String, allowCleartext: Boolean): String? {
+            val base = hubBaseUrl.trimEnd('/')
+            if (!relayPath.startsWith("/")) {
+                return relayPath.takeIf {
+                    it.startsWith("wss://") && RelayUrlValidator.isValidRelayUrl(it, base)
+                }
+            }
+            return when {
+                base.startsWith("https://") -> "wss://" + base.removePrefix("https://") + relayPath
+                base.startsWith("http://") && allowCleartext -> "ws://" + base.removePrefix("http://") + relayPath
+                else -> null
+            }
         }
     }
 }

@@ -20,8 +20,8 @@ import org.llamenos.hotline.model.HubKeyEnvelopeResponseEnvelope
  * native lib is absent — we inject test state directly via
  * [CryptoService.injectHubKeyForTest] to verify cache semantics.
  *
- * Decryption methods ([decryptHubEvent], [decryptHubEventTrial],
- * [decryptServerEvent], [decryptServerEventWithStoredKeys]) return null when
+ * Decryption methods ([decryptHubEvent], [decryptServerEvent],
+ * [decryptServerEventForEpoch]) return null when
  * native lib is absent — ensuring graceful degradation.
  */
 class CryptoServiceHubKeyTest {
@@ -113,14 +113,6 @@ class CryptoServiceHubKeyTest {
         assertNull(result)
     }
 
-    // ---- decryptHubEventTrial: graceful null without native lib ----
-
-    @Test
-    fun `decryptHubEventTrial returns null without native lib`() {
-        val result = cryptoService.decryptHubEventTrial("deadbeef")
-        assertNull(result)
-    }
-
     // ---- decryptServerEvent: graceful null without native lib ----
 
     @Test
@@ -129,11 +121,11 @@ class CryptoServiceHubKeyTest {
         assertNull(result)
     }
 
-    // ---- decryptServerEventWithStoredKeys: graceful null without native lib ----
+    // ---- decryptServerEventForEpoch: graceful null without native lib ----
 
     @Test
-    fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        val result = cryptoService.decryptServerEventWithStoredKeys("deadbeef")
+    fun `decryptServerEventForEpoch returns null without native lib`() {
+        val result = cryptoService.decryptServerEventForEpoch("deadbeef", 20_000L)
         assertNull(result)
     }
 

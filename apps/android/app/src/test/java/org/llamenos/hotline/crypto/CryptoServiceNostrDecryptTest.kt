@@ -35,17 +35,28 @@ class CryptoServiceNostrDecryptTest {
         assertNull(cryptoService.decryptHubEvent("deadbeef", "hub-1"))
     }
 
-    @Test
-    fun `decryptHubEventTrial returns null without native lib`() {
-        cryptoService.injectHubKeyForTest("hub-1", "aa".repeat(32))
-        assertNull(cryptoService.decryptHubEventTrial("deadbeef"))
-    }
-
     // ---- Server event decrypt API contract ----
 
     @Test
-    fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        assertNull(cryptoService.decryptServerEventWithStoredKeys("deadbeef"))
+    fun `decryptServerEventForEpoch returns null without native lib`() {
+        assertNull(cryptoService.decryptServerEventForEpoch("deadbeef", 20_000L))
+    }
+
+    @Test
+    fun `decryptServerEventForEpoch rejects a negative epoch`() {
+        assertNull(cryptoService.decryptServerEventForEpoch("deadbeef", -1L))
+    }
+
+    // ---- Relay auth / event signature contract ----
+
+    @Test(expected = IllegalStateException::class)
+    fun `signRelayChallenge throws without native lib`() {
+        cryptoService.signRelayChallenge("deadbeef")
+    }
+
+    @Test
+    fun `verifyServerEventSignature is false without native lib`() {
+        assertFalse(cryptoService.verifyServerEventSignature("deadbeef", "aa".repeat(64), "bb".repeat(32)))
     }
 
     @Test
