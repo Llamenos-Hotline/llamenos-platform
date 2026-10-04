@@ -4,10 +4,16 @@ import { netFetch } from '../net'
 
 // --- Auth ---
 
-export async function login(pubkey: string, timestamp: number, token: string) {
+/**
+ * `nonce` is NOT optional in practice: `createAuthToken` always signs one, and
+ * `loginBodySchema` carries it, so a caller that omits it sends the server a
+ * message the client never signed — a hard 401 (#1389). It stays optional in
+ * the signature only because the field is absent from the nonce-less shape.
+ */
+export async function login(pubkey: string, timestamp: number, token: string, nonce?: string) {
   return request<{ ok: true; roles: string[] }>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ pubkey, timestamp, token }),
+    body: JSON.stringify({ pubkey, timestamp, token, ...(nonce ? { nonce } : {}) }),
   })
 }
 

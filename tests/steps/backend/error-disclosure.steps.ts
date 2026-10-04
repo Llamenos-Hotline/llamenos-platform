@@ -12,8 +12,8 @@ import {
   generateTestKeypair,
 } from '../../api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes, bytesToHex } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -44,9 +44,10 @@ Given('a request with auth header {string}', async ({ world }, headerValue: stri
 Given('a request with an expired auth token', async ({ world }) => {
   const { seedHex, pubkey } = generateTestKeypair()
   const expiredTimestamp = Date.now() - 6 * 60 * 1000
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${expiredTimestamp}:GET:/api/auth/me`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, expiredTimestamp, 'GET', '/api/auth/me', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
-  const token = JSON.stringify({ pubkey, timestamp: expiredTimestamp, token: bytesToHex(sig) })
+  const token = JSON.stringify({ pubkey, timestamp: expiredTimestamp, token: bytesToHex(sig), nonce })
   getEDState(world).authHeader = `Bearer ${token}`
 })
 
@@ -54,9 +55,10 @@ Given('a request with an auth token for an unknown pubkey', async ({ world }) =>
   // Fresh keypair not registered in the system
   const { seedHex, pubkey } = generateTestKeypair()
   const timestamp = Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:GET:/api/auth/me`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, 'GET', '/api/auth/me', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
-  const token = JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig) })
+  const token = JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig), nonce })
   getEDState(world).authHeader = `Bearer ${token}`
 })
 

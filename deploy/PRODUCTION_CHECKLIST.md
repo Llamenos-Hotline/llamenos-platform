@@ -34,6 +34,10 @@ Detailed procedures are in `docs/runbooks/`:
 - [ ] `SERVER_SECRET` is 64 hex chars
 - [ ] `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY` are unique and >= 24 chars
 - [ ] `ADMIN_PUBKEY` set to real admin's Ed25519 pubkey
+- [ ] `ADMIN_DECRYPTION_PUBKEY` set to the admin's X25519 pubkey — the SECOND key
+      `bun run bootstrap-admin` prints, a different value from `ADMIN_PUBKEY`.
+      Required whenever `ADMIN_PUBKEY` is set; the server refuses to boot without
+      it rather than encrypt notes to a key that cannot decrypt them (#1283).
 - [ ] `DOMAIN` set to actual production domain
 - [ ] `ACME_EMAIL` set for Let's Encrypt notifications
 - [ ] `ENVIRONMENT=production` (not development)

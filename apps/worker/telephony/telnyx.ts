@@ -444,6 +444,14 @@ export class TelnyxAdapter implements TelephonyAdapter {
     return this.emptyResponse()
   }
 
+  /**
+   * Telnyx is call-control: legs are ended by API command, not by the webhook
+   * response. The losing leg is ended by cancelRinging / hangupCall.
+   */
+  hangupResponse(): TelephonyResponse {
+    return this.emptyResponse()
+  }
+
   emptyResponse(): TelephonyResponse {
     return {
       contentType: 'application/json',

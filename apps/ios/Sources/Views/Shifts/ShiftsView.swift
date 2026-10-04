@@ -90,10 +90,7 @@ struct ShiftsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "phone.fill")
                                 .foregroundStyle(Color.brandPrimary)
-                            Text(String(
-                                format: NSLocalizedString("shifts_active_calls", comment: "%d active call(s)"),
-                                vm.activeCallCount
-                            ))
+                            Text(L10n.format("shifts_active_calls", comment: "%d active call(s)", vm.activeCallCount))
                             .font(.brand(.subheadline))
                             .foregroundStyle(Color.brandMutedForeground)
                             Spacer()
@@ -210,10 +207,7 @@ struct ShiftsView: View {
 
                             Spacer()
 
-                            Text(String(
-                                format: NSLocalizedString("shifts_count", comment: "%d shift(s)"),
-                                shiftDay.shifts.count
-                            ))
+                            Text(L10n.format("shifts_count", comment: "%d shift(s)", shiftDay.shifts.count))
                             .font(.brand(.caption))
                             .foregroundStyle(Color.brandMutedForeground)
                         }

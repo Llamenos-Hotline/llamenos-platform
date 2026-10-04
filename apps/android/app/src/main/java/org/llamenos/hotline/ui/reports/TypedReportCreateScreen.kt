@@ -128,15 +128,7 @@ fun TypedReportCreateScreen(
     }
 
     val screenTitle = if (reportType != null) {
-        // report_typed_create_title is sourced from packages/i18n as "New %@ Report" —
-        // %@ is Swift's String(format:) placeholder, not a valid Java Formatter
-        // conversion, so passing reportType.label as a stringResource() vararg
-        // throws UnknownFormatConversionException (discovered via the location-field
-        // Roborazzi screenshot test added for issue #768; this codepath was previously
-        // untested with a non-null reportType). Substitute manually instead, matching
-        // the existing workaround for the same iOS-format placeholder in
-        // SettingsScreen.kt's crash_reporting_pending_reports_description usage.
-        stringResource(R.string.report_typed_create_title).replace("%@", reportType.label)
+        stringResource(R.string.report_typed_create_title, reportType.label)
     } else {
         stringResource(R.string.report_type_picker_title)
     }

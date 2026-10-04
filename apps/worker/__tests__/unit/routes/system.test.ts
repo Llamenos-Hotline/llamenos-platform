@@ -4,7 +4,7 @@
  * Tests: permission enforcement (system:manage-instance), health aggregation,
  * service status derivation from env vars, graceful fallback on service errors.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import systemRoutes from '@worker/routes/system'
@@ -28,10 +28,14 @@ function makeApp(opts: {
     services = {},
   } = opts
 
+  // `onlineNow` comes from getHubPresence (services/presence.ts), which composes
+  // the active-call list with the ringing resolver — there is no
+  // `calls.getPresence` to mock any more, so the roster services it reads have
+  // to be present here.
   const mockCalls = {
     getActiveCalls: vi.fn().mockResolvedValue([]),
     getTodayCount: vi.fn().mockResolvedValue(0),
-    getPresence: vi.fn().mockResolvedValue({ users: [] }),
+    getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
   }
 
   const mockIdentity = {
@@ -40,6 +44,22 @@ function makeApp(opts: {
 
   const mockShifts = {
     getCurrentVolunteers: vi.fn().mockResolvedValue([]),
+  }
+
+  // Ringing — and therefore presence — is `scheduled ∩ clocked_in`, so the
+  // resolver reads `active_shifts` too. These scenarios are about the
+  // availability filters (`pk2` is rostered but on break), not about consent,
+  // so clock-in mirrors whatever the schedule says rather than being a second
+  // list a test has to remember to update.
+  const mockActiveShifts = {
+    listClockedInPubkeys: vi.fn(async () =>
+      new Set<string>(await mockShifts.getCurrentVolunteers()),
+    ),
+  }
+
+  const mockSettings = {
+    getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }] }),
   }
 
   const app = new Hono<AppEnv>()
@@ -51,6 +71,8 @@ function makeApp(opts: {
       calls: mockCalls,
       identity: mockIdentity,
       shifts: mockShifts,
+      activeShifts: mockActiveShifts,
+      settings: mockSettings,
       ...services,
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')
@@ -59,7 +81,7 @@ function makeApp(opts: {
   })
   app.route('/', systemRoutes)
 
-  return { app, mockCalls, mockIdentity, mockShifts }
+  return { app, mockCalls, mockIdentity, mockShifts, mockActiveShifts, mockSettings }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +135,7 @@ describe('GET /system/health', () => {
   })
 
   it('marks blob storage as down when not configured', async () => {
-    const { app } = makeApp({ env: {} }) // no R2_BUCKET or STORAGE_MANAGER
+    const { app } = makeApp({ env: {} }) // no BLOB_STORAGE or STORAGE_MANAGER
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -122,8 +144,8 @@ describe('GET /system/health', () => {
     expect(blobService?.status).toBe('down')
   })
 
-  it('marks blob storage as ok when R2_BUCKET configured', async () => {
-    const { app } = makeApp({ env: { R2_BUCKET: 'my-bucket' } })
+  it('marks blob storage as ok when BLOB_STORAGE configured', async () => {
+    const { app } = makeApp({ env: { BLOB_STORAGE: 'my-bucket' } })
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -174,16 +196,21 @@ describe('GET /system/health', () => {
     expect(calls.today).toBe(15)
   })
 
+  /**
+   * `onShift` is the roster; `onlineNow` is who a call would actually reach.
+   * They are deliberately different numbers — pk2 is rostered but on break, so
+   * the hotline would not ring them. Before presence was derived from the
+   * ringing resolver, `onlineNow` was 0 on every deployment.
+   */
   it('returns correct user counts from service', async () => {
-    const { app, mockIdentity, mockCalls, mockShifts } = makeApp()
+    const { app, mockIdentity, mockShifts } = makeApp()
     mockIdentity.getUsers.mockResolvedValue({
       users: [
-        { active: true },
-        { active: true },
-        { active: false },
+        { pubkey: 'pk1', active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
+        { pubkey: 'pk2', active: true, onBreak: true, roles: ['role-volunteer'], hubRoles: [] },
+        { pubkey: 'pk3', active: false, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
       ],
     })
-    mockCalls.getPresence.mockResolvedValue({ users: [{ pubkey: 'pk1' }] })
     mockShifts.getCurrentVolunteers.mockResolvedValue(['pk1', 'pk2'])
 
     const res = await app.request('/health')
@@ -230,8 +257,8 @@ describe('GET /system/health', () => {
     expect(['ok', 'degraded']).toContain(server.status)
   })
 
-  it('includes storage blobStorage:Connected when R2_BUCKET configured', async () => {
-    const { app } = makeApp({ env: { R2_BUCKET: 'my-bucket' } })
+  it('includes storage blobStorage:Connected when BLOB_STORAGE configured', async () => {
+    const { app } = makeApp({ env: { BLOB_STORAGE: 'my-bucket' } })
 
     const res = await app.request('/health')
     const json = await res.json() as Record<string, unknown>
@@ -239,7 +266,7 @@ describe('GET /system/health', () => {
     expect(storage.blobStorage).toBe('Connected')
   })
 
-  it('includes storage blobStorage:Not configured without R2_BUCKET', async () => {
+  it('includes storage blobStorage:Not configured without BLOB_STORAGE', async () => {
     const { app } = makeApp({ env: {} })
 
     const res = await app.request('/health')
