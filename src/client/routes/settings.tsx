@@ -16,17 +16,12 @@ import type { ErasureRequest } from '@protocol/schemas'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
 import { supportsInAppAudio } from '@/lib/in-app-audio'
-import { Settings2, Mic, Bell, User, Globe, Fingerprint, KeyRound, Trash2, Plus, Phone, Monitor, PhoneCall, Smartphone, Loader2, CheckCircle2, Bug, Send, MessageSquare, LogOut, Lock, AlertTriangle, Clock, Server } from 'lucide-react'
+import { Settings2, Mic, Bell, User, Globe, Fingerprint, KeyRound, Trash2, Plus, Phone, Monitor, PhoneCall, Loader2, Bug, Send, MessageSquare, LogOut, Lock, AlertTriangle, Clock, Server } from 'lucide-react'
 import { isPackagedTauri, getApiBase, resetApiBase, stagePendingServerAddress } from '@/lib/api-config'
 import { ServerAddressForm } from '@/components/setup/ServerAddressForm'
 import { isWebAuthnAvailable, registerCredential, listCredentials, deleteCredential } from '@/lib/webauthn'
 import type { WebAuthnCredentialInfo } from '@protocol/schemas/webauthn'
 import { PhoneInput } from '@/components/phone-input'
-import {
-  getProvisioningRoom,
-  encryptForDevice,
-  sendProvisionedKey,
-} from '@/lib/provisioning'
 import { getNotificationPrefs, setNotificationPrefs } from '@/lib/notifications'
 import { useNotificationPermission } from '@/lib/use-notification-permission'
 import { LANGUAGES } from '@shared/languages'
@@ -271,18 +266,6 @@ function SettingsPage() {
         <p className="text-xs text-muted-foreground">
           {pk ? `${t('profileSettings.publicKey', { defaultValue: 'Public key' })}: ${pk.slice(0, 16)}...` : ''}
         </p>
-      </SettingsSection>
-
-      {/* Link Device */}
-      <SettingsSection
-        id="linked-devices"
-        title={t('deviceLink.linkedDevices')}
-        description={t('deviceLink.linkedDevicesDesc')}
-        icon={<Smartphone className="h-5 w-5 text-muted-foreground" />}
-        expanded={expanded.has('linked-devices')}
-        onToggle={(open) => toggleSection('linked-devices', open)}
-      >
-        <LinkDeviceSection />
       </SettingsSection>
 
       {/* Passkeys (WebAuthn) — all users */}
@@ -740,115 +723,6 @@ function NotificationPermissionStatus() {
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function LinkDeviceSection() {
-  const { t } = useTranslation()
-  const [linkCode, setLinkCode] = useState('')
-  const [status, setStatus] = useState<'idle' | 'linking' | 'verify-sas' | 'success' | 'error'>('idle')
-  const [statusMessage, setStatusMessage] = useState('')
-  const [sasCode, setSasCode] = useState('')
-
-  async function handleLinkDevice() {
-    if (!linkCode.trim()) return
-    setStatus('linking')
-    try {
-      // Parse the code — could be JSON from QR or short code (roomId prefix)
-      let roomId: string
-      let token: string
-      try {
-        const parsed = JSON.parse(linkCode)
-        roomId = parsed.r
-        token = parsed.t
-      } catch {
-        // Treat as short code — but we need the full roomId
-        // Short codes aren't enough; user must paste the full QR data or use camera
-        setStatus('error')
-        setStatusMessage(t('deviceLink.invalidCode'))
-        return
-      }
-
-      // Fetch room to get ephemeral pubkey
-      const room = await getProvisioningRoom(roomId, token)
-      if (room.status !== 'waiting') {
-        setStatus('error')
-        setStatusMessage(t('deviceLink.linkExpired'))
-        return
-      }
-
-      // Encrypt signing seed entirely in Rust — the device key NEVER enters JavaScript.
-      // ECDH, HKDF key derivation, encryption, and SAS all happen in native code.
-      const { createAuthToken } = await import('@/lib/platform')
-      const { encryptedHex: encrypted, sasCode: sas, primaryEncPubkeyHex } =
-        await encryptForDevice(room.ephemeralPubkey)
-      setSasCode(sas)
-
-      // Send encrypted payload (authenticated via CryptoState)
-      const provisionPath = `/api/provision/rooms/${roomId}/payload`
-      const authTokenJson = await createAuthToken(Date.now(), 'POST', provisionPath)
-      await sendProvisionedKey(roomId, token, encrypted, primaryEncPubkeyHex, {
-        'Authorization': `Bearer ${authTokenJson}`,
-      })
-
-      setStatus('verify-sas')
-      setStatusMessage(t('deviceLink.verifySASPrimary'))
-    } catch {
-      setStatus('error')
-      setStatusMessage(t('deviceLink.linkFailed'))
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{t('deviceLink.linkFromPrimary')}</p>
-
-      {status === 'idle' || status === 'error' ? (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor="link-code">{t('deviceLink.enterCode')}</Label>
-            <div className="flex gap-2">
-              <Input
-                id="link-code"
-                value={linkCode}
-                onChange={e => setLinkCode(e.target.value)}
-                placeholder={t('deviceLink.codePlaceholder')}
-                className="font-mono"
-                data-testid="link-code-input"
-              />
-              <Button onClick={handleLinkDevice} disabled={!linkCode.trim()} data-testid="link-device-button">
-                <Smartphone className="h-4 w-4" />
-                {t('deviceLink.link')}
-              </Button>
-            </div>
-          </div>
-          {status === 'error' && (
-            <p role="alert" className="text-sm text-destructive">{statusMessage}</p>
-          )}
-        </div>
-      ) : status === 'linking' ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          {t('common.loading')}
-        </div>
-      ) : status === 'verify-sas' ? (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">{statusMessage}</p>
-          <div className="rounded-lg border-2 border-primary/20 bg-primary/5 p-4 text-center" data-testid="primary-sas-code">
-            <p className="text-xs text-muted-foreground mb-1">{t('deviceLink.securityCode')}</p>
-            <p className="text-3xl font-mono font-bold tracking-[0.3em]">{sasCode}</p>
-          </div>
-          <Button variant="outline" className="w-full" onClick={() => { setStatus('idle'); setLinkCode(''); setSasCode('') }}>
-            {t('common.done')}
-          </Button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 text-sm text-green-600">
-          <CheckCircle2 className="h-4 w-4" />
-          {statusMessage}
-        </div>
-      )}
     </div>
   )
 }

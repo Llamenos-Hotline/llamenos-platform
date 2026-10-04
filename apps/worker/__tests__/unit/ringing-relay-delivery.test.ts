@@ -77,6 +77,11 @@ function makeServices(rosters: Record<string, string[]>): Services {
       .map(([hubId]) => ({ hubId, roleIds: ['role-volunteer'] }))
   return {
     shifts: { getCurrentVolunteers: vi.fn(async (hubId: string) => rosters[hubId] ?? []) },
+    // These scenarios are about relay fan-out, not consent: everyone on a hub's
+    // roster has also clocked into that hub, which ringing now requires.
+    activeShifts: {
+      listClockedInPubkeys: vi.fn(async (hubId: string) => new Set(rosters[hubId] ?? [])),
+    },
     settings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
