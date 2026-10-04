@@ -1037,8 +1037,17 @@ export class SettingsService {
       .from(providerConfigs)
       .where(isNull(providerConfigs.hubId))
       .limit(1)
-    const messagingConfig = row.messagingConfig as MessagingConfig | null
-    const setupState = row.setupState as SetupState | null
+    // These two columns hold partially-written JSON. `getSettings()` upserts the
+    // singleton row with `setup_state = '{}'`, so on every fresh install
+    // `row.setupState` is present but empty — casting it `as SetupState | null`
+    // claimed `selectedChannels` was always an array, and `setupState?.…` guarded
+    // only the null case. `{}` therefore threw a TypeError, `GET /api/config`
+    // caught it and reported every channel disabled, and the desktop — which
+    // gates its whole Conversations page on those flags — showed "No messaging
+    // channels enabled" on a deployment that had channels configured.
+    // `Partial<>` is what the data actually is, and makes the guards mandatory.
+    const messagingConfig = row.messagingConfig as Partial<MessagingConfig> | null
+    const setupState = row.setupState as Partial<SetupState> | null
 
     const voiceEnabled =
       !!providerConfig ||
@@ -1050,12 +1059,12 @@ export class SettingsService {
 
     return {
       voice: voiceEnabled,
-      sms: messagingConfig?.enabledChannels.includes('sms') ?? false,
-      whatsapp: messagingConfig?.enabledChannels.includes('whatsapp') ?? false,
-      signal: messagingConfig?.enabledChannels.includes('signal') ?? false,
-      rcs: messagingConfig?.enabledChannels.includes('rcs') ?? false,
-      telegram: messagingConfig?.enabledChannels.includes('telegram') ?? false,
-      reports: setupState?.selectedChannels.includes('reports') ?? false,
+      sms: messagingConfig?.enabledChannels?.includes('sms') ?? false,
+      whatsapp: messagingConfig?.enabledChannels?.includes('whatsapp') ?? false,
+      signal: messagingConfig?.enabledChannels?.includes('signal') ?? false,
+      rcs: messagingConfig?.enabledChannels?.includes('rcs') ?? false,
+      telegram: messagingConfig?.enabledChannels?.includes('telegram') ?? false,
+      reports: setupState?.selectedChannels?.includes('reports') ?? false,
     }
   }
 
