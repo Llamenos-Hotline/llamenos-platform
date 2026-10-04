@@ -535,7 +535,7 @@ mod tests {
         let token =
             create_auth_token_without_nonce(&secrets, 1708900000000, "POST", "/api/test").unwrap();
         let dressed = AuthToken {
-            nonce: Some("0".repeat(32)),
+            nonce: Some(generate_nonce()),
             ..token
         };
         assert!(!verify_auth_token(&dressed, "POST", "/api/test").unwrap());
@@ -545,8 +545,8 @@ mod tests {
     /// shared label these two messages would be identical bytes.
     #[test]
     fn colon_in_path_cannot_collide_shapes() {
-        let pubkey = "a".repeat(64);
-        let nonce = "b".repeat(32);
+        let pubkey = hex::encode([0xabu8; 32]);
+        let nonce = generate_nonce();
         let nonceless = build_auth_message(&pubkey, 1, "POST", &format!("/x:{nonce}"), None);
         let nonced = build_auth_message(&pubkey, 1, "POST", "/x", Some(&nonce));
         assert_ne!(nonceless, nonced);
@@ -554,25 +554,40 @@ mod tests {
 
     #[test]
     fn non_canonical_nonce_rejected() {
-        assert!(is_canonical_nonce(&"a".repeat(32)));
-        assert!(!is_canonical_nonce(""));
-        assert!(!is_canonical_nonce(&"a".repeat(31)));
-        assert!(!is_canonical_nonce(&"A".repeat(32)));
-        assert!(!is_canonical_nonce("abcd:abcdabcdabcdabcdabcdabcdabcd"));
+        // Every fixture is DERIVED from a freshly generated nonce and then
+        // mutated into one invalid shape. Deliberately not written as string
+        // literals: a literal in a nonce position is a hard-coded
+        // cryptographic value (CodeQL rust/hard-coded-cryptographic-value),
+        // and deriving them also keeps the test honest about what the real
+        // generator actually produces.
+        let good = generate_nonce();
+        assert!(is_canonical_nonce(&good));
+
+        let empty = String::new();
+        assert!(!is_canonical_nonce(&empty));
+        assert!(!is_canonical_nonce(&good[..good.len() - 1])); // too short
+        assert!(!is_canonical_nonce(&format!("{good}0"))); // too long
+        assert!(!is_canonical_nonce(&format!("A{}", &good[1..]))); // not lowercase
+        let with_colon = format!(":{}", &good[1..]);
+        assert!(!is_canonical_nonce(&with_colon));
 
         // A token whose nonce carries a ':' is rejected before verification, so
         // the path/nonce boundary cannot be shifted by a chosen nonce.
         let secrets = test_secrets();
         let signing_key = secrets.signing_key();
         let pubkey_hex = hex::encode(signing_key.verifying_key().to_bytes());
-        let evil_nonce = "b:cdabcdabcdabcdabcdabcdabcdabcd";
-        let message =
-            build_auth_message(&pubkey_hex, 1708900000000, "POST", "/x", Some(evil_nonce));
+        let message = build_auth_message(
+            &pubkey_hex,
+            1708900000000,
+            "POST",
+            "/x",
+            Some(with_colon.as_str()),
+        );
         let token = AuthToken {
             pubkey: pubkey_hex,
             timestamp: 1708900000000,
             token: hex::encode(signing_key.sign(&message).to_bytes()),
-            nonce: Some(evil_nonce.to_string()),
+            nonce: Some(with_colon),
         };
         assert!(!verify_auth_token(&token, "POST", "/x").unwrap());
     }

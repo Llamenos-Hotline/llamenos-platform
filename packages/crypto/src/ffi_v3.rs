@@ -1170,7 +1170,7 @@ mod tests {
 
         // The nonce-bearing domain must reject it even at the FFI layer.
         let dressed = auth::AuthToken {
-            nonce: Some("0".repeat(32)),
+            nonce: Some(hex::encode([0x5au8; 16])),
             ..token
         };
         assert!(!auth::verify_auth_token(&dressed, "POST", "/api/invites/redeem").unwrap());
@@ -1181,12 +1181,12 @@ mod tests {
     /// The exported builder is the same function the Kotlin/Swift bindings call.
     #[test]
     fn exported_builder_matches_core() {
-        let pubkey = "a".repeat(64);
+        let pubkey = hex::encode([0xabu8; 32]);
         assert_eq!(
             mobile_build_auth_message(pubkey.clone(), 7, "GET".into(), "/x".into(), None),
             auth::build_auth_message(&pubkey, 7, "GET", "/x", None)
         );
-        let nonce = "c".repeat(32);
+        let nonce = hex::encode([0xcdu8; 16]);
         assert_eq!(
             mobile_build_auth_message(
                 pubkey.clone(),

@@ -78,12 +78,27 @@ const ALLOWED = new Map<string, string>([
     'comment only: names the nonce-less label on the nonce-less IPC command',
   ],
   [
+    'tests/steps/crypto/crypto-steps.ts',
+    'comment only: names the nonce-less label to explain why the nonce is required',
+  ],
+  [
+    'tests/mocks/hpke-mock.ts',
+    'mirrors the numeric label registry for the browser mock — a label-to-id map, ' +
+      'not a message builder',
+  ],
+  [
     'apps/worker/__tests__/unit/auth-message-single-source.test.ts',
     'this test',
   ],
 ])
 
-const LABEL_REFERENCE = /LABEL_DEVICE_AUTH(_NO_NONCE)?\b/
+/**
+ * Both the constant names AND their literal values. The first sweep only looked
+ * for the identifiers and missed `tests/steps/crypto/crypto-steps.ts`, which
+ * rebuilt the message from a hardcoded 'llamenos:device-auth:v1' string — the
+ * raw-literal form CLAUDE.md forbids outright for crypto contexts.
+ */
+const LABEL_REFERENCE = /LABEL_DEVICE_AUTH(_NO_NONCE)?\b|llamenos:device-auth/
 
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.rs', '.kt', '.swift', '.json'])
 
