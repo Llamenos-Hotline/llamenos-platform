@@ -340,6 +340,42 @@ class CryptoService @Inject constructor() {
         return createAuthTokenInternal(method, path)
     }
 
+    /**
+     * Create an Ed25519 auth token signed WITHOUT a nonce.
+     *
+     * Only for routes whose wire schema has no `nonce` field — today that is
+     * `POST /api/invites/redeem` alone. The message is signed under
+     * `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the server accepts only on routes
+     * that opt in, so this token is useless anywhere else. Every other call
+     * site must use [createAuthToken].
+     */
+    suspend fun createAuthTokenWithoutNonce(method: String, path: String): AuthToken =
+        withContext(computeDispatcher) {
+            createAuthTokenWithoutNonceInternal(method, path)
+        }
+
+    private fun createAuthTokenWithoutNonceInternal(method: String, path: String): AuthToken {
+        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        if (!isUnlocked) throw CryptoException("No key loaded")
+
+        val timestamp = System.currentTimeMillis()
+        return try {
+            val ffiToken = org.llamenos.core.mobileCreateAuthTokenWithoutNonce(
+                timestamp = timestamp.toULong(),
+                method = method,
+                path = path,
+            )
+            AuthToken(
+                pubkey = ffiToken.pubkey,
+                timestamp = ffiToken.timestamp.toLong(),
+                token = ffiToken.token,
+                nonce = ffiToken.nonce,
+            )
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Auth token creation failed: ${e.message}", e)
+        }
+    }
+
     private fun createAuthTokenInternal(method: String, path: String): AuthToken {
         check(nativeLibLoaded) { "Native crypto library not loaded." }
         if (!isUnlocked) throw CryptoException("No key loaded")

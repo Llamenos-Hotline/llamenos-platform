@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +41,21 @@ import org.llamenos.hotline.ui.components.PINPad
 import org.llamenos.hotline.ui.components.SecureWindowEffect
 
 /**
+ * Localised message for a failed invite redemption.
+ */
+@Composable
+private fun enrolmentErrorMessage(error: EnrolmentError): String = stringResource(
+    when (error) {
+        EnrolmentError.INVALID_CODE -> R.string.enrol_error_invalid_code
+        EnrolmentError.NOT_FOUND -> R.string.enrol_error_not_found
+        EnrolmentError.EXPIRED -> R.string.enrol_error_expired
+        EnrolmentError.RATE_LIMITED -> R.string.enrol_error_rate_limited
+        EnrolmentError.NETWORK -> R.string.enrol_error_network
+        EnrolmentError.UNKNOWN -> R.string.enrol_error_unknown
+    },
+)
+
+/**
  * PIN set screen with enter + confirm flow.
  *
  * Two phases:
@@ -46,6 +64,8 @@ import org.llamenos.hotline.ui.components.SecureWindowEffect
  *
  * On mismatch, shows error and resets to confirmation phase.
  * On match, encrypts the key with the PIN and navigates to dashboard.
+ * If an invite code was entered on the login screen, the redemption runs after
+ * key generation and its progress / failure is shown here (#1345).
  */
 @Composable
 fun PINSetScreen(
@@ -167,6 +187,61 @@ fun PINSetScreen(
                 }
 
                 Spacer(Modifier.height(32.dp))
+
+                // Invite-code enrolment status (#1345). Shown after key generation
+                // while the server registers this identity against the invite code.
+                when (val enrolment = uiState.enrolment) {
+                    is EnrolmentState.Redeeming -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .testTag("enrol-redeeming"),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.enrol_redeeming),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("enrol-redeeming-label"),
+                        )
+                    }
+
+                    is EnrolmentState.Failed -> {
+                        Text(
+                            text = stringResource(R.string.enrol_failed_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = enrolmentErrorMessage(enrolment.error),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("enrol-error"),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = viewModel::retryEnrolment,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .testTag("enrol-retry"),
+                        ) {
+                            Text(stringResource(R.string.enrol_retry))
+                        }
+                        TextButton(
+                            onClick = viewModel::skipEnrolment,
+                            modifier = Modifier
+                                .testTag("enrol-skip"),
+                        ) {
+                            Text(stringResource(R.string.enrol_continue_without))
+                        }
+                    }
+
+                    else -> Unit
+                }
             }
 
             LoadingOverlay(

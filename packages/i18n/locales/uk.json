@@ -3930,7 +3930,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "unlock": {
     "subtitle": "Введіть ваш PIN для розблокування",
@@ -4660,5 +4662,17 @@
     "unavailableMessage": "На жаль, зараз ніхто не може відповісти на ваш дзвінок. Будь ласка, спробуйте пізніше. До побачення.",
     "voicemailPrompt": "Зараз ніхто не може відповісти на ваш дзвінок. Будь ласка, залиште повідомлення після сигналу.",
     "voicemailThanks": "Дякуємо за ваше повідомлення. До побачення."
+  },
+  "enrol": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enrol",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
