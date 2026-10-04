@@ -26,6 +26,9 @@ enum PINPhase: Equatable {
 /// Escalating lockout policy for failed PIN attempts.
 /// Attempts 1-4: no lockout. 5-6: 30s. 7-8: 2min. 9: 10min. 10+: wipe all keys.
 enum PINLockout {
+    /// Failed attempts allowed before the keys are wiped.
+    static let maxAttempts = 10
+
     /// Compute the lockout duration for the given number of failed attempts.
     /// Returns nil for no lockout, 0 for wipe (terminal).
     static func lockoutDuration(forAttempts attempts: Int) -> TimeInterval? {
@@ -40,7 +43,7 @@ enum PINLockout {
 
     /// Whether the given attempt count triggers a full key wipe.
     static func shouldWipeKeys(forAttempts attempts: Int) -> Bool {
-        return attempts >= 10
+        return attempts >= maxAttempts
     }
 }
 
@@ -127,15 +130,14 @@ final class PINViewModel {
         case .unlock:
             if isLockedOut {
                 let remaining = Int(lockoutUntil.timeIntervalSinceNow.rounded(.up))
-                return String(
-                    format: NSLocalizedString("pin_lockout_remaining", comment: "Locked out. Try again in %d seconds."),
-                    max(remaining, 0)
-                )
+                return L10n.format("pin_lockout_remaining", comment: "Locked out. Try again in %d seconds.", max(remaining, 0))
             }
             if failedAttempts > 0 {
-                return String(
-                    format: NSLocalizedString("pin_unlock_attempts", comment: "%d failed attempts"),
-                    failedAttempts
+                return L10n.format(
+                    "pin_unlock_attempts",
+                    comment: "N of M attempts used",
+                    failedAttempts,
+                    PINLockout.maxAttempts
                 )
             }
             return NSLocalizedString("pin_unlock_subtitle", comment: "Enter your PIN to unlock")
@@ -280,11 +282,9 @@ final class PINViewModel {
 
         if let duration = PINLockout.lockoutDuration(forAttempts: failedAttempts) {
             keychainService.setLockoutUntil(Date().addingTimeInterval(duration))
-            errorMessage = String(
-                format: NSLocalizedString(
-                    "error_pin_lockout_duration",
-                    comment: "Too many failed attempts. Locked for %d seconds."
-                ),
+            errorMessage = L10n.format(
+                "error_pin_lockout_duration",
+                comment: "Too many failed attempts. Locked for %d seconds.",
                 Int(duration)
             )
         } else {

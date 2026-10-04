@@ -71,13 +71,11 @@ struct HubOnboardingSheet: View {
             .frame(height: 4)
 
             // Step label
-            // The i18n codegen renders every {{placeholder}} as %@ (an object),
-            // so the counts must be passed as strings — %@ against an Int reads
-            // the integer as a pointer and crashes the app.
-            Text(String(
-                format: NSLocalizedString("hub_onboarding_step_of", comment: "Step %@ of %@"),
-                String(viewModel.currentStep.stepNumber),
-                String(OnboardingStep.totalSteps)
+            Text(L10n.format(
+                "hub_onboarding_step_of",
+                comment: "Step %d of %d",
+                viewModel.currentStep.stepNumber,
+                OnboardingStep.totalSteps
             ))
             .font(.brand(.caption))
             .foregroundStyle(Color.brandMutedForeground)

@@ -162,32 +162,53 @@ class EventsViewModel @Inject constructor(
 
     /**
      * Suspending version of entity type loading — called from [refresh] for sequential execution.
+     *
+     * The event list is loading from here until the records request settles. Leaving
+     * `isLoading` false while entity types are fetched made the list render its
+     * "No events" empty state for the whole round trip, before any record was asked for.
      */
     private suspend fun loadEntityTypesSync() {
-        _uiState.update { it.copy(isLoadingEntityTypes = true) }
-        try {
-            val response = apiService.request<EntityTypesResponse>(
+        _uiState.update {
+            it.copy(
+                isLoadingEntityTypes = true,
+                isLoading = it.events.isEmpty(),
+                isRefreshing = it.events.isNotEmpty(),
+                error = null,
+            )
+        }
+        val response = try {
+            apiService.request<EntityTypesResponse>(
                 "GET",
                 apiService.hp("/api/settings/cms/entity-types"),
             )
+        } catch (e: Exception) {
             _uiState.update {
                 it.copy(
-                    entityTypes = response.entityTypes,
                     isLoadingEntityTypes = false,
+                    isLoading = false,
+                    isRefreshing = false,
+                    error = e.message ?: "Failed to load events",
                 )
             }
-            // Now load events for the first event entity type
-            loadEvents()
-        } catch (_: Exception) {
-            _uiState.update { it.copy(isLoadingEntityTypes = false) }
-            // Entity types unavailable — likely CMS not configured
+            return
         }
+        _uiState.update {
+            it.copy(
+                entityTypes = response.entityTypes,
+                isLoadingEntityTypes = false,
+            )
+        }
+        loadEventsSync()
     }
 
     /**
      * Load event records from GET /api/records filtered to event entity types.
      */
     fun loadEvents() {
+        viewModelScope.launch { loadEventsSync() }
+    }
+
+    private suspend fun loadEventsSync() {
         val eventTypes = _uiState.value.eventEntityTypes
         if (eventTypes.isEmpty()) {
             _uiState.update {
@@ -201,37 +222,35 @@ class EventsViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        _uiState.update {
+            it.copy(
+                isLoading = it.events.isEmpty(),
+                isRefreshing = it.events.isNotEmpty(),
+                error = null,
+            )
+        }
+        try {
+            // Load records for the first event entity type
+            val firstEventType = eventTypes.first()
+            val response = apiService.request<RecordsListResponse>(
+                "GET",
+                apiService.hp("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
+            )
             _uiState.update {
                 it.copy(
-                    isLoading = it.events.isEmpty(),
-                    isRefreshing = it.events.isNotEmpty(),
-                    error = null,
+                    events = response.records,
+                    total = response.total,
+                    isLoading = false,
+                    isRefreshing = false,
                 )
             }
-            try {
-                // Load records for the first event entity type
-                val firstEventType = eventTypes.first()
-                val response = apiService.request<RecordsListResponse>(
-                    "GET",
-                    apiService.hp("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
+        } catch (e: Exception) {
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isRefreshing = false,
+                    error = e.message ?: "Failed to load events",
                 )
-                _uiState.update {
-                    it.copy(
-                        events = response.records,
-                        total = response.total,
-                        isLoading = false,
-                        isRefreshing = false,
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isRefreshing = false,
-                        error = e.message ?: "Failed to load events",
-                    )
-                }
             }
         }
     }
