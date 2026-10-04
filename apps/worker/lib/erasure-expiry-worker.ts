@@ -35,13 +35,21 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
 
       for (const request of expired) {
         try {
+          // Hub-scoped requests are crypto-shreds, not person erasures: they
+          // have no userId and a different executor. Until that branch exists
+          // they are left pending rather than claimed, so nothing silently
+          // treats a hub shred as a no-op person erasure.
+          if (request.scope !== 'user' || request.userId === null) continue
+
           // IMP-2: CAS claim — skip if another worker already claimed it
           const claimed = await opts.erasureService.markExecuting(request.id)
           if (!claimed) continue
 
+          const userId = request.userId
+
           const { reEncryptionJobIds } =
             await opts.erasureService.executeErasure(
-              request.userId,
+              userId,
               'system',
               request.justification ?? 'Self-service erasure delay expired',
               opts.auditService,
@@ -49,13 +57,13 @@ export function startErasureExpiryWorker(opts: ErasureExpiryWorkerOpts): void {
 
           const wsManager = getConnectionManager()
           if (wsManager) {
-            wsManager.sendSignedWipeToUser(request.userId, {
+            wsManager.sendSignedWipeToUser(userId, {
               type: 'device:wipe',
-              targetUserId: request.userId,
+              targetUserId: userId,
               reason: 'user-erasure',
               timestamp: new Date().toISOString(),
             })
-            wsManager.terminateUser(request.userId)
+            wsManager.terminateUser(userId)
           }
 
           logger.info('Erasure executed', {
