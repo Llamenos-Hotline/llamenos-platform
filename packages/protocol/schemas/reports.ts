@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { pubkeySchema, paginationSchema, recipientEnvelopeSchema } from './common'
+import { conversationResponseSchema } from './conversations'
 
 // --- Response schemas ---
 
@@ -33,10 +34,9 @@ export const conversionStatusEnum = z.enum(['pending', 'in_progress', 'completed
 // --- List/wrapper response schemas ---
 
 export const reportListResponseSchema = z.object({
-  conversations: z.array(z.object({
-    id: z.string(),
-    createdAt: z.string(),
-  })),
+  // The route returns full conversation rows (services.conversations.list) —
+  // the reports list IS the report-type conversation list.
+  conversations: z.array(conversationResponseSchema),
   total: z.number(),
 })
 

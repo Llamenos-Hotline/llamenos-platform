@@ -5,7 +5,7 @@ import SwiftUI
 /// Detail view for a triage report. Shows report content, metadata, and a
 /// "Convert to Case" button that creates a new case record from the report.
 struct TriageDetailView: View {
-    let report: ClientReportResponse
+    let report: SharedConversation
     let viewModel: TriageViewModel
 
     @Environment(AppState.self) private var appState
@@ -204,24 +204,27 @@ struct TriageDetailView: View {
 #Preview("Triage Detail") {
     NavigationStack {
         TriageDetailView(
-            report: ClientReportResponse(
-                id: "preview-1",
-                channelType: "reports",
-                contactIdentifierHash: nil,
+            report: SharedConversation(
                 assignedTo: nil,
-                status: "waiting",
+                channelType: "reports",
+                contactIdentifierHash: "hash",
+                contactLast4: nil,
                 createdAt: ISO8601DateFormatter().string(from: Date()),
-                updatedAt: nil,
+                id: "preview-1",
                 lastMessageAt: nil,
                 messageCount: 2,
-                metadata: ReportMetadata(
-                    type: "report",
-                    reportTitle: "Incident near downtown shelter",
+                metadata: Metadata(
+                    conversionStatus: nil,
+                    customFieldValues: nil,
+                    linkedCallID: nil,
                     reportCategory: "Safety",
-                    reportTypeId: nil,
-                    linkedCallId: nil,
-                    reportId: nil
-                )
+                    reportID: nil,
+                    reportTitle: "Incident near downtown shelter",
+                    reportTypeID: nil,
+                    type: .report
+                ),
+                status: .waiting,
+                updatedAt: ISO8601DateFormatter().string(from: Date())
             ),
             viewModel: TriageViewModel(
                 apiService: APIService(cryptoService: CryptoService(), hubContext: HubContext()),

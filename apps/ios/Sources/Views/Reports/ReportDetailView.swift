@@ -5,7 +5,7 @@ import SwiftUI
 /// Detail view for a single report. Shows title, status, category, metadata,
 /// and action buttons (claim/close) for authorized users.
 struct ReportDetailView: View {
-    let report: ClientReportResponse
+    let report: SharedConversation
     let viewModel: ReportsViewModel
 
     @Environment(AppState.self) private var appState
@@ -231,24 +231,27 @@ struct ReportDetailView: View {
 #Preview("Report Detail") {
     NavigationStack {
         ReportDetailView(
-            report: ClientReportResponse(
-                id: "preview-1",
-                channelType: "reports",
-                contactIdentifierHash: nil,
+            report: SharedConversation(
                 assignedTo: nil,
-                status: "waiting",
+                channelType: "reports",
+                contactIdentifierHash: "hash",
+                contactLast4: nil,
                 createdAt: ISO8601DateFormatter().string(from: Date()),
-                updatedAt: nil,
+                id: "preview-1",
                 lastMessageAt: nil,
                 messageCount: 0,
-                metadata: ReportMetadata(
-                    type: "report",
-                    reportTitle: "Suspicious activity near shelter",
+                metadata: Metadata(
+                    conversionStatus: nil,
+                    customFieldValues: nil,
+                    linkedCallID: nil,
                     reportCategory: "Safety",
-                    reportTypeId: nil,
-                    linkedCallId: nil,
-                    reportId: nil
-                )
+                    reportID: nil,
+                    reportTitle: "Suspicious activity near shelter",
+                    reportTypeID: nil,
+                    type: .report
+                ),
+                status: .waiting,
+                updatedAt: ISO8601DateFormatter().string(from: Date())
             ),
             viewModel: ReportsViewModel(
                 apiService: APIService(cryptoService: CryptoService(), hubContext: HubContext()),

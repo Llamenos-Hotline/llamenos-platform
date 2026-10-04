@@ -57,56 +57,26 @@ enum ReportStatusFilter: String, CaseIterable, Sendable {
     }
 }
 
-// MARK: - ReportMetadata
-// Client-only: generated `ConversationMetadata` uses different field names
-// and types (e.g., TypeEnum enum vs raw string).
+// MARK: - Report conversation UI extensions
+// Report lists decode to generated `ReportListResponse` whose elements are
+// generated `SharedConversation` — the reports list IS the report-type
+// conversation list (packages/protocol/schemas/reports.ts +
+// conversations.ts). Only the display helpers below are client-side.
 
-/// Metadata embedded in a report's conversation record.
-struct ReportMetadata: Codable, Sendable {
-    let type: String?
-    let reportTitle: String?
-    let reportCategory: String?
-    let reportTypeId: String?
-    let linkedCallId: String?
-    let reportId: String?
-}
+extension SharedConversation: Identifiable {}
 
-// MARK: - ClientReportResponse
-// Client-only: generated `ReportResponse` has `encryptedContent`, `readerEnvelopes`,
-// `createdBy` fields that this client model doesn't have. Also uses
-// `SharedReportResponseStatus` enum instead of raw string.
-
-/// Server response for a single report from `GET /api/reports`.
-/// Named `ClientReportResponse` to avoid conflict with generated `ReportResponse`.
-struct ClientReportResponse: Codable, Identifiable, Sendable {
-    let id: String
-    let channelType: String
-    let contactIdentifierHash: String?
-    let assignedTo: String?
-    let status: String
-    let createdAt: String
-    let updatedAt: String?
-    let lastMessageAt: String?
-    let messageCount: Int
-    let metadata: ReportMetadata?
-
+extension SharedConversation {
     var reportTitle: String {
         metadata?.reportTitle ?? NSLocalizedString("report_untitled", comment: "Untitled Report")
     }
 
     var reportCategory: String? { metadata?.reportCategory }
 
-    var reportTypeId: String? { metadata?.reportTypeId }
+    var reportTypeId: String? { metadata?.reportTypeID }
 
-    var statusEnum: ReportStatus { ReportStatus(rawValue: status) ?? .waiting }
-}
-
-// MARK: - ReportsListResponse
-
-/// API response wrapper for the reports list.
-struct ReportsListResponse: Codable, Sendable {
-    let conversations: [ClientReportResponse]
-    let total: Int
+    var statusEnum: ReportStatus {
+        status.flatMap { ReportStatus(rawValue: $0.rawValue) } ?? .waiting
+    }
 }
 
 // MARK: - CreateReportRequest
