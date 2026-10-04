@@ -11,7 +11,7 @@ import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
 import { DemoAccountPicker } from '@/components/demo-account-picker'
 import { AccountRecoveryFlow } from '@/components/account-recovery-flow'
-import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Smartphone, Upload, ArrowRight, Mail } from 'lucide-react'
+import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Upload, ArrowRight, Mail } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { LogoMark } from '@/components/logo-mark'
 import { LanguageSelect } from '@/components/language-select'
@@ -573,16 +573,6 @@ function LoginPage() {
                 )}
               </Button>
             </>
-          )}
-
-          {/* Link device from another device */}
-          {recoveryStep === 'upload' && (
-            <Link to="/link-device" className="block">
-              <Button variant="outline" className="w-full" type="button">
-                <Smartphone className="h-4 w-4" />
-                {t('deviceLink.linkThisDevice')}
-              </Button>
-            </Link>
           )}
 
           {/* Redeem an invite (#1128) — the only in-app entry point to onboarding */}
