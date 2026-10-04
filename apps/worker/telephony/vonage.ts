@@ -152,6 +152,10 @@ export class VonageAdapter implements TelephonyAdapter {
     const hp = hubQP(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingAction = sayOrStream('greeting', lang, params.audioUrls, greetingText)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    const noticeActions = params.callRecordingEnabled
+      ? [sayOrStream('recordingNotice', lang, params.audioUrls)]
+      : []
 
     if (params.rateLimited) {
       const rateLimitAction = sayOrStream('rateLimited', lang, params.audioUrls)
@@ -165,6 +169,7 @@ export class VonageAdapter implements TelephonyAdapter {
 
       return this.ncco([
         greetingAction,
+        ...noticeActions,
         captchaAction,
         digitsTalk,
         {
@@ -180,6 +185,7 @@ export class VonageAdapter implements TelephonyAdapter {
     const holdAction = sayOrStream('pleaseHold', lang, params.audioUrls)
     return this.ncco([
       greetingAction,
+      ...noticeActions,
       holdAction,
       {
         action: 'conversation',
@@ -213,15 +219,22 @@ export class VonageAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey resolved from DB in /call-recording — no URL params needed
+    // #1505: omit `record` (and its recording callback) entirely unless this hub
+    // opted in, so Vonage never writes the conversation audio to disk.
+    const recording = params.recordCall
+      ? {
+          record: true,
+          eventUrl: [`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}`],
+          eventMethod: 'POST',
+        }
+      : {}
     return this.ncco([
       {
         action: 'conversation',
         name: params.parentCallSid,
         startOnEnter: true,
         endOnExit: true,
-        record: true,
-        eventUrl: [`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}`],
-        eventMethod: 'POST',
+        ...recording,
       },
     ])
   }

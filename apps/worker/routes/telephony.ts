@@ -234,6 +234,12 @@ telephony.post('/language-selected',
     await services.settings.storeCaptcha({ callSid, expected: captchaDigits })
   }
 
+  // #1505: whether this hub records answered calls. Read here so the greeting can
+  // disclose it to the caller BEFORE they are connected — the same setting is read
+  // again at /user-answer to decide whether to actually record, so a caller can
+  // never be recorded on a call where they were not told.
+  const { recordCalls } = await services.settings.getCallSettings(hubId)
+
   const audioUrls = await audioUrlsFor(c)
   const response = await adapter.handleIncomingCall({
     callSid,
@@ -242,6 +248,7 @@ telephony.post('/language-selected',
     rateLimited,
     callerLanguage,
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
+    callRecordingEnabled: recordCalls === true,
     audioUrls,
     speechUrl: await speechUrlFor(c, adapter),
     captchaDigits,
@@ -390,7 +397,17 @@ telephony.post('/user-answer',
   const callRecord = activeCallsForAnswer.find(call => call.callId === parentCallSid)
 
   const origin = new URL(c.req.url).origin
-  const response = await adapter.handleCallAnswered({ parentCallSid, callbackUrl: origin, userPubkey: pubkey, hubId })
+  // #1505: provider-side recording is opt-in per hub and OFF by default. The
+  // caller was told in the greeting (/language-selected reads the same setting),
+  // so recording here without disclosure is not reachable.
+  const { recordCalls } = await services.settings.getCallSettings(hubId || undefined)
+  const response = await adapter.handleCallAnswered({
+    parentCallSid,
+    callbackUrl: origin,
+    userPubkey: pubkey,
+    hubId,
+    recordCall: recordCalls === true,
+  })
 
   // The audit log is the accountability record: it says a volunteer answered
   // only once the bridge instruction exists, never before it. Anything above
