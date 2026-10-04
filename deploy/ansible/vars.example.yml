@@ -111,8 +111,14 @@ webhook_base_url: ""
 admin_pubkey: ""
 # The admin's X25519 ENCRYPTION public key — a different value from
 # admin_pubkey (which is the Ed25519 SIGNING key). Both are printed by
-# `bun run bootstrap-admin`. Leaving this empty makes the app fall back to
-# admin_pubkey, which seals admin envelopes to a key that cannot open them.
+# `bun run bootstrap-admin`, derived from one seed.
+#
+# REQUIRED whenever admin_pubkey is set. The server refuses to boot without
+# it and will NOT substitute admin_pubkey: that is an Ed25519 signing key,
+# DHKEM(X25519) accepts any 32 bytes as a recipient, and every note sealed to
+# it becomes permanently unreadable with no error at write or read time
+# (#1283). Empty is valid only when admin_pubkey is also empty — the
+# bootstrap-via-desktop path, where no admin key is configured at all.
 admin_decryption_pubkey: ""
 
 # HMAC secret for hashing phone numbers and IPs
