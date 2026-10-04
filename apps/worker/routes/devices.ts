@@ -2,7 +2,8 @@
  * Device registration API routes.
  *
  * GET    /api/devices         — List current user's registered devices.
- * POST   /api/devices/register — Register/update device (push token + Phase 6 crypto keys).
+ * POST   /api/devices/register — Register/update device (push token + Phase 6 crypto keys;
+ *                                desktop: X25519 key only, no push token — #1548 groundwork).
  * DELETE /api/devices/:id     — Deregister a specific device (triggers PUK rotation).
  * DELETE /api/devices         — Remove all devices for current user (logout).
  */
@@ -119,14 +120,15 @@ devicesRoutes.post('/register',
 
     // Only URL-format tokens (UnifiedPush endpoints) are fetched by the server —
     // opaque tokens (APNs, FCM) are not URLs and never leave the vendor APIs.
-    if (body.pushToken.includes('://')) {
+    // Desktop registrations (#1548) carry no push token at all.
+    if (body.pushToken && body.pushToken.includes('://')) {
       const rejection = pushEndpointRejection(c.env, body.pushToken)
       if (rejection) return c.json(rejection, 400)
     }
 
     await services.identity.registerDevice(pubkey, {
       platform: body.platform,
-      pushToken: body.pushToken,
+      pushToken: body.pushToken ?? null,
       wakeKeyPublic: body.wakeKeyPublic,
       ed25519Pubkey: body.ed25519Pubkey,
       x25519Pubkey: body.x25519Pubkey,

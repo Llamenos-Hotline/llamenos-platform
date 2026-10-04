@@ -143,6 +143,50 @@ describe('devices routes', () => {
         x25519Pubkey: 'x-pk',
       })
     })
+
+    it('registers a desktop device without a push token (#1548)', async () => {
+      const { app, services } = createApp()
+
+      const res = await app.request('/devices/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: 'desktop',
+          x25519Pubkey: 'x-pk',
+          ed25519Pubkey: 'ed-pk',
+          deviceName: 'Workstation',
+        }),
+      })
+
+      expect(res.status).toBe(204)
+      expect(services.identity.registerDevice).toHaveBeenCalledWith('user-pk-1', {
+        platform: 'desktop',
+        pushToken: null,
+        wakeKeyPublic: undefined,
+        ed25519Pubkey: 'ed-pk',
+        x25519Pubkey: 'x-pk',
+        deviceName: 'Workstation',
+        deviceModel: undefined,
+        osVersion: undefined,
+        appVersion: undefined,
+      })
+    })
+
+    it('skips the push-endpoint origin check when no push token is present', async () => {
+      const { app, services } = createApp()
+
+      const res = await app.request('/devices/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: 'desktop',
+          x25519Pubkey: 'x-pk',
+        }),
+      }, {})
+
+      expect(res.status).toBe(204)
+      expect(services.identity.registerDevice).toHaveBeenCalled()
+    })
   })
 
   describe('POST /devices/register — UnifiedPush endpoint origin (#960)', () => {

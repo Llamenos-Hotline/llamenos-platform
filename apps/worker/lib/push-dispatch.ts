@@ -172,6 +172,11 @@ class ServicePushDispatcher implements PushDispatcher {
     const staleTokens: string[] = []
 
     for (const device of deviceList) {
+      // Desktop devices (#1548 groundwork) register without a push token — they
+      // are envelope targets, not push targets. Skipping them here also avoids
+      // HPKE-sealing against an empty wake key.
+      if (!device.pushToken) continue
+
       const encryptedWake = encryptWakePayload(wakePayload, device.wakeKeyPublic)
       const encryptedFull = encryptFullPayload(fullPayload, userPubkey)
 

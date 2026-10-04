@@ -80,6 +80,49 @@ describe('decideDeviceRegistration', () => {
       expect(decision.evictDeviceId).toBeUndefined()
     }
   })
+
+  // #1548 groundwork: desktop registrations have no push token.
+  describe('desktop registrations (null pushToken)', () => {
+    it('matching X25519 key → update_existing', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, x25519Pubkey: 'x-key-1' },
+        makeDevice('d2', new Date()),
+      ]
+      const decision = decideDeviceRegistration(devices, null, 5, 'x-key-1')
+      expect(decision).toEqual({ action: 'update_existing', deviceId: 'd1' })
+    })
+
+    it('null pushToken never matches another tokenless device → insert', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, x25519Pubkey: 'x-key-1' },
+      ]
+      const decision = decideDeviceRegistration(devices, null, 5, 'x-key-2')
+      expect(decision.action).toBe('insert')
+      if (decision.action === 'insert') {
+        expect(decision.evictDeviceId).toBeUndefined()
+      }
+    })
+
+    it('no matchKey and null pushToken → insert, evicting LRU at capacity', () => {
+      const devices = Array.from({ length: 5 }, (_, i) =>
+        makeDevice(`d${i}`, new Date(`2026-0${i + 1}-01T00:00:00Z`)),
+      )
+      const decision = decideDeviceRegistration(devices, null)
+      expect(decision.action).toBe('insert')
+      if (decision.action === 'insert') {
+        expect(decision.evictDeviceId).toBe('d0')
+      }
+    })
+
+    it('X25519 match takes precedence over push-token match', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, x25519Pubkey: 'x-key-1' },
+        makeDevice('d2', new Date(), 'fresh-token'),
+      ]
+      const decision = decideDeviceRegistration(devices, 'fresh-token', 5, 'x-key-1')
+      expect(decision).toEqual({ action: 'update_existing', deviceId: 'd1' })
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

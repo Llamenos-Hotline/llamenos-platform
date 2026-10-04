@@ -50,7 +50,7 @@ import {
   RENEWAL_THRESHOLD_MS,
   decideSessionRenewal,
 } from '../lib/session-renewal'
-import { decideDeviceRegistration } from '../lib/device-eviction'
+import { decideDeviceRegistration, MAX_DEVICES_PER_VOLUNTEER } from '../lib/device-eviction'
 const INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 const CHALLENGE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 const PROVISION_ROOM_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -1135,9 +1135,15 @@ export class IdentityService {
    * Register (upsert) a device. Enforces max 5 devices per volunteer.
    */
   async registerDevice(pubkey: string, data: {
-    platform: 'ios' | 'android'
-    pushToken: string
-    wakeKeyPublic: string
+    platform: 'ios' | 'android' | 'desktop'
+    /**
+     * Push token. Null for desktop registrations (#1548) — desktop devices
+     * receive per-device envelopes, not pushes. Mobile registrations must
+     * always provide one (enforced by the route schema).
+     */
+    pushToken: string | null
+    /** Wake-tier HPKE key. Only meaningful for push-capable (mobile) devices. */
+    wakeKeyPublic?: string
     /** Phase 6: Ed25519 signing public key (hex, optional for legacy clients) */
     ed25519Pubkey?: string
     /** Phase 6: X25519 key-agreement public key (hex, optional for legacy clients) */
@@ -1162,11 +1168,23 @@ export class IdentityService {
 
       const now = new Date()
       const allDevices = await tx
-        .select({ id: devices.id, lastSeenAt: devices.lastSeenAt, pushToken: devices.pushToken })
+        .select({
+          id: devices.id,
+          lastSeenAt: devices.lastSeenAt,
+          pushToken: devices.pushToken,
+          x25519Pubkey: devices.x25519Pubkey,
+        })
         .from(devices)
         .where(eq(devices.pubkey, pubkey))
 
-      const decision = decideDeviceRegistration(allDevices, data.pushToken)
+      // Desktop registrations carry no push token; they are matched (and
+      // re-registered) by their X25519 identity key instead (#1548).
+      const decision = decideDeviceRegistration(
+        allDevices,
+        data.pushToken,
+        MAX_DEVICES_PER_VOLUNTEER,
+        data.platform === 'desktop' ? (data.x25519Pubkey ?? null) : null,
+      )
 
       if (decision.action === 'update_existing') {
         await tx
