@@ -5,7 +5,7 @@
  * across all API endpoints. Creates one user per default role and
  * verifies expected HTTP status codes for each endpoint.
  */
-import { Given, When, Before, getState, setState } from './fixtures'
+import { Given, When, Then, Before, getState, setState } from './fixtures'
 // Status assertions (Then) are in assertions.steps.ts
 import { getSharedState, setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
@@ -39,6 +39,9 @@ interface PermMatrixState {
   testVolunteerPubkey?: string
   deletableVolunteerPubkey?: string
   testShiftId?: string
+  /** Shift rostering the volunteer plus one other user — see the schedule scenario. */
+  sharedRosterShiftId?: string
+  sharedRosterOtherPubkey?: string
   deletableShiftId?: string
   testBanPhone?: string
   testInviteCode?: string
@@ -111,6 +114,48 @@ Given('a test shift exists', async ({ request, world }) => {
     const hubId = getScenarioState(world).hubId
     const shift = await createShiftViaApi(request, { name: `PM Shift ${Date.now()}`, hubId })
     getPermMatrixState(world).testShiftId = shift.id
+  }
+})
+
+// A volunteer may see the schedule without seeing who else is on it: the
+// roster the server returns to a `shifts:read-own` caller must contain the
+// caller and nobody else. Rostering two people is the whole point — a shift
+// with only the volunteer on it would make the assertion vacuous.
+Given('a test shift rosters the volunteer alongside another user', async ({ request, world }) => {
+  const pm = getPermMatrixState(world)
+  const volunteer = pm.roleUsers['volunteer']
+  const other = pm.roleUsers['reporter']
+  if (!volunteer || !other) throw new Error('role users were not created')
+  const hubId = getScenarioState(world).hubId
+  const shift = await createShiftViaApi(request, {
+    name: `PM Roster ${Date.now()}`,
+    hubId,
+    userPubkeys: [other.pubkey, volunteer.pubkey],
+  })
+  pm.sharedRosterShiftId = shift.id
+  pm.sharedRosterOtherPubkey = other.pubkey
+})
+
+When('the {string} user lists the hub schedule', async ({ request, world }, role: string) => {
+  const user = getPermMatrixState(world).roleUsers[role]
+  if (!user) throw new Error(`No test user for role "${role}"`)
+  const hubId = getScenarioState(world).hubId
+  getSharedState(world).lastResponse = await apiGet(request, `/hubs/${hubId}/shifts`, user.deviceKey)
+})
+
+Then('the schedule shows that shift with only the volunteer on its roster', async ({ world }) => {
+  const pm = getPermMatrixState(world)
+  const volunteer = pm.roleUsers['volunteer']
+  if (!volunteer) throw new Error('role users were not created')
+  const body = getSharedState(world).lastResponse?.data as
+    { shifts?: Array<{ id: string; userPubkeys: string[] }> } | undefined
+  const shifts = body?.shifts ?? []
+  const row = shifts.find(s => s.id === pm.sharedRosterShiftId)
+  if (!row) {
+    throw new Error(`the volunteer could not see shift ${pm.sharedRosterShiftId} in ${JSON.stringify(shifts.map(s => s.id))}`)
+  }
+  if (row.userPubkeys.length !== 1 || row.userPubkeys[0] !== volunteer.pubkey) {
+    throw new Error(`roster leaked: expected only the caller, got ${JSON.stringify(row.userPubkeys)}`)
   }
 })
 

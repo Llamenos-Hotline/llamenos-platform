@@ -196,8 +196,12 @@ describe('shifts routes', () => {
 
       const res = await app.request('/shifts')
       expect(res.status).toBe(200)
-      const json = await res.json()
+      const json = await res.json() as { shifts: Array<{ userPubkeys: string[] }> }
       expect(json.shifts).toHaveLength(1)
+      // The other half of the #1342 decision: `shifts:read` is "view all
+      // shifts, including who is on each roster", so the roster must come
+      // back whole — the narrowing below must not leak into this path.
+      expect(json.shifts[0].userPubkeys).toEqual(['b'.repeat(64)])
       expect(listSpy).toHaveBeenCalledWith('hub-1')
     })
 
