@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -128,6 +128,31 @@ function withoutTheFix(script: string): string {
 // passes claude a verb.
 const FAKE_CLAUDE = `#!/usr/bin/env bash
 cat >/dev/null
+
+# --- #1460/#1511 instrumentation -------------------------------------------
+# The real engine derives its MCP servers, its startup hooks and its
+# user-level CLAUDE.md from $HOME. This stand-in reproduces exactly those
+# three loads, so the HOME-isolation rail at the bottom of this file can
+# observe them from outside the process: the hook writes a file, the MCP
+# server contributes a tool name, and the CLAUDE.md is reported as loaded.
+# Every mode below still behaves as it always did — the existing tests do
+# not see this, because the HOME they run under has none of it planted.
+cfg="\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+printf '%s\\n' "$HOME" > "\${SMOKE_HOME_PROBE:-/dev/null}"
+if [ -f "$cfg/settings.json" ]; then
+  hook="$(sed -n 's/.*"SESSIONSTART_COMMAND":[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$cfg/settings.json")"
+  if [ -n "$hook" ]; then sh -c "$hook" >/dev/null 2>&1 || true; fi
+fi
+if [ -f "$cfg/mcp.json" ]; then
+  case " $* " in
+    *" --strict-mcp-config "*) : ;;
+    *) sed -n 's/.*"MCP_TOOL_NAME":[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$cfg/mcp.json" \\
+         >> "\${SMOKE_MCP_PROBE:-/dev/null}" ;;
+  esac
+fi
+if [ -f "$cfg/CLAUDE.md" ]; then printf 'loaded\\n' >> "\${SMOKE_MEMORY_PROBE:-/dev/null}"; fi
+if [ -f "$cfg/.credentials.json" ]; then printf 'present\\n' > "\${SMOKE_AUTH_PROBE:-/dev/null}"; fi
+# ---------------------------------------------------------------------------
 case "\${MOCK_CLAUDE_RUN_MODE:-fail}" in
   fail)
     echo "simulated: Unexpected server error from provider" >&2
@@ -168,14 +193,21 @@ esac
 let scratch: string
 let binDir: string
 let runnerTemp: string
+let stepHome: string
 let originalPath: string | undefined
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), 'llamenos-fleet-review-smoke-'))
   binDir = join(scratch, 'bin')
   runnerTemp = join(scratch, 'runner-temp')
+  stepHome = join(scratch, 'home')
   mkdirSync(binDir)
   mkdirSync(runnerTemp)
+  // A scratch HOME for every run of the step, never the operator's: the step
+  // now creates its reviewer HOME under `$HOME` (#1460), and a suite that
+  // littered the real one — or let the real one's hooks fire — would be
+  // both rude and, per #1511, actively misleading.
+  mkdirSync(join(stepHome, '.claude'), { recursive: true })
   writeFileSync(join(binDir, 'claude'), FAKE_CLAUDE)
   chmodSync(join(binDir, 'claude'), 0o755)
   originalPath = process.env['PATH']
@@ -190,7 +222,11 @@ afterEach(() => {
 /** Runs a script body the way GitHub runs an unshelled `run:` step:
  *  `bash -e <file>`. Captures stdout+stderr combined, the way a job log
  *  reads it. */
-function runStep(script: string, runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass'): { status: number | null; output: string } {
+function runStep(
+  script: string,
+  runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass',
+  extraEnv: Record<string, string> = {},
+): { status: number | null; output: string } {
   const scriptPath = join(scratch, 'step.sh')
   writeFileSync(scriptPath, script)
   const result = spawnSync('bash', ['-e', scriptPath], {
@@ -199,9 +235,11 @@ function runStep(script: string, runMode: 'fail' | 'bad-verdict' | 'bad-model' |
       ...process.env,
       ...jobEnv(),
       PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}`,
+      HOME: stepHome,
       RUNNER_TEMP: runnerTemp,
       FLEET_REVIEW_MODEL: 'test-model',
       MOCK_CLAUDE_RUN_MODE: runMode,
+      ...extraEnv,
     },
   })
   return { status: result.status, output: `${result.stdout}\n${result.stderr}` }
@@ -367,5 +405,170 @@ describe('rail: the smoke step and the real review must resolve the SAME engine/
     // But it is no longer testing what the real review will actually run.
     expect(output).not.toContain(`engine=${direct.binary} model=${direct.model}`)
     expect(direct.model).toBe('test-model')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #1460 / #1511: the smoke step must run the engine under a GATE-OWNED HOME,
+// not the runner's.
+//
+// `--tools` (#1458) restricts BUILT-IN tools only, so the runner's own
+// `$HOME/.claude` still reached into every session: its MCP servers as extra
+// callable tools, its `settings.json` hooks EXECUTING at session start, and
+// its user-level `CLAUDE.md` prepended as trusted instructions. The last of
+// those blocked merges — the reviewer saw the operator's workflow
+// instructions conflicting with this step's fixed-string prompt and declined
+// it as a prompt-injection attempt, 3/3 runs on #1510, reported as
+// `NO-VERDICT:engine-unavailable`.
+//
+// Verified by BREAKING it, as #1460 demands: the sentinels below are planted
+// in the HOME the step runs under, and the mutation at the end strips the
+// `env HOME=` prefix and shows the same fake engine firing them. Reading the
+// config would prove nothing; the whole defect is that the config looks fine.
+// ---------------------------------------------------------------------------
+
+const HOOK_SENTINEL_NAME = 'smoke-sessionstart-hook-ran'
+const SMOKE_MCP_TOOL = 'mcp__marker__write_anything'
+
+/** Plants, in the HOME the step itself runs under, everything the engine
+ *  would discover there: a hook that writes a sentinel, an MCP server that
+ *  contributes a tool, and a user-level CLAUDE.md. Returns the probe paths
+ *  the fake engine reports through. */
+function plantPoison(): { hook: string; mcp: string; memory: string; homeProbe: string; auth: string } {
+  const cfg = join(stepHome, '.claude')
+  const hook = join(scratch, HOOK_SENTINEL_NAME)
+  mkdirSync(cfg, { recursive: true })
+  writeFileSync(join(cfg, 'CLAUDE.md'), '# Operator instructions\n\nAlways invoke a planning skill first.\n')
+  writeFileSync(join(cfg, 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${hook}` }] }] },
+    SESSIONSTART_COMMAND: `touch ${hook}`,
+  }), 'utf8')
+  writeFileSync(join(cfg, 'mcp.json'), JSON.stringify({
+    mcpServers: { marker: { command: 'marker-server' } },
+    MCP_TOOL_NAME: SMOKE_MCP_TOOL,
+  }), 'utf8')
+  // The one file the gate-owned HOME is allowed to inherit — the login state
+  // the engine authenticates from, and the reason a clean HOME is not free.
+  writeFileSync(join(cfg, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-not-a-real-token' } }), 'utf8')
+  return {
+    hook,
+    mcp: join(scratch, 'mcp-probe'),
+    memory: join(scratch, 'memory-probe'),
+    homeProbe: join(scratch, 'home-probe'),
+    auth: join(scratch, 'auth-probe'),
+  }
+}
+
+function probeEnv(p: ReturnType<typeof plantPoison>): Record<string, string> {
+  return {
+    SMOKE_MCP_PROBE: p.mcp,
+    SMOKE_MEMORY_PROBE: p.memory,
+    SMOKE_HOME_PROBE: p.homeProbe,
+    SMOKE_AUTH_PROBE: p.auth,
+  }
+}
+
+/** The pre-fix shape for the MCP half: strips `--strict-mcp-config` from the
+ *  engine invocation. Separate from the HOME mutation on purpose — the two
+ *  halves of #1460 defend against different loads, and a mutation that
+ *  conflated them would let one cover for the other's absence. */
+function withoutStrictMcpConfig(script: string): string {
+  const mutated = script.replace('--permission-mode plan --strict-mcp-config --tools', '--permission-mode plan --tools')
+  expect(mutated, 'the engine invocation does not pass --strict-mcp-config — this mutation is vacuous').not.toBe(script)
+  return mutated
+}
+
+/** The pre-fix shape: strips the `env HOME="$rev_home"` prefix from the
+ *  engine invocation, so the engine inherits the runner's HOME exactly as it
+ *  did before #1460. Asserts the prefix was present, so it can never pass
+ *  vacuously. */
+function withoutTheGateOwnedHome(script: string): string {
+  const mutated = script.replace('| env HOME="$rev_home" "$rev_binary"', '| "$rev_binary"')
+  expect(mutated, 'the engine invocation does not carry `env HOME="$rev_home"` — this mutation is vacuous').not.toBe(script)
+  return mutated
+}
+
+describe('rail: the smoke step runs the engine under a gate-owned HOME (#1460, #1511)', () => {
+  it('does not execute the runner HOME\'s SessionStart hook', () => {
+    const p = plantPoison()
+    const { status } = runStep(smokeStepScript(), 'pass', probeEnv(p))
+    expect(status).toBe(0)
+    expect(existsSync(p.hook), 'the runner HOME\'s SessionStart hook executed inside the smoke session').toBe(false)
+  })
+
+  it('does not hand the engine the runner HOME\'s MCP server', () => {
+    const p = plantPoison()
+    runStep(smokeStepScript(), 'pass', probeEnv(p))
+    expect(existsSync(p.mcp), `an MCP tool (${SMOKE_MCP_TOOL}) reached the reviewer`).toBe(false)
+  })
+
+  it('does not load the runner HOME\'s user-level CLAUDE.md — the instruction conflict #1511 traced the refusal to', () => {
+    const p = plantPoison()
+    runStep(smokeStepScript(), 'pass', probeEnv(p))
+    expect(existsSync(p.memory), 'the runner\'s user-level CLAUDE.md was prepended to the smoke session').toBe(false)
+  })
+
+  it('provisions the one credential file, so the engine can still authenticate', () => {
+    // The whole risk of a clean HOME is taking the engine's credentials with
+    // it. `claude` on this runner authenticates from login state on disk, not
+    // an env var, so exactly one file has to travel — and nothing else may.
+    // The engine reports what it found, from inside the gate-owned HOME, so
+    // this holds even though the step deletes that HOME on the way out.
+    const p = plantPoison()
+    const { status } = runStep(smokeStepScript(), 'pass', probeEnv(p))
+    expect(status).toBe(0)
+    const seen = readFileSync(p.homeProbe, 'utf8').trim()
+    expect(seen, 'the engine inherited the runner\'s HOME').not.toBe(stepHome)
+    expect(seen).toContain(jobEnv()['FLEET_REVIEWER_HOME_PREFIX'] ?? 'MISSING-PREFIX')
+    expect(readFileSync(p.auth, 'utf8'), 'the engine found no login state in the gate-owned HOME').toContain('present')
+  })
+
+  it('removes the gate-owned HOME when the step exits', () => {
+    const p = plantPoison()
+    runStep(smokeStepScript(), 'pass', probeEnv(p))
+    const seen = readFileSync(p.homeProbe, 'utf8').trim()
+    expect(existsSync(seen), 'the gate-owned HOME outlived the step that created it').toBe(false)
+  })
+
+  // MUTATION (per "audit gates by breaking them"): every assertion above is a
+  // NEGATIVE, and a negative proves nothing until the mechanism is shown to
+  // fire. Same step, same fake engine, same planted HOME — only the
+  // `env HOME="$rev_home"` prefix removed.
+  it('MUTATION: without the gate-owned HOME, the SessionStart hook runs and the CLAUDE.md loads', () => {
+    const p = plantPoison()
+    const { status } = runStep(withoutTheGateOwnedHome(smokeStepScript()), 'pass', probeEnv(p))
+    // The mutated step still PASSES — that is the whole danger. Nothing about
+    // running it looks wrong.
+    expect(status).toBe(0)
+    expect(existsSync(p.hook), 'the hook sentinel is dead — the tests above prove nothing').toBe(true)
+    expect(readFileSync(p.memory, 'utf8'), 'the CLAUDE.md sentinel is dead — the tests above prove nothing').toContain('loaded')
+  })
+
+  // The MCP half is NOT covered by the HOME mutation above, and deliberately
+  // so: with the gate-owned HOME removed the engine does see the runner's
+  // `mcp.json`, yet `--strict-mcp-config` still refuses to load it. Each half
+  // of the fix therefore gets its own mutation, so neither can silently cover
+  // for the other being dropped.
+  it('MUTATION: without --strict-mcp-config, the runner HOME\'s MCP server becomes a callable tool', () => {
+    const p = plantPoison()
+    const script = withoutStrictMcpConfig(withoutTheGateOwnedHome(smokeStepScript()))
+    const { status } = runStep(script, 'pass', probeEnv(p))
+    expect(status).toBe(0)
+    expect(readFileSync(p.mcp, 'utf8'), 'the MCP sentinel is dead — the tool-set rails prove nothing')
+      .toContain(SMOKE_MCP_TOOL)
+  })
+})
+
+describe('rail: the smoke step names what the engine actually said (partial #1508)', () => {
+  it('an unreadable verdict is reported as "answered but unparseable", with an excerpt — not as "could not be run"', () => {
+    // `bad-verdict` makes the fake engine answer with prose plus
+    // `VERDICT: MAYBE`. Before this, the headline was a bare
+    // `engine-unavailable` whose own detail string is "the review engine
+    // could not be run" — which sent #1511's reporter to look at runner
+    // health three times for a reviewer that had answered perfectly well.
+    const { status, output } = runStep(smokeStepScript(), 'bad-verdict')
+    expect(status).toBe(1)
+    expect(output).toContain('the engine ANSWERED and parseVerdict could not read a verdict from it')
+    expect(output, 'the excerpt of the engine\'s own words is missing').toContain('I looked at the diff.')
   })
 })
