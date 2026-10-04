@@ -1429,7 +1429,10 @@ mod tests {
             let id = mobile_label_to_id(label.into()).unwrap();
             assert_eq!(crate::labels::id_to_label(id), Some(label));
         }
-        assert!(mobile_label_to_id("llamenos:not-a-real-label".into()).is_err());
+        // Derived from a registered label so the raw spelling lives only in
+        // labels.rs; an unregistered label must not silently map to an ID.
+        let unknown = format!("{}-not-a-real-label", crate::labels::LABEL_MESSAGE);
+        assert_eq!(mobile_label_to_id(unknown.into()).is_err(), true);
     }
 
     #[test]

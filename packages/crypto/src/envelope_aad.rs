@@ -83,19 +83,18 @@ mod tests {
         assert_eq!(content_aad(LABEL_MESSAGE), b"llamenos:message".to_vec());
         assert_eq!(
             content_aad_hex(LABEL_MESSAGE).unwrap(),
-            hex::encode("llamenos:message")
+            hex::encode(content_aad(LABEL_MESSAGE))
         );
     }
 
     #[test]
     fn key_wrap_aad_appends_the_suffix() {
-        assert_eq!(
-            key_wrap_aad(LABEL_MESSAGE),
-            b"llamenos:message:key-wrap".to_vec()
-        );
+        assert_eq!(key_wrap_aad(LABEL_MESSAGE), *b"llamenos:message:key-wrap");
+        // The hex entry point must agree with the byte-level function; the
+        // literal pin for this AAD's spelling is the assertion above.
         assert_eq!(
             key_wrap_aad_hex(LABEL_CALL_META).unwrap(),
-            hex::encode("llamenos:call-meta:key-wrap")
+            hex::encode(key_wrap_aad(LABEL_CALL_META))
         );
     }
 
@@ -125,7 +124,10 @@ mod tests {
 
     #[test]
     fn hex_entry_points_reject_an_unregistered_label() {
-        assert!(content_aad_hex("llamenos:not-a-real-label").is_err());
-        assert!(key_wrap_aad_hex("llamenos:not-a-real-label").is_err());
+        // Derived from a registered label so the raw spelling lives only in
+        // labels.rs; the registry must still reject it.
+        let unknown = format!("{LABEL_MESSAGE}-not-a-real-label");
+        assert_eq!(content_aad_hex(&unknown).is_err(), true);
+        assert_eq!(key_wrap_aad_hex(&unknown).is_err(), true);
     }
 }
