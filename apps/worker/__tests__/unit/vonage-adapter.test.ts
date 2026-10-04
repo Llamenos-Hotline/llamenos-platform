@@ -370,6 +370,13 @@ describe('VonageAdapter', () => {
     })
   })
 
+  describe('hangupCall failures', () => {
+    it('rejects when Vonage refuses the hang-up', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('{}', { status: 500 }))
+      await expect(adapter.hangupCall('call-uuid-123')).rejects.toThrow(/hangup failed: 500/)
+    })
+  })
+
   describe('hangupCall', () => {
     it('sends PUT request with hangup action', async () => {
       const mockFetch = vi.mocked(globalThis.fetch)

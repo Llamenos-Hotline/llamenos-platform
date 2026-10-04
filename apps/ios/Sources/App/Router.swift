@@ -44,8 +44,6 @@ enum Route: Hashable {
     case settings
     /// Admin management screens.
     case admin
-    /// Device linking flow (QR scan + ECDH).
-    case deviceLink
 }
 
 // MARK: - Router
@@ -104,11 +102,6 @@ final class Router {
     /// Navigate to PIN set (creates device keys atomically with PIN encryption).
     func showPINSet() {
         navigate(to: .pinSet)
-    }
-
-    /// Navigate to device linking flow.
-    func showDeviceLink() {
-        navigate(to: .deviceLink)
     }
 
     /// Navigate to dashboard after successful unlock or onboarding.

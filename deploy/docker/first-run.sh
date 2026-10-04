@@ -59,6 +59,9 @@ else
   echo ""
   echo "IMPORTANT: You still need to set these manually:"
   echo "  - ADMIN_PUBKEY  (run 'bun run bootstrap-admin' to generate)"
+  echo "  - ADMIN_DECRYPTION_PUBKEY (the SECOND key that same command prints —"
+  echo "                   the admin's X25519 HPKE recipient. Required whenever"
+  echo "                   ADMIN_PUBKEY is set, and a different value from it.)"
   echo "  - DOMAIN        (your domain name, default: localhost)"
   echo "  - ACME_EMAIL    (for Let's Encrypt TLS certificates)"
   echo ""
@@ -73,6 +76,21 @@ if [ -z "${ADMIN_PUBKEY:-}" ]; then
   echo "You will need to set it before the app is fully functional."
   echo "Generate one with: bun run bootstrap-admin"
   echo ""
+elif [ -z "${ADMIN_DECRYPTION_PUBKEY:-}" ]; then
+  # Not a warning: the app refuses to boot in this state, on purpose. Sealing
+  # admin envelopes to ADMIN_PUBKEY (an Ed25519 signing key) succeeds and makes
+  # every note permanently undecryptable, so a server that cannot name a real
+  # X25519 recipient must not start (#1283).
+  echo "ERROR: ADMIN_PUBKEY is set but ADMIN_DECRYPTION_PUBKEY is not."
+  echo ""
+  echo "These are two different keys. ADMIN_PUBKEY is Ed25519 (it verifies the"
+  echo "admin's signatures); ADMIN_DECRYPTION_PUBKEY is X25519 (it is the HPKE"
+  echo "recipient every note, message and hub key is encrypted to). The app will"
+  echo "refuse to start without it rather than encrypt notes to a key that cannot"
+  echo "decrypt them."
+  echo ""
+  echo "Run 'bun run bootstrap-admin' and copy BOTH printed public keys into .env."
+  exit 1
 fi
 
 # Start stack
@@ -103,7 +121,7 @@ echo ""
 echo "Health check: curl http://localhost:3000/api/health/ready"
 echo ""
 echo "Next steps:"
-echo "  1. Set ADMIN_PUBKEY in .env (if not already done)"
+echo "  1. Set ADMIN_PUBKEY and ADMIN_DECRYPTION_PUBKEY in .env (if not already done)"
 echo "  2. Restart with: docker compose restart app"
 echo "  3. Open https://${DOMAIN:-localhost} in your browser"
 echo "  4. Download the desktop app and log in with your admin key"

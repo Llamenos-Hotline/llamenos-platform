@@ -343,6 +343,17 @@ export class TestDB {
     )
   }
 
+  /**
+   * Delete the instance-wide telephony provider config (the `provider_configs` row with
+   * no hub). There is no API that removes one, so the @global-setting scenarios that
+   * create it reset it here: every hub without its own provider falls back to this
+   * config, so a leaked one would change which provider every other call scenario
+   * reaches.
+   */
+  static async deleteGlobalProviderConfigs(): Promise<void> {
+    await (await sql()).unsafe('DELETE FROM provider_configs WHERE hub_id IS NULL')
+  }
+
   /** Close the database connection pool. */
   static async close(): Promise<void> {
     // Deliberately does NOT go through sql(): closing a connection that was

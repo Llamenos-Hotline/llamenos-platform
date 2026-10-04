@@ -24,8 +24,8 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { expect, test, type APIRequestContext } from '@playwright/test'
-import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { bytesToHex, hexToBytes } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import {
   ADMIN_SEED,
   addHubMemberViaApi,
@@ -369,8 +369,8 @@ test('a registration trunk registers with the credentials the carrier issued, an
 function adminAuthorization(method: string, path: string): string {
   const pubkey = seedHexToPubkey(ADMIN_SEED)
   const timestamp = Date.now()
-  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}:${nonce}`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, method, path, nonce)
   const token = bytesToHex(ed25519.sign(message, hexToBytes(ADMIN_SEED)))
   return `Bearer ${JSON.stringify({ pubkey, timestamp, token, nonce })}`
 }

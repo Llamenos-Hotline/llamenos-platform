@@ -167,26 +167,6 @@ final class AdminFlowUITests: BaseUITest {
         XCTAssertTrue(found, "Create invite button should exist")
     }
 
-    // MARK: - Settings Device Link
-
-    func testDeviceLinkButtonExists() {
-        navigateToSettings()
-
-        // Device link is now in Account Settings sub-page
-        let accountLink = find("settings-account-link")
-        guard accountLink.waitForExistence(timeout: 5) else {
-            XCTFail("Account settings link should exist")
-            return
-        }
-        accountLink.tap()
-
-        let linkButton = scrollToFind("settings-link-device")
-        XCTAssertTrue(
-            linkButton.exists,
-            "Link device button should exist in account settings"
-        )
-    }
-
     func testSettingsRoleBadgeExists() {
         navigateToSettings()
 

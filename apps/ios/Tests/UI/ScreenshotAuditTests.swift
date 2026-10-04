@@ -495,23 +495,6 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     // ──────────────────────────────────────────────────────────────────────────────
-    // MARK: – 16 Device Linking
-    // ──────────────────────────────────────────────────────────────────────────────
-
-    func testScreenshot_16_DeviceLink() {
-        launchAsAdminWithAPI()
-        navigateToAccountSettings()
-        let linkBtn = scrollToVisible("settings-link-device", maxSwipes: 5)
-        XCTAssertTrue(linkBtn.exists && linkBtn.isHittable, "'settings-link-device' should be reachable by scrolling — refusing to screenshot the wrong screen")
-        linkBtn.tap()
-        _ = anyElementExists([
-            "device-link-view", "qr-scanner", "device-link-connecting", "device-link-error"
-        ], timeout: 8)
-        app.answerSystemPromptOnce(.camera)
-        screenshot("16-device-link")
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────────
     // MARK: – Screenshot Helper
     // ──────────────────────────────────────────────────────────────────────────────
 

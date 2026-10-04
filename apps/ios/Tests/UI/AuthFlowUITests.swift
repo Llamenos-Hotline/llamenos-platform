@@ -46,9 +46,9 @@ final class AuthFlowUITests: XCTestCase {
         let createButton = find("create-identity")
         XCTAssertTrue(createButton.waitForExistence(timeout: 3), "Create Identity button should exist")
 
-        // Link Device button (v3: device linking via QR/ECDH replaces device key import)
-        let linkButton = find("link-device")
-        XCTAssertTrue(linkButton.waitForExistence(timeout: 3), "Link Device button should exist")
+        // Device linking is not offered: the flow reported success without carrying the
+        // keys across, leaving a second device that reads nothing (#1300).
+        XCTAssertFalse(find("link-device").exists, "Login must not offer linking from another device")
     }
 
     // MARK: - Onboarding Flow
@@ -119,36 +119,21 @@ final class AuthFlowUITests: XCTestCase {
         XCTAssertTrue(find("pin-input").exists, "PIN entry should remain for retry")
     }
 
-    // MARK: - Import Flow
+    // MARK: - Device Linking (not offered, #1300)
 
-    func testDeviceLinkFlow() {
-        // V3: device key import replaced by device linking (QR + ephemeral ECDH).
-        // Tap "Link from Another Device" and verify the device link screen appears.
-        let hubInput = find("hub-url-input")
-        XCTAssertTrue(hubInput.waitForExistence(timeout: 20), "Hub URL input should exist")
+    func testDeviceLinkDeepLinkDoesNotLeaveLogin() {
+        // `llamenos://device-link` used to open the linking flow at any auth state.
+        let createButton = find("create-identity")
+        XCTAssertTrue(createButton.waitForExistence(timeout: 20), "Login screen should be showing")
 
-        let linkButton = find("link-device")
-        XCTAssertTrue(linkButton.waitForExistence(timeout: 5), "Link Device button should exist")
-        linkButton.tap()
+        app.open(URL(string: "llamenos://device-link")!)
 
-        // Device link view should appear
-        let deviceLinkView = find("device-link-view")
         XCTAssertTrue(
-            deviceLinkView.waitForExistence(timeout: 5),
-            "Device link view should appear after tapping Link from Another Device"
+            createButton.waitForExistence(timeout: 5),
+            "A device-link deep link must leave the login screen in place"
         )
-        app.answerSystemPromptOnce(.camera)
-
-        // Cancel should return to login
-        let cancelButton = find("cancel-device-link")
-        if cancelButton.waitForExistence(timeout: 3) {
-            cancelButton.tap()
-            let createButton = find("create-identity")
-            XCTAssertTrue(
-                createButton.waitForExistence(timeout: 5),
-                "Should return to login after cancel"
-            )
-        }
+        XCTAssertTrue(createButton.isHittable, "Nothing may be pushed over the login screen")
+        XCTAssertFalse(find("link-device").exists, "Login must not offer linking from another device")
     }
 
     // MARK: - Dashboard
