@@ -57,7 +57,7 @@ final class AssignmentViewModel {
         errorMessage = nil
         do {
             let body = ["pubkeys": [pubkey]]
-            let _: CaseRecord = try await apiService.request(
+            let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/records/\(recordId)/assign"),
                 body: body

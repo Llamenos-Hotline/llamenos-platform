@@ -6,7 +6,7 @@ import SwiftUI
 /// category, fields list, statuses, severities, and contact roles.
 /// No editing — that is desktop-only.
 struct SchemaDetailView: View {
-    let entityType: CaseEntityTypeDefinition
+    let entityType: EntityType
 
     var body: some View {
         List {
@@ -277,7 +277,7 @@ struct SchemaDetailView: View {
 
 /// A single field row showing name, type, required badge, and access level badge.
 private struct FieldRow: View {
-    let field: CaseFieldDefinition
+    let field: SharedEntityTypeDefinitionField
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -290,7 +290,7 @@ private struct FieldRow: View {
                 Spacer()
 
                 // Type chip
-                Text(field.type)
+                Text(field.type.rawValue)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.brandPrimary)
                     .padding(.horizontal, 8)
@@ -384,7 +384,7 @@ private struct AccessLevelBadge: View {
 #if DEBUG
 #Preview("Schema Detail") {
     NavigationStack {
-        SchemaDetailView(entityType: CaseEntityTypeDefinition(
+        SchemaDetailView(entityType: EntityType(
             id: "preview-1",
             hubId: nil,
             name: "incident",
@@ -397,13 +397,13 @@ private struct AccessLevelBadge: View {
             templateId: nil,
             templateVersion: nil,
             fields: [
-                CaseFieldDefinition(
+                SharedEntityTypeDefinitionField(
                     id: "f1", name: "title", label: "Title", type: "text",
                     required: true, options: nil, lookupId: nil, validation: nil,
                     section: nil, helpText: "Brief incident title", placeholder: nil,
                     defaultValue: nil, order: 0, indexable: true, indexType: nil,
-                    accessLevel: "all", accessRoles: nil, visibleToVolunteers: true,
-                    editableByVolunteers: true, templateId: nil, hubEditable: nil
+                    accessLevel: "all", accessRoles: nil, visibleToUsers: true,
+                    editableByUsers: true, templateId: nil, hubEditable: nil
                 ),
             ],
             statuses: [
@@ -436,8 +436,8 @@ private struct AccessLevelBadge: View {
             editRoles: nil,
             isArchived: false,
             isSystem: false,
-            createdAt: nil,
-            updatedAt: nil
+            createdAt: "",
+            updatedAt: ""
         ))
     }
 }

@@ -6,8 +6,8 @@ import SwiftUI
 /// Shows decrypted summary header, status pill, severity badge, assignment controls,
 /// and inline comment input for the timeline.
 struct CaseDetailView: View {
-    let record: CaseRecord
-    let entityType: CaseEntityTypeDefinition
+    let record: SharedRecordListResponseRecord
+    let entityType: EntityType
     let viewModel: CaseManagementViewModel
     let appState: AppState
 
@@ -258,7 +258,7 @@ struct CaseDetailView: View {
                     Image(systemName: tabIcon(tab))
                         .font(.system(size: 14))
                     // Show count badges for contacts and evidence
-                    if tab == .contacts, let count = record.contactCount, count > 0 {
+                    if tab == .contacts, record.contactCount > 0 {
                         Text("\(count)")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
@@ -266,7 +266,7 @@ struct CaseDetailView: View {
                             .background(Color.brandMuted)
                             .clipShape(Capsule())
                     }
-                    if tab == .evidence, let count = record.fileCount, count > 0 {
+                    if tab == .evidence, record.fileCount > 0 {
                         Text("\(count)")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
@@ -328,7 +328,7 @@ struct CaseDetailView: View {
                 }
 
                 // Render fields grouped by section
-                let sortedFields = entityType.fields.sorted { ($0.order ?? 0) < ($1.order ?? 0) }
+                let sortedFields = entityType.fields.sorted { $0.order < $1.order }
                 let sections = Dictionary(grouping: sortedFields) { $0.section ?? "" }
                 let sectionKeys = sections.keys.sorted()
 
@@ -393,13 +393,13 @@ struct CaseDetailView: View {
         .accessibilityIdentifier("case-details-tab")
     }
 
-    private func fieldRow(_ field: CaseFieldDefinition) -> some View {
+    private func fieldRow(_ field: SharedEntityTypeDefinitionField) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(field.label)
                     .font(.brand(.caption))
                     .foregroundStyle(.secondary)
-                if field.accessLevel != nil && field.accessLevel != "all" {
+                if field.accessLevel != .all {
                     Image(systemName: "lock")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
@@ -430,7 +430,7 @@ struct CaseDetailView: View {
     }
 
     @ViewBuilder
-    private func fieldValueView(value: String, field: CaseFieldDefinition) -> some View {
+    private func fieldValueView(value: String, field: SharedEntityTypeDefinitionField) -> some View {
         switch field.fieldType {
         case .checkbox:
             HStack(spacing: 4) {
@@ -786,7 +786,7 @@ struct CaseDetailView: View {
 
 private struct TimelineItemRow: View {
     let interaction: Interaction
-    let entityType: CaseEntityTypeDefinition
+    let entityType: EntityType
     let cryptoService: CryptoService
 
     @State private var decryptedContent: String?

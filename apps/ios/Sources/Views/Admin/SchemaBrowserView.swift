@@ -8,7 +8,7 @@ import SwiftUI
 struct SchemaBrowserView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var entityTypes: [CaseEntityTypeDefinition] = []
+    @State private var entityTypes: [EntityType] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
 
@@ -75,7 +75,7 @@ struct SchemaBrowserView: View {
         errorMessage = nil
 
         do {
-            let response: EntityTypesResponse = try await appState.apiService.request(
+            let response: EntityTypeListResponse = try await appState.apiService.request(
                 method: "GET", path: appState.apiService.hp("/api/settings/cms/entity-types")
             )
             entityTypes = response.entityTypes.filter { $0.isArchived != true }
@@ -91,7 +91,7 @@ struct SchemaBrowserView: View {
 
 /// A single row in the entity type list showing icon, name, and metadata badges.
 private struct EntityTypeRow: View {
-    let entityType: CaseEntityTypeDefinition
+    let entityType: EntityType
 
     var body: some View {
         HStack(spacing: 12) {
@@ -110,8 +110,8 @@ private struct EntityTypeRow: View {
                     .fontWeight(.medium)
                     .foregroundStyle(Color.brandForeground)
 
-                if let description = entityType.description, !description.isEmpty {
-                    Text(description)
+                if !entityType.description.isEmpty {
+                    Text(entityType.description)
                         .font(.brand(.caption))
                         .foregroundStyle(Color.brandMutedForeground)
                         .lineLimit(1)
