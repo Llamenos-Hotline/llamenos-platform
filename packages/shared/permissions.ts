@@ -340,7 +340,13 @@ export const DEFAULT_ROLES: Omit<Role, 'createdAt' | 'updatedAt'>[] = [
       'conversations:claim', 'conversations:send', 'conversations:read-assigned',
       'conversations:claim-sms', 'conversations:claim-whatsapp',
       'conversations:claim-signal', 'conversations:claim-rcs', 'conversations:claim-web',
-      'shifts:read-own', 'bans:report',
+      // Self-service availability: a volunteer sets their OWN shift availability
+      // and clocks in. `POST /shifts/clock-in` is requirePermission('shifts:set-availability')
+      // (apps/worker/routes/shifts.ts). Without it the client shows the control and the
+      // server 403s — #1342. #1406 made exactly this grant to every call-answering hub
+      // TEMPLATE role; this is the same decision for the global default role, which that
+      // PR did not touch.
+      'shifts:read-own', 'shifts:set-availability', 'bans:report',
       'reports:read-assigned', 'reports:read-types', 'reports:send-message',
       'settings:read',
       'files:upload', 'files:download-own',

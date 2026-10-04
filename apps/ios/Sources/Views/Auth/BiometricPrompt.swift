@@ -108,20 +108,14 @@ struct BiometricButton: View {
                 onAuthenticated()
             } label: {
                 Label {
-                    Text(String(
-                        format: NSLocalizedString("unlock_with_biometric", comment: "Unlock with %@"),
-                        biometricType.displayName
-                    ))
+                    Text(L10n.format("unlock_with_biometric", comment: "Unlock with %@", biometricType.displayName))
                 } icon: {
                     Image(systemName: biometricType.systemImageName)
                         .font(.title2)
                 }
             }
             .accessibilityIdentifier("biometric-unlock")
-            .accessibilityLabel(String(
-                format: NSLocalizedString("unlock_with_biometric", comment: "Unlock with %@"),
-                biometricType.displayName
-            ))
+            .accessibilityLabel(L10n.format("unlock_with_biometric", comment: "Unlock with %@", biometricType.displayName))
         }
     }
 }

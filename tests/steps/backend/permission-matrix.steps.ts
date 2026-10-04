@@ -119,9 +119,10 @@ Given('a test ban exists', async ({ request, world }) => {
   getPermMatrixState(world).testBanPhone = ban.phone
 })
 
-Given('a test invite exists', async ({ request, world }) => {
+Given('a test invite exists', async ({ request, world, workerHub }) => {
   // Create a fresh invite each time (will be revoked by the test)
   const { data } = await apiPost<{ code: string }>(request, '/invites', {
+    hubId: workerHub,
     name: `PM Invite ${Date.now()}`,
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -288,11 +289,12 @@ When('the {string} user sends {string} to the test note reply endpoint with repl
   }, user.deviceKey)
 })
 
-When('the {string} user sends {string} to {string} with valid invite body', async ({ request, world }, role: string, _method: string, _path: string) => {
+When('the {string} user sends {string} to {string} with valid invite body', async ({ request, world, workerHub }, role: string, _method: string, _path: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
   getSharedState(world).lastResponse = await apiPost(request, '/invites', {
+    hubId: workerHub,
     name: uniqueName('PM Invite'),
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],

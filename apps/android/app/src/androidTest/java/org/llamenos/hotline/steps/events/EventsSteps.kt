@@ -29,30 +29,26 @@ class EventsSteps : BaseSteps() {
 
     @Given("events exist in the system")
     fun eventsExistInTheSystem() {
-        // Seed event data via declarative test-seed endpoint
-        val client = ScenarioHooks.apiClient
+        // Seed event data via declarative test-seed endpoint. A seeding failure fails
+        // the step here, not three steps later as an unexplained empty list.
+        val client = checkNotNull(ScenarioHooks.apiClient) { "No test API client — cannot seed events" }
         val hubId = ScenarioHooks.currentHubId
-        if (client != null && hubId.isNotEmpty()) {
-            try {
-                val result = client.seed(
-                    TestApiClient.SeedSpec(
-                        hubId = hubId,
-                        adminSeed = ScenarioHooks.ADMIN_SEED,
-                        permissions = TestApiClient.SeedPermissions(
-                            grantVolunteerCms = true,
-                            enableCaseManagement = true,
-                        ),
-                        entityTypes = listOf(
-                            TestApiClient.SeedEntityType(template = "protest_event", records = 2),
-                        ),
-                    )
-                )
-                check(result.ok) { "test-seed failed for events: errors=${result.errors}" }
-                Log.i("EventsSteps", "Seeded ${result.entityTypes.size} entity types, ${result.records.size} records")
-            } catch (e: Throwable) {
-                Log.w("EventsSteps", "test-seed for events failed: ${e.message}")
-            }
-        }
+        check(hubId.isNotEmpty()) { "No scenario hub — cannot seed events" }
+        val result = client.seed(
+            TestApiClient.SeedSpec(
+                hubId = hubId,
+                adminSeed = ScenarioHooks.ADMIN_SEED,
+                permissions = TestApiClient.SeedPermissions(
+                    grantVolunteerCms = true,
+                    enableCaseManagement = true,
+                ),
+                entityTypes = listOf(
+                    TestApiClient.SeedEntityType(template = "protest_event", records = 2),
+                ),
+            )
+        )
+        check(result.ok) { "test-seed failed for events: errors=${result.errors}" }
+        Log.i("EventsSteps", "Seeded ${result.entityTypes.size} entity types, ${result.records.size} records")
         iNavigateToTheEventsScreen()
     }
 
@@ -86,7 +82,9 @@ class EventsSteps : BaseSteps() {
         val hasCards = composeRule.onAllNodes(hasTestTagPrefix("event-card-"))
             .fetchSemanticsNodes().isNotEmpty()
         check(hasCards) {
-            "No event cards found — events may not have been seeded by setupCms"
+            val shown = listOf("events-empty", "events-error", "events-cms-disabled")
+                .filter { composeRule.onAllNodesWithTag(it).fetchSemanticsNodes().isNotEmpty() }
+            "No event cards found; the events screen settled on $shown"
         }
 
         onAllNodes(hasTestTagPrefix("event-card-")).onFirst().performClick()

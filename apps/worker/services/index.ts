@@ -39,6 +39,7 @@ import { ShiftRequestsService } from './shift-requests'
 import { RecoveryGroupService } from './recovery-group'
 import { TeamsService } from './teams'
 import { TagsService } from './tags'
+import { IvrSpeechService } from './ivr-speech'
 
 export interface Services {
   identity: IdentityService
@@ -75,6 +76,7 @@ export interface Services {
   recoveryGroup: RecoveryGroupService
   teams: TeamsService
   tags: TagsService
+  ivrSpeech: IvrSpeechService
 }
 
 export interface ServicesOpts {
@@ -138,6 +140,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
     recoveryGroup: new RecoveryGroupService(db, audit),
+    ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
   }

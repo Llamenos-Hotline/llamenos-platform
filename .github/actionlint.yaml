@@ -1,0 +1,9 @@
+# Labels of the repo's self-hosted runners. actionlint only knows GitHub's
+# hosted labels, so without this every `runs-on` naming one of ours is
+# reported as unknown — which buries the real findings in noise.
+self-hosted-runner:
+  labels:
+    - ios-e2e      # macOS runners for ios-e2e build + ui shards
+    - fleet-review # the box that runs fleet/review
+    - hetzner      # Linux runners
+    - llamenos

@@ -3,6 +3,7 @@ import { CommandHandler, legStatusFromCause } from './command-handler'
 import type { BridgeClient, BridgeEvent } from './bridge-client'
 import type { WebhookSender } from './webhook-sender'
 import type { BridgeCommand, BridgeConfig, WebhookPayload } from './types'
+import { logger } from './logger'
 
 // ---- Fake BridgeClient: records every call, hands out predictable IDs ----
 
@@ -118,7 +119,14 @@ const answered = (legId: string, token: string, parent = CALLER): BridgeEvent =>
 })
 const hangup = (channelId: string, cause = 16): BridgeEvent => ({ type: 'channel_hangup', channelId, cause, causeText: '', timestamp: ts })
 const dtmf = (digit: string, channelId = CALLER): BridgeEvent => ({ type: 'dtmf_received', channelId, digit, durationMs: 100, timestamp: ts })
-const playbackDone = (playbackId: string, channelId = CALLER): BridgeEvent => ({ type: 'playback_finished', channelId, playbackId, timestamp: ts })
+const playbackDone = (playbackId: string, channelId = CALLER, failed = false): BridgeEvent => ({
+  type: 'playback_finished',
+  channelId,
+  playbackId,
+  failed,
+  media: 'sound:http://app:3000/api/ivr-audio/rateLimited/es?exp=1&sig=secret',
+  timestamp: ts,
+})
 
 const queueCmd: BridgeCommand = { action: 'queue', queueName: CALLER, waitMusicEvent: 'wait_music', exitEvent: 'queue_exit', metadata: CONTEXT }
 
@@ -172,10 +180,30 @@ describe('CommandHandler', () => {
       expect(handler.getStatus().activeCalls).toBe(0)
     })
 
-    it('skips a spoken prompt: on a PBX only uploaded audio is heard', async () => {
-      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Hola', language: 'es' }])
+    it('reports a prompt the PBX could not play, without its signature, and still moves on', async () => {
+      const errors = vi.spyOn(logger, 'error').mockImplementation(() => {})
+      worker.reply('/api/telephony/incoming', [
+        { action: 'play', url: 'http://app:3000/api/ivr-audio/rateLimited/es?exp=1&sig=secret' },
+        { action: 'hangup' },
+      ])
       await handler.handleEvent(incoming())
-      expect(pbx.of('playMedia')).toEqual([])
+      await handler.handleEvent(playbackDone('pb-1', CALLER, true))
+
+      expect(pbx.of('hangup')).toEqual([[CALLER]])
+      const logged = errors.mock.calls.map((args) => args.join(' ')).join('\n')
+      expect(logged).toContain('the caller heard nothing: sound:http://app:3000/api/ivr-audio/rateLimited/es')
+      expect(logged).not.toContain('secret')
+      errors.mockRestore()
+    })
+
+    it('does not report a prompt the caller cut off by hanging up', async () => {
+      const errors = vi.spyOn(logger, 'error').mockImplementation(() => {})
+      worker.reply('/api/telephony/incoming', [{ action: 'play', url: 'http://app:3000/api/ivr-audio/greeting/es?exp=1&sig=secret' }])
+      await handler.handleEvent(incoming())
+      await handler.handleEvent({ type: 'hangup_requested', channelId: CALLER, timestamp: ts })
+      await handler.handleEvent(playbackDone('pb-1', CALLER, true))
+      expect(errors.mock.calls.map((args) => args.join(' ')).join('\n')).not.toContain('Prompt failed')
+      errors.mockRestore()
     })
 
     it('plays a prompt to the end before hanging up, so a turned-away caller hears why', async () => {
@@ -192,7 +220,7 @@ describe('CommandHandler', () => {
     })
 
     it('hangs up at once when nothing is playing', async () => {
-      worker.reply('/api/telephony/incoming', [{ action: 'speak', text: 'Adiós', language: 'es' }, { action: 'hangup' }])
+      worker.reply('/api/telephony/incoming', [{ action: 'hangup' }])
       await handler.handleEvent(incoming())
       expect(pbx.of('hangup')).toEqual([[CALLER]])
     })
@@ -273,7 +301,6 @@ describe('CommandHandler', () => {
 
     it('posts at once when there is nothing to collect (single-language hotline)', async () => {
       worker.reply('/api/telephony/incoming', [
-        { action: 'speak', text: ' ', language: 'es' },
         { action: 'gather', numDigits: 0, timeout: 0, callbackEvent: 'language_selected', metadata: { auto: '1', forceLang: 'es' } },
       ])
       await handler.handleEvent(incoming())
@@ -541,7 +568,7 @@ describe('CommandHandler', () => {
 
     it('a finished voicemail is reported, then the closing prompt plays and the call ends', async () => {
       worker.reply('/api/telephony/voicemail-complete', [
-        { action: 'speak', text: 'Gracias', language: 'es' },
+        { action: 'play', url: 'http://app:3000/api/ivr-speech/0123456789ab/es/R3JhY2lhcw.wav?sig=00' },
         { action: 'hangup' },
       ])
 
@@ -551,6 +578,10 @@ describe('CommandHandler', () => {
         { payload: { event: 'voicemail-recording', recordingStatus: 'done', recordingName: `voicemail-${CALLER}` }, query: CONTEXT },
       ])
       expect(worker.to('/api/telephony/voicemail-complete')).toMatchObject([{ query: CONTEXT }])
+      // The thank-you is heard to the end before the call ends.
+      expect(pbx.of('playMedia')).toHaveLength(1)
+      expect(pbx.of('hangup')).toEqual([])
+      await handler.handleEvent(playbackDone('pb-1'))
       expect(pbx.of('hangup')).toEqual([[CALLER]])
     })
 

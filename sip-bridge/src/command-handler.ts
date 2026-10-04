@@ -120,6 +120,11 @@ export class CommandHandler {
       case 'channel_hangup':
         await this.onChannelHangup(event)
         break
+      case 'hangup_requested': {
+        const call = this.calls.get(event.channelId)
+        if (call) call.hangupRequested = true
+        break
+      }
       case 'dtmf_received':
         await this.onDtmfReceived(event)
         break
@@ -254,7 +259,13 @@ export class CommandHandler {
   private async onPlaybackFinished(event: BridgeEvent & { type: 'playback_finished' }): Promise<void> {
     const call = this.calls.get(event.channelId)
     if (!call) return
-    call.pendingPlaybacks.delete(event.playbackId)
+    // Still ours: not one stopPrompts() cut off (a stopped playback reports done anyway).
+    const ours = call.pendingPlaybacks.delete(event.playbackId)
+    if (event.failed && ours && !call.hangupRequested) {
+      // Asterisk reports a prompt it could not fetch or decode only here: the
+      // caller heard silence, which is otherwise indistinguishable from a prompt.
+      logger.error('[handler]', `Prompt failed to play — the caller heard nothing: ${redactMediaUri(event.media)}`)
+    }
     if (call.pendingPlaybacks.size > 0) return
     if (call.hangupAfterPrompts) {
       await this.client.hangup(call.channelId)
@@ -389,10 +400,6 @@ export class CommandHandler {
 
   private async executeCommand(channelId: string, cmd: BridgeCommand): Promise<void> {
     switch (cmd.action) {
-      case 'speak':
-        // Nothing to play: the prompt was never uploaded for this language (see SpeakCommand).
-        logger.warn('[handler]', `No uploaded audio for a ${cmd.language} prompt — skipping it`)
-        break
       case 'play':
         await this.playPrompt(channelId, `sound:${cmd.url}`)
         break
@@ -779,4 +786,9 @@ export function legStatusFromCause(cause: number): CallLegStatus {
     default:
       return 'failed'
   }
+}
+
+/** A media URI without its query string: the signature that lets anyone fetch it stays out of logs */
+function redactMediaUri(media: string): string {
+  return media.replace(/\?.*$/, '')
 }

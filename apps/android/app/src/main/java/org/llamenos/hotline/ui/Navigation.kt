@@ -68,7 +68,6 @@ import org.llamenos.hotline.ui.hubs.CreateHubScreen
 import org.llamenos.hotline.ui.hubs.HubListScreen
 import org.llamenos.hotline.ui.hubs.HubManagementViewModel
 import org.llamenos.hotline.ui.hubsettings.HubCommunicationsScreen
-import org.llamenos.hotline.ui.settings.DeviceLinkScreen
 import org.llamenos.hotline.ui.settings.ErasureRequestScreen
 import org.llamenos.hotline.ui.auth.DeviceWipeReceiptScreen
 import org.llamenos.hotline.ui.contacts.ContactDetailScreen
@@ -238,11 +237,6 @@ sealed interface LlamenosRoute {
         companion object {
             const val ROUTE_PATTERN = "shift/{shiftId}"
         }
-    }
-
-    /** Device linking via QR code. */
-    data object DeviceLink : LlamenosRoute {
-        override val route = "device_link"
     }
 
     /** Case management list. */
@@ -628,9 +622,6 @@ fun LlamenosNavigation(
                 onNavigateToHelp = {
                     navController.navigate(LlamenosRoute.Help.route)
                 },
-                onNavigateToDeviceLink = {
-                    navController.navigate(LlamenosRoute.DeviceLink.route)
-                },
                 onNavigateToErasure = {
                     navController.navigate(LlamenosRoute.ErasureRequest.route)
                 },
@@ -906,12 +897,6 @@ fun LlamenosNavigation(
 
         composable(LlamenosRoute.Help.route) {
             HelpScreen(
-                onNavigateBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(LlamenosRoute.DeviceLink.route) {
-            DeviceLinkScreen(
                 onNavigateBack = { navController.popBackStack() },
             )
         }

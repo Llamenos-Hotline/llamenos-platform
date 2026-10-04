@@ -57,10 +57,11 @@ struct CallSettingsView: View {
                     Text(NSLocalizedString("admin_call_ring_timeout", comment: "Ring Timeout"))
                         .font(.brand(.body))
                     Spacer()
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_call_seconds_format",
-                        comment: "%d seconds"
-                    ), viewModel.callSettings.ringTimeout))
+                        comment: "%d seconds",
+                        viewModel.callSettings.ringTimeout
+                    ))
                     .font(.brand(.body))
                     .foregroundStyle(Color.brandPrimary)
                     .fontWeight(.medium)
@@ -95,10 +96,11 @@ struct CallSettingsView: View {
                     Text(NSLocalizedString("admin_call_max_duration", comment: "Max Call Duration"))
                         .font(.brand(.body))
                     Spacer()
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_call_minutes_format",
-                        comment: "%d minutes"
-                    ), viewModel.callSettings.maxDuration))
+                        comment: "%d minutes",
+                        viewModel.callSettings.maxDuration
+                    ))
                     .font(.brand(.body))
                     .foregroundStyle(Color.brandPrimary)
                     .fontWeight(.medium)
@@ -133,10 +135,11 @@ struct CallSettingsView: View {
                     Text(NSLocalizedString("admin_call_parallel_ring", comment: "Parallel Ring Count"))
                         .font(.brand(.body))
                     Spacer()
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "admin_call_volunteers_format",
-                        comment: "%d volunteers"
-                    ), viewModel.callSettings.parallelRingCount))
+                        comment: "%d volunteers",
+                        viewModel.callSettings.parallelRingCount
+                    ))
                     .font(.brand(.body))
                     .foregroundStyle(Color.brandPrimary)
                     .fontWeight(.medium)
