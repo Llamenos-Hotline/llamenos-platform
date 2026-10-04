@@ -36,8 +36,9 @@ data class InviteUiState(
  * Scoped to the auth NavHost so the invite survives Login → PIN set → redeem. The
  * invite is validated before the user chooses a PIN, and redeemed once the new device
  * keys exist (redemption signs with them). Redemption registers the identity with the
- * server; hub membership is granted by a hub admin, and the app picks the hub up by
- * itself once it exists.
+ * server AND writes the hub membership the invite names (#1474), so this request carries
+ * no hub of its own — the hub lives on the invite record. The app picks that membership
+ * up by itself on its next hub load.
  */
 @HiltViewModel
 class InviteViewModel @Inject constructor(
