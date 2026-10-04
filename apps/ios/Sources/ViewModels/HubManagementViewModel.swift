@@ -158,7 +158,7 @@ final class HubManagementViewModel {
         defer { isSaving = false }
         error = nil
 
-        let body = CreateHubRequest(
+        let body = CreateHubBody(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
