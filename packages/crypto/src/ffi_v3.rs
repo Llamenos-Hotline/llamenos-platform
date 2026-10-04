@@ -193,6 +193,56 @@ pub fn mobile_create_auth_token_from_signing_key(
     auth::create_auth_token_from_signing_key(&signing_key_hex, timestamp, &method, &path)
 }
 
+/// Create an Ed25519 auth token with NO nonce, using the device signing key in
+/// mobile state.
+///
+/// For the routes whose wire schema has no `nonce` field — today only
+/// `POST /api/invites/redeem`, whose body is `{ code, pubkey, timestamp, token }`.
+/// The message is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the
+/// server accepts only on routes that opt in, so this token is useless
+/// anywhere else. Every other call site must use `mobile_create_auth_token`.
+#[uniffi::export]
+pub fn mobile_create_auth_token_without_nonce(
+    timestamp: u64,
+    method: String,
+    path: String,
+) -> Result<auth::AuthToken, CryptoError> {
+    with_secrets(|secrets, _| {
+        auth::create_auth_token_without_nonce(secrets, timestamp, &method, &path)
+    })
+}
+
+/// Verify an Ed25519 auth token (stateless).
+///
+/// Exposed so platform tests can assert the domain-separation property
+/// directly: a nonce-less token verifies only under its own label, and a
+/// nonce-bearing token whose nonce was dropped does not verify at all.
+#[uniffi::export]
+pub fn mobile_verify_auth_token(
+    token: auth::AuthToken,
+    method: String,
+    path: String,
+) -> Result<bool, CryptoError> {
+    auth::verify_auth_token(&token, &method, &path)
+}
+
+/// Build the canonical auth message bytes — the one construction path, exposed
+/// so platform code never hand-builds the signed string.
+///
+/// `nonce: None` selects the nonce-less shape (a different label); `Some(n)`
+/// the nonce-bearing one. Platform tests use this to pin byte-equality against
+/// the interop vectors.
+#[uniffi::export]
+pub fn mobile_build_auth_message(
+    pubkey_hex: String,
+    timestamp: u64,
+    method: String,
+    path: String,
+    nonce: Option<String>,
+) -> Vec<u8> {
+    auth::build_auth_message(&pubkey_hex, timestamp, &method, &path, nonce.as_deref())
+}
+
 // ── Ed25519 signing (stateful) ─────────────────────────────────────
 
 /// Sign a message (hex-encoded) using the device's Ed25519 key.
@@ -1283,6 +1333,7 @@ mod tests {
 
         let token =
             mobile_create_auth_token(1708900000000, "GET".into(), "/api/test".into()).unwrap();
+        assert!(token.nonce.is_some());
         assert_eq!(token.pubkey.len(), 64);
         assert_eq!(token.token.len(), 128); // Ed25519 sig = 64 bytes = 128 hex
 
@@ -1290,6 +1341,53 @@ mod tests {
         assert!(valid);
 
         mobile_lock();
+    }
+
+    /// The FFI surface must expose the nonce-less variant and it must verify —
+    /// this is the export desktop and Android consume for invite redemption.
+    #[test]
+    fn nonceless_auth_token_via_ffi() {
+        let _encrypted =
+            mobile_generate_and_load("auth-dev-nonceless".into(), "12345678".into()).unwrap();
+
+        let token = mobile_create_auth_token_without_nonce(
+            1708900000000,
+            "POST".into(),
+            "/api/invites/redeem".into(),
+        )
+        .unwrap();
+        assert!(token.nonce.is_none());
+        assert!(auth::verify_auth_token(&token, "POST", "/api/invites/redeem").unwrap());
+
+        // The nonce-bearing domain must reject it even at the FFI layer.
+        let dressed = auth::AuthToken {
+            nonce: Some(hex::encode([0x5au8; 16])),
+            ..token
+        };
+        assert!(!auth::verify_auth_token(&dressed, "POST", "/api/invites/redeem").unwrap());
+
+        mobile_lock();
+    }
+
+    /// The exported builder is the same function the Kotlin/Swift bindings call.
+    #[test]
+    fn exported_builder_matches_core() {
+        let pubkey = hex::encode([0xabu8; 32]);
+        assert_eq!(
+            mobile_build_auth_message(pubkey.clone(), 7, "GET".into(), "/x".into(), None),
+            auth::build_auth_message(&pubkey, 7, "GET", "/x", None)
+        );
+        let nonce = hex::encode([0xcdu8; 16]);
+        assert_eq!(
+            mobile_build_auth_message(
+                pubkey.clone(),
+                7,
+                "GET".into(),
+                "/x".into(),
+                Some(nonce.clone())
+            ),
+            auth::build_auth_message(&pubkey, 7, "GET", "/x", Some(&nonce))
+        );
     }
 
     #[test]

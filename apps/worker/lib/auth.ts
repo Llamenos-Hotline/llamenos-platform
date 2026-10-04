@@ -1,8 +1,8 @@
 import { createHash } from 'crypto'
 import type { AuthPayload, User } from '../types'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes } from '@shared/encoding'
+import { buildAuthMessage, isCanonicalAuthNonce } from '@shared/auth-message'
 import type { IdentityService } from '../services/identity'
 import { createLogger } from './logger'
 import { isRevokedSigningKey } from './revoked-signing-keys'
@@ -35,20 +35,42 @@ export function validateToken(auth: AuthPayload): boolean {
 }
 
 /**
- * Build the canonical auth message bytes.
- * Format: `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}` (legacy)
- * or:     `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}:{nonce}` (with nonce)
+ * Re-exported from `@shared/auth-message` — the single TypeScript construction
+ * path, which mirrors `packages/crypto/src/auth.rs::build_auth_message`.
  *
- * MUST match exactly: packages/crypto/src/auth.rs::build_auth_message()
+ * Re-exported rather than re-implemented so route code and tests that need the
+ * canonical bytes cannot grow a second copy of the layout.
  */
-export function buildAuthMessage(pubkey: string, timestamp: number, method: string, path: string, nonce?: string): Uint8Array {
-  const base = `${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}`
-  return utf8ToBytes(nonce ? `${base}:${nonce}` : base)
+export { buildAuthMessage }
+
+export interface VerifyAuthOptions {
+  /**
+   * Accept the nonce-less message shape.
+   *
+   * Opt-in per route, and only for routes whose wire schema has no `nonce`
+   * field (today just `POST /api/invites/redeem`, whose body is
+   * `{ code, pubkey, timestamp, token }`). Everywhere else a token without a
+   * nonce is rejected outright, so a client that drops the nonce it signed
+   * fails loudly instead of silently downgrading to a replayable signature.
+   */
+  allowMissingNonce?: boolean
 }
 
-export function verifyAuthToken(auth: AuthPayload, method?: string, path?: string): boolean {
+export function verifyAuthToken(
+  auth: AuthPayload,
+  method?: string,
+  path?: string,
+  options: VerifyAuthOptions = {},
+): boolean {
   if (!validateToken(auth)) return false
   if (!method || !path) return false
+  if (auth.nonce === undefined) {
+    // Nonce-less tokens are a separate label domain with no replay protection
+    // by construction. Only routes that cannot carry a nonce may accept them.
+    if (!options.allowMissingNonce) return false
+  } else if (!isCanonicalAuthNonce(auth.nonce)) {
+    return false
+  }
   try {
     const message = buildAuthMessage(auth.pubkey, auth.timestamp, method, path, auth.nonce)
     return ed25519Verify(

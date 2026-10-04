@@ -28,15 +28,13 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
+  // No setup project. It existed only to wipe the target before the run, which
+  // a deployed server correctly refuses — every test now asserts on a delta it
+  // caused rather than on a clean slate (#1423).
   projects: [
-    {
-      name: 'live-setup',
-      testMatch: /live-setup\.ts/,
-    },
     {
       name: 'live-chromium',
       use: { ...devices['Desktop Chrome'] },
-      dependencies: ['live-setup'],
     },
   ],
   // No webServer — tests hit the deployed staging instance

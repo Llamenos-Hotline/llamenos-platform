@@ -61,17 +61,9 @@ Then('I should see the language selector', async ({ page }) => {
 })
 
 Then('I should see the theme toggle buttons', async ({ page }) => {
-  // Fresh install has data-testid on theme buttons, stored key login does not.
-  // Check for either testid-based or aria-label-based buttons — sequentially to avoid strict mode.
-  const systemTestId = page.getByTestId(TestIds.THEME_SYSTEM)
-  if (await systemTestId.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    // TestId-based buttons exist — verify all three
-    await expect(page.getByTestId(TestIds.THEME_LIGHT)).toBeVisible({ timeout: 2000 })
-    await expect(page.getByTestId(TestIds.THEME_DARK)).toBeVisible({ timeout: 2000 })
-    return
-  }
-  // Fallback to aria-label-based buttons
-  await expect(page.locator('button[aria-label*="system" i], button[title*="system" i]').first()).toBeVisible({ timeout: 2000 })
-  await expect(page.locator('button[aria-label*="light" i], button[title*="light" i]').first()).toBeVisible({ timeout: 2000 })
-  await expect(page.locator('button[aria-label*="dark" i], button[title*="dark" i]').first()).toBeVisible({ timeout: 2000 })
+  // The login page's theme buttons carry no testid (the theme-* testids are
+  // not rendered anywhere in src/client), so identify them by accessible name.
+  await expect(page.locator('button[aria-label*="system" i], button[title*="system" i]').first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.locator('button[aria-label*="light" i], button[title*="light" i]').first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.locator('button[aria-label*="dark" i], button[title*="dark" i]').first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })

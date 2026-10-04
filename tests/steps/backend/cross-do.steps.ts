@@ -265,8 +265,9 @@ Then('the conversation should be reopened', async ({ request, world }) => {
 
 // ─── Invite → Registration → Call Handling ──────────────────────────
 
-When('an admin creates an invite', async ({ request, world }) => {
+When('an admin creates an invite', async ({ request, world, workerHub }) => {
   const { data } = await apiPost<{ code?: string; invite?: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: uniqueName('XDO Invitee'),
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],

@@ -1,10 +1,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO, gh, ghJson } from './gh.js'
-import { decideReviewSet, REVIEW_JOB, REVIEW_REQUEST_LOGIN, type ReviewSetDecision } from './ci.js'
+import {
+  GITHUB_API, appApiRequest, checkVerdictRecorder, describeRecorderFailure, fetchAppHttp,
+  githubErrorDetail, mintInstallationToken, VerdictRecorderError,
+  type AppHttp, type RecorderReadiness,
+} from './github-app.js'
+import { decideReviewSet, reviewTriggerLogins, REVIEW_JOB, type ReviewSetDecision } from './ci.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR } from './specialist.js'
 import { classifyImpact } from './impact.js'
 import type { VerifyReport } from './verify.js'
@@ -44,10 +47,22 @@ const execFileAsync = promisify(execFile)
  * than relying on `gh pr merge` to reject afterwards.
  *
  * Every step is pure or dependency-injected (`ReviewAndMergeDeps`) so the
- * five real network/process calls this needs — read the PR, export its head,
- * run the reviewer, post the check-run, merge — are exercised in tests as
- * plain mocks, exactly like every other CI-adjacent file in this
- * orchestrator (`ci.ts`, `review.ts`).
+ * real network/process calls this needs — read the PR, export its head, run
+ * the reviewer, check that a verdict CAN be recorded, record it, merge — are
+ * exercised in tests as plain mocks, exactly like every other CI-adjacent
+ * file in this orchestrator (`ci.ts`, `review.ts`).
+ *
+ * #1483 — one of those calls cannot use the operator's `gh` credentials at
+ * all. The Checks API refuses a personal access token
+ * (`You must authenticate via a GitHub App. (HTTP 403)`), so the verdict is
+ * posted with a short-lived GitHub App installation token minted per
+ * invocation by `github-app.ts`. Nothing else here uses it. Until that App
+ * exists this command fails CLOSED — it refuses before spending a review
+ * (`cannot-record`), or, if the post fails after one ran, says plainly that
+ * the verdict is lost (`review-unrecorded`) and exits non-zero. There is no
+ * PAT fallback, and `POST …/statuses` on a commit — which a PAT *would* accept — is
+ * rejected permanently, because a PAT-written green status could override a
+ * red check run and a review gate must fail closed.
  */
 
 // ---------------------------------------------------------------------------
@@ -121,17 +136,21 @@ export interface PrSnapshotFacts {
   addedLines: number
   authorLogin: string
   authorIsBot: boolean
+  /** The head branch — with the author, it decides whom a review may be
+   *  requested from (`reviewTriggerLogins`). */
+  headBranch: string
 }
 
 interface GhPrViewForReview {
   headRefOid: string
   baseRefOid: string
+  headRefName: string
   files: { path: string; additions: number; deletions: number }[]
   author: { login: string; is_bot?: boolean }
 }
 
 async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefined> {
-  const view = await ghJson<GhPrViewForReview>(['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,files,author'])
+  const view = await ghJson<GhPrViewForReview>(['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,headRefName,files,author'])
   if (view === undefined) return undefined
   return {
     headSha: view.headRefOid,
@@ -140,6 +159,7 @@ async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefi
     addedLines: view.files.reduce((n, f) => n + f.additions, 0),
     authorLogin: view.author.login,
     authorIsBot: view.author.is_bot === true,
+    headBranch: view.headRefName,
   }
 }
 
@@ -223,33 +243,68 @@ const CHECK_RUN_TITLES: Record<ReviewVerdict, string> = {
  *  failed `gh api` call and no check-run at all. Truncated, never rejected. */
 const CHECK_RUN_SUMMARY_MAX = 65_000
 
+export interface PostCheckRunOptions {
+  /** Injected in tests; production mints per invocation and keeps no copy. */
+  mintToken?: () => Promise<string>
+  http?: AppHttp
+}
+
 /**
- * The ONLY place in `orchestrator/src` that creates a check-run — see the
- * "check-runs is created in exactly one file" rail in guards.test.ts. Posted
- * via `--input <file>` (a temp JSON file), never as `-f`/`-F` argv fields:
- * `output.summary` is the reviewer's own unbounded prose, and this codebase
- * already avoids handing unbounded worker/model text to a subprocess as an
- * argv element (see `cli.ts`'s `editPrBody`, which does the same for a PR
- * body over `--body-file`) rather than trusting an OS argv limit to never
- * bite the one review that mattered enough to write a long summary.
+ * The ONLY place in `orchestrator/src` that creates a check run — see the
+ * "created in exactly one file" rail in guards.test.ts, which this change
+ * keeps true: `github-app.ts` holds the AUTH (JWT + installation token) and
+ * never touches this endpoint, so there is still exactly one place this
+ * process can post a verdict.
+ *
+ * #1483 — this is the one call in the whole orchestrator that cannot use the
+ * operator's own `gh` credentials. The Checks API refuses a personal access
+ * token outright (`You must authenticate via a GitHub App. (HTTP 403)`), so
+ * the verdict is posted with a short-lived installation token minted here and
+ * used for nothing else. Reading the PR, exporting its head and merging all
+ * keep using the operator's own `gh`.
+ *
+ * Posted in-process over `fetch`, not `gh api --input <file>`. The temp-file
+ * form existed because `output.summary` is the reviewer's own unbounded prose
+ * and this codebase does not hand unbounded model text to a subprocess as an
+ * argv element — in-process there is no argv and no temp file at all, which
+ * satisfies that constraint more completely, and it also keeps the
+ * installation token out of any subprocess's environment or command line.
+ *
+ * Throws on every failure, never returns quietly: `runReviewAndMerge` turns a
+ * throw here into the `review-unrecorded` outcome, which says plainly that a
+ * review ran and could not be recorded. There is no PAT fallback and no
+ * commit-status path — see `github-app.ts` for why that shortcut is rejected
+ * permanently.
  */
-export async function postReviewCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-checkrun-'))
-  try {
-    const file = join(dir, 'check-run.json')
-    const summary = text.length > CHECK_RUN_SUMMARY_MAX
-      ? `${text.slice(0, CHECK_RUN_SUMMARY_MAX)}\n\n… (truncated)`
-      : text
-    writeFileSync(file, JSON.stringify({
-      name: REVIEW_JOB,
-      head_sha: sha,
-      status: 'completed',
-      conclusion: checkRunConclusion(verdict),
-      output: { title: CHECK_RUN_TITLES[verdict], summary },
-    }))
-    await gh(['api', `repos/${REPO}/check-runs`, '-X', 'POST', '--input', file])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+export async function postReviewCheckRun(
+  sha: string,
+  verdict: ReviewVerdict,
+  text: string,
+  opts: PostCheckRunOptions = {},
+): Promise<void> {
+  const summary = text.length > CHECK_RUN_SUMMARY_MAX
+    ? `${text.slice(0, CHECK_RUN_SUMMARY_MAX)}\n\n… (truncated)`
+    : text
+  const body = JSON.stringify({
+    name: REVIEW_JOB,
+    head_sha: sha,
+    status: 'completed',
+    conclusion: checkRunConclusion(verdict),
+    output: { title: CHECK_RUN_TITLES[verdict], summary },
+  })
+  const token = await (opts.mintToken ?? mintInstallationToken)()
+  const what = `recording the ${REVIEW_JOB} verdict for ${sha}`
+  const res = await appApiRequest(opts.http ?? fetchAppHttp, {
+    method: 'POST',
+    url: `${GITHUB_API}/repos/${REPO}/check-runs`,
+    authorization: `token ${token}`,
+    body,
+  }, [token], what)
+  if (res.status !== 201) {
+    throw new VerdictRecorderError(
+      `${what} failed: HTTP ${res.status} — ${githubErrorDetail(res.body, [token])}`,
+      [token],
+    )
   }
 }
 
@@ -321,6 +376,15 @@ export type ReviewAndMergeOutcome =
   | { kind: 'merged'; pr: string; headSha: string }
   | { kind: 'needs-codeowner'; pr: string; headSha: string; authorLogin: string }
   | { kind: 'not-mergeable'; pr: string; reason: string }
+  /** #1483 — the App credentials that record a verdict are absent or
+   *  unusable. Caught BEFORE the reviewer runs, so nothing was spent and
+   *  nothing was posted. */
+  | { kind: 'cannot-record'; pr: string; reason: string }
+  /** #1483 — the review RAN and its verdict could not be written to GitHub.
+   *  The one outcome this command must never render as a success: a verdict
+   *  that is quietly lost is worse than the 403 it replaced, which at least
+   *  shouted. */
+  | { kind: 'review-unrecorded'; pr: string; headSha: string; verdict: ReviewVerdict; reason: string }
 
 export function describeOutcome(o: ReviewAndMergeOutcome): string {
   switch (o.kind) {
@@ -330,6 +394,15 @@ export function describeOutcome(o: ReviewAndMergeOutcome): string {
       return `review-and-merge: PR ${o.pr} (head ${o.headSha}) is ready to merge but was opened by ` +
         `${o.authorLogin}, a bot — a human code-owner must approve it first; not merging on the operator's behalf`
     case 'not-mergeable': return `review-and-merge: PR ${o.pr} not merged — ${o.reason}`
+    case 'cannot-record':
+      return `review-and-merge: PR ${o.pr} NOT reviewed and NOT merged — this command cannot record a ` +
+        `${REVIEW_JOB} verdict, so it refused before spending a review: ${o.reason}. ` +
+        'Nothing was posted. Use the CI gate (request a review on the PR) until the GitHub App exists — see issue #1483'
+    case 'review-unrecorded':
+      return `review-and-merge: PR ${o.pr} — a non-author review RAN on head ${o.headSha} and reached ` +
+        `${o.verdict}, but it could NOT be recorded as the ${REVIEW_JOB} check run: ${o.reason}. ` +
+        'That verdict is LOST — nothing was posted and nothing was merged. Fix the GitHub App ' +
+        'credentials (issue #1483) and run this again'
   }
 }
 
@@ -342,6 +415,11 @@ export interface ReviewAndMergeDeps {
   /** Export + strip the head commit; caller always calls `cleanup()`. */
   exportHead(headSha: string, baseSha: string): Promise<ReviewSnapshot>
   invokeReviewer(pr: string, diff: string, facts: PrSnapshotFacts, exportDir: string): Promise<SecondOpinionResult>
+  /** #1483 — can this process record a verdict at all? Local-only (no
+   *  network, no token minted) so a missing App credential costs a
+   *  millisecond rather than a whole `opus` review. */
+  recorderReady(): Promise<RecorderReadiness>
+  /** Throws on every failure — there is no "posted it, probably" return. */
   postCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void>
   currentHeadSha(pr: string): Promise<string | undefined>
   requiredChecks(pr: string): Promise<RequiredCheck[] | undefined>
@@ -399,7 +477,11 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
       kind: 'not-mergeable', pr,
       reason: `PR ${pr} needs ${reviewSet.profiles.join(', ')} as well as the general non-author review, and this ` +
         `command only runs the general one — it will not post a ${REVIEW_JOB} that claims otherwise. ` +
-        `Request a review from ${REVIEW_REQUEST_LOGIN} and let the CI gate run the whole set.`,
+        // Whom to ask depends on who wrote the PR: GitHub refuses to request
+        // a PR's own author, so naming one fixed login here sent every PR
+        // `llamenos-auto` wrote to a request that cannot be made (#1232).
+        `Request a review from ${reviewTriggerLogins({ prAuthor: facts.authorLogin, branch: facts.headBranch })[0]} ` +
+        'and let the CI gate run the whole set.',
     }
   }
 
@@ -410,6 +492,14 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
       'check-run — reusing it, no new review',
     )
   } else {
+    // #1483 — refuse BEFORE the review, not after. The Checks API will not
+    // accept the operator's PAT, so without working App credentials this
+    // command would perform a full `opus` review and then have nowhere to
+    // put the answer. Checked only on this branch: the freshness-hit path
+    // above posts nothing and so needs no recorder.
+    const recorder = await deps.recorderReady()
+    if (!recorder.ok) return { kind: 'cannot-record', pr, reason: recorder.reason }
+
     const diff = await deps.prDiff(pr)
     const snapshot = await deps.exportHead(facts.headSha, facts.baseSha)
     let result: SecondOpinionResult
@@ -418,7 +508,17 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
     } finally {
       await snapshot.cleanup()
     }
-    await deps.postCheckRun(facts.headSha, result.verdict, result.text)
+    try {
+      await deps.postCheckRun(facts.headSha, result.verdict, result.text)
+    } catch (e) {
+      // The verdict existed and is now unrecorded. Said plainly, with a
+      // non-zero exit, and never as "posted" — the log line below is
+      // reached only on a real 201.
+      return {
+        kind: 'review-unrecorded', pr, headSha: facts.headSha, verdict: result.verdict,
+        reason: describeRecorderFailure(e),
+      }
+    }
     deps.log(`review-and-merge: posted ${REVIEW_JOB}=${checkRunConclusion(result.verdict)} for PR ${pr} head ${facts.headSha}`)
     if (result.verdict !== 'PASS') {
       return {
@@ -463,7 +563,8 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     fetchReviewCheckRuns,
     exportHead: (headSha, baseSha) => fetchAndExportHead(repoRoot, headSha, baseSha),
     invokeReviewer: runNonAuthorReview,
-    postCheckRun: postReviewCheckRun,
+    recorderReady: async () => checkVerdictRecorder(),
+    postCheckRun: (sha, verdict, text) => postReviewCheckRun(sha, verdict, text),
     currentHeadSha: async (pr) => (await ghJson<{ headRefOid: string }>(['pr', 'view', pr, '--json', 'headRefOid']))?.headRefOid,
     requiredChecks: readRequiredChecks,
     reviewSet: async (pr, changedFiles) => {

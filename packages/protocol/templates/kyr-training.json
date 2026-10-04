@@ -256,7 +256,7 @@
         "notes:*",
         "reports:*",
         "shifts:read",
-        "volunteers:read",
+        "users:read",
         "hubs:read"
       ]
     },
@@ -285,7 +285,7 @@
         "notes:*",
         "reports:*",
         "shifts:read",
-        "volunteers:read",
+        "users:read",
         "hubs:read"
       ]
     }

@@ -10,11 +10,44 @@ import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, i
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { permissionGranted } from '@shared/permissions'
+import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { createEntityRouter } from '../lib/entity-router'
+import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
+import { ServiceError } from '../services/settings'
 
 const invites = new Hono<AppEnv>()
+
+/**
+ * The hub an invite admits into when the client did not name one.
+ *
+ * `'ambiguous'` means there is a real choice to make and the caller has to
+ * make it; `null` means there is nothing to choose from yet. Nothing here
+ * guesses: admitting a volunteer into a hub nobody chose is the failure #1037
+ * is about.
+ *
+ *  - exactly one active hub — the R1 shape, and the same rule `GET /api/config`
+ *    uses for `defaultHubId`
+ *  - several, but the creator belongs to exactly one of them
+ *  - NO active hub yet: the setup wizard invites a volunteer at step 5 and
+ *    creates the hub at step 6, so the invite legitimately predates its hub.
+ *    It is stored without one and `redeemInvite` resolves it at redemption,
+ *    by which time the wizard has finished.
+ *  - otherwise ambiguous
+ */
+async function resolveInviteHubId(
+  services: { settings: { getHubs(): Promise<{ hubs: Array<{ id: string; status: string }> }> } },
+  user: { hubRoles?: Array<{ hubId: string }> },
+): Promise<string | null | 'ambiguous'> {
+  const { hubs } = await services.settings.getHubs()
+  const active = hubs.filter(h => h.status === 'active')
+  if (active.length === 0) return null
+  if (active.length === 1) return active[0].id
+
+  const memberships = [...new Set((user.hubRoles ?? []).map(hr => hr.hubId))]
+    .filter(id => active.some(h => h.id === id))
+  return memberships.length === 1 ? memberships[0] : 'ambiguous'
+}
 
 // --- Public routes (no auth) ---
 
@@ -67,9 +100,23 @@ invites.post('/redeem',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Verify Ed25519 auth token signature
+    // Verify Ed25519 auth token signature.
+    //
+    // `redeemInviteBodySchema` has no `nonce` field, so the redeemer signs the
+    // nonce-less message shape — a distinct domain-separation label
+    // (`LABEL_DEVICE_AUTH_NO_NONCE`), which is what makes this token useless
+    // against any other endpoint. It is also the only route that opts into the
+    // nonce-less domain; everywhere else a missing nonce is a hard rejection.
+    //
+    // Replay of the redemption itself is tracked separately in #1367 and
+    // bounded by `redeemInvite` consuming the invite code atomically.
     const inviteUrl = new URL(c.req.url)
-    const isValid = await verifyAuthToken({ pubkey: body.pubkey, timestamp: body.timestamp, token: body.token }, c.req.method, inviteUrl.pathname)
+    const isValid = await verifyAuthToken(
+      { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token },
+      c.req.method,
+      inviteUrl.pathname,
+      { allowMissingNonce: true },
+    )
     if (!isValid) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
@@ -125,13 +172,50 @@ invites.post('/',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+    const user = c.get('user')
+    const allRoles = c.get('allRoles') as Role[]
+
+    // Every invite names a hub. Without one, redemption produced a user with
+    // no hub membership — invisible to the operator, unschedulable, unrungable
+    // (#1037). This route is not mounted under /hubs/:hubId, and the desktop
+    // dialog does not yet send a hub, so resolve it here and refuse rather
+    // than mint a hub-less invite.
+    const resolved = body.hubId ?? await resolveInviteHubId(services, user)
+    if (resolved === 'ambiguous') {
+      return c.json({
+        error: 'hubId is required: this server has several hubs and none is implied by your membership',
+      }, 400)
+    }
+    const hubId: string | null = resolved
+
+    // The hub must exist, and the creator must be able to invite within it.
+    if (hubId) {
+      try {
+        await services.settings.getHub(hubId)
+      } catch (err) {
+        if (err instanceof ServiceError && err.status === 404) {
+          return c.json({ error: 'Hub not found' }, 404)
+        }
+        throw err
+      }
+      const hubPermissions = resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, hubId)
+      if (!permissionGranted(hubPermissions, 'invites:create')) {
+        return c.json({ error: 'Access denied' }, 403)
+      }
+    }
+
+    // Roles the redeemer gets. The inviter's explicit choice wins; otherwise
+    // the hub's template decides, and a template naming none grants none.
+    const requested = body.roleIds ?? []
+    const roleIds = requested.length > 0 || !hubId
+      ? requested
+      : await resolveHubDefaultMemberRoles(services.settings, hubId)
 
     // Validate that the creator can grant all requested roles (prevent privilege escalation)
-    if (body.roleIds && body.roleIds.length > 0) {
+    if (roleIds.length > 0) {
       const creatorPermissions = c.get('permissions') as string[]
       if (!permissionGranted(creatorPermissions, '*')) {
-        const allRoles = c.get('allRoles') as Role[]
-        for (const roleId of body.roleIds) {
+        for (const roleId of roleIds) {
           const role = allRoles.find(r => r.id === roleId)
           if (!role) {
             return c.json({ error: `Unknown role: ${roleId}` }, 400)
@@ -145,8 +229,15 @@ invites.post('/',
       }
     }
 
-    const result = await services.identity.createInvite({ ...body, createdBy: pubkey })
-    await audit(services.audit, 'inviteCreated', pubkey, { name: body.name }, undefined, null)
+    const result = await services.identity.createInvite({
+      name: body.name,
+      phone: body.phone,
+      roleIds,
+      hubId,
+      createdBy: pubkey,
+    })
+
+    await audit(services.audit, 'inviteCreated', pubkey, { name: body.name, hubId }, undefined, null)
     return c.json(result, 201)
   },
 )

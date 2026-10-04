@@ -41,13 +41,26 @@ ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other w
    volunteer with digest authentication.
 6. **The caller hears the uploaded prompt** — the hub rate-limits to one call a
    minute; the caller's second call is turned away and, with no prompt
-   uploaded, hears nothing. The operator's WebM upload is refused; a 2 s 1 kHz
-   PCM WAV is accepted. The third call is turned away again, and the carrier's
-   recording of what the caller heard (`[caller-hears]` in
-   `carrier/extensions.conf`) holds the tone for its whole length: Asterisk
-   fetched it from `http://app:3000/api/ivr-audio/rateLimited/en` and the
-   bridge let it finish before hanging up. Fails without the media cache
+   uploaded, hears the generated rate-limit message. The operator's WebM upload
+   is refused; a 2 s 1 kHz PCM WAV is accepted. The third call is turned away
+   again, and the carrier's recording of what the caller heard (`[caller-hears]`
+   in `carrier/extensions.conf`) holds the tone for its whole length, and not
+   the generated message: the upload wins. Fails without the media cache
    directory (`asterisk-entrypoint.sh`) or with an immediate hangup.
+7. **Uploaded greeting, then hold message** — both uploads are heard, in order,
+   before the caller is queued.
+8. **Generated menu and prompts (#1347)** — a hub offering Spanish and French,
+   with nothing uploaded; a caller from a French number presses nothing. The
+   recording holds, in order, the Spanish and French menu options, then the
+   French greeting and hold message — each found by normalised cross-correlation
+   (`audio-match.ts`) with the exact clip the app serves for it
+   (`fetch-speech.ts`, which mints the same signed URL the worker hands the PBX).
+9. **Fallback language (#1347)** — the same, from a Philippine number: Tagalog
+   has no offline voice, so the caller hears the English greeting and hold
+   message.
+
+`audio-match.test.ts` proves the instrument itself: it finds a clip that was
+played through µ-law and rejects one that was not.
 
 ```sh
 deploy/docker/tests/telephony/run-call-e2e.sh                         # needs only Docker and bun
@@ -60,11 +73,11 @@ takes several minutes; later runs reuse Docker's cache.
 
 ## What it does not cover
 
-- **Most prompts.** Only an uploaded `rateLimited` prompt is played on this
-  path. The Asterisk adapter asks for `connecting`, `captcha`, `holdMusic` and
-  `voicemailPrompt`, which are not prompt types an operator can upload, and
-  speaks the language menu, which the bridge cannot (it has no speech engine:
-  a `speak` is skipped). Those parts of the call are silent.
+- **FreeSWITCH.** Its adapter plays the same generated-speech URLs through
+  mod_httapi, but no FreeSWITCH runs here.
+- **Intelligibility.** A clip found in the recording is the clip the app
+  synthesised; whether a listener understands it is measured separately
+  (#1347: ASR over the G.711 channel), not here.
 - **Hold music and the voicemail beep.** The image ships no sound files and
   no music-on-hold class.
 - **DTMF input.** The captcha and multi-digit menu paths are covered by the
