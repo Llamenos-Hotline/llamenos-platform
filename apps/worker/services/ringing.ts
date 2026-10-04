@@ -6,10 +6,11 @@ import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableError } from '../lib/retry'
-import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { getCircuitBreaker, CircuitOpenError } from '../lib/circuit-breaker'
 import { incCounter } from '../routes/metrics'
 import { hashPhone } from '../lib/crypto'
 import { resolveHubPermissions } from '@shared/permissions'
+import { AllDialsFailedError } from '../telephony/adapter'
 
 const logger = createLogger('ringing')
 
@@ -21,7 +22,7 @@ const logger = createLogger('ringing')
 export interface ParallelRingingResult {
   ringing: boolean
   /** Why nothing rang (only set when `ringing` is false). */
-  reason?: 'no-volunteers' | 'no-available-volunteers' | 'error'
+  reason?: 'no-volunteers' | 'no-available-volunteers' | 'telephony-failure' | 'error'
   /** Number of available on-shift volunteers notified (relay / VoIP push / phone). */
   volunteersNotified: number
 }
@@ -327,30 +328,66 @@ export async function startParallelRinging(
         name: 'telephony:ringVolunteers',
         failureThreshold: 5,
         resetTimeoutMs: 30_000,
+        // getCircuitBreaker is a singleton keyed by name, so this only takes effect the
+        // first time the breaker is created — but that is the only time it needs to.
+        onStateChange: (_name, _from, to) => {
+          if (to === 'open') {
+            logger.error(
+              'CRITICAL: Telephony ringVolunteers circuit opened — volunteers are not being phoned',
+              new Error('Circuit opened: telephony:ringVolunteers'),
+            )
+          } else if (to === 'closed') {
+            logger.info('Telephony ringVolunteers circuit recovered')
+          }
+        },
       })
 
-      const legSids = await breaker.execute(() =>
-        withRetry(
-          () => adapter.ringVolunteers({
-            callSid,
-            callerNumber,
-            volunteers: volunteersWithTokens,
-            callbackUrl: origin,
-            hubId,
-          }),
-          {
-            maxAttempts: 3,
-            baseDelayMs: 500,
-            maxDelayMs: 3000,
-            isRetryable: isRetryableError,
-            onRetry: (attempt, error) => {
-              logger.warn(`ringVolunteers retry ${attempt} for callSid=${callSid}`, { error })
-              incCounter('llamenos_retry_attempts_total', { service: 'telephony', operation: 'ringVolunteers' })
+      try {
+        const legSids = await breaker.execute(() =>
+          withRetry(
+            () => adapter.ringVolunteers({
+              callSid,
+              callerNumber,
+              volunteers: volunteersWithTokens,
+              callbackUrl: origin,
+              hubId,
+            }),
+            {
+              maxAttempts: 3,
+              baseDelayMs: 500,
+              maxDelayMs: 3000,
+              isRetryable: isRetryableError,
+              onRetry: (attempt, error) => {
+                logger.warn(`ringVolunteers retry ${attempt} for callSid=${callSid}`, { error })
+                incCounter('llamenos_retry_attempts_total', { service: 'telephony', operation: 'ringVolunteers' })
+              },
             },
-          },
+          )
         )
-      )
-      recordRingLegs(callSid, legSids)
+        recordRingLegs(callSid, legSids)
+      } catch (err) {
+        // AllDialsFailedError (every leg failed) and CircuitOpenError (the breaker is
+        // already open from a prior total failure) both mean a provider outage, not a
+        // partial failure — withRetry only reaches here once retries are exhausted.
+        // A total provider outage must not be reported as a successful ring (#1136).
+        if (err instanceof AllDialsFailedError || err instanceof CircuitOpenError) {
+          logger.error(
+            'All phone legs failed to dial — phone volunteers were not reached',
+            err,
+            { callSid, hubId, attempted: volunteersWithTokens.length },
+          )
+          incCounter('llamenos_calls_unroutable_total', { reason: 'telephony-failure' })
+          // browserVoip volunteers, if any, were already notified over the relay/VoIP
+          // push above and may still answer — only report total failure when nobody was
+          // reached by any channel.
+          return {
+            ringing: browserVoip.length > 0,
+            reason: 'telephony-failure',
+            volunteersNotified: browserVoip.length,
+          }
+        }
+        throw err
+      }
     }
     return { ringing: true, volunteersNotified: available.length }
   } catch (err) {

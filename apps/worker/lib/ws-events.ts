@@ -165,13 +165,17 @@ export function publishEvent(
     const outboxRef = outbox
     outboxRef
       .enqueue({ hubId: targetHub, kind, epoch, payload })
-      .then((id) => {
-        // Fan out, then mark delivered
+      .then(async (id) => {
+        // Fan out, then mark delivered — but ONLY when publishToHub actually delivered
+        // it. A rate-limited drop returns false; marking it delivered anyway would
+        // discard the one safety net that could have redriven it (#1136).
         const manager = getConnectionManager()
-        if (manager) {
-          manager.publishToHub(targetHub, kind, payload, epoch)
+        const delivered = manager ? manager.publishToHub(targetHub, kind, payload, epoch) : false
+        if (delivered) {
+          await outboxRef.markDelivered(id)
+        } else {
+          await outboxRef.markFailed(id, manager ? 'rate limited at publish time' : 'no connection manager at publish time')
         }
-        return outboxRef.markDelivered(id)
       })
       .catch((err) => {
         log.error('Outbox enqueue failed — falling back to in-memory fan-out', { kind, err })
@@ -211,14 +215,20 @@ export async function drainOutbox(): Promise<number> {
       if (!event.hubId) {
         throw new Error('outbox event has no hubId — no legitimate audience')
       }
-      manager.publishToHub(
+      const wasDelivered = manager.publishToHub(
         event.hubId,
         event.kind,
         event.payload,
         event.epoch,
       )
-      await outbox.markDelivered(id)
-      delivered++
+      if (wasDelivered) {
+        await outbox.markDelivered(id)
+        delivered++
+      } else {
+        // Still rate-limited — leave it pending for the next drain sweep rather than
+        // recording this drop as a delivery (#1136).
+        await outbox.markFailed(id, 'rate limited during drain')
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       await outbox.markFailed(id, message)

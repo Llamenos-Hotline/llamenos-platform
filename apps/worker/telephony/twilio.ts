@@ -1,6 +1,7 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { buildWebhookUrl } from '../lib/webhook-url'
-import { assertHangupResponse } from './adapter'
+import { createLogger } from '../lib/logger'
+import { assertHangupResponse, collectRingResults } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -66,6 +67,8 @@ function sayOrPlay(promptKey: string, lang: string, audioUrls?: AudioUrlMap, tex
 function hubXmlParam(hubId?: string): string {
   return hubId ? `&amp;hub=${escapeXml(encodeURIComponent(hubId))}` : ''
 }
+
+const logger = createLogger('telephony.twilio')
 
 /**
  * TwilioAdapter — Twilio implementation of TelephonyAdapter.
@@ -233,8 +236,6 @@ export class TwilioAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const callSids: string[] = []
-
     const calls = await Promise.allSettled(
       params.volunteers.map(async (vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs
@@ -262,17 +263,13 @@ export class TwilioAdapter implements TelephonyAdapter {
           const data = await res.json() as { sid: string }
           return data.sid
         }
-        throw new Error(`Failed to call volunteer`)
+        throw new Error(`Failed to call volunteer: ${res.status}`)
       })
     )
 
-    for (const result of calls) {
-      if (result.status === 'fulfilled') {
-        callSids.push(result.value)
-      }
-    }
-
-    return callSids
+    // Throws when EVERY leg failed (total outage) — see AllDialsFailedError. A partial
+    // failure returns whatever succeeded (#1136).
+    return collectRingResults(calls, 'Twilio', (msg, err) => logger.error(msg, err))
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {

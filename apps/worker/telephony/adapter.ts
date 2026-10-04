@@ -258,3 +258,45 @@ export async function assertHangupResponse(res: Response, provider: string): Pro
   const detail = await res.text().catch(() => '')
   throw new Error(`${provider} hangup failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
 }
+
+/**
+ * Thrown by `ringVolunteers` when EVERY per-volunteer dial attempt failed — a total
+ * provider outage, not a partial one. Distinguishing "all legs failed" from "some legs
+ * failed" matters: a partial failure (some volunteers unreachable, others rung fine) is
+ * normal and must not trip the circuit breaker or retry the whole batch (the volunteers
+ * who WERE reached must not be re-dialled). A total failure means the provider is down
+ * and the caller — services/ringing.ts — must retry, trip the breaker on repeated
+ * failure, and report the ring as failed rather than claiming success (#1136).
+ */
+export class AllDialsFailedError extends Error {
+  constructor(public readonly attempted: number) {
+    super(`All ${attempted} dial attempt(s) failed`)
+    this.name = 'AllDialsFailedError'
+  }
+}
+
+/**
+ * Collect the call/leg SIDs from a `Promise.allSettled` of per-volunteer dial attempts.
+ * Each individual failure is logged (so a specific bad number is diagnosable), but this
+ * only throws when NONE of the attempts succeeded. A partial failure returns whatever
+ * did succeed — ringing fewer legs than requested is not the same event as ringing none
+ * (#1136).
+ */
+export function collectRingResults(
+  results: PromiseSettledResult<string>[],
+  provider: string,
+  logFailure: (message: string, err: unknown) => void,
+): string[] {
+  const sids: string[] = []
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      sids.push(result.value)
+    } else {
+      logFailure(`${provider}: failed to dial a volunteer`, result.reason)
+    }
+  }
+  if (sids.length === 0 && results.length > 0) {
+    throw new AllDialsFailedError(results.length)
+  }
+  return sids
+}

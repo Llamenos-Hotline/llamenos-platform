@@ -458,13 +458,16 @@ describe('VonageAdapter', () => {
       expect(result).toEqual(['uuid-1'])
     })
 
-    it('returns empty array when all calls fail', async () => {
+    // #1136: when EVERY dial attempt fails this must reject (not resolve to `[]`) so
+    // the caller (services/ringing.ts) can retry and the circuit breaker can see the
+    // failure — a total provider outage must never look like a successful ring.
+    it('rejects when every dial attempt fails (total outage, #1136)', async () => {
       const mockFetch = vi.mocked(globalThis.fetch)
       mockFetch
         .mockResolvedValueOnce(new Response('Error', { status: 500 }))
         .mockResolvedValueOnce(new Response('Error', { status: 500 }))
 
-      const result = await adapter.ringVolunteers({
+      await expect(adapter.ringVolunteers({
         callSid: 'call-123',
         callerNumber: '+15559876543',
         volunteers: [
@@ -472,9 +475,7 @@ describe('VonageAdapter', () => {
           { phone: '+15552222222', callToken: 'token-b' },
         ],
         callbackUrl: 'https://example.com',
-      })
-
-      expect(result).toEqual([])
+      })).rejects.toThrow('All 2 dial attempt(s) failed')
     })
   })
 

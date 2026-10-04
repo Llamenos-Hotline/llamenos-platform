@@ -14,6 +14,7 @@ import {
 import { WS_PROTOCOL_VERSION } from '@protocol/schemas/ws-messages'
 import type { WsEventMessage } from '@protocol/schemas/ws-messages'
 import { createLogger } from './logger'
+import { incCounter } from '../routes/metrics'
 
 const log = createLogger('ws-manager')
 
@@ -29,9 +30,16 @@ const BUFFER_MAX_AGE_MS = 5 * 60 * 1000
 /** Slots reserved for call events (kinds 1000-1001) */
 const RESERVED_SLOTS = 100
 
-/** Rate limit windows (per hub per kind group, events/minute) */
+/**
+ * Rate limit windows (per hub per kind group, events/minute).
+ *
+ * Deliberately no entry for 'calls' (kinds 1000-1002, call:ring/update/voicemail): a
+ * single call produces ~3 of these, so a hub sustaining ~33 calls/minute would start
+ * losing rings under any finite limit here. A safety-critical ring must not be shed as
+ * if it were a blast-progress tick — `checkRateLimit` exempts the 'calls' group
+ * unconditionally rather than relying on a limit nothing can reach (#1136).
+ */
 const RATE_LIMITS: Record<string, number> = {
-  'calls': 100,      // kinds 1000-1002
   'messages': 200,   // kinds 1010-1012
   'records': 50,     // kinds 1020-1023
   'blast': 20,       // kinds 1030-1032
@@ -159,12 +167,18 @@ export class ConnectionManager {
   /**
    * Publish an event to all subscribers of a hub.
    * Signs the event, buffers durable events, and fans out to WebSocket connections.
+   *
+   * Returns false when the event was dropped (rate-limited) rather than delivered —
+   * callers that persist events to the outbox (ws-events.ts) MUST only mark the outbox
+   * row delivered when this returns true, or a drop is recorded as a success and never
+   * redriven (#1136).
    */
-  publishToHub(hubId: string, kind: number, payload: string, epoch: number): void {
+  publishToHub(hubId: string, kind: number, payload: string, epoch: number): boolean {
     // Rate limit check
     if (!this.checkRateLimit(hubId, kind)) {
-      log.warn('Rate limit exceeded', { hubId, kind })
-      return
+      log.warn('Rate limit exceeded — event dropped', { hubId, kind })
+      incCounter('llamenos_relay_events_dropped_total', { reason: 'rate_limited', kindGroup: kindGroup(kind) ?? 'unknown' })
+      return false
     }
 
     const ts = Date.now()
@@ -189,7 +203,7 @@ export class ConnectionManager {
 
     // Fan out to subscribers
     const hubSubs = this.hubSubscriptions.get(hubId)
-    if (!hubSubs) return
+    if (!hubSubs) return true
 
     const eventJson = JSON.stringify(event)
     for (const [pubkey, kinds] of hubSubs) {
@@ -204,6 +218,7 @@ export class ConnectionManager {
         }
       }
     }
+    return true
   }
 
   /** Replay buffered events since a given timestamp to a specific connection. */
@@ -355,6 +370,7 @@ export class ConnectionManager {
   private checkRateLimit(hubId: string, kind: number): boolean {
     const group = kindGroup(kind)
     if (!group) return true // No limit for ephemeral events
+    if (group === 'calls') return true // Call events are safety-critical — never rate-limited (#1136)
 
     const limit = RATE_LIMITS[group]
     if (!limit) return true
