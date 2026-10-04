@@ -28,6 +28,9 @@ import * as crypto from 'crypto'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 const _TEST_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+// Deliberately NOT the canonical builder: this file signs a message that omits
+// the method and path segments, to assert the server rejects an unbound token.
+// `@shared/auth-message` cannot express a malformed shape, by design.
 const AUTH_PREFIX = LABEL_DEVICE_AUTH
 
 // ── Local security audit state ──────────────────────────────────
