@@ -16,7 +16,7 @@ final class NotesViewModel {
     var notes: [DecryptedNote] = []
 
     /// Custom field definitions fetched from the server.
-    var customFields: [CustomFieldDefinition] = []
+    var customFields: [CustomFieldsBodyField] = []
 
     /// Whether the initial load is in progress.
     var isLoading: Bool = false
@@ -253,13 +253,21 @@ final class NotesViewModel {
 
     private func fetchCustomFields() async {
         do {
-            let response: CustomFieldsResponse = try await apiService.request(
+            let response: CustomFieldsListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/settings/custom-fields")
             )
             customFields = response.fields
-                .filter { $0.visibleToVolunteers }
-                .sorted { $0.order < $1.order }
+                .filter { $0.isVisibleToUsers }
+                .map {
+                    CustomFieldsBodyField(
+                        context: $0.context, label: $0.label, name: $0.name,
+                        options: $0.options, order: $0.order.map(Int.init),
+                        fieldRequired: $0.fieldRequired, type: $0.type,
+                        visibleToUsers: $0.visibleToUsers
+                    )
+                }
+                .sorted { $0.orderOrZero < $1.orderOrZero }
         } catch {
             // Custom fields are optional — silently continue without them
             customFields = []

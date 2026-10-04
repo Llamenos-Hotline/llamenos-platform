@@ -6,7 +6,7 @@ import SwiftUI
 /// custom field values, and metadata. Supports copy-to-clipboard.
 struct NoteDetailView: View {
     let note: DecryptedNote
-    let customFields: [CustomFieldDefinition]
+    let customFields: [CustomFieldsBodyField]
 
     @State private var showCopyConfirmation: Bool = false
 
@@ -221,7 +221,7 @@ struct NoteDetailView: View {
 
     /// Order fields according to their definition order.
     private func orderedFields(_ fields: [String: AnyCodableValue]) -> [(key: String, value: AnyCodableValue)] {
-        let fieldOrder = Dictionary(uniqueKeysWithValues: customFields.map { ($0.name, $0.order) })
+        let fieldOrder = Dictionary(uniqueKeysWithValues: customFields.map { ($0.name, $0.orderOrZero) })
         return fields.sorted { lhs, rhs in
             let lhsOrder = fieldOrder[lhs.key] ?? Int.max
             let rhsOrder = fieldOrder[rhs.key] ?? Int.max
@@ -253,26 +253,20 @@ struct NoteDetailView: View {
                 updatedAt: nil
             ),
             customFields: [
-                CustomFieldDefinition(
-                    id: "f1", name: "severity", label: "Severity", type: .number,
-                    required: true, options: nil, validation: nil,
-                    visibleToVolunteers: true, editableByVolunteers: true,
-                    context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                    order: 0, createdAt: nil
+                CustomFieldsBodyField(
+                    context: "call-notes", label: "Severity", name: "severity",
+                    options: nil, order: 0, fieldRequired: true, type: .number,
+                    visibleToUsers: true
                 ),
-                CustomFieldDefinition(
-                    id: "f2", name: "category", label: "Category", type: .select,
-                    required: false, options: ["Legal", "Medical", "Housing"],
-                    validation: nil, visibleToVolunteers: true, editableByVolunteers: true,
-                    context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                    order: 1, createdAt: nil
+                CustomFieldsBodyField(
+                    context: "call-notes", label: "Category", name: "category",
+                    options: ["Legal", "Medical", "Housing"],
+                    order: 1, fieldRequired: false, type: .select, visibleToUsers: true
                 ),
-                CustomFieldDefinition(
-                    id: "f3", name: "followUp", label: "Follow-up Needed", type: .checkbox,
-                    required: false, options: nil, validation: nil,
-                    visibleToVolunteers: true, editableByVolunteers: true,
-                    context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                    order: 2, createdAt: nil
+                CustomFieldsBodyField(
+                    context: "call-notes", label: "Follow-up Needed", name: "followUp",
+                    options: nil, order: 2, fieldRequired: false, type: .checkbox,
+                    visibleToUsers: true
                 ),
             ]
         )

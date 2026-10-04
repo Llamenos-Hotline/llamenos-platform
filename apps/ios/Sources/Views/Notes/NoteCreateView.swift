@@ -5,7 +5,7 @@ import SwiftUI
 /// Sheet view for creating a new encrypted note. Includes a text editor for the note body
 /// and dynamically renders custom field inputs based on the field definitions from the server.
 struct NoteCreateView: View {
-    let customFields: [CustomFieldDefinition]
+    let customFields: [CustomFieldsBodyField]
     let onSave: (String, [String: AnyCodableValue]?, String?, String?) async throws -> Void
     var transcriptionService: TranscriptionService?
 
@@ -19,7 +19,7 @@ struct NoteCreateView: View {
     @State private var attachedTranscript: String?
 
     /// Editable custom fields (filtered + sorted).
-    private var editableFields: [CustomFieldDefinition] {
+    private var editableFields: [CustomFieldsBodyField] {
         customFields
             .filter { $0.editableByVolunteers }
             .sorted { $0.order < $1.order }
@@ -192,7 +192,7 @@ struct NoteCreateView: View {
     // MARK: - Custom Field Input
 
     @ViewBuilder
-    private func customFieldInput(for field: CustomFieldDefinition) -> some View {
+    private func customFieldInput(for field: CustomFieldsBodyField) -> some View {
         switch field.type {
         case .text:
             TextField(
@@ -244,7 +244,7 @@ struct NoteCreateView: View {
         }
 
         // Show required indicator
-        if field.required {
+        if field.isRequired {
             if case .none = fieldValues[field.name] {
                 Text(NSLocalizedString("field_required", comment: "Required"))
                     .font(.brand(.caption2))
@@ -330,7 +330,7 @@ struct NoteCreateView: View {
         guard !trimmedText.isEmpty else { return }
 
         // Validate required fields
-        for field in editableFields where field.required {
+        for field in editableFields where field.isRequired {
             if fieldValues[field.name] == nil {
                 errorMessage = L10n.format("note_create_field_required", comment: "%@ is required", field.label)
                 return
@@ -363,27 +363,20 @@ struct NoteCreateView: View {
 #Preview("Create Note") {
     NoteCreateView(
         customFields: [
-            CustomFieldDefinition(
-                id: "f1", name: "severity", label: "Severity (1-5)", type: .number,
-                required: true, options: nil,
-                validation: CustomFieldDefinition.FieldValidation(minLength: nil, maxLength: nil, min: 1, max: 5),
-                visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 0, createdAt: nil
+            CustomFieldsBodyField(
+                context: "call-notes", label: "Severity (1-5)", name: "severity",
+                options: nil, order: 0, fieldRequired: true, type: .number,
+                visibleToUsers: true
             ),
-            CustomFieldDefinition(
-                id: "f2", name: "category", label: "Category", type: .select,
-                required: false, options: ["Legal", "Medical", "Housing", "Financial", "Other"],
-                validation: nil, visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 1, createdAt: nil
+            CustomFieldsBodyField(
+                context: "call-notes", label: "Category", name: "category",
+                options: ["Legal", "Medical", "Housing", "Financial", "Other"],
+                order: 1, fieldRequired: false, type: .select, visibleToUsers: true
             ),
-            CustomFieldDefinition(
-                id: "f3", name: "followUp", label: "Follow-up Needed", type: .checkbox,
-                required: false, options: nil, validation: nil,
-                visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 2, createdAt: nil
+            CustomFieldsBodyField(
+                context: "call-notes", label: "Follow-up Needed", name: "followUp",
+                options: nil, order: 2, fieldRequired: false, type: .checkbox,
+                visibleToUsers: true
             ),
         ],
         onSave: { _, _, _, _ in }
