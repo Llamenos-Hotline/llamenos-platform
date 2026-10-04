@@ -13,7 +13,7 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS } from '../../orchestrator/src/review.js'
+import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
@@ -607,7 +607,7 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // smoke test is the only place a runner whose `claude` build rejects the
     // flag gets named as a configuration problem instead of failing every
     // real review as an opaque `engine-unavailable`.
-    expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --tools "\$rev_tools" --model "\$rev_model"/)
+    expect(text).toMatch(/\| env HOME="\$rev_home" "\$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "\$rev_tools" --model "\$rev_model"/)
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
       .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
@@ -646,12 +646,88 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
       .toMatch(/rev_tools="\$FLEET_REVIEWER_TOOLS"/)
   })
 
+  // #1460/#1511: the reviewer's HOME is the gate's, not the runner's. Both
+  // halves of that live here as literals for the SAME version-boundary
+  // reason as the tool list above (#1464 — the head's YAML runs against the
+  // base's checkout, so importing a symbol the head adds deadlocks the gate
+  // for the PR adding it), and this is the assertion that makes carrying
+  // them as literals safe: it runs where the YAML and review.ts are the
+  // same commit.
+  it('carries the gate-owned HOME literals, equal to REVIEWER_HOME_PREFIX / REVIEWER_CREDENTIALS_RELPATH in the source', () => {
+    const text = fleetReviewJobText()
+    const prefix = /^\s*FLEET_REVIEWER_HOME_PREFIX:\s*(\S+)\s*$/m.exec(text)
+    if (prefix === null) throw new Error('FLEET_REVIEWER_HOME_PREFIX not set in the fleet-review job env')
+    expect(prefix[1], 'the workflow\'s FLEET_REVIEWER_HOME_PREFIX has drifted from REVIEWER_HOME_PREFIX in orchestrator/src/review.ts')
+      .toBe(REVIEWER_HOME_PREFIX)
+    const relpath = /^\s*FLEET_REVIEWER_CREDENTIALS_RELPATH:\s*(\S+)\s*$/m.exec(text)
+    if (relpath === null) throw new Error('FLEET_REVIEWER_CREDENTIALS_RELPATH not set in the fleet-review job env')
+    expect(relpath[1], 'the workflow\'s FLEET_REVIEWER_CREDENTIALS_RELPATH has drifted from REVIEWER_CREDENTIALS_RELPATH in orchestrator/src/review.ts')
+      .toBe(REVIEWER_CREDENTIALS_RELPATH)
+    // And they are what the step actually builds the HOME from, not merely
+    // declared in `env:` and then ignored.
+    expect(text, 'the smoke step does not build its HOME from the env-carried prefix')
+      .toMatch(/rev_home="\$\(mktemp -d "\$HOME\/\$\{FLEET_REVIEWER_HOME_PREFIX\}XXXXXX"\)"/)
+    expect(text, 'the smoke step does not place the credential file at the env-carried relative path')
+      .toMatch(/rev_creds="\$rev_home\/\$FLEET_REVIEWER_CREDENTIALS_RELPATH"/)
+  })
+
+  // The reviewer must load no MCP server the gate did not name. `--tools`
+  // covers BUILT-IN tools only, so without this flag an MCP server
+  // configured on the runner arrives as an extra callable tool regardless —
+  // and a write-capable one makes a reviewer that is supposed to be
+  // read-only writable (#1460). Asserted on the smoke invocation as well as
+  // in `verifierArgs` (see review.test.ts) so a claude build that rejects
+  // the flag is named as a configuration problem instead of failing every
+  // real review as an opaque `engine-unavailable`.
+  it('passes --strict-mcp-config and never a --mcp-config that would reintroduce one', () => {
+    // Scoped to the invocation LINE, not the whole job: the surrounding
+    // comments legitimately say "`--strict-mcp-config` with no
+    // `--mcp-config` alongside it", which a whole-job absence check would
+    // trip on its own explanation.
+    const invocation = /^.*\| env HOME="\$rev_home" "\$rev_binary".*$/m.exec(fleetReviewJobText())
+    if (invocation === null) throw new Error('the smoke step\'s engine invocation line was not found')
+    expect(invocation[0], 'the smoke invocation does not pass --strict-mcp-config').toContain('--strict-mcp-config')
+    expect(invocation[0], 'a --mcp-config would hand the reviewer MCP servers again')
+      .not.toMatch(/(^|\s)--mcp-config(\s|=|$)/)
+  })
+
+  // #1511's third cause, pinned. The smoke prompt used to be
+  // `Reply with exactly: VERDICT: PASS` — a health check that asks the model
+  // to bypass its own judgement and emit a fixed attestation. That is
+  // indistinguishable from an injected instruction, and the reviewer refused
+  // it on exactly those grounds, 3/3 runs on #1510, reported as
+  // `NO-VERDICT:engine-unavailable`. Measured on the installed binary, it is
+  // refused even under a clean HOME, so the HOME fix alone does not settle
+  // it: the prompt has to ask a QUESTION whose answer IS the verdict, so the
+  // verdict is earned rather than dictated.
+  it('asks the engine a question with a real answer, never to emit a fixed verdict string', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke prompt is back to dictating a fixed verdict string — the exact shape #1511 was refused for')
+      .not.toMatch(/Reply with exactly/i)
+    const prompt = /smoke_prompt="\$\(printf[\s\S]*?\)"/.exec(text)
+    if (prompt === null) throw new Error('the smoke prompt was not found — this rail would pass vacuously')
+    expect(prompt[0], 'the smoke prompt asks the engine nothing').toContain('?')
+    // Both verdicts have to be reachable from the prompt, or it is still
+    // dictating one answer rather than asking for the right one.
+    expect(prompt[0]).toContain('VERDICT: PASS')
+    expect(prompt[0]).toContain('VERDICT: FAIL')
+    // Single-quoted shell words: an apostrophe in the prompt would end the
+    // quoting and mangle the invocation.
+    const body = prompt[0].slice(prompt[0].indexOf("'"))
+    expect(body.split("'").length % 2, 'the smoke prompt has an unbalanced apostrophe — the shell quoting is broken').toBe(1)
+  })
+
   it('never imports the tool list across the head-YAML/base-checkout version boundary', () => {
     const text = fleetReviewJobText()
     // Any `bun -e` import naming REVIEWER_TOOLS is the deadlock, restored.
     for (const m of text.matchAll(/import \{([^}]*)\} from "\.\/orchestrator\/src\/review\.ts"/g)) {
       expect(m[1], 'a gate-time import names REVIEWER_TOOLS again — this deadlocks fleet/review for any PR that changes it')
         .not.toMatch(/\bREVIEWER_TOOLS\b/)
+      // Same trap, same ban, for the #1460 HOME-isolation constants: they
+      // are literals in `env:` precisely because importing them here would
+      // deadlock the gate for the PR that introduced them.
+      expect(m[1], 'a gate-time import names a REVIEWER_HOME_* / REVIEWER_CREDENTIALS_* symbol — this deadlocks fleet/review for any PR that changes it')
+        .not.toMatch(/\bREVIEWER_(HOME_PREFIX|CREDENTIALS_RELPATH)\b/)
     }
   })
 

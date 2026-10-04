@@ -454,6 +454,25 @@ jobs:
       # re-arms. A literal here crosses no version boundary, and the drift
       # it could otherwise hide is caught by the test above instead.
       FLEET_REVIEWER_TOOLS: Read,Grep,Glob
+      # The reviewer's gate-owned HOME (#1460, #1511), carried as literals
+      # here for the SAME version-boundary reason as FLEET_REVIEWER_TOOLS
+      # above: this YAML is the head's, the checkout is the base's, so a
+      # `bun -e` import of a symbol the head adds deadlocks the gate for the
+      # PR that adds it (#1464). `tests/orchestrator/guards.test.ts` pins
+      # both equal to `REVIEWER_HOME_PREFIX` and
+      # `REVIEWER_CREDENTIALS_RELPATH` in orchestrator/src/review.ts, at a
+      # commit where the YAML and the module are necessarily the same
+      # version.
+      #
+      # Why the smoke step builds a HOME at all, rather than leaving it to
+      # the real review: the smoke exists to name a configuration problem
+      # BEFORE every real review fails opaquely as `engine-unavailable`. An
+      # engine that cannot authenticate from a gate-owned HOME — because the
+      # provisioned credential file is absent, or the installed build
+      # resolves its login state somewhere this does not reach — must be
+      # caught here, where it is classified, not there.
+      FLEET_REVIEWER_HOME_PREFIX: .llamenos-review-home-
+      FLEET_REVIEWER_CREDENTIALS_RELPATH: .claude/.credentials.json
 
     steps:
       # MANDATORY, and must stay the literal first step: a self-hosted
@@ -1109,8 +1128,80 @@ jobs:
             fail "engine-unavailable" "the $rev_binary CLI is not on PATH on this runner"
           fi
 
-          run_out="$(cd "$root" && printf 'Reply with exactly: VERDICT: PASS\n' \
-            | "$rev_binary" --print --permission-mode plan --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+          # GATE-OWNED HOME (#1460, #1511) — the shell twin of
+          # `prepareReviewerHome` in review.ts; read that function's doc
+          # comment for the full rationale, which is not repeated here.
+          #
+          # In short: `--tools` restricts BUILT-IN tools only, so the
+          # runner's own `$HOME/.claude` still reached into every review —
+          # its MCP servers as extra callable tools, its `settings.json`
+          # hooks executing at session start, and its user-level `CLAUDE.md`
+          # and skills prepended as trusted instructions. The last of those
+          # is what blocked merges: the reviewer saw the operator's workflow
+          # instructions conflicting with this step's fixed-string prompt
+          # and declined it as a prompt-injection attempt, 3/3 runs on #1510.
+          # `root` being an empty `mktemp -d` does nothing about it —
+          # clearing the WORKING directory does not clear USER-level config.
+          #
+          # Created inside $HOME on purpose: `ln` (a HARD link, never a
+          # symlink — claude opens this file with O_NOFOLLOW and refuses a
+          # symlinked one) cannot cross filesystems, and a hard link is what
+          # keeps a token refresh writing through to the operator's single
+          # authoritative store instead of into a directory this step
+          # deletes. `cp` is the cross-device fallback.
+          #
+          # An ABSENT source file is deliberately not fatal here: the engine
+          # then runs unauthenticated and the call below fails with
+          # auth language, which `classify` names `engine-auth` — a far
+          # better diagnosis than this block guessing.
+          rev_home="$(mktemp -d "$HOME/${FLEET_REVIEWER_HOME_PREFIX}XXXXXX")"
+          trap 'rm -rf "$rev_home"' EXIT
+          chmod 700 "$rev_home"
+          rev_creds="$rev_home/$FLEET_REVIEWER_CREDENTIALS_RELPATH"
+          mkdir -p "$(dirname "$rev_creds")"
+          chmod 700 "$(dirname "$rev_creds")"
+          src_creds="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+          if [ -f "$src_creds" ]; then
+            ln "$src_creds" "$rev_creds" 2>/dev/null || cp "$src_creds" "$rev_creds"
+            chmod 600 "$rev_creds"
+          fi
+
+          # `--strict-mcp-config` with no `--mcp-config` alongside it means
+          # the reviewer loads ZERO MCP servers — and this is NOT redundant
+          # with the gate-owned HOME above. Measured on the installed 2.1.280
+          # binary: a session under a FRESH gate-owned HOME with
+          # `--tools default` still loaded 26 MCP tools (`mcp__claude_ai_*`
+          # connectors, `create`/`update`/`delete`/Drive/Gmail among them),
+          # because those are attached to the ACCOUNT the credential file
+          # authenticates as, not to anything in $HOME. The same invocation
+          # with this flag loaded zero. It is passed here as well as in
+          # `verifierArgs` so a runner whose claude build rejects the flag is
+          # named as a configuration problem by this step, rather than
+          # failing every real review as an opaque `engine-unavailable`.
+          # The smoke prompt asks a QUESTION with a real answer, and makes the
+          # verdict the ANSWER to it (#1511's third suggestion). The old
+          # prompt dictated the verdict string outright — a health check that
+          # asks a model to bypass its own judgement and emit a fixed
+          # attestation, which is indistinguishable from an injected
+          # instruction and was refused on exactly those grounds. Measured on
+          # the installed 2.1.280 binary: the old prompt is refused even
+          # under a clean HOME ("I have no review content in front of me, so
+          # that string would falsely imply something was checked"); this one
+          # returned `VERDICT: PASS` as its exact final line on 3/3 runs
+          # under a clean HOME and 2/2 under a deliberately poisoned one. The
+          # verdict is now EARNED, which is why it is stable.
+          #
+          # No apostrophes anywhere in it, deliberately: it is carried as
+          # single-quoted shell words.
+          smoke_prompt="$(printf '%s\n' \
+            'This is the health check for an automated code-review pipeline, not a code review. The only thing being tested is whether this pipeline can read your answer.' \
+            '' \
+            'Question: is 2 + 2 equal to 4?' \
+            '' \
+            'Answer it. Whatever else you write, the LAST line of your reply must be exactly "VERDICT: PASS" if the answer is yes, or exactly "VERDICT: FAIL" if it is no. Nothing may follow that line.')"
+
+          run_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+            | env HOME="$rev_home" "$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then
@@ -1127,7 +1218,28 @@ jobs:
           ')"
           verdict_status=$?
           if [ "$verdict_status" -ne 0 ]; then
-            fail "engine-unavailable" "$verdict_out"
+            # Partial #1508: name what the engine ACTUALLY said, on the line
+            # directly under the headline. `engine-unavailable`'s own detail
+            # string is "the review engine could not be run", which is false
+            # on this arm — the engine ran and answered, and `parseVerdict`
+            # could not read a verdict out of the answer. That one-line
+            # excerpt is what would have named #1511's prompt-injection
+            # refusal on the FIRST run instead of the third plus a human.
+            # Splitting the token itself (`engine-unreadable`, and a retry)
+            # is the rest of #1508 and is NOT done here: a new member of the
+            # NO-VERDICT taxonomy has to travel through `classifyEngineFailure`,
+            # the outcome titles and the check-name mapping, which is a
+            # bigger change than this one belongs in.
+            #
+            # Scrubbed and capped: newlines flattened so it stays one line,
+            # 300 characters, and anything token-shaped redacted — this text
+            # is the model's own prose, but it is printed into a public job
+            # log and must not become a way for engine output to carry a
+            # credential into one.
+            excerpt="$(printf '%s' "$run_out" | tr -d '\000' | tr '\n\r\t' '   ' \
+              | sed -E 's#(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9._-]{16,}|[A-Za-z0-9+/]{40,}={0,2})#[redacted]#g' \
+              | cut -c1-300)"
+            fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
           fi
           printf '%s\n' "$verdict_out"
           echo "review engine smoke test OK (engine=$rev_binary model=$rev_model)"
