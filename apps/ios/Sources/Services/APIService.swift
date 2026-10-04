@@ -437,7 +437,7 @@ final class APIService: @unchecked Sendable {
 
     /// Fetch short-lived SIP credentials for the given hub.
     /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
+    func getSipToken(hubId: String) async throws -> SIPTokenResponse {
         return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
     }
 
