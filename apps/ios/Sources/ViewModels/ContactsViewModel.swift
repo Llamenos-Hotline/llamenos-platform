@@ -6,7 +6,7 @@ import Foundation
 final class ContactsViewModel {
     private let apiService: APIService
 
-    var contacts: [ContactSummary] = []
+    var contacts: [SharedContactTimelineListResponseContact] = []
     var total: Int = 0
     var currentPage: Int = 1
     var searchQuery: String = ""
@@ -22,7 +22,7 @@ final class ContactsViewModel {
     var hasMore: Bool { contacts.count < total }
 
     /// Filtered contacts based on selected contact type.
-    var filteredContacts: [ContactSummary] {
+    var filteredContacts: [SharedContactTimelineListResponseContact] {
         contacts
     }
 
@@ -43,12 +43,12 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             contacts = response.contacts
-            total = response.total
+            total = Int(response.total)
             currentPage = 1
         } catch {
             if contacts.isEmpty {
@@ -76,12 +76,12 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactsListResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             contacts.append(contentsOf: response.contacts)
-            total = response.total
+            total = Int(response.total)
             currentPage = nextPage
         } catch {
             // Silently fail for pagination
@@ -103,12 +103,12 @@ final class ContactsViewModel {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactSearchResponse = try await apiService.request(
+            let response: ContactTimelineListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             contacts = response.contacts
-            total = response.total
+            total = Int(response.total)
             currentPage = 1
         } catch {
             if contacts.isEmpty {
@@ -242,7 +242,7 @@ final class ContactTimelineViewModel {
                 path: apiService.hp("/api/contacts/\(contactHash)/timeline") + "?limit=100"
             )
             events = response.events
-            total = response.total
+            total = Int(response.total)
         } catch {
             if events.isEmpty {
                 errorMessage = error.localizedDescription
