@@ -1,10 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   hasSuccessfulReview, checkRunConclusion, evaluateMergeReadiness, describeOutcome,
-  runReviewAndMerge, REVIEW_AND_MERGE_MODEL,
+  runReviewAndMerge, postReviewCheckRun, REVIEW_AND_MERGE_MODEL,
   type CheckRunInfo, type RequiredCheck, type ReviewAndMergeDeps, type PrSnapshotFacts,
 } from '../../orchestrator/src/review-and-merge.js'
 import { REVIEW_JOB } from '../../orchestrator/src/ci.js'
+import { REPO } from '../../orchestrator/src/gh.js'
+import {
+  GITHUB_API, VerdictRecorderError,
+  type AppHttp, type AppHttpRequest,
+} from '../../orchestrator/src/github-app.js'
+import { fakeInstallationToken, fakeJwt, fakeOperatorPat } from './fake-credentials.js'
 import type { SecondOpinionResult } from '../../orchestrator/src/review.js'
 
 const facts = (over: Partial<PrSnapshotFacts> = {}): PrSnapshotFacts => ({
@@ -146,6 +152,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     fetchReviewCheckRuns: vi.fn(async () => undefined),
     exportHead: vi.fn(async () => snapshot),
     invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'PASS', text: 'VERDICT: PASS' })),
+    recorderReady: vi.fn(async () => ({ ok: true as const })),
     postCheckRun: vi.fn(async () => {}),
     currentHeadSha: vi.fn(async () => 'head111'),
     requiredChecks: vi.fn(async () => requiredChecks()),
@@ -381,5 +388,181 @@ describe('runReviewAndMerge refuses a PR whose review set it does not actually r
     const outcome = await runReviewAndMerge('9', deps)
     expect(outcome.kind).toBe('merged')
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #1483 — the verdict is recorded with a GitHub App installation token, or
+// it is not recorded at all. The Checks API refuses a PAT outright, so these
+// assertions are about WHICH credential reaches WHICH endpoint, and about
+// every way this command must refuse rather than lose a verdict.
+// ---------------------------------------------------------------------------
+
+const INSTALL_TOKEN = fakeInstallationToken()
+const APP_JWT = fakeJwt()
+const OPERATOR_PAT = fakeOperatorPat()
+
+interface RecordedPost { requests: AppHttpRequest[]; http: AppHttp }
+
+function recordingCheckHttp(status = 201, body = '{"id":42}'): RecordedPost {
+  const requests: AppHttpRequest[] = []
+  return {
+    requests,
+    http: async (req) => {
+      requests.push(req)
+      return { status, body }
+    },
+  }
+}
+
+describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
+  it('POSTs the verdict to this repo\'s check-runs endpoint with the INSTALLATION token', async () => {
+    const { requests, http } = recordingCheckHttp()
+    await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', {
+      mintToken: async () => INSTALL_TOKEN,
+      http,
+    })
+
+    expect(requests).toHaveLength(1)
+    const req = requests[0]
+    expect(req?.method).toBe('POST')
+    expect(req?.url).toBe(`${GITHUB_API}/repos/${REPO}/check-runs`)
+
+    // The whole point: the installation token, not the App JWT, and not the
+    // operator's PAT. `Bearer <jwt>` goes to the token-exchange endpoints
+    // (asserted in github-app.test.ts); this call carries `token <ghs_…>`.
+    expect(req?.authorization).toBe(`token ${INSTALL_TOKEN}`)
+    expect(req?.authorization).not.toContain(APP_JWT)
+    expect(req?.authorization).not.toContain(OPERATOR_PAT)
+    expect(req?.authorization).not.toMatch(/^Bearer /)
+  })
+
+  it('sends the real check-run payload — name, head SHA, conclusion and the reviewer\'s own text', async () => {
+    const { requests, http } = recordingCheckHttp()
+    await postReviewCheckRun('abc123', 'FAIL', 'VERDICT: FAIL — leaks a key', {
+      mintToken: async () => INSTALL_TOKEN,
+      http,
+    })
+    const body = JSON.parse(requests[0]?.body ?? '{}') as Record<string, unknown>
+    expect(body['name']).toBe(REVIEW_JOB)
+    expect(body['head_sha']).toBe('abc123')
+    expect(body['status']).toBe('completed')
+    expect(body['conclusion']).toBe('failure')
+    expect((body['output'] as { summary?: string }).summary).toContain('leaks a key')
+  })
+
+  it('truncates an over-long summary rather than letting GitHub reject the whole post', async () => {
+    const { requests, http } = recordingCheckHttp()
+    await postReviewCheckRun('abc123', 'PASS', 'x'.repeat(70_000), { mintToken: async () => INSTALL_TOKEN, http })
+    const summary = (JSON.parse(requests[0]?.body ?? '{}') as { output: { summary: string } }).output.summary
+    expect(summary.length).toBeLessThan(70_000)
+    expect(summary).toContain('(truncated)')
+  })
+
+  it('throws when GitHub refuses the post — never returns as if it had been recorded', async () => {
+    const { http } = recordingCheckHttp(403, JSON.stringify({ message: 'You must authenticate via a GitHub App.' }))
+    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', { mintToken: async () => INSTALL_TOKEN, http }))
+      .rejects.toThrow(/HTTP 403/)
+  })
+
+  it('throws when no token can be minted, and never reaches the endpoint', async () => {
+    const { requests, http } = recordingCheckHttp()
+    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', {
+      mintToken: async () => { throw new VerdictRecorderError('FLEET_REVIEW_APP_ID is not set') },
+      http,
+    })).rejects.toThrow(/FLEET_REVIEW_APP_ID/)
+    expect(requests, 'it must not post a verdict it could not authenticate').toEqual([])
+  })
+
+  it('keeps the installation token out of its own error message, even when GitHub echoes it', async () => {
+    const { http } = recordingCheckHttp(401, JSON.stringify({ message: `bad credential ${INSTALL_TOKEN}`, token: INSTALL_TOKEN }))
+    const e = await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', { mintToken: async () => INSTALL_TOKEN, http })
+      .catch((err: unknown) => err)
+    expect(e).toBeInstanceOf(VerdictRecorderError)
+    expect((e as Error).message).not.toContain(INSTALL_TOKEN)
+    expect((e as Error).message).toContain('HTTP 401')
+  })
+})
+
+describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#1483)', () => {
+  it('refuses BEFORE the reviewer runs when the App credentials are absent', async () => {
+    const deps = baseDeps({
+      recorderReady: vi.fn(async () => ({ ok: false as const, reason: 'FLEET_REVIEW_APP_ID is not set (see issue #1483)' })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+
+    expect(outcome.kind).toBe('cannot-record')
+    expect(outcome.kind === 'cannot-record' && outcome.reason).toContain('FLEET_REVIEW_APP_ID')
+    // Nothing spent, nothing posted, nothing merged.
+    expect(deps.invokeReviewer, 'an opus review must not be spent on a verdict that cannot be recorded').not.toHaveBeenCalled()
+    expect(deps.exportHead).not.toHaveBeenCalled()
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('says plainly that nothing was posted, and names the issue, in the operator-facing line', () => {
+    const line = describeOutcome({ kind: 'cannot-record', pr: '9', reason: 'the key is missing at /x/review-app.pem' })
+    expect(line).toContain('NOT reviewed')
+    expect(line).toContain('Nothing was posted')
+    expect(line).toContain('#1483')
+    expect(line, 'a refusal must never read as a success').not.toMatch(/\bposted fleet\/review\b/)
+  })
+
+  it('reports a LOST verdict when the review ran but the post failed, and never merges', async () => {
+    const deps = baseDeps({
+      postCheckRun: vi.fn(async () => { throw new VerdictRecorderError('HTTP 401 — A JSON web token could not be decoded') }),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+
+    expect(outcome.kind).toBe('review-unrecorded')
+    expect(outcome.kind === 'review-unrecorded' && outcome.verdict).toBe('PASS')
+    expect(outcome.kind === 'review-unrecorded' && outcome.headSha).toBe('head111')
+    expect(outcome.kind === 'review-unrecorded' && outcome.reason).toContain('HTTP 401')
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
+    expect(deps.merge, 'a verdict that was never recorded cannot gate a merge').not.toHaveBeenCalled()
+  })
+
+  // The precise shape the brief forbids: a "posted the verdict" line when
+  // nothing was posted.
+  it('never logs "posted" when the post failed', async () => {
+    const deps = baseDeps({
+      postCheckRun: vi.fn(async () => { throw new VerdictRecorderError('HTTP 403') }),
+    })
+    await runReviewAndMerge('9', deps)
+    const logged = (deps.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('\n')
+    expect(logged).not.toContain('posted')
+  })
+
+  it('renders the lost verdict as a loss, not a pass', () => {
+    const line = describeOutcome({
+      kind: 'review-unrecorded', pr: '9', headSha: 'head111', verdict: 'PASS', reason: 'HTTP 403',
+    })
+    expect(line).toContain('LOST')
+    expect(line).toContain('nothing was posted')
+    expect(line).toContain('#1483')
+  })
+
+  it('the freshness-hit path needs no App credentials at all — it posts nothing', async () => {
+    const deps = baseDeps({
+      fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
+      recorderReady: vi.fn(async () => ({ ok: false as const, reason: 'FLEET_REVIEW_APP_ID is not set' })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
+    expect(deps.recorderReady).not.toHaveBeenCalled()
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a specialist-needing PR without even consulting the recorder', async () => {
+    const deps = baseDeps({
+      reviewSet: vi.fn(async () => ({
+        ok: true as const, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [],
+      })),
+    })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('will not post a fleet/review that claims otherwise')
+    expect(deps.recorderReady).not.toHaveBeenCalled()
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
   })
 })

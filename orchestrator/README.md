@@ -170,6 +170,40 @@ Adding or removing a `-reviewer` label cannot orphan either verdict.
 refuses outright on a PR whose set needs more — request a review from
 `llamenos-auto` and let the CI gate run the whole set.
 
+**`llamenos-fleet review-and-merge` is non-functional until the GitHub App
+exists (#1483).** The Checks API refuses a personal access token
+(`You must authenticate via a GitHub App. (HTTP 403)`), so without the two
+credentials in the next section the command refuses *before* spending a
+review and exits non-zero. Use the CI gate (request a review on the PR)
+until then. There is deliberately no fallback: `POST …/statuses` on a commit
+does accept a PAT, but a PAT-written green status under the `fleet/review`
+context name could override a red check run, which is fail-open — see
+`orchestrator/src/github-app.ts`.
+
+### Recording a verdict: the `llamenos-fleet-review` GitHub App (#1483)
+
+Two values, both read by `orchestrator/src/github-app.ts` and used for
+exactly one API call — the `fleet/review` check-run POST. Everything else
+`review-and-merge` does (reading the PR, exporting its head, merging) keeps
+using the operator's own `gh` credentials.
+
+| Value | Where it goes | Secret? |
+|-------|---------------|---------|
+| `FLEET_REVIEW_APP_ID` | A line in `~/.llamenos-fleet/env`. The App's numeric ID, shown on its settings page. | No |
+| The App's private key (`.pem`) | `~/.llamenos-fleet/review-app.pem`, **mode 600**. Override the path with `FLEET_REVIEW_APP_KEY_PATH` (tests use this; production should not). | **Yes** |
+| `FLEET_REVIEW_APP_INSTALLATION_ID` | Optional, in `~/.llamenos-fleet/env`. Skips the installation lookup. Without it the installation is matched by account login, and an ambiguous result is a refusal, not a guess. | No |
+
+The App needs **`checks: write` and nothing else** (`metadata: read` is added
+by GitHub automatically). That is the point: if the key leaked, the worst an
+attacker could do is post a check-run conclusion — it cannot read this
+repository's code, merge, push, or touch issues or pull requests. See issue
+#1483 for the creation steps.
+
+Each invocation mints a fresh installation token (RS256 App JWT → installation
+token → one POST) and keeps no copy of it. A missing, mis-permissioned or
+unparseable key is a hard refusal with the remedy named — never a silent
+skip, and never a "posted the verdict" line when nothing was posted.
+
 **Fail closed.** Unreadable labels, an unknown or malformed `-reviewer`
 label, an unreadable agent registry: each fails the check with the rule it
 broke. None of them is ever "no review needed".
@@ -342,7 +376,8 @@ deliberate exception:
 | `~/.llamenos-fleet/scheduler.lock` | Pidfile lock; ensures only one `tick()` runs at a time. Stale locks (holder process no longer alive) are reaped automatically. |
 | `~/.llamenos-fleet/runs.jsonl` | The ledger — one JSON line per dispatch/shadow/rejection-relevant outcome. Read by `status`, the circuit breakers, and the per-item attempt limit. |
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
-| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). |
+| `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
+| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
 
 ## systemd timer
 
