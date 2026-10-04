@@ -56,15 +56,15 @@ struct PlatformBansView: View {
         List {
             if !viewModel.platformBanSearchResults.isEmpty {
                 Section(header: Text(NSLocalizedString("platform_bans_search_title", comment: "Search Results"))) {
-                    ForEach(viewModel.platformBanSearchResults) { (ban: AppBanEntry) in
+                    ForEach(viewModel.platformBanSearchResults) { (ban: SearchBansResponseBan) in
                         BanRowView(ban: ban) {}
                             .overlay(alignment: .topTrailing) {
                                 BadgeView(
-                                    text: ban.hubId == nil
+                                    text: ban.hubID == nil
                                         ? NSLocalizedString("platform_bans_scope_platform", comment: "Platform")
                                         : NSLocalizedString("platform_bans_scope_hub", comment: "Hub"),
-                                    icon: ban.hubId == nil ? "globe" : "building.2",
-                                    color: ban.hubId == nil ? .purple : .blue,
+                                    icon: ban.hubID == nil ? "globe" : "building.2",
+                                    color: ban.hubID == nil ? .purple : .blue,
                                     style: .subtle
                                 )
                             }

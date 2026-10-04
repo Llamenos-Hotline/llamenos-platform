@@ -89,7 +89,7 @@ final class AdminViewModel {
     // MARK: - Ban List State
 
     /// All ban entries from the server.
-    var bans: [AppBanEntry] = []
+    var bans: [BanListResponseBan] = []
 
     /// Whether bans are loading.
     var isLoadingBans: Bool = false
@@ -106,7 +106,7 @@ final class AdminViewModel {
     // MARK: - Audit Log State
 
     /// Audit log entries from the server.
-    var auditEntries: [AppAuditEntry] = []
+    var auditEntries: [SharedEntry] = []
 
     /// Total count of audit entries for pagination.
     var auditTotal: Int = 0
@@ -127,7 +127,7 @@ final class AdminViewModel {
     // MARK: - Invites State
 
     /// All invite codes from the server.
-    var invites: [AppInvite] = []
+    var invites: [Invite] = []
 
     /// Whether invites are loading.
     var isLoadingInvites: Bool = false
@@ -271,7 +271,7 @@ final class AdminViewModel {
     // MARK: - Platform Bans State
 
     /// Platform-scoped bans from the API.
-    var platformBans: [AppBanEntry] = []
+    var platformBans: [PlatformBanListResponseBan] = []
 
     /// Whether platform bans are loading.
     var isLoadingPlatformBans: Bool = false
@@ -283,7 +283,7 @@ final class AdminViewModel {
     var platformBanSearchQuery: String = ""
 
     /// Search results from cross-hub search.
-    var platformBanSearchResults: [AppBanEntry] = []
+    var platformBanSearchResults: [SearchBansResponseBan] = []
 
     // MARK: - Shared State
 
@@ -368,12 +368,12 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: BanListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans"
             )
             bans = response.bans.sorted { lhs, rhs in
-                (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
+                (lhs.bannedDate ?? Date.distantPast) > (rhs.bannedDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -449,12 +449,12 @@ final class AdminViewModel {
         auditPage = 1
 
         do {
-            let response: AuditLogResponse = try await apiService.request(
+            let response: AuditListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/audit?page=1&limit=\(auditPageSize)"
             )
             auditEntries = response.entries
-            auditTotal = response.total
+            auditTotal = Int(response.total)
             hasMoreAudit = auditEntries.count < response.total
         } catch {
             errorMessage = error.localizedDescription
@@ -471,13 +471,13 @@ final class AdminViewModel {
         let nextPage = auditPage + 1
 
         do {
-            let response: AuditLogResponse = try await apiService.request(
+            let response: AuditListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/audit?page=\(nextPage)&limit=\(auditPageSize)"
             )
             auditEntries.append(contentsOf: response.entries)
             auditPage = nextPage
-            auditTotal = response.total
+            auditTotal = Int(response.total)
             hasMoreAudit = auditEntries.count < response.total
         } catch {
             errorMessage = error.localizedDescription
@@ -495,12 +495,12 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: InvitesListResponse = try await apiService.request(
+            let response: InviteListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/identity/invites"
             )
             invites = response.invites.sorted { lhs, rhs in
-                (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
+                (lhs.bannedDate ?? Date.distantPast) > (rhs.bannedDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -516,7 +516,7 @@ final class AdminViewModel {
 
         do {
             let request = CreateInviteRequest(role: newInviteRole.rawValue)
-            let _: AppInvite = try await apiService.request(
+            let _: Invite = try await apiService.request(
                 method: "POST",
                 path: "/api/identity/invite",
                 body: request
@@ -1090,12 +1090,12 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: PlatformBanListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans/platform"
             )
             platformBans = response.bans.sorted {
-                ($0.createdDate ?? Date.distantPast) > ($1.createdDate ?? Date.distantPast)
+                ($0.bannedDate ?? Date.distantPast) > ($1.bannedDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -1169,39 +1169,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: SearchBansResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans/platform/search?q=\(query)"
             )
             platformBanSearchResults = response.bans
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    /// Promote a hub-scoped ban to platform scope.
-    func promoteBanToPlatform(banId: String) async {
-        errorMessage = nil
-        successMessage = nil
-
-        guard let ban = bans.first(where: { $0.id == banId }) else { return }
-
-        do {
-            let request = CreateBanRequest(
-                identifierHash: ban.identifierHash,
-                reason: ban.reason
-            )
-            try await apiService.request(
-                method: "POST",
-                path: "/api/bans/platform",
-                body: request
-            )
-
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.success)
-
-            successMessage = NSLocalizedString("platform_bans_promote_button", comment: "Promoted to platform ban")
-            await loadPlatformBans()
         } catch {
             errorMessage = error.localizedDescription
         }

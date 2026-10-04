@@ -202,7 +202,7 @@ struct InviteView: View {
 
 /// A single invite row showing the code, role, status, and sharing option.
 struct InviteRowView: View {
-    let invite: AppInvite
+    let invite: Invite
 
     @State private var showCopied: Bool = false
 
