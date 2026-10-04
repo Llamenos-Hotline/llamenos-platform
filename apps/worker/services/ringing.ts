@@ -44,10 +44,31 @@ function reportUnroutableCall(
 type RingableUser = Awaited<ReturnType<Services['identity']['getUsers']>>['users'][number]
 
 /**
- * Resolve the volunteers a call for this hub rings: on-shift (or the hub's
- * fallback group when nobody is on shift), filtered to those who are active,
- * not on break, not already on a live call in any hub, and have access to the hub. If every on-shift volunteer is unavailable the fallback group is
- * tried with the same rules.
+ * Resolve the volunteers a call for this hub rings.
+ *
+ * The roster is the intersection of two independent consents, and a volunteer
+ * rings only when both are present:
+ *
+ *  - **scheduled now** — an active `shifts` row covering the current UTC
+ *    day/time that names them. This is the *admin's* consent: an admin put
+ *    them on the schedule.
+ *  - **clocked in** — an `active_shifts` row for this hub. This is the
+ *    *volunteer's* consent: they pressed the button, now.
+ *
+ * Receiving a crisis call must never be implicit, so neither consent alone is
+ * enough: scheduled-but-not-clocked-in does not ring, and
+ * clocked-in-but-not-scheduled does not ring either.
+ *
+ * When that intersection is empty — including when the schedule is populated
+ * but unmanned, which is now a far more likely state — the hub's fallback
+ * group is tried instead. The fallback group is the operator's last resort for
+ * an unmanned hotline and is deliberately *not* gated on clocking in; gating
+ * it would mean an unmanned schedule silently drops the call.
+ *
+ * The resulting set is then filtered to those who are active, not on break,
+ * not already on a live call in any hub, and have access to the hub. If every
+ * member of the intersection is unavailable the fallback group is tried with
+ * the same rules.
  *
  * Shared by the ringing path, the answer path, presence (services/presence.ts)
  * and the read-only routing diagnostic (services/routing-readiness.ts), so
@@ -56,25 +77,42 @@ type RingableUser = Awaited<ReturnType<Services['identity']['getUsers']>>['users
  * `available` is empty when a roster exists but nobody is available.
  *
  * `usedFallback` says which of the two rosters `available` came from — the hub's
- * fallback group, or the shift schedule. It is reported by the routing
- * diagnostic so an operator can tell "the shift is covered" from "nobody is on
- * shift and the fallback group is carrying the hotline"; nothing branches on it.
+ * fallback group, or the scheduled ∩ clocked-in intersection. It is reported by
+ * the routing diagnostic so an operator can tell "the shift is covered and
+ * manned" from "the fallback group is carrying the hotline"; nothing branches on
+ * it. Paired with that diagnostic's `scheduledNow` and `clockedIn` counts it
+ * also separates the two ways the intersection empties: nobody rostered, versus
+ * rostered but nobody clocked in.
  */
 export async function resolveRingableVolunteers(
   services: Services,
   hubId: string,
 ): Promise<{ available: RingableUser[]; usedFallback: boolean } | null> {
-  let onShiftPubkeys = await services.shifts.getCurrentVolunteers(hubId)
+  const scheduledPubkeys = await services.shifts.getCurrentVolunteers(hubId)
+
+  // Ringing requires BOTH consents: the admin scheduled them AND they clocked
+  // in. `getCurrentVolunteers` answers only the first — it reads the `shifts`
+  // schedule — so intersect it with the `active_shifts` rows clock-in writes.
+  const clockedInPubkeys = await services.activeShifts.listClockedInPubkeys(hubId)
+  let onShiftPubkeys = scheduledPubkeys.filter(pk => clockedInPubkeys.has(pk))
   let usedFallback = false
 
-  // If no one is on shift, use the hub's fallback group
+  // Nobody is both scheduled and clocked in — an unmanned hotline. Fall through
+  // to the hub's fallback group rather than drop the call. Not gated on
+  // clocking in: see the note above.
   if (onShiftPubkeys.length === 0) {
     const fallback = await services.settings.getFallbackGroup(hubId)
     onShiftPubkeys = fallback.userPubkeys
     usedFallback = true
   }
 
-  logger.info('Resolving ringable volunteers', { hubId, onShiftCount: onShiftPubkeys.length })
+  logger.info('Resolving ringable volunteers', {
+    hubId,
+    scheduledCount: scheduledPubkeys.length,
+    clockedInCount: clockedInPubkeys.size,
+    onShiftCount: onShiftPubkeys.length,
+    usedFallback,
+  })
 
   if (onShiftPubkeys.length === 0) return null
 
@@ -103,7 +141,7 @@ export async function resolveRingableVolunteers(
 
   // Everyone on shift is unavailable (inactive / on break / on a call) — try the fallback
   // group with the same availability rules before giving up. The fallback is
-  // meant for exactly this case, not only for an empty roster.
+  // meant for exactly this case, not only for an empty intersection.
   if (available.length === 0 && !usedFallback) {
     const fallback = await services.settings.getFallbackGroup(hubId)
     available = pickAvailable(fallback.userPubkeys)
