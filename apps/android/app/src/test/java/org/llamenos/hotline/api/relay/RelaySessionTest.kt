@@ -272,6 +272,32 @@ class RelaySessionTest {
         assertEquals(null, RelayEventParser.parse("""{"type":"call:ring"}"""))
     }
 
+    // ---- device wipe is not a relay event (#1093) ----
+
+    @Test
+    fun `parser never produces a DeviceWipe from relay event content`() {
+        val content = """{"type":"device:wipe","targetDevicePubkey":"aa","reason":"seized","serverSignature":"bb"}"""
+        assertEquals(LlamenosEvent.Unknown("device:wipe"), RelayEventParser.parse(content))
+    }
+
+    @Test
+    fun `validly signed device-wipe relay event does not reach the wipe handler`() = runTest {
+        val s = session()
+        s.authenticate("hub-a")
+        val frame = serverEvent(
+            "hub-a",
+            """{"type":"device:wipe","targetDevicePubkey":"${deviceKey.rawPubkeyHex()}","reason":"seized","serverSignature":"00"}""",
+        )
+
+        val delivered = s.onFrame(frame).delivered()
+
+        // The frame is authentic, so it is delivered — but only as an inert Unknown. The
+        // Navigation wipe collector matches `event as? LlamenosEvent.DeviceWipe`, so nothing
+        // arriving on the relay `event` path can trigger keystore/crypto wipe.
+        assertEquals(listOf(AttributedHubEvent<LlamenosEvent>("hub-a", LlamenosEvent.Unknown("device:wipe"))), delivered)
+        assertTrue(delivered.none { it.event is LlamenosEvent.DeviceWipe })
+    }
+
     private companion object {
         /** DER prefix of an X.509 SubjectPublicKeyInfo for a raw Ed25519 key. */
         const val ED25519_SPKI_PREFIX = "302a300506032b6570032100"

@@ -24,6 +24,7 @@ import org.junit.Test
 import org.llamenos.hotline.api.AnalyticsRepository
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeyValueStore
@@ -98,6 +99,7 @@ class DashboardViewModelHubAttributionTest {
             mockk<SessionState>(relaxed = true),
             activeHubState,
             mockk<AnalyticsRepository>(relaxed = true),
+            ShiftClockRepository(apiService),
         )
     }
 
