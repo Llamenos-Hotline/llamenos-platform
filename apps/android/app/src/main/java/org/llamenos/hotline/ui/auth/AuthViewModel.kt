@@ -63,6 +63,20 @@ data class AuthUiState(
 )
 
 /**
+ * Auth state after the user locks the app: PIN entry cleared and the
+ * authenticated flag reset, so the PIN unlock screen does not treat the
+ * just-locked session as already authenticated.
+ */
+internal fun AuthUiState.resetForLock(): AuthUiState = copy(
+    pin = "",
+    confirmPin = "",
+    isConfirmingPin = false,
+    pinMismatch = false,
+    error = null,
+    isAuthenticated = false,
+)
+
+/**
  * ViewModel for the authentication flow.
  *
  * Manages state for login and PIN setup/unlock.
@@ -333,18 +347,15 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
-     * Reset PIN entry state (when navigating back from confirm to initial entry).
+     * Reset PIN entry state and clear the authenticated flag.
+     *
+     * Called on lock (Navigation's `onLock`): the user is back at the PIN
+     * unlock screen, so `isAuthenticated` must be false — otherwise
+     * PINUnlockScreen's `LaunchedEffect(uiState.isAuthenticated)` would
+     * fire immediately and bounce back to Main while locked.
      */
     fun resetPinEntry() {
-        _uiState.update {
-            it.copy(
-                pin = "",
-                confirmPin = "",
-                isConfirmingPin = false,
-                pinMismatch = false,
-                error = null,
-            )
-        }
+        _uiState.update { it.resetForLock() }
     }
 
     /**
