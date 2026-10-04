@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
+import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind } from './review.js'
 import { diffHash, reviewSetTag, type CachedVerdict, type ReviewCache, type ReviewCacheKey } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -128,6 +128,27 @@ export const REVIEW_SKIP_AUTHORS: readonly string[] = ['dependabot[bot]', 'depen
  */
 export const REVIEW_REPUBLISH_ACTION = 'synchronize'
 
+/**
+ * The event name of the operator's manual dispatch — `fleet-review.yml`'s
+ * `workflow_dispatch` trigger, carrying a `pr_number` input.
+ *
+ * It is a REAL review trigger and never a bypass: it reaches `run-engine`
+ * like any review request, runs the full review set, and can return FAIL. It
+ * is accepted with no reviewer login to check because triggering a
+ * `workflow_dispatch` at all needs write access to this repository.
+ *
+ * WHAT IT IS NOT is a second route to a green gate, and #1471 was briefed on
+ * the belief that it was. A dispatch's check run attaches to the commit, but
+ * the check SUITE a `workflow_dispatch` creates on a branch is not associated
+ * with the PULL REQUEST, so that check run never enters the PR's
+ * status-check rollup — measured on #1372, #1378 and #1184, each of whose
+ * heads carries a dispatch SUCCESS while the rollup still shows an older
+ * `pull_request` FAILURE. So a dispatch is how you GET a verdict; only
+ * `review_requested` CLEARS the context. `reviewNotRequestedAdvice` must
+ * therefore never offer it as the recovery, and a rail pins that.
+ */
+export const REVIEW_DISPATCH_EVENT = 'workflow_dispatch'
+
 export interface ReviewRequestEvent {
   /** `github.event_name`. */
   eventName: string
@@ -145,9 +166,12 @@ export interface ReviewRequestEvent {
    *  carried only so the refusal can say so, rather than a team request
    *  failing with advice that never mentions it. */
   requestedTeam?: string | undefined
-  /** `github.event.pull_request.user.login` — the PR's AUTHOR, who can never
-   *  be its trigger (see `reviewTriggerLogins`). Absent only narrows: with no
-   *  author the stand-in route below stays shut, and a request for
+  /** The PR's AUTHOR, who can never be its trigger (see
+   *  `reviewTriggerLogins`). `github.event.pull_request.user.login` where the
+   *  event has a PR payload; the live PR read otherwise, since
+   *  `workflow_dispatch` has no payload at all (see
+   *  `reviewRequestEventFromEnv`). Absent only narrows: with no author the
+   *  stand-in route below stays shut, and a request for
    *  `REVIEW_REQUEST_LOGIN` rests on GitHub's own refusal to request a PR's
    *  author, exactly as it did before the author was known here. */
   prAuthor?: string | undefined
@@ -213,8 +237,11 @@ export type ReviewRequestDecision =
   | { requested: false; reason: string }
 
 /**
- * Whether THIS event is the one asking for a review. The only thing that
- * decides it is WHO was asked — never a label, and never a push.
+ * Whether THIS event is the one asking for a review. On a `pull_request` the
+ * only thing that decides it is WHO was asked — never a label, and never a
+ * push. On a `workflow_dispatch` the write access the event itself required
+ * decides it (`REVIEW_DISPATCH_EVENT`), because a dispatch has no reviewer
+ * login to name and the operator typing a PR number is the act.
  *
  * Fail closed in both directions this can be got wrong: an unrecognised
  * event name is not a request, and a request naming anyone else (a human
@@ -232,9 +259,25 @@ export type ReviewRequestDecision =
  * a PR's author ask itself for its own review.
  */
 export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
-  if (e.eventName === 'workflow_dispatch') return { requested: true }
+  // The operator's manual escape hatch IS a request (#1471). It carries no
+  // reviewer login to check and needs none: `workflow_dispatch` cannot be
+  // triggered without write access to this repository, so somebody with
+  // write access typing this PR's number is the "look at this now" the
+  // reviewer login stands for on the `review_requested` path. It reaches
+  // `run-engine` and runs the real review set — see `REVIEW_DISPATCH_EVENT`.
+  if (e.eventName === REVIEW_DISPATCH_EVENT) return { requested: true }
   if (e.eventName !== 'pull_request') {
-    return { requested: false, reason: `\`${e.eventName || '(no event)'}\` is not a review request` }
+    // An event name this function does not recognise is still a refusal —
+    // fail closed — but the reason now names the one trigger that is always
+    // reachable, instead of stopping at "not a review request" and leaving
+    // the reader with nothing to press. `(no event)` in particular used to
+    // be a dead end for a run that WAS a dispatch, only one whose stale
+    // head YAML never said so (see `reviewRequestEventFromEnv`).
+    return {
+      requested: false,
+      reason: `\`${e.eventName || '(no event)'}\` is not a review request — \`review_requested\` starts a ` +
+        `review, and so does a \`${REVIEW_DISPATCH_EVENT}\` of fleet-review.yml with this PR's number`,
+    }
   }
   // Stated explicitly, ahead of the reviewer check, so the red check a push
   // produces says what actually happened. Without this the refusal would
@@ -276,16 +319,125 @@ export function reviewIsRequested(e: ReviewRequestEvent): boolean {
  * The raw review-request fields `fleet-review.yml`'s gate step hands over in
  * `env:`, uninterpreted — `reviewRequestFor` judges them. The one reader of
  * those variable names, so the workflow and the gate cannot disagree on one.
+ *
+ * Two of those fields have a FALLBACK, both for the same reason: this gate
+ * runs BASE code against the PR's own HEAD copy of the workflow (#1464), and
+ * a `workflow_dispatch` has no `pull_request` payload. See each field.
  */
-export function reviewRequestEventFromEnv(env: NodeJS.ProcessEnv, branch: string): ReviewRequestEvent {
+export function reviewRequestEventFromEnv(
+  env: NodeJS.ProcessEnv,
+  branch: string,
+  livePrAuthor?: string | undefined,
+): ReviewRequestEvent {
   return {
-    eventName: env['FLEET_REVIEW_EVENT_NAME'] ?? '',
+    // `GITHUB_EVENT_NAME` is the fallback, and it is not belt-and-braces: it
+    // is the only one of these the RUNNER sets, so it is the only one a
+    // stale `FLEET_REVIEW_*` block cannot omit. The gate executes the PR's
+    // own HEAD copy of `fleet-review.yml` against a BASE checkout of this
+    // module (#1464), so an open PR whose branch predates
+    // `FLEET_REVIEW_EVENT_NAME` hands this reader nothing and the event
+    // reads as `(no event)` — which refused seven of #1471's eight
+    // dispatches outright, naming "no event" on a run GitHub had already
+    // told the runner was a `workflow_dispatch`. Preferring the explicit
+    // variable keeps the workflow the statement of intent; falling back to
+    // the runner's own value keeps the decision honest when the workflow
+    // copy is too old to make one. Never fail-open: with no event name from
+    // either source this stays '' and `reviewRequestFor` refuses.
+    eventName: firstNonBlank(env['FLEET_REVIEW_EVENT_NAME'], env['GITHUB_EVENT_NAME']) ?? '',
     action: env['FLEET_REVIEW_EVENT_ACTION'],
     requestedReviewer: env['FLEET_REVIEW_REQUESTED_REVIEWER'],
     requestedTeam: env['FLEET_REVIEW_REQUESTED_TEAM'],
-    prAuthor: env['FLEET_REVIEW_PR_AUTHOR'],
+    // `workflow_dispatch` carries no `pull_request` payload, so
+    // `github.event.pull_request.user.login` is empty on every dispatch and
+    // the author is simply unknown from the event. `livePrAuthor` is the
+    // same PR read `runReviewGate` already makes for the labels
+    // (`readPrFacts`) — no extra round trip — and it matters because the
+    // author is what decides who may be asked (`reviewTriggerLogins`):
+    // without it, the advice a red check prints defaulted to
+    // `REVIEW_REQUEST_LOGIN`, which on a PR `REVIEW_REQUEST_LOGIN` itself
+    // authored is the PR's OWN AUTHOR — a request GitHub answers 422. That
+    // is the second half of #1471: the dead end told you to walk into a
+    // wall. The event payload still WINS where it has one, so nothing about
+    // the `review_requested` path now depends on an API call.
+    prAuthor: firstNonBlank(env['FLEET_REVIEW_PR_AUTHOR'], livePrAuthor),
     branch,
   }
+}
+
+/** The first of these that is set and not all whitespace; `undefined` if none
+ *  is. Blank is treated as absent throughout this module (see `loginOf`),
+ *  because `env:` renders an unset `${{ ... }}` context path as ''. */
+function firstNonBlank(...values: readonly (string | undefined)[]): string | undefined {
+  return values.find((v) => (v ?? '').trim().length > 0)
+}
+
+/**
+ * The advice a red `not-requested` check prints: why this event did not
+ * count is `reviewRequestFor`'s job, and this is what to DO about it.
+ *
+ * `alreadyRequested` is the PR's LIVE `requested_reviewers` list. When the
+ * login we are about to tell the reader to request is already on it, "request
+ * a review from X" is a guaranteed no-op and must say so (#1471): GitHub
+ * re-adds a CODEOWNER's request the instant it is removed, the DELETE answers
+ * 200 with the PR object, the follow-up POST no-ops on an already-requested
+ * login, and NO `review_requested` event is emitted. `requested_reviewers`
+ * cannot distinguish "requested just now" from "requested last week and never
+ * re-fired", so every command in that sequence reports success while nothing
+ * happens — which is exactly how eight PRs sat red with the check telling
+ * each reader to run the one loop that cannot terminate.
+ *
+ * `undefined` means the live list could not be read, which is not the same as
+ * empty: say nothing about it rather than claim the re-request will work.
+ */
+export function reviewNotRequestedAdvice(input: {
+  pr: string
+  branch: string
+  ask: string
+  isAuthorStandIn: boolean
+  alreadyRequested: readonly string[] | undefined
+}): string[] {
+  const { pr, branch, ask, isAuthorStandIn, alreadyRequested } = input
+  // Deliberately NOT a `gh workflow run fleet-review.yml` suggestion. A
+  // dispatch does run the real review and does write a `fleet/review` check
+  // run on the head — but a check suite created by a `workflow_dispatch` on a
+  // branch is not associated with the PULL REQUEST, so that check run never
+  // enters the PR's status-check rollup and cannot clear (or fail) the
+  // required context. Measured on three of #1471's PRs at once: #1372's head
+  // carries a `pull_request` FAILURE and a later `workflow_dispatch` SUCCESS,
+  // and the rollup surfaces only the FAILURE; same on #1378 and #1184 (whose
+  // head carries TWO dispatch successes and still shows a four-day-old red).
+  // Naming it here would replace one dead end with another, which is the
+  // whole defect this function exists to stop.
+  const pending = alreadyRequested?.some((l) => loginOf(l) === loginOf(ask)) === true
+  if (pending) {
+    return [
+      `review not requested — \`${ask}\` is ALREADY a requested reviewer on this PR, so requesting one again ` +
+        'does nothing: GitHub emits no `review_requested` event for a login it already has, and re-adds a ' +
+        "CODEOWNER's request the instant you remove it (the DELETE answers 200 with the PR object and changes " +
+        'nothing, while every command in the sequence reports success). That recovery cannot start a review ' +
+        'here (#1471).',
+      `check it rather than trust it: gh api repos/<owner>/<repo>/issues/${pr}/events ` +
+        '--jq \'[.[] | select(.event|test("review_request"))] | last\' — if the newest review-request event ' +
+        'is not from just now, nothing fired and `reviewRequests` is telling you nothing.',
+      'a `workflow_dispatch` of fleet-review.yml WILL run the real review, but its check run is not associated ' +
+        `with PR #${pr} and so never enters this PR's status-check rollup — it cannot clear this context. ` +
+        'Escalate on #1471 instead of looping.',
+    ]
+  }
+  return [
+    isAuthorStandIn
+      ? `review not requested — this PR's author cannot be asked to review it, so request a review from ` +
+        `\`${ask}\` to run the non-author review`
+      : `review not requested — request a review from \`${ask}\` to run the non-author review`,
+    // Only claimed when the list was actually READ and that login was absent.
+    // `undefined` means the read failed, which cannot rule out the no-op
+    // above — so say nothing rather than promise an event will fire.
+    ...(alreadyRequested === undefined
+      ? [`(could not read this PR's requested reviewers, so whether that request will emit an event is unknown — ` +
+         'check `issues/<n>/events` after making it)']
+      : [`\`${ask}\` is not currently requested on this PR, so that request will emit an event and start the ` +
+         `review (branch \`${branch}\`).`]),
+  ]
 }
 
 /**
@@ -368,7 +520,7 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    `export-unsafe`: refused before any reviewer ran, for the reason named.
  */
 export const REVIEW_CI_RESULTS = [
-  'pass', 'fail', 'unreadable', 'cache-pass', 'cache-fail',
+  'pass', 'fail', 'unreadable', 'budget-exhausted', 'cache-pass', 'cache-fail',
   'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
 ] as const
 export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
@@ -417,7 +569,7 @@ export const REVIEW_OUTCOME_TOKENS = [
   'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:unclassified',
   'REJECTED:reviewed', 'REJECTED:cached',
   'NO-VERDICT:not-requested', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
-  'NO-VERDICT:unreadable', 'NO-VERDICT:did-not-run',
+  'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:did-not-run',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable',
   'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
@@ -963,7 +1115,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     const who = name === GENERAL_REVIEWER ? 'review' : name
     if (s.status === 'rejected') {
       const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail }
+      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined as EngineFailureKind | undefined }
     }
     const r = s.value
     // UNREADABLE and FAIL both fail, but they are different facts and the
@@ -977,11 +1129,13 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     // `review unavailable: {"name":"UnknownError",...}` for what was,
     // underneath, a bad model id — the wrong diagnostic sent whoever read
     // it looking for an outage that was never happening.
-    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured` : `${who} unavailable`
+    const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
+      : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
+      : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
       : verdictSummary(r.text)
-    return { name, verdict: r.verdict, headline, text: r.text }
+    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind }
   })
 
   const ok = results.every((r) => r.verdict === 'PASS')
@@ -998,7 +1152,16 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // A substantive rejection outranks an UNREADABLE beside it: somebody DID
   // read this diff and reject it, so the outcome to report is "fix the
   // code", not "re-run the reviewer" — see `REVIEW_CI_RESULTS`.
-  const result: ReviewCiResult = ok ? 'pass' : results.some((r) => r.verdict === 'FAIL') ? 'fail' : 'unreadable'
+  // A substantive FAIL still outranks everything. Among the non-FAIL
+  // failures, an exhausted budget is reported as itself: it is the one whose
+  // remedy is NOT "re-request" (that re-runs the same diff under the same
+  // budget), so collapsing it into `unreadable` hands the reader advice that
+  // cannot work.
+  const result: ReviewCiResult = ok
+    ? 'pass'
+    : results.some((r) => r.verdict === 'FAIL') ? 'fail'
+    : results.some((r) => r.failureKind === 'budget-exhausted') ? 'budget-exhausted'
+    : 'unreadable'
   const verdict: ReviewCiVerdict = { ok, summary, result }
 
   // Only a FRESH, SUBSTANTIVE verdict this process itself just produced is
@@ -1281,10 +1444,36 @@ export function ciContextFromEnv(env: NodeJS.ProcessEnv, repoDir: string): CiCon
   return { branch, repoDir, headDir, headSha, baseSha, pr: env['FLEET_CI_PR'] ?? '(unknown)' }
 }
 
+/**
+ * `git diff` flags that make the text a function of the two commits ALONE.
+ *
+ * This text is the review cache's key (`diffHash`, review-cache.ts), so any
+ * byte that varies with the machine turns an unchanged diff into a miss —
+ * and a miss on a review request is a full model review of a diff that
+ * was already judged.
+ *
+ * `--full-index` is the one that was live. Without it the `index a1b2c3d..`
+ * line carries blob ids abbreviated to `core.abbrev=auto`, whose width
+ * grows with the clone's OBJECT COUNT: 8 hex digits below 65,536 objects, 9
+ * above. The review box's persistent clone held 61,899 objects on
+ * 2026-09-30, so every cached verdict was one width change from missing at
+ * once — and a hosted runner's fresh clone and the box's grown one could
+ * disagree about the same diff. #1170's PASS was recorded under the 8-digit
+ * text; the same two commits in a clone with 101k objects hashed to a
+ * different key and missed.
+ *
+ * The rest pin the output against a runner's own git config — prefixes,
+ * colour, an external or textconv diff driver — which the operator's `HOME`
+ * on the review box may set and a hosted runner never does.
+ */
+export const CI_DIFF_FLAGS: readonly string[] = [
+  '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+]
+
 /** Read inside the trusted base checkout, over the fetched head object. */
 export async function ciDiff(ctx: CiContext): Promise<string> {
   const { stdout } = await execFileAsync(
-    'git', ['-C', ctx.repoDir, 'diff', `${ctx.baseSha}...${ctx.headSha}`],
+    'git', ['-C', ctx.repoDir, 'diff', ...CI_DIFF_FLAGS, `${ctx.baseSha}...${ctx.headSha}`],
     { maxBuffer: 32 * 1024 * 1024 },
   )
   return stdout

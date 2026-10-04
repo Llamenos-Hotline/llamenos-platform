@@ -7,6 +7,7 @@ import {
   createVolunteerViaApi,
   createShiftViaApi,
   createBanViaApi,
+  clockInViaApi,
   type CreateVolunteerResult,
 } from '../../api-helpers'
 import type { RelayCapture } from '../../helpers/relay-capture'
@@ -86,6 +87,13 @@ Given('{int} volunteers are on shift', async ({ request, world }, count: number)
     userPubkeys: pubkeys,
     hubId: state.hubId,
   })
+
+  // "On shift" is the intersection of both consents: the admin's shift above and
+  // each volunteer's own clock-in. A volunteer who has not clocked in is not
+  // rung and may not answer (apps/worker/services/ringing.ts).
+  for (const vol of volunteers) {
+    await clockInViaApi(request, state.hubId, vol.deviceKey)
+  }
 
   state.volunteers = volunteers
   state.shiftIds.push(shift.id)

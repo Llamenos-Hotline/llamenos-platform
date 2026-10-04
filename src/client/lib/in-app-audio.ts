@@ -1,13 +1,18 @@
 import type { TelephonyProviderType } from '@shared/types'
 
 /**
- * Providers whose calls can be answered with audio inside the app.
+ * Providers whose telephony protocol/token minter (`apps/worker/telephony/
+ * webrtc-tokens.ts`) is capable of in-app audio, in principle. This drives
+ * the admin telephony settings UI (issue #728) — which providers may offer
+ * the WebRTC toggle at all — not whether a browser audio client is actually
+ * installed today. Every other provider rings volunteers' phones (PSTN
+ * parallel ringing) and cannot carry call audio into the app regardless.
  *
- * Only Twilio and SignalWire have a browser-audio client integration
- * (`@twilio/voice-sdk`, see `webrtc.ts`) and a token minter on the server
- * (`apps/worker/telephony/webrtc-tokens.ts`). Every other provider still
- * rings volunteers' phones (PSTN parallel ringing), but the app cannot carry
- * the call audio.
+ * `webrtc.ts` (`initWebRtc`) does NOT use this set to decide readiness: no
+ * provider has a browser audio client SDK installed anywhere in this repo
+ * (issue #1147, e.g. `@twilio/voice-sdk` is not a dependency), so it always
+ * reports `unsupported` until one ships, independent of what this function
+ * returns for a given provider.
  *
  * Keep in sync with the server's WebRTC token support until in-app audio for
  * all providers is routed through the SIP bridge.

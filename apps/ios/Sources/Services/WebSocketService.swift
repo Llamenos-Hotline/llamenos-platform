@@ -28,7 +28,7 @@ enum ConnectionState: Equatable, Sendable {
         case .connected:
             return NSLocalizedString("ws_connected", comment: "Connected")
         case .reconnecting(let attempt):
-            return String(format: NSLocalizedString("ws_reconnecting", comment: "Reconnecting (%d)..."), attempt)
+            return L10n.format("ws_reconnecting", comment: "Reconnecting (%d)...", attempt)
         }
     }
 }

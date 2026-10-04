@@ -92,8 +92,6 @@ struct ContentView: View {
             SettingsView()
         case .admin:
             AdminTabView()
-        case .deviceLink:
-            DeviceLinkView()
         }
     }
 }

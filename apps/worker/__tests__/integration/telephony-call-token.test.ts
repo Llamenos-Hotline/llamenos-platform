@@ -31,6 +31,7 @@ import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { CallsService } from '../../services/calls'
+import { recordRingLegs } from '../../services/ringing'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 vi.mock('@worker/lib/service-factories')
@@ -125,6 +126,12 @@ function makeAdapter(): TelephonyAdapter {
       return { status: form.get('CallStatus') ?? '' }
     }),
     emptyResponse: vi.fn().mockReturnValue(xml('<Response/>')),
+    // /user-answer reads the winning leg's SID to cancel the other ringing legs (#1039).
+    parseIncomingWebhook: vi.fn().mockImplementation(async (req: Request) => {
+      const form = new URLSearchParams(await req.clone().text())
+      return { callSid: form.get('CallSid') ?? undefined, callerNumber: '', calledNumber: '' }
+    }),
+    cancelRinging: vi.fn().mockResolvedValue(undefined),
   } as unknown as TelephonyAdapter
 }
 
@@ -289,6 +296,26 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     expect(results.map(r => r.status).sort()).toEqual([200, 403])
     const winner = results[0].status === 200 ? V1 : V2
     expect(await activeRow('CA-4')).toMatchObject({ status: 'in-progress', answered_by: winner })
+  })
+
+  it('the winning pickup cancels every other ringing leg exactly once, sparing its own (#1039)', async () => {
+    const adapter = makeAdapter()
+    const app = await makeApp(adapter)
+    const [t1, t2] = await seedRingingCall('CA-4b', [V1, V2])
+    recordRingLegs('CA-4b', ['LEG-1', 'LEG-2'])
+
+    const answerLeg = (token: string, legSid: string) =>
+      app.request(`/api/telephony/user-answer?callToken=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `CallSid=${legSid}`,
+      })
+    const results = await Promise.all([answerLeg(t1, 'LEG-1'), answerLeg(t2, 'LEG-2')])
+    expect(results.map(r => r.status).sort()).toEqual([200, 403])
+
+    const winnerLeg = results[0].status === 200 ? 'LEG-1' : 'LEG-2'
+    expect(adapter.cancelRinging).toHaveBeenCalledTimes(1)
+    expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], winnerLeg)
   })
 
   it('a cancelled leg reporting completed does not end the answered call', async () => {
