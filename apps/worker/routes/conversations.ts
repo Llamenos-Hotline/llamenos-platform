@@ -327,9 +327,17 @@ conversations.post('/:id/messages',
       // #1283: the admin reader is the X25519 HPKE recipient or nothing. The
       // old `|| c.env.ADMIN_PUBKEY` sealed this message to an Ed25519 signing
       // key, which no secret key can open.
+      //
+      // #1140 follow-on: `pubkey` is `c.get('pubkey')`, the caller's Ed25519
+      // *identity* key — not an HPKE recipient. Sealing to it produced a second,
+      // permanently unopenable envelope beside the admin's working one, which is
+      // the #1283 defect repeated here. The server has no X25519 key for any
+      // user (`users` carries only `pubkey`; `devices.x25519_pubkey` is never
+      // populated), so it cannot substitute the right one — and must not invent
+      // one. Clients that hold their own device key send `encryptedContent` and
+      // `readerEnvelopes` instead and take the branch above; the desktop does.
       const adminDecryptionPubkey = adminHpkeRecipient(c.env)
-      const readerPubkeys: HpkeRecipientPubkey[] = []
-      if (adminDecryptionPubkey) readerPubkeys.push(adminDecryptionPubkey)
+      const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
 
       // `pubkey` is the sender's Ed25519 *identity* key, not a recipient key.
       // Resolve the X25519 keys of the devices they registered; refuse the send

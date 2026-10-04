@@ -46,6 +46,17 @@ function makeApp(opts: {
     getCurrentVolunteers: vi.fn().mockResolvedValue([]),
   }
 
+  // Ringing — and therefore presence — is `scheduled ∩ clocked_in`, so the
+  // resolver reads `active_shifts` too. These scenarios are about the
+  // availability filters (`pk2` is rostered but on break), not about consent,
+  // so clock-in mirrors whatever the schedule says rather than being a second
+  // list a test has to remember to update.
+  const mockActiveShifts = {
+    listClockedInPubkeys: vi.fn(async () =>
+      new Set<string>(await mockShifts.getCurrentVolunteers()),
+    ),
+  }
+
   const mockSettings = {
     getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
     getRoles: vi.fn().mockResolvedValue({ roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }] }),
@@ -60,6 +71,7 @@ function makeApp(opts: {
       calls: mockCalls,
       identity: mockIdentity,
       shifts: mockShifts,
+      activeShifts: mockActiveShifts,
       settings: mockSettings,
       ...services,
     } as unknown as AppEnv['Variables']['services'])
@@ -69,7 +81,7 @@ function makeApp(opts: {
   })
   app.route('/', systemRoutes)
 
-  return { app, mockCalls, mockIdentity, mockShifts, mockSettings }
+  return { app, mockCalls, mockIdentity, mockShifts, mockActiveShifts, mockSettings }
 }
 
 // ---------------------------------------------------------------------------

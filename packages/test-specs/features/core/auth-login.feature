@@ -139,7 +139,8 @@ Feature: Authentication & Login
     When I enter "nsec1test" in the device key field
     Then the device key field should be a password field
 
-  @desktop @ios @android @smoke
+  # @wip: device linking is not offered in the pilot build; restored with the unified provisioning protocol — #1027
+  @desktop @ios @android @smoke @wip
   Scenario: Link device button is visible
     Given the app is freshly installed
     And I am on the login screen

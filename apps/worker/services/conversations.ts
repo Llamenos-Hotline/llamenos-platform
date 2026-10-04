@@ -499,11 +499,22 @@ export class ConversationsService {
 
     // Encrypt the message content using envelope pattern. An absent admin
     // recipient means one fewer reader, never a substituted key (#1283).
+    //
+    // `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // pubkey — the key that signs their auth tokens (see `claim()` and
+    // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
+    // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
+    // accepts any 32 bytes, so it neither threw nor warned. This is the same
+    // defect as #1283, at a second site.
+    //
+    // `devices.x25519_pubkey` is the one column that can supply a real HPKE
+    // recipient for a user, and the desktop now populates it on unlock
+    // (`src/client/lib/device-registration.ts`). `getUserHpkeRecipients` is the
+    // only path from a user id to that key, and the branded type below makes
+    // re-adding a non-X25519 key a compile error rather than silent, permanent
+    // data loss.
     const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
 
-    // `conv.assignedTo` is the volunteer's Ed25519 *identity* key. Sealing to
-    // it succeeds and yields an envelope nobody can open, so resolve the
-    // X25519 keys of the devices they actually registered.
     if (conv.assignedTo) {
       const assigneeRecipients = await getUserHpkeRecipients(this.db, conv.assignedTo)
       if (assigneeRecipients.length === 0) {

@@ -118,10 +118,25 @@ function makeMockSettingsService() {
 /** Every roster user is a volunteer member of the hub the tests answer in. */
 const HUB_MEMBER = { roles: [] as string[], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] }
 
-/** Volunteers a call would ring: on shift, active, not on break, members of hub-1. */
+/**
+ * Volunteers a call would ring: scheduled, clocked in, active, not on break,
+ * members of hub-1.
+ */
 function makeRingRoster(onShift: string[], users = onShift) {
   return {
     shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue(onShift) },
+    // Both reads of `active_shifts` the roster serves, from one source, so a
+    // test overriding `activeShifts` cannot silently drop one of them: the
+    // resolver needs `listClockedInPubkeys` (ringing requires a clock-in) and
+    // the /routing diagnostic needs `listActiveByHub` for its `clockedIn`
+    // count. These scenarios are about the availability filters, not consent,
+    // so everyone scheduled has also clocked in.
+    activeShifts: {
+      listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(onShift)),
+      listActiveByHub: vi.fn().mockResolvedValue({
+        activeShifts: onShift.map(pubkey => ({ pubkey, hubId: 'hub-1' })),
+      }),
+    },
     identity: {
       getUsers: vi.fn().mockResolvedValue({
         users: users.map(pubkey => ({ pubkey, active: true, onBreak: false, callPreference: 'phone', phone: '+1555', ...HUB_MEMBER })),
@@ -260,14 +275,7 @@ describe('Calls Routes', () => {
     /** The read-only oracle for "would a call arriving now ring anybody?". */
     it('answers the verdict, the counts, and who — for a caller who may see presence', async () => {
       const onShift = ['a'.repeat(64), 'b'.repeat(64)]
-      const services = makeServices({
-        ...makeRingRoster(onShift),
-        activeShifts: {
-          listActiveByHub: vi.fn().mockResolvedValue({
-            activeShifts: onShift.map(pubkey => ({ pubkey, hubId: 'hub-1' })),
-          }),
-        },
-      })
+      const services = makeServices(makeRingRoster(onShift))
       const { app } = createTestApp({
         permissions: ['calls:read-active', 'calls:read-presence'],
         services,
@@ -291,12 +299,7 @@ describe('Calls Routes', () => {
      */
     it('withholds the volunteer list from a caller without calls:read-presence', async () => {
       const onShift = ['a'.repeat(64)]
-      const services = makeServices({
-        ...makeRingRoster(onShift),
-        activeShifts: {
-          listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [{ pubkey: onShift[0], hubId: 'hub-1' }] }),
-        },
-      })
+      const services = makeServices(makeRingRoster(onShift))
       const { app } = createTestApp({ permissions: ['calls:read-active'], services })
 
       const res = await app.request('/routing')
@@ -309,10 +312,7 @@ describe('Calls Routes', () => {
     })
 
     it('reports a hub that would ring nobody, with the counts that diagnose why', async () => {
-      const services = makeServices({
-        ...makeRingRoster([]),
-        activeShifts: { listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [] }) },
-      })
+      const services = makeServices(makeRingRoster([]))
       const { app } = createTestApp({
         permissions: ['calls:read-active', 'calls:read-presence'],
         services,
