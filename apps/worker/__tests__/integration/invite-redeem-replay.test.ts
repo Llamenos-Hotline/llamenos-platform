@@ -86,6 +86,10 @@ const DDL = `
     pubkey TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL
   );
+  CREATE TABLE ${TEST_SCHEMA}.hubs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'active'
+  );
 `
 
 const JSONB_TYPE = {
