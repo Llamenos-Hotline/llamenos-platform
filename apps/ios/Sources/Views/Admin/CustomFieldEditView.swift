@@ -5,16 +5,15 @@ import SwiftUI
 struct CustomFieldEditView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let field: CustomFieldDefinition?
+    let field: CustomFieldsBodyField?
     let existingCount: Int
-    let onSave: (CustomFieldDefinition) async -> Void
+    let onSave: (CustomFieldsBodyField) async -> Void
 
     @State private var label: String = ""
-    @State private var fieldType: CustomFieldDefinition.FieldType = .text
-    @State private var context: CustomFieldDefinition.FieldContext = .callNotes
+    @State private var fieldType: SharedCustomFieldDefinitionType = .text
+    @State private var context: String = "call-notes"
     @State private var isRequired: Bool = false
     @State private var visibleToVolunteers: Bool = true
-    @State private var editableByVolunteers: Bool = true
     @State private var options: [String] = []
     @State private var newOption: String = ""
     @State private var isSaving = false
@@ -47,11 +46,11 @@ struct CustomFieldEditView: View {
                         NSLocalizedString("field_type", comment: "Type"),
                         selection: $fieldType
                     ) {
-                        Text(NSLocalizedString("field_type_text", comment: "Text")).tag(CustomFieldDefinition.FieldType.text)
-                        Text(NSLocalizedString("field_type_number", comment: "Number")).tag(CustomFieldDefinition.FieldType.number)
-                        Text(NSLocalizedString("field_type_select", comment: "Select")).tag(CustomFieldDefinition.FieldType.select)
-                        Text(NSLocalizedString("field_type_checkbox", comment: "Checkbox")).tag(CustomFieldDefinition.FieldType.checkbox)
-                        Text(NSLocalizedString("field_type_textarea", comment: "Text Area")).tag(CustomFieldDefinition.FieldType.textarea)
+                        Text(NSLocalizedString("field_type_text", comment: "Text")).tag(SharedCustomFieldDefinitionType.text)
+                        Text(NSLocalizedString("field_type_number", comment: "Number")).tag(SharedCustomFieldDefinitionType.number)
+                        Text(NSLocalizedString("field_type_select", comment: "Select")).tag(SharedCustomFieldDefinitionType.select)
+                        Text(NSLocalizedString("field_type_checkbox", comment: "Checkbox")).tag(SharedCustomFieldDefinitionType.checkbox)
+                        Text(NSLocalizedString("field_type_textarea", comment: "Text Area")).tag(SharedCustomFieldDefinitionType.textarea)
                     }
                     .accessibilityIdentifier("field-type-picker")
                 }
@@ -62,9 +61,9 @@ struct CustomFieldEditView: View {
                         NSLocalizedString("field_context", comment: "Context"),
                         selection: $context
                     ) {
-                        Text(NSLocalizedString("field_context_notes", comment: "Notes")).tag(CustomFieldDefinition.FieldContext.callNotes)
-                        Text(NSLocalizedString("field_context_reports", comment: "Reports")).tag(CustomFieldDefinition.FieldContext.reports)
-                        Text(NSLocalizedString("field_context_both", comment: "Both")).tag(CustomFieldDefinition.FieldContext.both)
+                        Text(NSLocalizedString("field_context_notes", comment: "Notes")).tag("call-notes")
+                        Text(NSLocalizedString("field_context_reports", comment: "Reports")).tag("reports")
+                        Text(NSLocalizedString("field_context_both", comment: "Both")).tag("all")
                     }
                     .accessibilityIdentifier("field-context-picker")
                 }
@@ -119,10 +118,6 @@ struct CustomFieldEditView: View {
                         isOn: $visibleToVolunteers
                     )
 
-                    Toggle(
-                        NSLocalizedString("field_editable_users", comment: "Editable by volunteers"),
-                        isOn: $editableByVolunteers
-                    )
                 }
             }
             .navigationTitle(isEditing
@@ -149,10 +144,9 @@ struct CustomFieldEditView: View {
                 if let field {
                     label = field.label
                     fieldType = field.type
-                    context = field.context
-                    isRequired = field.required
-                    visibleToVolunteers = field.visibleToVolunteers
-                    editableByVolunteers = field.editableByVolunteers
+                    context = field.context ?? "call-notes"
+                    isRequired = field.fieldRequired ?? false
+                    visibleToVolunteers = field.visibleToUsers ?? true
                     options = field.options ?? []
                 }
             }
@@ -168,21 +162,15 @@ struct CustomFieldEditView: View {
             .replacingOccurrences(of: " ", with: "_")
             .filter { $0.isLetter || $0.isNumber || $0 == "_" }
 
-        let definition = CustomFieldDefinition(
-            id: field?.id ?? UUID().uuidString,
-            name: field?.name ?? slug,
-            label: trimmedLabel,
-            type: fieldType,
-            required: isRequired,
-            options: showsOptions ? options : nil,
-            validation: nil,
-            visibleToVolunteers: visibleToVolunteers,
-            editableByVolunteers: editableByVolunteers,
+        let definition = CustomFieldsBodyField(
             context: context,
-            allowFileUpload: nil,
-            acceptedFileTypes: nil,
+            label: trimmedLabel,
+            name: field?.name ?? slug,
+            options: showsOptions ? options : nil,
             order: field?.order ?? existingCount,
-            createdAt: field?.createdAt
+            fieldRequired: isRequired,
+            type: fieldType,
+            visibleToUsers: visibleToVolunteers
         )
 
         await onSave(definition)

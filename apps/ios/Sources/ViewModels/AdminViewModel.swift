@@ -141,7 +141,7 @@ final class AdminViewModel {
     // MARK: - Custom Fields State
 
     /// All custom field definitions.
-    var customFields: [CustomFieldDefinition] = []
+    var customFields: [CustomFieldsBodyField] = []
 
     /// Whether custom fields are loading.
     var isLoadingFields: Bool = false
@@ -150,7 +150,7 @@ final class AdminViewModel {
     var showFieldEditor: Bool = false
 
     /// The field being edited (nil for create).
-    var editingField: CustomFieldDefinition?
+    var editingField: CustomFieldsBodyField?
 
     // MARK: - Report Categories State
 
@@ -542,11 +542,22 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: CustomFieldsResponse = try await apiService.request(
+            let response: CustomFieldsListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/custom-fields?role=admin"
             )
-            customFields = response.fields.sorted { $0.order < $1.order }
+            // The GET shape (`CustomFieldsListResponseField`) is a read-only
+            // variant of the PUT shape; key fields by name for editing.
+            customFields = response.fields
+                .map {
+                    CustomFieldsBodyField(
+                        context: $0.context, label: $0.label, name: $0.name,
+                        options: $0.options, order: $0.order.map(Int.init),
+                        fieldRequired: $0.fieldRequired, type: $0.type,
+                        visibleToUsers: $0.visibleToUsers
+                    )
+                }
+                .sorted { $0.orderOrZero < $1.orderOrZero }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -560,7 +571,7 @@ final class AdminViewModel {
         successMessage = nil
 
         do {
-            let body = ["fields": customFields]
+            let body = CustomFieldsBody(fields: customFields)
             try await apiService.request(
                 method: "PUT",
                 path: "/api/settings/custom-fields",
@@ -577,8 +588,8 @@ final class AdminViewModel {
     }
 
     /// Add or update a field in the local list, then save to server.
-    func saveField(_ field: CustomFieldDefinition) async {
-        if let index = customFields.firstIndex(where: { $0.id == field.id }) {
+    func saveField(_ field: CustomFieldsBodyField) async {
+        if let index = customFields.firstIndex(where: { $0.name == field.name }) {
             customFields[index] = field
         } else {
             customFields.append(field)
@@ -589,8 +600,8 @@ final class AdminViewModel {
     }
 
     /// Delete a field by ID, then save to server.
-    func deleteField(id: String) async {
-        customFields.removeAll { $0.id == id }
+    func deleteField(name: String) async {
+        customFields.removeAll { $0.name == name }
         await saveCustomFields()
     }
 
