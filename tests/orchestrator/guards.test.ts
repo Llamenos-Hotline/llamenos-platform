@@ -759,18 +759,24 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     expect(fleetReviewYamlText()).not.toContain('--dangerously-skip-permissions')
   })
 
-  // The kimi fallback (fleet-review.yml's file header): the operator dial
-  // must be a repo variable read through the job env, exactly like
-  // FLEET_REVIEW_MODEL — and review.ts must read the identical env var so
-  // the smoke step's tolerance arm and the real review's fallback can never
-  // disagree about whether the fallback is armed.
-  it('declares FLEET_REVIEW_FALLBACK (kimi default, off disables) and review.ts reads the identical env var', () => {
+  // The engine order and the fallback toggle (fleet-review.yml's file
+  // header): both must be repo variables read through the job env, exactly
+  // like FLEET_REVIEW_MODEL — and review.ts must read the identical env vars
+  // so the smoke step's branch and tolerance arms and the real review can
+  // never disagree about which engine runs first or whether crossing is
+  // armed.
+  it('declares FLEET_REVIEW_PRIMARY (kimi default) and FLEET_REVIEW_FALLBACK (on default, off disables), and review.ts reads the identical env vars', () => {
     const text = fleetReviewJobText()
-    const m = /^\s*FLEET_REVIEW_FALLBACK:\s*(.+?)\s*$/m.exec(text)
-    if (m === null) throw new Error('FLEET_REVIEW_FALLBACK not set in the fleet-review job env')
-    expect(m[1]).toBe("${{ vars.FLEET_REVIEW_FALLBACK || 'kimi' }}")
+    const primary = /^\s*FLEET_REVIEW_PRIMARY:\s*(.+?)\s*$/m.exec(text)
+    if (primary === null) throw new Error('FLEET_REVIEW_PRIMARY not set in the fleet-review job env')
+    expect(primary[1]).toBe("${{ vars.FLEET_REVIEW_PRIMARY || 'kimi' }}")
+    const fallback = /^\s*FLEET_REVIEW_FALLBACK:\s*(.+?)\s*$/m.exec(text)
+    if (fallback === null) throw new Error('FLEET_REVIEW_FALLBACK not set in the fleet-review job env')
+    expect(fallback[1]).toBe("${{ vars.FLEET_REVIEW_FALLBACK || 'on' }}")
     const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review).toContain("process.env['FLEET_REVIEW_PRIMARY']")
     expect(review).toContain("process.env['FLEET_REVIEW_FALLBACK']")
+    expect(review).toContain("process.env['FLEET_REVIEW_KIMI_MODEL']")
   })
 
   // The fallback reviewer must be a READ-ONLY reviewer in fact, not in name:
@@ -808,23 +814,35 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
       .toContain('orchestrator/reviewer-readonly.agent.md')
     const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
     expect(review, 'kimiArgs does not install the read-only agent profile').toContain("'--agent-file', REVIEWER_AGENT_FILE")
-    // The fallback never receives a claude model id or an auto/yolo mode.
+    // kimi never receives a claude model id and never an auto/yolo mode; its
+    // own optional model override (FLEET_REVIEW_KIMI_MODEL) is the only
+    // --model, and it is gated on being nonempty.
     const argsM = /export function kimiArgs[\s\S]*?\n\}/.exec(review)
     if (argsM === null) throw new Error('kimiArgs not found in review.ts')
-    expect(argsM[0]).not.toContain('--model')
+    expect(argsM[0]).toContain("args.push('--model', input.model)")
     expect(argsM[0]).not.toMatch(/\byolo\b|--auto\b/)
+    expect(argsM[0]).not.toContain('REVIEWER_MODEL')
   })
 
-  // The tolerance arm's three guards, pinned: never on engine-auth (an
-  // expired runner login stays loud), never when the operator dial is off,
-  // never without a kimi binary on PATH (no half-run). Removing any guard
-  // makes this rail fail — the arm is what keeps a claude quota from
-  // stopping the merge train AND what keeps it from becoming a silent pass.
-  it('the smoke step\'s fallback arm is gated on not-auth, the operator dial, and kimi being on PATH', () => {
+  // The tolerance arms' three guards in EACH direction, pinned: never on
+  // engine-auth (an expired runner login stays loud), never when the
+  // operator dial is off, never without the other engine's binary on PATH
+  // (no half-run). Removing any guard makes this rail fail — the arms are
+  // what keep one engine's outage from stopping the merge train AND what
+  // keep it from becoming a silent pass.
+  it('the smoke step\'s fallback arms are gated on not-auth, the operator dial, and the other engine being on PATH — both directions', () => {
     const text = fleetReviewJobText()
-    expect(text).toContain('[ "$engine_class" != "engine-auth" ]')
-    expect(text).toContain('[ "${FLEET_REVIEW_FALLBACK:-kimi}" != "off" ]')
-    expect(text).toMatch(/command -v kimi >\/dev\/null 2>&1/)
+    const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
+    expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
+    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(2)
+    expect(text).toContain('command -v claude >/dev/null 2>&1')
+    expect(text).toContain('command -v kimi >/dev/null 2>&1')
+    // And the primary branch is selected from the RESOLVED engine — never
+    // from an env var read directly — so the smoke test and the real review
+    // smoke the same engine by construction (including the bootstrap
+    // window, when the base checkout still resolves claude).
+    expect(text).toContain('if [ "$rev_engine" = "kimi" ]; then')
+    expect(text).toContain('console.log(JSON.stringify({ engine: inv.engine, binary: inv.binary, model: inv.model }))')
   })
 
   it('review.ts reads the reviewer model from FLEET_REVIEW_MODEL, defaulting to sonnet, not a bare literal', () => {
