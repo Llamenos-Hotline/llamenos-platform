@@ -19,6 +19,7 @@ import { incCounter } from './metrics'
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 
 const logger = createLogger('routes.conversations')
 
@@ -323,7 +324,10 @@ conversations.post('/:id/messages',
     if (body.encryptedContent) {
       encryptedContent = body.encryptedContent
     } else if (plaintextForSending) {
-      const adminDecryptionPubkey = c.env.ADMIN_DECRYPTION_PUBKEY || c.env.ADMIN_PUBKEY
+      // #1283: the admin reader is the X25519 HPKE recipient or nothing. The
+      // old `|| c.env.ADMIN_PUBKEY` sealed this message to an Ed25519 signing
+      // key, which no secret key can open.
+      const adminDecryptionPubkey = adminHpkeRecipient(c.env)
       const readerPubkeys: string[] = []
       if (adminDecryptionPubkey) readerPubkeys.push(adminDecryptionPubkey)
       if (pubkey !== adminDecryptionPubkey) readerPubkeys.push(pubkey)

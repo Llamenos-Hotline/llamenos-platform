@@ -67,7 +67,13 @@ export interface TelephonyAdapter {
    * Generate hold music / wait message for callers in queue.
    * When queueTime exceeds threshold, returns <Leave/> to trigger voicemail.
    */
-  handleWaitMusic(lang: string, audioUrls?: AudioUrlMap, queueTime?: number, queueTimeout?: number): Promise<TelephonyResponse>
+  handleWaitMusic(
+    lang: string,
+    audioUrls?: AudioUrlMap,
+    queueTime?: number,
+    queueTimeout?: number,
+    speechUrl?: SpeechUrlBuilder,
+  ): Promise<TelephonyResponse>
 
   /**
    * Reject a banned/blocked caller.
@@ -75,7 +81,20 @@ export interface TelephonyAdapter {
   rejectCall(): TelephonyResponse
 
   /**
+   * Response for a webhook whose call leg must be ended immediately — e.g. a
+   * volunteer who picked up after another volunteer already won the call.
+   * Unlike rejectCall (a pre-answer rejection of a caller), this terminates a
+   * leg that has already been answered.
+   */
+  hangupResponse(): TelephonyResponse
+
+  /**
    * End/hangup a call by its SID.
+   *
+   * Resolves once the provider confirms the leg is disconnected (or no longer
+   * exists). MUST reject when the provider refuses or is unreachable — callers
+   * report the outcome to the volunteer and must not claim a disconnect that
+   * did not happen.
    */
   hangupCall(callSid: string): Promise<void>
 
@@ -130,7 +149,7 @@ export interface TelephonyAdapter {
   // --- Additional response methods ---
 
   /** Thank the caller after voicemail recording and hang up */
-  handleVoicemailComplete(lang: string): TelephonyResponse
+  handleVoicemailComplete(lang: string, speechUrl?: SpeechUrlBuilder): TelephonyResponse
 
   /** Return an empty/no-op response */
   emptyResponse(): TelephonyResponse
@@ -143,6 +162,7 @@ export interface LanguageMenuParams {
   enabledLanguages: string[]
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface IncomingCallParams {
@@ -157,6 +177,7 @@ export interface IncomingCallParams {
   captchaDigits?: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface CaptchaResponseParams {
@@ -166,6 +187,7 @@ export interface CaptchaResponseParams {
   callerLanguage: string
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface CallAnsweredParams {
@@ -190,6 +212,7 @@ export interface VoicemailParams {
   maxRecordingSeconds?: number
   /** Hub ID for multi-hub routing — appended to callback URLs as &hub= */
   hubId?: string
+  speechUrl?: SpeechUrlBuilder
 }
 
 export interface RingVolunteersParams {
@@ -216,3 +239,22 @@ export interface TelephonyResponse {
 
 /** Map of "promptType:language" -> audio URL for custom recordings */
 export type AudioUrlMap = Record<string, string>
+
+/**
+ * The URL of `text` spoken in `locale` by the worker's own speech engine
+ * (IvrSpeechService) — for the self-hosted PBXs, which cannot speak a prompt
+ * themselves. Cloud providers speak with their own engines and ignore it.
+ */
+export type SpeechUrlBuilder = (text: string, locale: string) => string
+
+/**
+ * Shared post-condition for `TelephonyAdapter.hangupCall` REST implementations:
+ * a 2xx means the provider ended the leg, a 404 means the leg is already gone
+ * (the caller hung up first) — both are a disconnected call. Anything else is a
+ * failure the caller must see.
+ */
+export async function assertHangupResponse(res: Response, provider: string): Promise<void> {
+  if (res.ok || res.status === 404) return
+  const detail = await res.text().catch(() => '')
+  throw new Error(`${provider} hangup failed: ${res.status}${detail ? ` ${detail.slice(0, 200)}` : ''}`)
+}

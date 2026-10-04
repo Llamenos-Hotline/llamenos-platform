@@ -73,9 +73,32 @@
 #
 #    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
 #    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
-#    and a `push` event carries no PR to attach a check to.
-#    `review_requested` remains the ONLY thing that starts a review, and it
-#    fires on both the first request and every re-request.
+#    and a `push` event carries no PR to attach a check to. That ban is
+#    unchanged and nothing below relaxes it.
+#
+#    `review_requested` remains the ONLY thing that can start a review AND
+#    clear this context. `workflow_dispatch` runs a real review too, but its
+#    check run does not reach the PR's rollup — see its own comment under
+#    `on:` below, and do not mistake it for a second route to a green gate.
+#
+#    AND THE RE-REQUEST IS NOT ALWAYS RE-EMITTABLE (#1471). When the required
+#    reviewer is a CODEOWNER of a path the PR touches, GitHub re-adds the
+#    request the instant you remove it, so the remove-then-re-add recovery
+#    this file documents emits NO event: `DELETE .../requested_reviewers`
+#    answers 200 with the PR object and changes nothing, the follow-up POST
+#    no-ops on a login already requested, and `requested_reviewers` cannot
+#    tell "requested just now" from "requested four days ago and never
+#    re-fired" — so every command in the sequence reports success while
+#    nothing happens. Measured both directions in one session: on #1372
+#    (reviewer a code owner of a touched path) the list stayed populated and
+#    the newest event stayed four days old; on #1467 (reviewer owning nothing
+#    it touched) the identical sequence emptied the list and emitted a fresh
+#    event. The honest check is the EVENTS endpoint, never `reviewRequests`:
+#      gh api repos/<o>/<r>/issues/<n>/events \
+#        --jq '[.[] | select(.event|test("review_request"))] | last'
+#    `reviewNotRequestedAdvice` (ci.ts) is what stops the red check sending
+#    its reader into that loop. The remaining gap — a verdict that can be
+#    RECORDED when no event can be made to fire — is #1471, still open.
 #
 #    The republish arm never runs on `llamenos-review-box` — see `runs-on`
 #    below. It cannot reach the engine, so it must not queue in front of a
@@ -135,8 +158,20 @@
 #                             review request was not for us, or this was a
 #                             PUSH (#1284) — which changed the diff, so
 #                             nothing the PR already earned covers the new
-#                             head. Still no model call either way.
-#   `run-engine`            → the real review, then the label clear.
+#                             head. Still no model call either way. Its
+#                             ADVICE is `reviewNotRequestedAdvice` (ci.ts),
+#                             which refuses to print "request a review from
+#                             X" when the live `requested_reviewers` already
+#                             lists X — that re-request emits no event, so
+#                             the old fixed advice sent every reader into the
+#                             one loop that cannot terminate (#1471). It
+#                             names the dispatch instead.
+#   `run-engine`            → the real review, then the label clear. Reached
+#                             from a `review_requested`, or from a
+#                             `workflow_dispatch` — both run the same review
+#                             set and both can FAIL, but only the former's
+#                             check run reaches the PR's rollup (see the
+#                             `workflow_dispatch` comment under `on:`).
 #
 # Every run's outcome — each of those, and every way the review itself can
 # end — is then NAMED on the check by the job's last step, "Name this run's
@@ -193,18 +228,42 @@ on:
   # a job-level `if:` (invariant 1).
   pull_request:
     types: [review_requested, synchronize]
-  # Manual escape hatch only — local debugging, or forcing a re-review after
-  # a provider-variable change (see "Switching the review engine provider" in
+  # The ESCAPE HATCH — and a real one, which is the whole of #1471. It runs
+  # the full review set, reaches `run-engine` like any review request, and
+  # can return FAIL. It is write-access-gated (a `workflow_dispatch` cannot
+  # be triggered without write access to this repository), which is why
+  # `reviewRequestFor` (ci.ts) accepts it with no reviewer login to check:
+  # somebody with write access typing this PR's number IS the "look at this
+  # now" that a review request means on the other arm.
+  #
+  # IT DOES NOT SATISFY THE REQUIRED CONTEXT, and this comment used to say it
+  # did (#1471). A dispatch run's check DOES attach to `github.sha`, which for
+  # `--ref <branch>` is that branch's tip at trigger time — but the check
+  # SUITE a `workflow_dispatch` creates on a branch is not associated with the
+  # PULL REQUEST, so that check run never enters the PR's status-check rollup.
+  # Measured on three of #1471's PRs at once: #1372's head carries a
+  # `pull_request` FAILURE and a later `workflow_dispatch` SUCCESS, and the
+  # rollup surfaces only the FAILURE; #1378 the same; #1184's head carries TWO
+  # dispatch successes and still shows a four-day-old red. So a dispatch is
+  # how you GET a verdict (a real review, a real check run on the commit, a
+  # readable outcome in the log) — not how you CLEAR the gate. Treat it as
+  # debugging and as evidence, and do not route a blocked PR through it
+  # expecting to merge.
+  #
+  # ALWAYS dispatch with `--ref <the PR's own head branch>`: the ctx step
+  # refuses any other ref outright rather than review a diff nobody asked for
+  # and write a `fleet/review` onto a commit that is not the PR's.
+  #
+  # Not the primary path: it takes an operator typing a PR number, so
+  # nothing routine should depend on it, and `review_requested` stays the
+  # trigger the fleet actually uses. Also used for local debugging and for
+  # forcing a re-review after a provider-variable change (see "Switching the
+  # review engine provider" in
   # docs/superpowers/specs/2026-09-11-llamenos-fleet-orchestrator-design.md).
-  # It is write-access-gated, and it CAN satisfy the required context: a
-  # dispatch run's check attaches to `github.sha`, which for
-  # `--ref <branch>` is the PR's head (see the ctx step's own comment).
-  # Never the primary path all the same — it takes an operator typing a PR
-  # number, so nothing routine should depend on it.
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to review (its current head, dispatched via --ref <branch>) — manual debugging only'
+        description: 'PR number to review — dispatch with --ref <that PR''s own head branch>; runs the real review set and can FAIL'
         required: true
         type: string
   # The merge queue's own event (#1187). REQUIRED, not optional: a required
@@ -377,6 +436,24 @@ jobs:
     # variable being silently invisible the way an absent provider id was.
     env:
       FLEET_REVIEW_MODEL: ${{ vars.FLEET_REVIEW_MODEL || 'sonnet' }}
+      # The reviewer's tool restriction, carried BY THIS WORKFLOW rather than
+      # imported from `orchestrator/src/review.ts` at gate time. It must
+      # equal `REVIEWER_TOOLS` in that module, and
+      # `tests/orchestrator/guards.test.ts` asserts exactly that — in the
+      # TEST SUITE, where this file and that module are the same commit.
+      #
+      # It cannot be an import here, because this job executes the HEAD's
+      # copy of this YAML against a BASE checkout of the source
+      # (`ref: base_sha`, deliberate — the gate never runs the code it
+      # judges). Those two refs are different by design, so a `bun -e`
+      # import of any symbol the head ADDS resolves against a base that
+      # does not have it yet and dies with `SyntaxError: Export named
+      # 'REVIEWER_TOOLS' not found` — which deadlocks the gate for the very
+      # PR adding the symbol, and for every future one that does the same.
+      # That is not a bootstrap quirk to absorb once; it is a trap that
+      # re-arms. A literal here crosses no version boundary, and the drift
+      # it could otherwise hide is caught by the test above instead.
+      FLEET_REVIEWER_TOOLS: Read,Grep,Glob
 
     steps:
       # MANDATORY, and must stay the literal first step: a self-hosted
@@ -547,6 +624,10 @@ jobs:
           PR_EVENT_BRANCH: ${{ github.event.pull_request.head.ref }}
           DISPATCH_PR: ${{ github.event.inputs.pr_number }}
           DISPATCH_SHA: ${{ github.sha }}
+          # The ref this run was dispatched against — checked against the
+          # PR's own head branch below, so a dispatch can never publish a
+          # verdict onto a commit belonging to something else.
+          DISPATCH_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
@@ -581,6 +662,24 @@ jobs:
             if [[ "$branch" == "null" || -z "$branch" || "$base_sha" == "null" || -z "$base_sha" ]]; then
               echo "::error::fleet/review FAILED: gh-api-pr-parse — \`gh api .../pulls/$pr\` returned data that did not parse into a branch/base_sha (got branch='$branch' base_sha='$base_sha'); raw response:"
               printf '%s\n' "$pr_json"
+              exit 1
+            fi
+            # The dispatched REF must be the PR's own head branch. This is
+            # the one thing that keeps the dispatch arm honest now that it is
+            # a real trigger (#1471): a dispatch run's check attaches to
+            # `github.sha`, which is whatever `--ref` resolved to, NOT
+            # anything derived from `pr_number`. Dispatching `--ref main -f
+            # pr_number=1184` would therefore review 1184's base-to-main diff
+            # and publish the verdict as a `fleet/review` on main's tip; with
+            # `--ref some-other-pr-branch` it would publish it on ANOTHER
+            # PR's head, handing that PR a required green it never earned.
+            # Both are a check that does not describe the commit it is
+            # attached to, which is the whole failure class this file's
+            # invariants exist to prevent. Refuse, naming the fix, rather
+            # than review a diff nobody asked for.
+            if [[ "$DISPATCH_REF" != "$branch" ]]; then
+              echo "::error::fleet/review FAILED: dispatch-ref-mismatch — this run was dispatched against ref '$DISPATCH_REF', but PR #$pr's head branch is '$branch'. A dispatch run's check attaches to the dispatched ref's commit ($head_sha), so reviewing PR #$pr from here would publish its verdict onto a commit that is not the PR's head."
+              echo "Re-dispatch with the PR's own branch: gh workflow run fleet-review.yml --ref $branch -f pr_number=$pr"
               exit 1
             fi
             if [[ "$live_head" != "$head_sha" ]]; then
@@ -968,6 +1067,11 @@ jobs:
           # warning line on stderr merged onto stdout would otherwise corrupt
           # every jq call after it for a reason with nothing to do with
           # engine configuration.
+          #
+          # Only symbols the BASE is known to have may be imported here. The
+          # reviewer's tool list is NOT one of them — it travels as
+          # `FLEET_REVIEWER_TOOLS` in this workflow's own `env:` instead, for
+          # the version-boundary reason documented there.
           engine_json="$(bun -e '
             import { reviewerInvocationFor } from "./orchestrator/src/review.ts"
             const inv = reviewerInvocationFor("claude")
@@ -980,6 +1084,23 @@ jobs:
           fi
           rev_binary="$(printf '%s' "$engine_json" | jq -r '.binary')"
           rev_model="$(printf '%s' "$engine_json" | jq -r '.model')"
+          # The reviewer's tool restriction, from this workflow's own `env:`
+          # — NOT imported from review.ts, because this YAML is the head's
+          # while the checkout is the base's (see FLEET_REVIEWER_TOOLS).
+          # `tests/orchestrator/guards.test.ts` pins this literal equal to
+          # `REVIEWER_TOOLS` in the source, at a commit where both are the
+          # same version, so the two still cannot drift apart silently.
+          #
+          # It is smoke-tested at all because `--tools` is the flag that
+          # withholds `Bash` from the reviewer, and a runner whose `claude`
+          # build does not accept it would otherwise pass this step (which
+          # used to pass a hand-written, flag-poorer argv) and then fail
+          # EVERY real review as an opaque `engine-unavailable`. Asserting
+          # the flag here names it as a configuration problem instead.
+          rev_tools="$FLEET_REVIEWER_TOOLS"
+          if [ -z "$rev_tools" ]; then
+            fail "engine-misconfigured" "FLEET_REVIEWER_TOOLS resolved to nothing — the reviewer would run with the full default tool set, Bash included"
+          fi
           if [ -z "$rev_binary" ] || [ "$rev_binary" = "null" ] || [ -z "$rev_model" ] || [ "$rev_model" = "null" ]; then
             fail "engine-misconfigured" "reviewerInvocationFor printed unparseable output: $engine_json"$'\n'"$engine_err"
           fi
@@ -989,7 +1110,7 @@ jobs:
           fi
 
           run_out="$(cd "$root" && printf 'Reply with exactly: VERDICT: PASS\n' \
-            | "$rev_binary" --print --permission-mode plan --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+            | "$rev_binary" --print --permission-mode plan --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then
@@ -1274,6 +1395,7 @@ jobs:
                   fail) token="REJECTED:reviewed" ;;
                   cache-fail) token="REJECTED:cached" ;;
                   unreadable) token="NO-VERDICT:unreadable" ;;
+                  budget-exhausted) token="NO-VERDICT:budget-exhausted" ;;
                   scope) token="NO-VERDICT:scope" ;;
                   review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
                   unknown-lane) token="NO-VERDICT:unknown-lane" ;;
@@ -1310,6 +1432,10 @@ jobs:
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
             NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
             NO-VERDICT:unreadable) detail="a reviewer ran but left no readable verdict; re-request the review" ;;
+            # Deliberately NOT "re-request": that re-runs the same diff under the same
+            # budget and exhausts again — a loop costing a full session per attempt
+            # that can never clear. These remedies are ones that actually work.
+            NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict; split the PR, or raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts — re-requesting will exhaust again" ;;
             NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
             NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;

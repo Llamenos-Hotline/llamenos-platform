@@ -44,6 +44,7 @@ function makeInviteRow(overrides: Record<string, unknown> = {}) {
     name: 'Bob Volunteer',
     phone: '+15559876543',
     roleIds: ['role-volunteer'],
+    hubId: 'hub-1',
     createdBy: 'admin-pk',
     createdAt: new Date(),
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days out
@@ -51,6 +52,67 @@ function makeInviteRow(overrides: Record<string, unknown> = {}) {
     usedBy: null,
     ...overrides,
   }
+}
+
+/**
+ * A transaction stand-in for redeemInvite, which issues, in order: the atomic
+ * invite claim (UPDATE ... RETURNING), optionally the sole-active-hub lookup
+ * (SELECT with explicit columns), the existing-user lookup (SELECT ... FOR
+ * UPDATE), and then either an UPDATE of that user or an INSERT.
+ *
+ * It records the values written so the tests can assert on the hubRoles
+ * actually persisted rather than on "some write happened".
+ */
+function makeRedeemTx(opts: {
+  invite: Record<string, unknown> | null
+  activeHubs?: Array<{ id: string }>
+  existingUser?: Record<string, unknown> | null
+  insertedUser?: Record<string, unknown> | null
+  updatedUser?: Record<string, unknown> | null
+}) {
+  const updated: unknown[] = []
+  const inserted: unknown[] = []
+  // UPDATE #1 is the invite claim; UPDATE #2, if any, is the user merge.
+  const updateReturns: unknown[][] = [
+    opts.invite ? [opts.invite] : [],
+    opts.updatedUser ? [opts.updatedUser] : [],
+  ]
+  const existingRows = opts.existingUser ? [opts.existingUser] : []
+
+  const tx = {
+    $updated: updated,
+    $inserted: inserted,
+    update: vi.fn(() => ({
+      set: vi.fn((values: unknown) => {
+        updated.push(values)
+        return {
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => updateReturns.shift() ?? []),
+          })),
+        }
+      }),
+    })),
+    // Explicit columns ⇒ the hubs lookup; no columns ⇒ the users lookup.
+    select: vi.fn((columns?: unknown) => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(async () => (columns ? (opts.activeHubs ?? []) : existingRows)),
+          for: vi.fn(() => ({ limit: vi.fn(async () => existingRows) })),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn((values: unknown) => {
+        inserted.push(values)
+        return {
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => (opts.insertedUser ? [opts.insertedUser] : [])),
+          })),
+        }
+      }),
+    })),
+  }
+  return tx
 }
 
 function makeSessionRow(overrides: Record<string, unknown> = {}) {
@@ -240,6 +302,7 @@ describe('IdentityService.createInvite', () => {
       name: 'Charlie',
       phone: '+15550001111',
       roleIds: ['role-volunteer'],
+      hubId: 'hub-1',
       createdBy: 'admin-pk',
     })
     expect(result.invite.name).toBe('Bob Volunteer') // from mock row
@@ -337,61 +400,155 @@ describe('IdentityService.redeemInvite', () => {
     ).rejects.toMatchObject({ status: 400 })
   })
 
-  it('creates user and marks invite used on success', async () => {
+  it('creates the user AND grants membership of the invite\'s hub', async () => {
+    // The grant is the whole point of #1037: without a hubRoles entry the
+    // redeemed volunteer is filtered out of GET /hubs/:hubId/users, so the
+    // operator cannot see, schedule, or ring them.
     const { db, service } = setup()
-    const invite = makeInviteRow()
-    const newUser = makeUserRow({ pubkey: 'pk-new', displayName: invite.name })
-
-    // RACE-01: Atomic claim succeeds — returns the invite row
-    const tx = {
-      update: vi.fn().mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([invite]),
-          }),
-        }),
+    const invite = makeInviteRow({ hubId: 'hub-7', roleIds: ['role-volunteer'] })
+    const tx = makeRedeemTx({
+      invite,
+      insertedUser: makeUserRow({
+        pubkey: 'pk-new',
+        displayName: invite.name,
+        hubRoles: [{ hubId: 'hub-7', roleIds: ['role-volunteer'] }],
       }),
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          onConflictDoNothing: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([newUser]),
-          }),
-        }),
-      }),
-    }
+    })
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
     const result = await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
     expect(result.volunteer.pubkey).toBe('pk-new')
-    expect(tx.update).toHaveBeenCalled() // atomic claim
-    expect(tx.insert).toHaveBeenCalled() // user created
+    expect(tx.$inserted[0]).toMatchObject({
+      pubkey: 'pk-new',
+      roles: ['role-volunteer'],
+      hubRoles: [{ hubId: 'hub-7', roleIds: ['role-volunteer'] }],
+    })
   })
 
-  it('throws 409 (not an unhandled duplicate-key error) when the pubkey already has a user', async () => {
+  it('grants no role when the invite names none, but still grants membership', async () => {
+    // An invite whose roleIds are empty is one where neither the inviter nor
+    // the hub's template named a role. The old code substituted a hardcoded
+    // `role-volunteer` — call-answering permission nobody asked for.
     const { db, service } = setup()
-    const invite = makeInviteRow()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: 'hub-7', roleIds: [] }),
+      insertedUser: makeUserRow({ pubkey: 'pk-new', roles: [], hubRoles: [{ hubId: 'hub-7', roleIds: [] }] }),
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    const tx = {
-      update: vi.fn().mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([invite]),
-          }),
-        }),
+    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
+    expect(tx.$inserted[0]).toMatchObject({
+      roles: [],
+      hubRoles: [{ hubId: 'hub-7', roleIds: [] }],
+    })
+  })
+
+  it('falls back to the sole active hub for an invite that carries none', async () => {
+    const { db, service } = setup()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: null }),
+      activeHubs: [{ id: 'hub-only' }],
+      insertedUser: makeUserRow({ pubkey: 'pk-new' }),
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+
+    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
+    expect(tx.$inserted[0]).toMatchObject({ hubRoles: [{ hubId: 'hub-only', roleIds: ['role-volunteer'] }] })
+  })
+
+  it('creates no hub membership when the hub is ambiguous', async () => {
+    const { db, service } = setup()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: null }),
+      activeHubs: [{ id: 'hub-a' }, { id: 'hub-b' }],
+      insertedUser: makeUserRow({ pubkey: 'pk-new' }),
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+
+    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
+    expect(tx.$inserted[0]).not.toHaveProperty('hubRoles')
+  })
+
+  it('merges the grant into an existing user\'s hubRoles instead of rejecting them', async () => {
+    // A person invited into a SECOND hub must not be refused for existing.
+    const { db, service } = setup()
+    const existing = makeUserRow({
+      pubkey: 'pk-existing',
+      roles: ['role-volunteer'],
+      hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
+    })
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: 'hub-2', roleIds: ['role-reviewer'] }),
+      existingUser: existing,
+      updatedUser: makeUserRow({
+        pubkey: 'pk-existing',
+        hubRoles: [
+          { hubId: 'hub-1', roleIds: ['role-volunteer'] },
+          { hubId: 'hub-2', roleIds: ['role-reviewer'] },
+        ],
       }),
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          // ON CONFLICT DO NOTHING returns no row when the pubkey already exists
-          onConflictDoNothing: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([]),
-          }),
-        }),
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+
+    const result = await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-existing' })
+    expect(result.volunteer.pubkey).toBe('pk-existing')
+    expect(tx.insert).not.toHaveBeenCalled()
+    // The first hub survives, the second is added, and the global roles and
+    // identity fields are untouched.
+    expect(tx.$updated[1]).toMatchObject({
+      hubRoles: [
+        { hubId: 'hub-1', roleIds: ['role-volunteer'] },
+        { hubId: 'hub-2', roleIds: ['role-reviewer'] },
+      ],
+    })
+    expect(tx.$updated[1]).not.toHaveProperty('roles')
+    expect(tx.$updated[1]).not.toHaveProperty('active')
+  })
+
+  it('unions roles when the existing user is re-invited to a hub they are already in', async () => {
+    const { db, service } = setup()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: 'hub-1', roleIds: ['role-reviewer'] }),
+      existingUser: makeUserRow({
+        pubkey: 'pk-existing',
+        hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
       }),
-    }
+      updatedUser: makeUserRow({ pubkey: 'pk-existing' }),
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+
+    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-existing' })
+    expect(tx.$updated[1]).toMatchObject({
+      hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer', 'role-reviewer'] }],
+    })
+  })
+
+  it('throws 409 when the pubkey exists and there is no hub to merge into', async () => {
+    const { db, service } = setup()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow({ hubId: null }),
+      activeHubs: [],
+      existingUser: makeUserRow({ pubkey: 'pk-existing' }),
+    })
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
     await expect(
       service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-existing' }),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('throws 409 (not an unhandled duplicate-key error) when a concurrent insert wins', async () => {
+    // The SELECT cannot lock a row that does not exist yet, so ON CONFLICT DO
+    // NOTHING is still the guard against a racing redemption.
+    const { db, service } = setup()
+    const tx = makeRedeemTx({
+      invite: makeInviteRow(),
+      insertedUser: null,
+    })
+    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+
+    await expect(
+      service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' }),
     ).rejects.toMatchObject({ status: 409 })
   })
 })

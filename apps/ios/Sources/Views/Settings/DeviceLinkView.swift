@@ -223,10 +223,11 @@ struct DeviceLinkView: View {
             }
             .padding(.vertical, 8)
             .accessibilityIdentifier("sas-code-display")
-            .accessibilityLabel(String(format: NSLocalizedString(
+            .accessibilityLabel(L10n.format(
                 "device_link_sas_code",
-                comment: "Verification code: %@"
-            ), sasCode))
+                comment: "Verification code: %@",
+                sasCode
+            ))
 
             // Confirm / Reject buttons
             VStack(spacing: 12) {

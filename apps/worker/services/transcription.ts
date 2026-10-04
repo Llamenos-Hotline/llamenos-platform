@@ -3,6 +3,7 @@ import type { Services } from '../services'
 import { getTelephonyFromService } from '../lib/service-factories'
 import { encryptMessageForStorage } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 
 const logger = createLogger('services.transcription')
 
@@ -38,10 +39,13 @@ export async function maybeTranscribe(
     })
 
     if (result.text) {
-      // Envelope encryption: single ciphertext, wrapped key for user + admin
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
+      // Envelope encryption: single ciphertext, wrapped key for user + admin.
+      // The admin reader is the X25519 recipient or nothing — ADMIN_PUBKEY is
+      // an Ed25519 signing key and sealing to it would make this transcript
+      // unreadable by everyone, silently (#1283).
+      const adminPubkey = adminHpkeRecipient(env)
       const readerPubkeys = [userPubkey]
-      if (adminPubkey !== userPubkey) readerPubkeys.push(adminPubkey)
+      if (adminPubkey && adminPubkey !== userPubkey) readerPubkeys.push(adminPubkey)
 
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
@@ -89,8 +93,14 @@ export async function transcribeVoicemail(
     })
 
     if (result.text) {
-      // Voicemails: envelope encryption for admin only
-      const adminPubkey = env.ADMIN_DECRYPTION_PUBKEY || env.ADMIN_PUBKEY
+      // Voicemails: envelope encryption for admin only. With no admin HPKE
+      // recipient configured there is no reader at all, and storing a
+      // ciphertext nobody can open is worse than not transcribing (#1283).
+      const adminPubkey = adminHpkeRecipient(env)
+      if (!adminPubkey) {
+        logger.warn('Voicemail transcription skipped: no ADMIN_DECRYPTION_PUBKEY, so no reader could open it', { callSid })
+        return
+      }
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, [adminPubkey])
       await services.records.createNote({
         callId: callSid,

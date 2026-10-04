@@ -216,23 +216,36 @@ export async function apiDelete<T = unknown>(
   return { status: res.status(), data: data as T }
 }
 
+/**
+ * Create a hub through the route an operator uses.
+ *
+ * This called /api/test-create-hub, on the stated grounds that "the
+ * authenticated /api/hubs POST requires system:manage-hubs which the bootstrap
+ * admin may not have". That is not so: `role-super-admin` carries
+ * `permissions: ['*']` (packages/shared/permissions.ts DEFAULT_ROLES), and the
+ * bootstrap admin holds that role — global-setup verifies it before any test
+ * runs. The dev route was never needed here.
+ *
+ * It was, however, actively harmful: `devGuard` (apps/worker/app.ts) answers
+ * 404 for every /api/test-* outside a development server, so every suite built
+ * on this helper — 15 files — could only ever run against a dev box. See #1423.
+ *
+ * `POST /api/hubs` also calls `setHubRole` for the creator, so the admin ends
+ * up a member of the hub exactly as the dev route arranged via `adminPubkey`.
+ */
 export async function createHubViaApi(
   request: APIRequestContext,
   name: string,
 ): Promise<string> {
-  // Use the test-create-hub endpoint (dev.ts) which bypasses permission checks
-  // and only requires the X-Test-Secret header. The authenticated /api/hubs POST
-  // requires system:manage-hubs which the bootstrap admin may not have.
-  // Pass adminPubkey so the endpoint can add the admin as a hub member even when
-  // ADMIN_PUBKEY env var is not set (local dev without .env).
-  const { status, data } = await devPost<{ id: string }>(request, '/test-create-hub', {
-    name,
-    adminPubkey: seedHexToPubkey(ADMIN_SEED),
-  })
-  if (status !== 200) {
-    throw new Error(`Failed to create hub: ${status}`)
+  const { status, data } = await apiPost<{ hub?: { id: string } }>(request, '/hubs', { name })
+  if (status !== 201 && status !== 200) {
+    throw new Error(`Failed to create hub "${name}": POST /api/hubs returned ${status}`)
   }
-  return data.id
+  const id = data?.hub?.id
+  if (!id) {
+    throw new Error(`POST /api/hubs returned ${status} but no hub id: ${JSON.stringify(data)}`)
+  }
+  return id
 }
 
 /**
@@ -288,7 +301,18 @@ export async function ensureAdminRole(
   request: APIRequestContext,
 ): Promise<void> {
   const pubkey = seedHexToPubkey(ADMIN_SEED)
-  let lastRoles: string[] | null = null
+
+  // Already correct — the normal case, and the ONLY reachable case on a
+  // deployment. The promotion below exists for a dev-only race (a concurrent
+  // /api/test-reset wiping the users table mid-run, recreating the admin as
+  // role-volunteer). A deployed server has no test-reset, so nothing can
+  // downgrade the admin, and /api/test-promote-admin is 404 there anyway.
+  // Checking first means this helper is a no-op rather than a hard failure
+  // against a real server (#1423).
+  const current = await readAdminRoles(request)
+  if (current?.includes('role-super-admin')) return
+
+  let lastRoles: string[] | null = current
   let lastStatus = 0
   for (let attempt = 0; attempt < 5; attempt++) {
     const { status } = await devPost(request, '/test-promote-admin', { pubkey })
@@ -336,22 +360,33 @@ export async function verifyHubMembership(
     console.warn(
       `[verifyHubMembership] Admin denied on hub ${hubId} — body: ${JSON.stringify(data)}`,
     )
-    // Re-add admin as hub member via the dev endpoint (bypasses auth)
-    const { status: devStatus } = await devPost(request, '/test-add-hub-member', {
-      hubId,
+    // The AUTHENTICATED route first. It works everywhere; the dev route below
+    // is 404 outside a development server, so trying it first made this path
+    // fail on a deployment for a reason that had nothing to do with hub
+    // membership (#1423).
+    const { status: addStatus } = await apiPost(request, `/hubs/${hubId}/members`, {
       pubkey: seedHexToPubkey(ADMIN_SEED),
       roleIds: ['role-super-admin'],
     })
-    if (devStatus !== 200) {
-      // Fallback: try the authenticated endpoint
-      const { status: addStatus } = await apiPost(request, `/hubs/${hubId}/members`, {
+    // Declared out here, not inside the branch: the final diagnostic below
+    // reports it too, and it stays `null` when the real route succeeded —
+    // which is itself the useful signal that no fallback was needed.
+    let devStatus: number | null = null
+    if (addStatus !== 200 && addStatus !== 201 && addStatus !== 204 && addStatus !== 409) {
+      // Dev-only fallback: bypasses auth entirely, for the case where the
+      // admin's own permissions are what is broken. 404 here means a
+      // deployment, where this route does not exist by design.
+      ;({ status: devStatus } = await devPost(request, '/test-add-hub-member', {
+        hubId,
         pubkey: seedHexToPubkey(ADMIN_SEED),
         roleIds: ['role-super-admin'],
-      })
-      if (addStatus !== 200 && addStatus !== 201 && addStatus !== 204 && addStatus !== 409) {
+      }))
+      // Only now is it genuinely unrecoverable: the real route failed AND the
+      // dev bypass either failed or does not exist on this server.
+      if (devStatus !== 200) {
         throw new Error(
           `Failed to ensure admin hub membership for hub ${hubId}: ` +
-          `notes returned ${status}, dev-add returned ${devStatus}, add-member returned ${addStatus}`
+          `notes returned ${status}, add-member returned ${addStatus}, dev-add returned ${devStatus}`
         )
       }
     }
@@ -378,7 +413,8 @@ export async function verifyHubMembership(
         )
         throw new Error(
           `Admin still lacks hub membership after re-add for hub ${hubId} ` +
-          `(status: ${finalStatus}, dev-add: ${devStatus}, body: ${JSON.stringify(finalData)})`
+          `(status: ${finalStatus}, add-member: ${addStatus}, ` +
+          `dev-add: ${devStatus ?? 'not attempted'}, body: ${JSON.stringify(finalData)})`
         )
       }
     }
@@ -407,6 +443,55 @@ export function generateTestKeypair(): { seedHex: string; pubkey: string } {
   const seedHex = bytesToHex(seedBytes)
   const pubkey = seedHexToPubkey(seedHex)
   return { seedHex, pubkey }
+}
+
+// ── Invite Redemption ─────────────────────────────────────────────
+
+/**
+ * A distinct simulated client address, for endpoints rate limited per client.
+ *
+ * The dev and CI servers run with `TRUST_PROXY_HEADERS=true` precisely so the
+ * suite can present itself as many clients rather than one. Without a
+ * `CF-Connecting-IP` every request in every Playwright worker falls into the
+ * single bucket for 127.0.0.1, so the suite's own parallelism — not the
+ * behaviour under test — decides who gets a 429.
+ */
+export function simulatedClientIp(): string {
+  const octet = () => 1 + Math.floor(Math.random() * 254)
+  return `10.${octet()}.${octet()}.${octet()}`
+}
+
+/**
+ * Redeem an invite as ONE client, distinct from every other redeemer.
+ *
+ * `POST /api/invites/redeem` is rate limited to 5 per minute per client
+ * (`apps/worker/routes/invites.ts`) — an anti-enumeration control, and not
+ * something any scenario here is asserting. Sharing one bucket across the
+ * suite made that control answer 429 to whichever redemption happened to be
+ * sixth, which is how "two users simultaneously redeem the same invite code"
+ * came to observe ZERO successes instead of one (#1480).
+ *
+ * Each redeemer is a different person, so each gets its own address. Pass
+ * `clientIp` explicitly when a scenario needs two redemptions to come from the
+ * same client.
+ */
+export async function redeemInviteViaApi<T = unknown>(
+  request: APIRequestContext,
+  code: string,
+  seedHex: string,
+  clientIp: string = simulatedClientIp(),
+): Promise<{ status: number; data: T }> {
+  const path = '/api/invites/redeem'
+  const pubkey = seedHexToPubkey(seedHex)
+  const timestamp = Date.now()
+  const token = bytesToHex(
+    ed25519.sign(buildAuthMessage(pubkey, timestamp, 'POST', path), hexToBytes(seedHex)),
+  )
+  const res = await request.post(path, {
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': clientIp },
+    data: { code, pubkey, timestamp, token },
+  })
+  return { status: res.status(), data: (await safeJson(res)) as T }
 }
 
 // ── User CRUD ─────────────────────────────────────────────────────

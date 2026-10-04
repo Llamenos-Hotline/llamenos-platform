@@ -176,6 +176,61 @@ describe('matchesPath', () => {
     expect(matchesPath('Dockerfile.build', 'Dockerfile*')).toBe(true)
     expect(matchesPath('deploy/docker/Dockerfile', 'Dockerfile*')).toBe(true)
   })
+
+  /**
+   * The root-anchored form (#1473). Before it existed, "own exactly the
+   * top-level README" was unsayable: `README.md` is a basename pattern that
+   * matches at every depth, so #1467's grant of it to infra also handed over
+   * 19 other lanes' README files — `packages/test-specs/README.md` among them,
+   * which the shared lane owns exclusively. Lane scope decides which lane may
+   * SELF-MERGE a path, so that is a transfer of authority over other lanes'
+   * documentation, and the review rejected it on that breadth alone.
+   */
+  describe('root-anchored patterns (leading slash)', () => {
+    it('anchors to the repo root — the whole point', () => {
+      expect(matchesPath('README.md', '/README.md')).toBe(true)
+      expect(matchesPath('apps/ios/README.md', '/README.md')).toBe(false)
+      expect(matchesPath('packages/test-specs/README.md', '/README.md')).toBe(false)
+    })
+
+    /**
+     * Breaking it on purpose: drop the leading slash from the same pattern and
+     * the over-broad match comes straight back. This is what proves the anchor
+     * is doing the work — a test that only checked the root file would pass
+     * before and after the fix and prove nothing (#1473).
+     */
+    it('is the ONLY thing separating it from the bare pattern it replaces', () => {
+      expect(matchesPath('apps/ios/README.md', 'README.md')).toBe(true)
+      expect(matchesPath('apps/ios/README.md', '/README.md')).toBe(false)
+    })
+
+    it('leaves bare basename patterns alone, so the never-write list is unchanged', () => {
+      // Purely additive. Basename matching at any depth is what makes the
+      // secret patterns behave like CODEOWNERS' `**/.env`; narrowing it
+      // globally to fix one grant would have quietly let a worker write a
+      // secret one directory down. See SECRET_PATH_PATTERNS.
+      expect(matchesPath('deploy/docker/.env', '.env')).toBe(true)
+      expect(matchesPath('apps/worker/config/.env.production', '.env')).toBe(true)
+      expect(matchesPath('deploy/certs/ca.pem', '*.pem')).toBe(true)
+      expect(matchesPath('infra/keys/id_ed25519', 'id_ed25519')).toBe(true)
+    })
+
+    it('still spells directories and globs the same way below the root', () => {
+      expect(matchesPath('docs/epics/x.md', '/docs/')).toBe(true)
+      expect(matchesPath('apps/docs/epics/x.md', '/docs/')).toBe(false)
+      expect(matchesPath('Dockerfile.build', '/Dockerfile*')).toBe(true)
+      expect(matchesPath('deploy/docker/Dockerfile', '/Dockerfile*')).toBe(false)
+    })
+
+    it('treats a lone slash as owning nothing, so adding the anchor cannot widen a scope', () => {
+      // `/` matched nothing before the anchor existed (no repo-relative path
+      // starts with one). Stripping it to '' would make `startsWith('')` true
+      // for every file in the repo — a lane that wrote `/` would own
+      // everything. Guarded explicitly.
+      expect(matchesPath('README.md', '/')).toBe(false)
+      expect(matchesPath('apps/worker/routes/auth.ts', '/')).toBe(false)
+    })
+  })
 })
 
 describe('matchesSecretPath — the never-write matcher (#1253)', () => {

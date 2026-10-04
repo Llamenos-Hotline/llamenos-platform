@@ -54,6 +54,12 @@ services:
       - DATABASE_URL=postgresql://llamenos:${PG_PASSWORD:?PG_PASSWORD is required}@postgres:5432/llamenos
       - PG_POOL_SIZE=${PG_POOL_SIZE:-10}
       - ADMIN_PUBKEY=${ADMIN_PUBKEY:?ADMIN_PUBKEY is required}
+      # The admin's X25519 HPKE recipient key — a DIFFERENT key from ADMIN_PUBKEY
+      # (Ed25519). Required whenever ADMIN_PUBKEY is set: validateConfig() refuses
+      # to start rather than seal admin envelopes to a signing key, which succeeds
+      # and yields notes nobody can ever decrypt (#1283). `bun run bootstrap-admin`
+      # prints both, derived from one seed.
+      - "ADMIN_DECRYPTION_PUBKEY=${ADMIN_DECRYPTION_PUBKEY:?ADMIN_DECRYPTION_PUBKEY is required — the admin's X25519 key from `bun run bootstrap-admin`, not ADMIN_PUBKEY}"
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       # Required by the app whenever ENVIRONMENT is production (the default above).
@@ -75,6 +81,15 @@ services:
       # Optional: GlitchTip/Sentry DSN for client crash reporting (profile: monitoring)
       - GLITCHTIP_DSN=${GLITCHTIP_DSN:-}
       # Signal notification sidecar (profile: signal)
+      # Points at the sidecar the `signal` profile starts. Keeping this
+      # default is what makes `--profile signal` work without extra operator
+      # configuration — removing it silently disconnects a deployment that
+      # DOES use Signal, which is worse than the problem it would solve.
+      #
+      # It does mean the variable is set even when the profile is off, so the
+      # health route cannot use "is the URL set?" to decide whether Signal is
+      # deployed. That is handled where it belongs — readiness no longer lets
+      # an OPTIONAL integration gate the verdict (#1418, routes/health.ts).
       - NOTIFIER_URL=${NOTIFIER_URL:-http://signal-notifier:3100}
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-}
       # ntfy/UnifiedPush relay (profile: push)

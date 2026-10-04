@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
   reviewIsRequested, reviewRequestFor, reviewRequestEventFromEnv, reviewTriggerLogins,
-  REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN,
+  reviewNotRequestedAdvice, REVIEW_REQUEST_LOGIN, RELEASE_REVIEW_REQUEST_LOGIN,
+  REVIEW_DISPATCH_EVENT,
   type ReviewRequestDecision, type ReviewRequestEvent,
 } from '../../orchestrator/src/ci.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
@@ -143,6 +144,19 @@ interface WorkflowDoc { jobs: Record<string, { steps?: WorkflowStep[] }> }
 
 const FLEET_REVIEW_YML = join(process.cwd(), '.github', 'workflows', 'fleet-review.yml')
 
+function stepById(id: string): WorkflowStep {
+  const wf = parseYaml(readFileSync(FLEET_REVIEW_YML, 'utf8')) as WorkflowDoc
+  const step = wf.jobs['fleet-review']?.steps?.find((s) => s.id === id)
+  if (step === undefined) throw new Error(`no \`${id}\` step in fleet-review.yml — this rail must not pass vacuously`)
+  return step
+}
+
+/** The step that resolves WHAT is being judged — and, on the dispatch arm,
+ *  refuses a ref that is not the PR's own head branch. */
+function gateCtxStep(): WorkflowStep {
+  return stepById('ctx')
+}
+
 function gateStep(): WorkflowStep {
   const wf = parseYaml(readFileSync(FLEET_REVIEW_YML, 'utf8')) as WorkflowDoc
   const step = wf.jobs['fleet-review']?.steps?.find((s) => s.id === 'gate')
@@ -217,9 +231,201 @@ describe('rail: the workflow hands the gate what it needs to decide (#1232)', ()
   // The chain above proves the YAML and ci.ts agree; this pins the one line
   // of glue between them, so the CLI cannot drift back to reading the
   // variables itself and bypass the reader tested here.
-  it('the review-gate command reads the event through reviewRequestEventFromEnv', () => {
+  it('the review-gate command reads the event through reviewRequestEventFromEnv, with the live author as the fallback', () => {
     const cli = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
-    expect(cli).toContain('reviewRequestEventFromEnv(process.env, ctx.branch)')
+    // The third argument is #1471: `workflow_dispatch` carries no PR payload,
+    // so without the live read the author is unknown and the advice defaults
+    // to `REVIEW_REQUEST_LOGIN` — the author itself, on the PRs that need the
+    // dispatch most.
+    expect(cli).toContain('reviewRequestEventFromEnv(process.env, ctx.branch, facts?.author)')
     expect(cli).not.toContain("process.env['FLEET_REVIEW_REQUESTED_REVIEWER']")
+    // The live read is the one `readPrFacts` already makes for the labels —
+    // the author must come out of THAT response, not a second round trip.
+    expect(cli).toMatch(/author: data\.user\?\.login/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #1471: the dispatch escape hatch, and the dead end that had no exit.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE BUG, measured on eight PRs (#1372 #1373 #1374 #1375 #1376 #1378 #1382
+ * #1184), all authored by `llamenos-auto` with `rhonda-rodododo` already in
+ * `reviewRequests`:
+ *
+ *  1. `review_requested` could not re-fire. GitHub re-adds a CODEOWNER's
+ *     review request the instant it is removed, so remove-then-re-add emits
+ *     NO event while every command in it reports success.
+ *  2. `synchronize` can only republish a verdict already earned for that
+ *     exact diff, so on a changed diff it concludes `not-requested`.
+ *  3. `workflow_dispatch` was REFUSED by the gate — the event name arrived
+ *     empty from a stale head copy of `fleet-review.yml` (the gate runs base
+ *     code against head YAML, #1464) and the refusal read "`(no event)` is
+ *     not a review request".
+ *  4. `review-and-merge` cannot POST a check run with a PAT (403).
+ *
+ * `fleet/review` is a required context, so all four closed meant eight PRs
+ * with no reachable route to a verdict at all.
+ *
+ * THE INVARIANTS: a dispatch IS a review request and reaches the engine; the
+ * event name survives a stale `FLEET_REVIEW_*` block; the login the advice
+ * names is never the PR's own author; and advice that cannot work says so.
+ */
+describe('rail: the dispatch escape hatch is a real review trigger (#1471)', () => {
+  it('a workflow_dispatch is a review request, with no reviewer login to name', () => {
+    expect(reviewRequestFor({
+      eventName: REVIEW_DISPATCH_EVENT, requestedReviewer: undefined, requestedTeam: undefined,
+      prAuthor: AUTO, branch: 'fleet/desktop/1130',
+    })).toEqual({ requested: true })
+  })
+
+  // The exact live shape: a head copy of fleet-review.yml predating
+  // `FLEET_REVIEW_EVENT_NAME` hands the gate NOTHING, and the runner's own
+  // `GITHUB_EVENT_NAME` is the only source that cannot be stale.
+  it('a dispatch whose stale head YAML sets no FLEET_REVIEW_* is still recognised, from GITHUB_EVENT_NAME', () => {
+    const event = reviewRequestEventFromEnv({ GITHUB_EVENT_NAME: REVIEW_DISPATCH_EVENT }, 'fleet/desktop/1130', AUTO)
+    expect(event.eventName).toBe(REVIEW_DISPATCH_EVENT)
+    expect(reviewRequestFor(event)).toEqual({ requested: true })
+  })
+
+  it('the explicit FLEET_REVIEW_EVENT_NAME still wins — the workflow stays the statement of intent', () => {
+    const event = reviewRequestEventFromEnv(
+      { FLEET_REVIEW_EVENT_NAME: 'pull_request', FLEET_REVIEW_EVENT_ACTION: 'synchronize', GITHUB_EVENT_NAME: 'pull_request' },
+      'fleet/desktop/1130',
+    )
+    expect(event.eventName).toBe('pull_request')
+    expect(reviewRequestFor(event).requested).toBe(false)
+  })
+
+  // Fail closed is unchanged: no event name from EITHER source is still a
+  // refusal, and the refusal now names the trigger that always works.
+  it('no event name from either source is still a refusal, and the reason names the dispatch', () => {
+    const event = reviewRequestEventFromEnv({}, 'fleet/desktop/1130', AUTO)
+    expect(event.eventName).toBe('')
+    const d = reviewRequestFor(event)
+    expect(d.requested).toBe(false)
+    expect(!d.requested && d.reason).toContain('(no event)')
+    expect(!d.requested && d.reason).toContain(REVIEW_DISPATCH_EVENT)
+  })
+
+  // Both directions are live in the open-PR set at once, so neither may be
+  // assumed: the author resolution must never name the PR's own author.
+  it.each([AUTO, OPERATOR, 'dependabot[bot]', 'some-colleague'])(
+    'on a dispatch for a PR authored by %s, the login the advice names is never the author',
+    (author) => {
+      const event = reviewRequestEventFromEnv({ GITHUB_EVENT_NAME: REVIEW_DISPATCH_EVENT }, 'fleet/infra/1', author)
+      expect(event.prAuthor).toBe(author)
+      for (const ask of reviewTriggerLogins(event)) {
+        expect(ask.toLowerCase(), `advice names the PR's own author on a PR by ${author}`).not.toBe(author.toLowerCase())
+      }
+    },
+  )
+
+  it('without the live author a dispatch would name llamenos-auto — which is #1471\'s 422', () => {
+    const blind = reviewRequestEventFromEnv({ GITHUB_EVENT_NAME: REVIEW_DISPATCH_EVENT }, 'fleet/desktop/1130')
+    expect(reviewTriggerLogins(blind)[0]).toBe(AUTO)
+    const resolved = reviewRequestEventFromEnv({ GITHUB_EVENT_NAME: REVIEW_DISPATCH_EVENT }, 'fleet/desktop/1130', AUTO)
+    expect(reviewTriggerLogins(resolved)[0]).toBe(OPERATOR)
+  })
+})
+
+describe('rail: a dispatch cannot publish a verdict onto a commit that is not the PR\'s (#1471)', () => {
+  /**
+   * A dispatch run's check attaches to `github.sha` — whatever `--ref`
+   * resolved to — and NOTHING about `pr_number` constrains that. Now that the
+   * dispatch is a real trigger, `--ref main -f pr_number=N` would review N's
+   * base-to-main diff and publish the verdict as a `fleet/review` on main's
+   * tip, and `--ref another-pr-branch` would hand THAT PR a required green it
+   * never earned. The ctx step refuses instead, and this is the rail on that
+   * refusal — without it the fix would have opened a fail-open path of its own.
+   */
+  it('the ctx step compares the dispatched ref against the PR\'s own head branch and exits non-zero', () => {
+    const step = gateCtxStep()
+    expect(step.env?.['DISPATCH_REF'], 'the ctx step does not receive the dispatched ref').toBe('${{ github.ref_name }}')
+    const script = step.run ?? ''
+    expect(script).toContain('"$DISPATCH_REF" != "$branch"')
+    expect(script).toContain('dispatch-ref-mismatch')
+    // The refusal must be a failure, and must sit INSIDE the dispatch arm —
+    // a `pull_request` carries no dispatched ref to compare.
+    const guardIdx = script.indexOf('dispatch-ref-mismatch')
+    const prArmIdx = script.indexOf('base_sha="$PR_EVENT_BASE_SHA"')
+    expect(guardIdx).toBeGreaterThan(prArmIdx)
+    expect(script.slice(guardIdx, guardIdx + 600)).toContain('exit 1')
+  })
+})
+
+describe('rail: advice that cannot work says so (#1471)', () => {
+  const advice = (over: Partial<Parameters<typeof reviewNotRequestedAdvice>[0]> = {}): string =>
+    reviewNotRequestedAdvice({
+      pr: '1184', branch: 'fleet/desktop/1130', ask: OPERATOR, isAuthorStandIn: true,
+      alreadyRequested: undefined, ...over,
+    }).join('\n')
+
+  it('names the login to request when it is not already requested', () => {
+    const text = advice({ alreadyRequested: [] })
+    expect(text).toContain(`\`${OPERATOR}\``)
+    expect(text).toContain('cannot be asked to review it')
+  })
+
+  it('refuses to tell you to re-request a login the PR ALREADY has', () => {
+    const text = advice({ alreadyRequested: [OPERATOR] })
+    expect(text).toContain('ALREADY a requested reviewer')
+    expect(text).not.toMatch(/request a review from `rhonda-rodododo` to run/)
+    // It points at the EVENTS endpoint, the only honest source: every command
+    // in the remove-then-add sequence reports success while nothing fires, and
+    // `reviewRequests` cannot tell "just now" from "four days ago".
+    expect(text).toContain(`issues/1184/events`)
+  })
+
+  // A dispatch runs the real review, but a check suite created by a
+  // `workflow_dispatch` on a branch is not associated with the PULL REQUEST,
+  // so its `fleet/review` check run never enters the PR's status-check rollup
+  // and cannot clear the required context. Measured on #1372/#1378/#1184,
+  // whose heads each carry a dispatch SUCCESS while the rollup still shows an
+  // older `pull_request` FAILURE. Advice naming it would be a second dead end
+  // — which is the exact failure this function exists to stop.
+  it('never offers a dispatch as the way to clear the context', () => {
+    for (const alreadyRequested of [undefined, [], [OPERATOR], [AUTO]]) {
+      for (const isAuthorStandIn of [true, false]) {
+        const text = advice({ alreadyRequested, isAuthorStandIn })
+        expect(text, `${String(alreadyRequested)}/${String(isAuthorStandIn)}`).not.toMatch(/gh workflow run/)
+      }
+    }
+  })
+
+  it('where it mentions a dispatch at all, it says the check does not reach this PR', () => {
+    const text = advice({ alreadyRequested: [OPERATOR] })
+    expect(text).toMatch(/workflow_dispatch/)
+    expect(text).toMatch(/never enters this PR's status-check rollup/)
+    expect(text).toMatch(/cannot clear this context/)
+  })
+
+  it('matches the already-requested login case-insensitively, as GitHub does', () => {
+    expect(advice({ alreadyRequested: ['Rhonda-Rodododo'] })).toContain('ALREADY a requested reviewer')
+  })
+
+  it('an UNREADABLE requested-reviewer list is not an empty one — it never claims the re-request works', () => {
+    const text = advice({ alreadyRequested: undefined })
+    expect(text).not.toContain('ALREADY a requested reviewer')
+    // Nor does it promise the request WILL fire — it cannot rule out the no-op.
+    expect(text).toMatch(/whether that request will emit an event is unknown/)
+    expect(text).not.toMatch(/so that request will emit an event/)
+  })
+
+  it('promises the request will fire only when it has SEEN the login is absent', () => {
+    expect(advice({ alreadyRequested: [] })).toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: [AUTO] })).toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: [OPERATOR] })).not.toMatch(/so that request will emit an event/)
+    expect(advice({ alreadyRequested: undefined })).not.toMatch(/so that request will emit an event/)
+  })
+
+  it('every branch names the login to ask', () => {
+    for (const alreadyRequested of [undefined, [], [OPERATOR], [AUTO]]) {
+      for (const isAuthorStandIn of [true, false]) {
+        const text = advice({ alreadyRequested, isAuthorStandIn })
+        expect(text, `${String(alreadyRequested)}/${String(isAuthorStandIn)}`).toContain(`\`${OPERATOR}\``)
+      }
+    }
   })
 })

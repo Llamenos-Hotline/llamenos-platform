@@ -7,24 +7,15 @@
 import { expect } from '@playwright/test'
 import { Then } from '../fixtures'
 import { Timeouts } from '../../helpers'
+import { expandSettingsSection } from '../common/ui-helpers'
 
 Then('I should see the notifications section', async ({ page }) => {
   await expect(page.getByTestId('notifications')).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the notification toggles', async ({ page }) => {
-  const section = page.getByTestId('notifications')
-  await expect(section).toBeVisible({ timeout: Timeouts.ELEMENT })
-  // Expand the section if collapsed
-  const isExpanded = await section.locator('[data-slot="collapsible-content"][data-state="open"]').count() > 0
-  if (!isExpanded) {
-    await section.getByTestId('notifications-trigger').click().catch(() => {})
-  }
-  const content = section.locator('[data-slot="switch"], [role="switch"], button[data-state]')
-  const isSwitch = await content.first().isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isSwitch) {
-    const count = await content.count()
-    expect(count).toBeGreaterThanOrEqual(1)
-  }
-  // If no switches found after expansion, section just rendered without them
+  const section = await expandSettingsSection(page, 'notifications')
+  // The previous version swallowed a failed expand click and, finding no
+  // switches, passed on "the section rendered without them".
+  await expect(section.getByRole('switch').first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })

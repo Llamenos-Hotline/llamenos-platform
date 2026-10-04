@@ -446,9 +446,12 @@ class M1CapabilityProbe {
     }
 
     /**
-     * Enrolment as a volunteer does it (#1345): an admin creates an invite for [role], the
-     * volunteer redeems it on a fresh install (hub URL + invite code → PIN twice), and the
-     * admin then adds them to a new hub. Returns the signing pubkey and the hub.
+     * Enrolment as a volunteer does it (#1345): an admin creates an invite for [role] into
+     * a new hub, and the volunteer redeems it on a fresh install (hub URL + invite code →
+     * PIN twice). Redemption is what grants the hub membership (#1474), so the invite
+     * names the hub — this server has many, and an unnamed hub is refused as ambiguous.
+     * [addHubMember] afterwards is belt-and-braces on the role, and idempotent.
+     * Returns the signing pubkey and the hub.
      *
      * [asLink]: paste the invite link instead, leaving the hub URL empty — the app must
      * take both the code and the hub from the link.
@@ -457,7 +460,7 @@ class M1CapabilityProbe {
         val hub = createHub(hubName)
         val invite = adminApi(
             flow, "POST", "/api/invites",
-            """{"name":"Probe $flow","phone":"+15555550100","roleIds":["$role"]}""",
+            """{"name":"Probe $flow","phone":"+15555550100","roleIds":["$role"],"hubId":"$hub"}""",
         )
         val code = json.parseToJsonElement(invite).jsonObject["invite"]!!.jsonObject["code"]!!.jsonPrimitive.content
         launch()

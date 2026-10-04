@@ -4,8 +4,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  parseVerdict, stripReviewerControlFiles, verifierFor,
-  classifyEngineFailure, reviewerBinaryFor, reviewerInvocationFor,
+  verifierArgs,
+  reviewFilesSection,
+  REVIEWER_TOOLS,
+  decodeEngineOutput,
+  parseVerdict,
+  stripReviewerControlFiles,
+  verifierFor,
+  classifyEngineFailure,
+  reviewerBinaryFor,
+  reviewerInvocationFor,
 } from '../../orchestrator/src/review.js'
 
 // #812: `fleet/review` retired `opencode` as the reviewer engine entirely —
@@ -62,10 +70,23 @@ describe('classifyEngineFailure', () => {
     expect(classifyEngineFailure(`${stdout}\n${stderr}`)).toBe('engine-misconfigured')
   })
 
+  it('reads claude\'s own "Reached max turns" text as budget-exhausted, not engine-unavailable', () => {
+    // Verbatim from a real run: fleet/review on #1445 (3 files) spent all ten
+    // turns in 68 seconds and emitted no verdict. Reported as
+    // `engine-unavailable` it became "re-request the review" — which re-runs
+    // the same diff under the same budget and exhausts again, a loop costing
+    // a full session each time. The remedy differs, so the classification
+    // must too.
+    expect(classifyEngineFailure('Error: Reached max turns (10)')).toBe('budget-exhausted')
+    expect(classifyEngineFailure('fleet/review: FAIL — review unavailable: Error: Reached max turns (20)')).toBe('budget-exhausted')
+  })
+
   it('reads an ordinary crash/timeout/outage as engine-unavailable', () => {
     expect(classifyEngineFailure('spawn ENOENT')).toBe('engine-unavailable')
     expect(classifyEngineFailure('simulated: Unexpected server error from provider')).toBe('engine-unavailable')
     expect(classifyEngineFailure('')).toBe('engine-unavailable')
+    // 'turns' alone must not trip the budget branch
+    expect(classifyEngineFailure('took several turns to connect')).toBe('engine-unavailable')
   })
 })
 
@@ -582,5 +603,192 @@ describe('postReview', () => {
     expect(args).not.toContain('--approve')
     expect(args).not.toContain('--request-changes')
     expect(args.join(' ')).toContain(verdict)
+  })
+})
+
+describe('decodeEngineOutput: the engine envelope', () => {
+  // Both payloads below are VERBATIM from real `claude` runs captured while
+  // diagnosing #1445 — a success and a forced exhaustion. Hand-written
+  // fixtures would only prove the decoder matches my guess at the shape.
+  const SUCCESS = JSON.stringify({
+    type: 'result', subtype: 'success', is_error: false, num_turns: 1,
+    duration_ms: 130436, permission_denials: [],
+    result: 'Simple, correct addition function. No issues.\nVERDICT: PASS',
+  })
+  // The exhaustion envelope carries NO `result` key at all.
+  const EXHAUSTED = JSON.stringify({
+    type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 2,
+    duration_ms: 51234, permission_denials: [],
+  })
+
+  it('takes the assistant text from .result, so the verdict line is still last', () => {
+    const run = decodeEngineOutput(SUCCESS, '')
+    expect(run.assistantText).toContain('VERDICT: PASS')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('records num_turns even on success — a reviewer nearing its ceiling is visible before it fails', () => {
+    expect(decodeEngineOutput(SUCCESS, '').diagnostics).toMatch(/num_turns=1/)
+  })
+
+  it('surfaces an exhausted budget as error_max_turns, which classifyEngineFailure reads', () => {
+    const run = decodeEngineOutput(EXHAUSTED, '')
+    expect(run.assistantText).toBe('')
+    expect(run.diagnostics).toMatch(/subtype=error_max_turns/)
+    expect(run.diagnostics).toMatch(/num_turns=2/)
+    // The whole chain: envelope -> diagnostics -> classification.
+    expect(classifyEngineFailure(run.diagnostics)).toBe('budget-exhausted')
+  })
+
+  it('counts permission denials — a reviewer fighting plan mode burns a turn per attempt', () => {
+    const denied = JSON.stringify({
+      type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10,
+      permission_denials: [{ tool_name: 'Edit' }, { tool_name: 'Write' }],
+    })
+    expect(decodeEngineOutput(denied, '').diagnostics).toMatch(/permission_denials=2/)
+  })
+
+  it('falls back to raw stdout when the output is not JSON, so an older engine still reviews', () => {
+    const plain = 'looks fine to me\nVERDICT: PASS'
+    const run = decodeEngineOutput(plain, '')
+    expect(run.assistantText).toBe(plain)
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('keeps stderr as diagnostics alongside the envelope notes', () => {
+    expect(decodeEngineOutput(EXHAUSTED, 'some stderr noise').diagnostics).toMatch(/some stderr noise/)
+  })
+})
+
+describe('verifierArgs: the reviewer invocation', () => {
+  const args = () => verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
+
+  it('asks for the event stream — without it an exhausted session leaves nothing behind', () => {
+    // The flags this rail exists for. Removing them previously left the whole
+    // fleet suite green while returning the reviewer to a mode that emits only
+    // a final assistant message — so a session which never reaches one
+    // produced no output at all. That is what made #1445 undiagnosable.
+    // `stream-json` (not plain `json`) is what carries the per-turn events the
+    // tool histogram is built from; plain `json` gives only the final object.
+    const a = args()
+    expect(a[a.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(a).toContain('--verbose')
+  })
+
+  it('runs in plan mode, so a reviewer can never edit the tree it is judging', () => {
+    const a = args()
+    expect(a[a.indexOf('--permission-mode') + 1]).toBe('plan')
+  })
+
+  it('passes the turn budget through, since --max-turns is what actually enforces it', () => {
+    expect(verifierArgs({ model: 'sonnet', maxTurns: 20, exportDir: '/x' })).toContain('20')
+  })
+
+  it('withholds the shell, because a shell read costs one turn per file', () => {
+    // #1445's cause, pinned. A live re-run of that PR's own prompt under the
+    // old argv produced `tools: Bashx13 Readx1`, `num_turns=11`,
+    // `permission_denials=0` and no verdict: `--permission-mode plan`
+    // forbids EDITS, not COMMANDS, so the reviewer walked the export with
+    // `cat`/`find`/`grep`/`sed` — one file per turn — and exhausted the
+    // budget mid-sentence.
+    //
+    // `--tools` restricts the AVAILABLE set (so the model never sees Bash and
+    // cannot plan around it), unlike `--allowedTools`, which only governs
+    // approval of a tool that is still present. Asserted as the whole list,
+    // not just "no Bash": a reviewer that cannot search cannot check whether
+    // a diff stayed inside its lane, so dropping Grep or Glob would be a
+    // capability regression this rail must also catch.
+    const a = args()
+    expect(a[a.indexOf('--tools') + 1]).toBe('Read,Grep,Glob')
+    expect(a.join(' ')).not.toMatch(/\bBash\b/)
+    expect(a.join(' ')).not.toMatch(/\bWebFetch\b/)
+  })
+
+  it('hands the export by --add-dir and never as the working directory', () => {
+    // The project root is a separate empty dir — see invokeVerifierEngine's
+    // comment on #812, where the PR under review WAS the project and its own
+    // committed tooling got loaded in-process.
+    const a = verifierArgs({ model: 'sonnet', maxTurns: 10, exportDir: '/tmp/export' })
+    expect(a[a.indexOf('--add-dir') + 1]).toBe('/tmp/export')
+    expect(a).not.toContain('--dir')
+  })
+})
+
+describe('summarised churn: what an exhausted review spent its turns on', () => {
+  /** A stream shaped like the real one — see the event order captured from a
+   *  live run: system/init, then assistant/tool_use and user/tool_result
+   *  pairs, then a final `result`. */
+  function stream(events: unknown[]): string {
+    return events.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  }
+  const toolUse = (name: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name }] } })
+  const say = (text: string) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+
+  it('names the tools and their counts, so churn is visible from the red check', () => {
+    const raw = stream([
+      { type: 'system', subtype: 'init' },
+      toolUse('Bash'), toolUse('Bash'), toolUse('Read'), toolUse('Bash'),
+      { type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10, permission_denials: [] },
+    ])
+    const d = decodeEngineOutput(raw, '').diagnostics
+    // `Bash x3` reads very differently from `Read x3` when asking why ten
+    // turns went nowhere — that distinction is the whole point.
+    expect(d).toMatch(/tools: Bashx3 Readx1/)
+    expect(d).toMatch(/num_turns=10/)
+    expect(d).toMatch(/subtype=error_max_turns/)
+  })
+
+  it('salvages the last thing the reviewer said when there is no result event', () => {
+    const raw = stream([
+      say('Looking at routes/shifts.ts now'),
+      toolUse('Read'),
+      say('Halfway through checking the permission guard'),
+      { type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 10 },
+    ])
+    // A bare --print discarded this entirely. Mid-sentence is more than nothing.
+    expect(decodeEngineOutput(raw, '').assistantText).toBe('Halfway through checking the permission guard')
+  })
+
+  it('still reads a clean PASS out of a full stream', () => {
+    const raw = stream([
+      say('checked it'),
+      { type: 'result', subtype: 'success', is_error: false, num_turns: 2,
+        permission_denials: [], result: 'all good\nVERDICT: PASS' },
+    ])
+    const run = decodeEngineOutput(raw, '')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+    expect(run.diagnostics).toMatch(/num_turns=2/)
+  })
+})
+
+describe('reviewFilesSection: how the reviewer is told to reach the export', () => {
+  const section = () => reviewFilesSection(['a/b.ts'], '/tmp/export-xyz')
+
+  it('spells out the absolute path every tool needs, because the cwd is empty', () => {
+    // The working directory is a separate empty scratch dir
+    // (`invokeVerifierEngine`), so an unqualified Grep/Glob searches nothing
+    // and an unqualified Read fails outright — #1445's transcript ends on
+    // `File does not exist. Note: your current working directory is
+    // /tmp/llamenos-fleet-reviewer-root-...`. Without being told, the
+    // reviewer falls back to shelling out, which is the churn itself:
+    // measured on #1445's own prompt, `--tools` alone still exhausted one of
+    // two runs (`Grepx10 Readx5`) until this text arrived with it.
+    const text = section()
+    expect(text).toMatch(/working directory is NOT the export/)
+    expect(text).toMatch(/path: \/tmp\/export-xyz/)
+    expect(text).toMatch(/\/tmp\/export-xyz\/<path>/)
+  })
+
+  it('names the three tools it actually has, and that there is no shell', () => {
+    // Must stay in step with `REVIEWER_TOOLS`: a prompt that promises a tool
+    // `--tools` withholds sends the reviewer looking for it, and a prompt
+    // that omits one it has leaves that one unused.
+    const text = section()
+    for (const tool of REVIEWER_TOOLS) expect(text).toContain(tool)
+    expect(text).toMatch(/no shell/)
+  })
+
+  it('tells the reviewer a tool call costs a turn — the budget is not free', () => {
+    expect(section()).toMatch(/every tool call spends one turn/)
   })
 })

@@ -1,4 +1,5 @@
 import { safeFetch } from '../lib/safe-fetch'
+import { assertHangupResponse } from './adapter'
 import type {
   TelephonyAdapter,
   IncomingCallParams,
@@ -261,11 +262,17 @@ export class VonageAdapter implements TelephonyAdapter {
     return this.ncco([])
   }
 
+  /** An answered Vonage call with an empty NCCO ends immediately. */
+  hangupResponse(): TelephonyResponse {
+    return this.ncco([])
+  }
+
   async hangupCall(callSid: string): Promise<void> {
-    await this.vonageApi(`/v1/calls/${callSid}`, {
+    const res = await this.vonageApi(`/v1/calls/${callSid}`, {
       method: 'PUT',
       body: JSON.stringify({ action: 'hangup' }),
     })
+    await assertHangupResponse(res, 'Vonage')
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {

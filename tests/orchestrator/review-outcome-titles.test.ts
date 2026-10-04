@@ -54,6 +54,22 @@ function step(jobName: string, stepName: string): WorkflowStep & { run: string }
   return { ...s, run: s.run }
 }
 
+/** A job's literal `env:` entries, read from the same YAML — what GitHub
+ *  injects into every `run:` step in that job. `${{ }}` expressions are
+ *  skipped (nothing here evaluates them); plain literals, which is what
+ *  `FLEET_REVIEWER_TOOLS` is, come through verbatim.
+ *
+ *  Read, never retyped: a hand-written value here would SUPPLY a variable
+ *  the workflow had stopped declaring, letting these steps keep passing in
+ *  the suite while the real reviewer ran with the full default tool set. */
+function jobEnv(name: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(job(name).env ?? {})) {
+    if (typeof v === 'string' && !v.includes('${{')) out[k] = v
+  }
+  return out
+}
+
 const NAMING_STEP = "Name this run's outcome"
 const ASSERT_STEP = 'Assert this run reached a real verdict'
 const SMOKE_STEP = 'Smoke-test the review engine'
@@ -162,6 +178,12 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['(5) not-requested — the request was not a valid trigger (every Dependabot PR, #1257)',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'not-requested' }, 'NO-VERDICT:not-requested'],
   ['(6) UNREADABLE — the engine ran, its output did not parse (#1263)', reviewed('unreadable', 'failure'), 'NO-VERDICT:unreadable'],
+  // Exhausting `--max-turns` is NOT an availability problem and NOT a parse
+  // failure: the engine answered and spent a whole session. It gets its own
+  // token because its remedy differs — re-requesting re-runs the same diff
+  // under the same budget and exhausts again.
+  ['(6b) budget exhausted — the engine ran a full session and reached no verdict',
+    reviewed('budget-exhausted', 'failure'), 'NO-VERDICT:budget-exhausted'],
   ['(7) scope — touched files outside the lane\'s scope (#1235)', reviewed('scope', 'failure'), 'NO-VERDICT:scope'],
   ['review-set-unresolved, decided by the gate',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'review-set-unresolved' }, 'NO-VERDICT:review-set-unresolved'],
@@ -354,7 +376,7 @@ describe('rail: an engine failure is named by its class, end to end', () => {
     writeFileSync(join(bin, 'claude'), '#!/usr/bin/env bash\ncat >/dev/null\necho "Claude AI usage limit reached" >&2\nexit 1\n')
     chmodSync(join(bin, 'claude'), 0o755)
     const temp = mkdtempSync(join(work, 'smoke-temp-'))
-    const r = runScript(step('fleet-review', SMOKE_STEP).run, { RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet' }, {
+    const r = runScript(step('fleet-review', SMOKE_STEP).run, { ...jobEnv('fleet-review'), RUNNER_TEMP: temp, FLEET_REVIEW_MODEL: 'sonnet' }, {
       path: `${bin}${delimiter}${process.env['PATH'] ?? ''}`,
     })
     expect(r.status, r.stdout + r.stderr).toBe(1)
@@ -412,6 +434,9 @@ describe('rail: runReviewCi names the result of every return path', () => {
     ['the reviewer rejected the diff', { secondOpinion: verdict('FAIL') }, 'fail', false],
     ['a rejection beside an UNREADABLE is still a rejection', { ...withProfile, secondOpinion: verdict('FAIL'), profileReview: verdict('UNREADABLE') }, 'fail', false],
     ['the reviewer left no readable verdict', { secondOpinion: verdict('UNREADABLE') }, 'unreadable', false],
+    ['the reviewer used its whole turn budget',
+      { secondOpinion: async () => ({ verdict: 'UNREADABLE' as const, text: 'Error: Reached max turns (10)', failureKind: 'budget-exhausted' as const }) },
+      'budget-exhausted', false],
     ['a reviewer threw', { secondOpinion: async () => { throw new Error('engine exploded') } }, 'unreadable', false],
     ['a cached PASS', { cacheFor: cacheOf({ verdict: 'PASS', text: 'cached pass' }) }, 'cache-pass', true],
     ['a cached FAIL', { cacheFor: cacheOf({ verdict: 'FAIL', text: 'cached fail' }) }, 'cache-fail', false],

@@ -3,6 +3,7 @@ import { SipBridgeAdapter } from '@worker/telephony/sip-bridge-adapter'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
 import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
+import { fakeSpeech, spoken } from '../helpers/fake-speech'
 
 class TestSipBridgeAdapter extends SipBridgeAdapter {
   getEndpointFormat(phone: string): string {
@@ -512,12 +513,12 @@ describe('AsteriskAdapter', () => {
         callerNumber: '+15559876543',
         hotlineName: 'Test Hotline',
         enabledLanguages: ['en'],
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('application/json')
       const body = JSON.parse(res.body)
-      expect(body.commands).toHaveLength(2)
-      expect(body.commands[0]).toEqual({ action: 'speak', text: ' ', language: 'en-US' })
-      expect(body.commands[1]).toMatchObject({
+      expect(body.commands).toHaveLength(1)
+      expect(body.commands[0]).toMatchObject({
         action: 'gather',
         numDigits: 0,
         timeout: 0,
@@ -526,12 +527,13 @@ describe('AsteriskAdapter', () => {
       })
     })
 
-    it('returns gather with speak commands for multiple languages', async () => {
+    it('announces each language as generated speech, then gathers the digit', async () => {
       const res = await adapter.handleLanguageMenu({
         callSid: 'CA123',
         callerNumber: '+15559876543',
         hotlineName: 'Test Hotline',
         enabledLanguages: ['en', 'es'],
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('application/json')
       const body = JSON.parse(res.body)
@@ -540,8 +542,8 @@ describe('AsteriskAdapter', () => {
       expect(gather).toBeDefined()
       expect(gather.numDigits).toBe(1)
       expect(gather.timeout).toBe(8)
-      const speaks = body.commands.filter((c: { action: string }) => c.action === 'speak')
-      expect(speaks.length).toBeGreaterThanOrEqual(1)
+      const announced = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => spoken(c.url))
+      expect(announced.map((a: { locale: string }) => a.locale)).toEqual(['en', 'es'])
     })
 
     it('uses custom audio URLs in incoming call when provided', async () => {
@@ -551,13 +553,16 @@ describe('AsteriskAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: true,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
         audioUrls: { 'rateLimited:en': 'https://example.com/rate-limited.mp3' },
       })
       const body = JSON.parse(res.body)
-      const playCmd = body.commands.find((c: { action: string }) => c.action === 'play')
-      expect(playCmd).toBeDefined()
-      expect(playCmd.url).toBe('https://example.com/rate-limited.mp3')
+      // The upload plays where it was uploaded; the greeting nobody uploaded is generated.
+      const urls = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => c.url)
+      expect(urls).toHaveLength(2)
+      expect(spoken(urls[0])?.locale).toBe('en')
+      expect(urls[1]).toBe('https://example.com/rate-limited.mp3')
     })
   })
 
@@ -569,6 +574,7 @@ describe('AsteriskAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: true,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
       })
       const body = JSON.parse(res.body)
@@ -584,14 +590,17 @@ describe('AsteriskAdapter', () => {
         voiceCaptchaEnabled: true,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
         captchaDigits: '1234',
       })
       const body = JSON.parse(res.body)
-      // Greeting, the CAPTCHA prompt, the digits, then collect them.
-      expect(body.commands).toHaveLength(4)
-      expect(body.commands[2]).toMatchObject({ action: 'speak', text: '1 2 3 4' })
-      const gather = body.commands[3]
+      // Greeting, the CAPTCHA prompt, each digit, then collect them.
+      expect(body.commands).toHaveLength(7)
+      expect(body.commands.slice(2, 6).map((c: { url: string }) => spoken(c.url))).toEqual(
+        ['1', '2', '3', '4'].map((text) => ({ locale: 'en', text })),
+      )
+      const gather = body.commands[6]
       expect(gather.action).toBe('gather')
       expect(gather.numDigits).toBe(4)
       expect(gather.timeout).toBe(10)
@@ -606,6 +615,7 @@ describe('AsteriskAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
       })
       const body = JSON.parse(res.body)
@@ -616,6 +626,41 @@ describe('AsteriskAdapter', () => {
       expect(queue.exitEvent).toBe('queue_exit')
     })
 
+    it("plays the fallback language's upload, not generated speech, to a caller no voice speaks (#1347)", async () => {
+      // Tagalog has no offline voice: its prompts fall back to English — and
+      // an English recording still beats English generated speech.
+      const res = await adapter.handleIncomingCall({
+        callSid: 'CA123',
+        callerNumber: '+639170000000',
+        voiceCaptchaEnabled: false,
+        rateLimited: false,
+        callerLanguage: 'tl',
+        speechUrl: fakeSpeech,
+        hotlineName: 'Test',
+        audioUrls: { 'pleaseHold:en': 'https://example.com/hold-en.wav' },
+      })
+      const body = JSON.parse(res.body)
+      const urls = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => c.url)
+      expect(spoken(urls[0])?.locale).toBe('en')
+      expect(urls[1]).toBe('https://example.com/hold-en.wav')
+    })
+
+    it("plays the caller's own-language upload over everything else", async () => {
+      const res = await adapter.handleIncomingCall({
+        callSid: 'CA123',
+        callerNumber: '+639170000000',
+        voiceCaptchaEnabled: false,
+        rateLimited: false,
+        callerLanguage: 'tl',
+        speechUrl: fakeSpeech,
+        hotlineName: 'Test',
+        audioUrls: { 'pleaseHold:tl': 'https://example.com/hold-tl.wav', 'pleaseHold:en': 'https://example.com/hold-en.wav' },
+      })
+      const body = JSON.parse(res.body)
+      const urls = body.commands.filter((c: { action: string }) => c.action === 'play').map((c: { url: string }) => c.url)
+      expect(urls[1]).toBe('https://example.com/hold-tl.wav')
+    })
+
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
         callSid: 'CA123',
@@ -623,6 +668,7 @@ describe('AsteriskAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
         audioUrls: { 'greeting:en': 'https://example.com/greeting.wav', 'pleaseHold:en': 'https://example.com/hold.wav' },
       })
@@ -639,6 +685,7 @@ describe('AsteriskAdapter', () => {
         digits: '5678',
         expectedDigits: '5678',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
       })
       const body = JSON.parse(res.body)
       const queue = body.commands.find((c: { action: string }) => c.action === 'queue')
@@ -652,10 +699,11 @@ describe('AsteriskAdapter', () => {
         digits: '0000',
         expectedDigits: '5678',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
       })
       const body = JSON.parse(res.body)
-      expect(body.commands[0]).toMatchObject({ action: 'speak', text: getPrompt('captchaFail', 'en') })
-      expect(body.commands[0].text).not.toBe('')
+      expect(spoken(body.commands[0].url)).toEqual({ locale: 'en', text: getPrompt('captchaFail', 'en') })
+      expect(getPrompt('captchaFail', 'en')).not.toBe('')
       expect(body.commands.some((c: { action: string }) => c.action === 'hangup')).toBe(true)
       expect(body.commands.some((c: { action: string }) => c.action === 'queue')).toBe(false)
     })
@@ -683,6 +731,7 @@ describe('AsteriskAdapter', () => {
       const res = await adapter.handleVoicemail({
         callSid: 'CA123',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         callbackUrl: 'https://example.com',
       })
       const body = JSON.parse(res.body)
@@ -697,6 +746,7 @@ describe('AsteriskAdapter', () => {
       const res = await adapter.handleVoicemail({
         callSid: 'CA123',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         callbackUrl: 'https://example.com',
         maxRecordingSeconds: 300,
       })
@@ -708,20 +758,20 @@ describe('AsteriskAdapter', () => {
 
   describe('handleWaitMusic', () => {
     it('returns leave_queue when queueTime exceeds timeout', async () => {
-      const res = await adapter.handleWaitMusic('en', undefined, 100, 90)
+      const res = await adapter.handleWaitMusic('en', undefined, 100, 90, fakeSpeech)
       const body = JSON.parse(res.body)
       expect(body.commands).toEqual([{ action: 'leave_queue' }])
     })
 
     it('returns hold music when within timeout', async () => {
-      const res = await adapter.handleWaitMusic('en', undefined, 30, 90)
+      const res = await adapter.handleWaitMusic('en', undefined, 30, 90, fakeSpeech)
       const body = JSON.parse(res.body)
       expect(body.commands.length).toBe(1)
-      expect(body.commands[0].action).toBe('speak')
+      expect(spoken(body.commands[0].url)).toEqual({ locale: 'en', text: getPrompt('waitMessage', 'en') })
     })
 
     it('uses custom audio URL for the wait message', async () => {
-      const res = await adapter.handleWaitMusic('en', { 'waitMessage:en': 'https://example.com/hold.mp3' }, 30, 90)
+      const res = await adapter.handleWaitMusic('en', { 'waitMessage:en': 'https://example.com/hold.mp3' }, 30, 90, fakeSpeech)
       const body = JSON.parse(res.body)
       expect(body.commands[0].action).toBe('play')
       expect(body.commands[0].url).toBe('https://example.com/hold.mp3')
@@ -738,11 +788,11 @@ describe('AsteriskAdapter', () => {
 
   describe('handleVoicemailComplete', () => {
     it('returns thank you and hangup', () => {
-      const res = adapter.handleVoicemailComplete('en')
+      const res = adapter.handleVoicemailComplete('en', fakeSpeech)
       const body = JSON.parse(res.body)
       expect(body.commands).toHaveLength(2)
-      expect(body.commands[0]).toMatchObject({ action: 'speak', text: getVoicemailThanks('en') })
-      expect(body.commands[0].text).not.toBe('')
+      expect(spoken(body.commands[0].url)).toEqual({ locale: 'en', text: getVoicemailThanks('en') })
+      expect(getVoicemailThanks('en')).not.toBe('')
       expect(body.commands[1]).toEqual({ action: 'hangup' })
     })
   })
@@ -794,6 +844,7 @@ describe('FreeSwitchAdapter', () => {
         callerNumber: '+15559876543',
         hotlineName: 'Test Hotline',
         enabledLanguages: ['en'],
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('caller_lang=en')
@@ -807,17 +858,19 @@ describe('FreeSwitchAdapter', () => {
         callerNumber: '+15559876543',
         hotlineName: 'Test Hotline',
         enabledLanguages: ['en'],
+        speechUrl: fakeSpeech,
         hubId: 'hub-123',
       })
       expect(res.body).toContain('hub=hub-123')
     })
 
-    it('forces English instead of a menu for [en, es] — Flite has no Spanish voice (#657)', async () => {
+    it('forces English instead of a menu for [en, tl] — no offline voice speaks Tagalog (#657, #1347)', async () => {
       const res = await adapter.handleLanguageMenu({
         callSid: 'CA123',
         callerNumber: '+15559876543',
         hotlineName: 'Test Hotline',
-        enabledLanguages: ['en', 'es'],
+        enabledLanguages: ['en', 'tl'],
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).not.toContain('<bind')
@@ -835,6 +888,7 @@ describe('FreeSwitchAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: true,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
       })
       expect(res.contentType).toBe('text/xml')
@@ -848,6 +902,7 @@ describe('FreeSwitchAdapter', () => {
         voiceCaptchaEnabled: true,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
         captchaDigits: '1234',
       })
@@ -864,6 +919,7 @@ describe('FreeSwitchAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
       })
       expect(res.contentType).toBe('text/xml')
@@ -879,6 +935,7 @@ describe('FreeSwitchAdapter', () => {
         voiceCaptchaEnabled: false,
         rateLimited: false,
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         hotlineName: 'Test',
         audioUrls: { 'greeting:en': 'https://example.com/greeting.wav', 'pleaseHold:en': 'https://example.com/hold.wav' },
       })
@@ -894,6 +951,7 @@ describe('FreeSwitchAdapter', () => {
         digits: '5678',
         expectedDigits: '5678',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<execute application="park"/>')
@@ -906,6 +964,7 @@ describe('FreeSwitchAdapter', () => {
         digits: '0000',
         expectedDigits: '5678',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
       })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<hangup/>')
@@ -931,6 +990,7 @@ describe('FreeSwitchAdapter', () => {
       const res = await adapter.handleVoicemail({
         callSid: 'CA123',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         callbackUrl: 'https://example.com',
       })
       expect(res.contentType).toBe('text/xml')
@@ -943,6 +1003,7 @@ describe('FreeSwitchAdapter', () => {
       const res = await adapter.handleVoicemail({
         callSid: 'CA123',
         callerLanguage: 'en',
+        speechUrl: fakeSpeech,
         callbackUrl: 'https://example.com',
         maxRecordingSeconds: 300,
       })
@@ -952,20 +1013,20 @@ describe('FreeSwitchAdapter', () => {
 
   describe('handleWaitMusic', () => {
     it('returns transfer to voicemail when queueTime exceeds timeout', async () => {
-      const res = await adapter.handleWaitMusic('en', undefined, 100, 90)
+      const res = await adapter.handleWaitMusic('en', undefined, 100, 90, fakeSpeech)
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<execute application="transfer"')
       expect(res.body).toContain('voicemail')
     })
 
     it('returns wait message when within timeout', async () => {
-      const res = await adapter.handleWaitMusic('en', undefined, 30, 90)
+      const res = await adapter.handleWaitMusic('en', undefined, 30, 90, fakeSpeech)
       expect(res.contentType).toBe('text/xml')
-      expect(res.body).toContain('<speak')
+      expect(res.body).toContain(`<playback file="${fakeSpeech(getPrompt('waitMessage', 'en'), 'en')}"/>`)
     })
 
     it('uses custom audio URL for wait music', async () => {
-      const res = await adapter.handleWaitMusic('en', { 'waitMessage:en': 'https://example.com/wait.mp3' }, 30, 90)
+      const res = await adapter.handleWaitMusic('en', { 'waitMessage:en': 'https://example.com/wait.mp3' }, 30, 90, fakeSpeech)
       expect(res.body).toContain('playback file="https://example.com/wait.mp3"')
     })
   })
@@ -980,10 +1041,10 @@ describe('FreeSwitchAdapter', () => {
 
   describe('handleVoicemailComplete', () => {
     it('returns thank you and hangup', () => {
-      const res = adapter.handleVoicemailComplete('en')
+      const res = adapter.handleVoicemailComplete('en', fakeSpeech)
       expect(res.contentType).toBe('text/xml')
       // The voicemail thank-you, not the CAPTCHA "please hold while we connect you".
-      expect(res.body).toContain(`>${getVoicemailThanks('en')}</speak>`)
+      expect(res.body).toContain(`<playback file="${fakeSpeech(getVoicemailThanks('en'), 'en')}"/>`)
       expect(res.body).toContain('<hangup/>')
     })
   })
