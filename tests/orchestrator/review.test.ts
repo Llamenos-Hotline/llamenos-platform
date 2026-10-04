@@ -704,6 +704,19 @@ describe('verifierArgs: the reviewer invocation', () => {
     expect(a.join(' ')).not.toMatch(/\bWebFetch\b/)
   })
 
+  // #1460/#1511: `--tools` restricts BUILT-IN tools only. Without
+  // `--strict-mcp-config` the engine still loads whatever MCP servers the
+  // invoking user's configuration declares, and they arrive as additional
+  // callable tools — so a write-capable one on the runner would make this
+  // read-only reviewer writable. The flag with no `--mcp-config` alongside
+  // it means ZERO MCP servers, which is the only tool set the declared one
+  // can be.
+  it('loads no MCP server at all, so the available tool set can only be the declared one', () => {
+    const a = args()
+    expect(a).toContain('--strict-mcp-config')
+    expect(a, 'a --mcp-config would hand the reviewer MCP servers again').not.toContain('--mcp-config')
+  })
+
   it('hands the export by --add-dir and never as the working directory', () => {
     // The project root is a separate empty dir — see invokeVerifierEngine's
     // comment on #812, where the PR under review WAS the project and its own
