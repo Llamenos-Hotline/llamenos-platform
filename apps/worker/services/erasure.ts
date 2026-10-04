@@ -5,7 +5,7 @@
  * admin immediate erasure, cryptographic cascade execution,
  * and re-encryption job queuing.
  */
-import { eq, and, sql, lt, desc, count } from 'drizzle-orm'
+import { eq, and, sql, desc, count } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   erasureRequests,
@@ -20,6 +20,8 @@ import {
   sessions,
   devices,
   hubKeys,
+  hubs,
+  retentionPlatformFloors,
 } from '../db/schema'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
@@ -37,6 +39,8 @@ const EMERGENCY_MIN_HOURS = 4
 // Per-hub erasure config defaults, applied until an admin saves a config row
 export const DEFAULT_ERASURE_DELAY_HOURS = 72
 export const DEFAULT_EMERGENCY_OVERRIDE_ENABLED = true
+/** The undo window before a hub crypto-shred executes, when no config row exists. */
+export const DEFAULT_HUB_SHRED_DELAY_HOURS = 48
 
 const ADMIN_ROLES = ['role-super-admin', 'role-admin', 'role-hub-admin'] as const
 
@@ -64,6 +68,7 @@ export class ErasureService {
   async getConfig(hubId: string): Promise<{
     hubId: string
     delayHours: number
+    hubShredDelayHours: number
     emergencyOverrideEnabled: boolean
     updatedAt: Date
     updatedBy: string
@@ -83,6 +88,7 @@ export class ErasureService {
   async getEffectiveConfig(hubId: string): Promise<{
     hubId: string
     delayHours: number
+    hubShredDelayHours: number
     emergencyOverrideEnabled: boolean
     updatedAt: Date | null
     updatedBy: string | null
@@ -91,6 +97,7 @@ export class ErasureService {
     return row ?? {
       hubId,
       delayHours: DEFAULT_ERASURE_DELAY_HOURS,
+      hubShredDelayHours: DEFAULT_HUB_SHRED_DELAY_HOURS,
       emergencyOverrideEnabled: DEFAULT_EMERGENCY_OVERRIDE_ENABLED,
       updatedAt: null,
       updatedBy: null,
@@ -183,40 +190,7 @@ export class ErasureService {
     let isEmergency = false
 
     if (emergency) {
-      // Validate emergency override
-      if (config && !config.emergencyOverrideEnabled) {
-        throw new ServiceError(403, 'Emergency override is disabled for this hub')
-      }
-      if (emergency.coApproverPubkey === userId) {
-        throw new ServiceError(400, 'Co-approver cannot be the same user as the requester')
-      }
-
-      // Verify co-approver Ed25519 signature over canonical message
-      // Message: LABEL:userId:timestamp
-      const sigMessage = utf8ToBytes(
-        `${LABEL_ERASURE_OVERRIDE_SIG}:${userId}:${emergency.timestamp}`,
-      )
-      let sigValid = false
-      try {
-        sigValid = ed25519Verify(
-          hexToBytes(emergency.coApproverPubkey),
-          sigMessage,
-          hexToBytes(emergency.coApproverSignature),
-        )
-      } catch {
-        // invalid hex or malformed key — treat as verification failure
-      }
-      if (!sigValid) {
-        throw new ServiceError(400, 'Co-approver signature verification failed')
-      }
-
-      // H01: Verify co-approver is a registered admin device
-      const coApproverUser = await this.identity?.getUserInternal(emergency.coApproverPubkey) ?? null
-      const isAdmin = coApproverUser?.roles.some(r => (ADMIN_ROLES as readonly string[]).includes(r)) ?? false
-      if (!isAdmin) {
-        throw new ServiceError(403, 'Co-approver must be a registered admin device')
-      }
-
+      await this.verifyCoApproval(userId, userId, emergency, config)
       effectiveDelayHours = EMERGENCY_MIN_HOURS
       isEmergency = true
     }
@@ -254,6 +228,206 @@ export class ErasureService {
         cancelledAt: new Date(),
       })
       .where(eq(erasureRequests.id, existing.id))
+  }
+
+  /**
+   * One implementation of co-approval verification, two callers: a person's
+   * erasure and a hub crypto-shred. The force override skips the WAIT, never
+   * the second pair of eyes (spec §14.1). `signSubject` is what the signature
+   * covers (the user id, or the hub id for a shred); `requester` is who asked
+   * — the co-approver must never be the same party.
+   */
+  private async verifyCoApproval(
+    signSubject: string,
+    requester: string,
+    emergency: {
+      coApproverPubkey: string
+      coApproverSignature: string
+      timestamp: string
+    },
+    config: { emergencyOverrideEnabled: boolean } | null,
+  ): Promise<void> {
+    if (config && !config.emergencyOverrideEnabled) {
+      throw new ServiceError(403, 'Emergency override is disabled for this hub')
+    }
+    if (emergency.coApproverPubkey === requester) {
+      throw new ServiceError(400, 'Co-approver cannot be the same user as the requester')
+    }
+
+    // Verify co-approver Ed25519 signature over canonical message
+    // Message: LABEL:signSubject:timestamp
+    const sigMessage = utf8ToBytes(
+      `${LABEL_ERASURE_OVERRIDE_SIG}:${signSubject}:${emergency.timestamp}`,
+    )
+    let sigValid = false
+    try {
+      sigValid = ed25519Verify(
+        hexToBytes(emergency.coApproverPubkey),
+        sigMessage,
+        hexToBytes(emergency.coApproverSignature),
+      )
+    } catch {
+      // invalid hex or malformed key — treat as verification failure
+    }
+    if (!sigValid) {
+      throw new ServiceError(400, 'Co-approver signature verification failed')
+    }
+
+    // H01: Verify co-approver is a registered admin device
+    const coApproverUser = await this.identity?.getUserInternal(emergency.coApproverPubkey) ?? null
+    const isAdmin = coApproverUser?.roles.some(r => (ADMIN_ROLES as readonly string[]).includes(r)) ?? false
+    if (!isAdmin) {
+      throw new ServiceError(403, 'Co-approver must be a registered admin device')
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hub shred request lifecycle
+  // ---------------------------------------------------------------------------
+
+  async getPendingHubShred(
+    hubId: string,
+  ): Promise<typeof erasureRequests.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(erasureRequests)
+      .where(
+        and(
+          eq(erasureRequests.scope, 'hub'),
+          eq(erasureRequests.hubId, hubId),
+          eq(erasureRequests.status, 'pending'),
+        ),
+      )
+      .limit(1)
+    return row ?? null
+  }
+
+  /**
+   * Schedule a hub crypto-shred. `executeAt` is written in SQL so the DATABASE
+   * clock decides when the window has elapsed — never setTimeout, never a
+   * faked Date on the app side. A verified emergency override executes
+   * immediately (NOW()), skipping the wait but not the second approver.
+   */
+  async createHubShredRequest(
+    hubId: string,
+    requestedBy: string,
+    justification?: string,
+    emergency?: {
+      coApproverPubkey: string
+      coApproverSignature: string
+      timestamp: string
+    },
+  ): Promise<typeof erasureRequests.$inferSelect> {
+    const [hub] = await this.db.select().from(hubs).where(eq(hubs.id, hubId))
+    if (!hub) {
+      throw new ServiceError(404, 'Hub not found')
+    }
+    const existing = await this.getPendingHubShred(hubId)
+    if (existing) {
+      throw new ServiceError(409, 'A shred request is already pending for this hub')
+    }
+
+    const config = await this.getConfig(hubId)
+    let isEmergency = false
+    if (emergency) {
+      await this.verifyCoApproval(hubId, requestedBy, emergency, config)
+      isEmergency = true
+    }
+
+    const hours = config?.hubShredDelayHours ?? DEFAULT_HUB_SHRED_DELAY_HOURS
+    const executeAt = isEmergency
+      ? sql`NOW()`
+      : sql`NOW() + (${hours} || ' hours')::interval`
+
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(erasureRequests)
+        .values({
+          scope: 'hub',
+          hubId,
+          userId: null,
+          previousStatus: hub.status,
+          status: 'pending',
+          requestedBy,
+          requestedAt: new Date(),
+          executeAt,
+          justification: justification ?? null,
+          emergencyOverride: isEmergency,
+          coApproverPubkey: emergency?.coApproverPubkey ?? null,
+          coApproverSignature: emergency?.coApproverSignature ?? null,
+        })
+        .returning()
+
+      // The hub is frozen for writes the moment the shred is scheduled. The
+      // prior status is recorded on the request so a cancel inside the window
+      // restores exactly what was there rather than guessing 'active'.
+      await tx
+        .update(hubs)
+        .set({ status: 'shred_pending', updatedAt: new Date() })
+        .where(eq(hubs.id, hubId))
+
+      return row!
+    })
+  }
+
+  async cancelHubShredRequest(hubId: string): Promise<void> {
+    const existing = await this.getPendingHubShred(hubId)
+    if (!existing) {
+      throw new ServiceError(404, 'No pending shred request for this hub')
+    }
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(erasureRequests)
+        .set({ status: 'cancelled', cancelledAt: new Date() })
+        .where(eq(erasureRequests.id, existing.id))
+      await tx
+        .update(hubs)
+        .set({
+          status: existing.previousStatus ?? 'active',
+          updatedAt: new Date(),
+        })
+        .where(eq(hubs.id, hubId))
+    })
+  }
+
+  /**
+   * A hub shred may not destroy rows a platform retention floor still covers.
+   * Returns the first blocking category, or null when the shred may proceed.
+   * audit_log is exempt: a shred never deletes an audit row.
+   */
+  async hubShredRetentionBlock(hubId: string): Promise<string | null> {
+    const floors = await this.db.select().from(retentionPlatformFloors)
+    for (const floor of floors) {
+      let count: number
+      if (floor.category === 'call_records') {
+        const rows = await this.db.execute<{ cnt: string }>(sql`
+          SELECT COUNT(*) AS cnt FROM call_records
+          WHERE hub_id = ${hubId}
+            AND started_at > NOW() - (${floor.minRetentionDays} || ' days')::interval
+        `)
+        count = Number(rows[0]!.cnt)
+      } else if (floor.category === 'notes') {
+        const rows = await this.db.execute<{ cnt: string }>(sql`
+          SELECT COUNT(*) AS cnt FROM notes
+          WHERE hub_id = ${hubId}
+            AND created_at > NOW() - (${floor.minRetentionDays} || ' days')::interval
+        `)
+        count = Number(rows[0]!.cnt)
+      } else if (floor.category === 'messages') {
+        const rows = await this.db.execute<{ cnt: string }>(sql`
+          SELECT COUNT(*) AS cnt FROM messages m
+          JOIN conversations c ON m.conversation_id = c.id
+          WHERE c.hub_id = ${hubId}
+            AND m.created_at > NOW() - (${floor.minRetentionDays} || ' days')::interval
+        `)
+        count = Number(rows[0]!.cnt)
+      } else {
+        continue // audit_log rows survive a shred — a floor cannot block it
+      }
+      if (count > 0) return floor.category
+    }
+    return null
   }
 
   async listRequests(
@@ -427,7 +601,9 @@ export class ErasureService {
       .where(
         and(
           eq(erasureRequests.status, 'pending'),
-          lt(erasureRequests.executeAt, new Date()),
+          // The database clock decides — both scopes — so a worker whose wall
+          // clock is ahead can never execute a request a second early.
+          sql`execute_at < NOW()`,
         ),
       )
   }
@@ -449,6 +625,13 @@ export class ErasureService {
     await this.db
       .update(erasureRequests)
       .set({ status: 'failed' })
+      .where(eq(erasureRequests.id, requestId))
+  }
+
+  async markCompleted(requestId: string): Promise<void> {
+    await this.db
+      .update(erasureRequests)
+      .set({ status: 'completed', executedAt: new Date() })
       .where(eq(erasureRequests.id, requestId))
   }
 
