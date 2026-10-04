@@ -179,6 +179,16 @@ export function freshHubDb(name: string): FreshHubDb {
 
       sql = postgres(urlFor(DB_NAME), { max: 4 })
       const db = drizzle(sql, { schema }) as unknown as Database
+      // drizzle-orm/postgres-js replaces serializers['3802'] (jsonb) with a
+      // transparent pass-through in construct(), assuming the column type
+      // already serialized the value. The bun-jsonb customType has no toDriver
+      // (correct for Bun SQL, which serializes natively), so raw objects would
+      // reach postgres.js's byte encoder and throw. Re-register a JSON
+      // serializer AFTER drizzle() so the same schema works on this driver.
+      // Strings pass through untouched, so this is a no-op for values already
+      // serialized by a toDriver (e.g. the test-jsonb vitest alias).
+      const serializers = (sql as unknown as { options: { serializers: Record<string, (v: unknown) => unknown> } }).options.serializers
+      serializers['3802'] = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
       const settings = new SettingsService(db)
       const identity = new IdentityService(db)
       const audit = new AuditService(db)
