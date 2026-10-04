@@ -166,19 +166,19 @@ struct ErasureQueueView: View {
 // MARK: - ErasureRequestRow
 
 struct ErasureRequestRow: View {
-    let request: AdminErasureRequest
+    let request: SharedRequest
     let onExecute: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(request.userId.truncatedPubkey())
+                Text(request.userID.truncatedPubkey())
                     .font(.brandMono(.body))
                     .lineLimit(1)
 
                 Spacer()
 
-                StatusBadge(status: request.status)
+                StatusBadge(status: request.status.rawValue)
             }
 
             if let justification = request.justification, !justification.isEmpty {
@@ -189,13 +189,13 @@ struct ErasureRequestRow: View {
             }
 
             HStack(spacing: 12) {
-                if let date = request.requestedAt {
+                if let date = DateFormatting.parseISO(request.requestedAt) {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
                         .font(.brand(.caption))
                         .foregroundStyle(.tertiary)
                 }
 
-                if request.emergencyOverride == true {
+                if request.emergencyOverride {
                     BadgeView(
                         text: NSLocalizedString("erasure_emergency_override_label", comment: "Emergency"),
                         icon: "bolt.fill",
@@ -205,7 +205,8 @@ struct ErasureRequestRow: View {
                 }
             }
 
-            if request.status == "pending" || request.status == "scheduled" {
+            // Wire statuses: pending, executing, completed, failed, cancelled.
+            if request.status == .pending {
                 Button(NSLocalizedString("erasure_admin_execute_button", comment: "Execute Erasure"), role: .destructive) {
                     onExecute()
                 }

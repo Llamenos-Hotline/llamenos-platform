@@ -240,7 +240,7 @@ final class AdminViewModel {
     // MARK: - Erasure Queue State
 
     /// Pending erasure requests from the API.
-    var erasureRequests: [AdminErasureRequest] = []
+    var erasureRequests: [SharedRequest] = []
 
     /// Whether erasure requests are loading.
     var isLoadingErasure: Bool = false
@@ -986,12 +986,13 @@ final class AdminViewModel {
             if let filter = erasureStatusFilter {
                 path += "?status=\(filter)"
             }
-            let response: ErasureQueueResponse = try await apiService.request(
+            let response: ErasureRequestListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             erasureRequests = response.requests.sorted {
-                ($0.requestedAt ?? Date.distantPast) > ($1.requestedAt ?? Date.distantPast)
+                (DateFormatting.parseISO($0.requestedAt) ?? .distantPast)
+                    > (DateFormatting.parseISO($1.requestedAt) ?? .distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -1243,21 +1244,9 @@ enum DeleteType: Sendable {
 }
 
 // MARK: - Erasure Models
-
-struct AdminErasureRequest: Codable, Identifiable, Sendable {
-    let id: String
-    let userId: String
-    let status: String
-    let requestedAt: Date?
-    let executeAt: Date?
-    let requestedBy: String?
-    let justification: String?
-    let emergencyOverride: Bool?
-}
-
-struct ErasureQueueResponse: Codable, Sendable {
-    let requests: [AdminErasureRequest]
-}
+// Erasure requests decode to generated `SharedRequest`; the queue response is
+// generated `ErasureRequestListResponse`
+// (packages/protocol/schemas/erasure.ts).
 
 struct ImmediateErasureRequest: Codable, Sendable {
     let justification: String
