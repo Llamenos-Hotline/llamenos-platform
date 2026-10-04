@@ -1,9 +1,16 @@
-# @wip: no backend step definitions for any scenario — #1151
-@backend @wip
+@backend @global-setting
 Feature: Platform-Scoped Ban Management
   As a super admin
   I want to manage platform-wide bans
   So that abusive callers are blocked across all hubs
+
+  # Platform bans (hubId IS NULL) are a genuinely global, non-hub-scoped resource —
+  # unlike hub-scoped fixtures, they are NOT isolated by the per-scenario workerHub
+  # fixture, so they would leak across the fullyParallel backend-bdd project's
+  # concurrent workers. @global-setting routes this whole feature to the serial
+  # backend-bdd-global-setting project (see playwright.config.ts); step definitions
+  # in tests/steps/backend/platform-bans.steps.ts clean up everything they create
+  # in an After hook, the same convention webauthn-policy.steps.ts uses.
 
   # ── Backend: Platform ban CRUD ──────────────────────────────────────
 
