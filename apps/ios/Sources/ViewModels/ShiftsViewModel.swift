@@ -82,7 +82,7 @@ final class ShiftsViewModel {
     // MARK: - SIP Account Lifecycle
 
     /// Register a SIP account with Linphone for the given hub. Called after clock-in succeeds.
-    func onShiftStarted(hubId: String, sipParams: SipTokenResponse) async {
+    func onShiftStarted(hubId: String, sipParams: SIPTokenResponse) async {
         do {
             try linphoneService.registerHubAccount(hubId: hubId, sipParams: sipParams)
         } catch {}

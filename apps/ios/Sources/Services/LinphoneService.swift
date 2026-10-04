@@ -9,7 +9,7 @@ import linphonesw
 /// Protocol for SIP account lifecycle operations. Implemented by `LinphoneService` for
 /// production and by test doubles in unit tests.
 protocol LinphoneServiceProtocol: AnyObject {
-    func registerHubAccount(hubId: String, sipParams: SipTokenResponse) throws
+    func registerHubAccount(hubId: String, sipParams: SIPTokenResponse) throws
     func unregisterHubAccount(hubId: String)
     func handleVoipPush(callId: String, hubId: String)
 }
@@ -33,17 +33,9 @@ enum LinphoneError: LocalizedError {
     }
 }
 
-// MARK: - SipTokenResponse
-
-/// SIP credentials returned by `GET /api/hubs/{hubId}/telephony/sip-token`.
-/// Used to register the volunteer's SIP account for the active shift.
-struct SipTokenResponse: Decodable {
-    let username: String
-    let domain: String
-    let password: String
-    let transport: String
-    let expiry: Int
-}
+// MARK: - SIP credentials
+// SIP credentials returned by `GET /api/hubs/{hubId}/telephony/sip-token`
+// decode to the generated `SIPTokenResponse`.
 
 // MARK: - LinphoneService
 
@@ -245,7 +237,7 @@ final class LinphoneService: LinphoneServiceProtocol {
     // MARK: - SIP Account Management
 
     /// Register a SIP account for the given hub. Called when the volunteer clocks in.
-    func registerHubAccount(hubId: String, sipParams: SipTokenResponse) throws {
+    func registerHubAccount(hubId: String, sipParams: SIPTokenResponse) throws {
         #if canImport(linphonesw)
         guard let core else { throw LinphoneError.notInitialized }
         let params = try core.createAccountParams()
