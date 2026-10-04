@@ -5,14 +5,16 @@ import { Mic, Square, Trash2 } from 'lucide-react'
 
 interface AudioRecorderProps {
   onRecorded: (blob: Blob) => void
-  existingUrl?: string
+  /** The audio already saved, fetched so it can be played back; `version` changes when it is replaced */
+  existing?: { version: string; load: () => Promise<Blob> }
   onDelete?: () => void
 }
 
-export function AudioRecorder({ onRecorded, existingUrl, onDelete }: AudioRecorderProps) {
+export function AudioRecorder({ onRecorded, existing, onDelete }: AudioRecorderProps) {
   const { t } = useTranslation()
   const [recording, setRecording] = useState(false)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
+  const [existingBlob, setExistingBlob] = useState<Blob | null>(null)
   const [duration, setDuration] = useState(0)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
@@ -28,13 +30,29 @@ export function AudioRecorder({ onRecorded, existingUrl, onDelete }: AudioRecord
     }
   }, [])
 
+  const loadExisting = useRef(existing?.load)
+  loadExisting.current = existing?.load
+  const existingVersion = existing?.version
+  useEffect(() => {
+    setExistingBlob(null)
+    const load = loadExisting.current
+    if (!existingVersion || !load) return
+    let cancelled = false
+    load()
+      .then(blob => { if (!cancelled) setExistingBlob(blob) })
+      // Playback is a convenience: a prompt that fails to load is still saved
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [existingVersion])
+
   // Manage blob URL lifecycle — revoke on change/unmount
   useEffect(() => {
-    if (!recordedBlob) { setPreviewUrl(existingUrl ?? null); return }
-    const url = URL.createObjectURL(recordedBlob)
+    const blob = recordedBlob ?? existingBlob
+    if (!blob) { setPreviewUrl(null); return }
+    const url = URL.createObjectURL(blob)
     setPreviewUrl(url)
     return () => URL.revokeObjectURL(url)
-  }, [recordedBlob, existingUrl])
+  }, [recordedBlob, existingBlob])
 
   async function startRecording() {
     try {
@@ -107,7 +125,7 @@ export function AudioRecorder({ onRecorded, existingUrl, onDelete }: AudioRecord
             {t('ivrAudio.record')}
           </Button>
         )}
-        {(existingUrl || recordedBlob) && onDelete && (
+        {(existing || recordedBlob) && onDelete && (
           <Button size="sm" variant="ghost" onClick={handleDelete} aria-label={t('ivrAudio.delete')}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>

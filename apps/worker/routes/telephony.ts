@@ -2,7 +2,8 @@ import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
-import type { TelephonyAdapter } from '../telephony/adapter'
+import type { SpeechUrlBuilder, TelephonyAdapter } from '../telephony/adapter'
+import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
@@ -10,7 +11,7 @@ import { hashPhone } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
-import { startParallelRinging } from '../services/ringing'
+import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
 import { maybeTranscribe, transcribeVoicemail } from '../services/transcription'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -22,6 +23,20 @@ import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
 
 const logger = createLogger('telephony')
+
+/** Operator-uploaded prompts, as signed URLs the provider fetches from the origin it reached us on */
+function audioUrlsFor(c: Context<AppEnv>) {
+  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET)
+}
+
+/**
+ * Generated speech, for a provider with no speech engine of its own (the
+ * self-hosted PBXs); cloud providers speak prompts themselves.
+ */
+async function speechUrlFor(c: Context<AppEnv>, adapter: TelephonyAdapter): Promise<SpeechUrlBuilder | undefined> {
+  if (!(adapter instanceof SipBridgeAdapter)) return undefined
+  return c.get('services').ivrSpeech.urlBuilder(new URL(c.req.url).origin)
+}
 
 const telephony = new Hono<AppEnv>()
 
@@ -149,6 +164,7 @@ telephony.post('/incoming',
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     enabledLanguages,
     hubId,
+    speechUrl: await speechUrlFor(c, adapter),
   })
   return telephonyResponse(response)
 })
@@ -172,6 +188,13 @@ telephony.post('/language-selected',
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { callSid, callerNumber, digits } = await adapter.parseLanguageWebhook(c.req.raw)
   const isAuto = url.searchParams.get('auto') === '1'
+
+  // Bans are enforced when the call is answered (/incoming), but a ban can be added
+  // while the caller is still in the language menu. Re-check before greeting or
+  // queueing so a newly banned caller never reaches a volunteer.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
 
   // Get hub's ordered language list for digit-to-language mapping
   const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
@@ -210,7 +233,7 @@ telephony.post('/language-selected',
     await services.settings.storeCaptcha({ callSid, expected: captchaDigits })
   }
 
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const response = await adapter.handleIncomingCall({
     callSid,
     callerNumber,
@@ -219,6 +242,7 @@ telephony.post('/language-selected',
     callerLanguage,
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     audioUrls,
+    speechUrl: await speechUrlFor(c, adapter),
     captchaDigits,
     hubId,
   })
@@ -253,10 +277,22 @@ telephony.post('/captcha',
   const callSid = url.searchParams.get('callSid') || ''
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
 
+  // A ban added while the caller was in the menu / CAPTCHA must still take effect.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
+
   // Look up expected digits from server-side storage (not URL params)
   const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })
 
-  const response = await adapter.handleCaptchaResponse({ callSid, digits, expectedDigits: expected, callerLanguage: callerLang, hubId })
+  const response = await adapter.handleCaptchaResponse({
+    callSid,
+    digits,
+    expectedDigits: expected,
+    callerLanguage: callerLang,
+    hubId,
+    speechUrl: await speechUrlFor(c, adapter),
+  })
 
   if (match) {
     const origin = new URL(c.req.url).origin
@@ -296,6 +332,19 @@ telephony.post('/user-answer',
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId || undefined))!
+
+  // Stop every other phone still ringing for this call. The answer itself was
+  // claimed atomically above (first pickup wins — `answerCallWithToken` is a
+  // conditional ringing → in-progress UPDATE, so a losing leg never gets here).
+  // The winner's own leg SID is needed so it is not cancelled with the losers;
+  // if the provider's webhook does not yield one we cancel nothing (losers then
+  // ring out, but can no longer win).
+  const winnerLegSid = await adapter.parseIncomingWebhook(c.req.raw.clone()).then(i => i.callSid, () => undefined)
+  if (winnerLegSid) {
+    await cancelLosingLegs(c.env, services, hubId ?? '', parentCallSid, winnerLegSid)
+  } else {
+    logger.warn('user-answer: winner leg SID not in webhook — not cancelling other legs', { parentCallSid })
+  }
 
   // Publish call answered event + presence update
   publishEvent(c.env, KIND_CALL_UPDATE, {
@@ -406,9 +455,15 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
   const queueTime = c.req.method === 'POST'
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
     : 0
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const callSettings = await services.settings.getCallSettings(hubId)
-  const response = await adapter.handleWaitMusic(lang, audioUrls, queueTime, callSettings.queueTimeoutSeconds)
+  const response = await adapter.handleWaitMusic(
+    lang,
+    audioUrls,
+    queueTime,
+    callSettings.queueTimeoutSeconds,
+    await speechUrlFor(c, adapter),
+  )
   return telephonyResponse(response)
 })
 
@@ -439,7 +494,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   }
 
   if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
-    const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+    const audioUrls = await audioUrlsFor(c)
     const origin = new URL(c.req.url).origin
     const callSettings = await services.settings.getCallSettings(hubId)
     const response = await adapter.handleVoicemail({
@@ -447,6 +502,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
       callerLanguage: lang,
       callbackUrl: origin,
       audioUrls,
+      speechUrl: await speechUrlFor(c, adapter),
       maxRecordingSeconds: callSettings.voicemailMaxSeconds,
       hubId,
     })
@@ -463,7 +519,7 @@ telephony.post('/voicemail-complete', validateWebhook, async (c) => {
   const services = c.get('services')
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
-  return telephonyResponse(adapter.handleVoicemailComplete(lang))
+  return telephonyResponse(adapter.handleVoicemailComplete(lang, await speechUrlFor(c, adapter)))
 })
 
 // --- Step 9: Call recording status callback (bridged call recording) ---

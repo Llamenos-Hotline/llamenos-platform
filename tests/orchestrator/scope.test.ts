@@ -1056,3 +1056,126 @@ describe('checkScopeAcross — cross-lane grants (#1115)', () => {
     expect(r.strayed).toEqual(['apps/ios/X.swift'])
   })
 })
+
+/**
+ * The two operator-facing setup documents (#1467), and the rail that keeps the
+ * grant from being wider than it reads.
+ *
+ * `README.md` and `docs/QUICKSTART.md` were owned by no lane at all (#1115).
+ * Because a `scope:<lane>` grant can only widen onto paths some real lane
+ * owns, an unowned path is unreachable by label too — so no PR could write
+ * either file without `fleet/verify` reporting `scope=fail`, which deadlocked
+ * any fix to an operator entry point that changes its own documented output
+ * (#1040 / #1472).
+ *
+ * The first attempt declared a bare `README.md`, which is a basename pattern
+ * and silently matched all 20 tracked README files — handing infra self-merge
+ * authority over other lanes' documentation, including the one the shared lane
+ * owns exclusively. The review rejected it on that breadth, correctly, and the
+ * fix was to give `matchesPath` a root-anchored form (#1473) rather than to
+ * settle for a weaker grant.
+ */
+describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467)', () => {
+  let infra: LaneScope
+  let backend: LaneScope
+  let shared: LaneScope
+  let files: string[]
+
+  const DOCS_DIFF = ['README.md', 'docs/QUICKSTART.md']
+
+  beforeAll(async () => {
+    const scopes = await loadLaneScopes(process.cwd())
+    const i = scopes['infra']
+    const b = scopes['backend']
+    const s = scopes['shared']
+    if (!i || !b || !s) throw new Error('expected infra, backend and shared lane fragments to exist')
+    infra = i
+    backend = b
+    shared = s
+    files = trackedFiles()
+  })
+
+  it('both are real tracked files, not a scope rule guarding nothing', () => {
+    for (const f of DOCS_DIFF) expect(files, `${f} is not tracked`).toContain(f)
+  })
+
+  it('infra may write both — the deadlock this grant exists to break', () => {
+    expect(checkScope(DOCS_DIFF, infra, []).strayed).toEqual([])
+  })
+
+  it('and the whole #1040 diff with them, since scripts/ and deploy/ are already infra', () => {
+    expect(checkScope(
+      [...DOCS_DIFF, 'scripts/bootstrap-admin.ts', 'deploy/ansible/playbooks/preflight.yml'],
+      infra, [],
+    ).strayed).toEqual([])
+  })
+
+  it('no other lane gained them — the grant did not leak sideways', () => {
+    expect(checkScope(DOCS_DIFF, backend, []).strayed).toEqual(DOCS_DIFF)
+    expect(checkScope(DOCS_DIFF, shared, []).strayed).toEqual(DOCS_DIFF)
+  })
+
+  /**
+   * THE OVER-GRANT RAIL. This is the assertion whose absence got the first
+   * attempt rejected: it fails against a bare `README.md` declaration and
+   * passes only with the anchored `/README.md`. Asserted against every tracked
+   * README other than the root one, so a future lane cannot quietly re-widen
+   * the grant by dropping the slash.
+   */
+  it('the README grant adds NOTHING below the repo root', () => {
+    const nested = files.filter((f) => f.endsWith('/README.md'))
+    expect(nested.length, 'expected several nested READMEs in the tree').toBeGreaterThan(5)
+
+    // Stated as "changes nothing", not "owns none of them", because a few
+    // nested READMEs sit under deploy/ and scripts/ and were infra's long
+    // before this grant. Comparing against the same scope with the README
+    // entry removed isolates exactly what the entry contributes — and that is
+    // the assertion a bare `README.md` cannot satisfy.
+    const withoutRootReadme: LaneScope = {
+      owned: infra.owned.filter((p) => p !== '/README.md'),
+      notOwned: infra.notOwned,
+    }
+    expect(infra.owned, 'expected the anchored form in the fragment').toContain('/README.md')
+    expect(checkScope(nested, infra, []).strayed)
+      .toEqual(checkScope(nested, withoutRootReadme, []).strayed)
+  })
+
+  it('specifically: the READMEs of other lanes stay out of infra', () => {
+    const otherLanes = [
+      'apps/ios/README.md',
+      'apps/android/README.md',
+      'apps/desktop/README.md',
+      'apps/worker/README.md',
+      'packages/crypto/README.md',
+      'packages/test-specs/README.md',
+      'orchestrator/README.md',
+    ]
+    for (const f of otherLanes) expect(files, `${f} is not tracked`).toContain(f)
+    expect(checkScope(otherLanes, infra, []).strayed).toEqual(otherLanes)
+  })
+
+  it('and the lanes that owned those READMEs still do', () => {
+    // packages/test-specs/README.md is shared-supervisor-exclusive and is
+    // named in this suite's test-specs carve-out tests above; it must not have
+    // changed hands.
+    expect(checkScope(['packages/test-specs/README.md'], shared, []).strayed).toEqual([])
+  })
+
+  it('does not reach the rest of the docs tree', () => {
+    const otherDocs = ['docs/protocol/PROTOCOL.md', 'docs/epics/README.md', 'docs/security/threat-model.md']
+    expect(checkScope(otherDocs, infra, []).strayed).toEqual(otherDocs)
+  })
+
+  /**
+   * `.claude/agents/fragments/` stays unowned by every lane, deliberately: a
+   * lane that could edit the scope judging it could widen its own authority.
+   * That is why this grant had to be made on a non-fleet branch and reviewed
+   * by a human, and the property is worth a rail of its own.
+   */
+  it('no lane owns the fragments that declare lane scope', () => {
+    const self = ['.claude/agents/fragments/infra-supervisor.md']
+    for (const [name, scope] of [['infra', infra], ['backend', backend], ['shared', shared]] as const) {
+      expect(checkScope(self, scope, []).strayed, `${name} must not own the scope fragments`).toEqual(self)
+    }
+  })
+})

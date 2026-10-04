@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import settingsRoute from '@worker/routes/settings'
+import { encodePcm16Wav } from '@/lib/ivr-wav'
 
 function createTestApp(opts: {
   permissions?: string[]
@@ -457,13 +458,15 @@ describe('settings route', () => {
         permissions: ['settings:manage-ivr'],
         services: { settings: { uploadIvrAudio: uploadSpy } },
       })
-      const audioData = new Uint8Array([0x00, 0x01, 0x02, 0x03])
+      // 10 ms of 8 kHz mono PCM: the only format the route accepts (see
+      // deploy/docker/tests/telephony/ivr-audio.test.ts for the rejections)
+      const audioData = encodePcm16Wav(new Float32Array(80), 8000)
       const res = await app.request('/ivr-audio/greeting/en', {
         method: 'PUT',
         body: audioData,
       })
       expect(res.status).toBe(200)
-      expect(uploadSpy).toHaveBeenCalledWith('greeting', 'en', expect.any(String), 4)
+      expect(uploadSpy).toHaveBeenCalledWith('greeting', 'en', Buffer.from(audioData).toString('base64'), audioData.byteLength)
     })
 
     it('DELETE /ivr-audio/:promptType/:language removes audio with permission', async () => {

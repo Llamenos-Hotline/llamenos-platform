@@ -177,8 +177,23 @@ pub const LABEL_PUK_PREVIOUS_GEN: &str = "llamenos:puk:prev-gen:v1";
 
 // --- NEW: Device Auth (Ed25519) ---
 
-/// Ed25519 device authentication token label
+/// Ed25519 device authentication token label (message carries a nonce).
 pub const LABEL_DEVICE_AUTH: &str = "llamenos:device-auth:v1";
+
+/// Ed25519 device authentication token label for the nonce-less message shape.
+///
+/// A handful of routes carry their auth fields in the request body and have no
+/// `nonce` field in their wire schema (`POST /api/invites/redeem`). Those
+/// signatures cover a five-field message instead of six. Reusing
+/// `LABEL_DEVICE_AUTH` for both shapes would let one layout be reinterpreted as
+/// the other — a URL path may legally contain `:`, so
+/// `…:POST:/x:deadbeef` is simultaneously a nonce-less message for path
+/// `/x:deadbeef` and a nonce-bearing message for path `/x` with nonce
+/// `deadbeef`. Giving the nonce-less shape its own domain-separation label makes
+/// the two cryptographically disjoint: a nonce-less token can never be replayed
+/// as a nonce-bearing request, and stripping the nonce from a nonce-bearing
+/// token can never downgrade it — both fail signature verification.
+pub const LABEL_DEVICE_AUTH_NO_NONCE: &str = "llamenos:device-auth-no-nonce:v1";
 
 // --- NEW: Items Key / Note Epoch ---
 
@@ -355,6 +370,13 @@ pub const LABEL_FIREHOSE_BUFFER_ENCRYPT: &str = "llamenos:firehose:buffer-encryp
 /// Firehose report wrapping (admin HPKE envelope)
 pub const LABEL_FIREHOSE_REPORT_WRAP: &str = "llamenos:firehose:report-wrap";
 
+// --- IVR media URLs (#1325, #1347) ---
+
+/// HMAC over the path of an IVR audio URL the worker hands a telephony
+/// provider (an operator-uploaded prompt or generated speech), so the public
+/// media routes serve only URLs the worker minted.
+pub const HMAC_IVR_MEDIA_URL: &str = "llamenos:ivr-media-url:v1";
+
 // --- SAS Derivation (EP02) ---
 
 /// Domain separation for SAS emoji derivation (device verification ceremony)
@@ -375,6 +397,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Indices 77-79: Role Encryption (EP01)
 // Index 80: EP02 Device Identity
 // Indices 92-94: Firehose Agent (EP-Firehose)
+// Index 96: IVR media URL signing
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -505,6 +528,10 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_FIREHOSE_AGENT_SEAL,     // 93
     LABEL_FIREHOSE_BUFFER_ENCRYPT, // 94
     LABEL_FIREHOSE_REPORT_WRAP,    // 95
+    // 96: IVR media URL signing (#1325, #1347)
+    HMAC_IVR_MEDIA_URL, // 96
+    // 97: nonce-less device auth message shape (#1389)
+    LABEL_DEVICE_AUTH_NO_NONCE, // 97
 ];
 
 /// Look up a label string by its numeric ID.
@@ -587,6 +614,10 @@ mod tests {
         assert_eq!(LABEL_PUK_WRAP_TO_DEVICE, "llamenos:puk:wrap:device:v1");
         assert_eq!(LABEL_PUK_PREVIOUS_GEN, "llamenos:puk:prev-gen:v1");
         assert_eq!(LABEL_DEVICE_AUTH, "llamenos:device-auth:v1");
+        assert_eq!(
+            LABEL_DEVICE_AUTH_NO_NONCE,
+            "llamenos:device-auth-no-nonce:v1"
+        );
         assert_eq!(LABEL_ITEMS_KEY_EXPORT, "llamenos:items-key-export:v1");
         assert_eq!(LABEL_NOTE_EPOCH_KEY, "llamenos:note-epoch-key:v1");
         assert_eq!(LABEL_HUB_PTK_PREV_GEN, "llamenos:hub-ptk:prev-gen:v1");
@@ -677,6 +708,7 @@ mod tests {
             "llamenos:firehose:buffer-encrypt"
         );
         assert_eq!(LABEL_FIREHOSE_REPORT_WRAP, "llamenos:firehose:report-wrap");
+        assert_eq!(HMAC_IVR_MEDIA_URL, "llamenos:ivr-media-url:v1");
     }
 
     /// Verify registry index stability.
@@ -735,6 +767,7 @@ mod tests {
         assert_eq!(id_to_label(93), Some(LABEL_FIREHOSE_AGENT_SEAL));
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
+        assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

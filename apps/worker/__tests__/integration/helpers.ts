@@ -11,6 +11,7 @@
  * setAlarm, getAlarm).
  */
 import type { Env } from '@worker/types'
+import { ed25519AuthPubkey, hpkeRecipientPubkey } from '@worker/lib/hpke-recipient'
 
 /** In-memory storage that mimics DurableObjectStorage. */
 export class MockStorage {
@@ -102,14 +103,19 @@ export function createMockState(): { storage: MockStorage } & Record<string, unk
 export function createMockEnv(overrides?: Partial<Env>): Env {
   const defaultEnv: Env = {
     AI: { run: async () => ({}) } as unknown as Env['AI'],
-    R2_BUCKET: { put: async () => ({}), get: async () => null, delete: async () => {} } as unknown as Env['R2_BUCKET'],
+    BLOB_STORAGE: { put: async () => ({}), get: async () => null, delete: async () => {} } as unknown as Env['BLOB_STORAGE'],
     STORAGE_MANAGER: undefined,
     STORAGE_ADMIN: undefined,
     TWILIO_ACCOUNT_SID: 'AC-test',
     TWILIO_AUTH_TOKEN: 'test-auth-token',
     TWILIO_PHONE_NUMBER: '+15551234567',
-    // X25519 pubkey used for HPKE encryption in tests
-    ADMIN_PUBKEY: '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+    // The two admin keys are two different keys. This fixture previously set
+    // only ADMIN_PUBKEY, commented "X25519 pubkey used for HPKE encryption" —
+    // the exact conflation #1283 is about — and relied on the route falling
+    // back to it as an HPKE recipient. Both are now supplied, under their own
+    // branded types, from the test admin seed in tests/api-helpers.ts.
+    ADMIN_PUBKEY: ed25519AuthPubkey('79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183')!,
+    ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey('27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177')!,
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
     // Valid 32-byte hex — needed by hashPhone() which calls hexToBytes(secret)

@@ -24,6 +24,7 @@ import type { RecipientEnvelope } from '@shared/types'
 import type { Database } from '../db'
 import { unsealAgentKey } from '../lib/agent-identity'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { adminHpkeRecipient, type Ed25519AuthPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { CircuitBreaker } from '../lib/circuit-breaker'
 import { createLogger } from '../lib/logger'
 import { clearWindowKeyCache } from '../messaging/firehose-observer'
@@ -77,8 +78,10 @@ export class FirehoseAgentService {
     private readonly sealKey: string,
     private readonly env: {
       SERVER_SECRET?: string
-      ADMIN_PUBKEY?: string
-      ADMIN_DECRYPTION_PUBKEY?: string
+      /** Ed25519, for signature verification. Never an envelope recipient. */
+      ADMIN_PUBKEY?: Ed25519AuthPubkey | string
+      /** X25519, the HPKE recipient admin envelopes are sealed to. */
+      ADMIN_DECRYPTION_PUBKEY?: HpkeRecipientPubkey | string
     },
   ) {}
 
@@ -403,24 +406,14 @@ export class FirehoseAgentService {
       extractedAt: new Date().toISOString(),
     })
 
-    // Get admin pubkeys for envelope encryption.
-    //
-    // ADMIN_PUBKEY is deliberately NOT included: it is the Ed25519 signing key,
-    // and sealing to it yields an envelope no one can open (#1283). Only the
-    // X25519 ADMIN_DECRYPTION_PUBKEY is a valid HPKE recipient.
-    const adminPubkeys: string[] = []
-    if (this.env.ADMIN_DECRYPTION_PUBKEY && /^[0-9a-f]{64}$/i.test(this.env.ADMIN_DECRYPTION_PUBKEY)) {
-      adminPubkeys.push(this.env.ADMIN_DECRYPTION_PUBKEY)
-    }
-    // KNOWN DEFECT, tracked separately: `conn.agentPubkey` is an **Ed25519** key
-    // (`lib/agent-identity.ts` generates it with `ed25519.getPublicKey`), and the
-    // matching open path (`hpkeOpen` below) uses the raw Ed25519 secret as an
-    // X25519 scalar — the two do not correspond, so the agent's own envelope is
-    // no more openable than the ADMIN_PUBKEY one removed above. Fixing it means
-    // changing the agent identity's key type, which is a self-contained change to
-    // this subsystem and deliberately out of scope for #1021/#1283.
+    // The admin reader for this report is the X25519 HPKE recipient, and only
+    // that. ADMIN_PUBKEY used to be added here too: an Ed25519 signing key,
+    // accepted by DHKEM(X25519) as 32 arbitrary bytes, producing a second
+    // envelope that no secret key could ever open (#1283).
+    const adminRecipient = adminHpkeRecipient(this.env)
+
     const recipientPubkeys = [
-      ...new Set([conn.agentPubkey, ...adminPubkeys]),
+      ...new Set([conn.agentPubkey, ...(adminRecipient ? [adminRecipient] : [])]),
     ]
 
     if (recipientPubkeys.length === 0) {

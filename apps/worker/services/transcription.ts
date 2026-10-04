@@ -39,7 +39,6 @@ export async function maybeTranscribe(
 
     if (result.text) {
       // Envelope encryption: single ciphertext, wrapped key for user + admin.
-      //
       // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
       // key, not an HPKE recipient. #1021: `userPubkey` is the answering
       // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
@@ -96,12 +95,17 @@ export async function transcribeVoicemail(
     })
 
     if (result.text) {
-      // Voicemails: envelope encryption for admin only.
-      // #1283: no `|| env.ADMIN_PUBKEY` fallback — see above.
+      // Voicemails: envelope encryption for admin only. With no admin HPKE
+      // recipient configured there is no reader at all, and storing a
+      // ciphertext nobody can open is worse than not transcribing (#1283).
       const readerPubkeys = await services.identity.buildReaderPubkeys(
         env.ADMIN_DECRYPTION_PUBKEY,
         [],
       )
+      if (readerPubkeys.length === 0) {
+        logger.warn('Voicemail transcription skipped: no ADMIN_DECRYPTION_PUBKEY, so no reader could open it', { callSid })
+        return
+      }
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
         callId: callSid,

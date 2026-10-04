@@ -70,8 +70,9 @@ struct HubOnboardingSheet: View {
             .frame(height: 4)
 
             // Step label
-            Text(String(
-                format: NSLocalizedString("hub_onboarding_step_of", comment: "Step %d of %d"),
+            Text(L10n.format(
+                "hub_onboarding_step_of",
+                comment: "Step %d of %d",
                 viewModel.currentStep.stepNumber,
                 OnboardingStep.totalSteps
             ))

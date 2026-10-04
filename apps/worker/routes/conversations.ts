@@ -19,6 +19,7 @@ import { incCounter } from './metrics'
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
+import { adminHpkeRecipient, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 
 const logger = createLogger('routes.conversations')
 
@@ -323,13 +324,20 @@ conversations.post('/:id/messages',
     if (body.encryptedContent) {
       encryptedContent = body.encryptedContent
     } else if (plaintextForSending) {
-      // #1283: no `|| c.env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
-      // key. #1021: `pubkey` is the sender's Ed25519 auth key, not an HPKE
-      // recipient; resolve it to their devices' X25519 encryption keys.
-      const readerPubkeys = await services.identity.buildReaderPubkeys(
-        c.env.ADMIN_DECRYPTION_PUBKEY,
-        [pubkey],
-      )
+      // #1283: the admin reader is the X25519 HPKE recipient or nothing. The
+      // old `|| c.env.ADMIN_PUBKEY` sealed this message to an Ed25519 signing
+      // key, which no secret key can open.
+      //
+      // #1140 follow-on: `pubkey` is `c.get('pubkey')`, the caller's Ed25519
+      // *identity* key — not an HPKE recipient. Sealing to it produced a second,
+      // permanently unopenable envelope beside the admin's working one, which is
+      // the #1283 defect repeated here. The server has no X25519 key for any
+      // user (`users` carries only `pubkey`; `devices.x25519_pubkey` is never
+      // populated), so it cannot substitute the right one — and must not invent
+      // one. Clients that hold their own device key send `encryptedContent` and
+      // `readerEnvelopes` instead and take the branch above; the desktop does.
+      const adminDecryptionPubkey = adminHpkeRecipient(c.env)
+      const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
       const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
       encryptedContent = encrypted.encryptedContent
       readerEnvelopes = encrypted.readerEnvelopes

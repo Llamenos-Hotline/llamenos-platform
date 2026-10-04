@@ -5,12 +5,14 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray, asc } from 'drizzle-orm'
+import { eq, and, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
+  hubs,
+  roles as roleDefinitions,
   sessions,
   inviteCodes,
   webauthnCredentials,
@@ -124,6 +126,31 @@ function sanitizeUser(vol: User): Omit<User, 'encryptedSecretKey'> & { encrypted
   return { ...vol, encryptedSecretKey: undefined }
 }
 
+/**
+ * SQL predicate: the user is a member of `hubId`. A user can belong to several
+ * hubs at once, so this matches any `hub_roles` entry for the hub. Super-admins
+ * (a global role granting `*`) reach every hub through hubContext, so they count
+ * as members of each; role-super-admin is also matched by id because
+ * resolvePermissions falls back to DEFAULT_ROLES when the roles table lacks it.
+ */
+function hubMember(hubId: string): SQL {
+  return sql`(
+    ${users.hubRoles} @> jsonb_build_array(jsonb_build_object('hubId', ${hubId}::text))
+    OR ${users.roles} @> ARRAY['role-super-admin']::text[]
+    OR EXISTS (
+      SELECT 1 FROM ${roleDefinitions}
+      WHERE ${roleDefinitions.id} = ANY(${users.roles})
+        AND ${roleDefinitions.permissions} @> ARRAY['*']::text[]
+    )
+  )`
+}
+
+/** A user as seen from inside one hub: their role assignments in other hubs are not its business */
+function scopeToHub(user: User, hubId: string | undefined): User {
+  if (!hubId) return user
+  return { ...user, hubRoles: (user.hubRoles ?? []).filter(hr => hr.hubId === hubId) }
+}
+
 /** Map a DB invite row to InviteCode interface */
 function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
   return {
@@ -131,12 +158,34 @@ function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
     name: row.name,
     phone: row.phone,
     roleIds: row.roleIds,
+    hubId: row.hubId,
     createdBy: row.createdBy ?? '',
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
     usedAt: row.usedAt?.toISOString(),
     usedBy: row.usedBy ?? undefined,
   }
+}
+
+/**
+ * Add a hub grant to a user's hubRoles, preserving every other hub.
+ *
+ * A second invite into a hub the user already belongs to unions the roles
+ * rather than replacing them, so redeeming one can never take a role away.
+ */
+function mergeHubRole(
+  hubRoles: NonNullable<User['hubRoles']>,
+  hubId: string,
+  roleIds: string[],
+): NonNullable<User['hubRoles']> {
+  const merged = hubRoles.map(hr => ({ ...hr, roleIds: [...hr.roleIds] }))
+  const existing = merged.find(hr => hr.hubId === hubId)
+  if (existing) {
+    existing.roleIds = [...new Set([...existing.roleIds, ...roleIds])]
+  } else {
+    merged.push({ hubId, roleIds: [...roleIds] })
+  }
+  return merged
 }
 
 /** Map a DB session row to ServerSession interface */
@@ -368,27 +417,35 @@ export class IdentityService {
   // =========================================================================
 
   /**
-   * List all users (encryptedSecretKey stripped). Users under revoked signing
+   * List users (encryptedSecretKey stripped). Users under revoked signing
    * keys are not members of anything — never listed, never an envelope recipient.
+   *
+   * With a hubId: only that hub's members (see `hubMember`), each showing only
+   * their role assignment in that hub. Without one: every user on the instance.
    */
-  async getUsers(): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
-    const rows = await this.db.select().from(users)
+  async getUsers(hubId?: string): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
+    const rows = hubId
+      ? await this.db.select().from(users).where(hubMember(hubId))
+      : await this.db.select().from(users)
     return {
-      users: rows.filter(r => !isRevokedSigningKey(r.pubkey)).map(r => sanitizeUser(rowToUser(r))),
+      users: rows
+        .filter(r => !isRevokedSigningKey(r.pubkey))
+        .map(r => sanitizeUser(scopeToHub(rowToUser(r), hubId))),
     }
   }
 
   /**
-   * Get a single volunteer by pubkey.
+   * Get a single volunteer by pubkey. With a hubId, 404 unless they are a
+   * member of that hub, and only their role assignment in it.
    */
-  async getUser(pubkey: string): Promise<ReturnType<typeof sanitizeUser>> {
+  async getUser(pubkey: string, hubId?: string): Promise<ReturnType<typeof sanitizeUser>> {
     const rows = await this.db
       .select()
       .from(users)
-      .where(eq(users.pubkey, pubkey))
+      .where(and(eq(users.pubkey, pubkey), hubId ? hubMember(hubId) : undefined))
       .limit(1)
     if (rows.length === 0) throw new ServiceError(404, 'Not found')
-    return sanitizeUser(rowToUser(rows[0]))
+    return sanitizeUser(scopeToHub(rowToUser(rows[0]), hubId))
   }
 
   /**
@@ -407,7 +464,8 @@ export class IdentityService {
   }
 
   /**
-   * Create a new volunteer.
+   * Create a new volunteer. With a hubId, they are created as a member of that
+   * hub, holding the same roles there.
    */
   async createUser(data: {
     pubkey: string
@@ -419,6 +477,7 @@ export class IdentityService {
     specializations?: string[]
     maxCaseAssignments?: number
     supervisorPubkey?: string
+    hubId?: string
   }): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     if (isRevokedSigningKey(data.pubkey)) throw new ServiceError(400, 'This signing key is revoked')
     const roles = this.enforceAdminRoles(data.pubkey, data.roleIds ?? data.roles ?? ['role-volunteer'])
@@ -427,6 +486,7 @@ export class IdentityService {
       displayName: data.name,
       phone: data.phone,
       roles,
+      ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: roles }] }),
       active: true,
       encryptedSecretKey: data.encryptedSecretKey,
       transcriptionEnabled: true,
@@ -445,11 +505,13 @@ export class IdentityService {
 
   /**
    * Update a volunteer's fields. Non-admin callers are restricted to safe fields.
+   * With a hubId, the returned volunteer shows only their role assignment in it.
    */
   async updateUser(
     pubkey: string,
     data: Partial<User>,
     isAdmin: boolean,
+    hubId?: string,
   ): Promise<{ volunteer: ReturnType<typeof sanitizeUser> }> {
     // RACE-11: Removed redundant SELECT — the UPDATE...RETURNING below handles
     // the "not found" case. The old SELECT was a read-before-write pattern that
@@ -499,7 +561,7 @@ export class IdentityService {
       .returning()
 
     if (!row) throw new ServiceError(404, 'Not found')
-    return { volunteer: sanitizeUser(rowToUser(row)) }
+    return { volunteer: sanitizeUser(scopeToHub(rowToUser(row), hubId)) }
   }
 
   /**
@@ -593,6 +655,13 @@ export class IdentityService {
     name: string
     phone: string
     roleIds: string[]
+    /**
+     * The hub the redeemer joins, resolved by the caller (routes/invites.ts).
+     * Null only when the server has no hub yet — the setup wizard invites a
+     * volunteer before it creates the hub — in which case `redeemInvite`
+     * resolves it at redemption.
+     */
+    hubId: string | null
     createdBy: string
   }): Promise<{ invite: InviteCode }> {
     const code = crypto.randomUUID()
@@ -603,7 +672,10 @@ export class IdentityService {
       code,
       name: data.name,
       phone: data.phone,
-      roleIds: data.roleIds || ['role-volunteer'],
+      // No `role-volunteer` fallback: an empty list means the inviter named no
+      // role and the hub's template named no default, which grants none.
+      roleIds: data.roleIds,
+      hubId: data.hubId,
       createdBy: data.createdBy,
       createdAt: now,
       expiresAt,
@@ -635,7 +707,33 @@ export class IdentityService {
   }
 
   /**
-   * Redeem an invite code — marks it used and creates a volunteer.
+   * Resolve the hub an invite without one admits into.
+   *
+   * Invites created before they carried a hub (#1037) have `hub_id` null. On a
+   * single-hub deployment — the shape R1 ships — there is exactly one answer,
+   * the same one `GET /api/config` reports as `defaultHubId`. With zero or
+   * several active hubs there is no answer, and the redeemer is created
+   * without hub membership rather than guessed into the wrong hub.
+   */
+  private async resolveSoleActiveHubId(tx: Database): Promise<string | null> {
+    const rows = await tx
+      .select({ id: hubs.id })
+      .from(hubs)
+      .where(eq(hubs.status, 'active'))
+      .limit(2)
+    return rows.length === 1 ? rows[0].id : null
+  }
+
+  /**
+   * Redeem an invite code — marks it used, and makes the redeemer a member of
+   * the invite's hub.
+   *
+   * The membership grant is the point. Without it (the state #1037 records)
+   * redemption produced a user with `hubRoles: []`, which
+   * `GET /api/hubs/:hubId/users` filters out — so the operator could not see
+   * the volunteer they had just invited, could not put them on a shift, and
+   * could not add them to a ring group. The volunteer authenticated fine and
+   * could never be rung.
    */
   async redeemInvite(data: { code: string; pubkey: string }): Promise<{
     volunteer: ReturnType<typeof sanitizeUser>
@@ -658,19 +756,53 @@ export class IdentityService {
 
       if (!invite) throw new ServiceError(400, 'Invalid, expired, or already-used invite code')
 
-      // Create volunteer. An existing pubkey must not surface as an unhandled
-      // unique-key violation (500): ON CONFLICT DO NOTHING + explicit 409. Throwing
-      // rolls back the claim above, so the invite stays redeemable.
-      // TODO(#1037): once invites carry a hub, merge the grant into the existing
-      // user's hubRoles instead of rejecting.
+      // The roles the invite grants, verbatim. No `role-volunteer` fallback:
+      // an empty list means neither the inviter nor the hub's template named a
+      // role, and the member joins with none for the operator to assign.
+      const grantedRoleIds = invite.roleIds
+      const hubId = invite.hubId ?? await this.resolveSoleActiveHubId(tx)
+
+      // An already-registered pubkey is a person being invited into a SECOND
+      // hub, not an error. Merge the grant into their existing hubRoles rather
+      // than rejecting them for existing (the TODO this closes). Their global
+      // roles, name, phone and active flag are left alone: an invite admits
+      // someone to a hub, it does not re-provision or reactivate an identity.
+      const existing = await tx
+        .select()
+        .from(users)
+        .where(eq(users.pubkey, data.pubkey))
+        .for('update')
+        .limit(1)
+
+      if (existing.length > 0) {
+        // With no hub to merge into there is nothing an invite can add, so the
+        // duplicate key is a genuine conflict. Throwing rolls back the claim
+        // above, leaving the invite redeemable.
+        if (!hubId) throw new ServiceError(409, 'A user with this key already exists')
+
+        const current = rowToUser(existing[0])
+        const [row] = await tx
+          .update(users)
+          .set({
+            hubRoles: mergeHubRole(current.hubRoles ?? [], hubId, grantedRoleIds),
+            updatedAt: new Date(),
+          })
+          .where(eq(users.pubkey, data.pubkey))
+          .returning()
+        return { volunteer: sanitizeUser(rowToUser(row)) }
+      }
+
+      // Create volunteer. The SELECT above is not a lock on a row that does
+      // not exist, so a concurrent redemption can still insert first: ON
+      // CONFLICT DO NOTHING + explicit 409 keeps that a 409 rather than an
+      // unhandled unique-key violation (500), and rolls back the claim.
       const [volRow] = await tx.insert(users).values({
         pubkey: data.pubkey,
         displayName: invite.name,
         phone: invite.phone,
-        roles: this.enforceAdminRoles(
-          data.pubkey,
-          invite.roleIds.length > 0 ? invite.roleIds : ['role-volunteer'],
-        ),
+        roles: this.enforceAdminRoles(data.pubkey, grantedRoleIds),
+        // Hub membership — what makes the redeemer visible to the operator.
+        ...(hubId && { hubRoles: [{ hubId, roleIds: grantedRoleIds }] }),
         active: true,
         encryptedSecretKey: '',
         transcriptionEnabled: true,

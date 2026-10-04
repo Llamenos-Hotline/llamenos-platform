@@ -7,6 +7,8 @@ describe('validateConfig', () => {
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
     ADMIN_PUBKEY: 'c'.repeat(64),
+    // Required once ADMIN_PUBKEY is set, and necessarily a different value —
+    // Ed25519 identity vs X25519 HPKE recipient (#1283).
     ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
@@ -72,7 +74,7 @@ describe('validateConfig', () => {
 
     it('throws when ADMIN_DECRYPTION_PUBKEY equals ADMIN_PUBKEY', () => {
       expect(() => validateConfig({ ...validEnv, ADMIN_DECRYPTION_PUBKEY: validEnv.ADMIN_PUBKEY }))
-        .toThrow(/must not equal ADMIN_PUBKEY/)
+        .toThrow(/identical to ADMIN_PUBKEY/)
     })
 
     it('throws when ADMIN_DECRYPTION_PUBKEY is not 64 hex chars', () => {

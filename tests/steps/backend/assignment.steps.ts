@@ -22,6 +22,7 @@ import {
   listEntityTypesViaApi,
   uniqueName,
 } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Local State ────────────────────────────────────────────────────
 
@@ -118,9 +119,7 @@ Given('on-shift volunteers exist', async ({ request, world }) => {
   const vol2 = await createUserViaApi(request, { name: uniqueName('ScoreVol2') })
   await createShiftViaApi(request, {
     name: uniqueName('ScoreShift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol1.pubkey, vol2.pubkey],
     hubId,
   })

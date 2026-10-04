@@ -125,15 +125,24 @@ services:
 
   # ── Optional: Asterisk PBX for local SIP telephony dev ─────────────────
   # Start with: docker compose -f deploy/docker/docker-compose.dev.yml --profile telephony up -d
+  # No call can route until the app provisions the SIP trunk
+  # (POST /api/provider-setup/create-sip-trunk; see asterisk-config/sorcery.conf).
+  # An end-to-end call against a simulated carrier: deploy/docker/tests/telephony/README.md
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 20.x
+    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
     profiles: ["telephony"]
     ports:
       - "5060:5060/udp"   # SIP
       - "5060:5060/tcp"   # SIP TCP
       - "8088:8088"       # ARI HTTP
+    # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
+    # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
+    user: root
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+      - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - asterisk-db:/var/lib/asterisk/astdb   # the provisioned SIP trunk
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -154,13 +163,20 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3200:3000"
+    # host.docker.internal is Docker Desktop only; on Linux it must be mapped
+    # to the host gateway or every webhook to the dev server fails to resolve.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - PBX_TYPE=ari
+      # PBX_TYPE names the PBX, not the protocol: `asterisk`, never `ari`.
+      - PBX_TYPE=asterisk
       - ARI_URL=ws://asterisk:8088/ari/events
       - ARI_REST_URL=http://asterisk:8088/ari
       - ARI_USERNAME=${ARI_USERNAME:-llamenos}
       - ARI_PASSWORD=${ARI_PASSWORD:-changeme}
-      - WORKER_WEBHOOK_URL=http://host.docker.internal:3000
+      # The dev server (bun run dev:server) on the host; override the port for a
+      # worktree server on a PORT other than 3000.
+      - WORKER_WEBHOOK_URL=${SIP_BRIDGE_WORKER_URL:-http://host.docker.internal:3000}
       - BRIDGE_SECRET=${BRIDGE_SECRET:-changeme}
     depends_on:
       asterisk:
@@ -202,6 +218,7 @@ configs:
       password = ${ARI_PASSWORD:-changeme}
 
 volumes:
+  asterisk-db:
   pgdata:
   rustfsdata:
   signal-data:

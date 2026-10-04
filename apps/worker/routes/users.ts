@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { createMiddleware } from 'hono/factory'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
@@ -9,23 +10,62 @@ import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
 
+// Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
+// Under a hub, every read and write is confined to that hub's members.
 const users = new Hono<AppEnv>()
 
-// GET / and GET /:targetPubkey via factory
-const userReadRouter = createEntityRouter({
+/**
+ * Under a hub, 404 for a target user who is not a member of it, before any
+ * handler reads or changes them.
+ */
+const targetInHub = createMiddleware<AppEnv>(async (c, next) => {
+  const hubId = c.get('hubId')
+  if (hubId) await c.get('services').identity.getUser(c.req.param('targetPubkey') ?? '', hubId)
+  await next()
+})
+
+// GET / via factory — getUsers(hubId) lists only the hub's members under a hub
+const userListRouter = createEntityRouter({
   tag: 'Users',
   domain: 'users',
   service: 'identity',
   listResponseSchema: userListResponseSchema,
   itemResponseSchema: userResponseSchema,
+  hubScoped: true,
+  disableGet: true,
   disableDelete: true,
-  idParam: 'targetPubkey',
   methods: {
     list: 'getUsers',
-    get: 'getUser',
   },
 })
-users.route('/', userReadRouter)
+users.route('/', userListRouter)
+
+// Permission first, so the 404 is no membership oracle for a hub user who may
+// not read users at all. Under a hub, getUser both 404s a non-member and shows
+// only the target's role assignment in this hub.
+users.get('/:targetPubkey',
+  describeRoute({
+    tags: ['Users'],
+    summary: 'Get a user by pubkey',
+    responses: {
+      200: {
+        description: 'User details',
+        content: {
+          'application/json': {
+            schema: resolver(userResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('users:read'),
+  async (c) => {
+    const user = await c.get('services').identity.getUser(c.req.param('targetPubkey'), c.get('hubId'))
+    return c.json(user)
+  },
+)
 
 users.post('/',
   describeRoute({
@@ -49,6 +89,7 @@ users.post('/',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+    const hubId = c.get('hubId') || null
 
     const result = await services.identity.createUser({
       pubkey: body.pubkey,
@@ -60,10 +101,10 @@ users.post('/',
       ...(body.specializations && { specializations: body.specializations }),
       ...(body.maxCaseAssignments !== undefined && { maxCaseAssignments: body.maxCaseAssignments }),
       ...(body.supervisorPubkey && { supervisorPubkey: body.supervisorPubkey }),
-      ...(body.supervisorPubkey && { supervisorPubkey: body.supervisorPubkey }),
+      // Created under a hub: a member of it, or they would vanish from its own user list
+      ...(hubId && { hubId }),
     })
 
-    const hubId = c.get('hubId') || null
     await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: body.roleIds || body.roles }, undefined, hubId)
 
     return c.json(result.volunteer, 201)
@@ -87,6 +128,7 @@ users.patch('/:targetPubkey',
     },
   }),
   requirePermission('users:update'),
+  targetInHub,
   validator('json', adminUpdateUserBodySchema),
   async (c) => {
     const services = c.get('services')
@@ -94,7 +136,7 @@ users.patch('/:targetPubkey',
     const targetPubkey = c.req.param('targetPubkey')
     const body = c.req.valid('json')
 
-    const result = await services.identity.updateUser(targetPubkey, body, true)
+    const result = await services.identity.updateUser(targetPubkey, body, true, c.get('hubId'))
 
     const hubId = c.get('hubId') || null
     if (body.roles) await audit(services.audit, 'rolesChanged', pubkey, { target: targetPubkey, roles: body.roles }, undefined, hubId)
@@ -125,6 +167,7 @@ users.delete('/:targetPubkey',
     },
   }),
   requirePermission('users:delete'),
+  targetInHub,
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
@@ -166,9 +209,9 @@ users.get('/:targetPubkey/cases',
     const services = c.get('services')
     const targetPubkey = c.req.param('targetPubkey')
 
-    // Verify user exists
+    // Verify user exists — and, under a hub, is a member of it
     try {
-      await services.identity.getUser(targetPubkey)
+      await services.identity.getUser(targetPubkey, c.get('hubId'))
     } catch {
       return c.json({ error: 'User not found' }, 404)
     }
@@ -177,7 +220,8 @@ users.get('/:targetPubkey/cases',
     const limit = parseInt(c.req.query('limit') ?? '20', 10)
     const entityTypeId = c.req.query('entityTypeId')
 
-    const hubId = c.req.query('hubId') ?? c.get('hubId') ?? ''
+    // The hub in the path wins: a ?hubId= must not reach into another hub
+    const hubId = c.get('hubId') ?? c.req.query('hubId') ?? ''
 
     const result = await services.cases.list({
       hubId,
@@ -219,14 +263,15 @@ users.get('/:targetPubkey/metrics',
     const services = c.get('services')
     const targetPubkey = c.req.param('targetPubkey')
 
-    // Verify user exists
+    // Verify user exists — and, under a hub, is a member of it
     try {
-      await services.identity.getUser(targetPubkey)
+      await services.identity.getUser(targetPubkey, c.get('hubId'))
     } catch {
       return c.json({ error: 'User not found' }, 404)
     }
 
-    const hubId = c.req.query('hubId') ?? c.get('hubId') ?? ''
+    // The hub in the path wins: a ?hubId= must not reach into another hub
+    const hubId = c.get('hubId') ?? c.req.query('hubId') ?? ''
 
     // Get all records assigned to this user
     const result = await services.cases.list({

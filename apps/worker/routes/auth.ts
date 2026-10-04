@@ -14,6 +14,7 @@ import { audit } from '../services/audit'
 import { getPrimaryRole } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 
 const auth = new Hono<AppEnv>()
 
@@ -194,10 +195,12 @@ auth.get('/me',
       webauthnRequired,
       webauthnRegistered: webauthnCreds.length > 0,
       // H17: Removed adminPubkey (signing key identity) — only decryption pubkey needed.
-      // #1283: never fall back to ADMIN_PUBKEY. That is the Ed25519 signing key;
-      // handing it to clients as a decryption pubkey tells every client to seal
-      // note/message/file envelopes to a key that cannot open them.
-      adminDecryptionPubkey: c.env.ADMIN_DECRYPTION_PUBKEY,
+      // #1283: and never ADMIN_PUBKEY as a stand-in for it. This value tells every
+      // client which key to seal its admin envelopes to; handing out the Ed25519
+      // signing key made every note written against it undecryptable forever.
+      // Absent when the deployment has no env-configured platform admin, which the
+      // clients already handle by omitting the admin envelope.
+      adminDecryptionPubkey: adminHpkeRecipient(c.env),
       serverEventKeyHex,
       serverEventKeyPrevHex,
       eventKeyEpoch,

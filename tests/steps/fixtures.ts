@@ -14,6 +14,8 @@ export type AdminWorld = {
   lastPhone: string
   lastHubId: string
   lastHubName: string
+  /** Display name set by 'I change my display name', checked after a reload. */
+  lastDisplayName: string
 }
 
 export type RolesWorld = {
@@ -44,6 +46,8 @@ export type CasesWorld = {
   // Triage
   triageReportTypeId: string
   triageReportId: string
+  // Smart assignment: suggestions returned for lastRecordId
+  lastSuggestions: Array<Record<string, unknown>>
 }
 
 export type ConversationWorld = {
@@ -155,7 +159,7 @@ export const test = base.extend<
   }, { auto: true }],
   // Scenario-scoped world objects — fresh per test, no cross-scenario leakage.
   adminWorld: async ({}, use) => {
-    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastHubId: '', lastHubName: '' })
+    await use({ lastUserName: '', lastUserPubkey: '', lastShiftName: '', lastPhone: '', lastHubId: '', lastHubName: '', lastDisplayName: '' })
   },
   rolesWorld: async ({}, use) => {
     await use({ cachedRoles: [], lastCreatedRoleId: '', volunteerNsec: '', reporterNsec: '' })
@@ -167,6 +171,7 @@ export const test = base.extend<
       eventEntityTypeId: '', lastEventId: '', lastEventName: '',
       contactCarlosId: '', contactMariaId: '', contactWithDataId: '', contactWithDataName: '',
       triageReportTypeId: '', triageReportId: '',
+      lastSuggestions: [],
     })
   },
   conversationWorld: async ({}, use) => {

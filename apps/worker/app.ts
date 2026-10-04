@@ -18,6 +18,7 @@ import callsRoutes from './routes/calls'
 import auditRoutes from './routes/audit'
 import settingsRoutes from './routes/settings'
 import telephonyRoutes from './routes/telephony'
+import ivrMediaRoutes from './routes/ivr-media'
 import webrtcRoutes from './routes/webrtc'
 import messagingRoutes from './messaging/router'
 import conversationsRoutes from './routes/conversations'
@@ -102,7 +103,10 @@ api.use('*', async (c, next) => {
   const durationSec = (performance.now() - t0) / 1000
   const method = c.req.method
   // Normalize path: strip query params and collapse IDs for cardinality control
-  const path = c.req.path.replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
+  // A generated-speech path names its own text (one per CAPTCHA), so it is one route.
+  const path = c.req.path
+    .replace(/\/ivr-speech\/.*$/, '/ivr-speech/:clip')
+    .replace(/\/[0-9a-f-]{8,}(\/|$)/gi, '/:id$1')
   recordHttpRequest(method, path, c.res.status, durationSec)
 })
 
@@ -189,26 +193,11 @@ api.patch('/messaging/preferences', async (c) => {
 // Only POST is registered here; GET /security-events falls through to the authenticated router.
 api.route('/security-events', publicSecurityEventsRoutes)
 
-// Public IVR audio serve (Twilio fetches during calls)
-api.get('/ivr-audio/:promptType/:language', async (c) => {
-  const services = c.get('services')
-  const promptType = c.req.param('promptType')
-  const language = c.req.param('language')
-  // Validate path params to prevent injection
-  if (!/^[a-z_-]+$/.test(promptType) || !/^[a-z]{2,5}(-[A-Z]{2})?$/.test(language)) {
-    return c.json({ error: 'Invalid parameters' }, 400)
-  }
-  const result = await services.settings.getIvrAudio(promptType, language)
-  if (!result) return c.json({ error: 'Not found' }, 404)
-  // Decode base64 audio to binary for streaming
-  const binary = Uint8Array.from(atob(result.audio), c => c.charCodeAt(0))
-  return new Response(binary, {
-    headers: {
-      'Content-Type': 'audio/wav',
-      'Content-Length': String(binary.byteLength),
-    },
-  })
-})
+// Public IVR media: what a telephony provider fetches during a call —
+// operator-uploaded prompts and generated speech — through signed URLs only.
+api.use('/ivr-audio/*', rateLimit('webhook'))
+api.use('/ivr-speech/*', rateLimit('webhook'))
+api.route('/', ivrMediaRoutes)
 
 // Authenticated routes
 const authenticated = new Hono<AppEnv>()
