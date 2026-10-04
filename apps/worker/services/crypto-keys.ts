@@ -117,6 +117,212 @@ export function computeEntryHash(
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency: advisory lock + shared validated-append (#1146)
+// ---------------------------------------------------------------------------
+
+/**
+ * Transaction type accepted by functions that must run inside a caller-owned
+ * transaction (so the advisory lock below is scoped to, and released by, that
+ * same transaction's commit/rollback).
+ */
+type SigchainTx = Parameters<Database['transaction']>[0] extends
+  (tx: infer Tx, ...rest: never[]) => unknown ? Tx : never
+
+/**
+ * Advisory-lock key for one user's sigchain. Every append path — the public
+ * POST /sigchain route, device revocation, recovery-group completion — must
+ * take this lock (via `appendValidatedSigchainLink` or directly) BEFORE
+ * reading the chain head. `SELECT ... FOR UPDATE` on the tip row is not
+ * enough: under READ COMMITTED a waiter re-reads the row it locked, not the
+ * newer tip the winner inserted, so both appends chain from the same
+ * predecessor (a fork), and an empty chain has no row to lock at all. This
+ * mirrors `chainLockKey` in services/audit.ts, which solved the identical
+ * problem for the hash-chained audit log.
+ */
+export function sigchainLockKey(userPubkey: string): string {
+  return `sigchain:${userPubkey}`
+}
+
+function mapSigchainRow(row: typeof sigchainLinks.$inferSelect): SigchainLinkRecord {
+  return {
+    id: row.id,
+    userPubkey: row.userPubkey,
+    seqNo: row.seqNo,
+    linkType: row.linkType,
+    payload: row.payload,
+    signature: row.signature,
+    prevHash: row.prevHash,
+    hash: row.hash,
+    signerDeviceId: row.signerDeviceId,
+    signerPubkey: row.signerPubkey,
+    createdAt: row.createdAt.toISOString(),
+  }
+}
+
+/**
+ * Validate hash-chain continuity and signature, then insert a sigchain link.
+ * MUST be called with a transaction (`tx`) already holding the advisory lock
+ * for `userPubkey` — see `sigchainLockKey`. This is the one place that reads
+ * the chain head and inserts; every append path funnels through it so a
+ * second code path can never again skip the continuity check the way
+ * `identity.revokeDevice` used to (#1146).
+ *
+ * The server verifies:
+ *   1. seqNo === expected (last seqNo + 1, or 0 for genesis) — against the
+ *      head read INSIDE this transaction, never a value the caller computed
+ *      earlier or trusted from the client.
+ *   2. prevHash matches the hash of the current chain head.
+ *   3. The claimed `hash` is the canonical hash of the payload + metadata
+ *      (prevents a correctly-signed hash from being paired with tampered
+ *      content).
+ *   4. Ed25519 `signature` over the entry hash is valid for the verification
+ *      key (`userPubkey` by default; `options.verifySignatureAgainst` for
+ *      self-authorizing link types like recovery-device-add, whose signer is
+ *      the new device's own key, not the account's).
+ *
+ * `signerDeviceId`/`signerPubkey`/`timestamp` default to `''` to match the
+ * sigchain_links column defaults — the only convention any caller has ever
+ * used for these fields, since no wire contract carries them for every link
+ * type yet (see identity.ts's revokeDevice caller).
+ */
+export async function appendValidatedSigchainLink(
+  tx: SigchainTx,
+  userPubkey: string,
+  link: {
+    seqNo: number
+    linkType: string
+    payload: unknown
+    signature: string
+    prevHash: string
+    hash: string
+    signerDeviceId?: string
+    signerPubkey?: string
+    timestamp?: string
+  },
+  options: { verifySignatureAgainst?: string } = {},
+): Promise<SigchainLinkRecord> {
+  // Fetch the chain tail (highest seqNo) in one query, under the advisory
+  // lock the caller is required to already hold.
+  const [currentHead] = await tx
+    .select({
+      seqNo: sigchainLinks.seqNo,
+      hash: sigchainLinks.hash,
+    })
+    .from(sigchainLinks)
+    .where(eq(sigchainLinks.userPubkey, userPubkey))
+    .orderBy(desc(sigchainLinks.seqNo))
+    .limit(1)
+  const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
+  const expectedPrevHash = currentHead?.hash ?? ''
+
+  if (link.seqNo !== expectedSeqNo) {
+    throw new CryptoKeyError(
+      `sigchain sequence mismatch: expected ${expectedSeqNo}, got ${link.seqNo}`,
+      409,
+    )
+  }
+  if (link.prevHash !== expectedPrevHash) {
+    throw new CryptoKeyError(
+      'sigchain prevHash mismatch: does not match current chain head',
+      409,
+    )
+  }
+
+  const signerDeviceId = link.signerDeviceId ?? ''
+  const signerPubkey = link.signerPubkey ?? ''
+  const timestamp = link.timestamp ?? ''
+
+  // Recompute entry hash from canonical form and verify it matches the
+  // claimed hash BEFORE checking the signature. This prevents a malicious
+  // client from submitting an arbitrary payload with a correctly-signed
+  // hash that doesn't actually bind to the payload content.
+  //
+  // Canonical form matches packages/crypto/src/sigchain.rs:compute_entry_hash.
+  // prevHash: empty string → null (Rust Option<String> serialization).
+  const recomputedHash = computeEntryHash(
+    link.seqNo,
+    link.prevHash === '' ? null : link.prevHash,
+    timestamp,
+    signerDeviceId,
+    signerPubkey,
+    link.payload,
+  )
+  if (recomputedHash !== link.hash.toLowerCase()) {
+    throw new CryptoKeyError(
+      'sigchain hash mismatch: recomputed hash does not match claimed hash — payload may have been tampered',
+      400,
+    )
+  }
+
+  // Verify Ed25519 signature over the entry hash
+  try {
+    const hashBytes = hexToBytes(link.hash)
+    const sigBytes = hexToBytes(link.signature)
+    const pubkeyBytes = hexToBytes(options.verifySignatureAgainst ?? userPubkey)
+    const valid = ed25519Verify(pubkeyBytes, hashBytes, sigBytes)
+    if (!valid) {
+      throw new CryptoKeyError(
+        'sigchain signature verification failed',
+        403,
+      )
+    }
+  } catch (e) {
+    if (e instanceof CryptoKeyError) throw e
+    throw new CryptoKeyError(
+      'sigchain signature verification failed: invalid format',
+      400,
+    )
+  }
+
+  const [inserted] = await tx
+    .insert(sigchainLinks)
+    .values({
+      userPubkey,
+      seqNo: link.seqNo,
+      linkType: link.linkType,
+      payload: link.payload,
+      signature: link.signature,
+      prevHash: link.prevHash,
+      hash: link.hash,
+      signerDeviceId,
+      signerPubkey,
+      linkTimestamp: timestamp,
+    })
+    .returning()
+
+  return mapSigchainRow(inserted)
+}
+
+/**
+ * Walk a sigchain (ordered by seqNo ascending, as returned by `getSigchain`)
+ * and report the first point where the hash-chain linkage breaks: a seqNo
+ * gap/duplicate, or a `prevHash` that doesn't match the previous link's
+ * `hash`. Returns `null` for an intact chain.
+ *
+ * A forked chain (#1146) — two links landing at the same seqNo before the
+ * unique index existed, or any future bug that bypasses
+ * `appendValidatedSigchainLink` — must never be reported to a caller as if
+ * it were a normal, valid chain.
+ */
+export function findSigchainBreak(
+  links: Pick<SigchainLinkRecord, 'seqNo' | 'prevHash' | 'hash'>[],
+): { seqNo: number; reason: string } | null {
+  let expectedSeqNo = 0
+  let expectedPrevHash = ''
+  for (const link of links) {
+    if (link.seqNo !== expectedSeqNo) {
+      return { seqNo: link.seqNo, reason: `expected seqNo ${expectedSeqNo}, found ${link.seqNo}` }
+    }
+    if (link.prevHash !== expectedPrevHash) {
+      return { seqNo: link.seqNo, reason: 'prevHash does not match the previous link\'s hash — chain is forked or tampered' }
+    }
+    expectedSeqNo = link.seqNo + 1
+    expectedPrevHash = link.hash
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -137,34 +343,22 @@ export class CryptoKeysService {
       .where(eq(sigchainLinks.userPubkey, userPubkey))
       .orderBy(asc(sigchainLinks.seqNo))
 
-    return rows.map(r => ({
-      id: r.id,
-      userPubkey: r.userPubkey,
-      seqNo: r.seqNo,
-      linkType: r.linkType,
-      payload: r.payload,
-      signature: r.signature,
-      prevHash: r.prevHash,
-      hash: r.hash,
-      // GET /users/:pubkey/sigchain previously omitted these two fields even
-      // though appendSigchainLink's own POST response includes them (and the
-      // DB column defaults to '', so every pre-existing row still round-trips
-      // fine). Verifiers need signerPubkey to check self-authorizing link
-      // types like recovery-device-add, whose signature is NOT verifiable
-      // against userPubkey the way every other link type's is.
-      signerDeviceId: r.signerDeviceId,
-      signerPubkey: r.signerPubkey,
-      createdAt: r.createdAt.toISOString(),
-    }))
+    // GET /users/:pubkey/sigchain previously omitted signerDeviceId/signerPubkey
+    // even though appendSigchainLink's own POST response includes them (and the
+    // DB column defaults to '', so every pre-existing row still round-trips
+    // fine). Verifiers need signerPubkey to check self-authorizing link
+    // types like recovery-device-add, whose signature is NOT verifiable
+    // against userPubkey the way every other link type's is.
+    return rows.map(mapSigchainRow)
   }
 
   /**
    * Append a new sigchain link, validating hash-chain continuity and signature.
    *
-   * The server verifies:
-   *   1. seqNo === expected (last seqNo + 1, or 0 for genesis)
-   *   2. prevHash matches the hash of the current chain head
-   *   3. Ed25519 signature over the entry hash is valid for userPubkey
+   * Runs inside a transaction holding the per-user advisory lock (see
+   * `sigchainLockKey`) so a concurrent append can never read the same chain
+   * head and fork the chain — see `appendValidatedSigchainLink` for the full
+   * validation this performs.
    *
    * Returns the persisted link on success.
    */
@@ -179,103 +373,10 @@ export class CryptoKeysService {
     signerPubkey: string
     timestamp: string
   }): Promise<SigchainLinkRecord> {
-    // Fetch the chain tail (highest seqNo) in one query
-    const [currentHead] = await this.db
-      .select({
-        seqNo: sigchainLinks.seqNo,
-        hash: sigchainLinks.hash,
-      })
-      .from(sigchainLinks)
-      .where(eq(sigchainLinks.userPubkey, userPubkey))
-      .orderBy(desc(sigchainLinks.seqNo))
-      .limit(1)
-    const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
-    const expectedPrevHash = currentHead?.hash ?? ''
-
-    if (link.seqNo !== expectedSeqNo) {
-      throw new CryptoKeyError(
-        `sigchain sequence mismatch: expected ${expectedSeqNo}, got ${link.seqNo}`,
-        409,
-      )
-    }
-    if (link.prevHash !== expectedPrevHash) {
-      throw new CryptoKeyError(
-        'sigchain prevHash mismatch: does not match current chain head',
-        409,
-      )
-    }
-
-    // Recompute entry hash from canonical form and verify it matches the
-    // claimed hash BEFORE checking the signature. This prevents a malicious
-    // client from submitting an arbitrary payload with a correctly-signed
-    // hash that doesn't actually bind to the payload content.
-    //
-    // Canonical form matches packages/crypto/src/sigchain.rs:compute_entry_hash.
-    // prevHash: empty string → null (Rust Option<String> serialization).
-    const recomputedHash = computeEntryHash(
-      link.seqNo,
-      link.prevHash === '' ? null : link.prevHash,
-      link.timestamp,
-      link.signerDeviceId,
-      link.signerPubkey,
-      link.payload,
-    )
-    if (recomputedHash !== link.hash.toLowerCase()) {
-      throw new CryptoKeyError(
-        'sigchain hash mismatch: recomputed hash does not match claimed hash — payload may have been tampered',
-        400,
-      )
-    }
-
-    // Verify Ed25519 signature over the entry hash
-    try {
-      const hashBytes = hexToBytes(link.hash)
-      const sigBytes = hexToBytes(link.signature)
-      const pubkeyBytes = hexToBytes(userPubkey)
-      const valid = ed25519Verify(pubkeyBytes, hashBytes, sigBytes)
-      if (!valid) {
-        throw new CryptoKeyError(
-          'sigchain signature verification failed',
-          403,
-        )
-      }
-    } catch (e) {
-      if (e instanceof CryptoKeyError) throw e
-      throw new CryptoKeyError(
-        'sigchain signature verification failed: invalid format',
-        400,
-      )
-    }
-
-    const [inserted] = await this.db
-      .insert(sigchainLinks)
-      .values({
-        userPubkey,
-        seqNo: link.seqNo,
-        linkType: link.linkType,
-        payload: link.payload,
-        signature: link.signature,
-        prevHash: link.prevHash,
-        hash: link.hash,
-        signerDeviceId: link.signerDeviceId,
-        signerPubkey: link.signerPubkey,
-        linkTimestamp: link.timestamp,
-      })
-      .returning()
-
-    return {
-      id: inserted.id,
-      userPubkey: inserted.userPubkey,
-      seqNo: inserted.seqNo,
-      linkType: inserted.linkType,
-      payload: inserted.payload,
-      signature: inserted.signature,
-      prevHash: inserted.prevHash,
-      hash: inserted.hash,
-      signerDeviceId: inserted.signerDeviceId,
-      signerPubkey: inserted.signerPubkey,
-      createdAt: inserted.createdAt.toISOString(),
-    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(userPubkey)}))`)
+      return appendValidatedSigchainLink(tx, userPubkey, link)
+    })
   }
 
   // -------------------------------------------------------------------------

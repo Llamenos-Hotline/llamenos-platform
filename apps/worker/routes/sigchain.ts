@@ -10,7 +10,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { checkPermission } from '../middleware/permission-guard'
 import { authErrors } from '../openapi/helpers'
-import { CryptoKeyError } from '../services/crypto-keys'
+import { CryptoKeyError, findSigchainBreak } from '../services/crypto-keys'
 
 const sigchainRoutes = new Hono<AppEnv>()
 
@@ -34,6 +34,16 @@ const sigchainLinkSchema = z.object({
 
 const sigchainResponseSchema = z.object({
   links: z.array(sigchainLinkSchema),
+  /**
+   * Set when the chain's prevHash linkage is broken (a fork, a seqNo gap, or
+   * tampering) rather than silently returning the forked chain as if it were
+   * valid (#1146). Readers verifying the chain MUST check this before
+   * trusting `links`.
+   */
+  integrityBreak: z.object({
+    seqNo: z.number().int(),
+    reason: z.string(),
+  }).nullable(),
 })
 
 const appendLinkBodySchema = z.object({
@@ -93,7 +103,8 @@ sigchainRoutes.get('/',
 
     const services = c.get('services')
     const links = await services.cryptoKeys.getSigchain(targetPubkey)
-    return c.json({ links })
+    const integrityBreak = findSigchainBreak(links)
+    return c.json({ links, integrityBreak })
   },
 )
 

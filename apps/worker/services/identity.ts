@@ -21,7 +21,6 @@ import {
   systemSettings,
   securityEvents,
   deviceVerifications,
-  sigchainLinks,
   authNonces,
 } from '../db/schema'
 import type {
@@ -1269,6 +1268,15 @@ export class IdentityService {
    * The client signs a `device_remove` sigchain link before calling this endpoint.
    * The server validates hash-chain continuity, persists the link, then deletes
    * the device record — all within a single transaction.
+   *
+   * Everything — the device/user lookups, the sigchain append, the device
+   * deletion, and the security event — runs inside ONE transaction. Before
+   * #1146 the device/user reads happened outside any transaction, so two
+   * concurrent revokes of the same device both passed the "device exists"
+   * check and both proceeded; and the sigchain insert trusted the client's
+   * `sigchainSeqNo` directly with no continuity check at all, so a client
+   * could plant a duplicate/out-of-order link outright rather than merely
+   * race into one.
    */
   async revokeDevice(
     pubkey: string,
@@ -1280,43 +1288,82 @@ export class IdentityService {
       sigchainPrevHash?: string
     },
   ): Promise<{ hubIds: string[]; pukRotationNeeded: boolean } | null> {
-    // Verify device belongs to caller
-    const [device] = await this.db
-      .select()
-      .from(devices)
-      .where(and(eq(devices.id, deviceId), eq(devices.pubkey, pubkey)))
-      .limit(1)
+    return await this.db.transaction(async (tx) => {
+      // Verify device belongs to caller. FOR UPDATE locks the device row so
+      // a concurrent revoke of the SAME device can't also pass this check
+      // before the first revoke's deletion commits (#1146).
+      const [device] = await tx
+        .select()
+        .from(devices)
+        .where(and(eq(devices.id, deviceId), eq(devices.pubkey, pubkey)))
+        .for('update')
+        .limit(1)
 
-    if (!device) return null
+      if (!device) return null
 
-    // Get user's hub memberships for key rotation
-    const [user] = await this.db
-      .select({ hubRoles: users.hubRoles })
-      .from(users)
-      .where(eq(users.pubkey, pubkey))
-      .limit(1)
+      // Get user's hub memberships for key rotation
+      const [user] = await tx
+        .select({ hubRoles: users.hubRoles })
+        .from(users)
+        .where(eq(users.pubkey, pubkey))
+        .limit(1)
 
-    const hubIds = user?.hubRoles
-      ? (user.hubRoles as Array<{ hubId: string }>).map(hr => hr.hubId)
-      : []
+      const hubIds = user?.hubRoles
+        ? (user.hubRoles as Array<{ hubId: string }>).map(hr => hr.hubId)
+        : []
 
-    // Atomic: append sigchain link + delete device + emit security event
-    await this.db.transaction(async (tx) => {
-      // 1. Append device_remove sigchain link (if client provided signed data)
+      // 1. Append device_remove sigchain link (if client provided signed data).
+      //
+      // Routed through appendValidatedSigchainLink — the same lock +
+      // continuity + hash/signature validation every other sigchain append
+      // uses — instead of inserting the client-supplied seqNo directly.
+      // appendValidatedSigchainLink takes the per-user advisory lock itself,
+      // so this insert is serialized against the public POST /sigchain
+      // route and recovery-group completion too, not just other revokes.
+      //
+      // signerDeviceId/signerPubkey/timestamp are not yet part of the
+      // revoke-device wire contract (packages/protocol/schemas/devices.ts
+      // only carries signature/sigchainHash/sigchainSeqNo/sigchainPrevHash),
+      // so they default to '' here — the same convention every row on this
+      // path has used since the signer_device_id/signer_pubkey/timestamp
+      // columns were added (migration 0050). Extending the wire contract to
+      // carry real values, so the canonical hash can bind to an actual
+      // signer and timestamp instead of just the payload, is tracked
+      // separately as a protocol change outside this fix's scope.
       if (sigchainData?.signature && sigchainData.sigchainHash != null && sigchainData.sigchainSeqNo != null) {
-        await tx.insert(sigchainLinks).values({
-          userPubkey: pubkey,
-          seqNo: sigchainData.sigchainSeqNo,
-          linkType: 'device_remove',
-          payload: {
-            deviceId,
-            devicePubkey: device.ed25519Pubkey,
-            platform: device.platform,
-          },
-          signature: sigchainData.signature,
-          prevHash: sigchainData.sigchainPrevHash ?? '',
-          hash: sigchainData.sigchainHash,
-        })
+        // Deferred import: crypto-keys.ts pulls in the native crypto FFI
+        // (@llamenos/crypto/ffi → bun:ffi) at module scope. identity.ts is
+        // imported by code paths that never touch a sigchain (e.g. plain
+        // Node/vitest integration tests constructing IdentityService), so a
+        // static import here would force that native binding to load just
+        // to construct the service. Loading it only when a device is
+        // actually being revoked keeps IdentityService's own import graph
+        // native-FFI-free.
+        const { appendValidatedSigchainLink, CryptoKeyError } = await import('./crypto-keys')
+        try {
+          await appendValidatedSigchainLink(tx, pubkey, {
+            seqNo: sigchainData.sigchainSeqNo,
+            linkType: 'device_remove',
+            payload: {
+              deviceId,
+              devicePubkey: device.ed25519Pubkey,
+              platform: device.platform,
+            },
+            signature: sigchainData.signature,
+            prevHash: sigchainData.sigchainPrevHash ?? '',
+            hash: sigchainData.sigchainHash,
+          })
+        } catch (e) {
+          // Translate to ServiceError — the app-wide error handler
+          // (app.ts's app.onError) only special-cases ServiceError; a raw
+          // CryptoKeyError would fall through to a misleading 500 instead
+          // of the 409/400/403 the continuity/hash/signature check actually
+          // means.
+          if (e instanceof CryptoKeyError) {
+            throw new ServiceError(e.status, e.message)
+          }
+          throw e
+        }
       }
 
       // 2. Delete device record
@@ -1341,10 +1388,10 @@ export class IdentityService {
           sigchainSeqNo: sigchainData?.sigchainSeqNo,
         },
       })
-    })
 
-    // Signal client to rotate PUK (excluding revoked device) and hub keys
-    return { hubIds, pukRotationNeeded: true }
+      // Signal client to rotate PUK (excluding revoked device) and hub keys
+      return { hubIds, pukRotationNeeded: true }
+    })
   }
 
   /**

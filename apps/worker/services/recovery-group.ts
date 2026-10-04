@@ -1,4 +1,4 @@
-import { eq, and, sql, desc } from 'drizzle-orm'
+import { eq, and, sql } from 'drizzle-orm'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { Database } from '../db'
@@ -8,11 +8,10 @@ import {
   userRecoveryEnvelopes,
   recoverySessions,
   recoverySessionContributions,
-  sigchainLinks,
 } from '../db/schema'
 import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
-import { computeEntryHash } from './crypto-keys'
+import { appendValidatedSigchainLink, sigchainLockKey, CryptoKeyError, type SigchainLinkRecord } from './crypto-keys'
 
 const logger = createLogger('service.recovery-group')
 
@@ -27,20 +26,6 @@ export class RecoveryGroupError extends Error {
     super(message)
     this.name = 'RecoveryGroupError'
   }
-}
-
-export interface SigchainLinkInsert {
-  id: string
-  userPubkey: string
-  seqNo: number
-  linkType: string
-  payload: unknown
-  signature: string
-  prevHash: string
-  hash: string
-  signerDeviceId: string
-  signerPubkey: string
-  createdAt: string
 }
 
 export class RecoveryGroupService {
@@ -741,7 +726,7 @@ export class RecoveryGroupService {
     hash: string
     signerDeviceId: string
     timestamp: string
-  }): Promise<{ sigchainLink: SigchainLinkInsert }> {
+  }): Promise<{ sigchainLink: SigchainLinkRecord }> {
     const { sessionId, sigchainSeqNo, sigchainPayload, signature, prevHash, hash, signerDeviceId, timestamp } = params
 
     const sessions = await this.db
@@ -806,92 +791,47 @@ export class RecoveryGroupService {
       )
     }
 
-    // Self-authorizing signature: verified against the NEW device's own key,
-    // not the account's identity key — the account's identity key is exactly
-    // what was lost and is why recovery was needed.
-    let signatureValid: boolean
-    try {
-      signatureValid = ed25519Verify(
-        hexToBytes(session.newDevicePubkey),
-        hexToBytes(hash),
-        hexToBytes(signature),
-      )
-    } catch {
-      signatureValid = false
-    }
-    if (!signatureValid) {
-      throw new RecoveryGroupError('Invalid recovery-device-add signature', 403)
-    }
-
-    let insertedLink!: SigchainLinkInsert
+    let insertedLink!: SigchainLinkRecord
 
     await this.db.transaction(async (tx) => {
-      const [currentHead] = await tx
-        .select({ seqNo: sigchainLinks.seqNo, hash: sigchainLinks.hash })
-        .from(sigchainLinks)
-        .where(eq(sigchainLinks.userPubkey, session.userPubkey))
-        .orderBy(desc(sigchainLinks.seqNo))
-        .limit(1)
+      // Take the per-user sigchain advisory lock BEFORE reading the head —
+      // see sigchainLockKey's doc comment (services/crypto-keys.ts) for why
+      // SELECT...FOR UPDATE on the tip row is not sufficient. Without this,
+      // a recovery completion racing a concurrent device_add/device_remove
+      // append (or another recovery completion) could read the same chain
+      // head as the other writer and fork the chain (#1146).
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(session.userPubkey)}))`)
 
-      const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
-      const expectedPrevHash = currentHead?.hash ?? ''
-
-      if (sigchainSeqNo !== expectedSeqNo) {
-        throw new RecoveryGroupError(
-          `sigchain sequence mismatch: expected ${expectedSeqNo}, got ${sigchainSeqNo}`,
-          409,
+      // appendValidatedSigchainLink is the single source of truth for
+      // continuity (seqNo/prevHash against the head just read under the
+      // lock above), canonical-hash recomputation, and signature
+      // verification — the same checks every sigchain append path uses
+      // (#1146). Self-authorizing: verified against the NEW device's own
+      // key via verifySignatureAgainst, not the account's identity key —
+      // the account's identity key is exactly what was lost and is why
+      // recovery was needed.
+      try {
+        insertedLink = await appendValidatedSigchainLink(
+          tx,
+          session.userPubkey,
+          {
+            seqNo: sigchainSeqNo,
+            linkType: 'recovery-device-add',
+            payload: sigchainPayload,
+            signature,
+            prevHash,
+            hash,
+            signerDeviceId,
+            signerPubkey: session.newDevicePubkey,
+            timestamp,
+          },
+          { verifySignatureAgainst: session.newDevicePubkey },
         )
-      }
-      if (prevHash !== expectedPrevHash) {
-        throw new RecoveryGroupError(
-          'sigchain prevHash mismatch: does not match current chain head',
-          409,
-        )
-      }
-
-      const recomputedHash = computeEntryHash(
-        sigchainSeqNo,
-        prevHash === '' ? null : prevHash,
-        timestamp,
-        signerDeviceId,
-        session.newDevicePubkey,
-        sigchainPayload,
-      )
-      if (recomputedHash !== hash.toLowerCase()) {
-        throw new RecoveryGroupError(
-          'sigchain hash mismatch: recomputed hash does not match claimed hash',
-          400,
-        )
-      }
-
-      const [inserted] = await tx
-        .insert(sigchainLinks)
-        .values({
-          userPubkey: session.userPubkey,
-          seqNo: sigchainSeqNo,
-          linkType: 'recovery-device-add',
-          payload: sigchainPayload,
-          signature,
-          prevHash,
-          hash,
-          signerDeviceId,
-          signerPubkey: session.newDevicePubkey,
-          linkTimestamp: timestamp,
-        })
-        .returning()
-
-      insertedLink = {
-        id: inserted.id,
-        userPubkey: inserted.userPubkey,
-        seqNo: inserted.seqNo,
-        linkType: inserted.linkType,
-        payload: inserted.payload,
-        signature: inserted.signature,
-        prevHash: inserted.prevHash,
-        hash: inserted.hash,
-        signerDeviceId: inserted.signerDeviceId,
-        signerPubkey: inserted.signerPubkey,
-        createdAt: inserted.createdAt.toISOString(),
+      } catch (e) {
+        if (e instanceof CryptoKeyError) {
+          throw new RecoveryGroupError(e.message, e.status)
+        }
+        throw e
       }
 
       await tx
