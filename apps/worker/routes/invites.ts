@@ -100,9 +100,23 @@ invites.post('/redeem',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Verify Ed25519 auth token signature
+    // Verify Ed25519 auth token signature.
+    //
+    // `redeemInviteBodySchema` has no `nonce` field, so the redeemer signs the
+    // nonce-less message shape — a distinct domain-separation label
+    // (`LABEL_DEVICE_AUTH_NO_NONCE`), which is what makes this token useless
+    // against any other endpoint. It is also the only route that opts into the
+    // nonce-less domain; everywhere else a missing nonce is a hard rejection.
+    //
+    // Replay of the redemption itself is tracked separately in #1367 and
+    // bounded by `redeemInvite` consuming the invite code atomically.
     const inviteUrl = new URL(c.req.url)
-    const isValid = await verifyAuthToken({ pubkey: body.pubkey, timestamp: body.timestamp, token: body.token }, c.req.method, inviteUrl.pathname)
+    const isValid = await verifyAuthToken(
+      { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token },
+      c.req.method,
+      inviteUrl.pathname,
+      { allowMissingNonce: true },
+    )
     if (!isValid) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
