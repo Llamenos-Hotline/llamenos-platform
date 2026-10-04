@@ -15,7 +15,7 @@ final class ReportsViewModel {
     // MARK: - Public State
 
     /// Reports from the server.
-    var reports: [ClientReportResponse] = []
+    var reports: [SharedConversation] = []
 
     /// Available report categories from the server.
     var categories: [String] = []
@@ -54,7 +54,7 @@ final class ReportsViewModel {
     var totalCount: Int = 0
 
     /// Reports filtered by the selected status filter and optional type filter.
-    var filteredReports: [ClientReportResponse] {
+    var filteredReports: [SharedConversation] {
         var result = reports
         if selectedFilter != .all {
             result = result.filter { $0.status == selectedFilter.rawValue }
@@ -185,7 +185,7 @@ final class ReportsViewModel {
                     }
             )
 
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
                 body: request
@@ -253,7 +253,7 @@ final class ReportsViewModel {
             let plainEncoder = JSONEncoder()
             let rawBody = try plainEncoder.encode(body)
 
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
                 rawBody: rawBody
@@ -284,7 +284,7 @@ final class ReportsViewModel {
 
         do {
             let request = ReportAssignRequest(assignTo: signingPubkey)
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports/\(id)/assign"),
                 body: request
@@ -308,7 +308,7 @@ final class ReportsViewModel {
 
         do {
             let request = ReportUpdateRequest(status: "closed")
-            let _: ClientReportResponse = try await apiService.request(
+            let _: SharedConversation = try await apiService.request(
                 method: "PATCH",
                 path: apiService.hp("/api/reports/\(id)"),
                 body: request
@@ -329,12 +329,12 @@ final class ReportsViewModel {
 
     private func fetchReports() async {
         do {
-            let response: ReportsListResponse = try await apiService.request(
+            let response: ReportListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/reports") + "?limit=50"
             )
             reports = response.conversations
-            totalCount = response.total
+            totalCount = Int(response.total)
         } catch {
             if case APIError.noBaseURL = error {
                 // Hub not configured — show empty state, no error
