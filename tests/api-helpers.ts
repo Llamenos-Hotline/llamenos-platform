@@ -15,7 +15,8 @@
 import { type APIRequestContext } from '@playwright/test'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import {
   generateContentKey,
   encryptContent,
@@ -39,23 +40,6 @@ export function seedHexToPubkey(seedHex: string): string {
 }
 
 /**
- * Build the canonical auth message bytes.
- * Format: `{LABEL_DEVICE_AUTH}:{pubkey_hex}:{timestamp_ms}:{METHOD}:{path}`
- * MUST match apps/worker/lib/auth.ts::buildAuthMessage()
- */
-function buildAuthMessage(pubkey: string, timestamp: number, method: string, path: string, nonce?: string): Uint8Array {
-  const base = `${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:${method}:${path}`
-  return utf8ToBytes(nonce ? `${base}:${nonce}` : base)
-}
-
-/** Generate a random 16-byte hex nonce for auth replay prevention */
-function randomNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  return bytesToHex(bytes)
-}
-
-/**
  * Create an Ed25519 auth token for API calls.
  * Matches the format expected by apps/worker/lib/auth.ts.
  * Includes a random nonce to prevent replay collisions in parallel test workers.
@@ -67,7 +51,7 @@ function createEd25519AuthToken(
 ): { pubkey: string; timestamp: number; token: string; nonce: string } {
   const pubkey = seedHexToPubkey(seedHex)
   const timestamp = Date.now()
-  const nonce = randomNonce()
+  const nonce = randomAuthNonce()
   const message = buildAuthMessage(pubkey, timestamp, method, path, nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }

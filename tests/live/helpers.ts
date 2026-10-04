@@ -5,7 +5,8 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { buildAuthMessage } from '@shared/auth-message'
 import { TestIds } from '../test-ids'
 import { apiGet, apiPatch } from '../api-helpers'
 import { generateContentKey, wrapKeyForRecipient, unwrapKey } from '../crypto-helpers'
@@ -431,9 +432,9 @@ export async function validateInvite(
  *
  * POST /api/invites/redeem is a PUBLIC route that carries its own Ed25519
  * proof in the BODY (code/pubkey/timestamp/token), not in an Authorization
- * header, and the signed message has no nonce segment. `apiPost` cannot
- * produce it, so the token is built here from LABEL_DEVICE_AUTH exactly as
- * `buildAuthMessage` (apps/worker/lib/auth.ts) does — never from a literal.
+ * header, and its schema has no nonce field. `apiPost` cannot produce it, so
+ * the token is built here with the canonical shared builder, which selects the
+ * nonce-less domain-separation label — never from a literal.
  */
 export async function redeemInvite(
   request: APIRequestContext,
@@ -444,7 +445,7 @@ export async function redeemInvite(
   const pubkey = bytesToHex(ed25519.getPublicKey(seedBytes))
   const timestamp = Date.now()
   const path = '/api/invites/redeem'
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:${path}`)
+  const message = buildAuthMessage(pubkey, timestamp, 'POST', path)
   const token = bytesToHex(ed25519.sign(message, seedBytes))
 
   return pacedStrict('POST /api/invites/redeem', async () => {
