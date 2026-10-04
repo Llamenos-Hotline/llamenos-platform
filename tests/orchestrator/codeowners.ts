@@ -48,12 +48,16 @@ export function codeownersPatterns(repoRoot: string = process.cwd()): string[] {
  * silently found nothing would turn every coverage assertion below into a
  * vacuous pass, which is the precise failure mode these tests exist to
  * prevent.
+ *
+ * `-z`, because without it git C-quotes any path holding a non-ASCII byte:
+ * the caller gets `"caf\303\251.ts"`, which matches no pattern and names no
+ * file on disk, so the path drops out of every check without an error.
  */
 export function trackedFiles(repoRoot: string = process.cwd()): string[] {
   let files: string[]
   try {
-    files = execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-      .split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
+    files = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\0').filter((l) => l.length > 0)
   } catch {
     files = walk(repoRoot, '')
   }

@@ -28,6 +28,7 @@ import {
   simulateIncomingMessage,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -72,9 +73,7 @@ When('the admin creates a shift including the volunteer', async ({ request, worl
   const hubId = getScenarioState(world).hubId
   const shift = await createShiftViaApi(request, {
     name: uniqueName('XDO Shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [getCrossDoState(world).volunteerPubkey!],
     hubId,
   })
@@ -266,8 +265,9 @@ Then('the conversation should be reopened', async ({ request, world }) => {
 
 // ─── Invite → Registration → Call Handling ──────────────────────────
 
-When('an admin creates an invite', async ({ request, world }) => {
+When('an admin creates an invite', async ({ request, world, workerHub }) => {
   const { data } = await apiPost<{ code?: string; invite?: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: uniqueName('XDO Invitee'),
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -291,9 +291,7 @@ When('the admin creates a shift with the new volunteer', async ({ request, world
   const hubId = getScenarioState(world).hubId
   const shift = await createShiftViaApi(request, {
     name: uniqueName('XDO New Vol Shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [getCrossDoState(world).newVolunteerPubkey!],
     hubId,
   })

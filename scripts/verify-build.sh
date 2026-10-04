@@ -43,7 +43,7 @@ EOF
 fi
 
 VERSION="${1:-}"
-REPO="rhonda-rodododo/llamenos-platform"
+REPO="Llamenos-Hotline/llamenos-platform"
 COSIGN_AVAILABLE=false
 
 echo "=== Llamenos Build Verification ==="
@@ -91,7 +91,7 @@ METADATA_PATTERNS=(
   "build-info.json"
 )
 
-RELEASES_REPO="rhonda-rodododo/llamenos-releases"
+RELEASES_REPO="Llamenos-Hotline/llamenos-releases"
 VERSION_NO_V="${VERSION#v}"
 
 for pat in "${METADATA_PATTERNS[@]}"; do

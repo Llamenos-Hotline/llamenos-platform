@@ -8,7 +8,7 @@ struct NotesView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: NotesViewModel?
+    @State private var viewModelBox = ViewModelBox<NotesViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -180,13 +180,11 @@ struct NotesView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: NotesViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = NotesViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

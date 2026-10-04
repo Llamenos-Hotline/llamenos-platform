@@ -22,6 +22,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   set +a
 fi
 
+source "$PROJECT_DIR/scripts/lib/worktree-db.sh"
+
 COMPOSE="docker compose --project-directory $PROJECT_DIR -f $COMPOSE_FILE"
 
 GREEN='\033[0;32m'
@@ -53,12 +55,27 @@ cmd_start() {
 
   # Set environment variables for local development
   export PLATFORM=bun
-  export PORT=3000
-  export DATABASE_URL="${DATABASE_URL:-postgresql://llamenos:${PG_PASSWORD:-dev}@localhost:5432/llamenos}"
-  export PG_POOL_SIZE=5
+  # Overridable so worktrees can each run a server against their own database
+  # (then point the tests at it: TEST_HUB_URL and TEST_RELAY_URL).
+  export PORT="${PORT:-3000}"
+  # This worktree's own database (created / migrated here if needed), or an
+  # explicit DATABASE_URL. scripts/test-backend-bdd.sh resolves it through the
+  # same function, so the server and TestDB cannot end up on different databases.
+  worktree_db_export --ensure
+  # 10 = the app's own default (apps/worker/db/index.ts) and production's.
+  # Not CI's 40: CI's Postgres serves one server, while this one serves every
+  # worktree's server within max_connections=100. 5 wedged full BDD runs (#1264).
+  export PG_POOL_SIZE="${PG_POOL_SIZE:-10}"
   # ADMIN_PUBKEY: use .env value if set (skips setup wizard); otherwise leave unset
   # so the admin bootstrap / setup wizard is exercisable in dev.
   [ -n "${ADMIN_PUBKEY:-}" ] && export ADMIN_PUBKEY
+  # Required whenever ADMIN_PUBKEY is set: the server refuses to boot rather than
+  # seal admin envelopes to the Ed25519 signing key, which succeeds and makes every
+  # note permanently undecryptable (#1283). Defaults to the X25519 key derived from
+  # the committed test seed so a .env carrying only the test ADMIN_PUBKEY still boots.
+  if [ -n "${ADMIN_PUBKEY:-}" ]; then
+    export ADMIN_DECRYPTION_PUBKEY="${ADMIN_DECRYPTION_PUBKEY:-27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177}"
+  fi
   export HOTLINE_NAME="${HOTLINE_NAME:-Llámenos (Dev)}"
   # ENVIRONMENT is required unconditionally by apps/worker/lib/config.ts and gates the
   # dev-only test-reset/test-promote-admin routes the admin bootstrap flow relies on —

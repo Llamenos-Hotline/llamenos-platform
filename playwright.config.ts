@@ -12,6 +12,15 @@ const desktopStepDirs = [
   "security", "settings", "shifts",
 ];
 
+// Every BDD project fails generation when a scenario its tag filter selects has
+// a step with no definition (#1153). With the old "skip-scenario", an unbound
+// scenario was rendered as test.fixme and silently dropped, so coverage could
+// be deleted or never written and the run stayed green — 176 backend and 25
+// desktop scenarios were dropped that way. A scenario that is deliberately not
+// run yet must say so with @wip (or @fixme when a real defect blocks it) plus a
+// linked issue; `bun run test-specs:validate` rejects the tag without one.
+const MISSING_STEPS = "fail-on-gen";
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -70,8 +79,7 @@ export default defineConfig({
         ],
         featuresRoot: "packages/test-specs/features",
         tags: "@desktop and not @backend and not @wip and not @fixme and not @requires-camera and not @requires-live-calls and not @requires-demo",
-        // Backend-only scenarios have steps not defined in desktop — skip them
-        missingSteps: "skip-scenario",
+        missingSteps: MISSING_STEPS,
       }),
       use: { ...devices["Desktop Chrome"] },
       fullyParallel: true,
@@ -87,8 +95,7 @@ export default defineConfig({
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and not @wip and not @fixme and not @global-setting and not @demo-mode and not @signed-webhooks",
-        // Desktop/mobile-only scenarios have steps not defined in backend — skip them
-        missingSteps: "skip-scenario",
+        missingSteps: MISSING_STEPS,
       }),
       use: {
         baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
@@ -119,7 +126,7 @@ export default defineConfig({
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @global-setting and not @wip and not @fixme",
-        missingSteps: "skip-scenario",
+        missingSteps: MISSING_STEPS,
       }),
       use: {
         baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
@@ -140,7 +147,7 @@ export default defineConfig({
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @demo-mode and not @wip and not @fixme",
-        missingSteps: "skip-scenario",
+        missingSteps: MISSING_STEPS,
       }),
       use: {
         baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
@@ -162,7 +169,7 @@ export default defineConfig({
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
         tags: "@backend and @signed-webhooks and not @wip and not @fixme",
-        missingSteps: "skip-scenario",
+        missingSteps: MISSING_STEPS,
       }),
       use: {
         baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
 import {
@@ -15,9 +16,14 @@ import type { Services } from '@worker/services'
 
 const NO_AAD = new Uint8Array(0)
 
+/** Demo identities exist only on a development server — the one environment these tests model. */
+const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as const
+
+const seedHexToEd25519Pubkey = (seedHex: string): string => bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
+
 /** Open a sealed item the way a demo account's device would: derive its X25519 secret, open the key wrap, decrypt. */
 function openAs(name: string, encryptedContent: string, envelope: { enc: string; ct: string }, label: string): string {
-  const identity = demoIdentityByName(name)
+  const identity = demoIdentityByName(DEV_SERVER, name)
   const encSecret = hkdf(sha256, hexToBytes(identity.seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
   const wrapped = new Uint8Array([...hexToBytes(envelope.enc), ...Buffer.from(envelope.ct, 'base64url')])
   const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(label), NO_AAD)
@@ -93,16 +99,24 @@ describe('demo dataset content', () => {
 
 describe('demo identities', () => {
   it('derive one distinct signing pubkey per shared demo account, from the account seed', () => {
-    const identities = demoIdentities()
+    const identities = demoIdentities(DEV_SERVER)
     expect(identities).toHaveLength(DEMO_ACCOUNTS.length)
     expect(new Set(identities.map(i => i.pubkey)).size).toBe(identities.length)
-    for (const identity of identities) expect(identity.pubkey).toMatch(/^[0-9a-f]{64}$/)
+    for (const identity of identities) {
+      expect(identity.pubkey).toMatch(/^[0-9a-f]{64}$/)
+      expect(identity.pubkey).toBe(seedHexToEd25519Pubkey(identity.seedHex))
+    }
+    expect(identities.map(i => i.listedPubkey)).toEqual(DEMO_ACCOUNTS.map(a => a.pubkey))
+  })
+
+  it('are generated once per process and stay stable within it', () => {
+    expect(demoIdentities(DEV_SERVER)).toBe(demoIdentities(DEV_SERVER))
   })
 })
 
 describe('sealForReaders', () => {
   it('produces the desktop wire format and each reader can open it', () => {
-    const [maria, admin] = [demoReader(demoIdentityByName('Maria Santos')), demoReader(demoIdentityByName('Demo Admin'))]
+    const [maria, admin] = [demoReader(demoIdentityByName(DEV_SERVER, 'Maria Santos')), demoReader(demoIdentityByName(DEV_SERVER, 'Demo Admin'))]
     const sealed = sealForReaders('hello demo', [maria, admin], LABEL_NOTE_KEY)
 
     expect(sealed.encryptedContent).toMatch(/^[0-9a-f]+$/)
@@ -116,13 +130,13 @@ describe('sealForReaders', () => {
   })
 
   it('does not open under a different label (domain separation)', () => {
-    const admin = demoReader(demoIdentityByName('Demo Admin'))
+    const admin = demoReader(demoIdentityByName(DEV_SERVER, 'Demo Admin'))
     const sealed = sealForReaders('secret', [admin], LABEL_NOTE_KEY)
     expect(() => openAs('Demo Admin', sealed.encryptedContent, sealed.envelopes[0], LABEL_CALL_META)).toThrow()
   })
 
   it('seals to the X25519 key the client derives from the signing seed', () => {
-    const identity = demoIdentityByName('James Chen')
+    const identity = demoIdentityByName(DEV_SERVER, 'James Chen')
     expect(demoReader(identity).encryptionPubkey).toBe(deriveDemoEncryptionPubkey(identity.seedHex))
     expect(demoReader(identity).encryptionPubkey).not.toBe(identity.pubkey)
   })
@@ -134,7 +148,7 @@ describe('seedDemoDataset', () => {
     const track = <T>(name: string, value: T) => vi.fn(async (..._args: unknown[]) => { calls.push(name); return value })
     let n = 0
     const id = () => `id-${++n}`
-    const users = new Set(demoIdentities().map(i => i.pubkey))
+    const users = new Set(demoIdentities(DEV_SERVER).map(i => i.pubkey))
     const services = {
       settings: {
         ensureInit: track('settings.ensureInit', undefined),
@@ -147,7 +161,7 @@ describe('seedDemoDataset', () => {
       },
       identity: {
         getUserInternal: vi.fn(async (pubkey: string) => (users.has(pubkey) ? { pubkey } : null)),
-        ensureInit: track('identity.ensureInit', undefined),
+        ensureDemoAccounts: track('identity.ensureDemoAccounts', undefined),
         setHubRole: vi.fn(async () => ({})),
       },
       shifts: { create: vi.fn(async () => ({ id: id() })) },
@@ -168,7 +182,7 @@ describe('seedDemoDataset', () => {
     }
     return { services: services as unknown as Services, stubs: services, calls }
   }
-  const ENV = { ENVIRONMENT: 'development', HMAC_SECRET: 'a'.repeat(64) } // gitleaks:allow
+  const ENV = { ...DEV_SERVER, HMAC_SECRET: 'a'.repeat(64) } // gitleaks:allow
   const NOW = new Date('2026-09-26T12:00:00.000Z')
 
   it('replaces the previous demo hub before rebuilding it', async () => {
@@ -177,8 +191,8 @@ describe('seedDemoDataset', () => {
     expect(stubs.settings.purgeHub).toHaveBeenCalledWith(DEMO_HUB.id)
     expect(calls.indexOf('settings.purgeHub')).toBeLessThan(calls.indexOf('settings.createHub'))
     // accounts removed by the purge are restored before memberships are assigned
-    expect(calls.indexOf('identity.ensureInit')).toBeGreaterThan(calls.indexOf('settings.purgeHub'))
-    expect(calls.indexOf('identity.ensureInit')).toBeLessThan(calls.indexOf('settings.createHub'))
+    expect(calls.indexOf('identity.ensureDemoAccounts')).toBeGreaterThan(calls.indexOf('settings.purgeHub'))
+    expect(calls.indexOf('identity.ensureDemoAccounts')).toBeLessThan(calls.indexOf('settings.createHub'))
   })
 
   it('seeds the fixed counts, one conversation per enabled channel, and reports them', async () => {
@@ -212,7 +226,7 @@ describe('seedDemoDataset', () => {
       const text = JSON.stringify({ text: call.note })
       expect(openAs(names[call.answeredBy!], input.encryptedContent, input.authorEnvelope, LABEL_NOTE_KEY)).toBe(text)
       expect(input.adminEnvelopes).toHaveLength(1)
-      expect(input.adminEnvelopes[0].pubkey).toBe(demoIdentityByName('Demo Admin').pubkey)
+      expect(input.adminEnvelopes[0].pubkey).toBe(demoIdentityByName(DEV_SERVER, 'Demo Admin').pubkey)
       expect(openAs('Demo Admin', input.encryptedContent, input.adminEnvelopes[0], LABEL_NOTE_KEY)).toBe(text)
     })
   })

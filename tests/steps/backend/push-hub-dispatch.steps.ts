@@ -5,9 +5,11 @@
  * field that matches the hub that triggered the push.
  *
  * Strategy:
- * - In ENVIRONMENT=development with no APNs/FCM credentials, push-dispatch.ts
- *   uses LoggingPushDispatcher which records all WakePayload objects in a
- *   module-level in-memory log.
+ * - In ENVIRONMENT=development, push-dispatch.ts wraps whichever dispatcher it
+ *   selects in RecordingPushDispatcher, which records every dispatched
+ *   WakePayload in a module-level in-memory log before the transport is
+ *   attempted. The recording therefore does not depend on whether APNs/ntfy are
+ *   configured, nor on whether the configured broker is reachable.
  * - POST /api/dev/test-simulate/push-dispatch directly invokes the dispatcher
  *   so BDD tests can verify payload structure without a full telephony flow.
  * - GET /api/dev/test-push-log returns the recorded entries (X-Test-Secret auth).
@@ -104,8 +106,8 @@ async function fetchPushLog(
 
 /**
  * Directly invoke the push dispatcher via the dev simulation endpoint.
- * This exercises createPushDispatcherFromService in development mode,
- * which uses LoggingPushDispatcher (no real APNs/FCM) and records the payload.
+ * This exercises createPushDispatcherFromService in development mode, which
+ * records the payload regardless of which transport (if any) is configured.
  */
 async function simulatePushDispatch(
   request: import('@playwright/test').APIRequestContext,

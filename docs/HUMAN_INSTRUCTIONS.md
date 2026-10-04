@@ -66,7 +66,7 @@ Edit `apps/desktop/tauri.conf.json` and set the `plugins.updater.pubkey` field:
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ4...",
       "endpoints": [
-        "https://github.com/rhonda-rodododo/llamenos/releases/latest/download/latest.json"
+        "https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest/download/latest.json"
       ]
     }
   }
@@ -388,7 +388,7 @@ modules:
       - install -Dm755 src-tauri/target/release/hotline /app/bin/hotline
     sources:
       - type: git
-        url: https://github.com/rhonda-rodododo/llamenos.git
+        url: https://github.com/Llamenos-Hotline/llamenos-platform.git
         tag: v0.1.0  # Updated per release
 ```
 
@@ -458,8 +458,8 @@ AuthorName: Llamenos
 AuthorEmail: dev@llamenos.org
 AuthorWebSite: https://llamenos-platform.com
 WebSite: https://llamenos-platform.com
-SourceCode: https://github.com/rhonda-rodododo/llamenos-platform
-IssueTracker: https://github.com/rhonda-rodododo/llamenos-platform/issues
+SourceCode: https://github.com/Llamenos-Hotline/llamenos-platform
+IssueTracker: https://github.com/Llamenos-Hotline/llamenos-platform/issues
 
 AutoName: Hotline
 Description: |
@@ -468,7 +468,7 @@ Description: |
   lines where volunteer and caller identity protection is critical.
 
 RepoType: git
-Repo: https://github.com/rhonda-rodododo/llamenos-platform.git
+Repo: https://github.com/Llamenos-Hotline/llamenos-platform.git
 
 Builds:
   - versionName: 1.0.0
@@ -633,7 +633,7 @@ credentials are only required for the marketing site (`site/`) deployment via
 After setting secrets, verify they are visible to workflows:
 
 ```bash
-gh secret list --repo rhonda-rodododo/llamenos
+gh secret list --repo Llamenos-Hotline/llamenos-platform
 ```
 
 Expected output should include at minimum:
@@ -692,11 +692,18 @@ identifiers, and configuration values are consistent across the project.
       `packages/crypto/` in this monorepo. No external `llamenos-core` checkout
       is needed. `tauri-release.yml` builds from the monorepo directly.
 - [ ] **All GitHub Secrets from Section 7** are set and populated
-- [ ] **CSP `connect-src`** in `apps/desktop/tauri.conf.json` includes the
-      production API domain (currently: `https://app.llamenos-hotline.org`)
+- [ ] **CSP `connect-src`** in `apps/desktop/tauri.conf.json` is
+      `ipc: http://ipc.localhost` — it lists no remote origin, because the desktop
+      app reaches the API through the Rust side over Tauri IPC, not from the webview.
+      If a remote origin is ever added it must be the production API domain,
+      `https://api.<domain>` (`https://api.llamenos-hotline.org` for the reference
+      deployment). `app.<domain>` is **not** the API domain: nothing serves it — no DNS
+      record and no Caddy vhost (see `docs/deployment/first-deploy.md`). It survives only
+      as a default CORS origin in `apps/worker/middleware/cors.ts` and
+      `apps/worker/lib/redirect-guard.ts`.
 - [ ] **Update manifest script** (`scripts/generate-update-manifest.sh`) uses
       the correct repository name in `REPO` variable (currently:
-      `rhonda-rodododo/llamenos`)
+      `Llamenos-Hotline/llamenos-platform`)
 - [ ] **Helm chart `sources`** in `deploy/helm/llamenos/Chart.yaml` points to
       the actual GitHub repository (currently: `https://github.com/your-org/llamenos`
       -- needs updating)

@@ -79,6 +79,11 @@ docker compose \
 log "All services healthy."
 
 if [[ "${RUN_TESTS}" == "true" ]]; then
+  # The server under test here is the containerised app, which always uses the
+  # shared `llamenos` database — point TestDB at that, not at this worktree's own.
+    source "${SCRIPT_DIR}/lib/worktree-db.sh"
+  worktree_db_export --shared
+
   log "Running backend BDD tests..."
   bun run test:backend:bdd ${BDD_TAGS:+--tags "${BDD_TAGS}"}
 

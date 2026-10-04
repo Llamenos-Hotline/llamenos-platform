@@ -31,7 +31,7 @@ class AnalyticsScreenSteps : BaseSteps() {
 
     @Then("the calls today stat card should be visible")
     fun theCallsTodayStatCardShouldBeVisible() {
-        val found = assertAnyTagDisplayed("stat-calls-today", "dashboard-title")
+        assertAnyTagDisplayed("stat-calls-today", "dashboard-title")
     }
 
     // ── Admin analytics screen ────────────────────────────────────────
@@ -48,7 +48,7 @@ class AnalyticsScreenSteps : BaseSteps() {
 
     @Then("I should see the analytics screen")
     fun iShouldSeeTheAnalyticsScreen() {
-        val found = assertAnyTagDisplayed("analytics-screen", "analytics-title")
+        assertAnyTagDisplayed("analytics-screen", "analytics-title")
     }
 
     @Then("I should see the KPI row")

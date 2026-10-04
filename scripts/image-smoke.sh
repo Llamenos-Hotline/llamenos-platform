@@ -86,24 +86,64 @@ native_smoke() {
     -e DATABASE_URL="postgresql://llamenos:${PG_PASSWORD}@${pg}:5432/llamenos" \
     "$IMAGE" >/dev/null
 
-  local deadline=$(( $(date +%s) + SMOKE_TIMEOUT_SEC )) started=0
+  local deadline=$(( $(date +%s) + SMOKE_TIMEOUT_SEC )) started=0 stopped=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
-    if [ "$(docker inspect -f '{{.State.Running}}' "$app")" != "true" ]; then break; fi
+    if [ "$(docker inspect -f '{{.State.Running}}' "$app")" != "true" ]; then
+      # The container is EXPECTED to exit here: it is started with only
+      # DATABASE_URL, so validateConfig() throws on HMAC_SECRET milliseconds
+      # after the entrypoint prints "Starting application". That left a race —
+      # if it printed the line and died in the gap between the grep above and
+      # this check, the loop concluded "never started" while the very logs it
+      # then dumped contained the line. Observed on at least four unrelated
+      # branches. A stopped container still has logs, so re-read them before
+      # concluding; exiting is not by itself a failure.
+      # `.State.Running` flips false before the log driver has necessarily
+      # flushed the container's last lines — on the CPUID-masked guest (1 vCPU,
+      # emulated) that lag is visible, and reading immediately here saw an
+      # incomplete log while the post-loop dump showed the marker. Wait for the
+      # container to be fully reaped, then re-read with a bounded retry.
+      # The 5x1s window this replaces was still too short: on 2026-09-27
+      # (run 36356918832, PR #1252) the FAIL line was logged 3ms BEFORE the
+      # post-loop dump that contained the very marker it said was missing,
+      # and 9 of the last 30 Image Smoke runs failed exactly this way — a
+      # 30% false-failure rate on a check that gates every Dockerfile change.
+      # Flush lag is seconds, not minutes, so poll for up to 60s (and never
+      # past the job's own deadline). A genuine never-started container now
+      # costs that extra minute; a flushed-late one costs nothing, and the
+      # old window was turning the common case into a red check.
+      docker wait "$app" >/dev/null 2>&1 || true
+      local flush_deadline=$(( $(date +%s) + 60 ))
+      # `if`, not `[ ... ] && ...`: under `set -euo pipefail` (line 23) a bare
+      # && list whose test is false returns 1 and aborts the whole script.
+      if [ "$flush_deadline" -gt "$deadline" ]; then flush_deadline="$deadline"; fi
+      while [ "$(date +%s)" -le "$flush_deadline" ]; do
+        if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
+        sleep 1
+      done
+      stopped=1
+      break
+    fi
     sleep 2
   done
 
   local logs
   logs="$(docker logs "$app" 2>&1 || true)"
-  echo "$logs" | grep -E '^\[(entrypoint|verify-runtime)\]|All migrations applied|FAILED' | sed 's/^/[image-smoke]   app: /' || true
+  echo "$logs" | grep -E '^\[(entrypoint|verify-runtime|migrate)\]|All migrations applied|FAILED' | sed 's/^/[image-smoke]   app: /' || true
   if [ "$started" != 1 ]; then
-    log "FAIL: the entrypoint did not reach 'Starting application' within ${SMOKE_TIMEOUT_SEC}s (running=$(docker inspect -f '{{.State.Running}}' "$app"))"
+    if [ "$stopped" = 1 ]; then
+      log "FAIL: the container exited before the entrypoint reached 'Starting application' (exit=$(docker inspect -f '{{.State.ExitCode}}' "$app"))"
+    else
+      log "FAIL: the entrypoint did not reach 'Starting application' within ${SMOKE_TIMEOUT_SEC}s (still running)"
+    fi
     echo "$logs" | tail -30 | sed 's/^/[image-smoke]   app: /'
     docker logs "$pg" 2>&1 | grep -E 'FATAL|DETAIL' | sed 's/^.* UTC \[[0-9]*\] //' | sort | uniq -c | sort -rn | head -6 \
       | sed 's/^/[image-smoke]   postgres: /' || true
     return 1
   fi
   echo "$logs" | grep -q '^\[verify-runtime\] text layer OK' || { log "FAIL: verify-runtime did not report OK"; return 1; }
+  # Paired with the CONTRACT comment in scripts/run-migrations.ts, which
+  # prints this as its final line on success.
   echo "$logs" | grep -q 'All migrations applied successfully' || { log "FAIL: migrations did not report success"; return 1; }
 
   local tables

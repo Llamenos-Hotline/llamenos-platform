@@ -144,6 +144,25 @@ describe('classifyReviewFailure', () => {
     expect(classifyReviewFailure([{ name: 'Checkout the PR BASE (trusted)', conclusion: 'failure' }])).toBe('infrastructure')
   })
 
+  // #1158: the gate step FAILS on three DECIDED outcomes — a cached
+  // substantive FAIL for this diff, a review nobody requested of
+  // llamenos-auto, and an unresolvable review set. None of them changes on
+  // a retry, so classifying them as infrastructure produced exactly the
+  // RERUN_REVIEW churn this issue exists to stop.
+  it('is substantive when the GATE step failed — its outcomes are decisions, not flakes', () => {
+    expect(classifyReviewFailure([
+      { name: 'Checkout the PR BASE (trusted)', conclusion: 'success' },
+      { name: 'Decide whether to run the review engine', conclusion: 'failure' },
+    ])).toBe('substantive')
+  })
+
+  it('is still infrastructure when the gate SUCCEEDED and the engine smoke test broke', () => {
+    expect(classifyReviewFailure([
+      { name: 'Decide whether to run the review engine', conclusion: 'success' },
+      { name: 'Smoke-test the review engine', conclusion: 'failure' },
+    ])).toBe('infrastructure')
+  })
+
   // Mutation rail (mandatory, per the brief): treating every review failure
   // as infrastructure must be distinguishable from the real function — this
   // pins the one input where they disagree.
@@ -228,9 +247,9 @@ describe('classifyPr — fleet/review tree', () => {
     expect(classify(pr({ checks: [...cheapPassChecks(), reviewCheck({ state: 'PENDING' })] })).action).toBe('WAITING')
   })
 
-  it('STALE_LABEL when the "review" label is present but there is no verdict on this head', () => {
+  it('the retired "review" label no longer makes a PR STALE_LABEL — nothing fires on it (#1158)', () => {
     const result = classify(pr({ labels: ['review'], checks: cheapPassChecks() }))
-    expect(result.action).toBe('STALE_LABEL')
+    expect(result.action).toBe('LABEL_FOR_REVIEW_CANDIDATE')
   })
 
   it('RERUN_REVIEW for an infrastructure failure not yet retried', () => {
@@ -714,5 +733,44 @@ describe('CODEOWNERS parsing and matching', () => {
       checks: [...cheapPassChecks(), reviewCheck()],
     }), gate)
     expect(result.action).toBe('REVIEW_BLOCKED')
+  })
+})
+
+// #1158 — there is no separate `fleet/review/<agent>` check any more: every
+// reviewer a PR needs runs inside the one `fleet/review` job, so a profile's
+// FAIL is already that check's FAIL and the board has nothing extra to bind.
+// What the board still reads from labels is the WORKLIST: a `-reviewer`
+// label survives only until its review has passed, so one still sitting on a
+// PR with no verdict on the current head means the review has not run here.
+// Every case below has every REQUIRED context green and a non-bot author
+// touching no owned path — i.e. would be MERGE without them.
+describe('classifyPr: reviewer labels are the worklist, not a second check (#1158)', () => {
+  const green = (extra: PrCheckContext[] = [], labels: string[] = []): PrFact =>
+    pr({ labels, checks: [...cheapPassChecks(), reviewCheck(), ...extra] })
+
+  it('baseline: with no reviewer label at all the PR is MERGE', () => {
+    expect(classify(green()).action).toBe('MERGE')
+  })
+
+  it('a reviewer label that SURVIVED a passing review still merges — the verdict is on the head', () => {
+    // The clear-labels job is best-effort: a label it could not remove must
+    // never turn a green, fully-reviewed PR into a blocker.
+    expect(classify(green([], ['crypto-security-reviewer'])).action).toBe('MERGE')
+  })
+
+  it('a reviewer label with NO fleet/review verdict on this head is STALE_LABEL, naming the label', () => {
+    const c = classify(pr({ labels: ['crypto-security-reviewer'], checks: cheapPassChecks() }))
+    expect(c.action).toBe('STALE_LABEL')
+    expect(c.reason).toContain('crypto-security-reviewer')
+    expect(c.reason).toContain('re-request a review')
+  })
+
+  it('a stale `fleet/review/<agent>` check from the retired design never blocks anything', () => {
+    expect(classify(green([ctx('fleet/review/crypto-security-reviewer', 'FAIL')])).action).toBe('MERGE')
+  })
+
+  it('an ordinary label is not a reviewer request and never makes a PR STALE_LABEL', () => {
+    expect(classify(pr({ labels: ['lane:infra', 'crypto'], checks: cheapPassChecks() })).action)
+      .toBe('LABEL_FOR_REVIEW_CANDIDATE')
   })
 })

@@ -9,11 +9,10 @@ import {
   apiPost,
   createUserViaApi,
   generateTestKeypair,
+  redeemInviteViaApi,
   ADMIN_SEED,
 } from '../../api-helpers'
-import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { bytesToHex } from '@shared/encoding'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -52,20 +51,12 @@ Before(async ({ world }) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function createRedeemAuth(seedHex: string): { pubkey: string; timestamp: number; token: string } {
-  const seedBytes = hexToBytes(seedHex)
-  const pubkey = bytesToHex(ed25519.getPublicKey(seedBytes))
-  const timestamp = Date.now()
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:/api/invites/redeem`)
-  const sig = ed25519.sign(message, seedBytes)
-  return { pubkey, timestamp, token: bytesToHex(sig) }
-}
-
 // ── RACE-01: Concurrent invite redemption ────────────────────────────
 
-Given('an admin creates an invite code for race testing', async ({ request, world }) => {
+Given('an admin creates an invite code for race testing', async ({ request, world, workerHub }) => {
   const s = getS(world)
   const res = await apiPost<{ invite: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: `Race Test ${Date.now()}`,
     phone: `+1555${Date.now().toString().slice(-7)}`,
     roleIds: ['role-volunteer'],
@@ -78,28 +69,28 @@ When('two users simultaneously redeem the same invite code', async ({ request, w
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
 
+  // Two users, so two distinct clients: redeemInviteViaApi gives each its own
+  // simulated address. Sending both from one address would put them in the
+  // same per-client rate-limit bucket, where the control under test is the
+  // 5/min limiter rather than the single-use claim (#1480).
   const kp1 = generateTestKeypair()
   const kp2 = generateTestKeypair()
-  const auth1 = createRedeemAuth(kp1.seedHex)
-  const auth2 = createRedeemAuth(kp2.seedHex)
 
-  const redeem = (auth: { pubkey: string; timestamp: number; token: string }) =>
-    request.post(`${BASE_URL}/api/invites/redeem`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { code: s.inviteCode, ...auth },
-    }).then(async (res) => ({
-      status: res.status(),
-      data: await res.json().catch(() => null),
-    }))
-
-  s.redeemResults = await Promise.all([redeem(auth1), redeem(auth2)])
+  s.redeemResults = await Promise.all([
+    redeemInviteViaApi(request, s.inviteCode!, kp1.seedHex),
+    redeemInviteViaApi(request, s.inviteCode!, kp2.seedHex),
+  ])
 })
 
 Then('exactly one redemption succeeds', async ({ world }) => {
   const s = getS(world)
   expect(s.redeemResults).toBeDefined()
+  // The statuses are in the message because the bare length told us nothing:
+  // "expected 1, received 0" looked like a broken single-use claim when both
+  // redemptions had in fact been rate limited (#1480).
+  const statuses = s.redeemResults!.map(r => r.status)
   const successes = s.redeemResults!.filter(r => r.status === 200)
-  expect(successes).toHaveLength(1)
+  expect(successes, `redemption statuses: ${statuses.join(', ')}`).toHaveLength(1)
 })
 
 Then('one redemption returns an error', async ({ world }) => {
@@ -107,7 +98,9 @@ Then('one redemption returns an error', async ({ world }) => {
   expect(s.redeemResults).toBeDefined()
   const failures = s.redeemResults!.filter(r => r.status !== 200)
   expect(failures).toHaveLength(1)
+  // A clean client error, not a 500 from an unhandled unique-key violation.
   expect(failures[0].status).toBeGreaterThanOrEqual(400)
+  expect(failures[0].status).toBeLessThan(500)
 })
 
 // ── RACE-02: Concurrent MLS message fetch ────────────────────────────

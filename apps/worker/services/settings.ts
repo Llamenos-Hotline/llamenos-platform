@@ -94,6 +94,7 @@ import type {
 import { IVR_LANGUAGES, LANGUAGE_CODES } from '@shared/languages'
 import type { IvrVoiceCatalog } from '../telephony/ivr-menu'
 import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
+import { speechLanguageFor } from './ivr-speech/voices'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
@@ -115,6 +116,17 @@ const log = createLogger('services.settings')
 // ---------------------------------------------------------------------------
 
 /** Thrown by service methods for known error conditions */
+/**
+ * Outcome of resolving the IVR voice catalog for a hub. Three distinct states:
+ * nothing configured yet (no constraint can be applied), a catalog resolved
+ * (constraint applies), or a provider configured whose catalog we do not hold
+ * (speakability unknown — must be refused, never silently permitted).
+ */
+type IvrCatalogResolution =
+  | { state: 'unconfigured' }
+  | { state: 'resolved'; catalog: IvrVoiceCatalog<unknown> }
+  | { state: 'unsupported'; providerType: string }
+
 export class ServiceError extends Error {
   constructor(
     public readonly status: number,
@@ -142,6 +154,18 @@ const DEFAULT_SPAM_SETTINGS: SpamSettings = {
 const DEFAULT_CALL_SETTINGS: CallSettings = {
   queueTimeoutSeconds: 90,
   voicemailMaxSeconds: 120,
+}
+
+/**
+ * On a self-hosted PBX every prompt nobody uploaded is generated speech
+ * (IvrSpeechService), so a language with no offline voice is not just absent
+ * from the menu: its callers are spoken to in another language. Say which, and
+ * how to fix it, where the operator hits the limit.
+ */
+function generatedSpeechGap(provider: string, unspeakable: string[]): string {
+  if (provider !== 'asterisk' && provider !== 'freeswitch') return ''
+  const heard = unspeakable.map((code) => `${code} → ${speechLanguageFor(code)}`).join(', ')
+  return `. No offline voice exists for them: callers in these languages hear prompts in another language (${heard}) unless you upload recordings in their language.`
 }
 
 const VALID_PROMPT_TYPES = [
@@ -234,8 +258,20 @@ export function invalidateRolesCache(): void {
 // SettingsService
 // ---------------------------------------------------------------------------
 
+/**
+ * What an `ensureInit` call seeds: the defaults every deployment needs, plus —
+ * in demo or development mode — a completed setup state and enabled messaging.
+ */
+type InitMode = 'default' | 'development' | 'demo'
+
 export class SettingsService {
-  private initialized = false
+  /**
+   * Modes already initialised by this process (cleared by `reset`). Tracked per
+   * mode, not as one flag: the server initialises defaults at boot, and a later
+   * demo/development call must still apply its mode-specific seeding rather than
+   * being swallowed as a repeat.
+   */
+  private initializedModes = new Set<InitMode>()
 
   constructor(protected db: Database) {}
 
@@ -243,12 +279,19 @@ export class SettingsService {
   // Initialization — seeds defaults for empty tables
   // =========================================================================
 
+  /**
+   * Seed defaults into empty settings fields and an empty roles table. Only
+   * ever fills what is empty, so it is safe on every server boot: values an
+   * operator has set, and roles that exist, are never overwritten.
+   */
   async ensureInit(env?: {
     DEMO_MODE?: string
     ENVIRONMENT?: string
   }): Promise<void> {
-    if (this.initialized) return
-    this.initialized = true
+    const mode: InitMode =
+      env?.DEMO_MODE === 'true' ? 'demo' : env?.ENVIRONMENT === 'development' ? 'development' : 'default'
+    if (this.initializedModes.has(mode)) return
+    this.initializedModes.add(mode)
 
     const row = await getSettings(this.db)
     const spamSettings = row.spamSettings as SpamSettings | null
@@ -282,7 +325,8 @@ export class SettingsService {
         .where(eq(systemSettings.id, SINGLETON_ID))
     }
 
-    // Seed default roles if none exist
+    // Seed default roles if none exist. ON CONFLICT DO NOTHING: replicas booting
+    // together against a fresh database can both see an empty table.
     const existingRoles = await this.db.select().from(rolesTable)
     if (existingRoles.length === 0) {
       const now = new Date()
@@ -297,13 +341,13 @@ export class SettingsService {
           description: r.description,
           createdAt: now,
           updatedAt: now,
-        })
+        }).onConflictDoNothing()
       }
     }
 
     // Demo/development mode: mark setup complete, enable messaging
-    if (env?.DEMO_MODE === 'true' || env?.ENVIRONMENT === 'development') {
-      const isDemoMode = env.DEMO_MODE === 'true'
+    if (mode !== 'default') {
+      const isDemoMode = mode === 'demo'
       const setupState = row.setupState as SetupState | null
       if (!setupState || !setupState.setupCompleted) {
         await this.db
@@ -495,23 +539,28 @@ export class SettingsService {
   }
 
   /**
-   * Resolve the IVR voice catalog for whichever provider will actually
-   * answer this hub's calls — hub-specific config first, then the global
-   * fallback (mirrors `getHubTelephonyFromService`'s resolution order in
-   * lib/service-factories.ts). `undefined` means "no provider configured
-   * yet to check against", not "nothing is speakable" — callers must not
-   * reject on `undefined`.
+   * Resolve the IVR voice catalog for whichever provider will actually answer
+   * this hub's calls — hub-specific config first, then the global fallback
+   * (mirrors `getHubTelephonyFromService`'s resolution order in
+   * lib/service-factories.ts).
+   *
+   * The three outcomes are kept distinct on purpose. The previous version
+   * returned a bare `IvrVoiceCatalog | undefined` behind a blanket
+   * `catch { return undefined }`, which collapsed "no provider configured yet"
+   * (legitimately permissive) together with "a provider IS configured but we
+   * could not read it" and "the lookup threw" (both of which must never be
+   * permissive). That conflation is what silently disabled a security-relevant
+   * constraint. There is deliberately no try/catch here: a failed read is a
+   * real failure and must surface, not be downgraded into "unconstrained".
    */
-  private async getEffectiveIvrVoiceCatalog(
-    hubId?: string,
-  ): Promise<IvrVoiceCatalog<unknown> | undefined> {
-    try {
-      const hubConfig = hubId ? await this.getHubTelephonyProvider(hubId) : null
-      const config = hubConfig ?? (await this.getTelephonyProvider())
-      return getIvrVoiceCatalogForProvider(config?.type)
-    } catch {
-      return undefined
-    }
+  private async resolveIvrVoiceCatalog(hubId?: string): Promise<IvrCatalogResolution> {
+    const hubConfig = hubId ? await this.getHubTelephonyProvider(hubId) : null
+    const config = hubConfig ?? (await this.getTelephonyProvider())
+    const providerType = config?.type
+    if (!providerType) return { state: 'unconfigured' }
+    const catalog = getIvrVoiceCatalogForProvider(providerType)
+    if (!catalog) return { state: 'unsupported', providerType }
+    return { state: 'resolved', catalog }
   }
 
   async updateIvrLanguages(data: {
@@ -535,13 +584,23 @@ export class SettingsService {
     // Constrain to what the active provider can actually speak (#732) —
     // reuses the catalog resolution built for #679 / PR #673 rather than
     // duplicating "which locales does this provider have a voice for".
-    const catalog = await this.getEffectiveIvrVoiceCatalog(hubId)
-    if (catalog) {
-      const unspeakable = valid.filter((code) => !catalog.speaks(code))
+    const resolution = await this.resolveIvrVoiceCatalog(hubId)
+    if (resolution.state === 'unsupported') {
+      // A provider is configured but we hold no voice catalog for it, so
+      // speakability is unknown. Refuse rather than fall through to the
+      // permissive branch reserved for "nothing configured yet".
+      throw new ServiceError(
+        400,
+        `No IVR voice catalog for the configured telephony provider (${resolution.providerType}) — cannot verify that it can speak the requested languages`,
+      )
+    }
+    if (resolution.state === 'resolved') {
+      const unspeakable = valid.filter((code) => !resolution.catalog.speaks(code))
       if (unspeakable.length > 0) {
         throw new ServiceError(
           400,
-          `The active telephony provider (${catalog.provider}) cannot speak: ${unspeakable.join(', ')}`,
+          `The active telephony provider (${resolution.catalog.provider}) cannot speak: ${unspeakable.join(', ')}` +
+            generatedSpeechGap(resolution.catalog.provider, unspeakable),
         )
       }
     }
@@ -609,27 +668,49 @@ export class SettingsService {
       )
     }
 
-    const now = Date.now()
     const windowMs = 60_000
 
-    const [existing] = await this.db
-      .select()
-      .from(rateLimits)
-      .where(eq(rateLimits.key, data.key))
+    // Single atomic statement (#1492). The previous implementation was a
+    // read-modify-write: SELECT the array, filter and append in JS, then upsert
+    // the whole array back. Concurrent requests on the same key all read the
+    // same array and the last write won, so N simultaneous requests were
+    // recorded as one — the limiter undercounted precisely under the parallel
+    // traffic it exists to stop (invite enumeration, credential grinding).
+    //
+    // INSERT ... ON CONFLICT DO UPDATE takes a row lock and re-evaluates the
+    // SET expression against the *committed* row, so concurrent callers are
+    // serialised by PostgreSQL and each one observes every predecessor.
+    //
+    // The window is evaluated from the database's own clock (`now()`, the
+    // transaction timestamp — stable for the whole statement) rather than from
+    // Date.now(), so the stored timestamps and the expiry cutoff share one
+    // clock and a skewed application server cannot widen or narrow the window.
+    //
+    // Retention is capped at maxPerMinute in-window entries before appending,
+    // which bounds the row under a flood without changing any verdict: entries
+    // dropped by the cap are strictly older than the ones kept, so whenever a
+    // dropped entry would still be in-window the retained set already holds
+    // maxPerMinute entries and the request is limited either way.
+    const nowMs = sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`
+    const result = await this.db.execute<{ count: number }>(sql`
+      INSERT INTO rate_limits (key, timestamps)
+      VALUES (${data.key}, jsonb_build_array(${nowMs}))
+      ON CONFLICT (key) DO UPDATE SET timestamps =
+        COALESCE((
+          SELECT jsonb_agg(recent.t)
+          FROM (
+            SELECT a.t
+            FROM jsonb_array_elements(rate_limits.timestamps) AS a(t)
+            WHERE (a.t)::numeric > ${nowMs} - ${windowMs}
+            ORDER BY (a.t)::numeric DESC
+            LIMIT ${data.maxPerMinute}
+          ) AS recent
+        ), '[]'::jsonb) || jsonb_build_array(${nowMs})
+      RETURNING jsonb_array_length(timestamps) AS count
+    `)
 
-    const timestamps = (existing?.timestamps as number[]) ?? []
-    const recent = timestamps.filter((t) => now - t < windowMs)
-    recent.push(now)
-
-    await this.db
-      .insert(rateLimits)
-      .values({ key: data.key, timestamps: recent })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: { timestamps: recent },
-      })
-
-    return { limited: recent.length > data.maxPerMinute }
+    const count = Number(result[0]?.count ?? 0)
+    return { limited: count > data.maxPerMinute }
   }
 
   // =========================================================================
@@ -956,8 +1037,17 @@ export class SettingsService {
       .from(providerConfigs)
       .where(isNull(providerConfigs.hubId))
       .limit(1)
-    const messagingConfig = row.messagingConfig as MessagingConfig | null
-    const setupState = row.setupState as SetupState | null
+    // These two columns hold partially-written JSON. `getSettings()` upserts the
+    // singleton row with `setup_state = '{}'`, so on every fresh install
+    // `row.setupState` is present but empty — casting it `as SetupState | null`
+    // claimed `selectedChannels` was always an array, and `setupState?.…` guarded
+    // only the null case. `{}` therefore threw a TypeError, `GET /api/config`
+    // caught it and reported every channel disabled, and the desktop — which
+    // gates its whole Conversations page on those flags — showed "No messaging
+    // channels enabled" on a deployment that had channels configured.
+    // `Partial<>` is what the data actually is, and makes the guards mandatory.
+    const messagingConfig = row.messagingConfig as Partial<MessagingConfig> | null
+    const setupState = row.setupState as Partial<SetupState> | null
 
     const voiceEnabled =
       !!providerConfig ||
@@ -969,12 +1059,12 @@ export class SettingsService {
 
     return {
       voice: voiceEnabled,
-      sms: messagingConfig?.enabledChannels.includes('sms') ?? false,
-      whatsapp: messagingConfig?.enabledChannels.includes('whatsapp') ?? false,
-      signal: messagingConfig?.enabledChannels.includes('signal') ?? false,
-      rcs: messagingConfig?.enabledChannels.includes('rcs') ?? false,
-      telegram: messagingConfig?.enabledChannels.includes('telegram') ?? false,
-      reports: setupState?.selectedChannels.includes('reports') ?? false,
+      sms: messagingConfig?.enabledChannels?.includes('sms') ?? false,
+      whatsapp: messagingConfig?.enabledChannels?.includes('whatsapp') ?? false,
+      signal: messagingConfig?.enabledChannels?.includes('signal') ?? false,
+      rcs: messagingConfig?.enabledChannels?.includes('rcs') ?? false,
+      telegram: messagingConfig?.enabledChannels?.includes('telegram') ?? false,
+      reports: setupState?.selectedChannels?.includes('reports') ?? false,
     }
   }
 
@@ -2265,20 +2355,30 @@ export class SettingsService {
     return currentMonth
   }
 
+  /**
+   * Hub-scoped telephony provider config.
+   *
+   * Delegates to {@link getTelephonyProvider}, which is the established read
+   * path for exactly this row — same table, same hub predicate, same credential
+   * handling. No separate parsing, key handling or decrypt helper here.
+   *
+   * The previous implementation read the row itself and did
+   * `JSON.parse(row.credentials)`. That could never succeed: every writer stores
+   * ciphertext (`provider-setup/index.ts` encrypts via `encryptCredentials`),
+   * and the provider type lives in the `provider_configs.provider_type` COLUMN,
+   * never inside the credentials JSON — so even a successful parse would have
+   * yielded an object with no `type`. It therefore returned null for every
+   * configured hub, which silently
+   *   - disabled the hub-scoped IVR speakability constraint (#1260) by making
+   *     the catalog resolution fall through to the instance-wide provider, and
+   *   - made `getHubTelephonyFromService` fall back to the global provider for
+   *     every hub, so per-hub provider configuration never took effect at all.
+   */
   async getHubTelephonyProvider(
     hubId: string,
+    hmacSecret?: string,
   ): Promise<TelephonyProviderConfig | null> {
-    const [row] = await this.db
-      .select()
-      .from(providerConfigs)
-      .where(eq(providerConfigs.hubId, hubId))
-      .limit(1)
-    if (!row?.credentials) return null
-    try {
-      return JSON.parse(row.credentials) as TelephonyProviderConfig
-    } catch {
-      return null
-    }
+    return this.getTelephonyProvider(hmacSecret, hubId)
   }
 
   async setHubTelephonyProvider(
@@ -3379,7 +3479,7 @@ export class SettingsService {
     // between the delete above and the ensureInit re-seed below.
     invalidateRolesCache()
 
-    this.initialized = false
+    this.initializedModes.clear()
     await this.ensureInit(env)
 
     // Invalidate again after re-seeding: a concurrent request may have cached

@@ -136,8 +136,16 @@ export function publishEvent(
   env: Env,
   kind: number,
   content: Record<string, unknown>,
-  hubId?: string,
+  hubId: string,
 ): void {
+  // Every event belongs to exactly one hub. There is no catch-all pseudo-hub:
+  // an event with no owning hub has no legitimate audience, so it is dropped
+  // loudly rather than fanned out to a channel every user could subscribe to.
+  if (!hubId) {
+    log.error('publishEvent called without a hubId — event dropped', { kind })
+    return
+  }
+
   const epoch = currentEpoch()
   const serverSecret = env?.SERVER_SECRET
   let payload: string
@@ -148,7 +156,7 @@ export function publishEvent(
     payload = JSON.stringify(content)
   }
 
-  const targetHub = hubId ?? 'global'
+  const targetHub = hubId
 
   // Persist durable events to the outbox before fan-out.
   // Fire-and-forget: the in-memory fan-out is the fast path;
@@ -200,8 +208,11 @@ export async function drainOutbox(): Promise<number> {
 
   for (const { id, event } of batch) {
     try {
+      if (!event.hubId) {
+        throw new Error('outbox event has no hubId — no legitimate audience')
+      }
       manager.publishToHub(
-        event.hubId ?? 'global',
+        event.hubId,
         event.kind,
         event.payload,
         event.epoch,

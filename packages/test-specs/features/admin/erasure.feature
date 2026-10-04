@@ -19,14 +19,14 @@ Feature: Account Erasure
     Given a registered volunteer user with a pending erasure request
     When the volunteer POSTs to "/erasure/me" again
     Then the response status should be 409
-    And the response should contain error "Erasure request already pending"
+    And the error message contains "Erasure request already pending"
 
   @backend
   Scenario: Volunteer cancels pending erasure request
     Given a registered volunteer user with a pending erasure request
     When the volunteer DELETEs "/erasure/me"
     Then the response status should be 200
-    And the response should contain ok true
+    And the response body "ok" should be true
 
   @backend
   Scenario: Volunteer checks own erasure status with no pending request
@@ -51,7 +51,7 @@ Feature: Account Erasure
     And a target volunteer user exists
     When the admin POSTs to "/erasure/:userId" with a justification
     Then the response status should be 200
-    And the response should contain ok true
+    And the response body "ok" should be true
     And the response should contain reEncryptionJobIds
 
   @backend
@@ -118,4 +118,4 @@ Feature: Account Erasure
     And a target volunteer user with a known device pubkey
     When the admin POSTs to "/erasure/:userId/wipe-device/:devicePubkey"
     Then the response status should be 200
-    And the response should contain ok true
+    And the response body "ok" should be true

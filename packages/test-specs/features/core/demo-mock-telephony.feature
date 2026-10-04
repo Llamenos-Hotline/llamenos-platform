@@ -9,6 +9,20 @@ Feature: Demo mock telephony
   # The production refusal is covered by apps/worker/__tests__/unit/mock-telephony.test.ts,
   # because a live server cannot be flipped into ENVIRONMENT=production.
 
+  # Unlike relay-event-delivery.feature (which uses the /test-simulate shortcut), this drives the
+  # production ringing path — startParallelRinging — so a ring published without its hub fails here.
+  @backend @demo-mode @calls @relay
+  Scenario: A simulated call rings on the hub it arrived on and on no other hub
+    Given 1 volunteers are on shift
+    And the hub uses the mock telephony provider
+    And the test relay is connected and capturing events
+    And a volunteer who is a member of a different hub only
+    When the admin simulates an incoming call
+    Then the relay should receive a kind 1000 event within 5 seconds
+    And the decrypted event content type should be "call:ring"
+    And the event hubId should be the scenario hub
+    And that volunteer's relay subscription to the scenario hub should be refused
+
   @backend @demo-mode @calls
   Scenario: Simulated call rings, is answered, noted and ended
     Given 2 volunteers are on shift
@@ -48,6 +62,15 @@ Feature: Demo mock telephony
     Given the hub uses the mock telephony provider
     When the admin simulates an incoming call
     Then the response status should be 422
+
+  # #1043: the call record is created before ringing is attempted, so a caller nobody could
+  # be rung for is still visible to the hotline (and can carry a voicemail) as `unanswered`.
+  @backend @demo-mode @calls
+  Scenario: A call nobody could be rung for is still recorded as unanswered
+    Given the hub uses the mock telephony provider
+    When the admin simulates an incoming call
+    Then the response status should be 422
+    And the hub call history should contain 1 unanswered call
 
   # The ring outcome (volunteersNotified) is server state: the count of volunteers the ringing
   # service actually selected, not anything the test remembers. See #1055.
@@ -98,6 +121,48 @@ Feature: Demo mock telephony
     When the admin simulates an incoming call
     Then the response status should be 200
     And the simulated call should have notified 1 volunteers
+
+  # Busy is instance-wide: a volunteer answering an in-progress call in ANY hub is not rung.
+  # volunteersNotified is the server's own ring set, so a regression here fails these scenarios (#1018).
+  @backend @demo-mode @calls
+  Scenario: A volunteer already on a call is not rung for a new call
+    Given 2 volunteers are on shift
+    And the hub uses the mock telephony provider
+    When the admin simulates an incoming call
+    And volunteer 0 answers the simulated call
+    And the admin simulates an incoming call
+    Then the response status should be 200
+    And the simulated call should have notified 1 volunteers
+
+  @backend @demo-mode @calls
+  Scenario: A volunteer on a call in one hub is not rung for a call in another hub
+    Given 2 volunteers are on shift
+    And the hub uses the mock telephony provider
+    And a second hub with the same 2 volunteers on shift uses the mock telephony provider
+    When the admin simulates an incoming call
+    And volunteer 0 answers the simulated call
+    And the admin simulates an incoming call in the second hub
+    Then the response status should be 200
+    And the simulated call should have notified 1 volunteers
+
+  @backend @demo-mode @calls
+  Scenario: Nothing rings when the only volunteer on shift is on a call
+    Given 1 volunteers are on shift
+    And the hub uses the mock telephony provider
+    When the admin simulates an incoming call
+    And volunteer 0 answers the simulated call
+    And the admin simulates an incoming call
+    Then the response status should be 422
+
+  @backend @demo-mode @calls
+  Scenario: A volunteer is rung again once their call has ended
+    Given 2 volunteers are on shift
+    And the hub uses the mock telephony provider
+    When the admin simulates an incoming call
+    And volunteer 0 answers the simulated call
+    And volunteer 0 hangs up the simulated call
+    And the admin simulates an incoming call
+    Then the simulated call should have notified 2 volunteers
 
   @backend @demo-mode @calls
   Scenario: A hub that has not selected the mock cannot be simulated against

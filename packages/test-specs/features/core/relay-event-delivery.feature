@@ -76,6 +76,28 @@ Feature: Real-Time Relay Event Delivery
     When an incoming call arrives from a unique number
     Then the relay should receive a kind 1000 event within 5 seconds
     And the event version should be 1
+    And the event hubId should be the scenario hub
+
+  @relay @calls
+  Scenario: A call ring is published to the hub the call arrived on
+    When an incoming call arrives from a unique number
+    Then the relay should receive a kind 1000 event within 5 seconds
+    And the event hubId should be the scenario hub
+
+  @relay @messaging
+  Scenario: An inbound message is published to the hub it arrived on
+    When an inbound SMS message arrives from a unique number
+    Then the relay should receive a kind 1010 event within 5 seconds
+    And the event hubId should be the scenario hub
+
+  # --- Hub isolation ---
+
+  @relay @security
+  Scenario: A member of another hub cannot subscribe to this hub's events or to a global catch-all
+    Given a volunteer who is a member of a different hub only
+    Then that volunteer's relay subscription to the scenario hub should be refused
+    And that volunteer's relay subscription to "global" should be refused
+    And that volunteer's relay subscription to their own hub should be accepted
 
   @relay
   Scenario: All relay events are signed by the server

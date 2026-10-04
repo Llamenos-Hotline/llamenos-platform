@@ -20,17 +20,17 @@ class LoginSteps : BaseSteps() {
 
     @Then("I should see the app title {string}")
     fun iShouldSeeTheAppTitle(title: String) {
-        val found = assertAnyTagDisplayed("app-title", "create-identity", "dashboard-title")
+        assertAnyTagDisplayed("app-title", "create-identity", "dashboard-title")
     }
 
     @Then("I should see the hub URL input field")
     fun iShouldSeeTheHubUrlInputField() {
-        val found = assertAnyTagDisplayed("hub-url-input", "app-title", "create-identity", "dashboard-title")
+        assertAnyTagDisplayed("hub-url-input", "app-title", "create-identity", "dashboard-title")
     }
 
     @Then("I should see the device key import input field")
     fun iShouldSeeTheNsecImportInputField() {
-        val found = assertAnyTagDisplayed("device-key-input", "app-title", "create-identity", "dashboard-title")
+        assertAnyTagDisplayed("device-key-input", "app-title", "create-identity", "dashboard-title")
     }
 
     @Then("I should see the {string} button")
@@ -51,7 +51,7 @@ class LoginSteps : BaseSteps() {
             }
             onNodeWithTag(tag).assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed(tag, "app-title", "dashboard-title")
+            assertAnyTagDisplayed(tag, "app-title", "dashboard-title")
         }
     }
 
@@ -67,7 +67,7 @@ class LoginSteps : BaseSteps() {
 
     @Then("the hub URL field should contain {string}")
     fun theHubUrlFieldShouldContain(url: String) {
-        val found = assertAnyTagDisplayed("hub-url-input", "app-title", "dashboard-title")
+        assertAnyTagDisplayed("hub-url-input", "app-title", "dashboard-title")
     }
 
     @When("I enter {string} in the device key field")
@@ -82,7 +82,7 @@ class LoginSteps : BaseSteps() {
 
     @Then("the device key field should be a password field")
     fun theNsecFieldShouldBeAPasswordField() {
-        val found = assertAnyTagDisplayed("device-key-input", "app-title", "dashboard-title")
+        assertAnyTagDisplayed("device-key-input", "app-title", "dashboard-title")
     }
 
     @When("I tap {string} without entering a device key")

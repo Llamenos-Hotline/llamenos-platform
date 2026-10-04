@@ -63,22 +63,22 @@ class ReportCreateSteps : BaseSteps() {
 
     @Then("I should see the create report button")
     fun iShouldSeeTheCreateReportButton() {
-        val found = assertAnyTagDisplayed("report-create-fab", "reports-title", "reports-list", "reports-empty", "dashboard-title")
+        assertAnyTagDisplayed("report-create-fab", "reports-title", "reports-list", "reports-empty", "dashboard-title")
     }
 
     @Then("I should see the report title input")
     fun iShouldSeeTheReportTitleInput() {
-        val found = assertAnyTagDisplayed("report-title-input", "report-create-fab", "reports-title", "dashboard-title")
+        assertAnyTagDisplayed("report-title-input", "report-create-fab", "reports-title", "dashboard-title")
     }
 
     @Then("I should see the report body input")
     fun iShouldSeeTheReportBodyInput() {
-        val found = assertAnyTagDisplayed("report-body-input", "report-title-input", "reports-title", "dashboard-title")
+        assertAnyTagDisplayed("report-body-input", "report-title-input", "reports-title", "dashboard-title")
     }
 
     @Then("I should see the report submit button")
     fun iShouldSeeTheReportSubmitButton() {
-        val found = assertAnyTagDisplayed("report-submit-button", "report-title-input", "reports-title", "dashboard-title")
+        assertAnyTagDisplayed("report-submit-button", "report-title-input", "reports-title", "dashboard-title")
     }
 
     @Then("the report submit button should be disabled")
@@ -87,7 +87,7 @@ class ReportCreateSteps : BaseSteps() {
             onNodeWithTag("report-submit-button").assertIsNotEnabled()
         } catch (_: Throwable) {
             // Submit button not available — may not be on creation form
-            val found = assertAnyTagDisplayed("report-submit-button", "report-title-input", "reports-title", "dashboard-title")
+            assertAnyTagDisplayed("report-submit-button", "report-title-input", "reports-title", "dashboard-title")
         }
     }
 }

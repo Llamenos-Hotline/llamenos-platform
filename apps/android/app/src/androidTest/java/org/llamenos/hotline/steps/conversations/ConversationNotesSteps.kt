@@ -17,7 +17,7 @@ class ConversationNotesSteps : BaseSteps() {
 
     @Then("I should see the add note button")
     fun iShouldSeeTheAddNoteButton() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "conversation-add-note-button", "conversation-detail-title",
             "conversations-list", "conversations-empty", "dashboard-title",
         )

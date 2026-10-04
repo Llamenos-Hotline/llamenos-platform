@@ -221,7 +221,7 @@ Then('the role dropdown should show all default roles', async ({ page, request }
   await expectFormOffersSystemRoles(page, request)
 })
 
-Given('a volunteer with {string} role', async ({ request, rolesWorld }, roleName: string) => {
+Given('a volunteer with {string} role', async ({ request, rolesWorld, workerHub }, roleName: string) => {
   const roles = await listRolesViaApi(request)
   const role = roles.find(r => r.name === roleName)
   expect(role).toBeTruthy()
@@ -233,6 +233,11 @@ Given('a volunteer with {string} role', async ({ request, rolesWorld }, roleName
   // Kept in the rolesWorld fixture, not on `window`: the old window stash did not
   // survive the page navigation in the next step, so the dropdown step silently no-op'd.
   rolesWorld.volunteerNsec = vol.nsec
+  // The volunteer list the UI renders is the ACTIVE hub's (#1044 scoped it to hub
+  // members), and `createVolunteerViaApi` posts to the unscoped /users mount, which
+  // writes no hubRoles. Without this the row simply is not in the list the next step
+  // looks at. Same call the "logged in as a volunteer" step above already makes.
+  await addHubMemberViaApi(request, workerHub, vol.pubkey, [role!.id])
 })
 
 When('I change their role to {string} via the dropdown', async ({ page, request, rolesWorld }, roleName: string) => {
@@ -256,7 +261,7 @@ Then('the volunteer should display the {string} badge', async ({ page, rolesWorl
   await expect(row.getByTestId(TestIds.VOLUNTEER_ROW_ROLE_BADGE)).toContainText(roleName, { timeout: Timeouts.ELEMENT })
 })
 
-Given('I changed a volunteer\'s role to {string}', async ({ request, rolesWorld }, roleName: string) => {
+Given('I changed a volunteer\'s role to {string}', async ({ request, rolesWorld, workerHub }, roleName: string) => {
   // Setup: a volunteer holding the role (assigned through the API).
   const role = (await listRolesViaApi(request)).find(r => r.name === roleName)
   expect(role, `role "${roleName}" must exist`).toBeTruthy()
@@ -265,6 +270,8 @@ Given('I changed a volunteer\'s role to {string}', async ({ request, rolesWorld 
     roleIds: [role!.id],
   })
   rolesWorld.volunteerNsec = vol.nsec
+  // Hub-scoped list (#1044) — see the note in "a volunteer with {string} role".
+  await addHubMemberViaApi(request, workerHub, vol.pubkey, [role!.id])
 })
 
 Then('I should see the {string} badge on their card', async ({ page, rolesWorld }, roleName: string) => {

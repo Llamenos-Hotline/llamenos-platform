@@ -17,6 +17,8 @@ Feature: Admin Flow
     And I should see "Hub Settings" in the navigation
     And I should see "Settings" in the navigation
 
+  # @wip: device-key card steps have no desktop definitions — #1195
+  @wip
   Scenario: Volunteer CRUD — add and delete volunteer
     When I navigate to the "Volunteers" page
     And I add a new volunteer with a unique name and phone

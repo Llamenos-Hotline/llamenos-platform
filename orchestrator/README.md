@@ -3,7 +3,7 @@
 ## What this is
 
 A scheduled dispatch loop that reads open GitHub issues labelled
-`agent-dispatchable` from `rhonda-rodododo/llamenos-platform`, routes each one
+`agent-dispatchable` from `Llamenos-Hotline/llamenos-platform`, routes each one
 to a lane (`backend`, `shared`, `desktop`, `ios`, `android`, `infra`) based on
 its `lane:<id>` label, and — once live dispatch ships in the follow-on plan —
 hands it to an agent scoped to that lane's owned paths.
@@ -130,6 +130,189 @@ ships in the follow-on plan. Until then:
 - **`shadow` is the only mode with real content today.** `off` does nothing;
   `live` is refused.
 
+## Review (#1158)
+
+**Assigning a reviewer, or re-requesting review, is what triggers a review.**
+Request one from `llamenos-auto` (or from `rhonda-rodododo` on the `release`
+PR) and `fleet/review` runs. Nothing else fires it — no label, and never a
+push.
+
+**The agent decides which reviews to run from the labels and from the PR
+itself.** The general non-author review always runs. On top of it:
+
+- a label ending `-reviewer` names an agent in `.claude/agents/` — e.g.
+  `crypto-security-reviewer`;
+- the PR's own content adds what nobody asked for — a crypto diff (by changed
+  path or by the PR's own description) gets the crypto review either way.
+
+They all run **concurrently, in one job**, and report **one check**:
+`fleet/review`. Any FAIL fails it; so does a reviewer that could not run.
+
+**The findings land on the PR.** Each reviewer's full text is posted as a PR
+comment — on a FAIL too, since that is the case whose reasoning you actually
+need. A comment, never a GitHub *review*: an approving review from the fleet
+would be one GitHub counts. Re-requesting a review on an unchanged diff
+re-posts nothing.
+
+**Labels are the worklist.** Once the whole set passes, the job removes the
+`-reviewer` labels it acted on, so what is left on a PR is what is still
+owed. A FAIL clears nothing — that is what makes the next review request
+re-run it.
+
+**Verdicts are cached per diff.** A PASS *and* a substantive FAIL are both
+recorded against `sha256(diff)`, so a rebase that does not change the diff
+never re-spends a review to reach the same conclusion — push a fix and the
+hash changes, which reviews afresh. An infrastructure failure (timeout,
+quota, unparseable response) is **never** cached, so it is always retried.
+Adding or removing a `-reviewer` label cannot orphan either verdict.
+
+**`llamenos-fleet review-and-merge` only runs the general review**, so it
+refuses outright on a PR whose set needs more — request a review from
+`llamenos-auto` and let the CI gate run the whole set.
+
+**`llamenos-fleet review-and-merge` is non-functional until the GitHub App
+exists (#1483).** The Checks API refuses a personal access token
+(`You must authenticate via a GitHub App. (HTTP 403)`), so without the two
+credentials in the next section the command refuses *before* spending a
+review and exits non-zero. Use the CI gate (request a review on the PR)
+until then. There is deliberately no fallback: `POST …/statuses` on a commit
+does accept a PAT, but a PAT-written green status under the `fleet/review`
+context name could override a red check run, which is fail-open — see
+`orchestrator/src/github-app.ts`.
+
+### Recording a verdict: the `llamenos-fleet-review` GitHub App (#1483)
+
+Two values, both read by `orchestrator/src/github-app.ts` and used for
+exactly one API call — the `fleet/review` check-run POST. Everything else
+`review-and-merge` does (reading the PR, exporting its head, merging) keeps
+using the operator's own `gh` credentials.
+
+| Value | Where it goes | Secret? |
+|-------|---------------|---------|
+| `FLEET_REVIEW_APP_ID` | A line in `~/.llamenos-fleet/env`. The App's numeric ID, shown on its settings page. | No |
+| The App's private key (`.pem`) | `~/.llamenos-fleet/review-app.pem`, **mode 600**. Override the path with `FLEET_REVIEW_APP_KEY_PATH` (tests use this; production should not). | **Yes** |
+| `FLEET_REVIEW_APP_INSTALLATION_ID` | Optional, in `~/.llamenos-fleet/env`. Skips the installation lookup. Without it the installation is matched by account login, and an ambiguous result is a refusal, not a guess. | No |
+
+The App needs **`checks: write` and nothing else** (`metadata: read` is added
+by GitHub automatically). That is the point: if the key leaked, the worst an
+attacker could do is post a check-run conclusion — it cannot read this
+repository's code, merge, push, or touch issues or pull requests. See issue
+#1483 for the creation steps.
+
+Each invocation mints a fresh installation token (RS256 App JWT → installation
+token → one POST) and keeps no copy of it. A missing, mis-permissioned or
+unparseable key is a hard refusal with the remedy named — never a silent
+skip, and never a "posted the verdict" line when nothing was posted.
+
+**Fail closed.** Unreadable labels, an unknown or malformed `-reviewer`
+label, an unreadable agent registry: each fails the check with the rule it
+broke. None of them is ever "no review needed".
+
+**Adding a reviewer profile:** write an agent definition whose frontmatter
+`name:` equals the profile name and ends `-reviewer`, merge it to `main`
+first (the registry is read from the PR's base), then create a label of the
+same name if you want to request it by hand. The workflow needs no change.
+
+Workflow `.github/workflows/fleet-review.yml`; CLI `review-gate` then
+`review-ci`; code `src/ci.ts` (`decideReviewSet`, `reviewIsRequested`,
+`decideReviewGate`, `runReviewCi`) and `src/specialist.ts` (the agent
+registry).
+
+## Cross-lane PRs: `scope:<lane>` grants (#1115)
+
+A lane's scope is the set of paths its workers may write, parsed from
+`.claude/agents/fragments/<lane>-supervisor.md`. Most work fits one lane.
+Some genuinely does not: a permission-boundary fix spans the shared module,
+the server that enforces it, the client that consumes it and the tests that
+prove it. That is one atomic change — splitting it produces PRs that each go
+green alone and leave `main` red between merges.
+
+Before this existed the author had no legal move: stray and be hard-blocked
+at `fleet/verify` with `scope=fail`, or split and break `main`. Now a PR can
+carry `scope:<lane>` labels, and `fleet/verify` treats a file as in-scope if
+**any** authorised lane owns it — its own, plus each granted one.
+
+```
+# a backend fix that must also update the desktop BDD steps it invalidates
+gh pr edit <N> --add-label scope:desktop
+```
+
+What a grant cannot do:
+
+- **Reach a secret.** `NEVER_WRITE_PATHS` is checked first and is absolute.
+  Be precise about what that covers, because an earlier draft of this section
+  overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
+  **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
+  in it, because lanes legitimately own some of them. Nor are committed
+  TEMPLATES of a secret (`.env.example`, `keystore.properties.example`): the
+  never-write comparison is `matchesSecretPath`, which subtracts
+  `SECRET_TEMPLATE_SUFFIXES` from the match, because a file that exists to be
+  committed and read cannot be a secret and a deploy template nobody may edit
+  is a deploy nobody may fix (#1253). That subtraction applies only to
+  `TEMPLATED_SECRET_PATTERNS` — `.env` and `keystore.properties`, the two
+  patterns a tracked template justifies. A new secret pattern inherits no
+  carve-out unless a tracked template proves it needs one, so
+  `.npmrc.example` and `id_rsa.example` remain forbidden. The interactive write-deny hook in
+  `.claude/settings.json` never blocked them either — its `\.env$` is
+  anchored — so this removes a divergence rather than creating one. A
+  template is exempt from the WRITE gate only: `classifyImpact` still rates
+  it high-impact, and `gitleaks` still reads its contents.
+
+- **Reach CI or deploy config via a grant.** That is enforced separately, by
+  `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,
+  `deploy/`, `Dockerfile*`, `Caddyfile*`, `knope.toml`. A grant is refused
+  these even when the granted lane owns them. Without that list, one
+  self-applied `scope:infra` label would extend any worker's write scope to
+  the supply chain that builds, tests, signs and ships the app, and
+  `fleet/verify` would say `scope=pass`.
+
+  The exclusion binds **grants only**. The owning lane still writes these
+  normally on its own PR: infra edits its own workflows, ios edits
+  `.github/workflows/ios*.yml`. And it is deliberately narrow — `scripts/` is
+  infra-owned but *not* excluded, because a cross-lane fix such as #1060
+  genuinely needs `scripts/bootstrap-admin.ts`. `.github/ci/` is likewise
+  absent: those are lint baselines, already shared-write, and not supply
+  chain.
+- **Be self-issued from the diff.** Labels live outside the commit, so a
+  worker cannot widen its own scope by editing a file in its own PR. That is
+  the whole reason the grant is a label and not a trailer in the PR body.
+  **This is a narrower claim than "a worker cannot grant itself scope."** The
+  fleet pushes with a GitHub account that can also run `gh pr edit
+  --add-label`, so a worker that chose to could label its own PR. What the
+  label buys is that the grant is *outside the diff*: it cannot arrive by
+  merging a branch, it is visible on the PR without reading the patch, and it
+  survives review as an explicit, separately-auditable act. Restricting who
+  may apply `scope:*` is a follow-up, not something this mechanism provides.
+- **Silently apply when unreadable.** If the labels cannot be read the gate
+  grants nothing and judges the PR on its own lane alone. Not knowing means
+  not granted. The same applies inside a merge queue, where the PR number is
+  not available: grants drop, so a cross-lane PR that passed on its own branch
+  can still fail in the queue. That direction is safe but surprising — worth
+  knowing before enabling a merge queue.
+
+- **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
+  is missing or unparseable, has `owned: []` — and an empty owned list means
+  "no ownership check". Honouring a grant for such a lane would make the whole
+  PR unrestricted, so an empty granted scope is discarded and logged. Only the
+  PR's OWN lane may be unrestricted; a grant may widen only by a real lane's
+  real paths.
+- **Merge two lanes into one scope.** Each lane is still resolved with its own
+  `owned`/`notOwned` pair and its own longest-match rules. Flattening them
+  would let one lane's grant cancel another's exclusion and make a path
+  writable that neither lane can write by itself.
+
+### Known gap this does not close
+
+`resolveLane` still falls back to `UNSCOPED_LANE` for any branch not named
+`fleet/<lane>/…`, and an unrestricted scope means no ownership check at all.
+So the scope gate is currently **opt-in by branch name** — the one string the
+worker being contained chooses. Closing that requires every path to have an
+owner first: **772 of 4165 tracked files currently have none** (most of
+`docs/`, all of `drizzle/migrations/`, `orchestrator/` itself, and
+`.claude/agents/` — including the lane fragments that define scope). Tracked
+in #1115; `NEVER_WRITE_PATHS` and CODEOWNERS are the defences that do bind
+universally in the meantime.
+
 ## Changing a lane's mode
 
 Lane modes are **runtime state, never source** (rail 8). Never edit
@@ -193,7 +376,8 @@ deliberate exception:
 | `~/.llamenos-fleet/scheduler.lock` | Pidfile lock; ensures only one `tick()` runs at a time. Stale locks (holder process no longer alive) are reaped automatically. |
 | `~/.llamenos-fleet/runs.jsonl` | The ledger — one JSON line per dispatch/shadow/rejection-relevant outcome. Read by `status`, the circuit breakers, and the per-item attempt limit. |
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
-| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). |
+| `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
+| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
 
 ## systemd timer
 

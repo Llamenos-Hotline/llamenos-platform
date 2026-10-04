@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - AuthStatus
 
@@ -88,6 +89,9 @@ final class AppState {
 
     /// Background task that listens for WebSocket events.
     private var eventListenerTask: Task<Void, Never>?
+    /// Resolves the relay endpoint from `/api/config` and connects.
+    private var relayConnectTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "org.llamenos.hotline", category: "Relay")
 
     // MARK: - Initialization
 
@@ -170,6 +174,9 @@ final class AppState {
             keychainService.deleteAll()
             // AuthService cached hasStoredKeys/hubURL from init — reset stale values
             authService.logout()
+            // The active hub lives in UserDefaults, which survives relaunches on the
+            // same simulator — without this a test inherits the previous test's hub.
+            hubContext.clearActiveHub()
         }
 
         // Configure hub URL for API access (must come before --test-register)
@@ -185,7 +192,7 @@ final class AppState {
                 // Use a separate volunteer keypair (NOT the admin key)
                 cryptoService.setMockVolunteerIdentity()
             } else {
-                // Default: admin mock identity matching ADMIN_PUBKEY in Docker .env
+                // Default: a fresh device key per launch; --test-register makes it an admin.
                 cryptoService.setMockIdentity()
             }
             isLocked = false
@@ -197,13 +204,10 @@ final class AppState {
 
         // Register identity with server (must come after keypair + hub URL)
         if args.contains("--test-register") && cryptoService.isUnlocked {
-            if args.contains("--test-volunteer-identity") {
-                // Volunteer identity — register via admin API, not bootstrap
-                registerUserIdentity()
-            } else {
-                // Admin identity — use the bootstrap endpoint
-                bootstrapTestIdentity()
-            }
+            let hubId = args.firstIndex(of: "--test-hub-id")
+                .flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            registerTestIdentity(asAdmin: !args.contains("--test-volunteer-identity"), hubId: hubId)
             // After successful registration, connect WebSocket and fetch role
             // so the dashboard shows "Connected" and the correct user role.
             connectWebSocketIfConfigured()
@@ -211,104 +215,103 @@ final class AppState {
         }
     }
 
-    /// Register the test identity as admin on the server via POST /api/auth/bootstrap.
-    /// Blocks the main thread briefly (max 5s) — acceptable for test setup only.
-    /// The bootstrap endpoint creates the admin user with role-super-admin.
-    /// If admin already exists (403), this is a no-op.
-    private func bootstrapTestIdentity() {
-        guard let hubURL = authService.hubURL,
-              let baseURL = URL(string: hubURL) else { return }
+    /// Register this launch's device identity with the test server the way an admin
+    /// adds a member in production: the well-known test admin — whose signing seed
+    /// BaseUITest hands the app in `XCTEST_ADMIN_SECRET`, and whose pubkey the server
+    /// runs with as ADMIN_PUBKEY — creates the user through `POST /api/users` and adds
+    /// it to the test class's hub through `POST /api/hubs/{hubId}/members`. That hub
+    /// becomes the active hub, so hub-scoped screens browse the class's own hub.
+    ///
+    /// This replaces a one-shot `POST /api/auth/bootstrap`. `setMockIdentity()` makes a
+    /// fresh key every launch and the test server always already has an admin, so the
+    /// bootstrap answered 403 every time and every API-connected UI test ran against a
+    /// server answering 401 to everything it did (#1221). The volunteer path read
+    /// `XCTEST_ADMIN_SECRET`, which no test ever set, and registered the X25519
+    /// encryption key where the server authenticates the Ed25519 signing key.
+    ///
+    /// A registration failure is fatal: an unregistered app would turn every
+    /// assertion after it into an assertion about a 401 error state.
+    private func registerTestIdentity(asAdmin: Bool, hubId: String?) {
+        guard let baseURL = apiService.baseURL else {
+            fatalError("UI_TESTING: --test-register requires --test-hub-url")
+        }
+        guard let devicePubkey = cryptoService.signingPubkeyHex else {
+            fatalError("UI_TESTING: --test-register requires --test-authenticated")
+        }
+        guard let adminSecretHex = ProcessInfo.processInfo.environment["XCTEST_ADMIN_SECRET"],
+              !adminSecretHex.isEmpty else {
+            fatalError("UI_TESTING: --test-register requires XCTEST_ADMIN_SECRET in the launch environment")
+        }
 
-        guard let token = try? cryptoService.createAuthToken(
-            method: "POST", path: "/api/auth/bootstrap"
-        ) else { return }
+        sendAsTestAdmin(
+            baseURL: baseURL,
+            adminSecretHex: adminSecretHex,
+            path: "/api/users",
+            body: [
+                "pubkey": devicePubkey,
+                "name": asAdmin ? "iOS UI Test Admin" : "iOS UI Test Volunteer",
+                "phone": "",
+                "roleIds": [asAdmin ? "role-super-admin" : "role-volunteer"],
+            ]
+        )
 
-        let url = baseURL.appendingPathComponent("api/auth/bootstrap")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 5
-
-        let body: [String: Any] = [
-            "pubkey": token.pubkey,
-            "timestamp": Int(token.timestamp),
-            "token": token.token,
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { _, _, _ in
-            sem.signal()
-        }.resume()
-        _ = sem.wait(timeout: .now() + 5)
+        if let hubId {
+            sendAsTestAdmin(
+                baseURL: baseURL,
+                adminSecretHex: adminSecretHex,
+                path: "/api/hubs/\(hubId)/members",
+                body: [
+                    "pubkey": devicePubkey,
+                    "roleIds": [asAdmin ? "role-hub-admin" : "role-volunteer"],
+                ]
+            )
+            hubContext.setActiveHub(hubId)
+        }
     }
 
-    /// Register the test user (volunteer) identity on the server.
-    /// First ensures admin is bootstrapped (using the admin key), then creates a user
-    /// using the admin's auth via POST /api/users.
-    private func registerUserIdentity() {
-        guard let hubURL = authService.hubURL,
-              let baseURL = URL(string: hubURL) else { return }
-        guard let userPubkey = cryptoService.pubkey else { return }
+    /// POST `body` to `path`, signed as the test admin. Blocks (max 60s, the budget
+    /// BaseUITest gives class-hub creation) — test setup only, before any view exists.
+    /// On a shard's first, cold launch the request has taken 36s to reach the server
+    /// (run 36364790578: sent 01:22:50, timed out client-side at 30s, logged by the
+    /// server at 01:23:26 and answered in 2.7s). Any non-2xx outcome is fatal (see above).
+    private func sendAsTestAdmin(baseURL: URL, adminSecretHex: String, path: String, body: [String: Any]) {
+        let token: AuthToken
+        do {
+            token = try CryptoService.createAuthTokenStatic(secretHex: adminSecretHex, method: "POST", path: path)
+        } catch {
+            fatalError("UI_TESTING: could not sign \(path) as the test admin: \(error)")
+        }
+        var auth: [String: Any] = ["pubkey": token.pubkey, "timestamp": Int(token.timestamp), "token": token.token]
+        if let nonce = token.nonce { auth["nonce"] = nonce }
 
-        // Step 1: Bootstrap admin using key injected via XCTEST_ADMIN_SECRET env var
-        let adminSecretHex = ProcessInfo.processInfo.environment["XCTEST_ADMIN_SECRET"] ?? ""
-        guard !adminSecretHex.isEmpty else { return }
-        bootstrapAdmin(baseURL: baseURL, adminSecretHex: adminSecretHex)
-
-        // Step 2: Create user using admin auth
-        createUser(baseURL: baseURL, adminSecretHex: adminSecretHex, userPubkey: userPubkey)
-    }
-
-    private func bootstrapAdmin(baseURL: URL, adminSecretHex: String) {
-        guard let adminToken = try? CryptoService.createAuthTokenStatic(
-            secretHex: adminSecretHex, method: "POST", path: "/api/auth/bootstrap"
-        ) else { return }
-
-        let url = baseURL.appendingPathComponent("api/auth/bootstrap")
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: baseURL.appendingPathComponent(String(path.dropFirst())))
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 5
-
-        let body: [String: Any] = [
-            "pubkey": adminToken.pubkey,
-            "timestamp": Int(adminToken.timestamp),
-            "token": adminToken.token,
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { _, _, _ in sem.signal() }.resume()
-        _ = sem.wait(timeout: .now() + 5)
-    }
-
-    private func createUser(baseURL: URL, adminSecretHex: String, userPubkey: String) {
-        guard let adminToken = try? CryptoService.createAuthTokenStatic(
-            secretHex: adminSecretHex, method: "POST", path: "/api/users"
-        ) else { return }
-
-        let url = baseURL.appendingPathComponent("api/users")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Server expects: Bearer {"pubkey":"...","timestamp":...,"token":"..."}
-        let authJSON = """
-        {"pubkey":"\(adminToken.pubkey)","timestamp":\(adminToken.timestamp),"token":"\(adminToken.token)"}
-        """
-        request.setValue("Bearer \(authJSON)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 5
+        guard let authJSON = try? JSONSerialization.data(withJSONObject: auth),
+              let bodyJSON = try? JSONSerialization.data(withJSONObject: body) else {
+            fatalError("UI_TESTING: could not encode \(path) request")
+        }
+        request.setValue("Bearer \(String(decoding: authJSON, as: UTF8.self))", forHTTPHeaderField: "Authorization")
+        request.httpBody = bodyJSON
 
-        let body: [String: Any] = [
-            "pubkey": userPubkey,
-            "name": "Test Volunteer",
-            "roles": ["role-volunteer"],
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
+        var outcome = "timed out after 60s"
         let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { _, _, _ in sem.signal() }.resume()
-        _ = sem.wait(timeout: .now() + 5)
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            defer { sem.signal() }
+            if let error {
+                outcome = error.localizedDescription
+            } else if let http = response as? HTTPURLResponse {
+                outcome = (200...299).contains(http.statusCode)
+                    ? "ok"
+                    : "HTTP \(http.statusCode) \(String(decoding: data ?? Data(), as: UTF8.self))"
+            }
+        }.resume()
+        _ = sem.wait(timeout: .now() + 62)
+        if outcome != "ok" {
+            fatalError("UI_TESTING: registering the test identity failed at POST \(path): \(outcome)")
+        }
     }
     #endif // UI_TESTING
 
@@ -397,6 +400,8 @@ final class AppState {
         wipeService.logout()
         eventListenerTask?.cancel()
         eventListenerTask = nil
+        relayConnectTask?.cancel()
+        relayConnectTask = nil
         authService.logout()
         isLocked = false
         authStatus = .unauthenticated
@@ -505,38 +510,20 @@ final class AppState {
         }
     }
 
+    /// Relay event kinds subscribed on every member hub: call ring/update/voicemail,
+    /// new message, conversation assigned, presence. Mirrors the desktop client.
+    static let relayEventKinds = [1000, 1001, 1002, 1010, 1011, 20000]
+
     /// Connect WebSocket to the relay if a hub URL is configured.
+    ///
+    /// The relay endpoint is the one the server advertises in `GET /api/config`
+    /// (`wsRelayUrl`), never a hard-coded suffix. Every hub the user is a member of is
+    /// subscribed — not only the active hub — so a ring on any hub reaches the app
+    /// (multi-hub routing axiom).
     private func connectWebSocketIfConfigured() {
-        guard let hubURL = authService.hubURL else { return }
+        guard authService.hubURL != nil, let hubBaseURL = apiService.baseURL else { return }
 
-        // Derive relay URL from hub URL. Only wss:// and https:// (converted to wss://)
-        // are allowed — http:// and ws:// are rejected to prevent MITM attacks.
-        var relayURL = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if relayURL.hasPrefix("https://") {
-            relayURL = relayURL.replacingOccurrences(of: "https://", with: "wss://")
-        } else if relayURL.hasPrefix("wss://") {
-            // Already the correct secure scheme — no transformation needed
-        } else if !relayURL.contains("://") {
-            // No scheme — assume secure relay
-            relayURL = "wss://\(relayURL)"
-        } else {
-            // http://, ws://, or any other non-HTTPS/WSS scheme — reject
-            return
-        }
-        if !relayURL.hasSuffix("/relay") {
-            relayURL += "/relay"
-        }
-
-        Task {
-            await webSocketService.connect(to: relayURL)
-        }
-
-        // Subscribe to the active hub (and any additional hubs from hubContext).
-        // Subscriptions are buffered in WebSocketService until the auth handshake completes.
-        let allHubKinds = [1000, 1001, 1002, 1010, 1011, 20000]
-        if let activeHubId = hubContext.activeHubId {
-            webSocketService.subscribe(hubId: activeHubId, kinds: allHubKinds)
-        }
+        webSocketService.subscribeToMemberHubs(kinds: Self.relayEventKinds)
 
         // Start (or restart) the attributed-event consumer that drives per-hub activity state.
         eventListenerTask?.cancel()
@@ -546,6 +533,37 @@ final class AppState {
                 hubActivityService.handle(attributed)
             }
         }
+
+        relayConnectTask?.cancel()
+        relayConnectTask = Task { [weak self] in
+            guard let self else { return }
+            guard let relayURL = await resolveRelayURL(hubBaseURL: hubBaseURL) else { return }
+            await webSocketService.connect(to: relayURL)
+        }
+    }
+
+    /// Fetch the server-advertised relay endpoint, retrying with backoff while the
+    /// server is unreachable. Returns nil if the server advertises no relay, advertises
+    /// one that fails the transport rule, or stays unreachable.
+    private func resolveRelayURL(hubBaseURL: URL) async -> URL? {
+        let maxAttempts = 5
+        for attempt in 0..<maxAttempts {
+            do {
+                let config = try await apiService.fetchAppConfig()
+                guard let url = WebSocketService.relayURL(hubBaseURL: hubBaseURL, advertised: config.wsRelayUrl) else {
+                    logger.error("Relay unavailable: server advertised wsRelayUrl=\(config.wsRelayUrl ?? "nil", privacy: .public)")
+                    return nil
+                }
+                return url
+            } catch {
+                if Task.isCancelled { return nil }
+                logger.warning("Relay config fetch failed (attempt \(attempt + 1)): \(error.localizedDescription, privacy: .public)")
+                if attempt + 1 < maxAttempts {
+                    try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt))))
+                }
+            }
+        }
+        return nil
     }
 }
 

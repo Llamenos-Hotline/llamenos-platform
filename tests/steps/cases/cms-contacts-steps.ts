@@ -241,11 +241,16 @@ When('I select {string} from the contact type filter', async ({ page }, filterLa
 Then('only individual contacts should appear in the list', async ({ page }) => {
   const contactList = page.getByTestId('contact-list')
   await expect(contactList).toBeVisible({ timeout: Timeouts.ELEMENT })
-  // Individual contacts show the Individual badge
   const cards = page.getByTestId('directory-contact-card')
+  // A filtered list that comes back empty is a failure, not a pass — the Given
+  // seeded one contact of each type, so at least the individual one must render.
+  await expect(cards.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
   const count = await cards.count()
-  if (count > 0) {
-    await expect(cards.first().getByText(/individual/i)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Assert on the type badge specifically, not a card-wide text match — the
+  // seeded contact's own name (e.g. "individual Contact 123") also contains
+  // the type string and would satisfy a card-wide regex on its own.
+  for (let i = 0; i < count; i++) {
+    await expect(cards.nth(i).getByTestId('contact-type-badge')).toHaveText(/individual/i, { timeout: Timeouts.ELEMENT })
   }
 })
 

@@ -11,6 +11,10 @@
  * shared dev server deliberately does not run; its refusals and its wiring are
  * covered here and in unit tests, and the success path against a demo-mode server
  * is documented in the PR.
+ *
+ * The demo accounts' signing keys are generated per server process and never
+ * committed, so the seeding step asks the server under test for them through
+ * the secret-gated dev route and keeps them on the scenario's world.
  */
 import { expect } from '@playwright/test'
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
@@ -20,10 +24,8 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 import { When, Then, After, getState, setState } from './fixtures'
 import { getSharedState, setLastResponse } from './shared-state'
-import { apiGet, apiPost, devDelete, devPost, seedHexToPubkey } from '../../api-helpers'
+import { apiGet, apiPost, devDelete, devGet, devPost, seedHexToPubkey } from '../../api-helpers'
 import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
-import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
-import { DEMO_SEEDS } from '@worker/lib/demo-seeds'
 import { DEMO_CALLS, DEMO_HUB } from '@worker/lib/demo-dataset'
 
 const HUB = DEMO_HUB.id
@@ -39,8 +41,15 @@ interface Counts {
   audit: number
 }
 
+interface DemoCredential {
+  name: string
+  pubkey: string
+  seedHex: string
+}
+
 interface DemoState {
   counts?: Counts
+  identities?: DemoCredential[]
 }
 
 function state(world: Record<string, unknown>): DemoState {
@@ -52,15 +61,16 @@ function state(world: Record<string, unknown>): DemoState {
   return s
 }
 
-function account(name: string): { seedHex: string; pubkey: string } {
-  const listed = DEMO_ACCOUNTS.find(a => a.name === name)
-  if (!listed) throw new Error(`Unknown demo account ${name}`)
-  const seedHex = DEMO_SEEDS[listed.pubkey]
-  return { seedHex, pubkey: seedHexToPubkey(seedHex) }
+function account(world: Record<string, unknown>, name: string): DemoCredential {
+  const identities = state(world).identities
+  if (!identities) throw new Error('Demo identities are fetched by "the demo dataset is seeded" — run that step first')
+  const found = identities.find(i => i.name === name)
+  if (!found) throw new Error(`Unknown demo account ${name}`)
+  return found
 }
 
-const ADMIN = () => account('Demo Admin')
-const VOLUNTEER = () => account('James Chen')
+const ADMIN = (world: Record<string, unknown>) => account(world, 'Demo Admin')
+const VOLUNTEER = (world: Record<string, unknown>) => account(world, 'James Chen')
 
 const hpke = new CipherSuite({ kem: KemId.DhkemX25519HkdfSha256, kdf: KdfId.HkdfSha256, aead: AeadId.Aes256Gcm })
 
@@ -101,8 +111,8 @@ async function listNotes(request: Parameters<typeof apiGet>[0], seedHex: string)
   return data.notes
 }
 
-async function countRows(request: Parameters<typeof apiGet>[0]): Promise<Counts> {
-  const seed = ADMIN().seedHex
+async function countRows(request: Parameters<typeof apiGet>[0], world: Record<string, unknown>): Promise<Counts> {
+  const seed = ADMIN(world).seedHex
   const get = async <T>(path: string) => {
     const res = await apiGet<T>(request, `/hubs/${HUB}${path}`, seed)
     expect(res.status, path).toBe(200)
@@ -125,50 +135,54 @@ After({ tags: '@demo-dataset' }, async ({ request }) => {
 
 // ── Seeding ──────────────────────────────────────────────────────
 
-When('the demo dataset is seeded', async ({ request }) => {
+When('the demo dataset is seeded', async ({ request, world }) => {
   const { status } = await devPost(request, '/test-seed-demo', {})
   expect(status).toBe(200)
+  const res = await devGet<{ identities: DemoCredential[] }>(request, '/test-demo-identities')
+  expect(res.status).toBe(200)
+  for (const identity of res.data.identities) expect(seedHexToPubkey(identity.seedHex)).toBe(identity.pubkey)
+  state(world).identities = res.data.identities
 })
 
 // ── Counts ───────────────────────────────────────────────────────
 
-Then('the demo hub has {int} calls in its history', async ({ request }, expected: number) => {
-  const { status, data } = await apiGet<{ total: number; calls: unknown[] }>(request, `/hubs/${HUB}/calls/history?limit=100`, ADMIN().seedHex)
+Then('the demo hub has {int} calls in its history', async ({ request, world }, expected: number) => {
+  const { status, data } = await apiGet<{ total: number; calls: unknown[] }>(request, `/hubs/${HUB}/calls/history?limit=100`, ADMIN(world).seedHex)
   expect(status).toBe(200)
   expect(data.total).toBe(expected)
   expect(data.calls).toHaveLength(expected)
 })
 
-Then('the demo hub has {int} shifts covering all {int} days', async ({ request }, shiftCount: number, dayCount: number) => {
-  const { status, data } = await apiGet<{ shifts: Array<{ days: number[] }> }>(request, `/hubs/${HUB}/shifts`, ADMIN().seedHex)
+Then('the demo hub has {int} shifts covering all {int} days', async ({ request, world }, shiftCount: number, dayCount: number) => {
+  const { status, data } = await apiGet<{ shifts: Array<{ days: number[] }> }>(request, `/hubs/${HUB}/shifts`, ADMIN(world).seedHex)
   expect(status).toBe(200)
   expect(data.shifts).toHaveLength(shiftCount)
   const days = new Set(data.shifts.flatMap(s => s.days))
   expect([...days].sort()).toEqual(Array.from({ length: dayCount }, (_, i) => i))
 })
 
-Then('the demo volunteer is on shift now', async ({ request }) => {
+Then('the demo volunteer is on shift now', async ({ request, world }) => {
   const { status, data } = await apiGet<{ onShift: boolean; currentShift: { encryptedName: string } | null }>(
-    request, `/hubs/${HUB}/shifts/my-status`, VOLUNTEER().seedHex,
+    request, `/hubs/${HUB}/shifts/my-status`, VOLUNTEER(world).seedHex,
   )
   expect(status).toBe(200)
   expect(data.onShift).toBe(true)
   expect(data.currentShift).not.toBeNull()
 })
 
-Then('the demo hub has {int} contacts', async ({ request }, expected: number) => {
-  const { status, data } = await apiGet<{ contacts: unknown[] }>(request, `/hubs/${HUB}/directory?limit=100`, ADMIN().seedHex)
+Then('the demo hub has {int} contacts', async ({ request, world }, expected: number) => {
+  const { status, data } = await apiGet<{ contacts: unknown[] }>(request, `/hubs/${HUB}/directory?limit=100`, ADMIN(world).seedHex)
   expect(status).toBe(200)
   expect(data.contacts).toHaveLength(expected)
 })
 
-Then('the demo hub has {int} cases', async ({ request }, expected: number) => {
-  const { status, data } = await apiGet<{ records: unknown[] }>(request, `/hubs/${HUB}/records?limit=100`, ADMIN().seedHex)
+Then('the demo hub has {int} cases', async ({ request, world }, expected: number) => {
+  const { status, data } = await apiGet<{ records: unknown[] }>(request, `/hubs/${HUB}/records?limit=100`, ADMIN(world).seedHex)
   expect(status).toBe(200)
   expect(data.records).toHaveLength(expected)
 })
 
-Then('the demo hub has one conversation for each configured messaging channel', async ({ request }) => {
+Then('the demo hub has one conversation for each configured messaging channel', async ({ request, world }) => {
   const config = await request.get('/api/config')
   const { channels } = await config.json() as { channels: Record<string, boolean> }
   const messagingChannels = ['sms', 'whatsapp', 'signal', 'rcs', 'telegram']
@@ -176,17 +190,17 @@ Then('the demo hub has one conversation for each configured messaging channel', 
   expect(configured.length).toBeGreaterThan(0)
 
   const { status, data } = await apiGet<{ conversations: Array<{ channelType: string }> }>(
-    request, `/hubs/${HUB}/conversations?limit=100`, ADMIN().seedHex,
+    request, `/hubs/${HUB}/conversations?limit=100`, ADMIN(world).seedHex,
   )
   expect(status).toBe(200)
   expect(data.conversations.map(c => c.channelType).sort()).toEqual(configured)
 })
 
-Then('the demo hub audit log is a valid hash chain with entries', async ({ request }) => {
-  const list = await apiGet<{ total: number }>(request, `/hubs/${HUB}/audit?limit=100`, ADMIN().seedHex)
+Then('the demo hub audit log is a valid hash chain with entries', async ({ request, world }) => {
+  const list = await apiGet<{ total: number }>(request, `/hubs/${HUB}/audit?limit=100`, ADMIN(world).seedHex)
   expect(list.status).toBe(200)
   expect(list.data.total).toBeGreaterThan(0)
-  const verify = await apiGet<{ valid: boolean; totalEntries: number }>(request, `/hubs/${HUB}/audit/verify`, ADMIN().seedHex)
+  const verify = await apiGet<{ valid: boolean; totalEntries: number }>(request, `/hubs/${HUB}/audit/verify`, ADMIN(world).seedHex)
   expect(verify.status).toBe(200)
   expect(verify.data.valid).toBe(true)
   expect(verify.data.totalEntries).toBe(list.data.total)
@@ -195,19 +209,19 @@ Then('the demo hub audit log is a valid hash chain with entries', async ({ reque
 // ── Idempotency ──────────────────────────────────────────────────
 
 When('the demo hub row counts are recorded', async ({ request, world }) => {
-  state(world).counts = await countRows(request)
+  state(world).counts = await countRows(request, world)
 })
 
 Then('the demo hub row counts are unchanged', async ({ request, world }) => {
   const before = state(world).counts
   expect(before).toBeDefined()
-  expect(await countRows(request)).toEqual(before)
+  expect(await countRows(request, world)).toEqual(before)
 })
 
 // ── Decryption round-trips ───────────────────────────────────────
 
-Then('every note written by the demo volunteer decrypts to its authored text for that volunteer', async ({ request }) => {
-  const volunteer = VOLUNTEER()
+Then('every note written by the demo volunteer decrypts to its authored text for that volunteer', async ({ request, world }) => {
+  const volunteer = VOLUNTEER(world)
   const notes = await listNotes(request, volunteer.seedHex)
   const expected = DEMO_CALLS.filter(c => c.note && c.answeredBy === 'james')
   expect(notes).toHaveLength(expected.length)
@@ -219,8 +233,8 @@ Then('every note written by the demo volunteer decrypts to its authored text for
   }
 })
 
-Then('every demo note decrypts to its authored text for the demo admin', async ({ request }) => {
-  const admin = ADMIN()
+Then('every demo note decrypts to its authored text for the demo admin', async ({ request, world }) => {
+  const admin = ADMIN(world)
   const notes = await listNotes(request, admin.seedHex)
   expect(notes).toHaveLength(noteTextByCallId.size)
   for (const note of notes) {
@@ -231,8 +245,8 @@ Then('every demo note decrypts to its authored text for the demo admin', async (
   }
 })
 
-Then('every demo call record decrypts for the demo admin with the fictional caller number', async ({ request }) => {
-  const admin = ADMIN()
+Then('every demo call record decrypts for the demo admin with the fictional caller number', async ({ request, world }) => {
+  const admin = ADMIN(world)
   const { status, data } = await apiGet<{ calls: Array<{ callId: string; callerLast4: string; encryptedContent: string; adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }> }> }>(
     request, `/hubs/${HUB}/calls/history?limit=100`, admin.seedHex,
   )
@@ -247,23 +261,23 @@ Then('every demo call record decrypts for the demo admin with the fictional call
   }
 })
 
-Then('the demo volunteer sees only their own notes and the demo admin sees all of them', async ({ request }) => {
-  const volunteerNotes = await listNotes(request, VOLUNTEER().seedHex)
-  const adminNotes = await listNotes(request, ADMIN().seedHex)
+Then('the demo volunteer sees only their own notes and the demo admin sees all of them', async ({ request, world }) => {
+  const volunteerNotes = await listNotes(request, VOLUNTEER(world).seedHex)
+  const adminNotes = await listNotes(request, ADMIN(world).seedHex)
   expect(volunteerNotes.length).toBeGreaterThan(0)
   expect(volunteerNotes.length).toBeLessThan(adminNotes.length)
-  expect(volunteerNotes.every(n => n.authorPubkey === VOLUNTEER().pubkey)).toBe(true)
+  expect(volunteerNotes.every(n => n.authorPubkey === VOLUNTEER(world).pubkey)).toBe(true)
   expect(new Set(adminNotes.map(n => n.authorPubkey)).size).toBeGreaterThan(1)
 })
 
 // ── Demo reset endpoint ──────────────────────────────────────────
 
 When('the demo admin requests a demo reset', async ({ request, world }) => {
-  setLastResponse(world, await apiPost(request, '/demo/reset', {}, ADMIN().seedHex))
+  setLastResponse(world, await apiPost(request, '/demo/reset', {}, ADMIN(world).seedHex))
 })
 
 When('the demo volunteer requests a demo reset', async ({ request, world }) => {
-  setLastResponse(world, await apiPost(request, '/demo/reset', {}, VOLUNTEER().seedHex))
+  setLastResponse(world, await apiPost(request, '/demo/reset', {}, VOLUNTEER(world).seedHex))
 })
 
 When('an unauthenticated client requests a demo reset', async ({ request, world }) => {

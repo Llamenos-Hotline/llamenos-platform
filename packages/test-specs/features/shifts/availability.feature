@@ -1,4 +1,5 @@
-@backend @desktop @ios
+# @wip: Background steps and REST vocabulary have no backend definitions — #1122
+@backend @desktop @ios @wip
 Feature: Availability Blocks
   As a volunteer
   I want to set availability blocks

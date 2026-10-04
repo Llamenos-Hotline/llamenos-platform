@@ -72,7 +72,7 @@ struct EntityTypeEditorView: View {
                 )
                 let updated: CaseEntityTypeDefinition = try await appState.apiService.request(
                     method: "PATCH",
-                    path: "/api/settings/cms/entity-types/\(entityType.id)/customize",
+                    path: appState.apiService.hp("/api/settings/cms/entity-types/\(entityType.id)/customize"),
                     body: body
                 )
                 await MainActor.run { onSave(updated); dismiss() }

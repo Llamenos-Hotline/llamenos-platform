@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { classifyImpact, tierFor, TIER1_PATHS, AGENT_INSTRUCTION_PATHS } from '../../orchestrator/src/impact.js'
 import { NEVER_WRITE_PATHS, SECRET_PATH_PATTERNS } from '../../orchestrator/src/config.js'
+import { checkScope } from '../../orchestrator/src/scope.js'
 
 /**
  * Builds a realistic changed-file path for a `matchesPath`/glob pattern so
@@ -87,6 +88,39 @@ describe('classifyImpact', () => {
     ['knope.toml'],
     ['sip-bridge/src/ari-adapter.ts'],
     ['signal-notifier/src/contact-resolver.ts'],
+    // The security-sensitive subset of `scripts/` (#1066): the infra lane may
+    // write scripts/, so these must still reach a human — matching CODEOWNERS.
+    ['scripts/bootstrap-admin.ts'],
+    ['scripts/release/sign-artifacts.sh'],
+    ['scripts/release/promote-release.sh'],
+    ['scripts/build-iso.sh'],
+    ['scripts/iso-builder/late-command.sh'],
+    ['scripts/verify-build.sh'],
+    ['scripts/verify-iso.sh'],
+    ['scripts/generate-update-manifest.sh'],
+    ['scripts/generate-update-manifest.ts'],
+    ['scripts/inject-cert-pins.ts'],
+    ['scripts/extract-cert-pins.sh'],
+    // The gate scripts under `scripts/` (#1087): whatever's exit status is a
+    // check's verdict. Weakening any of these lets a defect through a check.
+    ['scripts/check-ipc-allowlist.sh'],
+    ['scripts/check-ecies-active.sh'],
+    ['scripts/check-label-count.sh'],
+    ['scripts/check-migration-drift.ts'],
+    ['scripts/check-migration-drift.sh'],
+    ['scripts/typecheck-tests-gate.ts'],
+    ['scripts/eslint-rules/no-inline-api-shape.js'],
+    ['scripts/regenerate-snapshot.ts'],
+    ['scripts/image-smoke.sh'],
+    ['scripts/verify-runtime.ts'],
+    ['scripts/run-migrations.ts'],
+    ['scripts/test-orchestrator.sh'],
+    ['scripts/test-fleet.sh'],
+    ['scripts/test-backend-bdd.sh'],
+    ['scripts/test-integration-full.sh'],
+    ['scripts/android-parallel-e2e.sh'],
+    ['scripts/lib/platform-detect.sh'],
+    ['scripts/lib/test-reporter.sh'],
   ])('treats %s as high impact', (f) => {
     expect(classifyImpact([f], 5).impact).toBe('high')
   })
@@ -94,6 +128,18 @@ describe('classifyImpact', () => {
   // Boundary-exact: ONLY `apps/desktop/src/crypto.rs` is restored above, not
   // the whole `apps/desktop/src/` directory — an ordinary desktop source file
   // stays low impact.
+  // Boundary-exact for scripts/ too: only the listed subsets are high impact.
+  // Dev, setup and build helpers — which enforce no check — are ordinary
+  // infra-lane work and merge on green.
+  it.each([
+    ['scripts/dev-setup.sh'],
+    ['scripts/dev-bun.sh'],
+    ['scripts/setup-android-sdk.sh'],
+    ['scripts/update-image-digests.sh'],
+  ])('does not escalate ordinary scripts/ file %s', (f) => {
+    expect(classifyImpact([f], 5).impact).toBe('low')
+  })
+
   it('does not escalate an ordinary desktop source file that is not the crypto IPC wrapper', () => {
     expect(classifyImpact(['apps/desktop/src/main.rs'], 5).impact).toBe('low')
   })
@@ -118,9 +164,11 @@ describe('classifyImpact', () => {
     ['apps/android/fastlane/Fastfile'],
     ['apps/desktop/tauri.conf.json'],
     ['packages/protocol/tools/codegen.ts'],
-    ['scripts/inject-cert-pins.ts'],
-    ['scripts/extract-cert-pins.sh'],
-    ['scripts/verify-build.sh'],
+    // `scripts/inject-cert-pins.ts`, `scripts/extract-cert-pins.sh` and
+    // `scripts/verify-build.sh` used to be in this list too. They were safe
+    // to narrow while no lane could write `scripts/` at all; #1066 gave it to
+    // the infra lane, so they are CODEOWNERS-owned and HIGH impact again —
+    // asserted with the rest of the scripts/ subset above.
     ['Dockerfile.build'],
   ])('treats %s as low impact (narrowed 2026-09-12 — no production users yet)', (f) => {
     expect(classifyImpact([f], 5).impact).toBe('low')
@@ -177,6 +225,29 @@ describe('classifyImpact — secrets always classify high', () => {
   it.each(NEVER_WRITE_PATHS)('never-write pattern %s is also high-impact (gates must not drift)', (pattern) => {
     const file = realisticPathFor(pattern)
     expect(classifyImpact([file], 5).impact).toBe('high')
+  })
+
+  // The write gate and the merge gate are deliberately ASYMMETRIC about
+  // committed templates (#1253): `deploy/docker/.env.example` must be
+  // WRITABLE, or the deploy template can never be fixed — but it stays
+  // HIGH-IMPACT, because a real credential pasted into a file that is
+  // committed on purpose is the one mistake a revert cannot undo. The
+  // required relation is never-write ⊆ high-impact, so the merge gate being
+  // the broader of the two keeps it intact.
+  it.each([
+    '.env.example',
+    'deploy/docker/.env.example',
+    'apps/android/keystore.properties.example',
+  ])('%s is writable by the never-write gate yet still high-impact at merge', (file) => {
+    expect(checkScope([file], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual([])
+    const result = classifyImpact([file], 5)
+    expect(result.impact).toBe('high')
+    expect(result.reasons.join(' ')).toContain('committed template (writable, still high-impact)')
+  })
+
+  it('does not call a real secret a committed template in its reason', () => {
+    expect(classifyImpact(['deploy/docker/.env'], 5).reasons.join(' '))
+      .toContain('(never-write and high-impact)')
   })
 
   // The twelve-path probe from the security review: every one is a

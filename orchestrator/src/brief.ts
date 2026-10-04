@@ -59,9 +59,21 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
         `You own these paths and ONLY these paths:\n\n` +
         lane.scope.owned.map((p) => `- \`${p}\``).join('\n') +
         `\n\nIf the fix genuinely requires touching something outside your scope, ` +
-        `do NOT touch it — reduce the fix to what fits inside your scope, note in your ` +
-        `final status exactly what you had to leave out and why, and let a human decide ` +
-        `whether the scope itself needs to change. Never silently widen your scope.`,
+        `do NOT touch it. You then have TWO options, and choosing between them is your ` +
+        `judgement call:\n\n` +
+        `1. If a smaller fix that fits inside your scope is genuinely an improvement, make ` +
+        `that one, and note in your final status exactly what you left out and why.\n` +
+        `2. If the only fix that fits would be WORSE than doing nothing — deleting a feature ` +
+        `rather than adding a dependency, storing state in memory rather than in the schema, ` +
+        `duplicating a shared type rather than changing it, weakening a guarantee to make a ` +
+        `test pass — then report BLOCKED instead, naming the path you needed and why the ` +
+        `in-scope alternative is worse.\n\n` +
+        `Option 2 is a correct and valued outcome, not a failure. A scope boundary must never ` +
+        `decide a product or architectural question by default: that is a human's call, and ` +
+        `reporting BLOCKED is how you hand it to them. Shipping the lesser fix with an honest ` +
+        `note does NOT hand it over — the note arrives in a pull request that is already open, ` +
+        `green, and heading for auto-merge.\n\n` +
+        `Never silently widen your scope.`,
     },
     {
       heading: 'What you must NOT do',

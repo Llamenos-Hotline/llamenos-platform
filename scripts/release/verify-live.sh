@@ -16,7 +16,20 @@ VERSION="${1:?Usage: verify-live.sh <version> [local-manifest-path]}"
 LOCAL_MANIFEST="${2:-}"
 
 UPDATER_URL="https://updates.llamenos.org/desktop/latest.json"
-GITHUB_URL="https://github.com/rhonda-rodododo/llamenos/releases/latest/download/latest.json"
+# Informational fallback only — never fatal (see the soft check near the end
+# of this script). The owner/repo was `rhonda-rodododo/llamenos`, which is
+# not this repository at all: it redirects to the v1 hotline repo, which has
+# never held a v2 desktop manifest. Corrected to this repository, where
+# tauri-release.yml does create the release (`gh release create --repo
+# "${GITHUB_REPOSITORY}"`).
+#
+# KNOWN GAP, deliberately not guessed at here: desktop releases are tagged
+# `desktop-v<version>` and published with `--latest=false`, so
+# `/releases/latest/download/...` will not resolve to them and this check
+# still reports "not available". Fixing that means deciding what the fallback
+# should point at (the tagged asset URL, or marking desktop releases latest),
+# which is a release-policy question rather than a rename — see #1218.
+GITHUB_URL="https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest/download/latest.json"
 
 echo "=== Verifying live updater endpoint ==="
 echo "  Expected version: ${VERSION}"

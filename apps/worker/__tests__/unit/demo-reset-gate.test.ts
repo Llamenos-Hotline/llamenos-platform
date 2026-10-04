@@ -2,18 +2,25 @@ import { describe, it, expect } from 'vitest'
 import { demoResetRefusal, type DemoResetGateEnv } from '@worker/lib/demo-reset-gate'
 
 const OK: DemoResetGateEnv = {
-  ENVIRONMENT: 'demo',
+  ENVIRONMENT: 'development',
+  DEV_ROUTES_ENABLED: 'true',
   DEMO_MODE: 'true',
   DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA',
 }
 
 describe('demoResetRefusal', () => {
-  it('allows a demo deployment that set both flags', () => {
+  it('allows a development server that set both demo flags', () => {
     expect(demoResetRefusal(OK)).toBeNull()
   })
 
-  it.each(['development', 'staging', 'demo'])('allows ENVIRONMENT=%s with both flags', (environment) => {
-    expect(demoResetRefusal({ ...OK, ENVIRONMENT: environment })).toBeNull()
+  // The reset registers the demo accounts, whose keys only a development server holds.
+  it.each(['staging', 'demo', 'test', '', 'Development'])('refuses ENVIRONMENT=%j even with every demo flag set', (environment) => {
+    expect(demoResetRefusal({ ...OK, ENVIRONMENT: environment })).toMatch(/development server/)
+  })
+
+  it('refuses a development server without DEV_ROUTES_ENABLED=true', () => {
+    expect(demoResetRefusal({ ...OK, DEV_ROUTES_ENABLED: undefined })).toMatch(/development server/)
+    expect(demoResetRefusal({ ...OK, DEV_ROUTES_ENABLED: 'TRUE' })).toMatch(/development server/)
   })
 
   it('refuses without DEMO_MODE', () => {
@@ -34,7 +41,7 @@ describe('demoResetRefusal', () => {
 
   describe('production', () => {
     // Every other flag set to the value that would otherwise permit the reset.
-    const permissive: DemoResetGateEnv = { DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }
+    const permissive: DemoResetGateEnv = { DEV_ROUTES_ENABLED: 'true', DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA' }
 
     it.each(['production', 'Production', ' PRODUCTION '])('always refuses ENVIRONMENT=%j', (environment) => {
       expect(demoResetRefusal({ ...permissive, ENVIRONMENT: environment })).toMatch(/production/)
@@ -44,7 +51,6 @@ describe('demoResetRefusal', () => {
       const env = {
         ...permissive,
         ENVIRONMENT: 'production',
-        DEV_ROUTES_ENABLED: 'true',
         DEV_RESET_SECRET: 'x',
         E2E_TEST_SECRET: 'y',
       } as DemoResetGateEnv

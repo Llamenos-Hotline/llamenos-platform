@@ -12,7 +12,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testAdminSeesCommunicationsLink() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to settings") {
             navigateToSettings()
@@ -46,7 +46,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testCommunicationsViewShowsLoadingOrContent() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings") {
             navigateToCommunications()
@@ -66,7 +66,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testNoProviderStateShowsSetupButton() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings") {
             navigateToCommunications()
@@ -89,7 +89,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testOnboardingSheetAppearsOnSetupTap() {
         given("I am logged in as an admin with no provider configured") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I tap the Start Setup button") {
             navigateToCommunications()
@@ -116,7 +116,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testOnboardingSheetShowsStepIndicator() {
         given("I open the onboarding sheet") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         then("the step indicator should be visible") {
@@ -130,7 +130,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testOnboardingSheetShowsCancelButton() {
         given("I open the onboarding sheet") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         then("the cancel button should be visible") {
@@ -144,7 +144,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testOnboardingCancelDismissesSheet() {
         given("the onboarding sheet is open") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         when("I tap Cancel") {
@@ -167,7 +167,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testTemplateListAppearsOnFirstStep() {
         given("I open the onboarding sheet") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         then("the template list should be visible as step 1") {
@@ -181,7 +181,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testStartFromScratchOptionExists() {
         given("I am on the template selection step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         then("a 'Start from Scratch' option should be visible") {
@@ -197,7 +197,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testChannelChecklistShowsAllToggles() {
         given("I am on the channel checklist step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelStep()
         }
@@ -224,7 +224,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testChannelChecklistIdentifier() {
         given("I am on the channel checklist step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelStep()
         }
@@ -239,7 +239,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testChannelTogglesAreIndependentlyToggleable() {
         given("I am on the channel checklist step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelStep()
         }
@@ -272,7 +272,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testBackButtonNotVisibleOnFirstStep() {
         given("I am on the first step (template)") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
         }
         then("the back button should NOT be visible") {
@@ -287,7 +287,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testNextButtonAppearsAfterTemplateStep() {
         given("I advance past the template step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelStep()
         }
@@ -302,7 +302,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testBackButtonAppearsAfterFirstStep() {
         given("I advance past the template step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelStep()
         }
@@ -319,7 +319,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testProviderStepRendersContent() {
         given("I advance to the provider connection step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToProviderStep()
         }
@@ -336,7 +336,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsSections() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings") {
             navigateToCommunications()
@@ -370,7 +370,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsChannelSettingsLink() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
@@ -392,7 +392,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSettingsListShowsUsageLink() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
@@ -413,7 +413,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testChannelSettingsNavigationOpensChecklist() {
         given("I am logged in as admin with provider configured") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I tap the channel settings link") {
             navigateToCommunications()
@@ -446,7 +446,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testUsageNavigationOpensUsageView() {
         given("I am logged in as admin with provider configured") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I tap the usage link") {
             navigateToCommunications()
@@ -472,7 +472,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testPhoneNumbersSectionExists() {
         given("I am logged in as an admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
@@ -495,7 +495,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testPhoneNumberStepRendersContent() {
         given("I advance to the phone number step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToPhoneStep()
         }
@@ -510,7 +510,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testChannelSetupStepRendersContent() {
         given("I advance to the channel setup step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToChannelSetupStep()
         }
@@ -525,7 +525,7 @@ final class HubCommunicationsUITests: BaseUITest {
 
     func testSummaryStepRendersContent() {
         given("I advance to the summary step") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
             openOnboardingSheet()
             advanceToSummaryStep()
         }

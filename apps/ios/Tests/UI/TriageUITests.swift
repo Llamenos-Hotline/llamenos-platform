@@ -200,7 +200,7 @@ final class TriageUITests: BaseUITest {
     /// Verifies the triage quick action card is visible on the dashboard for admins.
     func testDashboardHasTriageQuickAction() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         then("the dashboard should show a triage quick action") {
             let triageAction = scrollToFind("dashboard-triage-action")

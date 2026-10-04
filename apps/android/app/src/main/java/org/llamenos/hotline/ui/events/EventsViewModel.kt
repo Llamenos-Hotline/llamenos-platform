@@ -43,6 +43,11 @@ data class EventsUiState(
     val isLoadingDetail: Boolean = false,
     val detailError: String? = null,
 
+    // Child records of the selected event (records whose parentRecordId is the event)
+    val childRecords: List<Record> = emptyList(),
+    val isLoadingChildren: Boolean = false,
+    val childrenError: String? = null,
+
     // Search
     val searchQuery: String = "",
 
@@ -65,6 +70,21 @@ data class EventsUiState(
      */
     val entityTypeMap: Map<String, EntityTypeDefinition>
         get() = entityTypes.associateBy { it.id }
+
+    /**
+     * Child records of the selected event that are themselves events.
+     */
+    val subEvents: List<Record>
+        get() = childRecords.filter { isEventRecord(it) }
+
+    /**
+     * Child records of the selected event that are not events (cases and other entity types).
+     */
+    val linkedCases: List<Record>
+        get() = childRecords.filterNot { isEventRecord(it) }
+
+    private fun isEventRecord(record: Record): Boolean =
+        entityTypeMap[record.entityTypeID]?.category == org.llamenos.protocol.SharedEntityTypeDefinitionCategory.Event
 
     /**
      * Events filtered by search query.
@@ -142,32 +162,53 @@ class EventsViewModel @Inject constructor(
 
     /**
      * Suspending version of entity type loading — called from [refresh] for sequential execution.
+     *
+     * The event list is loading from here until the records request settles. Leaving
+     * `isLoading` false while entity types are fetched made the list render its
+     * "No events" empty state for the whole round trip, before any record was asked for.
      */
     private suspend fun loadEntityTypesSync() {
-        _uiState.update { it.copy(isLoadingEntityTypes = true) }
-        try {
-            val response = apiService.request<EntityTypesResponse>(
+        _uiState.update {
+            it.copy(
+                isLoadingEntityTypes = true,
+                isLoading = it.events.isEmpty(),
+                isRefreshing = it.events.isNotEmpty(),
+                error = null,
+            )
+        }
+        val response = try {
+            apiService.request<EntityTypesResponse>(
                 "GET",
                 apiService.hp("/api/settings/cms/entity-types"),
             )
+        } catch (e: Exception) {
             _uiState.update {
                 it.copy(
-                    entityTypes = response.entityTypes,
                     isLoadingEntityTypes = false,
+                    isLoading = false,
+                    isRefreshing = false,
+                    error = e.message ?: "Failed to load events",
                 )
             }
-            // Now load events for the first event entity type
-            loadEvents()
-        } catch (_: Exception) {
-            _uiState.update { it.copy(isLoadingEntityTypes = false) }
-            // Entity types unavailable — likely CMS not configured
+            return
         }
+        _uiState.update {
+            it.copy(
+                entityTypes = response.entityTypes,
+                isLoadingEntityTypes = false,
+            )
+        }
+        loadEventsSync()
     }
 
     /**
      * Load event records from GET /api/records filtered to event entity types.
      */
     fun loadEvents() {
+        viewModelScope.launch { loadEventsSync() }
+    }
+
+    private suspend fun loadEventsSync() {
         val eventTypes = _uiState.value.eventEntityTypes
         if (eventTypes.isEmpty()) {
             _uiState.update {
@@ -181,37 +222,35 @@ class EventsViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        _uiState.update {
+            it.copy(
+                isLoading = it.events.isEmpty(),
+                isRefreshing = it.events.isNotEmpty(),
+                error = null,
+            )
+        }
+        try {
+            // Load records for the first event entity type
+            val firstEventType = eventTypes.first()
+            val response = apiService.request<RecordsListResponse>(
+                "GET",
+                apiService.hp("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
+            )
             _uiState.update {
                 it.copy(
-                    isLoading = it.events.isEmpty(),
-                    isRefreshing = it.events.isNotEmpty(),
-                    error = null,
+                    events = response.records,
+                    total = response.total,
+                    isLoading = false,
+                    isRefreshing = false,
                 )
             }
-            try {
-                // Load records for the first event entity type
-                val firstEventType = eventTypes.first()
-                val response = apiService.request<RecordsListResponse>(
-                    "GET",
-                    apiService.hp("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
+        } catch (e: Exception) {
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isRefreshing = false,
+                    error = e.message ?: "Failed to load events",
                 )
-                _uiState.update {
-                    it.copy(
-                        events = response.records,
-                        total = response.total,
-                        isLoading = false,
-                        isRefreshing = false,
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isRefreshing = false,
-                        error = e.message ?: "Failed to load events",
-                    )
-                }
             }
         }
     }
@@ -226,6 +265,8 @@ class EventsViewModel @Inject constructor(
                     isLoadingDetail = true,
                     detailError = null,
                     selectedEvent = null,
+                    childRecords = emptyList(),
+                    childrenError = null,
                 )
             }
             try {
@@ -236,11 +277,45 @@ class EventsViewModel @Inject constructor(
                         isLoadingDetail = false,
                     )
                 }
+                loadChildRecords(eventId)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         isLoadingDetail = false,
                         detailError = e.message ?: "Failed to load event",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Load the child records of an event from GET /api/records?parentRecordId=.
+     *
+     * Record-based events nest sub-events and link cases through the record
+     * parent/child relation, mirroring the desktop event detail. The deprecated
+     * /api/events endpoints read the separate events table, which record-based
+     * events never enter.
+     */
+    fun loadChildRecords(eventId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingChildren = true, childrenError = null) }
+            try {
+                val response = apiService.request<RecordsListResponse>(
+                    "GET",
+                    apiService.hp("/api/records") + "?parentRecordId=$eventId&limit=50",
+                )
+                _uiState.update {
+                    it.copy(
+                        childRecords = response.records,
+                        isLoadingChildren = false,
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoadingChildren = false,
+                        childrenError = e.message ?: "Failed to load linked records",
                     )
                 }
             }
@@ -332,6 +407,10 @@ class EventsViewModel @Inject constructor(
         _uiState.update { it.copy(error = null) }
     }
 
+    fun dismissChildrenError() {
+        _uiState.update { it.copy(childrenError = null) }
+    }
+
     fun dismissActionError() {
         _uiState.update { it.copy(actionError = null) }
     }
@@ -345,6 +424,8 @@ class EventsViewModel @Inject constructor(
             it.copy(
                 selectedEvent = null,
                 detailError = null,
+                childRecords = emptyList(),
+                childrenError = null,
             )
         }
     }

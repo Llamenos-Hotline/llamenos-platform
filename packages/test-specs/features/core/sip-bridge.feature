@@ -1,4 +1,5 @@
-@backend
+# @wip: no backend step definitions for any scenario — #1192
+@backend @wip
 Feature: SIP Bridge Integration
   As the SIP bridge service
   I want to translate PBX events into Worker webhooks and execute commands

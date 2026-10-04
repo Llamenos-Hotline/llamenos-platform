@@ -159,7 +159,7 @@ events.post('/',
       eventId: event.id,
       entityTypeId: event.entityTypeId,
       caseNumber: event.caseNumber,
-    }, event.hubId ?? undefined)
+    }, event.hubId ?? '')
 
     await audit(services.audit, 'eventCreated', pubkey, {
       eventId: event.id,
@@ -202,7 +202,7 @@ events.patch('/:id',
     publishEvent(c.env, KIND_RECORD_UPDATED, {
       type: 'event:updated',
       eventId: id,
-    }, updated.hubId ?? undefined)
+    }, updated.hubId ?? '')
 
     await audit(services.audit, 'eventUpdated', pubkey, { eventId: id }, undefined, c.get('hubId') ?? null)
 

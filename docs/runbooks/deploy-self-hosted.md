@@ -64,7 +64,7 @@ supported (the app's `.env` addresses them by Docker-network name).
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/rhonda-rodododo/llamenos-platform.git
+git clone https://github.com/Llamenos-Hotline/llamenos-platform.git
 cd llamenos-platform
 ```
 

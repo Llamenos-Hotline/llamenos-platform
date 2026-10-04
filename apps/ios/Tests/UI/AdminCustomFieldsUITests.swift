@@ -26,7 +26,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testCustomFieldsTabShowsContent() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to the custom fields tab") {
             navigateToCustomFields()
@@ -43,7 +43,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testAddFieldButtonExists() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to the custom fields tab") {
             navigateToCustomFields()
@@ -58,7 +58,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testCreateFieldSheetOpens() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to custom fields and tap add") {
             navigateToCustomFields()
@@ -99,7 +99,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testCancelFieldCreation() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the create field sheet and cancel") {
             navigateToCustomFields()
@@ -132,7 +132,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testEditorFormElementsExist() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the create field sheet") {
             navigateToCustomFields()
@@ -166,7 +166,7 @@ final class AdminCustomFieldsUITests: BaseUITest {
 
     func testEmptyStateShowsCreateButton() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to custom fields") {
             navigateToCustomFields()

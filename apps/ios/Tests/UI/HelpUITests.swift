@@ -45,7 +45,7 @@ final class HelpUITests: BaseUITest {
 
     func testAdminGuideVisibleForAdmins() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to the help screen") {
             navigateToSettings()

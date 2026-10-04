@@ -1,4 +1,5 @@
-@backend @security
+# @wip: needs DB clock control a shared BDD server cannot give — #1194
+@backend @security @wip
 Feature: Session security hardening
   Sessions are cleaned up on device revocation, have an absolute maximum
   lifetime, and WebAuthn challenges are consumed atomically.

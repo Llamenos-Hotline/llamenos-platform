@@ -45,6 +45,15 @@ function setAdv(world: Record<string, unknown>, patch: Partial<CmsAdvancedState>
   setState(world, KEY, { ...current, ...patch })
 }
 
+/**
+ * A well-formed id that names nothing. The fixed placeholders these steps used
+ * (`00000000-…-000000000001`) are not RFC 9562 UUIDs, so `z.uuid()` rejected them
+ * with 400 before the lookup ran — the "not found" scenarios never reached it.
+ */
+function nonexistentId(): string {
+  return crypto.randomUUID()
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────
 
 Given('two contacts exist in the directory', async ({ world, request }) => {
@@ -124,8 +133,8 @@ When('I attempt to merge a non-existent primary contact', async ({ world, reques
   const hubId = getScenarioState(world).hubId
 
   const { status, data } = await apiPost(request, `/hubs/${hubId}/directory/merge`, {
-    primaryId: '00000000-0000-0000-0000-000000000000',
-    secondaryId: '00000000-0000-0000-0000-000000000001',
+    primaryId: nonexistentId(),
+    secondaryId: nonexistentId(),
     mergedEncryptedSummary: 'x',
     mergedSummaryEnvelopes: [],
     mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
@@ -143,7 +152,7 @@ When('I attempt to merge a non-existent secondary contact into the contact', asy
 
   const { status, data } = await apiPost(request, `/hubs/${hubId}/directory/merge`, {
     primaryId,
-    secondaryId: '00000000-0000-0000-0000-000000000099',
+    secondaryId: nonexistentId(),
     mergedEncryptedSummary: 'x',
     mergedSummaryEnvelopes: [],
     mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
@@ -177,8 +186,8 @@ When('I attempt to merge a non-existent record', async ({ world, request }) => {
   const hubId = getScenarioState(world).hubId
 
   const { status, data } = await apiPost(request, `/hubs/${hubId}/records/merge`, {
-    primaryId: '00000000-0000-0000-0000-000000000000',
-    secondaryId: '00000000-0000-0000-0000-000000000001',
+    primaryId: nonexistentId(),
+    secondaryId: nonexistentId(),
   })
 
   setAdv(world, { lastStatusCode: status })
@@ -345,6 +354,26 @@ Then('the deleted contacts are no longer returned in the contact list', async ({
   for (const id of adv.contactIds) {
     expect(returnedIds).not.toContain(id)
   }
+})
+
+Then('the merged-away secondary contact is no longer returned in the contact list', async ({ world, request }) => {
+  const hubId = getScenarioState(world).hubId
+  const adv = getAdv(world)
+  const [, secondaryId] = adv.contactIds
+
+  const data = await listContactsViaApi(request, { hubId })
+  const returnedIds = data.contacts.map((c) => String(c.id))
+  expect(returnedIds).not.toContain(secondaryId)
+})
+
+Then('the primary contact is still returned in the contact list', async ({ world, request }) => {
+  const hubId = getScenarioState(world).hubId
+  const adv = getAdv(world)
+  const [primaryId] = adv.contactIds
+
+  const data = await listContactsViaApi(request, { hubId })
+  const returnedIds = data.contacts.map((c) => String(c.id))
+  expect(returnedIds).toContain(primaryId)
 })
 
 Then('the bulk create response shows {int} contacts created', ({ world }, count: number) => {

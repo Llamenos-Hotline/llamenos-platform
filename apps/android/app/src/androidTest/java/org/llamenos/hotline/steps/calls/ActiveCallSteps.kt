@@ -1,6 +1,7 @@
 package org.llamenos.hotline.steps.calls
 
 import android.util.Log
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -127,12 +128,16 @@ class ActiveCallSteps : BaseSteps() {
 
     @Then("the active call card should disappear")
     fun theActiveCallCardShouldDisappear() {
-        // After hangup, the active call card should eventually disappear.
-        // Give it a generous timeout for the backend to process the end-call event.
-        composeRule.waitForIdle()
-        // The card may or may not disappear immediately depending on WebSocket latency.
-        // Assert the dashboard is still accessible.
-        val found = assertAnyTagDisplayed("dashboard-title", NAV_DASHBOARD)
+        // Hangup ends the call server-side; the dashboard drops the card once the
+        // end-call event (or the next active-call fetch) lands.
+        try {
+            composeRule.waitUntil(15_000) {
+                composeRule.onAllNodesWithTag("active-call-card").fetchSemanticsNodes().isEmpty()
+            }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("active-call-card still shown 15s after hangup (call $activeCallId)", e)
+        }
+        assertAnyTagDisplayed("dashboard-title")
     }
 
     @When("I tap the ban and hangup button")

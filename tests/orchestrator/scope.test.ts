@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { checkScope } from '../../orchestrator/src/scope.js'
+import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
+import { trackedFiles } from './codeowners.js'
 
 const IOS: LaneScope = { owned: ['apps/ios/', '.github/workflows/ios*.yml'], notOwned: [] }
 const NEVER = ['.env', 'deploy/', '.github/workflows/']
@@ -75,6 +76,8 @@ describe('checkScope', () => {
         'src/server/',
         'tests/steps/backend/',
         'tests/steps/fixtures.ts',
+        'tests/api-helpers.ts',
+        'tests/simulation-helpers.ts',
         '.github/ci/*-baseline.json',
         'eslint.config.js',
         'lefthook.yml',
@@ -82,6 +85,8 @@ describe('checkScope', () => {
         'packages/test-specs/features/',
         'packages/i18n/locales/',
         'scripts/test-backend-bdd.sh',
+        'drizzle/',
+        'drizzle.config.ts',
       ])
       expect(backend.notOwned).toEqual([
         'tests/',
@@ -544,6 +549,47 @@ describe('checkScope', () => {
     })
   })
 
+  describe('shared test-helper lane-scope fix: backend shared-write on tests/api-helpers.ts and tests/simulation-helpers.ts (#1115)', () => {
+    let backend: LaneScope
+    let desktop: LaneScope
+
+    beforeAll(async () => {
+      const scopes = await loadLaneScopes(process.cwd())
+      const b = scopes['backend']
+      const d = scopes['desktop']
+      if (!b || !d) throw new Error('expected backend and desktop lane fragments to exist')
+      backend = b
+      desktop = d
+    })
+
+    // Same class of grant, and the same reason, as tests/steps/fixtures.ts above:
+    // backend's own BDD suite imports these, so a lane that cannot write them
+    // cannot fix its own tests. tests/api-helpers.ts has 108 importers across
+    // tests/, tests/simulation-helpers.ts has 24, both heavily from
+    // tests/steps/backend/. Before this grant, #1064 and #1072 were hard-blocked
+    // at fleet/verify for touching test infrastructure they depend on.
+    it('backend may write the shared test helpers its own suite imports', () => {
+      expect(checkScope(['tests/api-helpers.ts', 'tests/simulation-helpers.ts'], backend, []).strayed).toEqual([])
+    })
+
+    it('desktop may write them too — via its unchanged blanket tests/ grant', () => {
+      expect(checkScope(['tests/api-helpers.ts', 'tests/simulation-helpers.ts'], desktop, []).strayed).toEqual([])
+    })
+
+    it('the grant is scoped to those two files — backend still may not write tests/mocks/ or desktop step directories', () => {
+      const r = checkScope(
+        ['tests/mocks/tauri.ts', 'tests/steps/calls/multi-hub-call-steps.ts', 'tests/steps/hub/hub-steps.ts'],
+        backend,
+        [],
+      )
+      expect(r.strayed).toEqual([
+        'tests/mocks/tauri.ts',
+        'tests/steps/calls/multi-hub-call-steps.ts',
+        'tests/steps/hub/hub-steps.ts',
+      ])
+    })
+  })
+
   describe('packages/test-specs/features/ lane-scope fix: all four platform lanes shared-write, tools/ stays shared-exclusive (#847, #908)', () => {
     let backend: LaneScope
     let desktop: LaneScope
@@ -765,5 +811,371 @@ describe('checkScope', () => {
     expect(checkScope(['.github/workflows/android.yml'], IOS, []).strayed).toEqual([
       '.github/workflows/android.yml',
     ])
+  })
+})
+
+/**
+ * #1066: no lane owned `scripts/`, so fleet/review rejected every PR touching
+ * it as out-of-scope — which made #1040 (bootstrap-admin prints the secret
+ * seed labelled as the public key) unfixable by any worker (#1060).
+ *
+ * These assert against REAL tracked files with the same `matchesPath` the
+ * gate uses, never string-against-string: a scope rule that reads right but
+ * matches no file is exactly how CODEOWNERS once guarded a file named `auth`
+ * that did not exist.
+ */
+describe('scripts/ ownership (#1066): infra owns it, backend keeps its own gate script', () => {
+  let scopes: Record<string, LaneScope>
+  let infra: LaneScope
+  let backend: LaneScope
+  let files: string[]
+
+  beforeAll(async () => {
+    scopes = await loadLaneScopes(process.cwd())
+    const inf = scopes['infra']
+    const b = scopes['backend']
+    if (!inf || !b) throw new Error('expected infra and backend lane fragments to exist')
+    infra = inf
+    backend = b
+    files = trackedFiles()
+  })
+
+  it.each([
+    'scripts/bootstrap-admin.ts',
+    'scripts/lib/bootstrap-admin-keys.ts',
+    'scripts/verify-build.sh',
+    'scripts/build-iso.sh',
+    'scripts/iso-builder/preseed.cfg.template',
+    'scripts/release/promote-release.sh',
+    'scripts/test-integration-full.sh',
+  ])('infra may write %s', (file) => {
+    expect(checkScope([file], infra, []).strayed).toEqual([])
+  })
+
+  it('the exact #1060 scripts/ diff is in scope for infra', () => {
+    expect(checkScope(['scripts/bootstrap-admin.ts', 'scripts/lib/bootstrap-admin-keys.ts'], infra, []).strayed)
+      .toEqual([])
+  })
+
+  it('scripts/test-backend-bdd.sh stays backend\'s: infra carves it out, backend may still write it', () => {
+    expect(checkScope(['scripts/test-backend-bdd.sh'], infra, []).strayed).toEqual(['scripts/test-backend-bdd.sh'])
+    expect(checkScope(['scripts/test-backend-bdd.sh'], backend, []).strayed).toEqual([])
+  })
+
+  it('every tracked file under scripts/ is owned by at least one lane', () => {
+    const scriptFiles = files.filter((f) => f.startsWith('scripts/'))
+    expect(scriptFiles).toContain('scripts/bootstrap-admin.ts')
+    const unowned = scriptFiles.filter(
+      (f) => !Object.values(scopes).some((s) => checkScope([f], s, []).strayed.length === 0 && s.owned.length > 0),
+    )
+    expect(unowned, `scripts/ files no lane may write:\n${unowned.join('\n')}`).toEqual([])
+  })
+
+  it('every owned and notOwned rule of every lane matches at least one tracked file', () => {
+    const dead: string[] = []
+    for (const [lane, s] of Object.entries(scopes)) {
+      for (const p of [...s.owned, ...s.notOwned]) {
+        if (!files.some((f) => matchesPath(f, p))) dead.push(`${lane}: ${p}`)
+      }
+    }
+    expect(dead, `lane scope rules matching no tracked file:\n${dead.join('\n')}`).toEqual([])
+  })
+})
+
+/**
+ * #1235: the shared lane owns both ends of a crypto BDD scenario — the Rust
+ * crate under `packages/crypto/` and the feature file under
+ * `packages/test-specs/` — but not `tests/steps/crypto/`, the step
+ * definitions that make the scenario execute. A scenario cannot be
+ * implemented without them, so the lane that writes the scenario was
+ * structurally barred from the middle of its own work, and `fleet/review`
+ * refused the PR for straying.
+ *
+ * This is the scope-forced compromise #1181 exists to prevent: the failure
+ * mode is not a red check, it is a worker quietly shipping the partial fix
+ * that fits inside its lane. So the rail asserts the whole diff a crypto
+ * scenario change requires is writable BY ONE LANE — three separate
+ * per-file assertions would each pass under the very split that caused the
+ * failure.
+ */
+describe('crypto BDD is writable end to end by the lane that owns the crypto domain (#1235)', () => {
+  let scopes: Record<string, LaneScope>
+  let shared: LaneScope
+  let desktop: LaneScope
+  let files: string[]
+
+  // The exact file list of #1235, the PR this gap blocked.
+  const CRYPTO_SCENARIO_DIFF = [
+    'packages/crypto/tests/interop.rs',
+    'packages/test-specs/features/security/crypto-interop.feature',
+    'tests/steps/crypto/crypto-steps.ts',
+  ]
+
+  beforeAll(async () => {
+    scopes = await loadLaneScopes(process.cwd())
+    const s = scopes['shared']
+    const d = scopes['desktop']
+    if (!s || !d) throw new Error('expected shared and desktop lane fragments to exist')
+    shared = s
+    desktop = d
+    files = trackedFiles()
+  })
+
+  it('the three files are real tracked files, not a scope rule guarding nothing', () => {
+    for (const f of CRYPTO_SCENARIO_DIFF) expect(files, `${f} is not tracked`).toContain(f)
+  })
+
+  it('the exact #1235 diff is in scope for shared — crate, feature file and step definitions together', () => {
+    expect(checkScope(CRYPTO_SCENARIO_DIFF, shared, []).strayed).toEqual([])
+  })
+
+  it('SOME single lane can write the whole diff — the property the split broke', () => {
+    const capable = Object.entries(scopes)
+      .filter(([, s]) => s.owned.length > 0 && checkScope(CRYPTO_SCENARIO_DIFF, s, []).strayed.length === 0)
+      .map(([lane]) => lane)
+    expect(capable, 'no lane may write a crypto scenario and its step definitions in one diff').toContain('shared')
+  })
+
+  it('desktop keeps tests/steps/crypto/ — the grant is shared-write, not a transfer', () => {
+    // The steps are Playwright browser code loaded by the desktop bdd
+    // project; desktop must still be able to change them, exactly as it
+    // still owns tests/steps/fixtures.ts and playwright.config.ts alongside
+    // backend's narrow grants on both.
+    expect(checkScope(['tests/steps/crypto/crypto-steps.ts'], desktop, []).strayed).toEqual([])
+  })
+
+  it.each([
+    'tests/steps/backend/hub-scoped-call-settings.steps.ts',
+    'tests/steps/hub/hub-steps.ts',
+    'tests/steps/fixtures.ts',
+    'tests/mocks/tauri-core.ts',
+    'tests/api-helpers.ts',
+    'tests/global-setup.ts',
+  ])('the grant does not widen into the rest of tests/ — shared may not write %s', (file) => {
+    expect(checkScope([file], shared, []).strayed).toEqual([file])
+  })
+
+  it('shared owns exactly one path under tests/ — a blanket tests/ grant would hand it every platform\'s step code', () => {
+    expect(shared.owned.filter((p) => p.startsWith('tests/'))).toEqual(['tests/steps/crypto/'])
+  })
+})
+
+describe('checkScopeAcross — cross-lane grants (#1115)', () => {
+  const backend: LaneScope = { owned: ['apps/worker/', 'tests/steps/backend/'], notOwned: ['tests/'] }
+  const desktop: LaneScope = { owned: ['src/client/', 'tests/'], notOwned: ['tests/steps/backend/'] }
+  const emptyLane: LaneScope = { owned: [], notOwned: [] }
+  const never = ['deploy/secrets/']
+
+  it('a file owned by ANY authorised lane is in scope', () => {
+    const r = checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [desktop], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual([])
+  })
+
+  it('without the grant, the same diff strays', () => {
+    expect(checkScopeAcross(['apps/worker/a.ts', 'src/client/b.ts'], backend, [], never).strayed)
+      .toEqual(['src/client/b.ts'])
+  })
+
+  it('a file owned by no authorised lane still strays', () => {
+    expect(checkScopeAcross(['apps/ios/X.swift'], backend, [desktop], never).strayed)
+      .toEqual(['apps/ios/X.swift'])
+  })
+
+  // The grant vocabulary names LANES, and no lane owns a never-write path, so
+  // no number of grants can reach one.
+  it('never-write stays absolute regardless of how many lanes are granted', () => {
+    const r = checkScopeAcross(['deploy/secrets/prod.pem'], backend, [desktop], never)
+    expect(r.forbidden).toEqual(['deploy/secrets/prod.pem'])
+    expect(r.strayed).toEqual([])
+  })
+
+  it('resolves each lane separately rather than unioning owned/notOwned', () => {
+    // desktop owns tests/ but not tests/steps/backend/; backend is the
+    // reverse. Each file is legal for exactly one of them.
+    expect(checkScopeAcross(['tests/steps/backend/a.steps.ts', 'tests/mocks/b.ts'], backend, [desktop], never).strayed)
+      .toEqual([])
+    expect(checkScopeAcross(['packages/crypto/src/lib.rs'], backend, [desktop], never).strayed)
+      .toEqual(['packages/crypto/src/lib.rs'])
+  })
+
+  // UNSCOPED_LANE semantics, unchanged: this must stay true of the PR's OWN
+  // lane so non-fleet branches are judged exactly as they are today.
+  it('an unrestricted OWN scope still means no ownership check', () => {
+    const r = checkScopeAcross(['anything/at/all.ts', 'deploy/secrets/k.pem'], emptyLane, [], never)
+    expect(r.strayed).toEqual([])
+    expect(r.forbidden).toEqual(['deploy/secrets/k.pem'])
+  })
+
+  // The inverse, and the one that matters for safety. `assertLiveLanesHaveScope`
+  // only requires a non-empty scope of lanes that are not `off`, so an `off`
+  // lane legitimately has `owned: []`. If a grant for it were honoured, one
+  // label would make the whole PR unrestricted — the grant would fail OPEN.
+  it('a GRANTED lane with an empty scope grants nothing — it must not make the PR unrestricted', () => {
+    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane], never)
+    expect(r.strayed).toEqual(['src/client/b.ts', 'apps/ios/X.swift'])
+  })
+
+  // The second thing the review gate caught: NEVER_WRITE_PATHS is
+  // SECRET_PATH_PATTERNS only, and `deploy/` + `.github/workflows/` are
+  // deliberately NOT in it because lanes own some of them. Without a grant
+  // exclusion, one self-applied `scope:infra` label would extend any worker's
+  // write scope to the supply chain.
+  describe('grant exclusion: a grant may not reach CI or deploy config', () => {
+    const infra: LaneScope = { owned: ['deploy/', '.github/workflows/', 'scripts/'], notOwned: [] }
+    const excluded = ['.github/workflows/', '.github/actions/', 'deploy/', 'Dockerfile*', 'Caddyfile*', 'knope.toml']
+
+    it('refuses CI and deploy paths to a grant even though the granted lane owns them', () => {
+      const r = checkScopeAcross(
+        ['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'],
+        backend, [infra], never, excluded,
+      )
+      expect(r.strayed).toEqual(['.github/workflows/ci.yml', 'deploy/docker/docker-compose.yml'])
+    })
+
+    it('still lets a grant reach the granted lane\'s non-supply-chain paths', () => {
+      // scripts/ is infra-owned and NOT excluded — #1060 legitimately needs
+      // scripts/bootstrap-admin.ts from the backend lane.
+      expect(checkScopeAcross(['scripts/bootstrap-admin.ts'], backend, [infra], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    // The exclusion restricts GRANTS, never a lane's own scope.
+    it('does not stop the owning lane writing those paths on its own PR', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml', 'deploy/x.yml'], infra, [], never, excluded).strayed)
+        .toEqual([])
+    })
+
+    it('defaults to no exclusion when the list is omitted, so existing callers are unaffected', () => {
+      expect(checkScopeAcross(['.github/workflows/ci.yml'], backend, [infra], never).strayed).toEqual([])
+    })
+  })
+
+  it('an empty granted scope alongside a real one leaves the real grant intact and nothing more', () => {
+    const r = checkScopeAcross(['src/client/b.ts', 'apps/ios/X.swift'], backend, [emptyLane, desktop], never)
+    expect(r.strayed).toEqual(['apps/ios/X.swift'])
+  })
+})
+
+/**
+ * The two operator-facing setup documents (#1467), and the rail that keeps the
+ * grant from being wider than it reads.
+ *
+ * `README.md` and `docs/QUICKSTART.md` were owned by no lane at all (#1115).
+ * Because a `scope:<lane>` grant can only widen onto paths some real lane
+ * owns, an unowned path is unreachable by label too — so no PR could write
+ * either file without `fleet/verify` reporting `scope=fail`, which deadlocked
+ * any fix to an operator entry point that changes its own documented output
+ * (#1040 / #1472).
+ *
+ * The first attempt declared a bare `README.md`, which is a basename pattern
+ * and silently matched all 20 tracked README files — handing infra self-merge
+ * authority over other lanes' documentation, including the one the shared lane
+ * owns exclusively. The review rejected it on that breadth, correctly, and the
+ * fix was to give `matchesPath` a root-anchored form (#1473) rather than to
+ * settle for a weaker grant.
+ */
+describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467)', () => {
+  let infra: LaneScope
+  let backend: LaneScope
+  let shared: LaneScope
+  let files: string[]
+
+  const DOCS_DIFF = ['README.md', 'docs/QUICKSTART.md']
+
+  beforeAll(async () => {
+    const scopes = await loadLaneScopes(process.cwd())
+    const i = scopes['infra']
+    const b = scopes['backend']
+    const s = scopes['shared']
+    if (!i || !b || !s) throw new Error('expected infra, backend and shared lane fragments to exist')
+    infra = i
+    backend = b
+    shared = s
+    files = trackedFiles()
+  })
+
+  it('both are real tracked files, not a scope rule guarding nothing', () => {
+    for (const f of DOCS_DIFF) expect(files, `${f} is not tracked`).toContain(f)
+  })
+
+  it('infra may write both — the deadlock this grant exists to break', () => {
+    expect(checkScope(DOCS_DIFF, infra, []).strayed).toEqual([])
+  })
+
+  it('and the whole #1040 diff with them, since scripts/ and deploy/ are already infra', () => {
+    expect(checkScope(
+      [...DOCS_DIFF, 'scripts/bootstrap-admin.ts', 'deploy/ansible/playbooks/preflight.yml'],
+      infra, [],
+    ).strayed).toEqual([])
+  })
+
+  it('no other lane gained them — the grant did not leak sideways', () => {
+    expect(checkScope(DOCS_DIFF, backend, []).strayed).toEqual(DOCS_DIFF)
+    expect(checkScope(DOCS_DIFF, shared, []).strayed).toEqual(DOCS_DIFF)
+  })
+
+  /**
+   * THE OVER-GRANT RAIL. This is the assertion whose absence got the first
+   * attempt rejected: it fails against a bare `README.md` declaration and
+   * passes only with the anchored `/README.md`. Asserted against every tracked
+   * README other than the root one, so a future lane cannot quietly re-widen
+   * the grant by dropping the slash.
+   */
+  it('the README grant adds NOTHING below the repo root', () => {
+    const nested = files.filter((f) => f.endsWith('/README.md'))
+    expect(nested.length, 'expected several nested READMEs in the tree').toBeGreaterThan(5)
+
+    // Stated as "changes nothing", not "owns none of them", because a few
+    // nested READMEs sit under deploy/ and scripts/ and were infra's long
+    // before this grant. Comparing against the same scope with the README
+    // entry removed isolates exactly what the entry contributes — and that is
+    // the assertion a bare `README.md` cannot satisfy.
+    const withoutRootReadme: LaneScope = {
+      owned: infra.owned.filter((p) => p !== '/README.md'),
+      notOwned: infra.notOwned,
+    }
+    expect(infra.owned, 'expected the anchored form in the fragment').toContain('/README.md')
+    expect(checkScope(nested, infra, []).strayed)
+      .toEqual(checkScope(nested, withoutRootReadme, []).strayed)
+  })
+
+  it('specifically: the READMEs of other lanes stay out of infra', () => {
+    const otherLanes = [
+      'apps/ios/README.md',
+      'apps/android/README.md',
+      'apps/desktop/README.md',
+      'apps/worker/README.md',
+      'packages/crypto/README.md',
+      'packages/test-specs/README.md',
+      'orchestrator/README.md',
+    ]
+    for (const f of otherLanes) expect(files, `${f} is not tracked`).toContain(f)
+    expect(checkScope(otherLanes, infra, []).strayed).toEqual(otherLanes)
+  })
+
+  it('and the lanes that owned those READMEs still do', () => {
+    // packages/test-specs/README.md is shared-supervisor-exclusive and is
+    // named in this suite's test-specs carve-out tests above; it must not have
+    // changed hands.
+    expect(checkScope(['packages/test-specs/README.md'], shared, []).strayed).toEqual([])
+  })
+
+  it('does not reach the rest of the docs tree', () => {
+    const otherDocs = ['docs/protocol/PROTOCOL.md', 'docs/epics/README.md', 'docs/security/threat-model.md']
+    expect(checkScope(otherDocs, infra, []).strayed).toEqual(otherDocs)
+  })
+
+  /**
+   * `.claude/agents/fragments/` stays unowned by every lane, deliberately: a
+   * lane that could edit the scope judging it could widen its own authority.
+   * That is why this grant had to be made on a non-fleet branch and reviewed
+   * by a human, and the property is worth a rail of its own.
+   */
+  it('no lane owns the fragments that declare lane scope', () => {
+    const self = ['.claude/agents/fragments/infra-supervisor.md']
+    for (const [name, scope] of [['infra', infra], ['backend', backend], ['shared', shared]] as const) {
+      expect(checkScope(self, scope, []).strayed, `${name} must not own the scope fragments`).toEqual(self)
+    }
   })
 })

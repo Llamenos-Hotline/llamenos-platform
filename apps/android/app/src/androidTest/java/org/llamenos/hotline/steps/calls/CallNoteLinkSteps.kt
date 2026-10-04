@@ -32,7 +32,7 @@ class CallNoteLinkSteps : BaseSteps() {
     @Then("each call record should have an add note button")
     fun eachCallRecordShouldHaveAnAddNoteButton() {
         // Verify call records or empty state are shown
-        val found = assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading")
+        assertAnyTagDisplayed("call-history-list", "call-history-empty", "call-history-loading")
     }
 
     @When("I tap the add note button on a call record")

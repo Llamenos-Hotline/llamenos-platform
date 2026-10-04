@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import kotlinx.serialization.json.JsonObject
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.llamenos.protocol.ChannelConfig
@@ -221,13 +222,12 @@ class HubCommunicationsTest {
             )
         }
 
-        // The switch inside the voice row — click the row to toggle
+        // The whole row is the toggle target.
         composeRule.onNodeWithTag("channel-switch-voice").performClick()
         composeRule.waitForIdle()
 
-        // Callback should have fired (the Switch inside the row intercepts the click)
-        // Note: the exact channel/enabled values depend on which sub-element got the click.
-        // The important thing is that the row is clickable and renders.
+        assertEquals("voice", toggledChannel)
+        assertEquals(true, toggledEnabled)
     }
 
     @Test
@@ -241,7 +241,8 @@ class HubCommunicationsTest {
         }
 
         composeRule.onNodeWithTag("channel-checklist").assertIsDisplayed()
-        // When disabled, the switches should still render but not be enabled
+        // When disabled, the switch rows still render but cannot be toggled.
+        composeRule.onNodeWithTag("channel-switch-voice").assertIsNotEnabled()
     }
 
     @Test

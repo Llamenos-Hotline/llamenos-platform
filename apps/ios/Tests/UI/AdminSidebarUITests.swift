@@ -6,31 +6,13 @@ import XCTest
 /// displays the expected nav items with accessibility identifiers, and that tapping
 /// a nav item triggers navigation.
 ///
-/// Uses `--test-authenticated` and `--test-admin` launch arguments for admin state.
-final class AdminSidebarUITests: XCTestCase {
-
-    private var app: XCUIApplication!
+/// Runs as a super-admin registered with the live backend (`launchAsAdminWithAPI`):
+/// admin UI is gated on server-granted permissions, which an offline launch never has.
+final class AdminSidebarUITests: BaseUITest {
 
     override func setUp() {
         super.setUp()
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments.append(contentsOf: [
-            "--reset-keychain",
-            "--test-authenticated",
-            "--test-admin",
-        ])
-        app.launch()
-    }
-
-    override func tearDown() {
-        app = nil
-        super.tearDown()
-    }
-
-    /// Find any element by accessibility identifier, regardless of XCUIElement type.
-    private func find(_ identifier: String) -> XCUIElement {
-        return app.descendants(matching: .any)[identifier].firstMatch
+        launchAsAdminWithAPI()
     }
 
     // MARK: - Sidebar Rendering
@@ -59,7 +41,7 @@ final class AdminSidebarUITests: XCTestCase {
         navigateToAdminPanel()
 
         // Platform section is only visible to super-admins with the right role.
-        // In --test-admin mode the user should have role-super-admin.
+        // The launched identity is a super-admin registered with the backend.
         let header = scrollToFind("admin-sidebar-header-platform")
         XCTAssertTrue(
             header.exists,
@@ -128,7 +110,7 @@ final class AdminSidebarUITests: XCTestCase {
     func testPlatformNavItemsPresent() {
         navigateToAdminPanel()
 
-        // Platform items require role-super-admin — present in --test-admin mode.
+        // Platform items require role-super-admin, which the launched identity has.
         let platformItems = [
             "admin-sidebar-item-hubs",
             "admin-sidebar-item-platform-roles",
@@ -206,71 +188,5 @@ final class AdminSidebarUITests: XCTestCase {
         item.tap()
 
         XCTAssertTrue(true, "Tapping platform hubs nav item should not crash")
-    }
-
-    // MARK: - Helpers
-
-    @discardableResult
-    private func scrollToFind(_ identifier: String, maxSwipes: Int = 8, timeout: TimeInterval = 2) -> XCUIElement {
-        let element = find(identifier)
-        if element.waitForExistence(timeout: timeout) {
-            return element
-        }
-        for _ in 0..<maxSwipes {
-            app.swipeUp()
-            if element.waitForExistence(timeout: 1) {
-                return element
-            }
-        }
-        return element
-    }
-
-    private func anyElementExists(_ identifiers: [String], timeout: TimeInterval = 10) -> Bool {
-        for (i, id) in identifiers.enumerated() {
-            let element = find(id)
-            let wait: TimeInterval = i == 0 ? timeout : 2
-            if element.waitForExistence(timeout: wait) {
-                return true
-            }
-        }
-        return false
-    }
-
-    // MARK: - Navigation Helpers
-
-    private func navigateToSettingsTab() {
-        let tabView = find("main-tab-view")
-        guard tabView.waitForExistence(timeout: 10) else {
-            XCTFail("Main tab view should be visible")
-            return
-        }
-
-        let tabBar = app.tabBars.firstMatch
-        guard tabBar.waitForExistence(timeout: 5) else { return }
-        // Settings tab (last tab)
-        let settingsTabButton = tabBar.buttons.element(boundBy: 5)
-        if settingsTabButton.exists {
-            settingsTabButton.tap()
-        }
-    }
-
-    private func navigateToAdminPanel() {
-        navigateToSettingsTab()
-
-        let adminLink = scrollToFind("settings-admin-link", maxSwipes: 5, timeout: 10)
-        guard adminLink.exists else {
-            XCTFail("Admin panel link should exist for admin users")
-            return
-        }
-        adminLink.tap()
-
-        // Wait for admin panel to load — look for the sidebar list or the tab view
-        let found = anyElementExists([
-            "admin-sidebar-list",
-            "admin-tab-view",
-        ])
-        if !found {
-            XCTFail("Admin panel should appear after tapping admin link")
-        }
     }
 }

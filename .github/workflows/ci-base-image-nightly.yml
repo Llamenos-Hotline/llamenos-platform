@@ -14,7 +14,7 @@
 # pattern as a Dependabot action bump.
 #
 # Bootstrap note: as of this workflow landing, no consuming workflow
-# references `ghcr.io/rhonda-rodododo/llamenos-ci-base@sha256:...` yet — that
+# references `ghcr.io/llamenos-hotline/llamenos-ci-base@sha256:...` yet — that
 # digest can't exist until the first successful run of THIS workflow
 # publishes it. The `bump-digest` job below only ever does a plain
 # find-and-replace of an existing pin; it does not add the first one (adding
@@ -43,7 +43,7 @@ on:
 permissions: {}  # deny-all; per-job permissions below
 
 env:
-  IMAGE: ghcr.io/rhonda-rodododo/llamenos-ci-base
+  IMAGE: ghcr.io/llamenos-hotline/llamenos-ci-base
 
 jobs:
   # Builds on every PR that touches the Dockerfile so a reviewer sees proof
@@ -72,7 +72,7 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         if: steps.push-gate.outputs.published == 'true'

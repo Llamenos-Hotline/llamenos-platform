@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// Account settings sub-page: identity, hub URL, connection status, device linking.
+/// Account settings sub-page: identity, hub URL, connection status, account erasure.
 struct AccountSettingsView: View {
     @Environment(AppState.self) private var appState
 
     @State private var showCopyConfirmation: Bool = false
-    @State private var showDeviceLink: Bool = false
 
     var body: some View {
         List {
@@ -18,18 +17,12 @@ struct AccountSettingsView: View {
             // WebSocket connection section
             connectionSection
 
-            // Device linking section
-            deviceLinkSection
-
             // Account erasure section
             erasureSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle(NSLocalizedString("settings_account_title", comment: "Account"))
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showDeviceLink) {
-            DeviceLinkView()
-        }
         .overlay(alignment: .bottom) {
             if showCopyConfirmation {
                 copyConfirmationBanner
@@ -94,6 +87,9 @@ struct AccountSettingsView: View {
                             .foregroundStyle(Color.brandPrimary)
                     }
                 }
+                // Keep the copy button's own identifier: without this the row's
+                // identifier is pushed onto every child, the button included.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-signing-pubkey")
             }
 
@@ -125,6 +121,9 @@ struct AccountSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                // Keep the copy button's own identifier: without this the row's
+                // identifier is pushed onto every child, the button included.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-encryption-pubkey")
             }
 
@@ -227,32 +226,6 @@ struct AccountSettingsView: View {
             }
         } header: {
             Text(NSLocalizedString("settings_connection_header", comment: "Connection"))
-        }
-    }
-
-    // MARK: - Device Link Section
-
-    private var deviceLinkSection: some View {
-        Section {
-            Button {
-                showDeviceLink = true
-            } label: {
-                Label {
-                    Text(NSLocalizedString("settings_link_device", comment: "Link Device"))
-                        .foregroundStyle(.primary)
-                } icon: {
-                    Image(systemName: "qrcode.viewfinder")
-                        .foregroundStyle(Color.brandPrimary)
-                }
-            }
-            .accessibilityIdentifier("settings-link-device")
-        } header: {
-            Text(NSLocalizedString("settings_devices_header", comment: "Devices"))
-        } footer: {
-            Text(NSLocalizedString(
-                "settings_link_device_footer",
-                comment: "Scan a QR code from your desktop app to securely transfer your identity to this device."
-            ))
         }
     }
 

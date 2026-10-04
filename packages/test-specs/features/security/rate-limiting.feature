@@ -1,4 +1,5 @@
-@backend @security
+# @wip: needs rate-limit buckets isolated from the parallel suite — #1194
+@backend @security @wip
 Feature: Persistent rate limiting
   Rate limit state persists in PostgreSQL and survives server restarts.
   Different endpoint tiers have different limits.

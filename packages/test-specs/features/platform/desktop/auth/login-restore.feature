@@ -6,7 +6,7 @@ Feature: Login Page Restore
 
   Scenario: Fresh install shows device key input and Log in button
     Given I am on the login screen
-    Then I should see the device key input
+    Then I should see the device key import input field
     And I should see the "Log in" button
 
   Scenario: Fresh install shows backup file upload area
@@ -39,7 +39,7 @@ Feature: Login Page Restore
     When I visit the login page
     Then I should see the PIN digit inputs
     When I click "Recovery Options"
-    Then I should see the device key input
+    Then I should see the device key import input field
     And I should see the "Log in" button
 
   Scenario: Language selector available on login

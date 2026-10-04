@@ -18,7 +18,13 @@ import {
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { decryptHubEvent } from '../../helpers/relay-crypto'
-import { ADMIN_SEED, apiGet } from '../../api-helpers'
+import {
+  ADMIN_SEED,
+  addHubMemberViaApi,
+  apiGet,
+  createHubViaApi,
+  createVolunteerViaApi,
+} from '../../api-helpers'
 
 const RELAY_URL = process.env.TEST_RELAY_URL || 'ws://localhost:3000/ws'
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
@@ -30,6 +36,8 @@ interface RelayStepState {
   serverPubkey?: string
   /** Server event key (hex) fetched from GET /api/auth/me */
   serverEventKeyHex?: string
+  /** A user who belongs to a different hub only (never to the scenario hub) */
+  otherHubMember?: { seedHex: string; hubId: string }
 }
 
 function getRelayState(world: Record<string, unknown>): RelayStepState {
@@ -112,9 +120,48 @@ When('an inbound SMS message arrives from a unique number', async ({ request, wo
     senderNumber: sender,
     body: 'BDD test message',
     channel: 'sms',
+    hubId: state.hubId,
   })
   state.conversationId = result.conversationId
   state.messageId = result.messageId
+})
+
+// --- Hub isolation ---
+
+Given('a volunteer who is a member of a different hub only', async ({ request, world }) => {
+  const rs = getRelayState(world)
+  const otherHubId = await createHubViaApi(request, `bdd-other-hub-${Date.now()}`)
+  const vol = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
+  await addHubMemberViaApi(request, otherHubId, vol.pubkey)
+  rs.otherHubMember = { seedHex: vol.seedHex, hubId: otherHubId }
+})
+
+// Subscription refusals surface from RelayCapture.connect as `Relay error: not_member`.
+Then("that volunteer's relay subscription to the scenario hub should be refused", async ({ world }) => {
+  const state = getScenarioState(world)
+  const { otherHubMember } = getRelayState(world)
+  expect(otherHubMember).toBeTruthy()
+  await expect(
+    RelayCapture.connect(RELAY_URL, { seedHex: otherHubMember!.seedHex, hubId: state.hubId }),
+  ).rejects.toThrow(/not_member/)
+})
+
+Then('that volunteer\'s relay subscription to {string} should be refused', async ({ world }, hubId: string) => {
+  const { otherHubMember } = getRelayState(world)
+  expect(otherHubMember).toBeTruthy()
+  await expect(
+    RelayCapture.connect(RELAY_URL, { seedHex: otherHubMember!.seedHex, hubId }),
+  ).rejects.toThrow(/not_member/)
+})
+
+Then("that volunteer's relay subscription to their own hub should be accepted", async ({ world }) => {
+  const { otherHubMember } = getRelayState(world)
+  expect(otherHubMember).toBeTruthy()
+  const capture = await RelayCapture.connect(RELAY_URL, {
+    seedHex: otherHubMember!.seedHex,
+    hubId: otherHubMember!.hubId,
+  })
+  capture.close()
 })
 
 // --- Relay Capture Utilities ---
@@ -200,6 +247,13 @@ Then(
     expect(rs.lastCapturedEvent!.hubId).toBe(expectedHubId)
   },
 )
+
+Then('the event hubId should be the scenario hub', async ({ world }) => {
+  const state = getScenarioState(world)
+  const rs = getRelayState(world)
+  expect(rs.lastCapturedEvent).toBeTruthy()
+  expect(rs.lastCapturedEvent!.hubId).toBe(state.hubId)
+})
 
 Then('the event version should be {int}', async ({ world }, expectedVersion: number) => {
   const rs = getRelayState(world)

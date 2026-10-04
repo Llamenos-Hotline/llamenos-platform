@@ -247,7 +247,7 @@ describe('BlastDeliveryWorker', () => {
     startBlastWorker(deps)
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(onStatusChange).toHaveBeenCalledWith('blast-done', 'sent')
+    expect(onStatusChange).toHaveBeenCalledWith('blast-done', 'hub-1', 'sent')
   })
 
   it('uses notification-only body for SMS when configured', async () => {

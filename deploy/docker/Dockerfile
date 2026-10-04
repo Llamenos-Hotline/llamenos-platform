@@ -68,8 +68,14 @@ FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52
 # FIXABLE CRITICAL) goes red on a base the tag can't move off. Upgrading here
 # rebases onto the current debian-security archive (this landed for perl-base
 # 5.40.1-6 → 5.40.1-6+deb13u1: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376).
-# No new packages are installed — upgrade only, then the apt lists are dropped.
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+#
+# espeak-ng is the one package added: the worker speaks every IVR prompt an
+# operator did not upload on the self-hosted PBXs (IvrSpeechService, #1347),
+# offline (ivr-speech/voices.ts lists the locales). ~30 MB; no recommends (no audio
+# output devices — it only ever writes WAV to a pipe).
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd -r llamenos && useradd -r -g llamenos -d /app -s /sbin/nologin llamenos
@@ -216,7 +222,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # this bump — they come from the Caddy 2.11.4 release's resolved dependency set,
 # not the Alpine base, and need a Caddy version bump to clear (follow-up, needs
 # Caddyfile.production + caddy-ratelimit plugin compat validation first).
-FROM caddy:2.11.4-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e AS static
+FROM caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b AS static
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by

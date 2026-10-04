@@ -32,7 +32,7 @@ class ReportSteps : BaseSteps() {
 
     @Then("the report should appear in the reports list")
     fun theReportShouldAppearInTheReportsList() {
-        val found = assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading")
+        assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading")
     }
 
     @Given("at least one report exists")
@@ -42,7 +42,7 @@ class ReportSteps : BaseSteps() {
 
     @Then("I should see reports in the list")
     fun iShouldSeeReportsInTheList() {
-        val found = assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading")
+        assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading")
     }
 
     @Given("a report exists")
@@ -67,7 +67,7 @@ class ReportSteps : BaseSteps() {
 
     @Then("I should see the report detail view")
     fun iShouldSeeTheReportDetailView() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-detail-title", "report-detail-title-text",
             "report-not-found", "report-metadata-card",
         )
@@ -75,7 +75,7 @@ class ReportSteps : BaseSteps() {
 
     @Then("I should see the report content")
     fun iShouldSeeTheReportContent() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-detail-title-text", "report-metadata-card", "report-not-found",
         )
     }
@@ -98,7 +98,7 @@ class ReportSteps : BaseSteps() {
 
     @Then("the report should be saved successfully")
     fun theReportShouldBeSavedSuccessfully() {
-        val found = assertAnyTagDisplayed("reports-list", "reports-empty", "report-detail-title")
+        assertAnyTagDisplayed("reports-list", "reports-empty", "report-detail-title")
     }
 
     @Given("a reporter is logged in")

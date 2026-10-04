@@ -17,6 +17,7 @@ Feature: Hub switching
     And I navigate to the notes screen
     Then the notes screen loads without error
 
+  # @wip: needs a real push wake path to drive on Android — blocked on #955
   @android @security @wip
   Scenario: Background push notification does not switch active hub
     Given I am authenticated and hub "hub-A" is the active hub

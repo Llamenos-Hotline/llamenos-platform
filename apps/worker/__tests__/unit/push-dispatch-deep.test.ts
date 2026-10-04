@@ -74,7 +74,7 @@ describe('createPushDispatcherFromService', () => {
     expect(dispatcher.sendToAllOnShift).toBeDefined()
   })
 
-  it('returns LoggingPushDispatcher in development without credentials', () => {
+  it('returns a recording dispatcher in development without credentials', () => {
     clearTestPushLog()
 
     const dispatcher = createPushDispatcherFromService(
@@ -87,7 +87,7 @@ describe('createPushDispatcherFromService', () => {
     // Should record payloads even without real push credentials
   })
 
-  it('LoggingPushDispatcher records payloads to test log', async () => {
+  it('records payloads to the test log in development', async () => {
     clearTestPushLog()
 
     const dispatcher = createPushDispatcherFromService(
@@ -108,7 +108,7 @@ describe('createPushDispatcherFromService', () => {
     expect(log[0].recipientPubkey).toBe('pubkey-abc')
   })
 
-  it('LoggingPushDispatcher sendToAllOnShift records for each volunteer', async () => {
+  it('sendToAllOnShift records one entry for each on-shift volunteer', async () => {
     clearTestPushLog()
     mockShiftsService.getCurrentVolunteers.mockResolvedValue(['pk-1', 'pk-2', 'pk-3'])
 

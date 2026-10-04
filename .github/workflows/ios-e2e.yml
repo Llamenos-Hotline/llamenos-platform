@@ -1,96 +1,175 @@
-# iOS E2E Tests (XCUITest)
+# iOS E2E — the LlamenosUITests (XCUITest) target against a live backend.
 #
-# Build once, test in 4 parallel shards on macOS runners.
-# Each shard gets its own isolated test hub for proper isolation.
-# Triggered on push to main/desktop and on pull requests.
+# Called by ci.yml's `ios-e2e` job whenever a change touches iOS paths, which
+# puts it inside the `ci-status` required aggregate: a failing UI test blocks
+# the merge. Also runnable by hand (workflow_dispatch) for a full re-run.
+#
+# History this replaces (#661, #1221): from 2026-05-04 (#168) the UI target was
+# not a member of the `Llamenos` scheme's test action, so `build-for-testing`
+# produced no UI test bundle; from 2026-05-10 the backend came from Docker
+# Compose, which GitHub-hosted macOS runners do not have (exit 125); from
+# 2026-09-12 (#682) the workflow was `workflow_dispatch`-only. For those four
+# months no iOS UI test ran anywhere in CI, while the coverage validator
+# credited scenarios to them.
+#
+# Shape: one job builds the app + UI test bundle once (UITesting
+# configuration, so the UI_TESTING launch hooks exist) and the server crypto
+# library; N shard jobs each start a native backend
+# (apps/ios/scripts/native-backend.sh — Homebrew PostgreSQL + `bun`, no
+# Docker) and run a disjoint, count-balanced slice of the test classes
+# (apps/ios/scripts/ui-tests.py). No retries: a flaky test is a failing test.
 
 name: iOS E2E
 
-# DISABLED on push/pull_request until #661 is resolved: the backend bootstrap
-# needs Docker, which GitHub-hosted macOS runners do not provide, so every
-# shard fails (exit 125) regardless of the change under test. Under the
-# "no red check" merge rule a check that cannot pass must be switched off
-# deliberately rather than merged around. Re-enable the triggers below in the
-# PR that closes #661.
 on:
+  workflow_call:
+    inputs:
+      include-quarantined:
+        description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
+        type: boolean
+        default: false
+      tier:
+        description: >-
+          full (all 326 tests, 4 shards) or smoke (the ci-smoke.txt classes,
+          2 shards). ci.yml passes the tier detect-changed-platforms.sh chose;
+          anything that can rebuild the iOS binary gets full. Defaults to full,
+          so an unset or unrecognised value never silently narrows the gate.
+        type: string
+        default: full
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ios-e2e-pr-{0}', github.ref) || format('ios-e2e-push-{0}', github.sha) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    inputs:
+      include-quarantined:
+        description: Also run the tests listed in apps/ios/Tests/UI/ci-quarantine.txt
+        type: boolean
+        default: true
+      tier:
+        description: full (all tests) or smoke (ci-smoke.txt classes only)
+        type: choice
+        options: [full, smoke]
+        default: full
+      take-screenshots:
+        description: >-
+          Also run the ci-non-gating.txt classes (ScreenshotAuditTests) and
+          publish their screenshots as an artifact. Off by default and
+          available ONLY here — not on workflow_call, so ci.yml cannot turn it
+          on, and not on schedule, which supplies no inputs. Those 42 methods
+          contain no assertions and took ~20 minutes of merge-gate critical
+          path to produce attachments nobody ever collected.
+        type: boolean
+        default: false
+  # ci.yml's `ios` flag is set by apps/ios/ and shared dependencies, not by
+  # apps/worker/ or src/server/ — so a backend-only PR that breaks the iOS
+  # client's API contract never runs this suite. The nightly run on main
+  # catches that within a day. It also runs the quarantined tests, so each
+  # quarantined defect stays visible daily until it is fixed.
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions: {}  # deny-all; per-job permissions below
 
 env:
   BUN_VERSION: "1.3.5"
-  TEST_ADMIN_PUBKEY: "79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
 
 jobs:
-  # ─── Detect Changed Files ─────────────────────────────────────
-  # Delegates to the SAME path map ci.yml's `changes` job uses — see
-  # .github/scripts/detect-changed-platforms.sh for the single source of
-  # truth (#664). Consolidated from what used to be this workflow's own
-  # `ios_related` regex. This workflow stays on `workflow_dispatch` only
-  # (see the header comment above `on:`) — that is an independent, deliberate
-  # decision pending #661, unrelated to the path-map consolidation here.
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    # Same guard, same scoping fix as ci.yml's `changes` job (#812) — kept in
-    # sync even though this workflow's `on:` block is currently
-    # `workflow_dispatch` only (#661), so `github.event_name` here is never
-    # `push` today. Fixing it anyway so re-enabling `pull_request`/`push`
-    # later doesn't silently reintroduce the bug this job was copy-pasted
-    # from.
-    if: "github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')"
-
-    outputs:
-      ios_related: ${{ steps.filter.outputs.ios }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - name: Detect changes
-        id: filter
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-            HEAD="${{ github.event.pull_request.head.sha }}"
-          else
-            BASE="${{ github.event.before }}"
-            HEAD="${{ github.event.after }}"
-          fi
-
-          if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
-            BASE="HEAD^"
-          fi
-          if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
-            HEAD="HEAD"
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files ($BASE..$HEAD):"
-          echo "$CHANGED"
-
-          printf '%s\n' "$CHANGED" | bash .github/scripts/detect-changed-platforms.sh | tee -a "$GITHUB_OUTPUT"
-
-  # ─── Build App + Backend Once ──────────────────────────────────
-  ios-e2e-build:
-    needs: changes
-    if: needs.changes.outputs.ios_related == 'true'
-    runs-on: macos-latest
+  # The same classification as ci.yml's `changes` job — the one shared path map
+  # (.github/scripts/detect-changed-platforms.sh, #664) behind the same
+  # push-scoped release-commit guard (#812). Called from ci.yml it agrees with
+  # the gate that already decided to call this workflow; the nightly schedule
+  # and a manual dispatch run the suite whatever changed (see `build`).
+  build:
+    name: build
+    # No `needs:` and no `if:` — deliberately. This workflow used to open with
+    # its own `changes` job computing an `ios_related` flag that gated this
+    # one. That flag could never be false when it mattered: ci.yml already
+    # gates the whole `uses:` call on `changes.outputs.ios == 'true'`, and the
+    # `schedule` / `workflow_dispatch` paths ran regardless via the same
+    # condition's `||` arms. It was a second copy of a decision already made,
+    # and it cost a serialised ubuntu job before any macOS work could start.
+    #
+    # Measured on one merge-queue run: the run was created at 20:13:30,
+    # `changes` started 20:13:55 and finished 20:14:04, and `build` could not
+    # start until 20:14:07 — where android-e2e's shards were already working
+    # at 20:13:46. Deleting it lets the build dispatch immediately, which is
+    # what pulls the whole iOS gate forward.
+    # The Mac mini (runners `mac-mini-ios-1..4`), not `macos-latest`.
+    #
+    # GitHub's macOS concurrency cap is 5 jobs REPO-WIDE, and money does not
+    # move it: Free, Pro and Team are all 5 (only Enterprise Cloud is 50),
+    # and larger runners share the same 5 while being billed even on public
+    # repos. Hardware we already own is the only lever that adds capacity.
+    #
+    # This job is the one worth moving first. It gates everything — the four
+    # `ui` shards cannot start until it finishes — so whenever it queues for
+    # a macOS slot, the entire iOS gate queues behind it. It is also the only
+    # macOS job here that needs no Docker, no sudo and no booted simulator,
+    # which is what makes it safe to co-tenant today.
+    #
+    # Built ONCE PER RUNNER CLASS, because a test bundle cannot cross between
+    # them. The Mac mini is on Xcode 27.0 with only the iOS 26.5 simulator
+    # runtime; GitHub's macOS image is on Xcode 26.6. An `.xctestrun` is bound
+    # to the SDK it was built against, so a Mac-built bundle will not run on a
+    # hosted simulator (or vice versa). The two builds run concurrently on
+    # different hardware, so this costs no wall-clock — only a second hosted
+    # macOS slot for ~4 minutes.
+    #
+    # The alternative, building once and running everywhere, is what the
+    # artifact names below used to imply. It cannot work across two Xcode
+    # versions, and failing that way would look like a test bug rather than a
+    # toolchain mismatch.
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(inputs.tier == 'smoke' && '["mac"]' || '["mac", "hosted"]') }}
+    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
     timeout-minutes: 45
 
-    outputs:
-      simulator: ${{ steps.sim.outputs.device }}
-
     steps:
+      # MANDATORY, and must stay the literal first step: this job now runs on
+      # a machine the operator owns, so a fork PR's code must never reach it
+      # — before the checkout, before anything else. Same guard, same
+      # reasoning, as the one fronting `fleet/review` (see fleet-review.yml).
+      # The repo's fork-PR approval policy (`all_external_contributors`) is
+      # the first layer; this is the second, because a policy is a setting
+      # someone can change and this is not.
+      #
+      # WHY THIS IS NOT DEAD CODE, since it reads like it might be. This file
+      # has no `pull_request` trigger of its own — it is reached via
+      # `workflow_call` from ci.yml. It is a reasonable assumption that
+      # `github.event_name` is therefore `workflow_call` and that
+      # `github.event.pull_request` is absent, which would make this guard
+      # inert. It is not: for a REUSABLE workflow the `github` context is the
+      # CALLER's, so a run invoked from ci.yml's `on: pull_request` sees
+      # `event_name == 'pull_request'` with the full PR payload.
+      # `workflow_call` appears in `github.event_name` only when a workflow is
+      # itself triggered by an external `workflow_call` event, never when it is
+      # invoked via `uses:`.
+      #
+      # Measured, not assumed — run 36761873368, this job's own log:
+      #     EVENT_NAME: pull_request
+      #     HEAD_REPO:  Llamenos-Hotline/llamenos-platform
+      #     THIS_REPO:  Llamenos-Hotline/llamenos-platform
+      # The `changes` job in this same file has relied on the same property
+      # since before these runners existed (`case "$EVENT_NAME" in`), and would
+      # have been misclassifying every PR if it did not hold.
+      #
+      # A `fleet/review` pass rejected this guard as dead code on exactly that
+      # assumption. The comment is here so the next reader does not have to
+      # re-derive it — and if you are about to "fix" this by removing the
+      # event_name check, read the log above first.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-e2e/build FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -102,14 +181,30 @@ jobs:
       - name: Install dependencies and run codegen
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
-      # Fails fast, before the expensive XCFramework/simulator build, the
-      # moment a test references an accessibility identifier the app no
-      # longer defines anywhere (see #755). New regressions fail the build;
-      # pre-existing, unrelated stale identifiers are tracked in
-      # stale-identifiers-baseline.txt so this doesn't block on debt this
-      # check didn't introduce.
+      # Fails fast, before the expensive build, the moment a test references
+      # an accessibility identifier the app no longer defines anywhere (#755).
       - name: Check for stale accessibility identifiers in iOS UI tests
         run: python3 apps/ios/scripts/check-stale-identifiers.py
+
+      # Every test the merge gate skips must exist and name the issue that owns it.
+      - name: Check the UI test quarantine
+        run: python3 apps/ios/scripts/ui-tests.py check-quarantine
+
+      # A smoke entry naming a deleted class would shrink the smoke tier
+      # silently — the tier must fail loudly instead, like the quarantine does.
+      - name: Check the UI smoke tier
+        run: python3 apps/ios/scripts/ui-tests.py check-smoke
+
+      # A class excused from the gate must make no claims. Without this, parking
+      # a real test in ci-non-gating.txt would silently stop checking it — the
+      # same silent-non-execution failure the file exists to avoid, not create.
+      - name: Check the non-gating classes assert nothing
+        run: python3 apps/ios/scripts/ui-tests.py check-non-gating
+
+      # A Mac-pinned entry naming a deleted class would stop pinning it
+      # silently, and the class would drift back onto hosted runners.
+      - name: Check the Mac-pinned classes exist
+        run: python3 apps/ios/scripts/ui-tests.py check-mac-shards
 
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
@@ -122,15 +217,15 @@ jobs:
             packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
-      - name: Install Rust stable (for crypto xcframework)
-        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+      # Needed on every run: the server crypto library (below) is built here
+      # even when the XCFramework comes from cache.
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Rust cache
-        if: steps.xcframework-cache.outputs.cache-hit != 'true'
         uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: packages/crypto
@@ -143,18 +238,19 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Copy UniFFI bindings (from build or cache)
-        run: |
-          cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+        run: cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
 
-      - name: Check for hardcoded secrets in Swift source
-        run: |
-          if grep -rE '[0-9a-f]{64}' apps/ios/Sources/ --include="*.swift" | grep -v 'gitleaks:allow'; then
-            echo "ERROR: Potential hardcoded hex secret found in iOS source"
-            exit 1
-          fi
+      # The backend's crypto goes through bun:ffi into this library
+      # (packages/crypto/ffi.ts); the shards run the server natively.
+      - name: Build server crypto library
+        run: packages/crypto/scripts/build-server.sh
 
+      # The four runners on this box share one /opt/homebrew prefix, and
+      # concurrent `brew install` against a shared prefix is not safe. This
+      # is a no-op on the Mac mini (xcodegen 2.44.1 is installed) and still
+      # installs normally anywhere it is genuinely absent.
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
 
       - name: Generate Xcode project
         working-directory: apps/ios
@@ -172,67 +268,133 @@ jobs:
                       if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
                           print(d['name'])
                           sys.exit(0)
-          print('iPhone 16')
+          sys.exit('no available iPhone simulator')
           ")
           echo "device=$SIM" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $SIM"
 
-      - name: Build app for testing
+      # UITesting configuration: the UI_TESTING launch hooks the suite relies
+      # on (--test-authenticated, --test-hub-url, ...) are compiled out of
+      # every other configuration.
+      - name: Build app + UI tests for testing
         working-directory: apps/ios
         run: |
-          xcodebuild build-for-testing \
-            -project Llamenos.xcodeproj \
-            -scheme Llamenos \
-            -configuration UITesting \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath /tmp/llamenos-build \
-            -parallelizeTargets \
-            EAGER_LINKING=YES \
-            DEBUG_INFORMATION_FORMAT=dwarf
+          if ! xcodebuild build-for-testing \
+              -project Llamenos.xcodeproj \
+              -scheme Llamenos \
+              -configuration UITesting \
+              -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+              -derivedDataPath ${{ runner.temp }}/llamenos-build \
+              -parallelizeTargets \
+              EAGER_LINKING=YES \
+              DEBUG_INFORMATION_FORMAT=dwarf \
+              >"$RUNNER_TEMP/build-for-testing.log" 2>&1; then
+            grep -E "error:" "$RUNNER_TEMP/build-for-testing.log" | head -50
+            tail -40 "$RUNNER_TEMP/build-for-testing.log"
+            exit 1
+          fi
+          grep -E "\*\* TEST BUILD" "$RUNNER_TEMP/build-for-testing.log"
+          # The scheme regression this workflow was dark behind (#168): a
+          # build that succeeds without producing the UI test runner.
+          test -d ${{ runner.temp }}/llamenos-build/Build/Products/UITesting-iphonesimulator/LlamenosUITests-Runner.app \
+            || { echo "::error::build-for-testing produced no LlamenosUITests-Runner.app"; exit 1; }
 
-      - name: Upload test build artifacts
+      - name: Upload test build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-build-${{ github.run_id }}
+          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            /tmp/llamenos-build/Build/Products/
+            ${{ runner.temp }}/llamenos-build/Build/Products/
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
 
-      - name: Build backend bundle
-        run: bun run build:server
-
-      - name: Upload backend bundle + tools
+      - name: Upload server crypto library
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-e2e-backend-${{ github.run_id }}
-          path: |
-            dist/server/
-            scripts/run-migrations.ts
-            node_modules/
-            bun.lockb
-            package.json
+          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/crypto/dist/server/libllamenos_core.dylib
           retention-days: 1
-          compression-level: 1
           if-no-files-found: error
 
-  # ─── Run E2E Tests (4 Shards) ─────────────────────────────────
-  ios-e2e:
-    needs: [changes, ios-e2e-build]
-    if: needs.changes.outputs.ios_related == 'true'
-    runs-on: macos-latest
+      # A hosted runner is thrown away after the job; this one is not, and the
+      # DerivedData tree is several GB per build. RUNNER_TEMP is unique per
+      # runner and the runner clears it between jobs, so this is belt to that
+      # braces rather than the only thing standing between us and a full disk.
+      - name: Remove this build's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
+
+  ui:
+    name: ui (${{ matrix.shard }})
+    needs: build
+    # Same self-hosted macOS runners as `build`. This is where the capacity
+    # actually goes: GitHub's cap is 5 concurrent macOS jobs REPO-WIDE, so a
+    # full-tier PR's four shards took FOUR of the repo's five slots and two
+    # such PRs saturated everything. Here they take none.
+    #
+    # Everything a shard touches must be per-shard, because these four now
+    # share one host instead of getting a VM each. Each one gets its own
+    # simulator (created below, not "the first available iPhone" — which is
+    # the same device for all four), its own backend HTTP and PostgreSQL
+    # ports, and its own RUNNER_TEMP for every file that used to be a fixed
+    # /tmp path.
+    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
-    timeout-minutes: 60
+    timeout-minutes: 65
 
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # `--total` below is `strategy.job-total`, so the shard count follows
+        # this list automatically — the smoke tier partitions its own classes
+        # across 2 shards rather than running a fraction of the full 4.
+        # Each shard carries the runner class it runs on, so all four start at
+        # once instead of four queueing through the Mac's two runners.
+        #
+        # The split is MEASURED, not arbitrary. Shards 0 and 3 are the two that
+        # have actually failed on GitHub's macOS runners — shard 0 on
+        # `testClockInViaAPI` / `testShiftStatusWithAPI` (10s waits that a
+        # contended runner misses) and shard 3 on
+        # `testPINWipeAfterTenFailedAttempts` at 313s against XCTest's 300s
+        # allowance. Shards 1 and 2 have passed on hosted runners twice each.
+        # So the fragile pair goes to the hardware where they pass, and the
+        # proven pair goes to the capacity that is otherwise idle.
+        #
+        # This also puts 5 of the 7 day-one-critical classes
+        # (apps/ios/Tests/UI/ci-smoke.txt) on the Mac: shard 0 carries
+        # APIConnectedUITests, AuthFlowUITests, PanicWipeUITests and
+        # ShiftFlowUITests; shard 3 carries SecurityUITests.
+        #
+        # Re-check this split if `ui-tests.py shard` changes its partition —
+        # the indices are positional, and a reshuffle would silently send the
+        # slow classes to the slow runners.
+        #
+        # The smoke tier stays entirely on the Mac: it is two shards, which is
+        # exactly the Mac's concurrency, so there is nothing to gain from
+        # splitting it and a toolchain to avoid straddling.
+        include: ${{ fromJSON(inputs.tier == 'smoke'
+          && '[{"shard":0,"host":"mac"},{"shard":1,"host":"mac"}]'
+          || '[{"shard":0,"host":"mac"},{"shard":3,"host":"mac"},{"shard":1,"host":"hosted"},{"shard":2,"host":"hosted"}]') }}
 
     steps:
-      - name: Checkout (for test file discovery)
+      # MANDATORY, and must stay the literal first step — same guard, same
+      # reasoning, as `build` and `fleet/review`: a fork PR's code must never
+      # execute on a machine the operator owns.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-e2e/ui FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
+      - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Bun
@@ -240,132 +402,327 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Download test build artifacts
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download test build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-build-${{ github.run_id }}
-          path: /tmp/llamenos-build/Build/Products/
-          if-no-files-found: error
+          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/llamenos-build/Build/Products/
 
-      - name: Download backend bundle
+      - name: Download server crypto library
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
         with:
-          name: ios-e2e-backend-${{ github.run_id }}
-          path: .
-          if-no-files-found: error
+          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/crypto/dist/server/
 
-      - name: Detect simulator
-        id: sim
+      # Each concurrent job on this host needs its own HTTP and PostgreSQL
+      # port. The number MUST come from the RUNNER, not from the shard index.
+      #
+      # Both runners live on the same Mac mini, so shard-derived ports are
+      # only disjoint WITHIN one run. Two overlapping runs — a `pull_request`
+      # run and a `merge_group` run, say — each have a shard 2; they land one
+      # on each runner and both bind the same port on one machine. That is
+      # exactly how `ui (2)` failed here with "port 3102 is already listening"
+      # while every shard of its own run was perfectly disjoint. A runner
+      # executes one job at a time, so a per-runner port cannot collide no
+      # matter how many runs overlap.
+      #
+      # native-backend.sh takes both ports as env and refuses a port that is
+      # already listening, so a collision is a loud failure rather than two
+      # servers quietly sharing a database. NATIVE_BACKEND_DIR defaults to
+      # RUNNER_TEMP, which is already per-runner, so pgdata/logs/pid need no
+      # help.
+      - name: Allocate this runner's backend ports
         run: |
-          SIM=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in sorted(data.get('devices', {}).items(), reverse=True):
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-                          print(d['name'])
-                          sys.exit(0)
-          print('iPhone 16')
-          ")
-          echo "device=$SIM" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $SIM"
+          set -euo pipefail
+          # Arithmetic lives in the shell, never in a workflow expression:
+          # GitHub's expression syntax has no arithmetic operators at all, so
+          # "3100 + something" there is a parse error that fails the ENTIRE
+          # workflow at startup — no jobs, no logs, just "this run likely
+          # failed because of a workflow file issue". (Expressions are parsed
+          # inside run blocks too, including in shell comments, so an empty
+          # one written here as an example would break it the same way.)
+          #
+          # Trailing digits of the runner name: mac-mini-ios-2 -> 2, which
+          # keeps the ports readable against the runner in the log. The 10#0
+          # prefix forces base 10 and makes an empty match 0 rather than a
+          # syntax error. A name with no usable index hashes the whole name
+          # instead of falling back to a constant — a constant would
+          # reintroduce precisely the collision this step exists to remove.
+          slot=$(( 10#0${RUNNER_NAME##*[^0-9]} ))
+          # Out of range as well as absent: a hosted runner is called
+          # "GitHub Actions 1000015958", whose trailing digits are an account
+          # id, not a slot — 3100 + that is not a port at all. Anything above
+          # the plausible number of runners on one host is not an index.
+          if [ "$slot" -lt 1 ] || [ "$slot" -gt 50 ]; then
+            slot=$(( 0x$(printf '%s' "$RUNNER_NAME" | shasum -a 256 | cut -c1-4) % 50 + 1 ))
+            echo "::warning::runner '$RUNNER_NAME' has no trailing index; hashed it to slot $slot"
+          fi
+          # Slots are 1-based, so no port can land on 3100 (the
+          # signal-notifier sidecar's documented port) and none is near the
+          # 3000/5432 a local `dev:server` and its Postgres occupy — this host
+          # is also somebody's development machine, and shard 0 on 3000
+          # collided with a running one on the very first try. Keeping CI off
+          # the conventional defaults means a person can run the app here
+          # without breaking the merge gate.
+          echo "NATIVE_BACKEND_PORT=$((3100 + slot))" >> "$GITHUB_ENV"
+          echo "NATIVE_BACKEND_PGPORT=$((5500 + slot))" >> "$GITHUB_ENV"
+          echo "$RUNNER_NAME (slot $slot) -> http $((3100 + slot)) / pg $((5500 + slot))"
 
-      # ─── Docker (not pre-installed on macOS runners) ───────────
-      - name: Setup Docker
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
+      - name: Start native backend
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          echo "shard $SHARD on $RUNNER_NAME -> http $NATIVE_BACKEND_PORT / pg $NATIVE_BACKEND_PGPORT"
+          apps/ios/scripts/native-backend.sh start
 
-      # ─── Start Backend Services ────────────────────────────────
-      - name: Bootstrap backend
-        uses: ./.github/actions/bootstrap-backend
-        with:
-          admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
-
-      - name: Disable macOS firewall for tests
+      # Hosted runners only. The firewall on a persistent host is configured
+      # once by its operator, not turned off per job — and this host has no
+      # passwordless sudo, so attempting it would only fail the shard.
+      - name: Disable macOS application firewall
+        if: runner.environment == 'github-hosted'
         run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
 
-      # ─── Create Test Hub for This Shard ────────────────────────
-      - name: Create test hub for shard ${{ matrix.shard }}
-        id: hub
+      # A DEDICATED device per shard, created here rather than picked from the
+      # pool. The old "first available iPhone" returns the SAME device to all
+      # four shards, which is harmless when each runs in its own VM and
+      # catastrophic when they share a host: four test runs driving one
+      # simulator. Creating it also removes the pre-existing-device
+      # assumption entirely — a fresh host needs no manual setup.
+      #
+      # Still resolved by UDID for both boot and destination: resolving by
+      # name twice once found no device right after the boot (run 36356469649).
+      - name: Create simulator for shard ${{ matrix.shard }}
+        id: sim
         run: |
-          RESPONSE=$(curl -s -X POST http://127.0.0.1:3000/api/test-create-hub \
-            -H "Content-Type: application/json" \
-            -H "X-Test-Secret: test-reset-secret" \
-            -d "{\"name\":\"ios-e2e-shard-${{ matrix.shard }}\",\"description\":\"iOS E2E test hub for shard ${{ matrix.shard }}\"}")
-          echo "Response: $RESPONSE"
-          HUB_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-          if [ -z "$HUB_ID" ]; then
-            echo "::error::Failed to create test hub"
+          set -euo pipefail
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
+          import json, sys
+          rs = [r for r in json.load(sys.stdin)['runtimes']
+                if r.get('isAvailable') and r.get('platform') == 'iOS']
+          if not rs: sys.exit('no available iOS runtime')
+          print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
+          ")
+          NAME="ios-e2e-${{ github.run_id }}-${{ github.run_attempt }}-shard${{ matrix.shard }}"
+          UDID=$(xcrun simctl create "$NAME" "iPhone 17 Pro" "$RUNTIME")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Created simulator: $NAME ($UDID) on $RUNTIME"
+
+      # Boot before the first test: booting on a 3-core runner starved the backend
+      # badly enough that the first class's hub creation took 30-49s (runs
+      # 36343743065, 36348376614).
+      - name: Boot simulator
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" -b
+
+      # Per-PR runs (ci.yml) skip the quarantine; the nightly schedule and a
+      # manual dispatch run it too.
+      - name: Select test classes for shard ${{ matrix.shard }}
+        id: shard
+        env:
+          INCLUDE_QUARANTINED: ${{ github.event_name == 'schedule' || inputs.include-quarantined }}
+          # Only the literal string `smoke` narrows the selection. The nightly
+          # schedule and push runs pass no tier at all and so run full.
+          IOS_TIER: ${{ inputs.tier }}
+        run: |
+          extra=()
+          if [ "$INCLUDE_QUARANTINED" = "true" ]; then extra=(--include-quarantined); fi
+          if [ "$IOS_TIER" = "smoke" ]; then extra+=(--only-smoke); fi
+          # Unset on workflow_call and schedule, which is the point: neither the
+          # gate nor the nightly can select these.
+          if [ "${{ inputs.take-screenshots }}" = "true" ]; then extra+=(--include-non-gating); fi
+          # The shard indices this workflow routes to the Mac, handed to the
+          # packer so the classes in ci-mac-shards.txt can only land there.
+          # Must match the `host: mac` entries in the matrix above;
+          # guards.test.ts asserts the two agree, because a silent mismatch
+          # puts the fragile classes back on hosted runners — which is the
+          # failure this whole mechanism exists to prevent.
+          extra+=(--mac-shards 0,3)
+          python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
+          test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
+
+      # Inside the job's 65: leaves room for setup (5-7 min) and the always()
+      # report/upload steps. Shards are balanced by measured time (ui-tests.py
+      # shard) at ~37 min per-PR; the nightly adds the quarantined tests. At 45 the
+      # heaviest count-balanced shard timed out after its last test had passed
+      # (43.2 min of test time, run 36368999711).
+      - name: Run XCUITests (shard ${{ matrix.shard }})
+        timeout-minutes: 50
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          # xcodebuild strips the TEST_RUNNER_ prefix and forwards the rest
+          # into the test runner's environment, where BaseUITest reads
+          # TEST_HUB_URL. This shard's backend is not on 3000, so without it
+          # every shard would drive the same (wrong) server.
+          #
+          # Reads the port the allocation step chose. It must NOT recompute it
+          # from the shard index: the backend's port is derived from the
+          # RUNNER, and shard N does not run on runner N. When this line did
+          # its own `3100 + SHARD` arithmetic, shard 3 on mac-mini-ios-1
+          # started a backend on 3101 and then pointed the test runner at
+          # 3103, and all 33 of that shard's tests failed with "No test hub
+          # for <class>". Shard 2 passed only because it happened to land on
+          # mac-mini-ios-2, where the two numbers coincide — which is exactly
+          # how a mismatch like this hides.
+          export TEST_RUNNER_TEST_HUB_URL="http://127.0.0.1:$NATIVE_BACKEND_PORT"
+
+          # Confirm the shard is pointed at a backend that answers, rather than
+          # letting every test fail its setup one by one — a port mismatch once
+          # cost a full shard and surfaced as 33 identical assertion failures.
+          #
+          # POLLED, not a single attempt. The first version used one
+          # `curl --max-time 10` and failed a merge-queue run on a backend that
+          # was perfectly healthy: the hosted runner was busy booting a
+          # simulator, the request sat unaccepted for over 10s, and curl
+          # returned "(28) timed out ... 0 bytes received" while the server log
+          # showed it answering 200 moments later. A fixed timeout sized for a
+          # fast machine is exactly the defect this step exists to surface, so
+          # it must not contain one itself.
+          #
+          # Up to ~2 minutes. Long enough to outlast simulator boot on a loaded
+          # hosted runner; far short of the 50-minute step budget, so a backend
+          # that genuinely never came up still fails fast and loudly.
+          hub_ok=0
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 10 "$TEST_RUNNER_TEST_HUB_URL/api/health/live" >/dev/null 2>&1; then
+              hub_ok=1
+              echo "hub reachable at $TEST_RUNNER_TEST_HUB_URL (attempt $attempt)"
+              break
+            fi
+            sleep 5
+          done
+          if [ "$hub_ok" != "1" ]; then
+            echo "::error::ios-e2e/ui FAILED: hub-unreachable — shard $SHARD on $RUNNER_NAME points at $TEST_RUNNER_TEST_HUB_URL and nothing answered in ~2 minutes. The backend was started on NATIVE_BACKEND_PORT=$NATIVE_BACKEND_PORT: if those two numbers differ, a port is being derived in two places; if they match, read the backend log step below — the server is either down or too starved to accept a connection."
             exit 1
           fi
-          echo "hub_id=$HUB_ID" >> "$GITHUB_OUTPUT"
-          echo "Created hub $HUB_ID for shard ${{ matrix.shard }}"
-
-      # ─── Determine Tests for This Shard ────────────────────────
-      - name: Collect UI test classes for this shard
-        id: shard-tests
-        run: |
-          # Find all UI test files and sort them
-          TEST_FILES=($(find apps/ios/Tests/UI -name "*UITests.swift" -o -name "*Tests.swift" | grep -v "BaseUITest.swift" | sort))
-          TOTAL=${#TEST_FILES[@]}
-          echo "Total UI test files: $TOTAL"
-
-          SHARD_ID=${{ matrix.shard }}
-          TOTAL_SHARDS=${{ strategy.job-total }}
-
-          # Build -only-testing arguments for tests assigned to this shard
-          ONLY_TESTING_ARGS=""
-          IDX=0
-          for file in "${TEST_FILES[@]}"; do
-            if [ $((IDX % TOTAL_SHARDS)) -eq "$SHARD_ID" ]; then
-              CLASS_NAME=$(basename "$file" .swift)
-              ONLY_TESTING_ARGS="${ONLY_TESTING_ARGS} -only-testing:LlamenosUITests/${CLASS_NAME}"
-              echo "Shard ${SHARD_ID}: ${CLASS_NAME}"
-            fi
-            IDX=$((IDX + 1))
-          done
-
-          echo "tests=${ONLY_TESTING_ARGS}" >> "$GITHUB_OUTPUT"
-
-      # ─── Run XCUITests for This Shard ──────────────────────────
-      - name: Run XCUITests (shard ${{ matrix.shard }})
-        working-directory: apps/ios
-        run: |
+          XCTESTRUN=$(find ${{ runner.temp }}/llamenos-build/Build/Products -name "*.xctestrun" -print -quit)
+          test -n "$XCTESTRUN" || { echo "::error::no .xctestrun in the downloaded build"; exit 1; }
+          # shellcheck disable=SC2046
           xcodebuild test-without-building \
-            -xctestrun $(find /tmp/llamenos-build/Build/Products -name "*.xctestrun" -print -quit) \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -xctestrun "$XCTESTRUN" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -parallel-testing-enabled NO \
-            ${{ steps.shard-tests.outputs.tests }}
-        env:
-          TEST_HUB_ID: ${{ steps.hub.outputs.hub_id }}
-          TEST_HUB_URL: http://localhost:3000
+            -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 300 \
+            -resultBundlePath "$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult" \
+            $(cat "$RUNNER_TEMP/shard-args.txt") \
+            2>&1 | tee "$RUNNER_TEMP/xcodebuild-test.log"
 
-      - name: Show backend runtime logs
-        if: ${{ !cancelled() }}
-        run: cat /tmp/backend.log || true
+      # always(): a shard that hits its timeout must still report what ran.
+      - name: Report (shard ${{ matrix.shard }})
+        if: always()
+        run: |
+          python3 apps/ios/scripts/ui-tests.py report "$RUNNER_TEMP/xcodebuild-test.log" \
+            --json "$RUNNER_TEMP/ui-test-results-shard-${{ matrix.shard }}.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # ─── Upload Test Results ───────────────────────────────────
+      # How much headroom did four concurrent shards actually leave? A hosted
+      # macOS runner gives a shard 3 cores and 7 GB to itself; four shards on
+      # this 10-core/16 GB host get ~2.5 cores and ~4 GB each, which is LESS
+      # memory per shard than hosted. Whether that matters is a measurement,
+      # not an opinion — and the tests are known to be resource-sensitive
+      # (see the "Boot simulator" comment: a starved backend took 30-49s to
+      # create a hub). Swap used here is the number that decides whether this
+      # host should run 4 shards at once or 2.
+      - name: Host headroom during this shard
+        if: always()
+        run: |
+          {
+            echo "### Shard ${{ matrix.shard }} host headroom"
+            echo '```'
+            sysctl -n vm.swapusage 2>/dev/null || true
+            echo "load:$(sysctl -n vm.loadavg 2>/dev/null || true)"
+            echo "booted simulators: $(xcrun simctl list devices booted 2>/dev/null | grep -c Booted || echo '?')"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show backend log
+        if: always()
+        run: cat "$RUNNER_TEMP/llamenos-native-backend/server.log" || true
+
+      # Why those screenshots were never used: nothing took them out of the
+      # .xcresult. Captured with `lifetime = .keepAlways`, bundled into an
+      # ~80 MB result file, uploaded, never opened. Exporting them to a plain
+      # directory is what makes the opt-in worth having at all.
+      - name: Export screenshots
+        if: always() && inputs.take-screenshots == true
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/screenshots-shard-${{ matrix.shard }}"
+          mkdir -p "$out"
+          xcresult="$RUNNER_TEMP/ios-e2e-shard-${{ matrix.shard }}.xcresult"
+          if [ ! -d "$xcresult" ]; then
+            echo "::warning::no xcresult at $xcresult — nothing to export"
+            exit 0
+          fi
+          # Tolerated rather than required: a change to this CLI must not fail a
+          # run whose tests already passed. The .xcresult artifact still has them.
+          if ! xcrun xcresulttool export attachments \
+                 --path "$xcresult" --output-path "$out" 2>"$RUNNER_TEMP/export.err"; then
+            echo "::warning::xcresulttool export attachments failed"
+            sed 's/^/  /' "$RUNNER_TEMP/export.err" || true
+            exit 0
+          fi
+          echo "exported $(find "$out" -type f | wc -l | tr -d ' ') file(s)"
+
+      - name: Upload screenshots
+        if: always() && inputs.take-screenshots == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-screenshots-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/screenshots-shard-${{ matrix.shard }}
+          retention-days: 30
+          if-no-files-found: ignore
+
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: ${{ !cancelled() }}
+        if: always()
         with:
           name: ios-e2e-results-shard-${{ matrix.shard }}
           path: |
-            /tmp/llamenos-build/Logs/Test/
-            apps/ios/build/reports/
+            ${{ runner.temp }}/ios-e2e-shard-${{ matrix.shard }}.xcresult
+            ${{ runner.temp }}/xcodebuild-test.log
+            ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
+            ${{ runner.temp }}/llamenos-native-backend/server.log
           retention-days: 7
 
-      - name: Tear down Docker Compose
-        if: always()
-        run: |
-          docker compose --env-file .env \
-            -f deploy/docker/docker-compose.yml \
-            -f deploy/docker/docker-compose.test.yml \
-            down -v 2>/dev/null || true
+      # Reads the ports from the environment the allocation step wrote, so
+      # there is exactly one place deriving them. The guard matters: with
+      # these unset, native-backend.sh falls back to 3000/5432 and would try
+      # to stop the OPERATOR's development server on this shared host.
+      - name: Stop native backend
+        if: always() && env.NATIVE_BACKEND_PORT != ''
+        run: apps/ios/scripts/native-backend.sh stop
 
-      - name: Stop backend services
+      # This host keeps every simulator ever created — each is GBs of runtime
+      # state, and a week of runs would fill the disk. Deleted unconditionally,
+      # including on cancellation, plus a sweep for the runs that never got
+      # here (killed mid-job, runner restarted).
+      - name: Delete this shard's simulator
         if: always()
         run: |
-          pkill -f "bun dist/server/index.js" || true
-          pkill -f rustfs || true
-          pg_ctl -D /tmp/pgdata stop 2>/dev/null || true
+          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+
+      # Sweep by AGE, never by name alone: other PRs' shards run on this same
+      # host concurrently and their devices are also called ios-e2e-*.
+      # Deleting those would kill a live run. A shard's job cap is 65 min, so
+      # anything untouched for 6h provably belongs to no running job.
+      - name: Sweep simulators orphaned by earlier runs
+        if: always()
+        run: |
+          find "$HOME/Library/Developer/CoreSimulator/Devices" -maxdepth 1 -type d -mmin +360 \
+            -exec test -e '{}/device.plist' ';' -print 2>/dev/null | while read -r dir; do
+            udid=$(basename "$dir")
+            name=$(/usr/libexec/PlistBuddy -c 'Print :name' "$dir/device.plist" 2>/dev/null || echo "")
+            case "$name" in
+              ios-e2e-*) xcrun simctl delete "$udid" 2>/dev/null && echo "swept $name ($udid)" ;;
+            esac
+          done || true

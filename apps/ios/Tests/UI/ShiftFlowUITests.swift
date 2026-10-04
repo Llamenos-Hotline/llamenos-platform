@@ -187,7 +187,8 @@ final class ShiftFlowUITests: BaseUITest {
             navigateToSettings()
         }
         then("I should see identity or version info") {
-            let found = anyElementExists(["settings-npub", "settings-version"])
+            // v3 device keys: the identity row is the signing pubkey, not a Bech32 npub.
+            let found = anyElementExists(["settings-signing-pubkey", "settings-version"])
             XCTAssertTrue(found, "Settings should show identity or version info")
         }
     }

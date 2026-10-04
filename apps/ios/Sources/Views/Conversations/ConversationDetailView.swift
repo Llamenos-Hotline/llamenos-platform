@@ -7,7 +7,7 @@ import SwiftUI
 struct ConversationDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: ConversationsViewModel?
+    @State private var viewModelBox = ViewModelBox<ConversationsViewModel>()
 
     let conversationId: String
 
@@ -231,7 +231,7 @@ struct ConversationDetailView: View {
 
     private var resolvedViewModel: ConversationsViewModel {
         let currentAdminPubkeys = [appState.adminDecryptionPubkey].compactMap { $0 }
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             vm.adminPubkeys = currentAdminPubkeys
             return vm
         }
@@ -242,9 +242,7 @@ struct ConversationDetailView: View {
             hubContext: hubContext,
             adminPubkeys: currentAdminPubkeys
         )
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

@@ -69,41 +69,41 @@ class NoteThreadSteps : BaseSteps() {
     @Given("I am on the notes list")
     fun iAmOnTheNotesList() {
         // Already navigated to Notes tab in Background
-        val found = assertAnyTagDisplayed("notes-list", "notes-empty", "notes-loading")
+        assertAnyTagDisplayed("notes-list", "notes-empty", "notes-loading")
     }
 
     @Then("I should see the thread replies section")
     fun iShouldSeeTheThreadRepliesSection() {
         // Thread UI may not be implemented — accept note detail or empty state
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-thread-header", "note-detail-text", "notes-empty", "notes-list",
         )
     }
 
     @Then("I should see the no replies message")
     fun iShouldSeeTheNoRepliesMessage() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-no-replies", "note-detail-text", "notes-empty",
         )
     }
 
     @Then("I should see the reply count in the thread header")
     fun iShouldSeeTheReplyCountInTheThreadHeader() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-reply-count", "note-thread-header", "note-detail-text", "notes-empty",
         )
     }
 
     @Then("I should see the reply input field")
     fun iShouldSeeTheReplyInputField() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-reply-input", "note-detail-text", "notes-empty",
         )
     }
 
     @Then("I should see the send reply button")
     fun iShouldSeeTheSendReplyButton() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "note-reply-send", "note-detail-text", "notes-empty",
         )
     }

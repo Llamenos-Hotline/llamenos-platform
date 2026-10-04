@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.admin
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -200,11 +201,20 @@ data class AdminUiState(
  * Provides CRUD operations for users, ban lists, audit logs, and invites.
  * Only accessible to users with admin role. Data is fetched on tab selection
  * to avoid unnecessary API calls.
+ *
+ * On an admin section screen the route carries [SECTION_ARG]; that section is
+ * selected (and its data loaded) once, when the ViewModel is created.
  */
 @HiltViewModel
 class AdminViewModel @Inject constructor(
     private val apiService: ApiService,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    companion object {
+        /** Route argument naming the admin sidebar section a screen shows. */
+        const val SECTION_ARG = "section"
+    }
 
     private val _uiState = MutableStateFlow(AdminUiState())
     val uiState: StateFlow<AdminUiState> = _uiState.asStateFlow()
@@ -218,7 +228,8 @@ class AdminViewModel @Inject constructor(
     val nsecEvent = _nsecEvent.receiveAsFlow()
 
     init {
-        loadVolunteers()
+        val section = savedStateHandle.get<String>(SECTION_ARG)
+        if (section != null) selectAdminSection(section) else loadVolunteers()
     }
 
     /**
@@ -246,6 +257,7 @@ class AdminViewModel @Inject constructor(
     fun selectAdminSection(slug: String) {
         _uiState.update { it.copy(selectedAdminSection = slug) }
         when (slug) {
+            "transcription" -> loadTranscriptionSettings()
             "report-types" -> loadReportCategories()
             "call-settings" -> loadCallSettings()
             "phone-menu-languages" -> loadIvrLanguages()
@@ -755,6 +767,16 @@ class AdminViewModel @Inject constructor(
     // ---- Admin Settings ----
 
     private fun loadAdminSettings() {
+        loadTranscriptionSettings()
+        // Load all settings sub-sections in parallel
+        loadReportCategories()
+        loadTelephonySettings()
+        loadCallSettings()
+        loadIvrLanguages()
+        loadSpamSettings()
+    }
+
+    private fun loadTranscriptionSettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSettings = true, settingsError = null) }
             try {
@@ -775,12 +797,6 @@ class AdminViewModel @Inject constructor(
                 }
             }
         }
-        // Load all settings sub-sections in parallel
-        loadReportCategories()
-        loadTelephonySettings()
-        loadCallSettings()
-        loadIvrLanguages()
-        loadSpamSettings()
     }
 
     fun toggleTranscription(enabled: Boolean) {

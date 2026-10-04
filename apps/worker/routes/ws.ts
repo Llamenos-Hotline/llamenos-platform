@@ -13,6 +13,7 @@ import { wsClientMessageSchema } from '@protocol/schemas/ws-messages'
 import type { ConnectionState } from '../lib/ws-manager'
 import { getConnectionManager } from '../lib/ws-manager'
 import { createLogger } from '../lib/logger'
+import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 
 const log = createLogger('ws')
 
@@ -196,6 +197,12 @@ async function handleAuth(
   const now = Date.now()
   if (Math.abs(now - msg.ts) > AUTH_TIMESTAMP_WINDOW_MS) {
     ws.sendText(JSON.stringify({ type: 'error', code: 'auth_failed', message: 'Timestamp expired' }))
+    ws.close(4001, 'Auth failed')
+    return
+  }
+
+  if (typeof msg.pubkey !== 'string' || isRevokedSigningKey(msg.pubkey)) {
+    ws.sendText(JSON.stringify({ type: 'error', code: 'auth_failed', message: 'Invalid signature' }))
     ws.close(4001, 'Auth failed')
     return
   }

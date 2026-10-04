@@ -155,7 +155,7 @@ class ReportTypeSteps : BaseSteps() {
     @Then("the report type picker should show available types")
     fun theReportTypePickerShouldShowAvailableTypes() {
         // Type picker shows either the list, loading indicator, or empty state
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-type-picker-list",
             "report-type-picker-loading",
             "report-type-picker-empty",
@@ -169,7 +169,7 @@ class ReportTypeSteps : BaseSteps() {
     fun eachTypeCardShouldShowALabelAndDescription() {
         // Assert that at least one report-type-label and report-type-description exist,
         // or fall back to the picker/reports screen being visible
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-type-label",
             "report-type-description",
             "report-type-picker-list",
@@ -184,7 +184,7 @@ class ReportTypeSteps : BaseSteps() {
         // Dynamic fields are tagged as "field-{name}". The exact field names depend
         // on the report type definition from the backend. Assert that we're on the
         // typed report form screen with at least the title input visible.
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "typed-report-title-input",
             "typed-report-create-title",
             "typed-report-not-found",
@@ -208,7 +208,7 @@ class ReportTypeSteps : BaseSteps() {
         // Audio input buttons are tagged as "field-{name}-audio" for textarea fields
         // with supportAudioInput=true. The mic button inside is "field-{name}-mic-button".
         // Check for any audio-related field elements.
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "typed-report-title-input",
             "typed-report-create-title",
             "reports-title",
@@ -232,7 +232,7 @@ class ReportTypeSteps : BaseSteps() {
         // We check for either the reports list (successful navigation back) or an
         // error message (submission failed).
         composeRule.waitForIdle()
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "reports-list",
             "reports-empty",
             "reports-title",
@@ -245,7 +245,7 @@ class ReportTypeSteps : BaseSteps() {
     fun theReportShouldAppearInMyReportsList() {
         // After successful creation, the reports list is refreshed.
         // Check for the reports list or any report card.
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "reports-list",
             "reports-empty",
             "reports-title",

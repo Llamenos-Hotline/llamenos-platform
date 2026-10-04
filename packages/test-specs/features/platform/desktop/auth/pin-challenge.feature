@@ -6,6 +6,9 @@ Feature: PIN Challenge (Re-auth Step-up)
 
   Background:
     Given I am logged in as an admin
+    # A hub member with a phone, so the toggle is on a row this scenario owns
+    # rather than on some other scenario's user leaking into the hub's list
+    And I have created a volunteer
 
   Scenario: Phone unmask requires PIN challenge
     When I navigate to the "Volunteers" page

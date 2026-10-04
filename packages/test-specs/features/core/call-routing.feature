@@ -47,11 +47,8 @@ Feature: Call Routing & History
     When a call needs to be routed
     Then all 3 volunteers should be in the ring group
 
-  @backend
-  Scenario: Exclude busy volunteers from ring group
-    Given a shift with 3 volunteers and 1 is on a call
-    When a call needs to be routed
-    Then only 2 volunteers should be in the ring group
+  # Busy-volunteer exclusion is asserted against the server's real ring set in
+  # demo-mock-telephony.feature (#1018).
 
   # The fallback group's ring behaviour (which volunteers are actually rung when no shift is
   # active) is asserted against the real ringing service in demo-mock-telephony.feature (#1017).
@@ -158,6 +155,33 @@ Feature: Call Routing & History
     And volunteer 1 answers the call
     Then the call status is "in-progress"
     And volunteer 2 no longer receives a ring
+
+  @backend
+  Scenario: Concurrent in-app answers - exactly one volunteer wins
+    And 2 volunteers are on shift
+    When a call arrives from "+15554446666"
+    And volunteers 1 and 2 answer the call in the app at the same time
+    Then exactly 1 in-app answer succeeds
+    And every other in-app answer is rejected with status 409
+    And the winning volunteer owns the call
+
+  @backend
+  Scenario: A volunteer cannot take over a call another volunteer is on
+    And 2 volunteers are on shift
+    When a call arrives from "+15554447777"
+    And volunteer 1 answers the call in the app
+    And volunteer 2 answers the call in the app
+    Then the last in-app answer is rejected with status 409
+    And volunteer 1 can still hang up the call
+
+  @backend
+  Scenario: A hub member who was not rung cannot answer the call
+    And 1 volunteers are on shift
+    And a hub member who is not on shift
+    When a call arrives from "+15554448888"
+    And the off-shift member answers the call in the app
+    Then the last in-app answer is rejected with status 403
+    And the call status is "ringing"
 
   # ── Backend: Voicemail ────────────────────────────────────────────
 

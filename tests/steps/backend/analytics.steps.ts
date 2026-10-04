@@ -22,6 +22,7 @@ import {
   simulateEndCall,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Local analytics test state ──────────────────────────────────────
 
@@ -80,9 +81,7 @@ Given('the hub has call records across multiple hours', async ({ request, world 
   const vol = await createUserViaApi(request, { name: uniqueName('analytics-vol') })
   await createShiftViaApi(request, {
     name: uniqueName('analytics-shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol.pubkey],
     hubId,
   })
@@ -109,9 +108,7 @@ Given('volunteers have answered calls and created notes', async ({ request, worl
   const vol2 = await createUserViaApi(request, { name: uniqueName('user-stats-vol2') })
   await createShiftViaApi(request, {
     name: uniqueName('user-stats-shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol1.pubkey, vol2.pubkey],
     hubId,
   })
@@ -141,9 +138,7 @@ Given('I have answered {int} calls today', async ({ request, world }, count: num
 
   await createShiftViaApi(request, {
     name: uniqueName('personal-shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol.pubkey],
     hubId,
   })
@@ -165,9 +160,7 @@ Given('there are calls from May 1 through May 10', async ({ request, world }) =>
   const vol = await createUserViaApi(request, { name: uniqueName('range-vol') })
   await createShiftViaApi(request, {
     name: uniqueName('range-shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol.pubkey],
     hubId,
   })
@@ -191,9 +184,7 @@ Given('there are calls in hub-A and hub-B', async ({ request, world }) => {
     const vol = await createUserViaApi(request, { name: uniqueName(`xhub-vol`) })
     await createShiftViaApi(request, {
       name: uniqueName('xhub-shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })

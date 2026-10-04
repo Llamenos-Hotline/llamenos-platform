@@ -136,6 +136,20 @@ describe('SettingsService.ensureInit', () => {
     const secondInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
+
+  it('still applies demo seeding after a default-mode init (server boot, then demo seeder)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow()],
+      [makeRole()],
+      [makeSettingsRow({ setupState: null, messagingConfig: null })],
+      [makeRole()],
+    ])
+    await service.ensureInit() // boot
+    const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
+    await service.ensureInit({ DEMO_MODE: 'true' })
+    expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -385,6 +399,19 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
     await expect(
       service.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('tells a self-hosted operator which language a caller hears instead, and that recordings fix it (#1347)', async () => {
+    const { service } = setup()
+    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+      type: 'asterisk',
+      phoneNumber: '+15551234567',
+    } as any)
+
+    // Generated speech has no Tagalog or Mixtec voice (ivr-speech/voices.ts).
+    const refused = service.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
+    await expect(refused).rejects.toMatchObject({ status: 400 })
+    await expect(refused).rejects.toThrow(/cannot speak: tl, mix\. No offline voice exists for them: .*\(tl → en, mix → es\) unless you upload recordings/)
   })
 
   it('accepts a hub override where every language is in the provider catalog', async () => {
@@ -773,6 +800,39 @@ describe('SettingsService.getEnabledChannels', () => {
 
     const result = await service.getEnabledChannels({})
     expect(result.voice).toBe(false)
+  })
+
+  /**
+   * On a real deployment `system_settings.setup_state` is `{}` — that is what
+   * `getSettings()` upserts for the singleton row, so it is the shape every
+   * fresh install has until the setup wizard writes to it. `getEnabledChannels`
+   * read `row.setupState` directly and cast it `as SetupState | null`, then did
+   * `setupState?.selectedChannels.includes(...)`: the `?.` guards a null row but
+   * not a present-and-empty one, so `{}` threw a TypeError.
+   *
+   * `GET /api/config` catches that and returns every channel `false`, and the
+   * desktop gates its whole Conversations page on those flags
+   * (`src/client/lib/config.tsx` `hasAnyMessaging`) — so a deployment with
+   * `enabledChannels: ['signal']` persisted rendered "No messaging channels
+   * enabled" and the messaging UI was unreachable.
+   *
+   * Every other test here supplies a complete `setupState` or `null`, which is
+   * exactly why this was never caught. Do not "fix" this case by giving the
+   * fixture a fuller object than production has.
+   */
+  it('reads channels when setupState is the empty object a fresh install stores', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow({
+        messagingConfig: { enabledChannels: ['signal'], inactivityTimeout: 60, maxConcurrentPerUser: 5, requireAssignment: false },
+        setupState: {},
+      })],
+      [],
+    ])
+
+    const result = await service.getEnabledChannels({})
+    expect(result.signal).toBe(true)
+    expect(result.reports).toBe(false)
   })
 })
 

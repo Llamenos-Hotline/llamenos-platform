@@ -1,9 +1,9 @@
 # Llámenos
 
-[![CI](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ci.yml)
-[![Desktop E2E](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/desktop-e2e.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/desktop-e2e.yml)
-[![iOS E2E](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ios-e2e.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/ios-e2e.yml)
-[![Docker](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/docker.yml/badge.svg)](https://github.com/rhonda-rodododo/llamenos-platform/actions/workflows/docker.yml)
+[![CI](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ci.yml)
+[![Desktop E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/desktop-e2e.yml)
+[![iOS E2E](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/ios-e2e.yml)
+[![Docker](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml/badge.svg)](https://github.com/Llamenos-Hotline/llamenos-platform/actions/workflows/docker.yml)
 
 A secure, self-hosted crisis response platform. Supports voice calls, SMS, WhatsApp, and Signal — all routed to on-shift volunteers. Volunteers log encrypted notes and manage conversations in a native desktop app. Admins manage shifts, volunteers, channels, and ban lists. Reporters can submit encrypted reports through a dedicated portal.
 
@@ -138,9 +138,9 @@ Authentication uses Ed25519/X25519 keypairs. Generate the first admin:
 bun run bootstrap-admin
 ```
 
-This outputs:
-- A **recovery key** — give this to the admin, store it securely
-- A **hex public key** — you'll need this in the next step
+This prints, separately:
+- Two **public** values — `ADMIN_PUBKEY` (Ed25519) and `ADMIN_DECRYPTION_PUBKEY` (X25519) — for the next step
+- The admin's **secret seed**, under a `SECRET` heading — give it only to the admin and never put it in `.env` or any server config
 
 ### 3. Configure environment
 
@@ -151,7 +151,8 @@ cp .env.example .env
 Edit `.env` with your admin public key and telephony credentials:
 
 ```env
-ADMIN_PUBKEY=hex_public_key_from_step_2
+ADMIN_PUBKEY=hex_public_key_from_step_2   # the PUBLIC value, never the secret seed
+ADMIN_DECRYPTION_PUBKEY=hex_decryption_public_key_from_step_2
 ENVIRONMENT=development
 
 # Twilio (default voice provider — optional if configuring via admin UI)

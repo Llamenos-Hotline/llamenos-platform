@@ -48,7 +48,7 @@ struct EntityTypeAdminView: View {
         loadError = nil
         do {
             let response: EntityTypesResponse = try await appState.apiService.request(
-                method: "GET", path: "/api/settings/cms/entity-types"
+                method: "GET", path: appState.apiService.hp("/api/settings/cms/entity-types")
             )
             entityTypes = response.entityTypes.filter { $0.isArchived != true }
         } catch {

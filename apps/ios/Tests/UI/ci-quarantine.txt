@@ -1,0 +1,70 @@
+# XCUITests the per-PR merge gate skips, each owned by a filed defect.
+#
+# They are not skipped anywhere else: the nightly schedule and manual dispatches
+# of .github/workflows/ios-e2e.yml run them, so each stays visible every day
+# until its defect is fixed. The coverage validator gives a quarantined test no
+# scenario credit. Remove an entry in the PR that fixes its defect.
+#
+# Format:  <Class>/<testMethod>  # <why> — #<issue>
+# Checked by: python3 apps/ios/scripts/ui-tests.py check-quarantine
+
+# MainTabView has six tabs; an iPhone tab bar shows four plus More (a product decision).
+DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More — #1240
+
+# The clock in/out card only renders when the hub has scheduled shifts.
+DashboardUITests/testNavigateToShiftsTab  # clock card hidden without scheduled shifts — #1241
+
+# provider-status / usage / channels are called without /onboard (404) and decoded as the wrong shapes.
+HubCommunicationsUITests/testBackButtonAppearsAfterFirstStep  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testChannelChecklistIdentifier  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testChannelChecklistShowsAllToggles  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testChannelSetupStepRendersContent  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testChannelTogglesAreIndependentlyToggleable  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testNextButtonAppearsAfterTemplateStep  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testNoProviderStateShowsSetupButton  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testOnboardingCancelDismissesSheet  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testOnboardingSheetAppearsOnSetupTap  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testOnboardingSheetShowsCancelButton  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testOnboardingSheetShowsStepIndicator  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testPhoneNumberStepRendersContent  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testProviderStepRendersContent  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testStartFromScratchOptionExists  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testSummaryStepRendersContent  # Communications contract mismatch — #1242
+HubCommunicationsUITests/testTemplateListAppearsOnFirstStep  # Communications contract mismatch — #1242
+
+# Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
+RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
+
+# AdminSidebarView is referenced only by its own #Preview; the app shows AdminTabView.
+AdminSidebarUITests/testAdminSidebarListExists  # tests a view the app never presents — #1245
+AdminSidebarUITests/testThisHubScopeHeaderVisible  # tests a view the app never presents — #1245
+AdminSidebarUITests/testPlatformScopeHeaderVisible  # tests a view the app never presents — #1245
+AdminSidebarUITests/testThisHubNavItemsPresent  # tests a view the app never presents — #1245
+AdminSidebarUITests/testAllThisHubNavItemsRendered  # tests a view the app never presents — #1245
+AdminSidebarUITests/testPlatformNavItemsPresent  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapLocationLookupNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapCallSettingsNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapBansNavigates  # tests a view the app never presents — #1245
+AdminSidebarUITests/testTapPlatformHubsNavigates  # tests a view the app never presents — #1245
+
+# navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
+EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
+
+# The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
+CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
+
+# Switching hubs fetches a hub key first, and no client ever creates one (#1042): every switch 404s.
+HubSwitchUITests/testHubSwitchUpdatesDataScope  # tapping a hub never switches the active hub — #1262
+# The Blasts screen renders none of its four states — no list, empty state, loading
+# or error — while GET /blasts returns 200. Navigation succeeds and the data
+# arrives; the view produces nothing. Not a flake: the same single test failed on
+# #1397 (CI diff ranges) and #1406 (hub template permissions), two PRs with nothing
+# in common, and no blast/broadcast path on main has changed since 2026-09-28.
+BlastsUITests/testBlastsListShowsContent  # view renders no state on a 200 — #1410
+# Second test in the same class hitting #1246's defect. The class's other test is
+# already parked below, but this one also selects the Contacts tab and so also
+# waits on `case-contacts-empty` / `case-contacts-loading` — both of which ARE
+# defined in CaseDetailView.swift and neither of which renders. It fails
+# intermittently (passed on one #1407 run, failed the next on an identical diff),
+# which is worse than failing always: it fails other people's PRs at random.
+CaseManagementUITests/testDetailTabSwitching  # contacts tab renders no state — #1246

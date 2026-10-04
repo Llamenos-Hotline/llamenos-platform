@@ -14,7 +14,7 @@
     "themeLight": "Tema ndijin",
     "themeSystem": "Tema de sistema",
     "back": "Noꞌó",
-    "copyField": "Copy %@",
+    "copyField": "Copy {{label}}",
     "createCase": "Create case",
     "currentStatus": "Current status",
     "customDateRange": "Custom date range",
@@ -250,7 +250,7 @@
     "noSubscribers": "Ta̱ꞌán suscriptor",
     "optOutFooter": "Pie de Cancelación",
     "rateLimit": "Límite (mensaje/segundo)",
-    "recipientCount": "%d ña̱yivi kúni̱ñúꞌú",
+    "recipientCount": "{{count}} ña̱yivi kúni̱ñúꞌú",
     "recipientCountOne": "1 ña̱yivi kúni̱ñúꞌú",
     "recipients": "ña̱yivi kúni̱ñúꞌú",
     "saveDraft": "Chikaa Borrador",
@@ -935,19 +935,19 @@
     "dotFilled": "Chítú",
     "enterPin": "Chikaa PIN miíún",
     "keyLocked": "Llave íyo bloqueada",
-    "lockoutRemaining": "Bloqueado. Náku̱ún nu̱ú %d segundo.",
+    "lockoutRemaining": "Bloqueado. Náku̱ún nu̱ú {{seconds}} segundo.",
     "mismatch": "PIN ña iin kuiti. Náku̱ún inka vuelta.",
     "setEncrypting": "Kúu cifrar llave miíún...",
     "setSubtitle": "Kaji iin PIN de 6-8 número ña proteger llave miíún",
     "setTitle": "Savaꞌa iin PIN",
     "tooShort": "PIN xíni̱ñúꞌú 6 número",
-    "unlockAttempts": "%d de %d intento ni̱ kuniñúꞌú",
+    "unlockAttempts": "{{used}} de {{total}} intento ni̱ kuniñúꞌú",
     "unlockSubtitle": "Chikaa PIN miíún ña desbloquear",
     "unlockTitle": "Chikaa PIN miíún",
     "unlockVerifying": "Kúu verificar...",
     "createPin": "Create a PIN or passphrase",
     "lengthLabel": "PIN Length",
-    "lengthOption": "%d digits",
+    "lengthOption": "{{count}} digits",
     "placeholder": "PIN or passphrase (8+ characters)"
   },
   "pinChallenge": {
@@ -1422,7 +1422,7 @@
     "providerConnection": "Provider Connection"
   },
   "shifts": {
-    "activeCalls": "%d llamada activa",
+    "activeCalls": "{{count}} llamada activa",
     "assigned": "Asignado",
     "available": "Íyo túva̱",
     "clockIn": "Registrar Entrada",
@@ -1431,7 +1431,7 @@
     "clockOutTitle": "¿Sandíꞌi Turno?",
     "clockedIn": "Xa̱ ní kivi nu̱ú turno",
     "clockedOut": "Xa̱ ní keta nu̱ú turno",
-    "count": "%d turno",
+    "count": "{{count}} turno",
     "create": "Savaꞌa Turno",
     "createShift": "Savaꞌa Turno",
     "days": {
@@ -1476,7 +1476,7 @@
     "selectedCount": "{{count}} ni̱ kaji",
     "shiftName": "Sivi Turno",
     "signUp": "Apuntar",
-    "signedUp": "Ni̱ apuntar nu̱ú %@",
+    "signedUp": "Ni̱ apuntar nu̱ú {{shift}}",
     "since": "Nuu̱",
     "startTime": "Hora Kíxáꞌá",
     "startsAt": "kíxáꞌá nu̱ú",
@@ -2984,7 +2984,7 @@
       "audioStart": "Start voice input",
       "audioStop": "Stop recording",
       "audioUnavailable": "Speech recognition is not available on this device",
-      "createTitle": "New %@ Report",
+      "createTitle": "New {{type}} Report",
       "datePick": "Pick a date",
       "required": "*",
       "selectOption": "Select an option"
@@ -3621,7 +3621,7 @@
     "createSubEvent": "Create Sub-Event",
     "created": "Created",
     "createdAt": "Created {{time}}",
-    "creatingAs": "Creating as %s",
+    "creatingAs": "Creating as {{entityType}}",
     "datesSection": "Dates",
     "descriptionPlaceholder": "Description (optional)",
     "detailTitle": "Event Detail",
@@ -3648,6 +3648,7 @@
     "noFields": "No custom fields defined for this event type.",
     "noLinkedCases": "No cases linked to this event.",
     "noLinkedReports": "No reports linked to this event.",
+    "noSubEvents": "No sub-events for this event.",
     "noTimeline": "No timeline entries yet.",
     "searchCases": "Search cases...",
     "searchPlaceholder": "Search events...",
@@ -3723,7 +3724,7 @@
     "browserTitle": "Schema Browser",
     "configuration": "Configuration",
     "contactRoles": "Contact Roles",
-    "fieldsCount": "%d fields",
+    "fieldsCount": "{{count}} fields",
     "interactions": "Interactions",
     "label": "Label",
     "labelPlural": "Plural Label",
@@ -3734,7 +3735,7 @@
     "overview": "Overview",
     "severities": "Severities",
     "statuses": "Statuses",
-    "statusesCount": "%d statuses",
+    "statusesCount": "{{count}} statuses",
     "statusesLabel": "Statuses",
     "subRecords": "Sub-Records",
     "template": "Template"
@@ -4073,7 +4074,7 @@
     "copyText": "Copy Text",
     "createCallIdLabel": "Associated Call",
     "createCallIdPlaceholder": "Call ID (optional)",
-    "createFieldRequired": "%@ is required",
+    "createFieldRequired": "{{field}} is required",
     "createSaving": "Encrypting & saving...",
     "createTextHint": "Write your call notes here...",
     "createTextLabel": "Note",
@@ -4329,8 +4330,8 @@
       "title": "Something went wrong"
     },
     "credentialTooShort": "PIN or passphrase must be at least 8 characters",
-    "decryptionFailed": "Decryption failed: %@",
-    "encryptionFailed": "Encryption failed: %@",
+    "decryptionFailed": "Decryption failed: {{reason}}",
+    "encryptionFailed": "Encryption failed: {{reason}}",
     "hubUnreachable": "Could not connect to the hub. Check the URL and try again.",
     "hubUrlEmpty": "Please enter the hub URL",
     "hubUrlInsecure": "Hub URL must use HTTPS for a secure connection",
@@ -4353,9 +4354,9 @@
     "encodingFailed": "Failed to encode contact data",
     "noHubKey": "Hub key not available",
     "noHubSelected": "No hub selected",
-    "wakeDecryptFailed": "Wake decrypt failed: %@",
+    "wakeDecryptFailed": "Wake decrypt failed: {{reason}}",
     "wakeKeyGeneration": "Failed to generate wake key",
-    "wakeRegisterFailed": "Device registration failed: %@"
+    "wakeRegisterFailed": "Device registration failed: {{reason}}"
   },
   "identityLabel": "Identidad",
   "back": "Noꞌó",
@@ -4421,7 +4422,7 @@
     "subtitle": "Chikaa PIN miíún ña desbloquear",
     "biometricReason": "Unlock Llamenos",
     "title": "Unlock",
-    "withBiometric": "Unlock with %@"
+    "withBiometric": "Unlock with {{method}}"
   },
   "lock": {
     "app": "Bloquear App",
@@ -4435,7 +4436,7 @@
     "connecting": "Kúu conectar...",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting (%d)..."
+    "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "accountNameLabel": "Account Name",
   "actionCopy": "Copy",
@@ -4459,7 +4460,7 @@
   },
   "connectWithOauth": "Connect with OAuth",
   "contact": {
-    "interactionsCount": "%d interactions"
+    "interactionsCount": "{{count}} interactions"
   },
   "containsLabel": "Contains",
   "copied": {
@@ -4472,7 +4473,7 @@
     "consentDescription": "When enabled, crash details (error type, stack trace, app version, OS) are sent to help fix bugs. No personal data, notes, keys, or call content is ever included.",
     "description": "Help improve Llamenos by sharing anonymous crash reports when errors occur.",
     "pendingReports": "Pending crash reports",
-    "pendingReportsDescription": "%@ crash report(s) from previous sessions are ready to send.",
+    "pendingReportsDescription": "{{count}} crash report(s) from previous sessions are ready to send.",
     "privacyNote": "Crash reports contain only technical information: error message, stack trace, app version, operating system, and device type. No personally identifiable information is collected.",
     "reportSent": "Crash report sent",
     "reportsCleared": "Pending crash reports discarded",
@@ -4511,16 +4512,16 @@
     "wiping": "Securely erasing local data..."
   },
   "duration": {
-    "minSec": "%dm %ds",
-    "sec": "%ds"
+    "minSec": "{{minutes}}m {{seconds}}s",
+    "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
   "enterApiCredentials": "Enter API Credentials",
   "fieldValidation": {
-    "max": "Must be at most %@",
-    "maxLength": "Must be at most %@ characters",
-    "min": "Must be at least %@",
-    "minLength": "Must be at least %@ characters",
+    "max": "Must be at most {{max}}",
+    "maxLength": "Must be at most {{max}} characters",
+    "min": "Must be at least {{min}}",
+    "minLength": "Must be at least {{min}} characters",
     "pattern": "Invalid format"
   },
   "fields": {
@@ -4633,7 +4634,7 @@
   "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
   "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a %s action.",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
   "useBiometric": "Use Biometric",
   "verificationMethodLabel": "Verification Method",

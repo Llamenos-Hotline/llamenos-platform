@@ -16,8 +16,9 @@ import XCTest
 ///
 /// Scope: the scenarios whose behaviour lives in `PINViewModel` / `AuthService` /
 /// `CryptoService` and can therefore be asserted deterministically, without a
-/// simulator UI flow. The screen-level scenarios from the same feature file live in
-/// `Tests/UI/AuthLoginBDDUITests.swift`.
+/// simulator UI flow. The feature's screen-level scenarios (onboarding, invite
+/// redemption, backspace/PIN-dot rendering) have no scenario-named iOS test yet —
+/// `bun run test-specs:validate --platform ios` lists them as MISSING.
 ///
 /// These exercise the escalating PIN lockout ladder (H7), which is the control that
 /// protects a seized volunteer device: 1–4 free retries, 30s at 5, 2min at 7,

@@ -11,6 +11,7 @@ import { createDatabase, closeDb, getDb, schema } from '../../apps/worker/db'
 import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
 import { createServices, type Services } from '../../apps/worker/services'
+import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig } from '../../apps/worker/lib/config'
@@ -26,6 +27,7 @@ import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '../../packages/shared/ev
 import type { MessagingChannelType } from '../../packages/shared/types'
 import type { Env } from '../../apps/worker/types/infra'
 import fs from 'node:fs'
+import { ed25519AuthPubkey, hpkeRecipientPubkey } from '@worker/lib/hpke-recipient'
 
 console.log('[llamenos] Starting Bun server...')
 
@@ -65,14 +67,26 @@ const services: Services = createServices(db, {
   notifierApiKey,
   notifierTokenSecret,
   env: {
-    ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-    ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+    ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+    ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
     SERVER_SECRET: serverSecret || undefined,
     ENVIRONMENT: process.env.ENVIRONMENT || undefined,
     DOMAIN: process.env.DOMAIN || undefined,
   },
 })
 console.log('[llamenos] Services initialized')
+
+// --- Seed defaults and the configured admin before anything serves ---
+// Settings first: the roles table must be populated before the admin user
+// exists, or a request authenticating in between resolves role-super-admin
+// against an empty table and is refused (see the ordering note in
+// routes/dev.ts test-reset). Both only fill what is missing, so they are safe
+// on every boot against an existing database. Mode-specific seeding (demo
+// accounts, a pre-completed setup) stays with the demo/dev flows that own it.
+// A failure here must stop the boot: a server without roles cannot authorise.
+await services.settings.ensureInit()
+await services.identity.ensurePlatformAdmin()
+console.log('[llamenos] Default settings, roles and platform admin ensured')
 
 // --- Startup: warn if any plaintext (un-encrypted) contacts exist ---
 try {
@@ -92,9 +106,20 @@ try {
   console.warn('[llamenos] Could not check for plaintext contacts:', err)
 }
 
+// --- Startup: warn about any hub that could not route a call to anybody ---
+// A hub with no shift and no fallback group rings nobody, which is the correct
+// out-of-the-box state (nobody is enrolled into crisis calls implicitly) but is
+// invisible: readiness passes, the wizard reports complete, and the first caller
+// hears voicemail. Warn while it can still be fixed, not once somebody is on the
+// line. A warning only — never a boot failure.
+await warnOnUnroutableHubs(services)
+
 const env: Record<string, unknown> = {
-  ADMIN_PUBKEY: readSecret('admin-pubkey', 'ADMIN_PUBKEY'),
-  ADMIN_DECRYPTION_PUBKEY: process.env.ADMIN_DECRYPTION_PUBKEY || undefined,
+  // The only place a raw env string becomes a typed key. Past this point the
+  // Ed25519 identity key and the X25519 HPKE recipient are different types and
+  // cannot be substituted for one another (apps/worker/lib/hpke-recipient.ts).
+  ADMIN_PUBKEY: ed25519AuthPubkey(readSecret('admin-pubkey', 'ADMIN_PUBKEY')),
+  ADMIN_DECRYPTION_PUBKEY: hpkeRecipientPubkey(process.env.ADMIN_DECRYPTION_PUBKEY),
   HMAC_SECRET: hmacSecret,
   HOTLINE_NAME: process.env.HOTLINE_NAME || 'Hotline',
   ENVIRONMENT: process.env.ENVIRONMENT || 'production',
@@ -103,8 +128,10 @@ const env: Record<string, unknown> = {
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || '',
   DEMO_MODE: process.env.DEMO_MODE || undefined,
   DEMO_MODE_CONFIRM: process.env.DEMO_MODE_CONFIRM || undefined,
+  // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
+  DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
-  R2_BUCKET: createBlobStorage(),
+  BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,
   SERVER_SECRET: serverSecret || undefined,
   GLITCHTIP_DSN: process.env.GLITCHTIP_DSN || undefined,
@@ -124,6 +151,31 @@ const env: Record<string, unknown> = {
   NOTIFIER_TOKEN_SECRET: notifierTokenSecret || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
+  // --- Push delivery ---
+  // This object IS the request env: anything absent here is permanently
+  // undefined to every route, no matter what the deploy writes into the
+  // container. These eight were written by the deploy templates and read by
+  // the push code, but never bridged, so both push transports were inert on
+  // every deployment. `validateConfig()` could not surface it either — it
+  // reads process.env directly, so startup reported push as configured while
+  // the routes saw nothing. Keep this literal explicit (no ...process.env
+  // spread, which would widen what routes can read) and add a key here
+  // whenever a route starts reading a new variable.
+  //
+  // iOS APNs — apps/worker/lib/voip-push.ts:37,76-78,
+  //            apps/worker/lib/push-dispatch.ts:82,209-211
+  APNS_KEY_P8: process.env.APNS_KEY_P8 || undefined,
+  APNS_KEY_ID: process.env.APNS_KEY_ID || undefined,
+  APNS_TEAM_ID: process.env.APNS_TEAM_ID || undefined,
+  // Android UnifiedPush/ntfy — apps/worker/lib/voip-push.ts:38,115,
+  //   apps/worker/lib/push-dispatch.ts:83,143-144,
+  //   apps/worker/lib/ntfy-origin.ts:74-79 (device endpoints are accepted only
+  //   on these origins, so without NTFY_PUBLIC_URL every device registered on
+  //   the public vhost is rejected).
+  NTFY_URL: process.env.NTFY_URL || undefined,
+  NTFY_AUTH_TOKEN: process.env.NTFY_AUTH_TOKEN || undefined,
+  NTFY_PUBLIC_URL: process.env.NTFY_PUBLIC_URL || undefined,
+  NTFY_ALLOWED_ORIGINS: process.env.NTFY_ALLOWED_ORIGINS || undefined,
 }
 
 // --- Initialize WebSocket relay ---
@@ -174,19 +226,19 @@ services.scheduler.start({
   },
   resolveIdentifier: (subscriberId: string) =>
     services.blasts.resolveSubscriberIdentifier(subscriberId),
-  onBlastProgress: (blastId, stats) => {
+  onBlastProgress: (blastId, hubId, stats) => {
     publishEvent(env as unknown as Env, KIND_BLAST_PROGRESS, {
       type: 'blast:progress',
       blastId,
       ...stats,
-    })
+    }, hubId)
   },
-  onBlastStatusChange: (blastId, status) => {
+  onBlastStatusChange: (blastId, hubId, status) => {
     publishEvent(env as unknown as Env, KIND_BLAST_STATUS, {
       type: 'blast:status',
       blastId,
       status,
-    })
+    }, hubId)
   },
 })
 
@@ -243,9 +295,10 @@ async function lookupUserHubs(pubkey: string): Promise<{ hubs: string[] } | null
   const activeHubIds = hubs
     .filter(h => h.status === 'active' && memberHubIds.includes(h.id))
     .map(h => h.id)
-  // Always include 'global' — messaging events (1010, 1011) and other
-  // hub-agnostic events are published to the 'global' pseudo-hub.
-  return { hubs: [...activeHubIds, 'global'] }
+  // Membership is the isolation boundary for relay subscriptions: every event
+  // is published to the hub that owns it, so a user may subscribe only to hubs
+  // they belong to. There is no catch-all pseudo-hub.
+  return { hubs: activeHubIds }
 }
 
 export default {

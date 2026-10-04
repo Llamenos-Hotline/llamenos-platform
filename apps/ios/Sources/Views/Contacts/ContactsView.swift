@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ContactsView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: ContactsViewModel?
+    @State private var viewModelBox = ViewModelBox<ContactsViewModel>()
     @State private var showCreateContact = false
 
     var body: some View {
@@ -205,9 +205,9 @@ struct ContactsView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ContactsViewModel {
-        if let vm = viewModel { return vm }
+        if let existing = viewModelBox.value { return existing }
         let vm = ContactsViewModel(apiService: appState.apiService)
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 }

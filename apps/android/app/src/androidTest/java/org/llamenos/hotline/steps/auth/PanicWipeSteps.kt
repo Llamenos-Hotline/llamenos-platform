@@ -33,24 +33,24 @@ class PanicWipeSteps : BaseSteps() {
 
     @Then("the panic wipe overlay should appear")
     fun thePanicWipeOverlayShouldAppear() {
-        val found = assertAnyTagDisplayed("panic-wipe-dialog", "panic-wipe-overlay", "panic-wipe-message", "app-title")
+        assertAnyTagDisplayed("panic-wipe-dialog", "panic-wipe-overlay", "panic-wipe-message", "app-title")
     }
 
     @Then("I should be redirected to the login page")
     fun iShouldBeRedirectedToTheLoginPage() {
-        val found = assertAnyTagDisplayed("app-title", "create-identity")
+        assertAnyTagDisplayed("app-title", "create-identity")
     }
 
     @Then("all local storage should be cleared")
     fun allLocalStorageShouldBeCleared() {
         // On Android: EncryptedSharedPreferences and Keystore entries cleared
-        val found = assertAnyTagDisplayed("app-title", "create-identity")
+        assertAnyTagDisplayed("app-title", "create-identity")
     }
 
     @Then("all session storage should be cleared")
     fun allSessionStorageShouldBeCleared() {
         // On Android: in-memory CryptoService state cleared
-        val found = assertAnyTagDisplayed("app-title", "create-identity")
+        assertAnyTagDisplayed("app-title", "create-identity")
     }
 
     @When("I press Escape twice then wait over one second")

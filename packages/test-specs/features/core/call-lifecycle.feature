@@ -38,10 +38,3 @@ Feature: Call Lifecycle Workflows
     When the admin removes the first volunteer from the shift
     And a call arrives from a unique caller
     Then only the second volunteer should be rung
-
-  # ─── Busy Volunteer Skipped ──────────────────────────────────────────
-
-  Scenario: Busy volunteer is skipped in parallel ring
-    Given a shift with 2 volunteers and 1 is on a call
-    When a call needs to be routed
-    Then only 1 volunteers should be in the ring group

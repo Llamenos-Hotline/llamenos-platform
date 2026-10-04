@@ -8,7 +8,7 @@ import SwiftUI
 struct ReportsView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
-    @State private var viewModel: ReportsViewModel?
+    @State private var viewModelBox = ViewModelBox<ReportsViewModel>()
     @State private var selectedReportType: ClientReportTypeDefinition?
 
     var body: some View {
@@ -217,11 +217,9 @@ struct ReportsView: View {
             )
         } description: {
             if vm.selectedFilter != .all {
-                Text(String(
-                    format: NSLocalizedString(
-                        "reports_empty_filtered",
-                        comment: "No %@ reports found."
-                    ),
+                Text(L10n.format(
+                    "reports_empty_filtered",
+                    comment: "No %@ reports found.",
                     vm.selectedFilter.displayName.lowercased()
                 ))
             } else {
@@ -297,14 +295,12 @@ struct ReportsView: View {
 
     private var resolvedViewModel: ReportsViewModel {
         let currentAdminPubkeys = [appState.adminDecryptionPubkey].compactMap { $0 }
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             vm.adminPubkeys = currentAdminPubkeys
             return vm
         }
         let vm = ReportsViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService, adminPubkeys: currentAdminPubkeys)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

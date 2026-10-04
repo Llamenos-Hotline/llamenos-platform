@@ -8,16 +8,16 @@ import SwiftUI
 /// Permission-gated: only admins see the full settings panel.
 struct HubCommunicationsView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: HubCommunicationsViewModel?
+    @State private var viewModelBox = ViewModelBox<HubCommunicationsViewModel>()
 
     private var vm: HubCommunicationsViewModel {
-        if let viewModel { return viewModel }
+        if let existing = viewModelBox.value { return existing }
         let vm = HubCommunicationsViewModel(
             onboardAPI: HubOnboardAPI(api: appState.apiService),
             providerService: ProviderSetupService(api: appState.apiService),
             hubContext: appState.hubContext
         )
-        DispatchQueue.main.async { self.viewModel = vm }
+        viewModelBox.value = vm
         return vm
     }
 

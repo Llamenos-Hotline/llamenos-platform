@@ -672,13 +672,7 @@ class ScreenshotTests {
         every { vm.uiState } returns MutableStateFlow(
             ShiftsUiState(
                 shifts = sampleShifts,
-                currentStatus = org.llamenos.hotline.model.ShiftStatusResponse(
-                    isOnShift = true,
-                    onBreak = false,
-                    shiftId = "shift-001",
-                    startedAt = sampleTimestamp2,
-                    callsToday = 14,
-                ),
+                clockedInAt = sampleTimestamp2,
             )
         )
         captureRoboImage("$OUT/shifts-android.png") {
@@ -854,7 +848,6 @@ class ScreenshotTests {
                     onDebugLoggingChange = {},
                     onClearCache = {},
                     onNavigateToAdmin = {},
-                    onNavigateToDeviceLink = {},
                 )
             }
         }
@@ -896,7 +889,6 @@ class ScreenshotTests {
                     onDebugLoggingChange = {},
                     onClearCache = {},
                     onNavigateToAdmin = {},
-                    onNavigateToDeviceLink = {},
                     biometricState = BiometricSectionState(enrolled = true),
                 )
             }

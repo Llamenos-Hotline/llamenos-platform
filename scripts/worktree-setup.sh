@@ -261,6 +261,37 @@ copy_android_artifacts() {
   fi
 }
 
+# One PostgreSQL database per worktree, on the one dev Postgres (scripts/worktree-db.ts).
+# Running setup is how a worktree opts in; the sweep then drops databases whose
+# worktree is gone. The database step never fails setup: the server launcher
+# (scripts/dev-bun.sh) runs the same ensure and refuses to start without it.
+setup_worktree_database() {
+  cd "$PROJECT_ROOT"
+  if [[ -n "${CI:-}" ]]; then
+    info "CI — skipping the per-worktree database (each CI job has its own Postgres)"
+    return 0
+  fi
+
+  info "Provisioning this worktree's PostgreSQL database..."
+  local rc=0
+  bun scripts/worktree-db.ts ensure --opt-in || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    ok "Worktree database ready"
+  elif [[ $rc -eq 3 ]]; then
+    warn "Dev Postgres not usable (see above) — 'bun run dev:server' retries provisioning at start"
+    return 0
+  else
+    warn "Worktree database NOT ready (see above) — 'bun run dev:server' will refuse to start until it is"
+  fi
+
+  info "Sweeping databases of removed worktrees..."
+  if bun scripts/worktree-db.ts sweep --drop --quiet; then
+    ok "Sweep complete"
+  else
+    warn "Sweep failed (see above)"
+  fi
+}
+
 main() {
   echo "Worktree Setup"
   echo "==============="
@@ -274,6 +305,7 @@ main() {
   build_crypto_android
   copy_ios_artifacts
   copy_android_artifacts
+  setup_worktree_database
 
   echo ""
   ok "Workspace setup complete!"

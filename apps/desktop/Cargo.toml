@@ -1,6 +1,6 @@
 [package]
 name = "llamenos-desktop"
-version = "0.19.17"
+version = "0.19.18"
 edition = "2024"
 rust-version = "1.88.0"
 license = "AGPL-3.0-or-later"

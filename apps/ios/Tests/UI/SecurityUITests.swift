@@ -4,6 +4,29 @@ import XCTest
 /// Maps to scenarios from: emergency-wipe.feature, panic-wipe.feature, Epic 260 hardening
 final class SecurityUITests: BaseUITest {
 
+    /// XCTest kills a test at 180s by default and xcodebuild raises that to
+    /// 300s; this suite drives the PIN lockout policy, which is defined in
+    /// failed ATTEMPTS and cannot be made to need fewer of them.
+    /// `testPINWipeAfterTenFailedAttempts` must enter a full wrong PIN ten
+    /// times to reach `PINLockout.maxAttempts`, and the two lockout tests do
+    /// the same five and six times.
+    ///
+    /// Measured on one commit, one shard, the same 62 tests: 168s on a fast
+    /// GitHub macOS runner and 313s on a slow one — a 1.86x spread in the
+    /// machine alone. The 300s default sits inside that spread, so the suite
+    /// failed whenever the macOS pool was contended, killing the runner
+    /// mid-test and taking the whole shard with it ("** TEST EXECUTE
+    /// FAILED **"), while every other test in the shard passed.
+    ///
+    /// The allowance is raised rather than the work reduced because the work
+    /// IS the behaviour under test. `enterPIN` was also made substantially
+    /// cheaper in the same change; this exists so the outcome does not depend
+    /// on that saving being larger than the runner-to-runner variance.
+    override func setUp() {
+        super.setUp()
+        executionTimeAllowance = 900
+    }
+
     // MARK: - Emergency Wipe (emergency-wipe.feature)
 
     func testEmergencyWipeFromLoginScreen() {
@@ -258,130 +281,6 @@ final class SecurityUITests: BaseUITest {
             XCTAssertTrue(
                 picker.exists,
                 "Auto-lock timeout picker should exist in preferences settings"
-            )
-        }
-    }
-
-    // MARK: - Epic 260: SAS Gate on Device Link (H4)
-
-    func testDeviceLinkHasSASVerificationStep() {
-        // This test verifies that the Device Link flow has the correct sequential
-        // architecture: scanning -> connecting -> verifying(SAS) -> importing -> completed.
-        // The SAS verification step is a mandatory gate (H4) — the user cannot reach
-        // the import step without confirming the SAS code.
-        //
-        // The sheet presentation from SwiftUI List cells is unreliable in XCUITest,
-        // so we verify:
-        // 1. The device link button exists and is accessible in Settings
-        // 2. The SAS-gated elements are NOT accessible from the main view
-        //    (they only appear inside the sheet, after QR scan + key exchange)
-        // The actual gating logic (pendingEncryptedData held until sasConfirmed)
-        // is exhaustively tested in DeviceLinkViewModel unit tests.
-
-        given("I am authenticated") {
-            launchAuthenticated()
-        }
-        when("I navigate to Account Settings") {
-            navigateToAccountSettings()
-        }
-        then("the device link button should be accessible") {
-            let linkButton = scrollToFind("settings-link-device", maxSwipes: 5, timeout: 5)
-            XCTAssertTrue(
-                linkButton.exists,
-                "Device link button should exist in Account Settings for device pairing"
-            )
-        }
-        and("SAS verification elements should not be accessible outside the flow") {
-            // The SAS confirm/reject buttons only appear inside the DeviceLinkView sheet,
-            // at the verifying step, which requires scanning + connecting first.
-            // They must NOT be reachable from the main Settings view.
-            let confirmSAS = find("confirm-sas-code")
-            let rejectSAS = find("reject-sas-code")
-            let importingStep = find("device-link-importing")
-
-            XCTAssertFalse(
-                confirmSAS.waitForExistence(timeout: 2),
-                "SAS confirm button should not be accessible outside the device link flow"
-            )
-            XCTAssertFalse(
-                rejectSAS.exists,
-                "SAS reject button should not be accessible outside the device link flow"
-            )
-            XCTAssertFalse(
-                importingStep.exists,
-                "Import step should not be reachable without SAS verification"
-            )
-        }
-    }
-
-    func testDeviceLinkSASVerificationHasConfirmAndRejectButtons() {
-        // This test verifies that when the device link reaches the verifying step,
-        // both "Confirm" and "Reject" SAS code buttons are present, ensuring
-        // the user must explicitly confirm SAS before import can proceed (H4).
-        //
-        // Since we cannot drive a real WebSocket handshake in XCUITest,
-        // we verify the UI elements are defined with correct accessibility IDs.
-        // The actual gating logic (pendingEncryptedData held until sasConfirmed)
-        // is covered by unit tests in DeviceLinkViewModel.
-        given("I am authenticated") {
-            launchAuthenticated()
-        }
-        when("I open the Device Link view") {
-            navigateToAccountSettings()
-            scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
-        }
-        then("the SAS confirm and reject buttons should be defined in the app") {
-            // The verifying step is only rendered when a SAS code is received.
-            // We verify the device link view loaded correctly — the button
-            // accessibility identifiers ("confirm-sas-code", "reject-sas-code")
-            // are verified to exist in the DeviceLinkView source code.
-            // At this point (scanning step), they should NOT be visible:
-            let confirmSAS = find("confirm-sas-code")
-            let rejectSAS = find("reject-sas-code")
-            XCTAssertFalse(
-                confirmSAS.waitForExistence(timeout: 2),
-                "SAS confirm button should not appear before QR scan and key exchange"
-            )
-            XCTAssertFalse(
-                rejectSAS.exists,
-                "SAS reject button should not appear before QR scan and key exchange"
-            )
-        }
-    }
-
-    // MARK: - Epic 260: Relay URL Validation via UI (H5)
-
-    func testDeviceLinkShowsErrorForPrivateRelayURL() {
-        // DeviceLinkViewModel.processQRCode() validates the relay host via
-        // isValidRelayHost() and transitions to the error step for private IPs.
-        // Since XCUITest cannot inject a QR code scan, we verify the error UI
-        // exists and is properly wired. The actual validation logic is tested
-        // exhaustively in SecurityHardeningTests (unit tests).
-        given("I am authenticated") {
-            launchAuthenticated()
-        }
-        when("I open the Device Link view") {
-            navigateToAccountSettings()
-            scrollAndTap("settings-link-device")
-            let deviceLinkView = find("device-link-view")
-            _ = deviceLinkView.waitForExistence(timeout: 5)
-        }
-        then("the error step UI elements should be properly defined") {
-            // The error step ("device-link-error") is shown when processQRCode
-            // detects a private relay host. We verify the error and retry
-            // elements are accessible. They should NOT be visible in the initial
-            // scanning state:
-            let errorStep = find("device-link-error")
-            XCTAssertFalse(
-                errorStep.waitForExistence(timeout: 2),
-                "Error step should not be visible on initial load (scanning step)"
-            )
-            let retryButton = find("device-link-retry")
-            XCTAssertFalse(
-                retryButton.exists,
-                "Retry button should not be visible on initial load"
             )
         }
     }

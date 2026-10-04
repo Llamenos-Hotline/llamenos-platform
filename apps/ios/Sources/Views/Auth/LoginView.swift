@@ -8,7 +8,7 @@ import SwiftUI
 struct LoginView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
-    @State private var viewModel: AuthViewModel?
+    @State private var viewModelBox = ViewModelBox<AuthViewModel>()
 
     var body: some View {
         let vm = resolvedViewModel
@@ -99,23 +99,6 @@ struct LoginView: View {
                         .buttonStyle(.plain)
                         .disabled(vm.isLoading)
                         .accessibilityIdentifier("create-identity")
-
-                        Button {
-                            router.showDeviceLink()
-                        } label: {
-                            Label(
-                                NSLocalizedString("login_link_device", comment: "Link from Another Device"),
-                                systemImage: "qrcode.viewfinder"
-                            )
-                            .fontWeight(.medium)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.brandPrimary, lineWidth: 1.5))
-                            .foregroundStyle(Color.brandPrimary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(vm.isLoading)
-                        .accessibilityIdentifier("link-device")
                     }
 
                     // Security tagline
@@ -139,13 +122,11 @@ struct LoginView: View {
 
     /// Lazily creates the AuthViewModel using the AppState services.
     private var resolvedViewModel: AuthViewModel {
-        if let vm = viewModel {
+        if let vm = viewModelBox.value {
             return vm
         }
         let vm = AuthViewModel(authService: appState.authService, apiService: appState.apiService)
-        DispatchQueue.main.async {
-            self.viewModel = vm
-        }
+        viewModelBox.value = vm
         return vm
     }
 }

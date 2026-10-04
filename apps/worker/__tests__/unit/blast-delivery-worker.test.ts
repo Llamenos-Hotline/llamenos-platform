@@ -301,7 +301,7 @@ describe('blast-delivery-worker', () => {
       expect(blastsService.getSendingBlasts).toHaveBeenCalled()
       expect(blastsService.drainDeliveryBatch).toHaveBeenCalledWith('blast-1', 50)
       expect(mockAdapter.sendMessage).toHaveBeenCalledTimes(1)
-      expect(onStatusChange).toHaveBeenCalledWith('blast-1', 'sent')
+      expect(onStatusChange).toHaveBeenCalledWith('blast-1', 'hub-1', 'sent')
     })
 
     it('skips blast if status is no longer sending', async () => {
@@ -564,7 +564,7 @@ describe('blast-delivery-worker', () => {
       startBlastWorker(deps)
       await vi.advanceTimersByTimeAsync(5000)
 
-      expect(onProgress).toHaveBeenCalledWith('blast-1', stats)
+      expect(onProgress).toHaveBeenCalledWith('blast-1', 'hub-1', stats)
     })
 
     it('does not call onStatusChange when blast is not completed', async () => {

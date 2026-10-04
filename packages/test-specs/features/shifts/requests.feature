@@ -1,4 +1,5 @@
-@backend @desktop @ios
+# @wip: Background steps and REST vocabulary have no backend definitions — #1122
+@backend @desktop @ios @wip
 Feature: Shift Join/Leave Requests
   As a volunteer
   I want to request to join or leave shifts

@@ -24,7 +24,7 @@ final class BlastsUITests: BaseUITest {
 
     func testBlastsQuickActionVisibleForAdmin() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         then("the dashboard should show a blasts quick action") {
             // Scroll down to find blasts action (it's below reports and contacts)
@@ -55,7 +55,7 @@ final class BlastsUITests: BaseUITest {
 
     func testBlastsListShowsContent() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to blasts") {
             // Scroll to find the blasts action first
@@ -76,7 +76,7 @@ final class BlastsUITests: BaseUITest {
 
     func testCreateBlastButtonExists() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to blasts") {
             scrollAndTap("dashboard-blasts-action")
@@ -94,7 +94,7 @@ final class BlastsUITests: BaseUITest {
 
     func testCreateBlastSheetOpens() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to blasts and tap create") {
             scrollAndTap("dashboard-blasts-action")
@@ -145,7 +145,7 @@ final class BlastsUITests: BaseUITest {
 
     func testScheduleButtonTogglesDatePicker() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the create blast sheet and tap schedule") {
             scrollAndTap("dashboard-blasts-action")
@@ -183,7 +183,7 @@ final class BlastsUITests: BaseUITest {
 
     func testCancelBlastCreation() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the create blast sheet and cancel") {
             scrollAndTap("dashboard-blasts-action")
@@ -217,7 +217,7 @@ final class BlastsUITests: BaseUITest {
 
     func testEmptyStateShowsCreateButton() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to blasts") {
             scrollAndTap("dashboard-blasts-action")

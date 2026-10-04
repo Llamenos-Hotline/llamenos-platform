@@ -603,7 +603,7 @@ the job fails; that is intentional). What they must contain:
 | `RUSTFS_ENDPOINT` | An S3 endpoint **reachable from GitHub-hosted runners over the internet**. The RustFS on this box is deliberately private (Docker network only, no published port), so this cannot be it as deployed. |
 | `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | S3 credentials with write access to the bucket below. |
 | `RUSTFS_STAGING_BUCKET` | Bucket **name** (no default; the workflow does not create it). |
-| `RELEASES_REPO_PAT` | Fine-grained PAT with write access to the GitHub repo `rhonda-rodododo/llamenos-releases`. |
+| `RELEASES_REPO_PAT` | Fine-grained PAT with write access to the GitHub repo `Llamenos-Hotline/llamenos-releases`. |
 
 Written by CI (`aws s3 cp --endpoint-url $RUSTFS_ENDPOINT`):
 
@@ -631,11 +631,28 @@ written, yes* — `RELEASES_REPO_PAT` is one of the five, the "push access" prob
 runs before any upload, and `verify-release-live.yml`, `verify-build.sh`, the
 release notes and `site/src/config.ts` read checksums/SBOM from it. It holds
 `desktop/v<version>/{CHECKSUMS.txt,sbom-desktop.cdx.json,build-info.json,latest.json}`
-— a public transparency log, not something the updater needs. **It could be
-replaced by the self-hosted tree** (those four files are already generated and
-could sit beside the installers under `desktop/v<version>/`), but that means
-changing the workflow and its four consumers — a separate change. Nothing was
-changed here.
+— a public transparency log, not something the updater needs.
+
+**Settled (#1226): it stays, at `Llamenos-Hotline/llamenos-releases`.** The
+open question above was whether to keep the repo or fold its four files into
+the self-hosted tree beside the installers. The operator's decision splits the
+two halves on purpose:
+
+* **Metadata → the org repo.** Checksums, SBOM, build info and the updater
+  manifest are committed to `Llamenos-Hotline/llamenos-releases` (public, and
+  now actually created — it 404'd until #1226). This is the public verification
+  surface, and it is deliberately somewhere a verifier can read without trusting
+  our infrastructure: a transparency log hosted on the same box that serves the
+  binaries can be rewritten by whoever compromises that box.
+* **Binaries → our own infrastructure, published from a local machine.**
+  Artifact publishing stays an operator action, consistent with the offline
+  signing workflow (`.claude/skills/release-signing/SKILL.md`) and with the
+  standing rule that CI *produces* release artifacts but never *submits* them.
+  There is deliberately no CI step that uploads binaries to our infra.
+
+So the five updater-channel secrets remain an operator step, and leaving them
+unset remains a supported state — `tauri-release.yml` reports the channel as
+NOT CONFIGURED and skips it cleanly.
 
 ### Two defects that block the updater channel regardless of hosting
 

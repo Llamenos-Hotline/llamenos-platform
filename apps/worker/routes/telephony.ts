@@ -2,14 +2,16 @@ import { Hono, type Context, type Next } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
-import type { TelephonyAdapter } from '../telephony/adapter'
+import type { SpeechUrlBuilder, TelephonyAdapter } from '../telephony/adapter'
+import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
 import { hashPhone } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
-import { startParallelRinging } from '../services/ringing'
+import { ServiceError } from '../services/settings'
+import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
 import { maybeTranscribe, transcribeVoicemail } from '../services/transcription'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -21,6 +23,20 @@ import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
 
 const logger = createLogger('telephony')
+
+/** Operator-uploaded prompts, as signed URLs the provider fetches from the origin it reached us on */
+function audioUrlsFor(c: Context<AppEnv>) {
+  return buildAudioUrlMap(c.get('services').settings, new URL(c.req.url).origin, c.env.HMAC_SECRET)
+}
+
+/**
+ * Generated speech, for a provider with no speech engine of its own (the
+ * self-hosted PBXs); cloud providers speak prompts themselves.
+ */
+async function speechUrlFor(c: Context<AppEnv>, adapter: TelephonyAdapter): Promise<SpeechUrlBuilder | undefined> {
+  if (!(adapter instanceof SipBridgeAdapter)) return undefined
+  return c.get('services').ivrSpeech.urlBuilder(new URL(c.req.url).origin)
+}
 
 const telephony = new Hono<AppEnv>()
 
@@ -148,6 +164,7 @@ telephony.post('/incoming',
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     enabledLanguages,
     hubId,
+    speechUrl: await speechUrlFor(c, adapter),
   })
   return telephonyResponse(response)
 })
@@ -171,6 +188,13 @@ telephony.post('/language-selected',
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { callSid, callerNumber, digits } = await adapter.parseLanguageWebhook(c.req.raw)
   const isAuto = url.searchParams.get('auto') === '1'
+
+  // Bans are enforced when the call is answered (/incoming), but a ban can be added
+  // while the caller is still in the language menu. Re-check before greeting or
+  // queueing so a newly banned caller never reaches a volunteer.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
 
   // Get hub's ordered language list for digit-to-language mapping
   const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
@@ -209,7 +233,7 @@ telephony.post('/language-selected',
     await services.settings.storeCaptcha({ callSid, expected: captchaDigits })
   }
 
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const response = await adapter.handleIncomingCall({
     callSid,
     callerNumber,
@@ -218,6 +242,7 @@ telephony.post('/language-selected',
     callerLanguage,
     hotlineName: c.env.HOTLINE_NAME || 'Llamenos',
     audioUrls,
+    speechUrl: await speechUrlFor(c, adapter),
     captchaDigits,
     hubId,
   })
@@ -252,10 +277,22 @@ telephony.post('/captcha',
   const callSid = url.searchParams.get('callSid') || ''
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
 
+  // A ban added while the caller was in the menu / CAPTCHA must still take effect.
+  if (await services.records.checkBan(hashPhone(callerNumber, c.env.HMAC_SECRET), hubId)) {
+    return telephonyResponse(adapter.rejectCall())
+  }
+
   // Look up expected digits from server-side storage (not URL params)
   const { match, expected } = await services.settings.verifyCaptcha({ callSid, digits })
 
-  const response = await adapter.handleCaptchaResponse({ callSid, digits, expectedDigits: expected, callerLanguage: callerLang, hubId })
+  const response = await adapter.handleCaptchaResponse({
+    callSid,
+    digits,
+    expectedDigits: expected,
+    callerLanguage: callerLang,
+    hubId,
+    speechUrl: await speechUrlFor(c, adapter),
+  })
 
   if (match) {
     const origin = new URL(c.req.url).origin
@@ -281,30 +318,45 @@ telephony.post('/user-answer',
   const url = new URL(c.req.url)
   const services = c.get('services')
 
-  // CRIT-W2: Resolve volunteer pubkey from opaque call token (delete-on-read for single-use guarantee)
+  // CRIT-W2: Resolve volunteer pubkey from the opaque call token and claim the
+  // answer. Single-use is enforced by the atomic ringing → in-progress
+  // transition on the call row, NOT by deleting the token: the provider also
+  // sends this token to /call-status, and the answered leg's later status
+  // callbacks (completed) still need it to find their call.
   // CRIT-W1: Hub resolved from DB call record via token, not from URL param
   const callToken = url.searchParams.get('callToken') || ''
-  const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
+  const tokenData = callToken ? await services.calls.answerCallWithToken(callToken) : null
   if (!tokenData) {
-    logger.warn('user-answer: invalid or expired call token', { callToken: callToken.slice(0, 8) })
+    logger.warn('user-answer: invalid, expired or already-used call token', { callToken: callToken.slice(0, 8) })
     return c.json({ error: 'Forbidden' }, 403)
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId || undefined))!
 
-  await services.calls.answerCall(hubId ?? '', parentCallSid, pubkey)
+  // Stop every other phone still ringing for this call. The answer itself was
+  // claimed atomically above (first pickup wins — `answerCallWithToken` is a
+  // conditional ringing → in-progress UPDATE, so a losing leg never gets here).
+  // The winner's own leg SID is needed so it is not cancelled with the losers;
+  // if the provider's webhook does not yield one we cancel nothing (losers then
+  // ring out, but can no longer win).
+  const winnerLegSid = await adapter.parseIncomingWebhook(c.req.raw.clone()).then(i => i.callSid, () => undefined)
+  if (winnerLegSid) {
+    await cancelLosingLegs(c.env, services, hubId ?? '', parentCallSid, winnerLegSid)
+  } else {
+    logger.warn('user-answer: winner leg SID not in webhook — not cancelling other legs', { parentCallSid })
+  }
 
   // Publish call answered event + presence update
   publishEvent(c.env, KIND_CALL_UPDATE, {
     type: 'call:update',
     callId: parentCallSid,
     status: 'in-progress',
-  }, hubId ?? undefined)
+  }, hubId ?? '')
 
   publishEvent(c.env, KIND_PRESENCE_UPDATE, {
     type: 'presence:summary',
     callId: parentCallSid,
-  }, hubId ?? undefined)
+  }, hubId ?? '')
 
   const [, activeCallsForAnswer] = await Promise.all([
     services.identity.getUser(pubkey).catch(() => ({} as { name?: string })),
@@ -336,7 +388,10 @@ telephony.post('/call-status',
   const url = new URL(c.req.url)
   const services = c.get('services')
 
-  // CRIT-W2: Resolve volunteer pubkey from opaque call token (may already be consumed by /user-answer)
+  // CRIT-W2: Resolve volunteer pubkey from opaque call token. Read-only — the
+  // provider sends pre-answer status events (initiated/ringing) to this route
+  // with the same token /user-answer needs, so a status callback must never
+  // consume it. The token lives until the call ends.
   // CRIT-W1: Hub resolved from DB call record, not from URL param
   const callToken = url.searchParams.get('callToken') || ''
   const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
@@ -354,6 +409,14 @@ telephony.post('/call-status',
       const preCall = preCalls.find(call => call.callId === parentCallSid)
       logger.debug('Ending call', { parentCallSid, foundInActive: !!preCall })
 
+      // A leg's `completed` only ends the call when that leg is the one that
+      // answered it. Other volunteers' legs (cancelled once someone picked up)
+      // carry the same call SID but must not end the bridged call.
+      if (tokenData && preCall && preCall.answeredBy !== pubkey) {
+        logger.debug('Ignoring completed status from a leg that did not answer the call', { parentCallSid })
+        return telephonyResponse(adapter.emptyResponse())
+      }
+
       try {
         await services.calls.endCall(hubId ?? '', parentCallSid)
         logger.debug('Call end result', { parentCallSid, status: 200 })
@@ -363,7 +426,7 @@ telephony.post('/call-status',
           type: 'call:update',
           callId: parentCallSid,
           status: 'completed',
-        }, hubId)
+        }, hubId ?? '')
 
         const duration = preCall
           ? Math.floor((Date.now() - new Date(preCall.startedAt).getTime()) / 1000)
@@ -392,9 +455,15 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
   const queueTime = c.req.method === 'POST'
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
     : 0
-  const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+  const audioUrls = await audioUrlsFor(c)
   const callSettings = await services.settings.getCallSettings(hubId)
-  const response = await adapter.handleWaitMusic(lang, audioUrls, queueTime, callSettings.queueTimeoutSeconds)
+  const response = await adapter.handleWaitMusic(
+    lang,
+    audioUrls,
+    queueTime,
+    callSettings.queueTimeoutSeconds,
+    await speechUrlFor(c, adapter),
+  )
   return telephonyResponse(response)
 })
 
@@ -410,13 +479,22 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
 
   if (queueResult === 'hangup') {
     // Caller hung up while in queue — end the call as unanswered
-    try { await services.calls.endCall(hubId ?? '', callSid) } catch { /* already ended */ }
+    try {
+      await services.calls.endCall(hubId ?? '', callSid)
+    } catch (err) {
+      // 404 = already ended. Anything else is a real failure and must not be swallowed.
+      if (err instanceof ServiceError && err.status === 404) {
+        logger.warn('Queue hangup for a call with no active record', { callSid, hubId: hubId || 'global' })
+      } else {
+        throw err
+      }
+    }
     await audit(services.audit, 'callMissed', 'system', { callSid }, undefined, hubId ?? null)
     return telephonyResponse(adapter.emptyResponse())
   }
 
   if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
-    const audioUrls = await buildAudioUrlMap(services.settings, new URL(c.req.url).origin)
+    const audioUrls = await audioUrlsFor(c)
     const origin = new URL(c.req.url).origin
     const callSettings = await services.settings.getCallSettings(hubId)
     const response = await adapter.handleVoicemail({
@@ -424,6 +502,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
       callerLanguage: lang,
       callbackUrl: origin,
       audioUrls,
+      speechUrl: await speechUrlFor(c, adapter),
       maxRecordingSeconds: callSettings.voicemailMaxSeconds,
       hubId,
     })
@@ -440,7 +519,7 @@ telephony.post('/voicemail-complete', validateWebhook, async (c) => {
   const services = c.get('services')
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
-  return telephonyResponse(adapter.handleVoicemailComplete(lang))
+  return telephonyResponse(adapter.handleVoicemailComplete(lang, await speechUrlFor(c, adapter)))
 })
 
 // --- Step 9: Call recording status callback (bridged call recording) ---
@@ -496,13 +575,23 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
   const callSid = url.searchParams.get('callSid') || ''
 
   if (recordingStatus === 'completed') {
+    // Throws 404 if there is no call record at all — that would mean a message was left
+    // for a call the hotline never recorded, which must be loud, not silent (#1043).
     await services.calls.markVoicemail(hubId ?? '', callSid)
+
+    // The caller has left a message and is done: close the call so it lands in history as
+    // `unanswered` with hasVoicemail=true. (No-op if the caller's leg already ended it.)
+    try {
+      await services.calls.endCall(hubId ?? '', callSid)
+    } catch (err) {
+      if (!(err instanceof ServiceError && err.status === 404)) throw err
+    }
 
     // Publish voicemail event
     publishEvent(c.env, KIND_CALL_VOICEMAIL, {
       type: 'voicemail:new',
       callId: callSid,
-    }, hubId)
+    }, hubId ?? '')
 
     await audit(services.audit, 'voicemailReceived', 'system', { callSid }, { request: c.req.raw, hmacSecret: c.env.HMAC_SECRET }, hubId ?? null)
 

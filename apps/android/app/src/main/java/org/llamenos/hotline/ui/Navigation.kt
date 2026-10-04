@@ -27,6 +27,8 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.service.OfflineQueue
 import org.llamenos.hotline.ui.admin.AdminScreen
+import org.llamenos.hotline.ui.admin.AdminSettingsScreenWithSidebar
+import org.llamenos.hotline.ui.admin.AdminViewModel
 import org.llamenos.hotline.ui.admin.SchemaBrowserScreen
 import org.llamenos.hotline.ui.admin.ShiftDetailScreen
 import org.llamenos.hotline.ui.admin.UserDetailScreen
@@ -65,7 +67,6 @@ import org.llamenos.hotline.ui.hubs.CreateHubScreen
 import org.llamenos.hotline.ui.hubs.HubListScreen
 import org.llamenos.hotline.ui.hubs.HubManagementViewModel
 import org.llamenos.hotline.ui.hubsettings.HubCommunicationsScreen
-import org.llamenos.hotline.ui.settings.DeviceLinkScreen
 import org.llamenos.hotline.ui.settings.ErasureRequestScreen
 import org.llamenos.hotline.ui.auth.DeviceWipeReceiptScreen
 import org.llamenos.hotline.ui.contacts.ContactDetailScreen
@@ -200,6 +201,15 @@ sealed interface LlamenosRoute {
         override val route = "admin"
     }
 
+    /** One admin section, opened from the admin sidebar drawer. */
+    data class AdminSection(val section: String) : LlamenosRoute {
+        override val route = "admin/section/$section"
+
+        companion object {
+            const val ROUTE_PATTERN = "admin/section/{${AdminViewModel.SECTION_ARG}}"
+        }
+    }
+
     /** Blasts (broadcast messages). */
     data object Blasts : LlamenosRoute {
         override val route = "blasts"
@@ -226,11 +236,6 @@ sealed interface LlamenosRoute {
         companion object {
             const val ROUTE_PATTERN = "shift/{shiftId}"
         }
-    }
-
-    /** Device linking via QR code. */
-    data object DeviceLink : LlamenosRoute {
-        override val route = "device_link"
     }
 
     /** Case management list. */
@@ -618,9 +623,6 @@ fun LlamenosNavigation(
                 onNavigateToHelp = {
                     navController.navigate(LlamenosRoute.Help.route)
                 },
-                onNavigateToDeviceLink = {
-                    navController.navigate(LlamenosRoute.DeviceLink.route)
-                },
                 onNavigateToErasure = {
                     navController.navigate(LlamenosRoute.ErasureRequest.route)
                 },
@@ -681,6 +683,14 @@ fun LlamenosNavigation(
             )
         }
 
+        // Sections replace one another above the admin panel, so back from any
+        // section returns to the panel.
+        val navigateToAdminSection: (String) -> Unit = { section ->
+            navController.navigate(LlamenosRoute.AdminSection(section).route) {
+                popUpTo(LlamenosRoute.Admin.route)
+            }
+        }
+
         composable(LlamenosRoute.Admin.route) {
             AdminScreen(
                 onNavigateBack = { navController.popBackStack() },
@@ -693,6 +703,14 @@ fun LlamenosNavigation(
                 onNavigateToSchemaBrowser = {
                     navController.navigate(LlamenosRoute.SchemaBrowser.route)
                 },
+                onNavigateToAdminSection = navigateToAdminSection,
+            )
+        }
+
+        composable(LlamenosRoute.AdminSection.ROUTE_PATTERN) {
+            AdminSettingsScreenWithSidebar(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToAdminSection = navigateToAdminSection,
             )
         }
 
@@ -880,12 +898,6 @@ fun LlamenosNavigation(
 
         composable(LlamenosRoute.Help.route) {
             HelpScreen(
-                onNavigateBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(LlamenosRoute.DeviceLink.route) {
-            DeviceLinkScreen(
                 onNavigateBack = { navController.popBackStack() },
             )
         }

@@ -15,7 +15,7 @@ class ReportCloseSteps : BaseSteps() {
     @Then("I should see the report close button")
     fun iShouldSeeTheReportCloseButton() {
         // Close button only appears on active reports — may not exist without backend
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-close-button", "report-detail-title", "reports-empty", "reports-list",
         )
     }

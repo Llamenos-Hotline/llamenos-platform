@@ -29,7 +29,7 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-st
 
 ```bash
 # Clone the monorepo
-git clone git@github.com:rhonda-rodododo/llamenos-platform.git
+git clone git@github.com:Llamenos-Hotline/llamenos-platform.git
 
 # Install dependencies
 cd llamenos-platform

@@ -564,7 +564,7 @@ records.post('/',
             recordId: record.id,
             pubkeys: [best.pubkey],
             autoAssigned: true,
-          }, record.hubId ?? undefined)
+          }, record.hubId ?? '')
         }
       } catch {
         // Auto-assignment is best-effort — never fail record creation
@@ -578,7 +578,7 @@ records.post('/',
       recordId: record.id,
       entityTypeId: record.entityTypeId,
       caseNumber: record.caseNumber,
-    }, record.hubId ?? undefined)
+    }, record.hubId ?? '')
 
     await audit(services.audit, 'recordCreated', pubkey, {
       recordId: record.id,
@@ -638,7 +638,7 @@ records.patch('/:id',
     publishEvent(c.env, KIND_RECORD_UPDATED, {
       type: 'record:updated',
       recordId: id,
-    }, updated.hubId ?? undefined)
+    }, updated.hubId ?? '')
 
     await audit(services.audit, 'recordUpdated', pubkey, { recordId: id }, undefined, c.get('hubId') ?? null)
 
@@ -890,7 +890,7 @@ records.post('/:id/assign',
       pubkeys: body.pubkeys,
       hubId: c.get('hubId') ?? '',
       entityTypeId: record.entityTypeId,
-    }, record.hubId ?? undefined)
+    }, record.hubId ?? '')
 
     await audit(services.audit, 'recordAssigned', pubkey, {
       recordId: id,
@@ -937,7 +937,7 @@ records.post('/:id/unassign',
       pubkey: body.pubkey,
       hubId: c.get('hubId') ?? '',
       entityTypeId: unassignRecord.entityTypeId,
-    }, unassignRecord.hubId ?? undefined)
+    }, unassignRecord.hubId ?? '')
 
     await audit(services.audit, 'recordUnassigned', pubkey, {
       recordId: id,

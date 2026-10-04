@@ -39,6 +39,10 @@ export interface LaneScope {
  * more bullets below) is not a shape this parser recognizes and will drop
  * the later bullets silently. And any backticked path must contain `/`, `.`,
  * or `*` or it will be silently treated as prose, not scope.
+ *
+ * To own ONE file at the top level, write it with a leading slash —
+ * `/README.md`, not `README.md`. A bare name is a basename pattern and matches
+ * that name at every depth in the tree; see `matchesPath` and #1473.
  */
 const OWNED_HEADING = /^\*\*Owned paths:?\*\*\s*(.*)$/
 const NOT_OWNED_HEADING = /^\*\*Does NOT own:?\*\*\s*(.*)$/i
@@ -134,10 +138,57 @@ function globToRegExp(pattern: string): RegExp {
  * write list MORE conservative, never less.
  */
 export function matchesPath(file: string, pattern: string): boolean {
+  // A LEADING `/` anchors the pattern to the repo root, and is the ONLY way to
+  // express "this one file, at the top level" (#1473).
+  //
+  // Without it, a single-file grant is unsayable. A pattern with no `/` is a
+  // basename pattern matched at ANY depth, so infra's `README.md` grant in
+  // #1467 also handed it `apps/ios/README.md`, `packages/test-specs/README.md`
+  // and 17 others — including a file the shared lane owns exclusively. Lane
+  // scope decides which lane may SELF-MERGE a path, so that silently
+  // transferred authority over other lanes' documentation; the review rejected
+  // it on breadth, independent of those files being harmless documentation.
+  // Adding a `/` to the pattern does not help either: `README.md/` reads as a
+  // directory and `./README.md` matches nothing.
+  //
+  // Deliberately ADDITIVE. Bare `README.md` keeps its basename-prefix
+  // behaviour, because that behaviour is load-bearing for the never-write list
+  // (see `SECRET_PATH_PATTERNS` and `config.ts`): it is what makes `.env`,
+  // `*.pem` and `id_ed25519` catch a secret at any depth, the way CODEOWNERS'
+  // `**/.env` would. Narrowing basename matching globally to fix one grant
+  // would have quietly widened what a worker may write. The defect was the
+  // ABSENCE of an anchored alternative, not the presence of basename matching.
+  if (pattern.startsWith('/')) {
+    const rooted = pattern.slice(1)
+    // A lone `/` is not "the whole repo": before the anchor existed it matched
+    // nothing (no repo-relative path starts with `/`), and an empty pattern
+    // here would make `startsWith('')` own every file. Keep it matching
+    // nothing, so adding the anchor cannot widen any existing scope.
+    if (rooted.length === 0) return false
+    return matchesRootedPath(file, rooted)
+  }
   if (!pattern.includes('/')) {
     const basename = file.slice(file.lastIndexOf('/') + 1)
     return pattern.includes('*') ? globToRegExp(pattern).test(basename) : basename.startsWith(pattern)
   }
+  return matchesRootedPath(file, pattern)
+}
+
+/**
+ * The three rules a path-shaped (non-basename) pattern has always used,
+ * unchanged and now shared with the root-anchored form so both spell
+ * "directory", "glob" and "literal prefix" identically: a trailing slash is a
+ * directory, a `*` is a single-segment glob, anything else is a literal prefix.
+ *
+ * The prefix case means `/README.md` also matches a root `README.md.bak`,
+ * exactly as `docs/QUICKSTART.md` already matches `docs/QUICKSTART.md.bak`.
+ * That is the pre-existing behaviour of every slash-bearing owned path, kept
+ * on purpose rather than tightened here: whether a dotted pattern should
+ * instead match exactly is a separate, riskier decision (#1473 raises it), and
+ * making the anchored form behave differently from every other path pattern
+ * would be a second semantics for readers to hold.
+ */
+function matchesRootedPath(file: string, pattern: string): boolean {
   if (pattern.endsWith('/')) {
     return file.startsWith(pattern)
   }
@@ -145,6 +196,104 @@ export function matchesPath(file: string, pattern: string): boolean {
     return file.startsWith(pattern)
   }
   return globToRegExp(pattern).test(file)
+}
+
+/**
+ * Suffixes that mark a file as a committed, secret-free TEMPLATE rather than
+ * the secret it is a template OF.
+ *
+ * Why this list exists at all: `SECRET_PATH_PATTERNS`'s bare-filename entries
+ * are prefix-matched against the basename (see `matchesPath`), deliberately,
+ * so that `.env` also catches `.env.local` and `.env.production` — a real
+ * secret under any environment name. That same prefix match also caught the
+ * four `.env*.example` files and the `keystore.properties.example` that are
+ * ALREADY TRACKED in this repo as documentation, which made every one of them
+ * permanently unwritable by any lane (the `fleet/review` FAIL on #1253 —
+ * "touched never-write paths: deploy/docker/.env.example"). A file whose
+ * entire purpose is to be committed and read by an operator cannot be a
+ * secret, and a deploy template nobody may edit is a deploy nobody may fix.
+ *
+ * Why a SUFFIX EXCLUSION and not a narrower pattern. The alternative was to
+ * stop prefix-matching and instead enumerate what may follow `.env` — exact
+ * `.env` plus `.env.<environment>` for a known set of environments. That
+ * fails OPEN, and in the worst direction: the day someone adds `.env.prod`,
+ * `.env.1984`, or `.env.flokinet` with real values, an enumeration that never
+ * heard of that name simply does not match, and the guard waves a live secret
+ * through in silence. The exclusion here fails CLOSED instead — anything that
+ * does not literally end in one of these suffixes is still a secret, so every
+ * environment name that will ever be invented is still caught by default, and
+ * the only files that escape are ones explicitly labelled as placeholders.
+ *
+ * Deliberately narrow, and deliberately case-SENSITIVE (no `.toLowerCase()`):
+ * `.env.Example` and `.env.EXAMPLE` stay forbidden. Every widening here is a
+ * new spelling a secret can hide behind, so the list carries only the three
+ * suffixes that have no other meaning anywhere, and `.gitleaks`-style content
+ * scanning — a REQUIRED status check on every PR (`.github/workflows/
+ * secret-scan.yml`) — remains the defence against a real credential pasted
+ * INTO one of these templates. This is a path-shape gate; it never claimed to
+ * read file contents, and the carve-out does not change which gate does.
+ */
+export const SECRET_TEMPLATE_SUFFIXES: readonly string[] = ['.example', '.sample', '.template']
+
+/** True for a committed template — `deploy/docker/.env.example`, not
+ *  `deploy/docker/.env`. The suffix must be a real suffix ON something: a
+ *  file named exactly `.example` is not a template of anything. */
+export function isSecretTemplatePath(file: string): boolean {
+  const basename = file.slice(file.lastIndexOf('/') + 1)
+  return SECRET_TEMPLATE_SUFFIXES.some((s) => basename.length > s.length && basename.endsWith(s))
+}
+
+/**
+ * The ONLY secret patterns a committed template may be exempt from.
+ *
+ * Derived from evidence, not from a general rule: these are exactly the two
+ * patterns that a template tracked in this repo actually matches. All five
+ * tracked templates — `.env.example`, `.env.live.example`,
+ * `apps/ios/fastlane/.env.example`, `deploy/docker/.env.example`,
+ * `apps/android/keystore.properties.example` — fall under one of them.
+ *
+ * A NEW secret pattern does NOT get a carve-out. It gets one only when a
+ * tracked template proves it needs one, and then only by being added here
+ * deliberately. `tests/orchestrator/config.test.ts` enforces both directions
+ * against the real tree: every tracked template must be covered by an entry
+ * here, and every entry here must be justified by at least one tracked
+ * template, so this list can neither silently under-cover nor rot into a
+ * dead exemption.
+ *
+ * Concretely, this is why `.npmrc.example`, `id_rsa.example`,
+ * `.dev.vars.example` and `authorized_keys.template` are still FORBIDDEN:
+ * nothing in this repo needs them, so nothing exempts them.
+ */
+export const TEMPLATED_SECRET_PATTERNS: readonly string[] = ['.env', 'keystore.properties']
+
+/**
+ * `matchesPath` for the NEVER-WRITE gate specifically: the secret patterns,
+ * minus committed templates.
+ *
+ * Separate from `matchesPath` on purpose, rather than being folded into it.
+ * `matchesPath` is also how lane OWNERSHIP is decided, and a lane that owns
+ * `deploy/` must keep owning `deploy/docker/.env.example` — teaching the
+ * general matcher that template files match nothing would make them
+ * unowned-and-strayed instead of unowned-and-forbidden, which is the same
+ * PR failing the same gate for a different stated reason. The carve-out is a
+ * property of the secret deny list, so it lives in the secret matcher.
+ *
+ * Scoped to `TEMPLATED_SECRET_PATTERNS` — it is NOT applied to every secret
+ * pattern. Only two patterns have a tracked template to justify one, and a
+ * carve-out that buys nothing today is latent surface: the glob patterns
+ * (`*.pem`, `*.key`, …) anchor their extension in `globToRegExp`, so
+ * `ca.pem.example` never matched them and exempting them was already a
+ * no-op — but if `globToRegExp` were ever loosened, or a directory-shaped
+ * secret pattern added, a blanket carve-out would silently become
+ * load-bearing for patterns nobody analysed, and a `server.key.example`
+ * holding a real key would become writable. The fail-closed default is that
+ * a NEW pattern inherits no carve-out and someone must justify adding one,
+ * which is the same reasoning that rejected environment enumeration above.
+ */
+export function matchesSecretPath(file: string, pattern: string): boolean {
+  if (!matchesPath(file, pattern)) return false
+  if (!TEMPLATED_SECRET_PATTERNS.includes(pattern)) return true
+  return !isSecretTemplatePath(file)
 }
 
 export async function loadLaneScopes(repoRoot: string): Promise<Record<string, LaneScope>> {

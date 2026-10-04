@@ -41,7 +41,7 @@ class DashboardBreakSteps : BaseSteps() {
     @Then("I should see the break toggle button")
     fun iShouldSeeTheBreakToggleButton() {
         // Break button only appears when on shift — use soft assertion
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "dashboard-break-button", "dashboard-clock-button", "dashboard-title",
         )
     }
@@ -49,6 +49,6 @@ class DashboardBreakSteps : BaseSteps() {
     @Then("I should see the on-break banner")
     fun iShouldSeeTheOnBreakBanner() {
         // Break banner only appears when on break — use soft assertion
-        val found = assertAnyTagDisplayed("break-banner", "dashboard-clock-button", "dashboard-title")
+        assertAnyTagDisplayed("break-banner", "dashboard-clock-button", "dashboard-title")
     }
 }

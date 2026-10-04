@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createBridgeClient } from './client-factory'
+import { createBridgeClient, parsePbxType } from './client-factory'
 import type { BridgeConfig } from './types'
 import { AriClient } from './clients/ari-client'
 import { EslClient } from './clients/esl-client'
@@ -43,5 +43,24 @@ describe('createBridgeClient', () => {
     expect(() =>
       createBridgeClient({ ...baseConfig, pbxType: 'unknown' as BridgeConfig['pbxType'] })
     ).toThrow('Unknown PBX_TYPE')
+  })
+})
+
+describe('parsePbxType', () => {
+  it('accepts each PBX name', () => {
+    expect(parsePbxType('asterisk')).toBe('asterisk')
+    expect(parsePbxType('freeswitch')).toBe('freeswitch')
+    expect(parsePbxType('kamailio')).toBe('kamailio')
+  })
+
+  it('rejects the protocol name and says which PBX name to use', () => {
+    // docker-compose.dev.yml shipped PBX_TYPE=ari: the bridge crashed on startup.
+    expect(() => parsePbxType('ari')).toThrow('set PBX_TYPE=asterisk')
+    expect(() => parsePbxType('esl')).toThrow('set PBX_TYPE=freeswitch')
+  })
+
+  it('rejects anything else', () => {
+    expect(() => parsePbxType('Asterisk ')).toThrow('Unknown PBX_TYPE')
+    expect(() => parsePbxType('')).toThrow('Unknown PBX_TYPE')
   })
 })

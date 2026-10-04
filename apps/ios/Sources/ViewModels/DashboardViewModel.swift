@@ -122,14 +122,17 @@ final class DashboardViewModel {
     // MARK: - WebSocket Events
 
     /// Start listening for real-time typed WebSocket events.
+    ///
+    /// Call events are handled from EVERY member hub, not just the active one
+    /// (multi-hub routing axiom): a ring on hub B must surface while hub A is being
+    /// browsed. Only browsing data (recent notes) is scoped to the active hub.
     func startEventListener() {
         eventTask?.cancel()
         eventTask = Task { [weak self] in
             guard let self else { return }
             for await attributed in self.webSocketService.attributedEvents {
                 guard !Task.isCancelled else { break }
-                guard attributed.hubId == self.hubContext.activeHubId else { continue }
-                await self.handleTypedEvent(attributed.event)
+                await self.handleTypedEvent(attributed)
             }
         }
     }
@@ -141,23 +144,30 @@ final class DashboardViewModel {
         stopTimer()
     }
 
-    /// Handle a decrypted, typed hub event and refresh only relevant data.
+    /// Handle a decrypted, hub-attributed event and refresh only relevant data.
     @MainActor
-    private func handleTypedEvent(_ eventType: HubEventType) {
-        switch eventType {
+    private func handleTypedEvent(_ attributed: AttributedHubEvent) {
+        switch attributed.event {
         case .callRing, .callAnswered, .callUpdate, .voicemailNew, .presenceSummary, .presenceDetail:
-            // Call/presence events affect shift status (active calls, availability)
+            // Call/presence events on any member hub affect shift status and the active call.
             Task {
                 await fetchShiftStatus()
                 await fetchActiveCall()
             }
         case .callEnded:
-            // Call ended — clear active call immediately, then refresh
-            currentCall = nil
-            Task { await fetchShiftStatus() }
+            // Call ended — clear it immediately if it was this hub's call, then refresh
+            if currentCall?.hubId == attributed.hubId {
+                currentCall = nil
+            }
+            Task {
+                await fetchShiftStatus()
+                await fetchActiveCall()
+            }
         case .shiftStarted, .shiftEnded, .shiftUpdate:
             Task { await fetchShiftStatus() }
         case .noteCreated:
+            // Recent notes are browsing data for the active hub only.
+            guard attributed.hubId == hubContext.activeHubId else { return }
             Task { await fetchRecentNotes() }
         case .messageNew, .messageStatus, .conversationNew, .conversationAssigned, .conversationClosed:
             // Message events don't affect dashboard — handled by ConversationsViewModel
@@ -187,36 +197,37 @@ final class DashboardViewModel {
 
     // MARK: - Call Actions
 
-    /// Hang up the current active call.
+    /// Hang up the current active call (on the call's own hub, not the active hub).
     func hangupCall() async {
-        guard let callId = currentCall?.id else { return }
+        guard let call = currentCall else { return }
         do {
-            try await apiService.request(method: "POST", path: apiService.hp("/api/calls/\(callId)/hangup"))
+            try await apiService.request(method: "POST", path: APIService.hubPath(call.hubId, "/api/calls/\(call.id)/hangup"))
             currentCall = nil
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// Report the current active call as spam.
+    /// Report the current active call as spam (on the call's own hub).
     func reportSpam() async {
-        guard let callId = currentCall?.id else { return }
+        guard let call = currentCall else { return }
         do {
-            try await apiService.request(method: "POST", path: apiService.hp("/api/calls/\(callId)/spam"))
+            try await apiService.request(method: "POST", path: APIService.hubPath(call.hubId, "/api/calls/\(call.id)/spam"))
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// Ban the caller and hang up.
+    /// Ban the caller and hang up (on the call's own hub).
     func banAndHangup(reason: String?) async {
-        guard let callId = currentCall?.id else { return }
+        guard let call = currentCall else { return }
+        let path = APIService.hubPath(call.hubId, "/api/calls/\(call.id)/ban")
         do {
             let body: [String: String]? = reason.map { ["reason": $0] }
             if let body {
-                try await apiService.request(method: "POST", path: apiService.hp("/api/calls/\(callId)/ban"), body: body)
+                try await apiService.request(method: "POST", path: path, body: body)
             } else {
-                try await apiService.request(method: "POST", path: apiService.hp("/api/calls/\(callId)/ban"))
+                try await apiService.request(method: "POST", path: path)
             }
             currentCall = nil
         } catch {
@@ -226,38 +237,70 @@ final class DashboardViewModel {
 
     // MARK: - Private Helpers
 
-    /// Fetch the volunteer's active call (if any).
-    private func fetchActiveCall() async {
-        do {
-            let response: ProtocolActiveCallsResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/calls/active")
-            )
-            if let first = response.calls.first {
-                // Attempt E2EE decryption of call metadata
-                var callerNumber = first.callerLast4
-                if let encryptedContent = first.encryptedContent,
-                   let envelopes = first.adminEnvelopes, !envelopes.isEmpty {
-                    let tuples = envelopes.map { (pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
-                    if let decrypted = cryptoService.decryptCallMetadata(
-                        encryptedContent: encryptedContent,
-                        adminEnvelopes: tuples
-                    ) {
-                        callerNumber = decrypted.callerNumber
-                    }
-                }
-                currentCall = ActiveCall(
-                    id: first.id,
-                    callerNumber: callerNumber,
-                    startedAt: DateFormatting.parseISO(first.startedAt) ?? Date(),
-                    status: first.status?.rawValue ?? "unknown"
-                )
-            } else {
-                currentCall = nil
-            }
-        } catch {
-            // Non-fatal — active call state will be updated on next event
+    /// Hubs whose calls the dashboard surfaces: every member hub the relay reported,
+    /// with the active hub first (and always present, so single-hub behaviour holds
+    /// before the relay has authenticated).
+    var callHubIds: [String] {
+        var ids: [String] = []
+        if let active = hubContext.activeHubId { ids.append(active) }
+        for id in webSocketService.memberHubIds where !ids.contains(id) {
+            ids.append(id)
         }
+        return ids
+    }
+
+    /// Fetch the volunteer's active call (if any) across every member hub.
+    /// The active hub's call wins when several hubs have one.
+    private func fetchActiveCall() async {
+        let hubIds = callHubIds
+        guard !hubIds.isEmpty else {
+            currentCall = nil
+            return
+        }
+        var callsByHub: [String: ProtocolActiveCallsResponse] = [:]
+        await withTaskGroup(of: (String, ProtocolActiveCallsResponse?).self) { group in
+            for hubId in hubIds {
+                group.addTask { [apiService] in
+                    // One unreachable hub must not hide another hub's ringing call.
+                    let response: ProtocolActiveCallsResponse? = try? await apiService.request(
+                        method: "GET",
+                        path: APIService.hubPath(hubId, "/api/calls/active")
+                    )
+                    return (hubId, response)
+                }
+            }
+            for await (hubId, response) in group {
+                if let response { callsByHub[hubId] = response }
+            }
+        }
+        guard let (hubId, first) = hubIds.lazy
+            .compactMap({ id in callsByHub[id]?.calls.first.map { (id, $0) } })
+            .first
+        else {
+            // No call anywhere. Clear only if every hub answered — a hub whose request
+            // failed may still hold the current call; the next event re-checks it.
+            if callsByHub.count == hubIds.count { currentCall = nil }
+            return
+        }
+        // Attempt E2EE decryption of call metadata
+        var callerNumber = first.callerLast4
+        if let encryptedContent = first.encryptedContent,
+           let envelopes = first.adminEnvelopes, !envelopes.isEmpty {
+            let tuples = envelopes.map { (pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
+            if let decrypted = cryptoService.decryptCallMetadata(
+                encryptedContent: encryptedContent,
+                adminEnvelopes: tuples
+            ) {
+                callerNumber = decrypted.callerNumber
+            }
+        }
+        currentCall = ActiveCall(
+            id: first.id,
+            hubId: hubId,
+            callerNumber: callerNumber,
+            startedAt: DateFormatting.parseISO(first.startedAt) ?? Date(),
+            status: first.status?.rawValue ?? "unknown"
+        )
     }
 
     private func fetchShiftStatus() async {

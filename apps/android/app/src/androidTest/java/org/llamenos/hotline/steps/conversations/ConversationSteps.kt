@@ -25,7 +25,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should see the conversations screen")
     fun iShouldSeeTheConversationsScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "conversation-filters", "conversations-list", "conversations-empty",
             "conversations-loading",
         )
@@ -33,7 +33,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the filter chips should be visible")
     fun theFilterChipsShouldBeVisible() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "filter-active", "filter-closed", "filter-all",
             "conversation-filters", "conversations-empty",
         )
@@ -47,7 +47,7 @@ class ConversationSteps : BaseSteps() {
             "All" -> "filter-all"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "conversation-filters", "conversations-empty")
+        assertAnyTagDisplayed(tag, "conversation-filters", "conversations-empty")
     }
 
     @Then("the {string} filter should be selected")
@@ -58,7 +58,7 @@ class ConversationSteps : BaseSteps() {
             "All" -> "filter-all"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "conversation-filters", "conversations-empty")
+        assertAnyTagDisplayed(tag, "conversation-filters", "conversations-empty")
     }
 
     // ---- Conversation filters ----
@@ -87,7 +87,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the conversation list should update")
     fun theConversationListShouldUpdate() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "conversation-filters", "conversations-list", "conversations-empty",
         )
     }
@@ -99,7 +99,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should see either the conversations list, empty state, or loading indicator")
     fun iShouldSeeEitherTheConversationsListEmptyStateOrLoadingIndicator() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "conversations-empty", "conversations-list", "conversations-loading"
         )
     }
@@ -158,7 +158,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should see the conversation thread")
     fun iShouldSeeTheConversationThread() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "messages-list", "messages-empty", "messages-loading",
             "conversations-list", "conversations-empty",
         )
@@ -185,12 +185,12 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the message should appear in the thread")
     fun theMessageShouldAppearInTheThread() {
-        val found = assertAnyTagDisplayed("messages-list", "messages-empty")
+        assertAnyTagDisplayed("messages-list", "messages-empty")
     }
 
     @Then("each conversation should show its channel badge")
     fun eachConversationShouldShowItsChannelBadge() {
-        val found = assertAnyTagDisplayed("conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("conversations-list", "conversations-empty")
     }
 
     // ---- Conversation actions ----
@@ -207,7 +207,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the conversation should show the assigned volunteer")
     fun theConversationShouldShowTheAssignedVolunteer() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "conversation-detail-title", "messages-list", "messages-empty",
             "conversations-list", "conversations-empty",
         )
@@ -225,7 +225,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the conversation status should change to {string}")
     fun theConversationStatusShouldChangeTo(status: String) {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "reopen-conversation-button", "close-conversation-button",
             "messages-list", "messages-empty", "conversations-list", "conversations-empty",
         )
@@ -255,7 +255,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("matching conversations should be displayed")
     fun matchingConversationsShouldBeDisplayed() {
-        val found = assertAnyTagDisplayed("conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("conversations-list", "conversations-empty")
     }
 
     // ---- Messaging admin settings ----
@@ -275,7 +275,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should see the messaging configuration section")
     fun iShouldSeeTheMessagingConfigurationSection() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title")
     }
 
     @Given("I am on the messaging settings")
@@ -293,22 +293,22 @@ class ConversationSteps : BaseSteps() {
 
     @When("I configure SMS channel with Twilio credentials")
     fun iConfigureSmsChannelWithTwilioCredentials() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title")
     }
 
     @Then("the SMS channel should be enabled")
     fun theSmsChannelShouldBeEnabled() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title")
     }
 
     @When("I configure WhatsApp channel")
     fun iConfigureWhatsAppChannel() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title")
     }
 
     @Then("the WhatsApp channel should be enabled")
     fun theWhatsAppChannelShouldBeEnabled() {
-        val found = assertAnyTagDisplayed("admin-tabs", "admin-title")
+        assertAnyTagDisplayed("admin-tabs", "admin-title")
     }
 
     // ---- Active conversation actions ----
@@ -345,12 +345,12 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should see the delivery status indicator")
     fun iShouldSeeTheDeliveryStatusIndicator() {
-        val found = assertAnyTagDisplayed("messages-list", "messages-empty", "conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("messages-list", "messages-empty", "conversations-list", "conversations-empty")
     }
 
     @Then("the conversation status should be {string}")
     fun theConversationStatusShouldBe(status: String) {
-        val found = assertAnyTagDisplayed("messages-list", "messages-empty", "conversation-filters", "conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("messages-list", "messages-empty", "conversation-filters", "conversations-list", "conversations-empty")
     }
 
     // ---- Assignment ----
@@ -376,7 +376,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("the volunteer name should appear on the conversation")
     fun theVolunteerNameShouldAppearOnTheConversation() {
-        val found = assertAnyTagDisplayed("messages-list", "messages-empty", "conversation-detail-title", "conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("messages-list", "messages-empty", "conversation-detail-title", "conversations-list", "conversations-empty")
     }
 
     // ---- Auto-assignment / channel filter ----
@@ -395,7 +395,7 @@ class ConversationSteps : BaseSteps() {
 
     @Then("it should be assigned to the volunteer with lowest load")
     fun itShouldBeAssignedToTheVolunteerWithLowestLoad() {
-        val found = assertAnyTagDisplayed("conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("conversations-list", "conversations-empty")
     }
 
     @Given("conversations exist across SMS and WhatsApp")
@@ -418,6 +418,6 @@ class ConversationSteps : BaseSteps() {
 
     @Then("I should only see SMS conversations")
     fun iShouldOnlySeeSmsConversations() {
-        val found = assertAnyTagDisplayed("conversations-list", "conversations-empty")
+        assertAnyTagDisplayed("conversations-list", "conversations-empty")
     }
 }

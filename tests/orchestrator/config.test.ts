@@ -8,6 +8,9 @@ import {
 } from '../../orchestrator/src/config.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
+import { trackedFiles } from './codeowners.js'
+import { matchesPath, TEMPLATED_SECRET_PATTERNS } from '../../orchestrator/src/fragments.js'
+import { SECRET_PATH_PATTERNS } from '../../orchestrator/src/config.js'
 
 describe('assertLiveLanesHaveScope', () => {
   const lane = (mode: Lane['mode'], owned: string[]): Lane => ({
@@ -104,6 +107,94 @@ describe('config', () => {
       [...NEVER_WRITE_PATHS],
     )
     expect(r.forbidden).toEqual(['apps/android/app/release.jks', 'apps/ios/fastlane/AuthKey_ABC123.p8'])
+  })
+
+  // --- #1253: committed templates are not secrets -------------------------
+  //
+  // The guard refused `deploy/docker/.env.example`, the template the first
+  // real deploy has to edit. These pin BOTH directions, because an exclusion
+  // that is one character too broad is worse than the bug it fixes.
+
+  it('still refuses every genuine secret shape through the real never-write list', () => {
+    const secrets = [
+      '.env',
+      'deploy/docker/.env',
+      '.env.local',
+      'deploy/docker/.env.production',
+      // An environment name that does not exist yet must not need a code
+      // change to be caught.
+      'deploy/docker/.env.1984',
+      'apps/worker/.dev.vars',
+      'apps/android/keystore.properties',
+      'deploy/secrets/prod.pem',
+      'apps/android/app/release.jks',
+      'apps/ios/fastlane/AuthKey_ABC123.p8',
+      'deploy/tls/server.key',
+      'scripts/id_rsa',
+      'scripts/id_ed25519',
+      '.npmrc',
+      '.pgpass',
+      'home/authorized_keys',
+      // Template-ish spellings that are NOT the exempt suffixes.
+      'deploy/docker/.env.Example',
+      'deploy/docker/.env.dist',
+      'deploy/docker/.env.example.local',
+    ]
+    const r = checkScope(secrets, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS])
+    expect(r.forbidden).toEqual(secrets)
+  })
+
+  // `trackedFiles`, never a bare `git ls-files`: under `fleet/verify` this
+  // suite runs inside a `git archive` EXPORT of the commit under judgement,
+  // which has no `.git` on purpose (`fleet-verify.yml` asserts its absence),
+  // so a raw git call throws there and passes here. The shared helper answers
+  // from the export's own tree instead, and refuses to return a vacuously
+  // short list.
+  it('permits every committed secret TEMPLATE actually tracked in this repo', () => {
+    const templates = trackedFiles().filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+    // Guards the guard: if the repo ever stops tracking these, this test
+    // would silently assert nothing.
+    expect(templates).toEqual(expect.arrayContaining([
+      '.env.example',
+      '.env.live.example',
+      'apps/ios/fastlane/.env.example',
+      'deploy/docker/.env.example',
+      'apps/android/keystore.properties.example',
+    ]))
+    const r = checkScope(templates, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS])
+    expect(r.forbidden).toEqual([])
+  })
+
+  // The carve-out list is EVIDENCE-DRIVEN, both directions, against the real
+  // tree — so it can neither silently under-cover a template nor rot into a
+  // dead exemption for a pattern nothing needs (#1256 review).
+
+  it('covers every tracked template with a carved-out pattern — no template is left unwritable', () => {
+    const templates = trackedFiles()
+      .filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+    for (const t of templates) {
+      const hits = SECRET_PATH_PATTERNS.filter((p) => matchesPath(t, p))
+      for (const p of hits) {
+        expect(
+          TEMPLATED_SECRET_PATTERNS,
+          `tracked template ${t} matches secret pattern ${p}, which is not carved out — it would be unwritable`,
+        ).toContain(p)
+      }
+    }
+  })
+
+  it('justifies every carved-out pattern with at least one tracked template — no dead exemption', () => {
+    const templates = trackedFiles()
+      .filter((f) => /\.(example|sample|template)$/.test(f.slice(f.lastIndexOf('/') + 1)))
+    for (const p of TEMPLATED_SECRET_PATTERNS) {
+      expect(
+        templates.some((t) => matchesPath(t, p)),
+        `carve-out for ${p} is justified by no tracked template — remove it rather than carry latent surface`,
+      ).toBe(true)
+      // A carve-out for a pattern that is not a secret pattern at all would
+      // be meaningless.
+      expect(SECRET_PATH_PATTERNS).toContain(p)
+    }
   })
 
   it('gives up on an item after three failed attempts', () => {

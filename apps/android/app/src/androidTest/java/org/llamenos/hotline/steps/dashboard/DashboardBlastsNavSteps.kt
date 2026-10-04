@@ -23,7 +23,7 @@ class DashboardBlastsNavSteps : BaseSteps() {
             onNodeWithTag("blasts-card").performScrollTo()
             onNodeWithTag("blasts-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("blasts-card", "dashboard-title")
+            assertAnyTagDisplayed("blasts-card", "dashboard-title")
         }
     }
 
@@ -40,7 +40,7 @@ class DashboardBlastsNavSteps : BaseSteps() {
 
     @Then("I should see the blasts screen")
     fun iShouldSeeTheBlastsScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "blasts-title", "blasts-list", "blasts-empty", "dashboard-title",
         )
     }

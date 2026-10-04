@@ -48,11 +48,16 @@ enum VersionStatus: Equatable {
 
 // MARK: - App Config Response
 
-/// Response from `GET /api/config` — only the fields needed for version checking.
+/// Response from `GET /api/config` — only the fields the client reads before login:
+/// version compatibility and the relay endpoint.
 struct AppConfig: Decodable {
     let hotlineName: String
     let apiVersion: Int
     let minApiVersion: Int
+    /// WebSocket relay endpoint advertised by the server (currently the path `/ws`).
+    /// May be a path relative to the hub URL or an absolute URL. `nil` when the server
+    /// has no relay configured.
+    let wsRelayUrl: String?
 }
 
 // MARK: - Recovery Group Response Types
@@ -152,10 +157,16 @@ final class APIService: @unchecked Sendable {
     /// Certificate pinning delegate (H14). Retained by the URLSession.
     private let pinningDelegate = CertificatePinningDelegate()
 
-    init(cryptoService: CryptoService, hubContext: HubContext) {
+    /// - Parameter sessionConfiguration: base configuration for the pinned URLSession.
+    ///   Tests pass one carrying a stub `URLProtocol`; production uses `.default`.
+    init(
+        cryptoService: CryptoService,
+        hubContext: HubContext,
+        sessionConfiguration: URLSessionConfiguration = .default
+    ) {
         self.cryptoService = cryptoService
         self.hubContext = hubContext
-        let config = URLSessionConfiguration.default
+        let config = sessionConfiguration
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
@@ -208,10 +219,51 @@ final class APIService: @unchecked Sendable {
         self.baseURL = url
     }
 
-    /// Returns path prefixed with /hubs/{activeHubId}. Falls back to bare path if no hub selected.
+    /// Resolve an API `path` against the hub URL, and the path its auth token signs.
+    ///
+    /// Callers pass paths that may carry a query ("/api/notes?page=1&limit=20").
+    /// `URL.appendingPathComponent` percent-encodes that "?" into the path, so such a
+    /// request went to `/api/notes%3Fpage=1&limit=20` — and the server verifies the
+    /// Ed25519 token against the URL's path alone (`url.pathname`,
+    /// apps/worker/lib/auth.ts), never its query. Every iOS request with a query
+    /// string failed with 401: the notes list, cases, contacts, reports, events,
+    /// call history, audit log, security events. The query now goes into the URL's
+    /// query component and the token signs the path without it.
+    static func resolve(path: String, against baseURL: URL) throws -> (url: URL, signedPath: String) {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let pathOnly = String(parts[0])
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent(pathOnly),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw APIError.invalidURL(path)
+        }
+        if parts.count == 2 {
+            components.query = String(parts[1])
+        }
+        guard let url = components.url else { throw APIError.invalidURL(path) }
+        return (url, pathOnly)
+    }
+
+    /// Scope an `/api/...` path to the active hub (`/api/hubs/{activeHubId}/...`).
+    /// Falls back to the bare path if no hub is selected.
+    ///
+    /// Use this only for browsing the active hub. Anything that belongs to a specific
+    /// hub — a call ringing on hub B while hub A is active — must use
+    /// `hubPath(_:_:)` with that hub's ID (multi-hub routing axiom).
     func hp(_ path: String) -> String {
         guard let hubId = hubContext.activeHubId else { return path }
-        return "/hubs/\(hubId)\(path)"
+        return Self.hubPath(hubId, path)
+    }
+
+    /// Scope an `/api/...` path to the given hub.
+    ///
+    /// The server mounts hub-scoped routes at `/api/hubs/:hubId/...`, so
+    /// `/api/calls/active` becomes `/api/hubs/{hubId}/calls/active`.
+    static func hubPath(_ hubId: String, _ path: String) -> String {
+        let apiPrefix = "/api"
+        let rest = path.hasPrefix(apiPrefix + "/") ? String(path.dropFirst(apiPrefix.count)) : path
+        return "\(apiPrefix)/hubs/\(hubId)\(rest)"
     }
 
     /// Test whether the hub URL is reachable. Returns true if the server responds.
@@ -245,14 +297,14 @@ final class APIService: @unchecked Sendable {
     ) async throws -> T {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
 
         // Attach Ed25519 auth token as Bearer header
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -330,14 +382,14 @@ final class APIService: @unchecked Sendable {
     ) async throws -> T {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
 
         // Attach Ed25519 auth token as Bearer header
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -440,23 +492,8 @@ final class APIService: @unchecked Sendable {
     /// Returns `.unknown` on network failure — the app should not be blocked if offline.
     /// Uses a plain JSONDecoder because the server sends camelCase keys natively.
     func checkVersionCompatibility() async -> VersionStatus {
-        guard let baseURL else { return .unknown }
-
-        let configURL = baseURL.appendingPathComponent("/api/config")
-        var request = URLRequest(url: configURL, timeoutInterval: 10)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
         do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                return .unknown
-            }
-            // Use a plain decoder — the /api/config endpoint returns camelCase keys
-            // (apiVersion, minApiVersion), not snake_case.
-            let plainDecoder = JSONDecoder()
-            let config = try plainDecoder.decode(AppConfig.self, from: data)
+            let config = try await fetchAppConfig()
 
             if Self.apiVersion < config.minApiVersion {
                 return .forceUpdate(minVersion: config.minApiVersion)
@@ -468,6 +505,27 @@ final class APIService: @unchecked Sendable {
         } catch {
             return .unknown
         }
+    }
+
+    /// Fetch the public `GET /api/config` document (unauthenticated).
+    /// Uses a plain JSONDecoder because the endpoint returns camelCase keys
+    /// (`apiVersion`, `minApiVersion`, `wsRelayUrl`), not snake_case.
+    func fetchAppConfig() async throws -> AppConfig {
+        guard let baseURL else { throw APIError.noBaseURL }
+
+        let configURL = baseURL.appendingPathComponent("/api/config")
+        var request = URLRequest(url: configURL, timeoutInterval: 10)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.requestFailed(statusCode: 0, body: "Non-HTTP response")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.requestFailed(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        return try JSONDecoder().decode(AppConfig.self, from: data)
     }
 
     // MARK: - Raw Authenticated Request (for OfflineQueue replay)
@@ -487,15 +545,15 @@ final class APIService: @unchecked Sendable {
     func rawRequest(method: String, path: String, body: String?) async throws -> (Int, String) {
         guard let baseURL else { throw APIError.noBaseURL }
 
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: path, against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = method.uppercased()
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if cryptoService.isUnlocked {
             do {
-                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: path)
+                let token = try cryptoService.createAuthToken(method: method.uppercased(), path: target.signedPath)
                 let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
                 let authJSON = """
                 {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
@@ -614,16 +672,15 @@ extension APIService {
         body.append(encryptedData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
-        let path = hp("/api/uploads/entity-file")
-        let fullURL = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: fullURL)
+        let target = try Self.resolve(path: hp("/api/uploads/entity-file"), against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         urlRequest.httpBody = body
 
         if cryptoService.isUnlocked {
-            let token = try cryptoService.createAuthToken(method: "POST", path: path)
+            let token = try cryptoService.createAuthToken(method: "POST", path: target.signedPath)
             let authJSON = """
             {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"}
             """

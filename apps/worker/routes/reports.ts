@@ -159,7 +159,7 @@ reports.post('/',
       type: 'report:new',
       conversationId: conversation.id,
       category: body.category,
-    }, conversation.hubId ?? undefined)
+    }, conversation.hubId ?? '')
 
     await audit(services.audit, 'reportCreated', pubkey, {
       conversationId: conversation.id,
@@ -386,7 +386,7 @@ reports.post('/:id/messages',
     publishEvent(c.env, KIND_MESSAGE_NEW, {
       type: 'message:new',
       conversationId: id,
-    }, report.hubId ?? undefined)
+    }, report.hubId ?? '')
 
     return c.json(msg)
   },
@@ -430,7 +430,7 @@ reports.post('/:id/assign',
       type: 'conversation:assigned',
       conversationId: id,
       assignedTo: body.assignedTo,
-    }, updated.hubId ?? undefined)
+    }, updated.hubId ?? '')
 
     return c.json(updated)
   },

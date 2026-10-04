@@ -25,7 +25,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies the hub list screen renders after navigating from Settings.
     func testHubListShowsHubs() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Settings > Hubs") {
             navigateToHubs()
@@ -40,28 +40,31 @@ final class HubManagementUITests: BaseUITest {
         }
     }
 
-    // MARK: - Scenario: Hub list shows hub cards with details
+    // MARK: - Scenario: Hub list shows hub cards
 
-    /// Verifies hub cards render with name, slug, and status when hubs exist.
+    /// Scenario: Hub list shows hub cards (platform/mobile/hubs/hub-management.feature)
+    ///
+    /// BaseUITest created this class's hub and made the app's identity a member of
+    /// it, so the list must show that hub's card — the "empty state" half of the
+    /// scenario's Then cannot be what renders here.
     func testHubListShowsHubCards() {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
-        when("I navigate to Settings > Hubs") {
+        when("I navigate to hub management") {
             navigateToHubs()
         }
-        then("I should see hub cards if hubs exist") {
-            let hubList = find("hubs-list")
-            if hubList.waitForExistence(timeout: 10) {
-                // Look for any hub row element
-                let hubRows = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'hub-row-'"))
-                if hubRows.count > 0 {
-                    let firstRow = hubRows.firstMatch
-                    XCTAssertTrue(firstRow.exists, "At least one hub row should be visible")
-                }
-            }
-            // If empty or loading, pass gracefully
+        then("I should see hub cards or the empty state") {
+            XCTAssertTrue(find("hubs-list").waitForExistence(timeout: 15), "The hub list should render")
+            // Server slug of "ios-<ClassName>-<ms>" (apps/worker/routes/dev.ts test-create-hub).
+            let classHubPrefix = "hub-row-ios-\(String(describing: type(of: self)).lowercased())-"
+            let classHubRow = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", classHubPrefix))
+                .firstMatch
+            XCTAssertTrue(
+                classHubRow.waitForExistence(timeout: 10),
+                "The card for this test class's hub (\(classHubPrefix)…) should be listed"
+            )
         }
     }
 
@@ -95,7 +98,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies the "Create Hub" button is visible on the hub management screen.
     func testCreateHubButtonVisible() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Settings > Hubs") {
             navigateToHubs()
@@ -114,7 +117,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies tapping the create hub button opens the creation form.
     func testCreateHubFormOpens() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I navigate to Hubs and tap Create Hub") {
             navigateToHubs()
@@ -153,7 +156,7 @@ final class HubManagementUITests: BaseUITest {
     /// Verifies cancelling the hub creation form returns to the hub list.
     func testCancelHubCreation() {
         given("I am authenticated as admin") {
-            launchAsAdmin()
+            launchAsAdminWithAPI()
         }
         when("I open the hub creation form and cancel") {
             navigateToHubs()

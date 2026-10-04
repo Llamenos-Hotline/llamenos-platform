@@ -30,6 +30,12 @@ export VERBOSE JSON_OUTPUT REPORTER_TIMEOUT
 
 cd "$PROJECT_ROOT"
 
+# TestDB (tests/db-helpers.ts) asserts persisted state straight from Postgres, so
+# it must query the database the server writes to. Resolve it exactly as
+# scripts/dev-bun.sh did for the server; an explicit DATABASE_URL (CI) wins.
+source "$SCRIPT_DIR/lib/worktree-db.sh"
+worktree_db_export
+
 reporter_init "backend-bdd"
 
 overall_result="pass"
@@ -43,10 +49,52 @@ if [[ "$NO_CODEGEN" != "true" ]]; then
   fi
 fi
 
-# Step 2: Check backend is reachable
+# Step 2: Generate BDD test files from features + step definitions.
+# playwright-bdd v8 requires explicit bddgen before test execution, and every BDD
+# project runs with missingSteps: "fail-on-gen" (#1153): a scenario selected by a
+# project's tag filter with a step that has no definition fails generation here,
+# before any backend is needed — instead of being rendered as a silently skipped
+# test. Deliberately unimplemented scenarios carry @wip/@fixme with a linked
+# issue (enforced by `bun run test-specs:validate`).
+#
+# `bddgen export` runs first to fill Playwright's TS transform cache from a single
+# thread: bddgen itself generates every BDD project concurrently in worker threads,
+# and the cache is written non-atomically, so on a cold cache one thread can load a
+# step file another is still writing — empty (its steps read as "missing") or
+# truncated (bddgen crashes). See the build job in .github/workflows/ci.yml.
+if ! reporter_run_step "bddgen" bash -c 'bunx bddgen export > /dev/null && bunx bddgen'; then
+  echo "bddgen failed. If it printed 'Missing step definitions', a scenario selected"
+  echo "by a BDD project's tag filter has an unbound step: bind it, or tag it"
+  echo "@wip / @fixme with a '# ... — #<issue>' comment above the tag."
+  overall_result="fail"
+  reporter_record_suite "bddgen" 0 1 0
+  reporter_summary "$overall_result"
+  exit 1
+fi
+reporter_record_suite "bddgen" 1 0 0
+
+# Step 3: Check the backend can actually SERVE, not merely that it is alive.
+#
+# This gated on /api/health/live, a LIVENESS probe: it reports that the process
+# is up and says nothing about its dependencies. A dev server whose database had
+# been dropped from under it (a per-worktree test DB removed by teardown, the
+# process left running) answered that probe 200 OK indefinitely — so this gate
+# went green and the run died two steps later at `api-bootstrap` with "cannot
+# run BDD tests without admin account", blaming the admin account when the real
+# fault was `database "tel_594161" does not exist`.
+#
+# /api/health/ready is the READINESS probe and does query PostgreSQL. On that
+# same server it correctly returned 503:
+#   {"status":"degraded","checks":{"postgres":{"status":"failing",...}}}
+# Gating on it turns a misleading later failure into an accurate immediate one,
+# and the body is printed so the cause is in the output rather than in a log
+# nobody reads.
 HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
-if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/live" >/dev/null 2>&1; then
-  echo "Backend not reachable at ${HUB_URL}. Start it with:"
+if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/ready" >/dev/null 2>&1; then
+  echo "Backend at ${HUB_URL} is not READY (liveness can still pass — readiness queries PostgreSQL):"
+  curl -s --max-time 10 "${HUB_URL}/api/health/ready" 2>/dev/null | head -c 500
+  echo
+  echo "Start it with:"
   echo "  docker compose -f deploy/docker/docker-compose.dev.yml up -d && bun run dev:server"
   overall_result="fail"
   reporter_record_suite "health-check" 0 1 0
@@ -55,7 +103,7 @@ if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/live" >/de
 fi
 reporter_record_suite "health-check" 1 0 0
 
-# Step 3: API-level bootstrap — reset DB and create admin account without requiring
+# Step 4: API-level bootstrap — reset DB and create admin account without requiring
 # the frontend UI. The bootstrap Playwright project needs the desktop frontend running
 # at PLAYWRIGHT_BASE_URL; for backend-only test runs we bypass it via the dev API.
 ADMIN_SEED="${ADMIN_SEED:-f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7}"
@@ -79,10 +127,6 @@ else
   reporter_summary "$overall_result"
   exit 1
 fi
-
-# Step 4: Generate BDD test files from features + step definitions
-# playwright-bdd v8 requires explicit bddgen before test execution
-bunx bddgen 2>&1
 
 # Step 5: Run backend BDD tests via Playwright
 # Uses --no-deps to skip the bootstrap Playwright project (we bootstrapped via API above).

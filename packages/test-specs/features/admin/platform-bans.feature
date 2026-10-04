@@ -1,4 +1,5 @@
-@backend
+# @wip: no backend step definitions for any scenario — #1151
+@backend @wip
 Feature: Platform-Scoped Ban Management
   As a super admin
   I want to manage platform-wide bans

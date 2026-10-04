@@ -54,7 +54,7 @@ class ReportDetailSteps : BaseSteps() {
 
     @Then("I should see the report detail screen")
     fun iShouldSeeTheReportDetailScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-detail-title", "report-not-found", "reports-list", "reports-empty",
         )
     }
@@ -77,7 +77,7 @@ class ReportDetailSteps : BaseSteps() {
 
     @Then("I should see the report metadata card")
     fun iShouldSeeTheReportMetadataCard() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-metadata-card", "report-detail-title", "report-not-found",
             "reports-list", "reports-empty",
         )
@@ -85,7 +85,7 @@ class ReportDetailSteps : BaseSteps() {
 
     @Then("I should see the report status badge")
     fun iShouldSeeTheReportStatusBadge() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-detail-status", "report-detail-title", "report-not-found",
             "reports-list", "reports-empty",
         )

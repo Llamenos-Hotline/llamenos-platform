@@ -9,7 +9,10 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek;
-use llamenos_core::auth::{create_auth_token_from_signing_key, verify_auth_token, AuthToken};
+use llamenos_core::auth::{
+    build_auth_message, create_auth_token_from_signing_key,
+    create_auth_token_from_signing_key_without_nonce, verify_auth_token, AuthToken,
+};
 use llamenos_core::encryption::{
     decrypt_call_record, decrypt_draft, decrypt_message, decrypt_note, decrypt_with_pin,
     encrypt_draft, encrypt_export, encrypt_message, encrypt_note, encrypt_with_pin,
@@ -139,6 +142,14 @@ struct AuthVectors {
     path: String,
     token: AuthToken,
     valid: bool,
+    /// The exact canonical message bytes (hex) that `token` signs — the
+    /// nonce-bearing shape. Other platforms rebuild this and must match byte
+    /// for byte; that equality is what keeps the layout from drifting.
+    message_hex: String,
+    /// The nonce-less shape for the same (timestamp, method, path), signed
+    /// under `LABEL_DEVICE_AUTH_NO_NONCE`.
+    nonceless_token: AuthToken,
+    nonceless_message_hex: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -356,6 +367,31 @@ fn generate_and_verify_test_vectors() {
         create_auth_token_from_signing_key(TEST_SECRET_KEY, timestamp, method, path).unwrap();
     let valid = verify_auth_token(&auth_token, method, path).unwrap();
     assert!(valid);
+    let auth_message = build_auth_message(
+        &auth_token.pubkey,
+        timestamp,
+        method,
+        path,
+        auth_token.nonce.as_deref(),
+    );
+
+    // --- Nonce-less auth token (the shape `/api/invites/redeem` signs) ---
+    let nonceless_token =
+        create_auth_token_from_signing_key_without_nonce(TEST_SECRET_KEY, timestamp, method, path)
+            .unwrap();
+    assert!(nonceless_token.nonce.is_none());
+    assert!(verify_auth_token(&nonceless_token, method, path).unwrap());
+    let nonceless_message =
+        build_auth_message(&nonceless_token.pubkey, timestamp, method, path, None);
+
+    // The two shapes are different domains, so neither signature verifies as
+    // the other — asserted here, in the file other platforms consume.
+    assert_ne!(auth_message, nonceless_message);
+    let stripped = AuthToken {
+        nonce: None,
+        ..auth_token.clone()
+    };
+    assert!(!verify_auth_token(&stripped, method, path).unwrap());
 
     // --- PIN encryption roundtrip ---
     let test_nsec = "nsec1test1234567890abcdef1234567890abcdef1234567890";
@@ -546,6 +582,9 @@ fn generate_and_verify_test_vectors() {
             path: path.to_string(),
             token: auth_token,
             valid: true,
+            message_hex: hex::encode(&auth_message),
+            nonceless_token,
+            nonceless_message_hex: hex::encode(&nonceless_message),
         },
         pin_encryption: PinEncryptionVectors {
             pin: TEST_PIN.to_string(),
@@ -807,51 +846,21 @@ fn pin_encryption_format_consistency() {
     assert!(result.is_err(), "Wrong credential must fail");
 }
 
-#[test]
-fn label_count_matches_expected() {
-    let label_vec = LabelVectors {
-        label_note_key: LABEL_NOTE_KEY.to_string(),
-        label_file_key: LABEL_FILE_KEY.to_string(),
-        label_file_metadata: LABEL_FILE_METADATA.to_string(),
-        label_hub_key_wrap: LABEL_HUB_KEY_WRAP.to_string(),
-        label_transcription: LABEL_TRANSCRIPTION.to_string(),
-        label_message: LABEL_MESSAGE.to_string(),
-        label_call_meta: LABEL_CALL_META.to_string(),
-        label_shift_schedule: LABEL_SHIFT_SCHEDULE.to_string(),
-        hkdf_salt: HKDF_SALT.to_string(),
-        hkdf_context_notes: HKDF_CONTEXT_NOTES.to_string(),
-        hkdf_context_drafts: HKDF_CONTEXT_DRAFTS.to_string(),
-        hkdf_context_export: HKDF_CONTEXT_EXPORT.to_string(),
-        label_hub_event: LABEL_HUB_EVENT.to_string(),
-        label_device_provision: LABEL_DEVICE_PROVISION.to_string(),
-        sas_salt: SAS_SALT.to_string(),
-        sas_info: SAS_INFO.to_string(),
-        auth_prefix: AUTH_PREFIX.to_string(),
-        hmac_phone_prefix: HMAC_PHONE_PREFIX.to_string(),
-        hmac_ip_prefix: HMAC_IP_PREFIX.to_string(),
-        hmac_keyid_prefix: HMAC_KEYID_PREFIX.to_string(),
-        hmac_subscriber: HMAC_SUBSCRIBER.to_string(),
-        hmac_preference_token: HMAC_PREFERENCE_TOKEN.to_string(),
-        recovery_salt: RECOVERY_SALT.to_string(),
-        label_backup: LABEL_BACKUP.to_string(),
-        label_server_nostr_key: LABEL_SERVER_NOSTR_KEY.to_string(),
-        label_server_nostr_key_info: LABEL_SERVER_NOSTR_KEY_INFO.to_string(),
-        label_push_wake: LABEL_PUSH_WAKE.to_string(),
-        label_push_full: LABEL_PUSH_FULL.to_string(),
-        label_audit_user_key_wrap: LABEL_AUDIT_USER_KEY_WRAP.to_string(),
-        label_erasure_override_sig: LABEL_ERASURE_OVERRIDE_SIG.to_string(),
-        label_audit_details: LABEL_AUDIT_DETAILS.to_string(),
-        label_device_wipe_sig: LABEL_DEVICE_WIPE_SIG.to_string(),
-    };
-
-    let json = serde_json::to_value(&label_vec).unwrap();
-    let map = json.as_object().unwrap();
-    assert_eq!(
-        map.len(),
-        32,
-        "Expected 32 labels — update interop test if new labels were added"
-    );
-}
+// `label_count_matches_expected` was removed here (#1222). It built a
+// `LabelVectors` struct from 32 hand-listed constants, serialised it, and
+// asserted the resulting map had 32 entries — i.e. it compared the struct's
+// own field count, a compile-time constant, against a literal. Adding a label
+// to crypto-labels.json could never fail it, and by the time it was removed
+// the source of truth held 95 labels while this test still said 32. Its
+// comment ("update interop test if new labels were added") described an
+// intention that nothing enforced.
+//
+// The property it claimed to check is enforced for real, derived from the
+// source of truth rather than hardcoded, by these tests in
+// packages/crypto/src/labels.rs:
+//   - `label_registry_matches_json` — every label in crypto-labels.json exists
+//     in LABEL_REGISTRY with the same value, and vice versa.
+//   - `label_count_matches_json`    — the registry count equals the JSON count.
 
 // ─── NEW v2 Tests ────────────────────────────────────────────
 

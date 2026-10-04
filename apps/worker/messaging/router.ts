@@ -8,6 +8,7 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED, KIND_MESSAGE_REACTION, KI
 import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
@@ -140,7 +141,7 @@ messaging.post('/:channel/webhook',
               messageId: result.messageId,
               status: statusUpdate.status,
               timestamp: statusUpdate.timestamp,
-            }, hubId)
+            }, hubId ?? '')
           }
 
           // Also correlate with blast deliveries (non-blocking)
@@ -172,7 +173,7 @@ messaging.post('/:channel/webhook',
           isTyping: typing.isTyping,
           channelType: 'signal',
           timestamp: typing.timestamp,
-        }, hubId)
+        }, hubId ?? '')
         return c.json({ ok: true })
       }
 
@@ -187,7 +188,7 @@ messaging.post('/:channel/webhook',
           isRemove: reaction.isRemove ?? false,
           sender: signalPayload.envelope.sourceUuid ?? signalPayload.envelope.source,
           channelType: 'signal',
-        }, hubId)
+        }, hubId ?? '')
         return c.json({ ok: true })
       }
 
@@ -255,19 +256,32 @@ messaging.post('/:channel/webhook',
   }
 
   // Forward to ConversationsService for processing
-  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_PUBKEY)
+  // #1283: this passed ADMIN_PUBKEY — the admin's Ed25519 *signing* key — as the
+  // HPKE recipient every inbound message was sealed to. Both keys are 64 hex
+  // characters, so nothing objected, and the resulting envelopes could not be
+  // opened by the admin or anyone else. `adminHpkeRecipient` returns the X25519
+  // key or nothing, and the parameter's type now rejects the Ed25519 one.
+  //
+  // #1140: `hubId` must be forwarded. It is read from `?hub=` above and used for
+  // the relay event and the push below, but was omitted here — so every inbound
+  // conversation was created with `hub_id = NULL`, and
+  // `GET /hubs/:hubId/conversations` filters on `eq(conversations.hubId, hubId)`.
+  // The desktop client only ever calls that hub-scoped path, so inbound messages
+  // were invisible on desktop. The dev simulation route forwards a hubId from its
+  // request body, which is why every backend BDD messaging scenario passed.
+  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env), hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
     type: 'message:new',
     conversationId: convResult.conversationId,
     channelType: channel,
-  }, hubId)
+  }, hubId ?? '')
 
   // Auto-assignment for new conversations
   if (convResult.isNew && convResult.status === 'waiting') {
     backgroundTask(c,
-      tryAutoAssign(services, c.env, convResult.conversationId, channel, c.env.ADMIN_PUBKEY, hubId)
+      tryAutoAssign(services, c.env, convResult.conversationId, channel, hubId)
     )
   }
 
@@ -299,7 +313,7 @@ messaging.post('/:channel/webhook',
   }
 
   // Audit the incoming message (no PII — only hashed identifier)
-  c.executionCtx.waitUntil(
+  backgroundTask(c,
     audit(services.audit, 'messageReceived', 'system', {
       channel,
       senderHash: incoming.senderIdentifierHash,
@@ -312,14 +326,13 @@ messaging.post('/:channel/webhook',
 
 /**
  * Try to auto-assign a new conversation to an available volunteer.
- * This runs in background via executionCtx.waitUntil() to not delay webhook response.
+ * This runs in background via backgroundTask() to not delay webhook response.
  */
 async function tryAutoAssign(
   services: Services,
   env: Env,
   conversationId: string,
   channelType: MessagingChannelType,
-  adminPubkey: string,
   hubId: string | undefined,
 ): Promise<void> {
   try {
@@ -379,7 +392,7 @@ async function tryAutoAssign(
       conversationId,
       assignedTo: bestCandidate,
       autoAssigned: true,
-    }, hubId)
+    }, hubId ?? '')
 
     logger.info('Auto-assigned conversation', { conversationId, assignedTo: bestCandidate.slice(0, 8) })
   } catch (err) {

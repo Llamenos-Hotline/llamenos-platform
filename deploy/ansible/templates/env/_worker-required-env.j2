@@ -29,6 +29,17 @@ PG_POOL_SIZE={{ pg_pool_size | default(10) }}
 {% if (admin_pubkey | default('')) | length > 0 %}
 ADMIN_PUBKEY={{ admin_pubkey }}
 {% endif %}
+{# ADMIN_PUBKEY is an Ed25519 SIGNING key. Admin envelopes need the admin's
+   X25519 ENCRYPTION key, which is a different value derived from the same
+   seed. The app falls back to ADMIN_PUBKEY when this is unset, which wraps
+   envelopes to a key that cannot decrypt them — so set it. `bun run
+   bootstrap-admin` prints both. #}
+{% if (admin_decryption_pubkey | default('')) | length > 0 %}
+ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey }}
+{% endif %}
+{% if (ntfy_allowed_origins | default('')) | length > 0 %}
+NTFY_ALLOWED_ORIGINS={{ ntfy_allowed_origins }}
+{% endif %}
 HOTLINE_NAME={{ hotline_name | default('Hotline') }}
 ENVIRONMENT={{ app_environment | default('production') }}
 HMAC_SECRET={{ hmac_secret }}

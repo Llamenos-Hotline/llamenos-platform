@@ -4,11 +4,11 @@ Categories:
 License: AGPL-3.0-or-later
 AuthorName: Llamenos Project
 WebSite: https://llamenos.org
-SourceCode: https://github.com/rhonda-rodododo/llamenos
-IssueTracker: https://github.com/rhonda-rodododo/llamenos/issues
+SourceCode: https://github.com/Llamenos-Hotline/llamenos-platform
+IssueTracker: https://github.com/Llamenos-Hotline/llamenos-platform/issues
 
 RepoType: git
-Repo: https://github.com/rhonda-rodododo/llamenos.git
+Repo: https://github.com/Llamenos-Hotline/llamenos-platform.git
 
 Builds:
   - versionName: 0.18.0

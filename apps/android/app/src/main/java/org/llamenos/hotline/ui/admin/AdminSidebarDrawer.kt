@@ -5,60 +5,138 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
+
+/**
+ * Wraps an admin screen in the admin sidebar drawer.
+ *
+ * [content] receives the action that opens the drawer, for the screen's
+ * [AdminSidebarToggle]. Picking an item closes the drawer and then hands its
+ * slug to [onNavigateToAdminSection]; picking the section already shown just
+ * closes it. The drawer opens only from the toggle, so edge swipes stay with
+ * the screen's own scrollables; back closes an open drawer before it leaves
+ * the screen.
+ */
+@Composable
+fun AdminSidebarDrawerHost(
+    selectedSlug: String?,
+    onNavigateToAdminSection: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable (openDrawer: () -> Unit) -> Unit,
+) {
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
+        drawerContent = {
+            AdminSidebarDrawer(
+                drawerState = drawerState,
+                selectedSlug = selectedSlug,
+                onItemClick = { slug ->
+                    scope.launch {
+                        drawerState.close()
+                        if (slug != selectedSlug) onNavigateToAdminSection(slug)
+                    }
+                },
+            )
+        },
+        modifier = modifier,
+    ) {
+        content { scope.launch { drawerState.open() } }
+    }
+}
+
+/** Top-bar action that opens the admin sidebar drawer. */
+@Composable
+fun AdminSidebarToggle(onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.testTag("admin-sidebar-toggle"),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Menu,
+            contentDescription = stringResource(R.string.admin_nav_open_menu),
+        )
+    }
+}
 
 @Composable
 fun AdminSidebarDrawer(
+    drawerState: DrawerState,
+    selectedSlug: String?,
     onItemClick: (String) -> Unit,
-    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxHeight()
-            .padding(horizontal = 12.dp)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        Text(
-            text = stringResource(R.string.admin_nav_scopes_this_hub),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-
-        AdminNavConfig.thisHubItems.forEach { item ->
-            NavigationDrawerItem(
-                label = { Text(stringResource(item.labelRes)) },
-                selected = false,
-                onClick = { onItemClick(item.slug) },
-                modifier = Modifier.testTag(item.testTag),
+    ModalDrawerSheet(drawerState = drawerState, modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(horizontal = 12.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            AdminSidebarScopeHeader(
+                text = stringResource(R.string.admin_nav_scopes_this_hub),
+                testTag = "admin-sidebar-scope-hub",
             )
-        }
+            AdminSidebarItems(AdminNavConfig.thisHubItems, selectedSlug, onItemClick)
 
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-        Text(
-            text = stringResource(R.string.admin_nav_scopes_platform),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-
-        AdminNavConfig.platformItems.forEach { item ->
-            NavigationDrawerItem(
-                label = { Text(stringResource(item.labelRes)) },
-                selected = false,
-                onClick = { onItemClick(item.slug) },
-                modifier = Modifier.testTag(item.testTag),
+            AdminSidebarScopeHeader(
+                text = stringResource(R.string.admin_nav_scopes_platform),
+                testTag = "admin-sidebar-scope-platform",
             )
+            AdminSidebarItems(AdminNavConfig.platformItems, selectedSlug, onItemClick)
         }
+    }
+}
+
+@Composable
+private fun AdminSidebarScopeHeader(text: String, testTag: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag(testTag),
+    )
+}
+
+@Composable
+private fun AdminSidebarItems(
+    items: List<AdminNavItem>,
+    selectedSlug: String?,
+    onItemClick: (String) -> Unit,
+) {
+    items.forEach { item ->
+        NavigationDrawerItem(
+            label = { Text(stringResource(item.labelRes)) },
+            selected = item.slug == selectedSlug,
+            onClick = { onItemClick(item.slug) },
+            modifier = Modifier.testTag(item.testTag),
+        )
     }
 }
 
@@ -109,4 +187,8 @@ object AdminNavConfig {
         AdminNavItem("platform-settings", R.string.admin_nav_items_platform_settings, "admin-sidebar-item-platform-settings", emptyList(), "role-super-admin"),
         AdminNavItem("gdpr-erasure", R.string.admin_nav_items_gdpr_erasure, "admin-sidebar-item-gdpr-erasure", listOf("settings:manage"), "role-super-admin"),
     )
+
+    /** The nav item for [slug], or null for a section the sidebar does not list. */
+    fun itemFor(slug: String): AdminNavItem? =
+        thisHubItems.firstOrNull { it.slug == slug } ?: platformItems.firstOrNull { it.slug == slug }
 }

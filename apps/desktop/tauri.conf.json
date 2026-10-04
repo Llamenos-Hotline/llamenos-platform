@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicollasricas/tauri-settings-schema/v2/schema.json",
   "productName": "Hotline",
-  "version": "0.19.17",
+  "version": "0.19.18",
   "identifier": "org.llamenos.hotline",
   "build": {
     "beforeDevCommand": "bun run dev:vite",

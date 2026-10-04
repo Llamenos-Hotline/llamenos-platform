@@ -1,15 +1,18 @@
 /**
  * CallsService — replaces CallRouterDO.
  *
- * Manages active call state, call history records (encrypted),
- * and volunteer presence derived from shifts + active calls.
+ * Manages active call state and call history records (encrypted).
  * All state is stored in PostgreSQL via Drizzle ORM.
+ *
+ * Volunteer presence is NOT here. It needs the shift roster and the hub's
+ * ringing rules, which this service does not own — it lived here behind an
+ * optional `ShiftsService` that production never passed, so presence reported
+ * nobody on every deployment. See services/presence.ts.
  */
-import { eq, and, desc, sql, gte, lte, count, or, lt } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, or, lt, isNull } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens } from '../db/schema'
 import { ServiceError } from './settings'
-import type { ShiftsService } from './shifts'
 
 /** Ringing calls older than 3 minutes are stale */
 const RINGING_TTL_MS = 3 * 60 * 1000
@@ -21,10 +24,7 @@ type ActiveCallRow = typeof activeCalls.$inferSelect
 type CallRecordRow = typeof callRecords.$inferSelect
 
 export class CallsService {
-  constructor(
-    protected db: Database,
-    private shiftsService?: ShiftsService,
-  ) {}
+  constructor(protected db: Database) {}
 
   // =========================================================================
   // Active Calls
@@ -86,11 +86,34 @@ export class CallsService {
           await tx
             .delete(activeCalls)
             .where(eq(activeCalls.callId, call.callId))
+          await tx.delete(callTokens).where(eq(callTokens.callSid, call.callId))
         }
       })
     }
 
     return active
+  }
+
+  /**
+   * Pubkeys of every user who is currently on a live call in ANY hub.
+   *
+   * A volunteer has one phone and one pair of ears, so "busy" is instance-wide: being
+   * `answeredBy` on an in-progress call in hub A makes them unavailable for hub B's calls.
+   * In-progress rows past the stale TTL are ignored (they are reaped by getActiveCalls).
+   */
+  async getBusyPubkeys(): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ answeredBy: activeCalls.answeredBy })
+      .from(activeCalls)
+      .where(
+        and(
+          eq(activeCalls.status, 'in-progress'),
+          gte(activeCalls.startedAt, new Date(Date.now() - IN_PROGRESS_TTL_MS)),
+        ),
+      )
+    const busy = new Set<string>()
+    for (const row of rows) if (row.answeredBy) busy.add(row.answeredBy)
+    return busy
   }
 
   /** Count calls started today (active + historical) */
@@ -121,42 +144,6 @@ export class CallsService {
     return (activeResult?.total ?? 0) + (historyResult?.total ?? 0)
   }
 
-  /**
-   * Get presence info: active calls + available volunteers.
-   * Delegates to ShiftsService.getCurrentVolunteers for on-shift data.
-   */
-  async getPresence(hubId: string): Promise<{
-    activeCalls: number
-    availableVolunteers: number
-    users: Array<{ pubkey: string; status: 'available' | 'on-call' }>
-  }> {
-    const active = await this.getActiveCalls(hubId)
-
-    const onCallPubkeys = new Set(
-      active
-        .filter(c => c.answeredBy && c.status === 'in-progress')
-        .map(c => c.answeredBy!),
-    )
-
-    let onShiftPubkeys: string[] = []
-    if (this.shiftsService) {
-      onShiftPubkeys = await this.shiftsService.getCurrentVolunteers(hubId)
-    }
-
-    const presenceUsers = onShiftPubkeys.map(pubkey => ({
-      pubkey,
-      status: onCallPubkeys.has(pubkey) ? 'on-call' as const : 'available' as const,
-    }))
-
-    const available = onShiftPubkeys.filter(pk => !onCallPubkeys.has(pk)).length
-
-    return {
-      activeCalls: active.length,
-      availableVolunteers: available,
-      users: presenceUsers,
-    }
-  }
-
   // =========================================================================
   // Call Lifecycle
   // =========================================================================
@@ -185,7 +172,13 @@ export class CallsService {
     return row
   }
 
-  /** Mark a call as answered by a volunteer */
+  /**
+   * Mark a call as answered by a volunteer — first pickup wins.
+   *
+   * The UPDATE is conditional on the call still ringing and unanswered, so of any
+   * number of concurrent answers exactly one gets a row back. Everyone else gets
+   * 409 (call exists but is already taken/ended) or 404 (no such call).
+   */
   async answerCall(hubId: string, callId: string, pubkey: string): Promise<ActiveCallRow> {
     const [row] = await this.db
       .update(activeCalls)
@@ -198,15 +191,17 @@ export class CallsService {
         and(
           eq(activeCalls.callId, callId),
           eq(activeCalls.hubId, hubId),
+          eq(activeCalls.status, 'ringing'),
+          isNull(activeCalls.answeredBy),
         ),
       )
       .returning()
 
-    if (!row) {
-      throw new ServiceError(404, 'Call not found')
-    }
+    if (row) return row
 
-    return row
+    const existing = await this.getActiveCallById(hubId, callId)
+    if (!existing) throw new ServiceError(404, 'Call not found')
+    throw new ServiceError(409, 'Call already answered')
   }
 
   /**
@@ -262,6 +257,9 @@ export class CallsService {
           adminEnvelopes: data?.adminEnvelopes ?? [],
         })
         .returning()
+
+      // The call is over: its volunteer-leg tokens have nothing left to resolve.
+      await tx.delete(callTokens).where(eq(callTokens.callSid, call.callId))
 
       return row
     })
@@ -454,9 +452,16 @@ export class CallsService {
     return row ?? null
   }
 
-  /** Mark a call as having a voicemail */
+  /**
+   * Mark a call as having a voicemail.
+   *
+   * The call is normally still in `active_calls`; if the caller's leg already ended and the
+   * call moved to `call_records`, the flag is set there instead. A call that exists in
+   * neither is a bug upstream (the record must be created before ringing — see
+   * `startParallelRinging`), so this throws 404 rather than silently updating zero rows.
+   */
   async markVoicemail(hubId: string, callId: string): Promise<{ ok: true }> {
-    await this.db
+    const updatedActive = await this.db
       .update(activeCalls)
       .set({ hasVoicemail: true })
       .where(
@@ -465,6 +470,24 @@ export class CallsService {
           eq(activeCalls.hubId, hubId),
         ),
       )
+      .returning({ callId: activeCalls.callId })
+
+    if (updatedActive.length > 0) return { ok: true }
+
+    const updatedHistory = await this.db
+      .update(callRecords)
+      .set({ hasVoicemail: true })
+      .where(
+        and(
+          eq(callRecords.callId, callId),
+          eq(callRecords.hubId, hubId),
+        ),
+      )
+      .returning({ callId: callRecords.callId })
+
+    if (updatedHistory.length === 0) {
+      throw new ServiceError(404, 'Call not found')
+    }
     return { ok: true }
   }
 
@@ -505,8 +528,17 @@ export class CallsService {
   // =========================================================================
 
   /**
-   * Create a single-use call token mapping to a volunteer pubkey + hub.
-   * The token is embedded in Twilio callback URLs instead of the raw pubkey.
+   * Create an opaque call token mapping to a volunteer pubkey + hub.
+   * The token is embedded in provider callback URLs instead of the raw pubkey.
+   *
+   * Providers send the SAME token to two routes: the answer URL (`/user-answer`)
+   * and the status URL (`/call-status`) — and the status callbacks start
+   * (initiated/ringing) BEFORE the volunteer answers and continue until the
+   * leg completes. So the token must stay valid for the whole life of the leg:
+   *   - `answerCallWithToken` is the ONLY single-use consumer (answering is
+   *     claimed atomically on the call row, see below);
+   *   - `resolveCallToken` is a read-only lookup used by status callbacks;
+   *   - tokens are deleted when the call ends (`endCall` / stale expiry).
    */
   async createCallToken(params: { callSid: string; volunteerPubkey: string; hubId: string }): Promise<string> {
     const token = crypto.randomUUID()
@@ -520,23 +552,65 @@ export class CallsService {
   }
 
   /**
-   * Resolve and consume a call token atomically (DELETE...RETURNING).
-   * Returns null if the token is unknown or expired (> 5 minutes old).
+   * Read-only token lookup for status callbacks (never consumes the token).
+   * Valid for as long as the call is live; returns null once the call has
+   * ended and its tokens have been removed.
    */
   async resolveCallToken(token: string): Promise<{ callSid: string; volunteerPubkey: string; hubId: string } | null> {
-    const TOKEN_TTL_MS = 5 * 60 * 1000
     const rows = await this.db
-      .delete(callTokens)
+      .select()
+      .from(callTokens)
+      .where(eq(callTokens.token, token))
+      .limit(1)
+    if (rows.length === 0) return null
+    const row = rows[0]
+    return { callSid: row.callSid, volunteerPubkey: row.volunteerPubkey, hubId: row.hubId }
+  }
+
+  /**
+   * Answer a call via a volunteer-leg token — the single-use path.
+   *
+   * The token must exist and be younger than 5 minutes, and the call must
+   * still be `ringing`. The `ringing` → `in-progress` transition is a single
+   * conditional UPDATE, so exactly one caller can win it: a replayed answer
+   * (same token) or a second volunteer racing for the same call gets null.
+   * The token itself is NOT deleted — the answered leg's later status
+   * callbacks (notably `completed`) still need it to find their call.
+   */
+  async answerCallWithToken(
+    token: string,
+  ): Promise<{ callSid: string; volunteerPubkey: string; hubId: string } | null> {
+    const TOKEN_TTL_MS = 5 * 60 * 1000
+    const [tokenRow] = await this.db
+      .select()
+      .from(callTokens)
       .where(
         and(
           eq(callTokens.token, token),
           gte(callTokens.createdAt, new Date(Date.now() - TOKEN_TTL_MS)),
         ),
       )
+      .limit(1)
+    if (!tokenRow) return null
+
+    const claimed = await this.db
+      .update(activeCalls)
+      .set({
+        answeredBy: tokenRow.volunteerPubkey,
+        status: 'in-progress',
+        answeredAt: new Date(),
+      })
+      .where(
+        and(
+          eq(activeCalls.callId, tokenRow.callSid),
+          eq(activeCalls.hubId, tokenRow.hubId),
+          eq(activeCalls.status, 'ringing'),
+        ),
+      )
       .returning()
-    if (rows.length === 0) return null
-    const row = rows[0]
-    return { callSid: row.callSid, volunteerPubkey: row.volunteerPubkey, hubId: row.hubId }
+    if (claimed.length === 0) return null
+
+    return { callSid: tokenRow.callSid, volunteerPubkey: tokenRow.volunteerPubkey, hubId: tokenRow.hubId }
   }
 
   /**

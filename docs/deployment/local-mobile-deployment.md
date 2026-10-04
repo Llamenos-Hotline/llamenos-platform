@@ -97,7 +97,7 @@ release (for example `android-v0.19.16`; assets `app-release.apk`,
 `gh release view android-v0.19.16`).
 
 ```bash
-gh release download android-v0.19.16 --repo rhonda-rodododo/llamenos-platform \
+gh release download android-v0.19.16 --repo Llamenos-Hotline/llamenos-platform \
   --pattern 'app-release.apk*'
 sha256sum -c app-release.apk.sha256       # the .sha256 records the bare file name
 adb install app-release.apk               # or open the file on the phone

@@ -24,7 +24,7 @@ class AdminSettingsSteps : BaseSteps() {
     @Then("I should see the transcription settings card")
     fun iShouldSeeTheTranscriptionSettingsCard() {
         // Admin settings loads from API — may stay in loading state without backend
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "admin-transcription-card", "admin-settings-loading",
             "admin-settings-error", "admin-tabs",
         )
@@ -32,7 +32,7 @@ class AdminSettingsSteps : BaseSteps() {
 
     @Then("I should see the transcription enabled toggle")
     fun iShouldSeeTheTranscriptionEnabledToggle() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "transcription-enabled-toggle", "admin-transcription-card",
             "admin-settings-loading", "admin-settings-error", "admin-tabs",
         )
@@ -40,7 +40,7 @@ class AdminSettingsSteps : BaseSteps() {
 
     @Then("I should see the transcription opt-out toggle")
     fun iShouldSeeTheTranscriptionOptOutToggle() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "transcription-optout-toggle", "admin-transcription-card",
             "admin-settings-loading", "admin-settings-error", "admin-tabs",
         )
@@ -58,7 +58,7 @@ class AdminSettingsSteps : BaseSteps() {
 
     @Then("transcription should be enabled")
     fun transcriptionShouldBeEnabled() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "transcription-enabled-toggle", "admin-transcription-card",
             "admin-settings-loading", "admin-tabs",
         )

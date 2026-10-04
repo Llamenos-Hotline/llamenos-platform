@@ -1,5 +1,5 @@
 import { SECRET_PATH_PATTERNS } from './config.js'
-import { matchesPath } from './fragments.js'
+import { isSecretTemplatePath, matchesPath } from './fragments.js'
 
 export const LARGE_DIFF_FILES = 40
 export const LARGE_DIFF_LINES = 1500
@@ -88,6 +88,60 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'vitest.orchestrator.config.ts',
   'vitest.unit.config.ts',
 
+  // Key generation, release signing, the FDE installer image, build/ISO
+  // verification, the desktop updater manifest and certificate pinning — the
+  // first security-sensitive subset of `scripts/`, which is otherwise
+  // ordinary infra-lane work (the gate scripts follow below). Matching CODEOWNERS entry for entry: a lane may author
+  // these, but one quiet edit here compromises every install, not one build.
+  'scripts/bootstrap-admin.ts',
+  'scripts/release/',
+  'scripts/build-iso.sh',
+  'scripts/iso-builder/',
+  'scripts/verify-build.sh',
+  'scripts/verify-iso.sh',
+  'scripts/generate-update-manifest.sh',
+  'scripts/generate-update-manifest.ts',
+  'scripts/inject-cert-pins.ts',
+  'scripts/extract-cert-pins.sh',
+
+  // The gate scripts under `scripts/`: every script whose exit status is a
+  // check's verdict, so weakening it lets a defect through that check. The
+  // repo checks CI and the git hooks run; the tests/ typecheck baseline gate;
+  // the custom lint rules; the migration-drift baseline writer; the built-
+  // image smoke gate plus the runtime invariant and migration runner that
+  // ship inside the image; and every test runner, with the helpers they all
+  // source. A lane that may quietly weaken the gate judging it can widen its
+  // own authority. CODEOWNERS owns `scripts/check-*` and `scripts/test-*.sh`
+  // as globs; these are exact files because this list is prefix/exact
+  // matching, and guards.test.ts fails if a file those globs match is
+  // missing here.
+  'scripts/check-bddgen-warmup.sh',
+  'scripts/check-codeql-languages.ts',
+  'scripts/check-ecies-active.sh',
+  'scripts/check-ipc-allowlist.sh',
+  'scripts/check-label-count.sh',
+  'scripts/check-migration-drift.sh',
+  'scripts/check-migration-drift.ts',
+  'scripts/typecheck-tests-gate.ts',
+  'scripts/eslint-rules/',
+  'scripts/regenerate-snapshot.ts',
+  'scripts/image-smoke.sh',
+  'scripts/verify-runtime.ts',
+  'scripts/run-migrations.ts',
+  'scripts/test-android.sh',
+  'scripts/test-backend-bdd.sh',
+  'scripts/test-changed.sh',
+  'scripts/test-crypto.sh',
+  'scripts/test-desktop.sh',
+  'scripts/test-feature.sh',
+  'scripts/test-fleet.sh',
+  'scripts/test-integration-full.sh',
+  'scripts/test-ios.sh',
+  'scripts/test-orchestrator.sh',
+  'scripts/test-worker.sh',
+  'scripts/android-parallel-e2e.sh',
+  'scripts/lib/',
+
   // Deanonymization surfaces (PR #794, matching CODEOWNERS): sip-bridge/
   // routes PSTN calls and handles caller phone numbers; signal-notifier/
   // does HMAC-hashed contact resolution. Both are top-level, NOT under
@@ -132,8 +186,24 @@ export function classifyImpact(
     // (config.ts) would refuse to write is high-impact here too, so a secret
     // that reaches a diff by a route the write gate did not cover still
     // always requires human review rather than auto-merging.
+    //
+    // This deliberately uses `matchesPath`, NOT the write gate's
+    // `matchesSecretPath`: the template carve-out (`.env.example`) is a
+    // write-gate exemption only. The required relation is never-write ⊆
+    // high-impact, so the merge gate staying the BROADER of the two keeps it
+    // intact while being strictly more conservative — and substantively
+    // right, because a real credential pasted into a committed template is
+    // the one mistake a revert can never undo. `deploy/` is not in
+    // `HIGH_IMPACT_PATHS`, so without this line a template edit would be
+    // classified low-impact the moment it stopped counting as a secret.
     const secretHit = SECRET_PATH_PATTERNS.find((p) => matchesPath(f, p))
-    if (secretHit) reasons.push(`${f} matches secret pattern ${secretHit} (never-write and high-impact)`)
+    if (secretHit) {
+      reasons.push(
+        isSecretTemplatePath(f)
+          ? `${f} matches secret pattern ${secretHit} as a committed template (writable, still high-impact)`
+          : `${f} matches secret pattern ${secretHit} (never-write and high-impact)`,
+      )
+    }
   }
   if (changedFiles.length > LARGE_DIFF_FILES) {
     reasons.push(`${changedFiles.length} files exceeds the ${LARGE_DIFF_FILES}-file review threshold`)

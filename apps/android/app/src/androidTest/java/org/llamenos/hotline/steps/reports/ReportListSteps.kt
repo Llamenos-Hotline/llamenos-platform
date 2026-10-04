@@ -27,14 +27,14 @@ class ReportListSteps : BaseSteps() {
 
     @Then("I should see the reports screen")
     fun iShouldSeeTheReportsScreen() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "reports-title", "reports-list", "reports-empty", "dashboard-title",
         )
     }
 
     @Then("I should see the reports title")
     fun iShouldSeeTheReportsTitle() {
-        val found = assertAnyTagDisplayed("reports-title", "reports-list", "reports-empty", "dashboard-title")
+        assertAnyTagDisplayed("reports-title", "reports-list", "reports-empty", "dashboard-title")
     }
 
     @And("I tap the back button on reports")
@@ -58,7 +58,7 @@ class ReportListSteps : BaseSteps() {
             "Closed" -> "report-filter-closed"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "reports-title", "reports-list", "reports-empty", "dashboard-title")
+        assertAnyTagDisplayed(tag, "reports-title", "reports-list", "reports-empty", "dashboard-title")
     }
 
     @When("I tap the {string} report status filter")
@@ -87,19 +87,19 @@ class ReportListSteps : BaseSteps() {
             "Closed" -> "report-filter-closed"
             else -> return
         }
-        val found = assertAnyTagDisplayed(tag, "reports-title", "dashboard-title")
+        assertAnyTagDisplayed(tag, "reports-title", "dashboard-title")
     }
 
     // ---- Content state ----
 
     @Then("I should see the reports content or empty state")
     fun iShouldSeeTheReportsContentOrEmptyState() {
-        val found = assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading", "dashboard-title")
+        assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading", "dashboard-title")
     }
 
     @Then("the reports screen should support pull to refresh")
     fun theReportsScreenShouldSupportPullToRefresh() {
-        val found = assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading", "dashboard-title")
+        assertAnyTagDisplayed("reports-list", "reports-empty", "reports-loading", "dashboard-title")
     }
 
     // ---- Report type labels on cards ----
@@ -109,7 +109,7 @@ class ReportListSteps : BaseSteps() {
         // Report type labels appear on cards as "report-type-label" when the report
         // was created via a CMS report type template. Not all reports will have a type
         // label (legacy reports omit it), so we assert defensively.
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "report-type-label",
             "reports-list",
             "reports-empty",

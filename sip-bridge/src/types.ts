@@ -150,6 +150,11 @@ export interface AriRecording {
 }
 
 // ---- Webhook Types (sent to Worker) ----
+//
+// Field names are the ones the worker parses (apps/worker/telephony/
+// sip-bridge-adapter.ts: parse*Webhook). A field the worker does not read is a
+// field that silently does nothing — e.g. a call-status sent as `callStatus`
+// was always read as "initiated".
 
 /** Webhook payload sent to the Worker in JSON format */
 export interface WebhookPayload {
@@ -168,125 +173,122 @@ export interface WebhookPayload {
   callerNumber: string
   calledNumber?: string
   digits?: string
-  callStatus?:
-    | 'initiated'
-    | 'ringing'
-    | 'in-progress'
-    | 'completed'
-    | 'busy'
-    | 'no-answer'
-    | 'failed'
+  /** Volunteer-leg outcome (call-status) */
+  status?: CallLegStatus
   queueTime?: number
-  queueResult?: 'leave' | 'queue-full' | 'error' | 'bridged' | 'hangup'
-  recordingStatus?: 'completed' | 'failed'
+  /** Why the caller left the queue (queue-exit) */
+  result?: QueueExitResult
+  /** ARI recording state: `done` on success */
+  recordingStatus?: 'done' | 'failed'
   recordingName?: string
+}
+
+export type CallLegStatus = 'completed' | 'busy' | 'no-answer' | 'failed'
+export type QueueExitResult = 'leave' | 'error' | 'hangup'
+
+// ---- Command Types (received from Worker) ----
+//
+// The vocabulary emitted by apps/worker/telephony/asterisk.ts. Every command in
+// a webhook response acts on the channel that webhook was about — the worker
+// never names channels. `metadata` is echoed back as the query string of the
+// callback the command triggers (hub, callSid, lang, ...), exactly like the
+// query string of a TwiML action URL.
+
+/** Callback events a command may name, and the worker route each one posts to. */
+export const CALLBACK_PATHS = {
+  language_selected: '/api/telephony/language-selected',
+  captcha_response: '/api/telephony/captcha',
+  wait_music: '/api/telephony/wait-music',
+  queue_exit: '/api/telephony/queue-exit',
+  recording_complete: '/api/telephony/voicemail-recording',
+} as const
+
+export type CallbackEvent = keyof typeof CALLBACK_PATHS
+
+/** Fixed worker routes the bridge calls on its own (not named by a command). */
+export const WORKER_PATHS = {
+  incoming: '/api/telephony/incoming',
+  userAnswer: '/api/telephony/user-answer',
+  callStatus: '/api/telephony/call-status',
+  callRecording: '/api/telephony/call-recording',
+  voicemailComplete: '/api/telephony/voicemail-complete',
+} as const
+
+/** Commands the Worker sends back to the bridge */
+export type BridgeCommand =
+  | PlayCommand
+  | GatherCommand
+  | QueueCommand
+  | BridgeCallCommand
+  | RecordCommand
+  | HangupCommand
+  | LeaveQueueCommand
+
+/**
+ * Play a prompt from a URL: an operator's upload (/api/ivr-audio) or speech the
+ * worker generated (/api/ivr-speech). The bridge has no speech engine — the
+ * worker turns every prompt into audio before it reaches the PBX.
+ */
+export interface PlayCommand {
+  action: 'play'
+  url: string
+}
+
+/** Collect DTMF digits, then post them to the callback event's route */
+export interface GatherCommand {
+  action: 'gather'
+  /** 0 = post immediately without waiting for input */
+  numDigits: number
+  /** Seconds to wait for input after the preceding prompts finish */
+  timeout: number
+  callbackEvent: 'language_selected' | 'captcha_response'
   metadata?: Record<string, string>
 }
 
-// ---- Command Types (received from Worker) ----
-
-/** Commands the Worker can send back to the bridge */
-export type BridgeCommand =
-  | PlaybackCommand
-  | GatherCommand
-  | BridgeCallCommand
-  | HangupCommand
-  | RecordCommand
-  | RingCommand
-  | QueueCommand
-  | RejectCommand
-  | RedirectCommand
-
-export interface PlaybackCommand {
-  action: 'playback'
-  channelId: string
-  media: string
-  text?: string
-  language?: string
+/** Hold the caller (music on hold) until a volunteer is bridged or the queue is left */
+export interface QueueCommand {
+  action: 'queue'
+  /** The caller's call SID — the name volunteer legs bridge against */
+  queueName: string
+  waitMusicEvent: 'wait_music'
+  exitEvent: 'queue_exit'
+  metadata?: Record<string, string>
 }
 
-export interface GatherCommand {
-  action: 'gather'
-  channelId: string
-  numDigits: number
-  timeout: number
-  media?: string
-  text?: string
-  language?: string
-  callbackPath: string
-  callbackParams?: Record<string, string>
-}
-
+/** Bridge this (volunteer) channel with the caller waiting in `queueName` */
 export interface BridgeCallCommand {
   action: 'bridge'
-  callerChannelId: string
-  volunteerChannelId: string
-  record?: boolean
-  /** Bridge type for SFrame E2EE: 'passthrough' disables media termination */
-  bridgeType?: 'mixing' | 'passthrough'
-  recordingCallbackPath?: string
-  recordingCallbackParams?: Record<string, string>
+  queueName: string
+  record: boolean
+}
+
+/** Record a voicemail from this channel */
+export interface RecordCommand {
+  action: 'record'
+  maxDuration: number
+  finishOnKey: string
+  callbackEvent: 'recording_complete'
+  metadata?: Record<string, string>
 }
 
 export interface HangupCommand {
   action: 'hangup'
-  channelId: string
-  cause?: number
+  reason?: string
 }
 
-export interface RecordCommand {
-  action: 'record'
-  channelId: string
-  name: string
-  maxDuration: number
-  beep: boolean
-  callbackPath: string
-  callbackParams?: Record<string, string>
-}
-
-export interface RingCommand {
-  action: 'ring'
-  endpoint: string
-  callerId: string
-  timeout: number
-  answerCallbackPath: string
-  answerCallbackParams?: Record<string, string>
-  statusCallbackPath: string
-  statusCallbackParams?: Record<string, string>
-}
-
-export interface QueueCommand {
-  action: 'queue'
-  channelId: string
-  musicOnHold?: string
-  waitCallbackPath?: string
-  waitCallbackInterval?: number
-  exitCallbackPath?: string
-  callbackParams?: Record<string, string>
-}
-
-export interface RejectCommand {
-  action: 'reject'
-  channelId: string
-  cause?: number
-}
-
-export interface RedirectCommand {
-  action: 'redirect'
-  path: string
-  params?: Record<string, string>
-  channelId: string
+/** Leave the queue — the caller goes on to voicemail via the queue-exit callback */
+export interface LeaveQueueCommand {
+  action: 'leave_queue'
 }
 
 // ---- Bridge Internal State ----
 
-/** Active call state tracked by the bridge */
+/** Active caller-leg state tracked by the bridge */
 export interface ActiveCall {
   channelId: string
   callerNumber: string
   calledNumber: string
   startedAt: number
-  language?: string
   /**
    * Tier 5 voice E2EE call mode.
    * - `sframe`: entered via `[volunteers-sframe]` dialplan context — MUST NOT record.
@@ -294,35 +296,58 @@ export interface ActiveCall {
    */
   mode: 'sframe' | 'pstn'
   bridgeId?: string
+  /** Volunteer legs currently ringing for this call */
   ringingChannels: string[]
+  /** Prompts queued or playing on this channel */
+  pendingPlaybacks: Set<string>
+  /** The worker asked to end the call; it ends once the last prompt finishes */
+  hangupAfterPrompts?: boolean
+  /** The caller hung up: prompts cut off from here on were not a playback failure */
+  hangupRequested?: boolean
   dtmfBuffer: string
   activeGather?: {
     numDigits: number
     timeout: number
-    callbackPath: string
-    callbackParams?: Record<string, string>
+    callbackEvent: GatherCommand['callbackEvent']
+    metadata?: Record<string, string>
     timeoutTimer?: ReturnType<typeof setTimeout>
   }
   queue?: {
-    waitTimer?: ReturnType<typeof setTimeout>
-    exitCallbackPath?: string
-    callbackParams?: Record<string, string>
+    queueName: string
+    metadata?: Record<string, string>
     startedAt: number
+    waitTimer?: ReturnType<typeof setInterval>
   }
 }
 
-/** Recording callback with creation timestamp for TTL pruning */
-export interface RecordingCallbackEntry {
-  callbackPath: string
-  callbackParams: Record<string, string>
-  channelId: string
-  createdAt: number
+/** A volunteer leg originated by the bridge to ring a volunteer's phone */
+export interface VolunteerLeg {
+  parentCallSid: string
+  /** Opaque single-use token the worker resolves to the volunteer */
+  callToken: string
+  answered: boolean
 }
+
+/** A recording in progress, and where to report its outcome */
+export interface PendingRecording {
+  kind: 'voicemail' | 'call'
+  channelId: string
+  /** voicemail: query for voicemail-recording / voicemail-complete; call: { parentCallSid } */
+  params: Record<string, string>
+  /** When to give up on the finish event; unset while the recording may legitimately still run */
+  expiresAt?: number
+}
+
+/**
+ * PBX_TYPE values. It names the PBX, not the protocol the bridge speaks to it:
+ * `asterisk` (spoken to over ARI), `freeswitch` (ESL), `kamailio` (JSONRPC).
+ */
+export const PBX_TYPES = ['asterisk', 'freeswitch', 'kamailio'] as const
+export type PbxType = (typeof PBX_TYPES)[number]
 
 /** Configuration for the bridge service */
 export interface BridgeConfig {
-  /** PBX type: asterisk, freeswitch, or kamailio */
-  pbxType: 'asterisk' | 'freeswitch' | 'kamailio'
+  pbxType: PbxType
   /** ARI WebSocket URL (asterisk only) */
   ariUrl: string
   /** ARI REST API URL (asterisk only) */
@@ -349,33 +374,6 @@ export interface BridgeConfig {
   bridgeHost: string
   /** Stasis application name (asterisk only) */
   stasisApp: string
-  /** SIP trunk provider hostname */
-  sipProvider?: string
-  /** SIP trunk username */
-  sipUsername?: string
-  /** SIP trunk password */
-  sipPassword?: string
   /** Maximum time (ms) to wait for initial PBX connection. Default 5 minutes. */
   connectionTimeoutMs: number
-  /** TTS engine configuration */
-  ttsConfig?: {
-    /** Selected engine: google | polly | espeak | none */
-    engine: 'google' | 'polly' | 'espeak' | 'none'
-    /** Directory for cached audio files */
-    cacheDir: string
-    /** Google Cloud API key */
-    googleApiKey?: string
-    /** Google Cloud voice name override */
-    googleVoiceName?: string
-    /** AWS access key ID */
-    awsAccessKeyId?: string
-    /** AWS secret access key */
-    awsSecretAccessKey?: string
-    /** AWS region */
-    awsRegion?: string
-    /** AWS Polly voice ID */
-    pollyVoiceId?: string
-    /** espeak-ng voice name */
-    espeakVoice?: string
-  }
 }

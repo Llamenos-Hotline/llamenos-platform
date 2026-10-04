@@ -34,7 +34,7 @@ class ConversationAssignSteps : BaseSteps() {
 
     @Then("I should see the assign conversation button")
     fun iShouldSeeTheAssignConversationButton() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "assign-conversation-button", "conversation-detail-title",
             "conversations-list", "conversations-empty",
         )
@@ -52,7 +52,7 @@ class ConversationAssignSteps : BaseSteps() {
 
     @Then("I should see the assign dialog")
     fun iShouldSeeTheAssignDialog() {
-        val found = assertAnyTagDisplayed(
+        assertAnyTagDisplayed(
             "assign-dialog", "assign-conversation-button",
             "conversations-list", "conversations-empty",
         )

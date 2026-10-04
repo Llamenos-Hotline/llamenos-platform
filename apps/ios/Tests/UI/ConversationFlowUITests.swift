@@ -14,7 +14,7 @@ final class ConversationFlowUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
     }
 
     override func tearDown() {

@@ -70,7 +70,7 @@ export function ContactCard({ contact, isSelected, onSelect }: ContactCardProps)
             </span>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-            <Badge variant="outline" className="text-[10px] gap-1">
+            <Badge data-testid="contact-type-badge" variant="outline" className="text-[10px] gap-1">
               <TypeIcon className="h-2.5 w-2.5" />
               {t(config.label, { defaultValue: contact.contactType })}
             </Badge>

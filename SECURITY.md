@@ -4,7 +4,7 @@
 
 Llámenos protects vulnerable populations. We take security reports seriously and will respond promptly.
 
-**Preferred method:** Use [GitHub's private security advisory feature](https://github.com/rhonda-rodododo/llamenos-platform/security/advisories/new). This keeps the report confidential until a fix is ready.
+**Preferred method:** Use [GitHub's private security advisory feature](https://github.com/Llamenos-Hotline/llamenos-platform/security/advisories/new). This keeps the report confidential until a fix is ready.
 
 **Encrypted communication:** If you need to communicate outside GitHub, contact the maintainers using the encrypted contact methods listed in the repository's signed releases.
 

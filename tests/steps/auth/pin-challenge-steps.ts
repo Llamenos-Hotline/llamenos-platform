@@ -3,12 +3,28 @@
  * Matches steps from: packages/test-specs/features/platform/desktop/auth/pin-challenge.feature
  * Covers phone unmask PIN re-verification, wrong PIN error display, and cancel dialog.
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds, Timeouts, enterPin, TEST_PIN } from '../../helpers'
 
+/**
+ * The volunteer row this feature acts on: the first one that actually has a phone
+ * visibility toggle.
+ *
+ * NOT `VOLUNTEER_ROW.first()`. Since #1044 scoped the list to hub members, a global
+ * super-admin counts as a member of every hub, so the bootstrap admin — inserted with
+ * `phone: ''` — is row 0 of every hub's list. The row renders a phone and a toggle
+ * only under `{user.phone && ...}`, so row 0 has neither, and asserting on it looks
+ * for a `+` that can never appear there. The Background's volunteer is the row that
+ * owns the toggle, and it is the row every step here must use.
+ */
+const phoneRow = (page: Page) =>
+  page.getByTestId(TestIds.VOLUNTEER_ROW)
+    .filter({ has: page.getByTestId(TestIds.TOGGLE_PHONE_VISIBILITY) })
+    .first()
+
 When('I click the phone visibility toggle', async ({ page }) => {
-  const toggleBtn = page.getByTestId(TestIds.TOGGLE_PHONE_VISIBILITY).first()
+  const toggleBtn = phoneRow(page).getByTestId(TestIds.TOGGLE_PHONE_VISIBILITY)
   await expect(toggleBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
   await toggleBtn.scrollIntoViewIfNeeded()
   await toggleBtn.click()
@@ -34,8 +50,9 @@ Then('the PIN challenge dialog should remain open', async ({ page }) => {
 })
 
 Then('I should see the unmasked phone number', async ({ page }) => {
-  // After dialog closes, the phone should be visible in the volunteer row
-  const phoneText = page.getByTestId(TestIds.VOLUNTEER_ROW).first().locator('text=/\\+/')
+  // After dialog closes, the phone should be visible in the row whose toggle was
+  // clicked — see `phoneRow` above for why row 0 is the wrong row to ask.
+  const phoneText = phoneRow(page).locator('text=/\\+/')
   await expect(phoneText).toBeVisible({ timeout: 5000 })
 })
 

@@ -20,7 +20,7 @@ class DashboardQuickActionsSteps : BaseSteps() {
             onNodeWithTag("quick-actions-grid").performScrollTo()
             onNodeWithTag("quick-actions-grid").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("quick-actions-grid", "dashboard-title")
+            assertAnyTagDisplayed("quick-actions-grid", "dashboard-title")
         }
     }
 
@@ -30,7 +30,7 @@ class DashboardQuickActionsSteps : BaseSteps() {
             onNodeWithTag("reports-card").performScrollTo()
             onNodeWithTag("reports-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("reports-card", "dashboard-title")
+            assertAnyTagDisplayed("reports-card", "dashboard-title")
         }
     }
 
@@ -40,7 +40,7 @@ class DashboardQuickActionsSteps : BaseSteps() {
             onNodeWithTag("help-card").performScrollTo()
             onNodeWithTag("help-card").assertIsDisplayed()
         } catch (_: Throwable) {
-            val found = assertAnyTagDisplayed("help-card", "dashboard-title")
+            assertAnyTagDisplayed("help-card", "dashboard-title")
         }
     }
 }

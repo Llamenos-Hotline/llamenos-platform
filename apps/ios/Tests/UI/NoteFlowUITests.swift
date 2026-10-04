@@ -15,7 +15,7 @@ final class NoteFlowUITests: XCTestCase {
         app = XCUIApplication()
         // Launch with pre-authenticated state and reset note data
         app.launchArguments.append(contentsOf: ["--reset-keychain", "--test-authenticated"])
-        app.launch()
+        app.launchAnsweringSystemPrompts()
     }
 
     override func tearDown() {

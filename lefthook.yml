@@ -36,7 +36,8 @@ pre-commit:
         fi
     bddgen-freshness:
       glob: "{packages/test-specs/features/**/*.feature,tests/steps/**/*.ts}"
-      run: bunx bddgen
+      # export warms the transform cache single-threaded first — see the build job in .github/workflows/ci.yml
+      run: bunx bddgen export > /dev/null && bunx bddgen
     worker-unit-tests:
       glob: "apps/worker/**/*.{ts,tsx}"
       run: bun run test:worker:unit

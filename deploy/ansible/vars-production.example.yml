@@ -85,6 +85,11 @@ llamenos_app_image: ""           # REQUIRED e.g. llamenos:0.19.16 (docker load) 
 # Admin Ed25519 public key (64 lowercase hex): `bun run bootstrap-admin` on your
 # workstation. Optional — the first admin can be bootstrapped from the desktop app.
 admin_pubkey: ""
+# The admin's X25519 ENCRYPTION public key — a different value from
+# admin_pubkey (which is the Ed25519 SIGNING key). Both are printed by
+# `bun run bootstrap-admin`. Leaving this empty makes the app fall back to
+# admin_pubkey, which seals admin envelopes to a key that cannot open them.
+admin_decryption_pubkey: ""
 
 # ─── Pinned service images (digests re-verified 2026-09-25) ──────
 llamenos_postgres_image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af

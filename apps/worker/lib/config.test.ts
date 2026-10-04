@@ -7,6 +7,9 @@ describe('validateConfig', () => {
     HMAC_SECRET: 'a'.repeat(64),
     SERVER_SECRET: 'b'.repeat(64),
     ADMIN_PUBKEY: 'c'.repeat(64),
+    // Required once ADMIN_PUBKEY is set, and necessarily a different value —
+    // Ed25519 identity vs X25519 HPKE recipient (#1283).
+    ADMIN_DECRYPTION_PUBKEY: 'd'.repeat(64),
     HOTLINE_NAME: 'Test Hotline',
     ENVIRONMENT: 'test',
   }

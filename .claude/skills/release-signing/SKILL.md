@@ -358,7 +358,7 @@ else
 fi
 
 # Also check the GitHub releases fallback endpoint
-GITHUB_MANIFEST=$(curl -sSfL "https://github.com/rhonda-rodododo/llamenos/releases/latest/download/latest.json" 2>/dev/null || echo "")
+GITHUB_MANIFEST=$(curl -sSfL "https://github.com/Llamenos-Hotline/llamenos-platform/releases/latest/download/latest.json" 2>/dev/null || echo "")
 if [ -n "${GITHUB_MANIFEST}" ]; then
   GH_VERSION=$(echo "${GITHUB_MANIFEST}" | jq -r '.version // empty')
   echo "GitHub releases fallback: version ${GH_VERSION:-'not found'}"
@@ -374,7 +374,7 @@ echo ""
 echo "  RustFS:    s3://${RUSTFS_BUCKET}/releases/v${VERSION}/"
 echo "  Updater:   https://updates.llamenos.org/desktop/latest.json"
 echo "  Audit:     llamenos-releases repo tagged v${VERSION}"
-echo "  GitHub:    https://github.com/rhonda-rodododo/llamenos/releases/tag/v${VERSION}"
+echo "  GitHub:    https://github.com/Llamenos-Hotline/llamenos-platform/releases/tag/v${VERSION}"
 echo ""
 ```
 

@@ -8,14 +8,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.llamenos.hotline.model.ClockResponse
 import org.llamenos.hotline.model.NotePayload
-import org.llamenos.hotline.model.ShiftStatusResponse
 import org.llamenos.hotline.model.ShiftsListResponse
 import org.llamenos.hotline.ui.notes.DecryptedNote
 import org.llamenos.hotline.ui.notes.NotesUiState
 import org.llamenos.hotline.ui.notes.displayValue
+import org.llamenos.protocol.MyStatusResponse
+import org.llamenos.protocol.SharedCreateShiftJoinRequestBodyType
 import org.llamenos.protocol.Shift
+import org.llamenos.protocol.ShiftJoinRequestResponse
 
 /**
  * Unit tests for model serialization and data class behavior.
@@ -48,34 +49,25 @@ class ModelTest {
         assertEquals(listOf("pk1", "pk2"), shift.userPubkeys)
     }
 
-    @Test
-    fun `ShiftStatusResponse deserializes on-shift state`() {
-        val input = """{"isOnShift":true,"shiftId":"s1","startedAt":"2026-03-01T09:00:00Z","activeCallCount":2,"recentNoteCount":5}"""
-        val status = json.decodeFromString<ShiftStatusResponse>(input)
+    // Shapes below are what apps/worker/routes/shifts.ts actually returns.
 
-        assertTrue(status.isOnShift)
-        assertEquals("s1", status.shiftId)
-        assertEquals(2, status.activeCallCount)
-        assertEquals(5, status.recentNoteCount)
+    @Test
+    fun `MyStatusResponse deserializes the backend my-status shape`() {
+        val input = """{"onShift":true,"currentShift":{"id":"s1","encryptedName":"enc","startTime":"09:00","endTime":"17:00"},"nextShift":null}"""
+        val status = json.decodeFromString<MyStatusResponse>(input)
+
+        assertTrue(status.onShift)
+        assertEquals("s1", status.currentShift?.id)
+        assertNull(status.nextShift)
     }
 
     @Test
-    fun `ShiftStatusResponse deserializes off-shift state`() {
-        val input = """{"isOnShift":false}"""
-        val status = json.decodeFromString<ShiftStatusResponse>(input)
+    fun `ShiftJoinRequestResponse deserializes the backend request shape`() {
+        val input = """{"id":"r1","hubId":"hub-1","shiftId":"s1","userPubkey":"pk","type":"leave","status":"pending","reviewedBy":null,"reviewedAt":null,"createdAt":"2026-03-01T09:00:00.000Z"}"""
+        val request = json.decodeFromString<ShiftJoinRequestResponse>(input)
 
-        assertFalse(status.isOnShift)
-        assertNull(status.shiftId)
-        assertNull(status.startedAt)
-    }
-
-    @Test
-    fun `ClockResponse deserializes success`() {
-        val input = """{"success":true,"shiftId":"s1"}"""
-        val response = json.decodeFromString<ClockResponse>(input)
-
-        assertTrue(response.success)
-        assertEquals("s1", response.shiftId)
+        assertEquals("s1", request.shiftID)
+        assertEquals(SharedCreateShiftJoinRequestBodyType.Leave, request.type)
     }
 
     @Test
