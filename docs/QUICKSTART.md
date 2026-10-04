@@ -346,7 +346,8 @@ Edit `.env` and fill in your values:
 
 ```bash
 # Required
-ADMIN_PUBKEY=           # Set in step 5 (bootstrap)
+ADMIN_PUBKEY=           # Set in step 5 (bootstrap) -- Ed25519 identity
+ADMIN_DECRYPTION_PUBKEY= # Set in step 5 too -- the X25519 key printed alongside it
 DOMAIN=hotline.yourorg.org
 ACME_EMAIL=admin@yourorg.org
 PG_PASSWORD=<generated above>
@@ -374,9 +375,12 @@ You need the admin public key before starting. There are two approaches:
 Start the application first with a temporary admin key, then bootstrap through the setup wizard:
 
 ```bash
-# Start with a placeholder -- the setup wizard will guide you
-# You will replace this after bootstrapping
-ADMIN_PUBKEY=0000000000000000000000000000000000000000000000000000000000000000
+# Leave BOTH admin keys empty -- the setup wizard will guide you, and the
+# server boots fine with no admin configured. Do not put a placeholder in
+# ADMIN_PUBKEY: once it is set, the server requires ADMIN_DECRYPTION_PUBKEY
+# too and refuses to start without it (see step 5).
+ADMIN_PUBKEY=
+ADMIN_DECRYPTION_PUBKEY=
 
 docker compose up -d
 ```
@@ -393,11 +397,22 @@ cd /path/to/llamenos
 bun run bootstrap-admin
 ```
 
-This outputs the public key (hex) and the secret key (nsec). Set the public key in your `.env`:
+This outputs ONE secret seed and TWO public keys. Set **both** public keys in your `.env`:
 
 ```bash
-ADMIN_PUBKEY=<hex public key from bootstrap-admin output>
+ADMIN_PUBKEY=<ADMIN_PUBKEY from bootstrap-admin output>
+ADMIN_DECRYPTION_PUBKEY=<ADMIN_DECRYPTION_PUBKEY from the same output>
 ```
+
+> These are different values and both are required. `ADMIN_PUBKEY` is Ed25519
+> and verifies the admin's signatures; `ADMIN_DECRYPTION_PUBKEY` is X25519 and
+> is the key every note, message and hub key is encrypted to. The server
+> refuses to start with only the first, because encrypting a note to an
+> Ed25519 key succeeds and produces a note nobody can ever decrypt (#1283).
+
+The script prints the two public values above separately from the secret seed,
+which appears under a `SECRET` heading. Never put the seed in `.env`: anything
+configured as an admin key is served to every authenticated user (#1040).
 
 Then start the application:
 
@@ -442,7 +457,9 @@ The admin account is the root of trust for your Llamenos instance. It uses a Web
    ```bash
    # On the server
    cd /opt/llamenos/deploy/docker
-   # Edit .env and set ADMIN_PUBKEY to the hex public key shown in the wizard
+   # Edit .env and set BOTH ADMIN_PUBKEY and ADMIN_DECRYPTION_PUBKEY to the
+   # two public keys shown in the wizard -- they are different values, and
+   # the server will not start with only the first
    docker compose up -d   # Restart to pick up the new key
    ```
 
@@ -456,23 +473,20 @@ cd /path/to/llamenos
 bun run bootstrap-admin
 ```
 
-Output:
-```
-=== Llamenos Admin Bootstrap ===
+The script prints the public values (`ADMIN_PUBKEY`, `ADMIN_DECRYPTION_PUBKEY`)
+separately from the secret values (the admin seed and `SERVER_SECRET`), which
+appear under a `SECRET` heading.
 
-PUBLIC KEY (hex):
-  a1b2c3d4...
-
-SECRET KEY (nsec) -- share this securely with the admin:
-  nsec1...
-```
-
-1. Copy the hex public key into your server's `.env` as `ADMIN_PUBKEY`.
+1. Copy the two public keys into your server's `.env` as `ADMIN_PUBKEY` and
+   `ADMIN_DECRYPTION_PUBKEY`. Both are required; the server refuses to start
+   with only the first. Never copy a secret value into server config.
 2. Restart the application: `docker compose up -d`.
-3. Store the nsec in a password manager. It cannot be recovered.
-4. Log in at `https://hotline.yourorg.org` using the nsec.
+3. Store the admin seed in a password manager. It cannot be recovered.
+4. The admin imports the seed on the login screen. The two public keys pin the
+   platform admin but do not create the account; the setup wizard (In-Browser
+   Bootstrap above) is the supported way to register the first admin.
 
-**SECURITY WARNING**: The admin nsec is the master key for your hotline. If compromised, an attacker can manage all volunteers, read admin-wrapped notes, and modify all settings. Store it in a hardware security module or a high-security password manager (1Password, Bitwarden, KeePassXC). Never reuse this keypair on public WebSocket relays or other services.
+**SECURITY WARNING**: The admin seed is the master key for your hotline. If compromised, an attacker can manage all volunteers, read admin-wrapped notes, and modify all settings. Store it in a hardware security module or a high-security password manager (1Password, Bitwarden, KeePassXC). Never reuse this keypair on public WebSocket relays or other services.
 
 ---
 
