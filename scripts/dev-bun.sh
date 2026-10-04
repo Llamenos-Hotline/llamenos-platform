@@ -69,6 +69,13 @@ cmd_start() {
   # ADMIN_PUBKEY: use .env value if set (skips setup wizard); otherwise leave unset
   # so the admin bootstrap / setup wizard is exercisable in dev.
   [ -n "${ADMIN_PUBKEY:-}" ] && export ADMIN_PUBKEY
+  # Required whenever ADMIN_PUBKEY is set: the server refuses to boot rather than
+  # seal admin envelopes to the Ed25519 signing key, which succeeds and makes every
+  # note permanently undecryptable (#1283). Defaults to the X25519 key derived from
+  # the committed test seed so a .env carrying only the test ADMIN_PUBKEY still boots.
+  if [ -n "${ADMIN_PUBKEY:-}" ]; then
+    export ADMIN_DECRYPTION_PUBKEY="${ADMIN_DECRYPTION_PUBKEY:-27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177}"
+  fi
   export HOTLINE_NAME="${HOTLINE_NAME:-Llámenos (Dev)}"
   # ENVIRONMENT is required unconditionally by apps/worker/lib/config.ts and gates the
   # dev-only test-reset/test-promote-admin routes the admin bootstrap flow relies on —

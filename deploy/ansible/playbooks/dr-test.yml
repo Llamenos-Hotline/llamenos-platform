@@ -128,6 +128,9 @@
                 STORAGE_SECRET_KEY: dr-test-secret-key
                 HMAC_SECRET: "{{ 'dr-test-hmac-secret-for-validation-only' | hash('sha256') }}"
                 ADMIN_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000000"
+                # Distinct from ADMIN_PUBKEY: the app refuses to boot when the two
+                # are equal or this is missing (#1283).
+                ADMIN_DECRYPTION_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000001"
                 SERVER_SECRET: "{{ 'dr-test-server-secret-for-validation-only' | hash('sha256') }}"
                 PORT: "3000"
               ports:

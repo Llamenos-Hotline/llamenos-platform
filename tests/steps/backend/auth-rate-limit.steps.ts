@@ -7,8 +7,8 @@ import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getSharedState, setLastResponse } from './shared-state'
 import { generateTestKeypair } from '../../api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
+import { hexToBytes, bytesToHex } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -42,16 +42,16 @@ function randomFakeIp(): string {
 
 function buildLoginBody(pubkey: string, seedHex: string): Record<string, unknown> {
   const timestamp = Date.now()
-  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:/api/auth/login:${nonce}`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, 'POST', '/api/auth/login', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }
 }
 
 function buildBootstrapBody(pubkey: string, seedHex: string): Record<string, unknown> {
   const timestamp = Date.now()
-  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-  const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${pubkey}:${timestamp}:POST:/api/auth/bootstrap:${nonce}`)
+  const nonce = randomAuthNonce()
+  const message = buildAuthMessage(pubkey, timestamp, 'POST', '/api/auth/bootstrap', nonce)
   const sig = ed25519.sign(message, hexToBytes(seedHex))
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }
 }
