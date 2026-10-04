@@ -21,7 +21,7 @@ import {
   apiPut,
   apiDelete,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   createUserViaApi,
   createRoleViaApi,
   addHubMemberViaApi,
@@ -172,8 +172,8 @@ Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
 
 After({ tags: '@hub-isolation' }, async ({ request, world }) => {
   const state = getIS(world)
-  await deleteHubViaApi(request, state.hubA.hubId).catch(() => {})
-  await deleteHubViaApi(request, state.hubB.hubId).catch(() => {})
+  await deleteHubViaApiIfPresent(request, state.hubA.hubId)
+  await deleteHubViaApiIfPresent(request, state.hubB.hubId)
 })
 
 // ── Given ──────────────────────────────────────────────────────────

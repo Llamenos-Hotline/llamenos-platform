@@ -12,7 +12,7 @@ import {
   apiGet,
   apiPatch,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   createRoleViaApi,
   createUserViaApi,
   addHubMemberViaApi,
@@ -51,7 +51,7 @@ interface CallSettings { queueTimeoutSeconds: number }
 
 After({ tags: '@hub-scoped-call-settings' }, async ({ request, world }) => {
   const id = getS(world).secondHubId
-  if (id) await deleteHubViaApi(request, id).catch(() => {})
+  if (id) await deleteHubViaApiIfPresent(request, id)
 })
 
 Given('a second hub exists', async ({ request, world }) => {
