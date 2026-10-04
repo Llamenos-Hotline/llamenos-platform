@@ -22,11 +22,14 @@ import {
   hubKeys,
 } from '../db/schema'
 import { ServiceError } from './settings'
+import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
+
+const logger = createLogger('services.erasure')
 
 // Emergency override minimum floor — hard-coded, not configurable
 const EMERGENCY_MIN_HOURS = 4
@@ -37,10 +40,21 @@ export const DEFAULT_EMERGENCY_OVERRIDE_ENABLED = true
 
 const ADMIN_ROLES = ['role-super-admin', 'role-admin', 'role-hub-admin'] as const
 
+/**
+ * Blob-envelope-mirror deletion, injected by the service registry. The hub
+ * shred leaves queued scope='hub' marker jobs in re_encryption_jobs when a
+ * crash lands between the database commit and the object-store deletion; the
+ * retry path here finishes those rather than losing the mirrors silently.
+ */
+export interface BlobMirrorDeleter {
+  deleteEnvelopeMirrors(fileIds: string[]): Promise<void>
+}
+
 export class ErasureService {
   constructor(
     protected db: Database,
     private readonly identity?: Pick<IdentityService, 'getUserInternal'>,
+    private readonly blobMirrors?: BlobMirrorDeleter,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -492,6 +506,47 @@ export class ErasureService {
       .limit(1)
 
     if (!job || job.status === 'completed') return
+
+    // Scope='hub' rows are blob-envelope-mirror markers left by the hub shred,
+    // not per-user envelope strips. The file rows survive a shred (only their
+    // envelopes go), so the ids are re-derivable here and a crash between the
+    // shred commit and the mirror deletion is retried, not lost.
+    if (job.scope === 'hub') {
+      if (this.blobMirrors) {
+        const fileRows = await this.db.execute<{ id: string }>(sql`
+          SELECT f.id FROM files f
+          JOIN conversations c ON f.conversation_id = c.id
+          WHERE c.hub_id = ${job.hubId}
+        `)
+        const fileIds = fileRows.map(r => r.id)
+        if (fileIds.length > 0) {
+          await this.blobMirrors.deleteEnvelopeMirrors(fileIds)
+        }
+      } else {
+        logger.error('Hub mirror marker queued but no blob mirror deleter injected', {
+          jobId: job.id,
+          hubId: job.hubId,
+        })
+      }
+      await this.db
+        .update(reEncryptionJobs)
+        .set({ status: 'completed', completedAt: new Date() })
+        .where(eq(reEncryptionJobs.id, jobId))
+      return
+    }
+
+    // A user-scope job whose hub has been shredded has nothing left to strip:
+    // the shred already destroyed every envelope. Complete, never stall.
+    const [hub] = await this.db.execute<{ status: string }>(
+      sql`SELECT status FROM hubs WHERE id = ${job.hubId}`,
+    )
+    if (hub?.status === 'shredded') {
+      await this.db
+        .update(reEncryptionJobs)
+        .set({ status: 'completed', completedAt: new Date() })
+        .where(eq(reEncryptionJobs.id, jobId))
+      return
+    }
 
     const userPubkey = job.userId
     const hubId = job.hubId
