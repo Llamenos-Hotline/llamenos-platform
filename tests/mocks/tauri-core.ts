@@ -31,6 +31,7 @@ import {
   SAS_INFO,
   SAS_SALT,
 } from '@shared/crypto-labels'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 
 /** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
 const PROVISIONING_BUNDLE_VERSION = 1
@@ -508,6 +509,24 @@ type MockOnlyCommand =
   | 'reset_pin_lockout'
   | 'expire_pin_lockout'
 
+/**
+ * Sign an auth token exactly as `packages/crypto/src/auth.rs` does: build the
+ * canonical message with the shared builder (which selects the label for the
+ * shape) and sign the raw UTF-8 bytes — no SHA-256 pre-hash, since Ed25519
+ * applies SHA-512 internally.
+ */
+function signMockAuthToken(
+  timestamp: number,
+  method: string,
+  path: string,
+  nonce: string | undefined,
+): string {
+  const secrets = requireSecrets()
+  const pubkey = bytesToHex(deriveEd25519Pubkey(secrets.signingSeed))
+  const sig = ed25519.sign(buildAuthMessage(pubkey, timestamp, method, path, nonce), secrets.signingSeed)
+  return JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig), ...(nonce ? { nonce } : {}) })
+}
+
 // ── Command handlers ──────────────────────────────────────────────────
 
 // Typed against TauriIpcCommand (the exact set of #[tauri::command]s the Rust
@@ -516,6 +535,7 @@ type MockOnlyCommand =
 // key (new/renamed command not yet mocked) or an excess key (stale mock for a
 // command Rust no longer registers) — instead of surfacing only as a runtime
 // "Unknown Tauri command" the first time a test happens to exercise it.
+
 const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   // --- Device key management ---
 
@@ -590,22 +610,19 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- Auth tokens (Ed25519) ---
 
+  // Ed25519 auth (v3 device keys). The message comes from the canonical shared
+  // builder — the same module the worker verifies with — so this mock cannot
+  // drift from the real Rust signer. A mock that signed a different shape is
+  // what kept #1389 green while real Tauri redemption returned 401.
+  //
+  // Like Rust, the nonce is generated HERE and never taken from the caller:
+  // the two commands differ only in which message shape they sign.
   create_auth_token_from_state: (a) => {
-    const timestamp = a.timestamp as number
-    const method = a.method as string
-    const path = a.path as string
-    const nonce = (a.nonce as string | undefined) || undefined
+    return signMockAuthToken(a.timestamp as number, a.method as string, a.path as string, randomAuthNonce())
+  },
 
-    // Ed25519 auth (v3 device keys) — must match Rust build_auth_message() exactly:
-    // Format: "llamenos:device-auth:v1:{pubkey}:{timestamp}:{method}:{path}" (legacy)
-    // or:     "llamenos:device-auth:v1:{pubkey}:{timestamp}:{method}:{path}:{nonce}" (with nonce)
-    // Sign raw UTF-8 bytes (no SHA-256 pre-hash — Ed25519 internally uses SHA-512)
-    const secrets = requireSecrets()
-    const pubkey = bytesToHex(deriveEd25519Pubkey(secrets.signingSeed))
-    const base = `llamenos:device-auth:v1:${pubkey}:${timestamp}:${method}:${path}`
-    const msgStr = nonce ? `${base}:${nonce}` : base
-    const sig = ed25519.sign(utf8ToBytes(msgStr), secrets.signingSeed)
-    return JSON.stringify({ pubkey, timestamp, token: bytesToHex(sig), ...(nonce ? { nonce } : {}) })
+  create_nonceless_auth_token_from_state: (a) => {
+    return signMockAuthToken(a.timestamp as number, a.method as string, a.path as string, undefined)
   },
 
   // --- Ed25519 signing/verification ---

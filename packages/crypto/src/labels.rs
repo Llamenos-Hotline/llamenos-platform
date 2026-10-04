@@ -185,8 +185,23 @@ pub const LABEL_PUK_PREVIOUS_GEN: &str = "llamenos:puk:prev-gen:v1";
 
 // --- NEW: Device Auth (Ed25519) ---
 
-/// Ed25519 device authentication token label
+/// Ed25519 device authentication token label (message carries a nonce).
 pub const LABEL_DEVICE_AUTH: &str = "llamenos:device-auth:v1";
+
+/// Ed25519 device authentication token label for the nonce-less message shape.
+///
+/// A handful of routes carry their auth fields in the request body and have no
+/// `nonce` field in their wire schema (`POST /api/invites/redeem`). Those
+/// signatures cover a five-field message instead of six. Reusing
+/// `LABEL_DEVICE_AUTH` for both shapes would let one layout be reinterpreted as
+/// the other — a URL path may legally contain `:`, so
+/// `…:POST:/x:deadbeef` is simultaneously a nonce-less message for path
+/// `/x:deadbeef` and a nonce-bearing message for path `/x` with nonce
+/// `deadbeef`. Giving the nonce-less shape its own domain-separation label makes
+/// the two cryptographically disjoint: a nonce-less token can never be replayed
+/// as a nonce-bearing request, and stripping the nonce from a nonce-bearing
+/// token can never downgrade it — both fail signature verification.
+pub const LABEL_DEVICE_AUTH_NO_NONCE: &str = "llamenos:device-auth-no-nonce:v1";
 
 // --- NEW: Items Key / Note Epoch ---
 
@@ -523,8 +538,10 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_FIREHOSE_REPORT_WRAP,    // 95
     // 96: IVR media URL signing (#1325, #1347)
     HMAC_IVR_MEDIA_URL, // 96
-    // 97: Device provisioning key bundle
-    LABEL_DEVICE_PROVISION_BUNDLE, // 97
+    // 97: nonce-less device auth message shape (#1389)
+    LABEL_DEVICE_AUTH_NO_NONCE, // 97
+    // 98: Device provisioning key bundle
+    LABEL_DEVICE_PROVISION_BUNDLE, // 98
 ];
 
 /// Look up a label string by its numeric ID.
@@ -607,6 +624,10 @@ mod tests {
         assert_eq!(LABEL_PUK_WRAP_TO_DEVICE, "llamenos:puk:wrap:device:v1");
         assert_eq!(LABEL_PUK_PREVIOUS_GEN, "llamenos:puk:prev-gen:v1");
         assert_eq!(LABEL_DEVICE_AUTH, "llamenos:device-auth:v1");
+        assert_eq!(
+            LABEL_DEVICE_AUTH_NO_NONCE,
+            "llamenos:device-auth-no-nonce:v1"
+        );
         assert_eq!(LABEL_ITEMS_KEY_EXPORT, "llamenos:items-key-export:v1");
         assert_eq!(LABEL_NOTE_EPOCH_KEY, "llamenos:note-epoch-key:v1");
         assert_eq!(LABEL_HUB_PTK_PREV_GEN, "llamenos:hub-ptk:prev-gen:v1");
@@ -761,7 +782,8 @@ mod tests {
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
         assert_eq!(id_to_label(96), Some(HMAC_IVR_MEDIA_URL));
-        assert_eq!(id_to_label(97), Some(LABEL_DEVICE_PROVISION_BUNDLE));
+        assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
+        assert_eq!(id_to_label(98), Some(LABEL_DEVICE_PROVISION_BUNDLE));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

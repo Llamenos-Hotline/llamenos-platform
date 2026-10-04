@@ -231,18 +231,40 @@ pub fn get_device_pubkeys(
 // ── Auth tokens (Ed25519) ───────────────────────────────────────────
 
 /// Create an Ed25519 auth token using the device signing key in CryptoState.
+///
+/// Always nonce-bearing: the nonce is generated inside Rust and signed into the
+/// message, so the caller MUST forward the `nonce` field it gets back (the
+/// server rebuilds the same message to verify). There is deliberately no nonce
+/// parameter — a caller can neither supply one nor ask for it to be omitted.
 #[tauri::command]
 pub fn create_auth_token_from_state(
     state: tauri::State<'_, CryptoState>,
     timestamp: u64,
     method: String,
     path: String,
-    #[allow(unused)] nonce: Option<String>,
 ) -> Result<String, String> {
-    // The nonce parameter is accepted for API compatibility with the JS caller
-    // but Rust generates its own cryptographic nonce internally via getrandom.
     state.with_secrets(|secrets| {
         let token = auth::create_auth_token(secrets, timestamp, &method, &path).map_err(err_str)?;
+        serde_json::to_string(&token).map_err(err_str)
+    })
+}
+
+/// Create an Ed25519 auth token with NO nonce, for routes whose wire schema has
+/// no `nonce` field — today only `POST /api/invites/redeem` (#1389).
+///
+/// The message is signed under `LABEL_DEVICE_AUTH_NO_NONCE`, a separate domain
+/// the server accepts only on routes that opt in. Use
+/// `create_auth_token_from_state` everywhere else.
+#[tauri::command]
+pub fn create_nonceless_auth_token_from_state(
+    state: tauri::State<'_, CryptoState>,
+    timestamp: u64,
+    method: String,
+    path: String,
+) -> Result<String, String> {
+    state.with_secrets(|secrets| {
+        let token = auth::create_auth_token_without_nonce(secrets, timestamp, &method, &path)
+            .map_err(err_str)?;
         serde_json::to_string(&token).map_err(err_str)
     })
 }

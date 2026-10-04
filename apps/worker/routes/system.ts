@@ -12,6 +12,7 @@ import { requirePermission } from '../middleware/permission-guard'
 import { systemHealthResponseSchema } from '@protocol/schemas/system'
 import { authErrors } from '../openapi/helpers'
 import type { Services } from '../services'
+import { getHubPresence } from '../services/presence'
 
 declare const __BUILD_VERSION__: string
 
@@ -117,7 +118,7 @@ async function fetchUserInfo(services: Services, hubId: string): Promise<SystemH
   try {
     const [volResult, presenceResult, onShiftPubkeys] = await Promise.all([
       services.identity.getUsers(),
-      services.calls.getPresence(hubId),
+      getHubPresence(services, hubId),
       services.shifts.getCurrentVolunteers(hubId),
     ])
 
