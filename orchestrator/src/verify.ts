@@ -415,9 +415,11 @@ export function parseVitestJson(text: string): VitestJsonCounts | undefined {
 }
 
 /** The last few lines of the runner's own output, for a reader of the job log
- *  when no result could be read — bounded so a crash dump cannot flood it. */
+ *  when no result could be read — bounded so a crash dump cannot flood it, and
+ *  scrubbed, because a dying runner's stderr is exactly where an env dump or a
+ *  connection string ends up (`scrubTestOutput`, defined below). */
 function outputTail(output: string): string {
-  const lines = output.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
+  const lines = scrubTestOutput(output).split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
   if (lines.length === 0) return ' (runner printed nothing)'
   return `; last output: ${lines.slice(-5).join(' | ')}`
 }

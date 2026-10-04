@@ -771,6 +771,14 @@ describe('judgeTargetRun', () => {
     expect(reason).toContain('Error: boom on import')
   })
 
+  it("scrubs the runner's own output tail — a dying runner's stderr is where an env dump lands", () => {
+    const run = exited(137, 'FATAL\nDATABASE_URL=postgres://admin:hunter2@db/llamenos\ntoken ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    const reason = reasonOf(judgeTargetRun('t', run, undefined))
+    expect(reason).toContain('last output:')
+    expect(reason).not.toContain('hunter2')
+    expect(reason).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123')
+  })
+
   it('SAYS SO when the result named no failure, instead of printing a bare count — and falls back to the output tail', () => {
     const text = vitestJson({ numFailedTests: 3, numFailedTestSuites: 2, numPassedTests: 9, success: false })
     const reason = reasonOf(judgeTargetRun('t', exited(1, 'FAIL somewhere\n'), text, '/root'))
