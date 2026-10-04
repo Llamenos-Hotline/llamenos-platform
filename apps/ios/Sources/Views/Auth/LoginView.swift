@@ -99,23 +99,6 @@ struct LoginView: View {
                         .buttonStyle(.plain)
                         .disabled(vm.isLoading)
                         .accessibilityIdentifier("create-identity")
-
-                        Button {
-                            router.showDeviceLink()
-                        } label: {
-                            Label(
-                                NSLocalizedString("login_link_device", comment: "Link from Another Device"),
-                                systemImage: "qrcode.viewfinder"
-                            )
-                            .fontWeight(.medium)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.brandPrimary, lineWidth: 1.5))
-                            .foregroundStyle(Color.brandPrimary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(vm.isLoading)
-                        .accessibilityIdentifier("link-device")
                     }
 
                     // Security tagline

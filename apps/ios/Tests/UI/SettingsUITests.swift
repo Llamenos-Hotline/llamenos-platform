@@ -151,11 +151,10 @@ final class SettingsUITests: BaseUITest {
         }
     }
 
-    // MARK: - Device Link (device-link.feature)
+    // MARK: - Device Link (not offered, #1300)
 
-    func testDeviceLinkButtonExists() {
-        given("I am on the settings screen") {
-            // Device link is now in Account Settings sub-page
+    func testAccountSettingsDoesNotOfferDeviceLinking() {
+        given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
             guard accountLink.waitForExistence(timeout: 5) else {
                 XCTFail("Account settings link should exist")
@@ -163,11 +162,13 @@ final class SettingsUITests: BaseUITest {
             }
             accountLink.tap()
         }
-        then("I should see a device link button") {
-            let linkButton = scrollToFind("settings-link-device", maxSwipes: 10)
-            XCTAssertTrue(
-                linkButton.exists,
-                "Link device button should exist in account settings"
+        then("the whole list renders without a device link entry") {
+            // Erasure is the last section — reaching it means every section has rendered.
+            let erasure = scrollToFind("erasure-request-link", maxSwipes: 10)
+            XCTAssertTrue(erasure.exists, "Account settings should render through to the erasure section")
+            XCTAssertFalse(
+                find("settings-link-device").exists,
+                "Account settings must not offer device linking — it reports success without moving the keys"
             )
         }
     }

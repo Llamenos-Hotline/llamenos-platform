@@ -13,7 +13,7 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS } from '../../orchestrator/src/review.js'
+import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
@@ -327,6 +327,59 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
     const hits = orchestratorSources().filter(({ text }) => CHECK_RUNS_CREATE.test(text))
     expect(hits.map((h) => h.file)).toEqual([REVIEW_AND_MERGE_FILE])
+
+    // And that one file must ACTUALLY post there. Deleting the request and
+    // leaving the module comment behind kept this rail green when it was
+    // deliberately sabotaged — the same false-green shape as a check once
+    // satisfied by a YAML *comment* naming a config file. The endpoint in
+    // prose is not the endpoint in a request.
+    expect(hits[0]?.text, 'the one permitted file mentions the endpoint but does not POST to it')
+      .toMatch(/method:\s*'POST'[\s\S]{0,200}check-runs`/)
+  })
+
+  /**
+   * #1483 added the only credential in this orchestrator that is not the
+   * operator's own `gh` auth: a GitHub App private key, exchanged for a
+   * short-lived installation token so the Checks API (which refuses a PAT)
+   * will accept the verdict above.
+   *
+   * These two rails bound that capability to one file each, in the same
+   * spirit as the one above and for the same reason: the check-run POST is
+   * the one local write path this design trusts, and a SECOND place that can
+   * mint an App token — or a second place that reads the key off disk — is a
+   * second ungoverned way to write a verdict, with the added property that
+   * whoever added it would also be handling key material.
+   *
+   * Note the division: `github-app.ts` holds the AUTH and never names the
+   * endpoint, `review-and-merge.ts` holds the one CALL and never reads the
+   * key. That is what keeps both rails satisfiable at once rather than one
+   * being traded for the other.
+   */
+  it('mints a GitHub App installation token from exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /access_tokens/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  it('reads the GitHub App private key in exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /review-app\.pem|createSign\(/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  /**
+   * The rejected shortcut, kept rejected. `POST /statuses/<sha>` accepts a
+   * PAT and satisfies a required context — which is exactly why it must not
+   * exist here: a PAT-written green status under the `fleet/review` context
+   * name could override a red check run. Fail-open, and explicitly rejected
+   * on #1483. `ci.ts`'s own comment above `VERIFY_JOB`/`REVIEW_JOB` rejected
+   * a same-named STATUS once already, for the separate reason that it makes
+   * fork PRs unmergeable; this is the second, independent reason.
+   */
+  it('never writes a commit status as an alternative to a check-run', () => {
+    for (const { file, text } of orchestratorSources()) {
+      expect(text, `${file} writes a commit status — see #1483`).not.toMatch(/\/statuses\//)
+    }
   })
 })
 
@@ -549,13 +602,133 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
   // (possibly different) resolution, silently disagreed with it.
   it('resolves the reviewer binary/model dynamically via reviewerInvocationFor, never a literal pinned in the invocation', () => {
     const text = fleetReviewJobText()
-    expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --model "\$rev_model"/)
+    // `--tools "$rev_tools"` is pinned here too: it is the flag that
+    // withholds `Bash` from the reviewer (see `REVIEWER_TOOLS`), and the
+    // smoke test is the only place a runner whose `claude` build rejects the
+    // flag gets named as a configuration problem instead of failing every
+    // real review as an opaque `engine-unavailable`.
+    expect(text).toMatch(/\| env HOME="\$rev_home" "\$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "\$rev_tools" --model "\$rev_model"/)
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
       .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
       .not.toMatch(/--model "?sonnet"?\b/)
     expect(text, 'smoke test pins a literal claude binary again instead of resolving one')
       .not.toMatch(/\|\s*claude --print --permission-mode plan/)
+  })
+
+  // The reviewer's tool list is the ONE value the smoke step may not import
+  // from review.ts, and these two rails are what make carrying it as a
+  // literal safe.
+  //
+  // Why it cannot be imported: this job executes the HEAD's copy of
+  // fleet-review.yml against a BASE checkout of the source (`ref:
+  // base_sha`, deliberate — the gate never runs the code it judges). A
+  // `bun -e` import of any symbol the head ADDS therefore resolves against
+  // a base that does not have it yet and dies with `SyntaxError: Export
+  // named '...' not found`, taking `fleet/review` red for the very PR that
+  // adds the symbol. `REVIEWER_TOOLS` hit this exactly (the PR adding it
+  // could not pass its own gate), and ANY future export consumed by this
+  // YAML would hit it identically — so the ban is on the pattern, not on
+  // the one symbol.
+  //
+  // Why a literal is still safe: this assertion runs in the TEST SUITE,
+  // where the YAML and review.ts are necessarily the SAME commit, so the
+  // drift a literal could otherwise hide is caught here instead — at the
+  // one place where comparing the two versions is even meaningful.
+  it('carries the reviewer tool list as its own literal, equal to REVIEWER_TOOLS in the source', () => {
+    const text = fleetReviewJobText()
+    const m = /^\s*FLEET_REVIEWER_TOOLS:\s*(\S+)\s*$/m.exec(text)
+    if (m === null) throw new Error('FLEET_REVIEWER_TOOLS not set in the fleet-review job env')
+    expect(m[1], 'the workflow\'s FLEET_REVIEWER_TOOLS has drifted from REVIEWER_TOOLS in orchestrator/src/review.ts')
+      .toBe(REVIEWER_TOOLS.join(','))
+    // And it is what actually reaches the engine, not merely declared.
+    expect(text, 'the smoke invocation does not pass the env-carried tool list')
+      .toMatch(/rev_tools="\$FLEET_REVIEWER_TOOLS"/)
+  })
+
+  // #1460/#1511: the reviewer's HOME is the gate's, not the runner's. Both
+  // halves of that live here as literals for the SAME version-boundary
+  // reason as the tool list above (#1464 — the head's YAML runs against the
+  // base's checkout, so importing a symbol the head adds deadlocks the gate
+  // for the PR adding it), and this is the assertion that makes carrying
+  // them as literals safe: it runs where the YAML and review.ts are the
+  // same commit.
+  it('carries the gate-owned HOME literals, equal to REVIEWER_HOME_PREFIX / REVIEWER_CREDENTIALS_RELPATH in the source', () => {
+    const text = fleetReviewJobText()
+    const prefix = /^\s*FLEET_REVIEWER_HOME_PREFIX:\s*(\S+)\s*$/m.exec(text)
+    if (prefix === null) throw new Error('FLEET_REVIEWER_HOME_PREFIX not set in the fleet-review job env')
+    expect(prefix[1], 'the workflow\'s FLEET_REVIEWER_HOME_PREFIX has drifted from REVIEWER_HOME_PREFIX in orchestrator/src/review.ts')
+      .toBe(REVIEWER_HOME_PREFIX)
+    const relpath = /^\s*FLEET_REVIEWER_CREDENTIALS_RELPATH:\s*(\S+)\s*$/m.exec(text)
+    if (relpath === null) throw new Error('FLEET_REVIEWER_CREDENTIALS_RELPATH not set in the fleet-review job env')
+    expect(relpath[1], 'the workflow\'s FLEET_REVIEWER_CREDENTIALS_RELPATH has drifted from REVIEWER_CREDENTIALS_RELPATH in orchestrator/src/review.ts')
+      .toBe(REVIEWER_CREDENTIALS_RELPATH)
+    // And they are what the step actually builds the HOME from, not merely
+    // declared in `env:` and then ignored.
+    expect(text, 'the smoke step does not build its HOME from the env-carried prefix')
+      .toMatch(/rev_home="\$\(mktemp -d "\$HOME\/\$\{FLEET_REVIEWER_HOME_PREFIX\}XXXXXX"\)"/)
+    expect(text, 'the smoke step does not place the credential file at the env-carried relative path')
+      .toMatch(/rev_creds="\$rev_home\/\$FLEET_REVIEWER_CREDENTIALS_RELPATH"/)
+  })
+
+  // The reviewer must load no MCP server the gate did not name. `--tools`
+  // covers BUILT-IN tools only, so without this flag an MCP server
+  // configured on the runner arrives as an extra callable tool regardless —
+  // and a write-capable one makes a reviewer that is supposed to be
+  // read-only writable (#1460). Asserted on the smoke invocation as well as
+  // in `verifierArgs` (see review.test.ts) so a claude build that rejects
+  // the flag is named as a configuration problem instead of failing every
+  // real review as an opaque `engine-unavailable`.
+  it('passes --strict-mcp-config and never a --mcp-config that would reintroduce one', () => {
+    // Scoped to the invocation LINE, not the whole job: the surrounding
+    // comments legitimately say "`--strict-mcp-config` with no
+    // `--mcp-config` alongside it", which a whole-job absence check would
+    // trip on its own explanation.
+    const invocation = /^.*\| env HOME="\$rev_home" "\$rev_binary".*$/m.exec(fleetReviewJobText())
+    if (invocation === null) throw new Error('the smoke step\'s engine invocation line was not found')
+    expect(invocation[0], 'the smoke invocation does not pass --strict-mcp-config').toContain('--strict-mcp-config')
+    expect(invocation[0], 'a --mcp-config would hand the reviewer MCP servers again')
+      .not.toMatch(/(^|\s)--mcp-config(\s|=|$)/)
+  })
+
+  // #1511's third cause, pinned. The smoke prompt used to be
+  // `Reply with exactly: VERDICT: PASS` — a health check that asks the model
+  // to bypass its own judgement and emit a fixed attestation. That is
+  // indistinguishable from an injected instruction, and the reviewer refused
+  // it on exactly those grounds, 3/3 runs on #1510, reported as
+  // `NO-VERDICT:engine-unavailable`. Measured on the installed binary, it is
+  // refused even under a clean HOME, so the HOME fix alone does not settle
+  // it: the prompt has to ask a QUESTION whose answer IS the verdict, so the
+  // verdict is earned rather than dictated.
+  it('asks the engine a question with a real answer, never to emit a fixed verdict string', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke prompt is back to dictating a fixed verdict string — the exact shape #1511 was refused for')
+      .not.toMatch(/Reply with exactly/i)
+    const prompt = /smoke_prompt="\$\(printf[\s\S]*?\)"/.exec(text)
+    if (prompt === null) throw new Error('the smoke prompt was not found — this rail would pass vacuously')
+    expect(prompt[0], 'the smoke prompt asks the engine nothing').toContain('?')
+    // Both verdicts have to be reachable from the prompt, or it is still
+    // dictating one answer rather than asking for the right one.
+    expect(prompt[0]).toContain('VERDICT: PASS')
+    expect(prompt[0]).toContain('VERDICT: FAIL')
+    // Single-quoted shell words: an apostrophe in the prompt would end the
+    // quoting and mangle the invocation.
+    const body = prompt[0].slice(prompt[0].indexOf("'"))
+    expect(body.split("'").length % 2, 'the smoke prompt has an unbalanced apostrophe — the shell quoting is broken').toBe(1)
+  })
+
+  it('never imports the tool list across the head-YAML/base-checkout version boundary', () => {
+    const text = fleetReviewJobText()
+    // Any `bun -e` import naming REVIEWER_TOOLS is the deadlock, restored.
+    for (const m of text.matchAll(/import \{([^}]*)\} from "\.\/orchestrator\/src\/review\.ts"/g)) {
+      expect(m[1], 'a gate-time import names REVIEWER_TOOLS again — this deadlocks fleet/review for any PR that changes it')
+        .not.toMatch(/\bREVIEWER_TOOLS\b/)
+      // Same trap, same ban, for the #1460 HOME-isolation constants: they
+      // are literals in `env:` precisely because importing them here would
+      // deadlock the gate for the PR that introduced them.
+      expect(m[1], 'a gate-time import names a REVIEWER_HOME_* / REVIEWER_CREDENTIALS_* symbol — this deadlocks fleet/review for any PR that changes it')
+        .not.toMatch(/\bREVIEWER_(HOME_PREFIX|CREDENTIALS_RELPATH)\b/)
+    }
   })
 
   // Scoped to the smoke-test step's own run: block — the job's surrounding
@@ -1073,13 +1246,17 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   })
 
   // The `not-requested` fail-closed message — an operator or agent reading
-  // a red `fleet/review` must be told exactly what to do (request a review
-  // from `llamenos-auto`), not left to guess why a check that "did nothing"
-  // is failing. The account name comes from `REVIEW_REQUEST_LOGIN`, never a
-  // second literal that could drift from what the gate actually accepts.
-  it('the review-gate CLI command fails with an actionable "review not requested" message naming the reviewer to request', () => {
+  // a red `fleet/review` must be told exactly what to do, not left to guess
+  // why a check that "did nothing" is failing. The advice itself is
+  // `reviewNotRequestedAdvice` (ci.ts), driven for real in
+  // tests/orchestrator/review-request-trigger.test.ts; this rail pins that
+  // the CLI gets its advice from THERE, and never from a second literal that
+  // could drift from what the gate actually accepts — which is how it came
+  // to tell a `llamenos-auto`-authored PR to request `llamenos-auto` (#1471).
+  it('the review-gate CLI command takes its "review not requested" advice from reviewNotRequestedAdvice, not a literal', () => {
     const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
-    expect(text).toContain('review not requested — request a review from \\`${REVIEW_REQUEST_LOGIN}\\`')
+    expect(text).toContain('reviewNotRequestedAdvice({')
+    expect(text).not.toContain('review not requested — request a review from')
     expect(text).not.toContain('add the \\`review\\` label')
   })
 
