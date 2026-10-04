@@ -42,7 +42,7 @@ final class ContactsAPIService: @unchecked Sendable {
 
     // MARK: - List
 
-    func listContacts(page: Int = 1, limit: Int = 50, contactTypeHash: String? = nil) async throws -> ContactDirectoryListResponse {
+    func listContacts(page: Int = 1, limit: Int = 50, contactTypeHash: String? = nil) async throws -> ContactListResponse {
         var path = apiService.hp("/api/contacts-v2") + "?page=\(page)&limit=\(limit)"
         if let contactTypeHash {
             let encoded = contactTypeHash.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactTypeHash
@@ -74,13 +74,11 @@ final class ContactsAPIService: @unchecked Sendable {
 
 // MARK: - Response Types
 
-struct ContactDirectoryListResponse: Decodable, Sendable {
-    let contacts: [Contact]
-    let total: Int
-    let page: Int
-    let limit: Int
-    let hasMore: Bool
-}
+// SKIPPED path finding (#1329): this service calls `/api/contacts-v2`, but the
+// worker mounts the directory router at `/api/directory` — every call 404s
+// today. Retargeting the paths would enable a currently dead feature, so it
+// is recorded as a finding rather than changed here. The list response type
+// is the generated `ContactListResponse`.
 
 struct ContactDirectorySearchResult: Decodable, Sendable {
     let contacts: [Contact]
