@@ -2522,6 +2522,7 @@
       "greeting": "Akèy",
       "pleaseHold": "Tanpri tann",
       "rateLimited": "Anpil apèl",
+      "recordingNotice": "Avi Anrejistreman",
       "voicemailPrompt": "Envitasyon Mesaj Vokal",
       "waitMessage": "Mesaj atant"
     },
@@ -4644,6 +4645,7 @@
   },
   "voice": {
     "greeting": "Mèsi paske ou rele {name}.",
+    "recordingNotice": "Tanpri sonje: n ap anrejistre apèl sa a.",
     "rateLimited": "Nou gen anpil apèl kounye a. Tanpri eseye ankò pita.",
     "captchaPrompt": "Tanpri antre chif sa yo:",
     "captchaTimeout": "Nou pa resevwa repons ou. Orevwa.",

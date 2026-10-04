@@ -758,6 +758,7 @@
       "greeting": "Salaan",
       "pleaseHold": "Fadlan Sug",
       "rateLimited": "Fariinta Tirada Badan",
+      "recordingNotice": "Ogeysiiska Duubista",
       "voicemailPrompt": "Dalabka Fariinta Codeedka",
       "waitMessage": "Fariin Sugitaan"
     },
@@ -4649,6 +4650,7 @@
   },
   "voice": {
     "greeting": "Waad ku mahadsan tahay waciddaada {name}.",
+    "recordingNotice": "Fadlan ogow: wicitaankan waa la duubi doonaa.",
     "rateLimited": "Waxaan hadda la kulmayaa wicitaano badan. Fadlan dib u isku day habeenkii dambe.",
     "captchaPrompt": "Fadlan geli lambarada soo socda:",
     "captchaTimeout": "Ma helin waxaad gelisay. Nabad gelyo.",

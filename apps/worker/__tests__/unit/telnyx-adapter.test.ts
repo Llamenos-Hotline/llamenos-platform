@@ -5,7 +5,6 @@ describe('TelnyxAdapter', () => {
   let adapter: TelnyxAdapter
   let fetchSpy: ReturnType<typeof vi.spyOn>
   let subtleVerifySpy: ReturnType<typeof vi.spyOn>
-  let subtleImportKeySpy: ReturnType<typeof vi.spyOn>
 
   const API_KEY = 'test-api-key'
   const CONNECTION_ID = 'conn-123'
@@ -17,7 +16,7 @@ describe('TelnyxAdapter', () => {
       new Response('{}', { status: 200 }),
     )
     subtleVerifySpy = vi.spyOn(crypto.subtle, 'verify').mockResolvedValue(true)
-    subtleImportKeySpy = vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({} as CryptoKey)
+    vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({} as CryptoKey)
   })
 
   afterEach(() => {
@@ -108,6 +107,7 @@ describe('TelnyxAdapter', () => {
   describe('handleIncomingCall', () => {
     it('plays greeting + hold music for normal call', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-003',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -124,6 +124,7 @@ describe('TelnyxAdapter', () => {
 
     it('hangs up for rate-limited calls', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-004',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -139,6 +140,7 @@ describe('TelnyxAdapter', () => {
 
     it('plays captcha prompt when captcha enabled', async () => {
       const result = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-005',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -183,9 +185,34 @@ describe('TelnyxAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('bridges the call to itself and starts recording', async () => {
+    /** Did the adapter ask Telnyx to start recording this call at all? */
+    function recordStartRequested(callControlId: string): boolean {
+      const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/record_start`
+      return fetchSpy.mock.calls.some((call: unknown[]) => call[0] === url)
+    }
+
+    it('bridges the call but never issues record_start when recording is off', async () => {
       const result = await adapter.handleCallAnswered({
+        recordCall: false,
+        parentCallSid: 'call-008',
+        callbackUrl: 'https://example.com',
+        userPubkey: 'pubkey-1',
+        hubId: 'hub-1',
+      })
+
+      expect(result.body).toBe('{}')
+      assertCommandFetch('call-008', 'bridge', {
+        call_control_id: 'call-008',
+      })
+      // No record_start command means Telnyx never writes the audio to disk.
+      expect(recordStartRequested('call-008')).toBe(false)
+    })
+
+    it('bridges the call and starts recording when recording is on', async () => {
+      const result = await adapter.handleCallAnswered({
+        recordCall: true,
         parentCallSid: 'call-008',
         callbackUrl: 'https://example.com',
         userPubkey: 'pubkey-1',

@@ -179,6 +179,12 @@ export class AsteriskAdapter extends SipBridgeAdapter {
       getPrompt('greeting', speechLang).replace('{name}', params.hotlineName),
     )
 
+    // #1505: disclose provider-side recording before the caller can be connected.
+    // Omitted on the rate-limited path — that call is hung up and never recorded.
+    const notice = params.callRecordingEnabled
+      ? [this.ariPrompt('recordingNotice', lang, audioUrls, speechUrl)]
+      : []
+
     if (rateLimited) {
       return this.ariJson([
         greeting,
@@ -191,6 +197,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
       const digits = params.captchaDigits
       return this.ariJson([
         greeting,
+        ...notice,
         this.ariPrompt('captchaPrompt', lang, audioUrls, speechUrl),
         // A clip per digit: ten clips a language, where a clip per CAPTCHA
         // would add a PBX media-cache entry (never evicted) for every call.
@@ -207,6 +214,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
     return this.ariJson([
       greeting,
+      ...notice,
       this.ariPrompt('pleaseHold', lang, audioUrls, speechUrl),
       this.ariQueue(callSid, lang, hubId),
     ])
@@ -230,11 +238,20 @@ export class AsteriskAdapter extends SipBridgeAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     const { parentCallSid } = params
+    // #1505: the SIP bridge already treats `record` as a per-bridge opt-in
+    // (`if (!cmd.record) return` in sip-bridge/src/command-handler.ts), and
+    // refuses outright to record an SFrame bridge. This adapter used to hard-code
+    // `true`, which satisfied that opt-in on every single answered call. Pass the
+    // hub's actual setting so the bridge's opt-in becomes a real policy decision.
+    //
+    // The bridge's SFrame ban still applies on top of this and is the stricter
+    // of the two: a recorder forces media decoding, so it can never run on an
+    // end-to-end encrypted bridge regardless of this flag.
     return this.ariJson([
       {
         action: 'bridge',
         queueName: parentCallSid,
-        record: true,
+        record: params.recordCall,
       },
     ])
   }

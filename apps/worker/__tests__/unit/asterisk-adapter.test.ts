@@ -91,6 +91,7 @@ describe('AsteriskAdapter', () => {
   describe('handleIncomingCall', () => {
     it('hangs up when rate limited', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         rateLimited: true,
         voiceCaptchaEnabled: false,
         callerLanguage: 'en',
@@ -108,6 +109,7 @@ describe('AsteriskAdapter', () => {
 
     it('emits captcha gather when voice captcha enabled', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         rateLimited: false,
         voiceCaptchaEnabled: true,
         captchaDigits: '1234',
@@ -129,6 +131,7 @@ describe('AsteriskAdapter', () => {
 
     it('queues caller when no captcha and not rate limited', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         rateLimited: false,
         voiceCaptchaEnabled: false,
         callerLanguage: 'en',
@@ -175,16 +178,32 @@ describe('AsteriskAdapter', () => {
     })
   })
 
+  // #1505 — the SIP bridge already honours `record` as a per-bridge opt-in
+  // (`if (!cmd.record) return` in sip-bridge/src/command-handler.ts). This
+  // adapter used to hard-code `true`, satisfying that opt-in on every call.
   describe('handleCallAnswered', () => {
-    it('bridges the call with recording', async () => {
+    const bridgeCmd = async (recordCall: boolean) => {
       const response = await adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'parent-call-123',
         callbackUrl: 'http://callback.local/recording',
         userPubkey: 'pubkey123',
       })
-
       const body = JSON.parse(response.body)
-      const bridge = body.commands.find((c: { action: string }) => c.action === 'bridge')
+      return body.commands.find((c: { action: string }) => c.action === 'bridge')
+    }
+
+    it('tells the bridge not to record when recording is off', async () => {
+      const bridge = await bridgeCmd(false)
+      expect(bridge).toBeDefined()
+      expect(bridge.queueName).toBe('parent-call-123')
+      // The bridge's own guard returns early on a falsy `record`, so the PBX
+      // never writes a file.
+      expect(bridge.record).toBe(false)
+    })
+
+    it('tells the bridge to record when recording is on', async () => {
+      const bridge = await bridgeCmd(true)
       expect(bridge).toBeDefined()
       expect(bridge.queueName).toBe('parent-call-123')
       expect(bridge.record).toBe(true)

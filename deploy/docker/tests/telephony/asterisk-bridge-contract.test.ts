@@ -81,6 +81,11 @@ interface WorkerScript {
   enabledLanguages: string[]
   captchaDigits?: string
   queueTimeoutSeconds?: number
+  /**
+   * #1505 — the hub's `callSettings.recordCalls`. Defaults to off, like a real
+   * hub that never touched the setting.
+   */
+  recordCalls?: boolean
 }
 
 function fakeWorker(script: WorkerScript) {
@@ -109,6 +114,7 @@ function fakeWorker(script: WorkerScript) {
         rateLimited: false,
         callerLanguage,
         hotlineName: 'Llámenos',
+        callRecordingEnabled: script.recordCalls === true,
         hubId: q.hub,
         speechUrl: fakeSpeech,
       })
@@ -132,7 +138,7 @@ function fakeWorker(script: WorkerScript) {
     [WORKER_PATHS.userAnswer]: async (_req, q) => {
       note('user-answer', q.callToken)
       // The worker resolves the token to the parent call it was minted for.
-      return adapter.handleCallAnswered({ parentCallSid: CALLER, callbackUrl: 'http://worker:3000', userPubkey: 'pk', hubId: HUB })
+      return adapter.handleCallAnswered({ parentCallSid: CALLER, callbackUrl: 'http://worker:3000', userPubkey: 'pk', hubId: HUB, recordCall: script.recordCalls === true })
     },
     [WORKER_PATHS.callStatus]: async (req, q) => {
       note('call-status', { ...(await adapter.parseCallStatusWebhook(req)), callToken: q.callToken })
@@ -221,7 +227,7 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
   })
 
   it('an answered call: menu, captcha, queue, ring, answer, bridge, hang up, recording', async () => {
-    const worker = fakeWorker({ enabledLanguages: ['en', 'es'], captchaDigits: '4837' })
+    const worker = fakeWorker({ enabledLanguages: ['en', 'es'], captchaDigits: '4837', recordCalls: true })
     handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
 
     await handler.handleEvent(incoming)
@@ -259,6 +265,7 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
     expect(worker.parsed['user-answer']).toEqual(['token-a'])
     expect(pbx.of('bridge')).toEqual([[CALLER, legs[0], { type: 'mixing', record: false }]])
     expect(pbx.of('hangup')).toEqual([[legs[1]]])
+    // This hub opted in (recordCalls: true), so the bridge is recorded.
     expect(pbx.of('recordBridge')).toHaveLength(1)
 
     // Volunteer A hangs up: the worker reads a completed leg for A's token…
@@ -270,6 +277,57 @@ describe('AsteriskAdapter ⇄ sip-bridge CommandHandler', () => {
     expect(worker.parsed['call-recording']).toEqual([
       { status: 'completed', recordingSid: `call-${CALLER}`, callSid: CALLER, parentCallSid: CALLER },
     ])
+  })
+
+  // #1505 — the same path, end to end, for a hub that has NOT opted in. The
+  // bridge is the component that would write the file, so this asserts against
+  // the real CommandHandler rather than the adapter's markup alone.
+  it('a hub that does not record calls: the caller is bridged, but no recording is ever started', async () => {
+    const worker = fakeWorker({ enabledLanguages: ['en'], recordCalls: false })
+    handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+
+    await handler.handleEvent(incoming)
+    await handler.handleEvent(dtmf('1'))
+
+    const ringBody = await captureRingRequest()
+    const legs = await handler.ringVolunteers(ringBody)
+    await handler.handleEvent({ type: 'channel_create', channelId: legs[0], callerNumber: '', calledNumber: 's', args: ['dialed', CALLER, 'token-a'], timestamp: ts })
+
+    // The call still connects: the fix must not break answering.
+    expect(pbx.of('bridge')).toEqual([[CALLER, legs[0], { type: 'mixing', record: false }]])
+    expect(worker.parsed['user-answer']).toEqual(['token-a'])
+
+    // Nothing is recorded anywhere: not the bridge, not a channel.
+    expect(pbx.of('recordBridge')).toEqual([])
+    expect(pbx.of('recordChannel')).toEqual([])
+
+    // And the volunteer hanging up still ends the call cleanly.
+    await handler.handleEvent(hangup(legs[0]))
+    expect(worker.parsed['call-status']).toEqual([{ status: 'completed', callToken: 'token-a' }])
+  })
+
+  // #1505 — voicemail is caller-initiated and must keep working with recording
+  // off: a caller who chose to leave a message still gets recorded.
+  it('voicemail still records when call recording is off', async () => {
+    // Single-language hotline, recording OFF: straight to the queue, then timeout.
+    const worker = fakeWorker({ enabledLanguages: ['es'], recordCalls: false, queueTimeoutSeconds: 30 })
+    handler = new CommandHandler(pbx.client, worker.webhook, bridgeConfig)
+
+    await handler.handleEvent(incoming)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(worker.parsed['queue-exit']).toEqual(['leave'])
+
+    // The caller's own message IS recorded: voicemail is caller-initiated and is
+    // deliberately NOT gated on callSettings.recordCalls.
+    expect(pbx.of('recordChannel')).toEqual([
+      [CALLER, { name: `voicemail-${CALLER}`, format: 'wav', maxDurationSeconds: 120, beep: true, terminateOn: '#' }],
+    ])
+    // ...while the call itself was never recorded.
+    expect(pbx.of('recordBridge')).toEqual([])
+
+    // And the voicemail still completes end to end.
+    await handler.handleEvent({ type: 'recording_complete', channelId: CALLER, recordingName: `voicemail-${CALLER}`, timestamp: ts })
+    expect(worker.parsed['voicemail-recording']).toEqual([{ status: 'completed', recordingSid: `voicemail-${CALLER}`, callSid: CALLER }])
   })
 
   it('an unanswered leg is read by the worker with the status its hangup cause means', async () => {

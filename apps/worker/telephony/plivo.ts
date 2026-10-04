@@ -149,6 +149,10 @@ export class PlivoAdapter implements TelephonyAdapter {
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingXml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    const noticeXml = params.callRecordingEnabled
+      ? sayOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
       const rateLimitXml = sayOrPlay('rateLimited', lang, params.audioUrls)
@@ -165,6 +169,7 @@ export class PlivoAdapter implements TelephonyAdapter {
       return this.plivoXml(`
         <GetDigits numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10" redirect="true">
           ${greetingXml}
+          ${noticeXml}
           ${captchaXml}
           ${speak(digits.split('').join(', ') + '.', lang)}
         </GetDigits>
@@ -176,6 +181,7 @@ export class PlivoAdapter implements TelephonyAdapter {
     const holdXml = sayOrPlay('pleaseHold', lang, params.audioUrls)
     return this.plivoXml(`
       ${greetingXml}
+      ${noticeXml}
       ${holdXml}
       <Conference waitSound="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" startConferenceOnEnter="false" endConferenceOnExit="false" stayAlone="true">${params.callSid}</Conference>
     `)
@@ -200,8 +206,13 @@ export class PlivoAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey resolved from DB in /call-recording — no URL params needed
+    // #1505: leave `record` off entirely unless this hub opted in, so Plivo
+    // never writes the mixed audio to disk.
+    const recordAttrs = params.recordCall
+      ? ` record="true" recordFileFormat="mp3" callbackUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" callbackMethod="POST"`
+      : ''
     return this.plivoXml(`
-      <Conference record="true" recordFileFormat="mp3" callbackUrl="${escapeXml(params.callbackUrl)}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" callbackMethod="POST" startConferenceOnEnter="true" endConferenceOnExit="true">${params.parentCallSid}</Conference>
+      <Conference${recordAttrs} startConferenceOnEnter="true" endConferenceOnExit="true">${params.parentCallSid}</Conference>
     `)
   }
 

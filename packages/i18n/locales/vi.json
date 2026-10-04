@@ -2522,6 +2522,7 @@
       "greeting": "Lời chào",
       "pleaseHold": "Xin giữ máy",
       "rateLimited": "Lượng cuộc gọi cao",
+      "recordingNotice": "Thông báo ghi âm",
       "voicemailPrompt": "Lời nhắn thư thoại",
       "waitMessage": "Tin nhắn chờ"
     },
@@ -4644,6 +4645,7 @@
   },
   "voice": {
     "greeting": "Cảm ơn bạn đã gọi đến {name}.",
+    "recordingNotice": "Xin lưu ý: cuộc gọi này sẽ được ghi âm.",
     "rateLimited": "Chúng tôi hiện đang có lượng cuộc gọi cao. Vui lòng thử lại sau.",
     "captchaPrompt": "Vui lòng nhập các chữ số sau:",
     "captchaTimeout": "Chúng tôi không nhận được thông tin của bạn. Tạm biệt.",

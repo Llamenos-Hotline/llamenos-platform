@@ -116,6 +116,12 @@ export class TwilioAdapter implements TelephonyAdapter {
     const hp = hubXmlParam(params.hubId)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
     const greetingTwiml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
+    // #1505: if this hub records answered calls, the caller is told before they
+    // can be connected. Omitted on the rate-limited path below — that call is
+    // hung up and never recorded.
+    const noticeTwiml = params.callRecordingEnabled
+      ? sayOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
       const rateLimitTwiml = sayOrPlay('rateLimited', lang, params.audioUrls)
@@ -135,6 +141,7 @@ export class TwilioAdapter implements TelephonyAdapter {
         <Response>
           <Gather numDigits="4" action="/api/telephony/captcha?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST" timeout="10">
             ${greetingTwiml}
+            ${noticeTwiml}
             ${captchaTwiml}
             <Say language="${tLang}">${escapeXml(digits.split('').join(', '))}.</Say>
           </Gather>
@@ -148,6 +155,7 @@ export class TwilioAdapter implements TelephonyAdapter {
     return this.twiml(`
       <Response>
         ${greetingTwiml}
+        ${noticeTwiml}
         ${holdTwiml}
         <Enqueue waitUrl="/api/telephony/wait-music?lang=${lang}${hp}" action="/api/telephony/queue-exit?callSid=${params.callSid}&amp;lang=${lang}${hp}" method="POST">${params.callSid}</Enqueue>
       </Response>
@@ -177,9 +185,15 @@ export class TwilioAdapter implements TelephonyAdapter {
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
     // CRIT-W1: Hub and pubkey are resolved from DB in /call-recording — no URL params needed
+    // #1505: no recording attributes at all unless this hub opted in. An absent
+    // `record` attribute means Twilio never writes the audio to disk, so there
+    // is nothing at the provider to leak, fetch, or forget to delete.
+    const recordAttrs = params.recordCall
+      ? ` record="record-from-answer" recordingStatusCallback="${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" recordingStatusCallbackEvent="completed"`
+      : ''
     return this.twiml(`
       <Response>
-        <Dial record="record-from-answer" recordingStatusCallback="${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${params.parentCallSid}" recordingStatusCallbackEvent="completed">
+        <Dial${recordAttrs}>
           <Queue>${params.parentCallSid}</Queue>
         </Dial>
       </Response>

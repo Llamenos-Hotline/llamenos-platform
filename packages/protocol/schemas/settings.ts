@@ -152,6 +152,16 @@ export type SpamSettings = z.infer<typeof spamSettingsSchema>
 export const callSettingsSchema = z.object({
   queueTimeoutSeconds: z.number().int().min(30).max(300).optional(),
   voicemailMaxSeconds: z.number().int().min(30).max(300).optional(),
+  /**
+   * Record answered calls at the telephony provider. Defaults to OFF: a crisis
+   * call must not be written to a third party's disk unless a hub has
+   * deliberately opted in. When enabled, the caller is told so in the greeting
+   * (`voice.recordingNotice`) before they are ever connected — see #1505.
+   *
+   * This does NOT gate voicemail. A caller who leaves a message has chosen to
+   * leave one; that recording is caller-initiated and always permitted.
+   */
+  recordCalls: z.boolean().optional().default(false),
 })
 
 export type CallSettings = z.infer<typeof callSettingsSchema>

@@ -225,6 +225,14 @@ export interface SpamSettings {
 export interface CallSettings {
   queueTimeoutSeconds: number   // 30-300, default 90
   voicemailMaxSeconds: number   // 30-300, default 120
+  /**
+   * Record answered calls at the telephony provider. Default FALSE (#1505) —
+   * provider-side recording writes crisis-call audio to a third party's disk,
+   * so a hub has to opt in, and the caller is told in the greeting when it is on.
+   *
+   * Never gates voicemail: that recording is caller-initiated.
+   */
+  recordCalls: boolean          // default false
 }
 
 /**

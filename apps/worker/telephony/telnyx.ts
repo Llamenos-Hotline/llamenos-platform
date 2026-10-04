@@ -268,6 +268,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
     const lang = params.callerLanguage
     const { voice, language } = getTelnyxVoice(lang)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
+    // #1505: disclose provider-side recording before the caller can be connected.
+    // Not spoken on the rate-limited path below — that call is hung up, never recorded.
+    const noticeText = params.callRecordingEnabled ? getPrompt('recordingNotice', lang) : ''
 
     if (params.rateLimited) {
       const rateLimitText = getPrompt('rateLimited', lang)
@@ -292,7 +295,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       })
 
       await this.client.command(params.callSid, 'speak', {
-        payload: greetingText,
+        payload: [greetingText, noticeText].filter(Boolean).join(' '),
         voice,
         language,
       })
@@ -319,7 +322,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
     })
 
     await this.client.command(params.callSid, 'speak', {
-      payload: `${greetingText} ${holdText}`,
+      payload: [greetingText, noticeText, holdText].filter(Boolean).join(' '),
       voice,
       language,
       client_state: queueState,
@@ -379,15 +382,19 @@ export class TelnyxAdapter implements TelephonyAdapter {
       call_control_id: params.parentCallSid,
     })
 
-    await this.client.command(params.parentCallSid, 'record_start', {
-      format: 'mp3',
-      channels: 'single',
-      client_state: encodeClientState({
-        lang: 'en',
-        callSid: params.parentCallSid,
-        hubId: params.hubId,
-      }),
-    })
+    // #1505: only ask Telnyx to record when this hub opted in. Without this
+    // command Telnyx never writes the call audio to disk.
+    if (params.recordCall) {
+      await this.client.command(params.parentCallSid, 'record_start', {
+        format: 'mp3',
+        channels: 'single',
+        client_state: encodeClientState({
+          lang: 'en',
+          callSid: params.parentCallSid,
+          hubId: params.hubId,
+        }),
+      })
+    }
 
     return this.emptyResponse()
   }

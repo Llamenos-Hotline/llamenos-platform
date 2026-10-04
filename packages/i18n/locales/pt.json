@@ -2522,6 +2522,7 @@
       "greeting": "Saudação",
       "pleaseHold": "Aguarde",
       "rateLimited": "Alto volume de chamadas",
+      "recordingNotice": "Aviso de gravação",
       "voicemailPrompt": "Mensagem de Correio de Voz",
       "waitMessage": "Mensagem de espera"
     },
@@ -4644,6 +4645,7 @@
   },
   "voice": {
     "greeting": "Obrigado por ligar para {name}.",
+    "recordingNotice": "Atenção: esta chamada será gravada.",
     "rateLimited": "Estamos com um alto volume de chamadas. Por favor, tente novamente mais tarde.",
     "captchaPrompt": "Por favor, digite os seguintes números:",
     "captchaTimeout": "Não recebemos sua entrada. Até logo.",

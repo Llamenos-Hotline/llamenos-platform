@@ -2522,6 +2522,7 @@
       "greeting": "问候语",
       "pleaseHold": "请稍候",
       "rateLimited": "高通话量消息",
+      "recordingNotice": "录音提示",
       "voicemailPrompt": "语音留言提示",
       "waitMessage": "等待消息"
     },
@@ -4644,6 +4645,7 @@
   },
   "voice": {
     "greeting": "感谢您致电{name}。",
+    "recordingNotice": "请注意：本次通话将被录音。",
     "rateLimited": "我们目前通话量较大，请稍后再试。",
     "captchaPrompt": "请输入以下数字：",
     "captchaTimeout": "我们未收到您的输入。再见。",
