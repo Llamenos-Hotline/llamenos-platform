@@ -19,7 +19,8 @@ import { incCounter } from './metrics'
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { adminHpkeRecipient, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { messageReaders } from '../lib/device-recipients'
 
 const logger = createLogger('routes.conversations')
 
@@ -337,27 +338,20 @@ conversations.post('/:id/messages',
       // one. Clients that hold their own device key send `encryptedContent` and
       // `readerEnvelopes` instead and take the branch above; the desktop does.
       const adminDecryptionPubkey = adminHpkeRecipient(c.env)
-      const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
-
       // `pubkey` is the sender's Ed25519 *identity* key, not a recipient key.
-      // Resolve the X25519 keys of the devices they registered; refuse the send
-      // if there are none rather than storing a copy the author can never read.
+      // Resolve the X25519 keys of the devices they actually registered.
       const authorRecipients = await c.get('services').identity.getHpkeRecipients(pubkey)
       if (authorRecipients.length === 0) {
-        // Refused, not degraded. Storing the message with only the admin's
-        // envelope would succeed and then render as `[Encrypted]` in the
-        // author's own thread, with nothing anywhere saying why. The client
-        // shows its own translated send-failure message; `code` is what it
-        // would branch on, and the `error` text is diagnostic only.
-        logger.warn('refusing send: author has no registered X25519 device key', { pubkey })
-        return c.json({
-          error: 'No X25519 device key registered for the author',
-          code: 'NO_ENCRYPTION_KEY_REGISTERED',
-        }, 409)
+        // Loud, but the message still goes: an author who cannot re-read their
+        // own sent copy is bad; a hotline that refuses to send the reply is
+        // worse, and that is what every client with no registered key would
+        // get — iOS registers no X25519 key at all today. Never silent, and
+        // never a substituted key.
+        logger.error('author has no registered X25519 device key; their own copy of this message will not be readable', {
+          conversationId: id,
+        })
       }
-      for (const recipient of authorRecipients) {
-        if (!readerPubkeys.includes(recipient)) readerPubkeys.push(recipient)
-      }
+      const readerPubkeys = messageReaders(adminDecryptionPubkey, authorRecipients)
 
       const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
       encryptedContent = encrypted.encryptedContent

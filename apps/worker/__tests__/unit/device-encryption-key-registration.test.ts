@@ -15,6 +15,8 @@
 import { describe, it, expect } from 'vitest'
 import { registerDeviceBodySchema } from '@protocol/schemas'
 import { decideDeviceRegistration, MAX_DEVICES_PER_VOLUNTEER } from '../../lib/device-eviction'
+import { messageReaders } from '../../lib/device-recipients'
+import { hpkeRecipientPubkey } from '../../lib/hpke-recipient'
 
 const X25519 = 'a'.repeat(64)
 const ED25519 = 'b'.repeat(64)
@@ -109,5 +111,35 @@ describe('decideDeviceRegistration keys on the device identity', () => {
     }))
     const decision = decideDeviceRegistration(atCapacity, { ed25519Pubkey: ED25519 })
     expect(decision).toEqual({ action: 'update_existing', deviceId: 'dev-4' })
+  })
+})
+
+describe('messageReaders', () => {
+  const admin = hpkeRecipientPubkey('ab'.repeat(32))!
+  const deviceA = hpkeRecipientPubkey('11'.repeat(32))!
+  const deviceB = hpkeRecipientPubkey('22'.repeat(32))!
+
+  it('seals to the admin and to every device the user registered', () => {
+    expect(messageReaders(admin, [deviceA, deviceB])).toEqual([admin, deviceA, deviceB])
+  })
+
+  it('deduplicates a user who is also the admin', () => {
+    expect(messageReaders(admin, [admin, deviceA])).toEqual([admin, deviceA])
+  })
+
+  it('yields the admin alone when the user has registered nothing', () => {
+    // The message is still written — see the function's own comment. What must
+    // never happen is a substituted key or an extra, unopenable envelope.
+    expect(messageReaders(admin, [])).toEqual([admin])
+  })
+
+  it('yields the user alone on a deployment with no env-configured admin', () => {
+    // `adminHpkeRecipient` returns undefined during desktop bootstrap; an
+    // absent admin means one fewer reader, never a substituted one (#1283).
+    expect(messageReaders(undefined, [deviceA])).toEqual([deviceA])
+  })
+
+  it('yields nothing rather than inventing a reader', () => {
+    expect(messageReaders(undefined, [])).toEqual([])
   })
 })

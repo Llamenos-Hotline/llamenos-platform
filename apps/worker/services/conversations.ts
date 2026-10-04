@@ -19,7 +19,7 @@ import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
-import { getUserHpkeRecipients } from '../lib/device-recipients'
+import { getUserHpkeRecipients, messageReaders } from '../lib/device-recipients'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
 
@@ -513,24 +513,19 @@ export class ConversationsService {
     // only path from a user id to that key, and the branded type below makes
     // re-adding a non-X25519 key a compile error rather than silent, permanent
     // data loss.
-    const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
-
-    if (conv.assignedTo) {
-      const assigneeRecipients = await getUserHpkeRecipients(this.db, conv.assignedTo)
-      if (assigneeRecipients.length === 0) {
-        // Never silent: the assigned volunteer will not be able to read this
-        // message, and the only way they ever will is by registering a device.
-        // The message is still stored — dropping an inbound crisis message
-        // would be worse than one an admin has to relay.
-        logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
-          conversationId: conv.id,
-          messageReadableBy: readerPubkeys.length,
-        })
-      }
-      for (const recipient of assigneeRecipients) {
-        if (!readerPubkeys.includes(recipient)) readerPubkeys.push(recipient)
-      }
+    const assigneeRecipients = conv.assignedTo
+      ? await getUserHpkeRecipients(this.db, conv.assignedTo)
+      : []
+    if (conv.assignedTo && assigneeRecipients.length === 0) {
+      // Never silent: the assigned volunteer will not be able to read this
+      // message, and the only way they ever will is by registering a device.
+      // The message is still stored — dropping an inbound crisis message
+      // would be worse than one an admin has to relay.
+      logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
+        conversationId: conv.id,
+      })
     }
+    const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 

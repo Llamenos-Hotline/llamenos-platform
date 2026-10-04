@@ -47,3 +47,29 @@ export async function getUserHpkeRecipients(
   }
   return recipients
 }
+
+/**
+ * The readers of one message: the platform admin, plus every device the author
+ * or assignee has registered.
+ *
+ * Both write paths (`handleIncoming` and `POST /conversations/:id/messages`)
+ * build this list, and building it twice is how the Ed25519 substitution came
+ * to exist at two sites (#1283, #1466). Deduplicated, because an admin who is
+ * also the author would otherwise be sealed to twice.
+ *
+ * An empty `userRecipients` yields the admin alone, and both callers log that
+ * case as an error before calling. The message is still written: a reply the
+ * author cannot re-read is a bad outcome, but refusing to send a crisis reply —
+ * which is what any client with no registered key would get, iOS included — is
+ * a far worse one.
+ */
+export function messageReaders(
+  adminRecipient: HpkeRecipientPubkey | undefined,
+  userRecipients: readonly HpkeRecipientPubkey[],
+): HpkeRecipientPubkey[] {
+  const readers: HpkeRecipientPubkey[] = adminRecipient ? [adminRecipient] : []
+  for (const recipient of userRecipients) {
+    if (!readers.includes(recipient)) readers.push(recipient)
+  }
+  return readers
+}
