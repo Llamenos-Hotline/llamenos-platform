@@ -261,7 +261,15 @@ messaging.post('/:channel/webhook',
   // characters, so nothing objected, and the resulting envelopes could not be
   // opened by the admin or anyone else. `adminHpkeRecipient` returns the X25519
   // key or nothing, and the parameter's type now rejects the Ed25519 one.
-  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env))
+  //
+  // #1140: `hubId` must be forwarded. It is read from `?hub=` above and used for
+  // the relay event and the push below, but was omitted here — so every inbound
+  // conversation was created with `hub_id = NULL`, and
+  // `GET /hubs/:hubId/conversations` filters on `eq(conversations.hubId, hubId)`.
+  // The desktop client only ever calls that hub-scoped path, so inbound messages
+  // were invisible on desktop. The dev simulation route forwards a hubId from its
+  // request body, which is why every backend BDD messaging scenario passed.
+  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env), hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {

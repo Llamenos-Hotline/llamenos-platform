@@ -18,8 +18,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { DEFAULT_ROLES } from '@shared/permissions'
-import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
-import { bytesToHex, utf8ToBytes } from '@shared/encoding'
+import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { bytesToHex } from '@shared/encoding'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 
@@ -298,9 +298,12 @@ describe('demo identities on the shipped entry point', () => {
 
   function signedBy(method: string, path: string): string {
     const timestamp = Date.now()
-    const message = utf8ToBytes(`${LABEL_DEVICE_AUTH}:${adminPubkey}:${timestamp}:${method}:${path}`)
+    // Header auth is the nonce-bearing domain: the server rejects a nonce-less
+    // token on every route that does not explicitly opt in.
+    const nonce = randomAuthNonce()
+    const message = buildAuthMessage(adminPubkey, timestamp, method, path, nonce)
     const token = bytesToHex(ed25519.sign(message, adminSecret))
-    return `Bearer ${JSON.stringify({ pubkey: adminPubkey, timestamp, token })}`
+    return `Bearer ${JSON.stringify({ pubkey: adminPubkey, timestamp, token, nonce })}`
   }
 
   it('a demo deployment with every flag set and a demo-claiming database registers and reveals nothing', async () => {

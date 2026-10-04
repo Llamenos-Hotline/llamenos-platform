@@ -20,13 +20,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -62,7 +60,9 @@ import org.llamenos.hotline.ui.components.LoadingOverlay
  * 1. "Create New Identity" with an invite code or link -> the invite is validated, then
  *    PINSetScreen, then the invite is redeemed (enrolment: the server learns the identity)
  * 2. "Create New Identity" without an invite -> PINSetScreen (a local identity only)
- * 3. "Link from Another Device" -> DeviceLinkScreen (QR scan)
+ *
+ * Device linking was removed from the pilot build (#1405); it returns when the
+ * identity layer can carry a device's keys across (#1300).
  *
  * Also includes demo mode buttons for testing.
  */
@@ -70,7 +70,6 @@ import org.llamenos.hotline.ui.components.LoadingOverlay
 fun LoginScreen(
     viewModel: AuthViewModel,
     onNavigateToPinSet: () -> Unit,
-    onNavigateToDeviceLink: () -> Unit = {},
     onDemoLogin: (String) -> Unit = {},
     inviteState: InviteUiState = InviteUiState(),
     onInviteChange: (String) -> Unit = {},
@@ -247,51 +246,6 @@ fun LoginScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     text = stringResource(R.string.create_new_identity),
-                                    style = MaterialTheme.typography.labelLarge,
-                                )
-                            }
-
-                            Spacer(Modifier.height(12.dp))
-
-                            // Divider with "or"
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                HorizontalDivider(modifier = Modifier.weight(1f))
-                                Text(
-                                    text = stringResource(R.string.login_or),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp),
-                                )
-                                HorizontalDivider(modifier = Modifier.weight(1f))
-                            }
-
-                            Spacer(Modifier.height(12.dp))
-
-                            // Link from Another Device button
-                            OutlinedButton(
-                                onClick = {
-                                    focusManager.clearFocus()
-                                    viewModel.createNewIdentity() // save hub URL
-                                    onNavigateToDeviceLink()
-                                },
-                                enabled = !uiState.isLoading,
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(52.dp)
-                                    .testTag("link-device"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Link,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = stringResource(R.string.settings_link_device),
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                             }

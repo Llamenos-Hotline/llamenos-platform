@@ -417,6 +417,96 @@ class CryptoSteps : BaseSteps() {
         vectors = TestVectorsJson.fromJson(json)
     }
 
+    /**
+     * Three-way byte equality, leg two: the GENERATED Kotlin binding
+     * (`org.llamenos.core.mobileBuildAuthMessage`, which is the UniFFI export of
+     * `packages/crypto/src/auth.rs::build_auth_message`) must reproduce the exact
+     * bytes real Rust emitted into test-vectors.json. Leg one is
+     * `tests/crypto-interop.spec.ts` for the TypeScript builder.
+     *
+     * Deliberately NOT wrapped in `try { } catch (_: Throwable) {}` like the
+     * older steps in this file: a swallowed assertion is decoration, not
+     * evidence (#1222). If the native library is missing, this fails loudly —
+     * which is the point.
+     */
+    @Then("the Kotlin binding rebuilds the exact auth message bytes from vectors")
+    fun theKotlinBindingRebuildsTheExactAuthMessageBytes() {
+        val v = vectors!!.auth
+        assertTrue("vectors must carry messageHex", v.messageHex.isNotEmpty())
+
+        val nonced = org.llamenos.core.mobileBuildAuthMessage(
+            pubkeyHex = v.token.pubkey,
+            timestamp = v.timestamp.toULong(),
+            method = v.method,
+            path = v.path,
+            nonce = v.token.nonce,
+        )
+        assertEquals(
+            "nonce-bearing message must match Rust byte for byte",
+            v.messageHex,
+            nonced.toHexString(),
+        )
+
+        val nonceless = org.llamenos.core.mobileBuildAuthMessage(
+            pubkeyHex = v.token.pubkey,
+            timestamp = v.timestamp.toULong(),
+            method = v.method,
+            path = v.path,
+            nonce = null,
+        )
+        assertEquals(
+            "nonce-less message must match Rust byte for byte",
+            v.noncelessMessageHex,
+            nonceless.toHexString(),
+        )
+
+        // The two shapes must be distinguishable — different label domains.
+        assertNotEquals(
+            "the two shapes must not share a layout",
+            nonced.toHexString(),
+            nonceless.toHexString(),
+        )
+    }
+
+    @Then("the nonce-less token from vectors verifies and the nonce-bearing one does not downgrade")
+    fun theNoncelessTokenVerifiesAndDoesNotDowngrade() {
+        val v = vectors!!.auth
+        val nonceless = v.noncelessToken!!
+
+        // A nonce-less token verifies in its own domain …
+        assertTrue(
+            "nonce-less token must verify under its own label",
+            org.llamenos.core.mobileVerifyAuthToken(
+                token = org.llamenos.core.AuthToken(
+                    pubkey = nonceless.pubkey,
+                    timestamp = nonceless.timestamp.toULong(),
+                    token = nonceless.token,
+                    nonce = null,
+                ),
+                method = v.method,
+                path = v.path,
+            ),
+        )
+
+        // … and a nonce-bearing token whose nonce was dropped does NOT (#1389).
+        assertFalse(
+            "stripping the nonce must invalidate the token, not downgrade it",
+            org.llamenos.core.mobileVerifyAuthToken(
+                token = org.llamenos.core.AuthToken(
+                    pubkey = v.token.pubkey,
+                    timestamp = v.timestamp.toULong(),
+                    token = v.token.token,
+                    nonce = null,
+                ),
+                method = v.method,
+                path = v.path,
+            ),
+        )
+    }
+
+    private fun ByteArray.toHexString(): String =
+        joinToString("") { "%02x".format(it) }
+
     @Given("the test secret key from vectors")
     fun theTestSecretKeyFromVectors() {
         // V3: Generate device keys and set test state from vectors.
