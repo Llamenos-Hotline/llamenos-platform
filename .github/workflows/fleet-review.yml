@@ -1155,6 +1155,12 @@ jobs:
           # auth language, which `classify` names `engine-auth` — a far
           # better diagnosis than this block guessing.
           rev_home="$(mktemp -d "$HOME/${FLEET_REVIEWER_HOME_PREFIX}XXXXXX")"
+          if [ -z "$rev_home" ] || [ ! -d "$rev_home" ]; then
+            # Guarded explicitly: an empty `rev_home` would otherwise reach
+            # `env HOME=""`, which hands the engine NO home at all and fails
+            # as an unexplained auth error several steps later.
+            fail "engine-misconfigured" "could not create the reviewer HOME under $HOME — mktemp -d failed"
+          fi
           trap 'rm -rf "$rev_home"' EXIT
           chmod 700 "$rev_home"
           rev_creds="$rev_home/$FLEET_REVIEWER_CREDENTIALS_RELPATH"
