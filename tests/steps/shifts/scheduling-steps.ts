@@ -10,16 +10,11 @@ import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { ShiftPage, Navigation } from '../../pages/index'
+import { expectShiftScheduleSettled } from './shift-schedule-state'
 // API helpers imported as needed by other step files
 
-Then('I should see shifts or the {string} message', async ({ page }, emptyMsg: string) => {
-  // At least one of: shift cards, empty state, fallback group, or the empty message text
-  const anyContent = page.locator(
-    `[data-testid="${TestIds.SHIFT_CARD}"], [data-testid="${TestIds.EMPTY_STATE}"], [data-testid="${TestIds.FALLBACK_GROUP_CARD}"]`,
-  )
-  const hasContent = await anyContent.first().isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (hasContent) return
-  await expect(page.getByText(emptyMsg).first()).toBeVisible({ timeout: 5000 })
+Then('I should see shifts or the {string} message', async ({ page, backendRequest, workerHub }, emptyMsg: string) => {
+  await expectShiftScheduleSettled(page, backendRequest, workerHub, emptyMsg)
 })
 
 When('I fill in the shift name with a unique name', async ({ page }) => {

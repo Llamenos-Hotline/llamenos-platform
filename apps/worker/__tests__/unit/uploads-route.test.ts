@@ -26,14 +26,14 @@ type FileRecordLike = {
   encryptedMetadata?: unknown[]
 }
 
-const R2_STUB = {
+const BLOB_STUB = {
   put: vi.fn().mockResolvedValue(undefined),
   get: vi.fn(),
   delete: vi.fn().mockResolvedValue(undefined),
 }
 
-// Hono bindings — passed as 3rd arg to app.request() so that c.env.R2_BUCKET resolves
-const R2_BINDINGS = { R2_BUCKET: R2_STUB }
+// Hono bindings — passed as 3rd arg to app.request() so that c.env.BLOB_STORAGE resolves
+const BLOB_BINDINGS = { BLOB_STORAGE: BLOB_STUB }
 
 function makeApp(opts: {
   permissions?: string[]
@@ -76,9 +76,9 @@ function makeApp(opts: {
   })
   app.route('/', uploadsRouter)
 
-  // Wrap app.request to always inject R2_BUCKET as Hono bindings (c.env.R2_BUCKET)
+  // Wrap app.request to always inject BLOB_STORAGE as Hono bindings (c.env.BLOB_STORAGE)
   const request = (input: string, init?: RequestInit) =>
-    app.request(input, init, R2_BINDINGS)
+    app.request(input, init, BLOB_BINDINGS)
 
   return { app, request, mockConversations, mockAudit }
 }
@@ -305,11 +305,11 @@ describe('PUT /uploads/:id/chunks/:chunkIndex', () => {
 
 describe('POST /uploads/:id/complete', () => {
   beforeEach(() => {
-    R2_STUB.get.mockReset()
-    R2_STUB.put.mockReset()
-    R2_STUB.delete.mockReset()
-    R2_STUB.put.mockResolvedValue(undefined)
-    R2_STUB.delete.mockResolvedValue(undefined)
+    BLOB_STUB.get.mockReset()
+    BLOB_STUB.put.mockReset()
+    BLOB_STUB.delete.mockReset()
+    BLOB_STUB.put.mockResolvedValue(undefined)
+    BLOB_STUB.delete.mockResolvedValue(undefined)
   })
 
   it('rejects completion when not all chunks uploaded', async () => {
@@ -354,9 +354,9 @@ describe('POST /uploads/:id/complete', () => {
 
   it('allows files:manage-all to bypass ownership check on complete', async () => {
     const chunk0 = new Uint8Array([1, 2])
-    R2_STUB.get.mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(chunk0.buffer) })
-    R2_STUB.put.mockResolvedValue(undefined)
-    R2_STUB.delete.mockResolvedValue(undefined)
+    BLOB_STUB.get.mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(chunk0.buffer) })
+    BLOB_STUB.put.mockResolvedValue(undefined)
+    BLOB_STUB.delete.mockResolvedValue(undefined)
 
     const { request } = makeApp({
       pubkey: 'admin-pub',
@@ -395,8 +395,8 @@ describe('POST /uploads/:id/complete', () => {
     expect(res.status).toBe(403)
   })
 
-  it('returns 500 when a chunk is missing in R2', async () => {
-    R2_STUB.get.mockResolvedValueOnce(null) // chunk 0 is missing
+  it('returns 500 when a chunk is missing from blob storage', async () => {
+    BLOB_STUB.get.mockResolvedValueOnce(null) // chunk 0 is missing
     const { request } = makeApp({
       fileRecord: {
         id: 'upload-1',
@@ -418,7 +418,7 @@ describe('POST /uploads/:id/complete', () => {
   it('assembles chunks and marks file complete', async () => {
     const chunk0 = new Uint8Array([1, 2])
     const chunk1 = new Uint8Array([3, 4])
-    R2_STUB.get
+    BLOB_STUB.get
       .mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(chunk0.buffer) })
       .mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(chunk1.buffer) })
 

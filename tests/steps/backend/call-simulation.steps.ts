@@ -15,6 +15,7 @@ import {
   apiPut,
   createVolunteerViaApi,
   createShiftViaApi,
+  clockInViaApi,
   listShiftsViaApi,
   deleteShiftViaApi,
   uniqueName,
@@ -25,6 +26,7 @@ import {
   simulateIncomingMessage,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Local State ──────────────────────────────────────────────────
 
@@ -169,12 +171,15 @@ Given('a shift is currently active with {int} volunteers', async ({ request, wor
   }
   const shift = await createShiftViaApi(request, {
     name: uniqueName('Active Shift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: getCallSimState(world).shiftVolunteers.map(v => v.pubkey),
     hubId,
   })
+  // Ringing needs the volunteer's consent as well as the admin's — see
+  // clockInViaApi.
+  for (const vol of getCallSimState(world).shiftVolunteers) {
+    await clockInViaApi(request, hubId, vol.deviceKey)
+  }
   getScenarioState(world).shiftIds.push(shift.id)
 })
 
@@ -207,20 +212,18 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
   const hubId = getScenarioState(world).hubId
   await createShiftViaApi(request, {
     name: uniqueName('Overlap Shift A'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol1.pubkey],
     hubId,
   })
   await createShiftViaApi(request, {
     name: uniqueName('Overlap Shift B'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol2.pubkey],
     hubId,
   })
+  await clockInViaApi(request, hubId, vol1.deviceKey)
+  await clockInViaApi(request, hubId, vol2.deviceKey)
 })
 
 Given('a shift configured for 9am-5pm in America\\/New_York', async ({ request, world }) => {
@@ -240,6 +243,7 @@ Given('a shift configured for 9am-5pm in America\\/New_York', async ({ request, 
     userPubkeys: [vol.pubkey],
     hubId,
   })
+  await clockInViaApi(request, hubId, vol.deviceKey)
 })
 
 When('a call needs to be routed', async ({ request, world }) => {
@@ -301,12 +305,12 @@ Given('an incoming call from {string}', async ({ request, world }, callerNumber:
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Sim Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })
+
+    await clockInViaApi(request, hubId, vol.deviceKey)
   }
   const result = await simulateIncomingCall(request, { callerNumber, hubId })
   getCallSimState(world).callId = result.callId
@@ -322,12 +326,12 @@ Given('an incoming call from {string} in {string}', async ({ request, world }, c
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Lang Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId,
     })
+
+    await clockInViaApi(request, hubId, vol.deviceKey)
   }
   const result = await simulateIncomingCall(request, { callerNumber, language, hubId })
   getCallSimState(world).callId = result.callId
@@ -345,12 +349,12 @@ Given('an incoming call from {string} for hub {string}', async ({ request, world
     getScenarioState(world).volunteers.push({ ...vol, onShift: true })
     await createShiftViaApi(request, {
       name: uniqueName('Hub Shift'),
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [vol.pubkey],
       hubId: workerHubId,
     })
+
+    await clockInViaApi(request, workerHubId, vol.deviceKey)
   }
   const result = await simulateIncomingCall(request, { callerNumber, hubId: workerHubId })
   getCallSimState(world).callId = result.callId

@@ -55,10 +55,11 @@ struct BanListView: View {
                     .accessibilityIdentifier("ban-row-\(ban.id)")
                 }
             } header: {
-                Text(String(format: NSLocalizedString(
+                Text(L10n.format(
                     "admin_bans_header",
-                    comment: "Banned (%d)"
-                ), viewModel.bans.count))
+                    comment: "Banned (%d)",
+                    viewModel.bans.count
+                ))
             }
         }
         .listStyle(.insetGrouped)

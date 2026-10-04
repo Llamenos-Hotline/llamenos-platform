@@ -15,6 +15,7 @@ import {
   apiPatch,
   apiPost,
   apiPut,
+  clockInViaApi,
   createHubViaApi,
   createShiftViaApi,
   createVolunteerViaApi,
@@ -22,6 +23,7 @@ import {
   listAuditLogViaApi,
   setFallbackGroupViaApi,
 } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 interface SimulatedCallResponse {
   ok?: boolean
@@ -63,12 +65,13 @@ Given(
     for (const vol of volunteers) await addHubMemberViaApi(request, hubId, vol.pubkey)
     await createShiftViaApi(request, {
       name: `BDD Shift B ${Date.now()}`,
-      startTime: '00:00',
-      endTime: '23:59',
-      days: [0, 1, 2, 3, 4, 5, 6],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: volunteers.map(v => v.pubkey),
       hubId,
     })
+    // Clock-in is per hub, and ringing requires it alongside the shift, so being
+    // clocked into the first hub does not put them on shift in this one.
+    for (const vol of volunteers) await clockInViaApi(request, hubId, vol.deviceKey)
     const res = await apiPut(request, demoPath(hubId, '/mock'), { enabled: true })
     expect(res.status, `enabling the mock on the second hub failed: ${JSON.stringify(res.data)}`).toBe(200)
   },

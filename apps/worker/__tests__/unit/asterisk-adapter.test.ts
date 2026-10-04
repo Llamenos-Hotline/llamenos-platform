@@ -5,6 +5,11 @@
  */
 import { describe, it, expect } from 'vitest'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
+import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
+import { fakeSpeech, spoken } from '../helpers/fake-speech'
+
+type Command = { action: string; url?: string }
+const spokenBy = (commands: Command[]) => commands.flatMap((c) => (c.url && spoken(c.url) ? [spoken(c.url)] : []))
 
 function createAdapter() {
   return new AsteriskAdapter(
@@ -40,13 +45,14 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
-      expect(body.commands).toHaveLength(2)
-      expect(body.commands[0].action).toBe('speak')
-      expect(body.commands[1].action).toBe('gather')
-      expect(body.commands[1].metadata).toEqual({ auto: '1', forceLang: 'es' })
+      // Nothing to announce: straight on in the one language.
+      expect(body.commands).toHaveLength(1)
+      expect(body.commands[0].action).toBe('gather')
+      expect(body.commands[0].metadata).toEqual({ auto: '1', forceLang: 'es' })
     })
 
     it('uses default language when no languages enabled', async () => {
@@ -55,6 +61,7 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -68,12 +75,12 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551234567',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
-      const speakCommands = body.commands.filter((c: { action: string }) => c.action === 'speak')
-      // Should have speak commands for each language
-      expect(speakCommands.length).toBeGreaterThanOrEqual(2)
+      // Each option is announced in its own language, as generated speech.
+      expect(spokenBy(body.commands).map((s) => s?.locale)).toEqual(['en', 'es', 'zh'])
       // Should end with a gather for digit input
       const lastCommand = body.commands[body.commands.length - 1]
       expect(lastCommand.action).toBe('gather')
@@ -90,11 +97,13 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551111111',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
       const hangup = body.commands.find((c: { action: string }) => c.action === 'hangup')
       expect(hangup).toBeDefined()
+      expect(spokenBy(body.commands).map((s) => s?.text)).toContain(getPrompt('rateLimited', 'en'))
     })
 
     it('emits captcha gather when voice captcha enabled', async () => {
@@ -106,6 +115,7 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-1',
         callerNumber: '+15551111111',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -113,6 +123,8 @@ describe('AsteriskAdapter', () => {
       expect(gather).toBeDefined()
       expect(gather.numDigits).toBe(4)
       expect(gather.callbackEvent).toBe('captcha_response')
+      // The digits are generated speech, one clip per digit (ten clips a language, not one per call).
+      expect(spokenBy(body.commands).slice(-4)).toEqual(['1', '2', '3', '4'].map((text) => ({ locale: 'es', text })))
     })
 
     it('queues caller when no captcha and not rate limited', async () => {
@@ -123,6 +135,7 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-xyz',
         callerNumber: '+15551111111',
         hotlineName: 'Test Hotline',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -139,6 +152,7 @@ describe('AsteriskAdapter', () => {
         expectedDigits: '1234',
         callerLanguage: 'en',
         callSid: 'call-1',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -152,6 +166,7 @@ describe('AsteriskAdapter', () => {
         expectedDigits: '1234',
         callerLanguage: 'en',
         callSid: 'call-1',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -183,6 +198,7 @@ describe('AsteriskAdapter', () => {
         callerLanguage: 'en',
         callbackUrl: 'http://callback.local/voicemail',
         maxRecordingSeconds: 60,
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -197,6 +213,7 @@ describe('AsteriskAdapter', () => {
         callSid: 'call-2',
         callerLanguage: 'en',
         callbackUrl: 'http://callback.local/voicemail',
+        speechUrl: fakeSpeech,
       })
 
       const body = JSON.parse(response.body)
@@ -215,7 +232,7 @@ describe('AsteriskAdapter', () => {
     })
 
     it('plays hold music when under timeout', async () => {
-      const response = await adapter.handleWaitMusic('en', undefined, 30, 90)
+      const response = await adapter.handleWaitMusic('en', undefined, 30, 90, fakeSpeech)
 
       const body = JSON.parse(response.body)
       // Should have speak or play command, not leave_queue
@@ -224,7 +241,7 @@ describe('AsteriskAdapter', () => {
 
     it('defaults timeout to 90 seconds', async () => {
       // queueTime=89 should NOT leave
-      const response = await adapter.handleWaitMusic('en', undefined, 89)
+      const response = await adapter.handleWaitMusic('en', undefined, 89, undefined, fakeSpeech)
       const body = JSON.parse(response.body)
       expect(body.commands.some((c: { action: string }) => c.action === 'leave_queue')).toBe(false)
 
@@ -255,12 +272,14 @@ describe('AsteriskAdapter', () => {
 
   describe('handleVoicemailComplete', () => {
     it('speaks thank you and hangs up', () => {
-      const response = adapter.handleVoicemailComplete('en')
+      const response = adapter.handleVoicemailComplete('en', fakeSpeech)
       const body = JSON.parse(response.body)
-      const speak = body.commands.find((c: { action: string }) => c.action === 'speak')
-      const hangup = body.commands.find((c: { action: string }) => c.action === 'hangup')
-      expect(speak).toBeDefined()
-      expect(hangup).toBeDefined()
+      expect(spokenBy(body.commands)).toEqual([{ locale: 'en', text: getVoicemailThanks('en') }])
+      expect(body.commands[body.commands.length - 1].action).toBe('hangup')
+    })
+
+    it('refuses to answer without a speech builder: a PBX cannot speak text itself', () => {
+      expect(() => adapter.handleVoicemailComplete('en')).toThrow(/speech URL builder/)
     })
   })
 })

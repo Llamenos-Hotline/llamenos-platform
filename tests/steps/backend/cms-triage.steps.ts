@@ -19,6 +19,7 @@ import {
   generateTestKeypair,
   uniqueName,
 } from '../../api-helpers'
+import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
 // ── Local State ──────────────────────────────────────────────────
 
@@ -461,9 +462,7 @@ Given('an on-shift volunteer with capacity exists', async ({ request, workerHub 
   const vol = await createUserViaApi(request, { name: uniqueName('AutoAssign Vol') })
   // Create an all-day, all-week shift so the volunteer is always on-shift
   await createShiftViaApi(request, {
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol.pubkey],
     hubId: workerHub,
   })

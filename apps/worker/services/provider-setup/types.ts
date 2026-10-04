@@ -33,12 +33,31 @@ export interface ConnectionTestResult {
 }
 
 /**
+ * What a SIP trunk is created from.
+ *
+ * `domain` means different things per provider: a hosted provider (Twilio,
+ * Telnyx, FreeSWITCH gateway) sends calls to it, while a self-hosted Asterisk
+ * trunks to it — there it is the carrier's SIP host[:port].
+ */
+export interface SipTrunkRequest {
+  domain: string
+  /**
+   * Credentials the carrier issued, for a trunk that registers with the carrier.
+   * Omit both for an IP-authenticated trunk. Never returned or logged.
+   */
+  username?: string
+  password?: string
+  /** Addresses the carrier sends calls from (IPs, CIDRs, hostnames); defaults to the carrier host */
+  inboundMatch?: string[]
+}
+
+/**
  * SIP trunk configuration returned by providers that support trunk creation.
  */
 export interface SipTrunkConfig {
   sipProvider: string
-  sipUsername: string
-  sipPassword: string
+  sipUsername?: string
+  sipPassword?: string
   trunkSid?: string
   connectionId?: string
 }
@@ -105,6 +124,6 @@ export interface ProviderCapabilityImpl {
   /** Create a SIP trunk (providers with `sipTrunks` capability). */
   createSipTrunk(
     credentials: Record<string, unknown>,
-    domain: string,
+    request: SipTrunkRequest,
   ): Promise<SipTrunkConfig>
 }

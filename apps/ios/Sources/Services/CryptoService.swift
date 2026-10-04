@@ -194,9 +194,9 @@ enum CryptoServiceError: LocalizedError, Equatable {
         case .invalidPin:
             return NSLocalizedString("error_invalid_pin", comment: "PIN must be 6-8 digits")
         case .encryptionFailed(let detail):
-            return String(format: NSLocalizedString("error_encryption_failed", comment: "Encryption failed: %@"), detail)
+            return L10n.format("error_encryption_failed", comment: "Encryption failed: %@", detail)
         case .decryptionFailed(let detail):
-            return String(format: NSLocalizedString("error_decryption_failed", comment: "Decryption failed: %@"), detail)
+            return L10n.format("error_decryption_failed", comment: "Decryption failed: %@", detail)
         }
     }
 }

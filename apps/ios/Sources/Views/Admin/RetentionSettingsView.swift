@@ -112,10 +112,11 @@ struct AppRetentionCategoryRow: View {
                 }
 
                 if let floor = category.minRetentionDays {
-                    Text(String(format: NSLocalizedString(
+                    Text(L10n.format(
                         "retention_min_days",
-                        comment: "Minimum: %d days (platform floor)"
-                    ), floor))
+                        comment: "Minimum: %d days (platform floor)",
+                        floor
+                    ))
                     .font(.brand(.caption))
                     .foregroundStyle(.orange)
                 }

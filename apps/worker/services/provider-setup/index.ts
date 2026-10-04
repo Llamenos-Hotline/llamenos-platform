@@ -13,7 +13,7 @@ import type {
 import { SettingsService } from '../settings'
 import { getProviderCapability, hasCapability } from './registry'
 import { encryptCredentials, decryptCredentials } from './crypto'
-import type { WebhookUrls, ConnectionTestResult, SipTrunkConfig } from './types'
+import type { WebhookUrls, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest } from './types'
 import { ProviderApiError } from './types'
 
 export class ProviderSetup {
@@ -178,11 +178,11 @@ export class ProviderSetup {
 
   async createSipTrunk(
     provider: TelephonyProviderType,
-    domain: string,
-    hubId: string,
+    request: SipTrunkRequest,
+    hubId?: string,
   ): Promise<SipTrunkConfig> {
     const { impl, creds } = await this.resolveProvider(provider, hubId, 'sipTrunks')
-    return impl.createSipTrunk(creds, domain)
+    return impl.createSipTrunk(creds, request)
   }
 
   async createOAuthState(opts: {
