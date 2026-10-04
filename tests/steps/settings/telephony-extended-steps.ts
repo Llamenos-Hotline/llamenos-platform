@@ -3,7 +3,7 @@
  * Matches additional steps from: packages/test-specs/features/desktop/calls/telephony-provider.feature
  * not covered by desktop-admin-steps.ts
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type { DataTable } from 'playwright-bdd'
 import { When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
@@ -40,12 +40,30 @@ When('I fill in Twilio credentials with phone number', async ({ page }) => {
 })
 
 Then('I should see {string} with {string}', async ({ page }, text1: string, text2: string) => {
-  const combined = page.locator(`text=/${text1}.*${text2}|${text2}.*${text1}/i`).first()
-  const isVisible = await combined.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isVisible) return
-  // Backend may not be available — verify page is loaded instead
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The previous fallback ("backend may not be available — the page loaded")
+  // passed whenever the saved provider was NOT shown.
+  const combined = page.getByText(new RegExp(`${text1}.*${text2}|${text2}.*${text1}`, 'i')).first()
+  await expect(combined).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
+
+/** Fill the provider credential fields. Every field must be present: a skipped fill saves a different config than the scenario describes. */
+async function fillProviderCredentials(
+  page: Page,
+  creds: { phone: string; accountSid: string; authToken: string; signalwireSpace?: string },
+) {
+  // #provider-phone, not any tel input (the Signal notification phone is one too).
+  // react-phone-number-input ignores clear(): select-all by triple-click, then type.
+  const telInput = page.locator('#provider-phone')
+  await expect(telInput).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await telInput.click({ clickCount: 3 })
+  await telInput.pressSequentially(creds.phone, { delay: 30 })
+  await telInput.blur()
+  await page.getByTestId(TestIds.ACCOUNT_SID).fill(creds.accountSid)
+  await page.getByTestId(TestIds.AUTH_TOKEN).fill(creds.authToken)
+  if (creds.signalwireSpace !== undefined) {
+    await page.getByPlaceholder('myspace').fill(creds.signalwireSpace)
+  }
+}
 
 When('I fill in Twilio credentials with a different phone number', async ({ page }) => {
   // Use #provider-phone to avoid matching other tel inputs (e.g. Signal notification phone).
@@ -58,14 +76,8 @@ When('I fill in Twilio credentials with a different phone number', async ({ page
   await telInput.blur()
   // Verify the fill actually worked before proceeding to save
   await expect(telInput).toHaveValue(/555.*987/, { timeout: 3000 })
-  const acInput = page.getByPlaceholder('AC...')
-  if (await acInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await acInput.fill('AC00000000000000000000000000000002')
-  }
-  const authTokenInput = page.locator('input[type="password"]').first()
-  if (await authTokenInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await authTokenInput.fill('test-auth-token-456')
-  }
+  await page.getByTestId(TestIds.ACCOUNT_SID).fill('AC00000000000000000000000000000002')
+  await page.getByTestId(TestIds.AUTH_TOKEN).fill('test-auth-token-456')
 })
 
 Then('the phone number field should be pre-filled', async ({ page }) => {
@@ -75,43 +87,21 @@ Then('the phone number field should be pre-filled', async ({ page }) => {
 })
 
 When('I fill in SignalWire credentials', async ({ page }) => {
-  // Triple-click to select all, then type — more reliable than clear() for react-phone-number-input.
-  const telInput = page.locator('#provider-phone')
-  if (await telInput.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await telInput.click({ clickCount: 3 })
-    await telInput.pressSequentially('+12125551122', { delay: 30 })
-    await telInput.blur()
-  }
-  const acInput = page.getByPlaceholder('AC...')
-  if (await acInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // SignalWire project IDs are UUIDs, not Twilio AC... format
-    await acInput.fill('a1b2c3d4-e5f6-7890-abcd-ef1234567890')
-  }
-  const authTokenInput = page.locator('input[type="password"]').first()
-  if (await authTokenInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await authTokenInput.fill('sw-auth-token-789')
-  }
-  const spaceInput = page.getByPlaceholder('myspace')
-  if (await spaceInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await spaceInput.fill('myhotline')
-  }
+  // SignalWire project IDs are UUIDs, not Twilio AC... SIDs.
+  await fillProviderCredentials(page, {
+    phone: '+12125551122',
+    accountSid: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    authToken: 'sw-auth-token-789',
+    signalwireSpace: 'myhotline',
+  })
 })
 
 When('I fill in fake Twilio credentials', async ({ page }) => {
-  const telInput = page.locator('#provider-phone')
-  if (await telInput.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-    await telInput.click({ clickCount: 3 })
-    await telInput.pressSequentially('+12125551456', { delay: 30 })
-    await telInput.blur()
-  }
-  const acInput = page.getByPlaceholder('AC...')
-  if (await acInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await acInput.fill('AC00000000000000000000000000000003')
-  }
-  const authTokenInput = page.locator('input[type="password"]').first()
-  if (await authTokenInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await authTokenInput.fill('fake-token')
-  }
+  await fillProviderCredentials(page, {
+    phone: '+12125551456',
+    accountSid: 'AC00000000000000000000000000000003',
+    authToken: 'fake-token',
+  })
 })
 
 Then('the provider dropdown should be visible', async ({ page }) => {

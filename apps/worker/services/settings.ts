@@ -668,27 +668,49 @@ export class SettingsService {
       )
     }
 
-    const now = Date.now()
     const windowMs = 60_000
 
-    const [existing] = await this.db
-      .select()
-      .from(rateLimits)
-      .where(eq(rateLimits.key, data.key))
+    // Single atomic statement (#1492). The previous implementation was a
+    // read-modify-write: SELECT the array, filter and append in JS, then upsert
+    // the whole array back. Concurrent requests on the same key all read the
+    // same array and the last write won, so N simultaneous requests were
+    // recorded as one — the limiter undercounted precisely under the parallel
+    // traffic it exists to stop (invite enumeration, credential grinding).
+    //
+    // INSERT ... ON CONFLICT DO UPDATE takes a row lock and re-evaluates the
+    // SET expression against the *committed* row, so concurrent callers are
+    // serialised by PostgreSQL and each one observes every predecessor.
+    //
+    // The window is evaluated from the database's own clock (`now()`, the
+    // transaction timestamp — stable for the whole statement) rather than from
+    // Date.now(), so the stored timestamps and the expiry cutoff share one
+    // clock and a skewed application server cannot widen or narrow the window.
+    //
+    // Retention is capped at maxPerMinute in-window entries before appending,
+    // which bounds the row under a flood without changing any verdict: entries
+    // dropped by the cap are strictly older than the ones kept, so whenever a
+    // dropped entry would still be in-window the retained set already holds
+    // maxPerMinute entries and the request is limited either way.
+    const nowMs = sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`
+    const result = await this.db.execute<{ count: number }>(sql`
+      INSERT INTO rate_limits (key, timestamps)
+      VALUES (${data.key}, jsonb_build_array(${nowMs}))
+      ON CONFLICT (key) DO UPDATE SET timestamps =
+        COALESCE((
+          SELECT jsonb_agg(recent.t)
+          FROM (
+            SELECT a.t
+            FROM jsonb_array_elements(rate_limits.timestamps) AS a(t)
+            WHERE (a.t)::numeric > ${nowMs} - ${windowMs}
+            ORDER BY (a.t)::numeric DESC
+            LIMIT ${data.maxPerMinute}
+          ) AS recent
+        ), '[]'::jsonb) || jsonb_build_array(${nowMs})
+      RETURNING jsonb_array_length(timestamps) AS count
+    `)
 
-    const timestamps = (existing?.timestamps as number[]) ?? []
-    const recent = timestamps.filter((t) => now - t < windowMs)
-    recent.push(now)
-
-    await this.db
-      .insert(rateLimits)
-      .values({ key: data.key, timestamps: recent })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: { timestamps: recent },
-      })
-
-    return { limited: recent.length > data.maxPerMinute }
+    const count = Number(result[0]?.count ?? 0)
+    return { limited: count > data.maxPerMinute }
   }
 
   // =========================================================================
@@ -1015,8 +1037,17 @@ export class SettingsService {
       .from(providerConfigs)
       .where(isNull(providerConfigs.hubId))
       .limit(1)
-    const messagingConfig = row.messagingConfig as MessagingConfig | null
-    const setupState = row.setupState as SetupState | null
+    // These two columns hold partially-written JSON. `getSettings()` upserts the
+    // singleton row with `setup_state = '{}'`, so on every fresh install
+    // `row.setupState` is present but empty — casting it `as SetupState | null`
+    // claimed `selectedChannels` was always an array, and `setupState?.…` guarded
+    // only the null case. `{}` therefore threw a TypeError, `GET /api/config`
+    // caught it and reported every channel disabled, and the desktop — which
+    // gates its whole Conversations page on those flags — showed "No messaging
+    // channels enabled" on a deployment that had channels configured.
+    // `Partial<>` is what the data actually is, and makes the guards mandatory.
+    const messagingConfig = row.messagingConfig as Partial<MessagingConfig> | null
+    const setupState = row.setupState as Partial<SetupState> | null
 
     const voiceEnabled =
       !!providerConfig ||
@@ -1028,12 +1059,12 @@ export class SettingsService {
 
     return {
       voice: voiceEnabled,
-      sms: messagingConfig?.enabledChannels.includes('sms') ?? false,
-      whatsapp: messagingConfig?.enabledChannels.includes('whatsapp') ?? false,
-      signal: messagingConfig?.enabledChannels.includes('signal') ?? false,
-      rcs: messagingConfig?.enabledChannels.includes('rcs') ?? false,
-      telegram: messagingConfig?.enabledChannels.includes('telegram') ?? false,
-      reports: setupState?.selectedChannels.includes('reports') ?? false,
+      sms: messagingConfig?.enabledChannels?.includes('sms') ?? false,
+      whatsapp: messagingConfig?.enabledChannels?.includes('whatsapp') ?? false,
+      signal: messagingConfig?.enabledChannels?.includes('signal') ?? false,
+      rcs: messagingConfig?.enabledChannels?.includes('rcs') ?? false,
+      telegram: messagingConfig?.enabledChannels?.includes('telegram') ?? false,
+      reports: setupState?.selectedChannels?.includes('reports') ?? false,
     }
   }
 

@@ -36,7 +36,7 @@ struct CopyableField: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("copy-field-button")
-            .accessibilityLabel(String(format: NSLocalizedString("a11y_copy_field", comment: "Copy %@"), label))
+            .accessibilityLabel(L10n.format("a11y_copy_field", comment: "Copy %@", label))
         }
         .accessibilityElement(children: .contain)
     }

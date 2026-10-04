@@ -242,7 +242,8 @@ Feature: Reports
 
   # ── Desktop: Template-Driven Report Types ──────────────────────────────
 
-  @desktop
+  # @fixme: the Reports page reads global report types, not template-defined ones — #1309
+  @desktop @fixme
   Scenario: Template apply creates report types
     Given I am logged in as an admin
     And case management is enabled
@@ -261,7 +262,8 @@ Feature: Reports
     Then the report type selector should be visible
     And the report type selector should list template-defined types
 
-  @desktop
+  # @fixme: the Reports page reads global report types, not template-defined ones — #1309
+  @desktop @fixme
   Scenario: Template-driven report form shows schema fields
     Given I am logged in as an admin
     And case management is enabled

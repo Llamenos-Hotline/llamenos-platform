@@ -2,33 +2,25 @@
  * Generic assertion step definitions using data-testid selectors.
  */
 import { expect } from '@playwright/test'
-import { Then, When } from '../fixtures'
+import { Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 
 Then('I should see the {string} button', async ({ page }, buttonText: string) => {
-  // Desktop doesn't have camera-based device linking — it uses a text input flow.
-  // Camera-related buttons won't exist; verify the device link section is visible instead.
-  if (buttonText === 'Request Camera Permission') {
-    const section = page.getByTestId('linked-devices')
-    await expect(section).toBeVisible({ timeout: Timeouts.ELEMENT })
-    return
-  }
+  // Camera-flow buttons ("Request Camera Permission") do not exist on desktop;
+  // those scenarios carry @requires-camera and are excluded from the desktop run.
+  // Substituting "the linked-devices section is visible" for them passed a
+  // scenario on something it never claimed.
   // Use .first() to avoid strict mode violations when the same button text
   // appears in both the sidebar and the main content area (e.g. "Log Out")
   await expect(page.getByRole('button', { name: buttonText }).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the error {string}', async ({ page }, errorText: string) => {
-  const errorMsg = page.getByTestId(TestIds.ERROR_MESSAGE)
-  const errorVisible = await errorMsg.isVisible({ timeout: 2000 }).catch(() => false)
-  if (errorVisible) {
-    await expect(errorMsg).toContainText(errorText)
-  } else {
-    // Fallback: look for error text in role="alert" elements
-    const alert = page.locator('[role="alert"]').filter({ hasText: errorText })
-    await expect(alert.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
-  }
+  // Either presentation counts, but only once it carries the expected text.
+  const errorMsg = page.getByTestId(TestIds.ERROR_MESSAGE).filter({ hasText: errorText })
+  const alert = page.getByRole('alert').filter({ hasText: errorText })
+  await expect(errorMsg.or(alert).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see a PIN error message', async ({ page }) => {
@@ -39,27 +31,10 @@ Then('I should see a PIN error message', async ({ page }) => {
 })
 
 Then('I should see an error message', async ({ page }) => {
-  // Check each error indicator sequentially to avoid strict mode violations
-  const checks = [
-    () => page.getByTestId(TestIds.ERROR_MESSAGE),
-    () => page.locator('[role="alert"]').first(),
-    () => page.getByText(/error|invalid|required|failed/i).first(),
-  ]
-  for (const getLocator of checks) {
-    const el = getLocator()
-    const isVis = await el.isVisible({ timeout: 2000 }).catch(() => false)
-    if (isVis) return
-  }
-  // None found — page may not be in an error state (cascading from prior step failure)
-  // Check if we're at least on a page that rendered (could be login page or authenticated page)
-  const pageTitle = page.getByTestId(TestIds.PAGE_TITLE)
-  const isTitle = await pageTitle.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isTitle) return
-  // May be on login page (which has no page-title) — that's acceptable for cascading failures
-  const loginForm = page.getByTestId(TestIds.DEVICE_KEY_INPUT)
-    .or(page.getByTestId(TestIds.LOGIN_SUBMIT_BTN))
-    .or(page.getByTestId(TestIds.PIN_INPUT))
-  await expect(loginForm.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The previous body fell back to "a page title or the login form is visible",
+  // so it passed whenever no error was shown at all.
+  const errorEl = page.getByTestId(TestIds.ERROR_MESSAGE).or(page.getByRole('alert'))
+  await expect(errorEl.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should remain on the login screen', async ({ page }) => {
@@ -68,10 +43,7 @@ Then('I should remain on the login screen', async ({ page }) => {
 })
 
 Then('I should remain on the unlock screen', async ({ page }) => {
-  // The PIN unlock screen should still be visible — check sequentially
-  const pinTestId = page.getByTestId(TestIds.PIN_INPUT)
-  if (await pinTestId.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) return
-  await expect(page.getByTestId(TestIds.PIN_INPUT)).toBeVisible({ timeout: 2000 })
+  await expect(page.getByTestId(TestIds.PIN_INPUT)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('I should remain on the settings screen', async ({ page }) => {
@@ -79,51 +51,30 @@ Then('I should remain on the settings screen', async ({ page }) => {
   await expect(page.getByTestId(TestIds.PAGE_TITLE)).toContainText(/settings/i)
 })
 
-Then('I should remain on the PIN confirmation screen', async ({ page }) => {
-  const confirmDialog = page.getByTestId(TestIds.CONFIRM_DIALOG)
-  if (await confirmDialog.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) return
-  const pinTestId = page.getByTestId(TestIds.PIN_INPUT)
-  if (await pinTestId.isVisible({ timeout: 2000 }).catch(() => false)) return
-  await expect(page.getByTestId(TestIds.PIN_INPUT)).toBeVisible({ timeout: 2000 })
-})
-
 Then('I should see a confirmation dialog', async ({ page }) => {
   const dialog = page.getByTestId(TestIds.CONFIRM_DIALOG)
-  const roleDialog = page.getByRole('dialog')
-  const alertDialog = page.getByRole('alertdialog')
-  const isDialog = await dialog.isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)
-  if (isDialog) return
-  const isRole = await roleDialog.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isRole) return
-  const isAlert = await alertDialog.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isAlert) return
-  throw new Error('Expected a confirmation dialog but none appeared (checked data-testid, role=dialog, role=alertdialog)')
+    .or(page.getByRole('dialog'))
+    .or(page.getByRole('alertdialog'))
+  await expect(dialog.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 Then('the dialog should be dismissed', async ({ page }) => {
   await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('no crashes should occur', async () => {
-  // If we got this far without an exception, no crashes occurred
+Then('no crashes should occur', async ({ page }) => {
+  // Uncaught page errors already fail the scenario (see the auto fixture in
+  // ../fixtures). A render error caught by the ErrorBoundary does not raise one,
+  // so check the boundary's fallback is not showing and the page still rendered.
+  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByText('Something went wrong')).toHaveCount(0)
 })
 
 Then('I should see {string} and {string} buttons', async ({ page }, btn1: string, btn2: string) => {
-  // For "Confirm" and "Cancel" in lock-logout, these may be in a dialog OR
-  // the app may have already logged out directly (no confirmation dialog).
-  // If we're on the login page, the buttons won't exist — that's acceptable.
-  const onLoginPage = page.url().includes('/login')
-  if (onLoginPage) return
-
-  // Desktop doesn't have QR-camera-based device linking — "Retry" and "Cancel"
-  // buttons from the camera flow won't exist. Verify the device link section instead.
-  if (btn1 === 'Retry' || btn2 === 'Retry') {
-    const section = page.getByTestId('linked-devices')
-    await expect(section).toBeVisible({ timeout: Timeouts.ELEMENT })
-    return
-  }
-
-  // Maps button label to one or more testids to check (first match wins)
+  // Buttons whose desktop form carries a testid. Any other label is matched by
+  // its accessible name. Each button must be visible: the previous version
+  // returned early on the login page and accepted "the login form is visible"
+  // as a stand-in for a missing button.
   const testIdMap: Record<string, string[]> = {
     'Confirm': [TestIds.CONFIRM_DIALOG_OK, 'sas-match'],  // SAS context uses sas-match
     'Reject':  ['sas-mismatch'],
@@ -132,37 +83,9 @@ Then('I should see {string} and {string} buttons', async ({ page }, btn1: string
     'Log Out':  [TestIds.LOGOUT_BTN],
   }
   for (const btnText of [btn1, btn2]) {
-    const testIds = testIdMap[btnText]
-    if (testIds) {
-      // Check each testid in priority order
-      let found = false
-      for (const tid of testIds) {
-        if (await page.getByTestId(tid).isVisible({ timeout: Timeouts.ELEMENT }).catch(() => false)) {
-          found = true
-          break
-        }
-      }
-      if (found) continue
-      const byRole = page.getByRole('button', { name: btnText })
-      if (await byRole.isVisible({ timeout: 2000 }).catch(() => false)) continue
-      // May be on login page (cascading failure)
-      const loginIndicator = page.getByTestId(TestIds.DEVICE_KEY_INPUT).or(page.getByTestId(TestIds.LOGIN_SUBMIT_BTN))
-      await expect(loginIndicator.first()).toBeVisible({ timeout: 2000 })
-    } else {
-      await expect(page.getByRole('button', { name: btnText })).toBeVisible({ timeout: Timeouts.ELEMENT })
-    }
-  }
-})
-
-When('I confirm the reset', async ({ page }) => {
-  // Click the confirm button in the dialog
-  const confirmBtn = page.getByTestId(TestIds.CONFIRM_DIALOG_OK)
-  const confirmVisible = await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)
-  if (confirmVisible) {
-    await confirmBtn.click()
-  } else {
-    // Fallback: look for a confirm/reset/delete button in the dialog
-    await page.getByTestId(TestIds.CONFIRM_DIALOG).getByRole('button', { name: /confirm|reset|delete|yes/i }).click()
+    let button = page.getByRole('button', { name: btnText })
+    for (const tid of testIdMap[btnText] ?? []) button = page.getByTestId(tid).or(button)
+    await expect(button.first(), `"${btnText}" button`).toBeVisible({ timeout: Timeouts.ELEMENT })
   }
 })
 
@@ -188,19 +111,14 @@ Then('the empty state card should be visible', async ({ page }) => {
 })
 
 Then('no stored keys should remain', async ({ page }) => {
-  // After factory reset, stored keys should be removed.
-  // In test env, the reset may not execute fully — verify we're on login page instead.
-  const onLoginPage = page.url().includes('/login')
-  if (onLoginPage) return // Reset redirected to login — acceptable
-  const hasKey = await page.evaluate(() => {
-    return (
+  // Poll storage until the encrypted device keys are gone. The old version
+  // returned early on /login and, when a key was still stored, asserted only
+  // that a page title rendered — it passed whether or not anything was wiped.
+  await expect.poll(
+    () => page.evaluate(() =>
       localStorage.getItem('stronghold:llamenos:llamenos-encrypted-device-keys') !== null ||
-      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null
-    )
-  }).catch(() => false)
-  // If key still exists, the reset step may not have executed — cascading failure
-  if (hasKey) {
-    // At minimum verify the page rendered
-    await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.ELEMENT })
-  }
+      localStorage.getItem('llamenos:llamenos-encrypted-device-keys') !== null,
+    ),
+    { message: 'encrypted device keys still stored', timeout: Timeouts.ELEMENT },
+  ).toBe(false)
 })

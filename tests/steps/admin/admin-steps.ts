@@ -84,6 +84,13 @@ Given('the crypto service is locked', async ({ page }) => {
   await page.evaluate(() => {
     sessionStorage.clear()
   })
+  // Establish the precondition, don't assume it.
+  await page.waitForFunction(() => !!(window as unknown as Record<string, unknown>).__TEST_PLATFORM, { timeout: Timeouts.AUTH })
+  const unlocked = await page.evaluate(async () => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as { isCryptoUnlocked(): Promise<boolean> }
+    return p.isCryptoUnlocked()
+  })
+  expect(unlocked, 'the crypto service must be locked for this scenario').toBe(false)
 })
 
 Given('a stored identity exists', async ({ page }) => {
@@ -122,14 +129,41 @@ Then('I should be able to navigate to all tabs:', async ({ page }, dataTable) =>
   }
 })
 
-When('I attempt to create an auth token', async () => {
-  // Crypto-level test — handled in crypto steps
+/** Run one crypto operation in the page and record whether it was rejected. */
+async function attemptCryptoOp(page: import('@playwright/test').Page, op: 'token' | 'encrypt') {
+  await page.waitForFunction(() => !!(window as unknown as Record<string, unknown>).__TEST_PLATFORM, { timeout: Timeouts.AUTH })
+  const rejected = await page.evaluate(async (which) => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      createAuthToken(ts: number, method: string, path: string): Promise<string>
+      encryptNote(payload: string, author: string, admins: string[]): Promise<unknown>
+    }
+    try {
+      if (which === 'token') await p.createAuthToken(Date.now(), 'GET', '/api/notes')
+      else await p.encryptNote('{"text":"locked"}', 'a'.repeat(64), [])
+      return false
+    } catch {
+      return true
+    }
+  }, op)
+  await page.evaluate((r) => {
+    (window as unknown as Record<string, unknown>).__test_crypto_rejected = r
+  }, rejected)
+}
+
+// The old versions of these three steps were empty ("handled in crypto steps"),
+// so "Crypto operations blocked when locked" passed without attempting anything.
+
+When('I attempt to create an auth token', async ({ page }) => {
+  await attemptCryptoOp(page, 'token')
 })
 
-When('I attempt to encrypt a note', async () => {
-  // Crypto-level test — handled in crypto steps
+When('I attempt to encrypt a note', async ({ page }) => {
+  await attemptCryptoOp(page, 'encrypt')
 })
 
-Then('it should throw a CryptoException', async () => {
-  // Verified at the crypto service level — if on PIN screen, crypto is locked
+Then('it should throw a CryptoException', async ({ page }) => {
+  const rejected = await page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__test_crypto_rejected,
+  )
+  expect(rejected, 'a locked crypto service must reject the operation').toBe(true)
 })

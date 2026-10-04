@@ -165,10 +165,16 @@ ingress:
 # Secrets (reference existing K8s secrets)
 secrets:
   # Create a secret named "llamenos-secrets" with these keys:
-  #   admin-pubkey, postgres-password, twilio-account-sid, twilio-auth-token, twilio-phone-number
+  #   admin-pubkey, admin-decryption-pubkey, postgres-password, twilio-account-sid,
+  #   twilio-auth-token, twilio-phone-number
   existingSecret: ""
   # Or provide values directly (will be base64-encoded into a Secret)
-  adminPubkey: ""
+  adminPubkey: ""           # Ed25519 identity key (verifies the admin's signatures)
+  # X25519 HPKE recipient key — a DIFFERENT value from adminPubkey, printed
+  # alongside it by `bun run bootstrap-admin`. Required whenever adminPubkey is
+  # set: the app refuses to boot rather than seal admin envelopes to an Ed25519
+  # key, which succeeds and makes every note permanently undecryptable (#1283).
+  adminDecryptionPubkey: ""
   postgresPassword: ""  # Required
   hmacSecret: ""         # Required: 64-char hex, generate with: openssl rand -hex 32
   twilioAccountSid: ""

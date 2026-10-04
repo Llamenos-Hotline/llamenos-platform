@@ -179,6 +179,7 @@ pub fn run() {
             crypto::get_device_pubkeys,
             // Auth (Ed25519)
             crypto::create_auth_token_from_state,
+            crypto::create_nonceless_auth_token_from_state,
             // Ed25519 signing/verification
             crypto::ed25519_sign_from_state,
             crypto::ed25519_verify,
