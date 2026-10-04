@@ -495,10 +495,20 @@ export class ConversationsService {
 
     // Encrypt the message content using envelope pattern. An absent admin
     // recipient means one fewer reader, never a substituted key (#1283).
-    const readerPubkeys: string[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
-    }
+    //
+    // `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // pubkey — the key that signs their auth tokens (see `claim()` and
+    // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
+    // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
+    // accepts any 32 bytes, so it neither threw nor warned. This is the same
+    // defect as #1283, at a second site.
+    //
+    // The server cannot seal to the assignee instead: `users` carries only the
+    // Ed25519 `pubkey`, and `devices.x25519_pubkey` — the one column that could
+    // supply a real HPKE recipient — is not populated by any client today. So
+    // the honest list is the admin alone. The type below makes re-adding a
+    // non-X25519 key a compile error rather than silent, permanent data loss.
+    const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 

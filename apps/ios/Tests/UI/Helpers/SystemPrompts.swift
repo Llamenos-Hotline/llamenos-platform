@@ -4,8 +4,7 @@ import XCTest
 ///
 /// Each is asked once per simulator: the app asks for notifications on every launch
 /// until answered (`LlamenosApp.requestPushNotificationPermission`, from the root
-/// view's `onAppear`), and for the camera when the device-link view opens
-/// (`DeviceLinkViewModel`). A fresh CI simulator therefore shows each once per shard.
+/// view's `onAppear`). A fresh CI simulator therefore shows it once per shard.
 ///
 /// Left to XCTest's implicit interruption handler, an alert was answered whenever the
 /// test next tapped something, racing a busy springboard. In run 36359693222 the handler
@@ -18,7 +17,6 @@ import XCTest
 extension XCUIApplication {
     enum SystemPrompt: String {
         case notifications = "Would Like to Send You Notifications"
-        case camera = "would like to access the Camera"
     }
 
     /// Launch the app, then answer the notification prompt it raises on a fresh simulator.
