@@ -8,6 +8,7 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED, KIND_MESSAGE_REACTION, KI
 import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
+import { adminHpkeRecipient } from '../lib/hpke-recipient'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
 import { SignalAdapter } from './signal/adapter'
@@ -255,7 +256,12 @@ messaging.post('/:channel/webhook',
   }
 
   // Forward to ConversationsService for processing
-  const convResult = await services.conversations.handleIncoming(incoming, c.env.ADMIN_PUBKEY)
+  // #1283: this passed ADMIN_PUBKEY — the admin's Ed25519 *signing* key — as the
+  // HPKE recipient every inbound message was sealed to. Both keys are 64 hex
+  // characters, so nothing objected, and the resulting envelopes could not be
+  // opened by the admin or anyone else. `adminHpkeRecipient` returns the X25519
+  // key or nothing, and the parameter's type now rejects the Ed25519 one.
+  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env))
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -267,7 +273,7 @@ messaging.post('/:channel/webhook',
   // Auto-assignment for new conversations
   if (convResult.isNew && convResult.status === 'waiting') {
     backgroundTask(c,
-      tryAutoAssign(services, c.env, convResult.conversationId, channel, c.env.ADMIN_PUBKEY, hubId)
+      tryAutoAssign(services, c.env, convResult.conversationId, channel, hubId)
     )
   }
 
@@ -319,7 +325,6 @@ async function tryAutoAssign(
   env: Env,
   conversationId: string,
   channelType: MessagingChannelType,
-  adminPubkey: string,
   hubId: string | undefined,
 ): Promise<void> {
   try {

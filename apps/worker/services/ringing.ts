@@ -70,14 +70,24 @@ type RingableUser = Awaited<ReturnType<Services['identity']['getUsers']>>['users
  * member of the intersection is unavailable the fallback group is tried with
  * the same rules.
  *
- * Shared by the ringing path and the answer path so "who may answer" can never
- * drift from "who was rung". Returns null when there is no roster at all;
+ * Shared by the ringing path, the answer path, presence (services/presence.ts)
+ * and the read-only routing diagnostic (services/routing-readiness.ts), so
+ * "who may answer", "who is shown as available" and "who would be rung" can
+ * never drift from "who was rung". Returns null when there is no roster at all;
  * `available` is empty when a roster exists but nobody is available.
+ *
+ * `usedFallback` says which of the two rosters `available` came from — the hub's
+ * fallback group, or the scheduled ∩ clocked-in intersection. It is reported by
+ * the routing diagnostic so an operator can tell "the shift is covered and
+ * manned" from "the fallback group is carrying the hotline"; nothing branches on
+ * it. Paired with that diagnostic's `scheduledNow` and `clockedIn` counts it
+ * also separates the two ways the intersection empties: nobody rostered, versus
+ * rostered but nobody clocked in.
  */
 export async function resolveRingableVolunteers(
   services: Services,
   hubId: string,
-): Promise<{ available: RingableUser[] } | null> {
+): Promise<{ available: RingableUser[]; usedFallback: boolean } | null> {
   const scheduledPubkeys = await services.shifts.getCurrentVolunteers(hubId)
 
   // Ringing requires BOTH consents: the admin scheduled them AND they clocked
@@ -135,6 +145,7 @@ export async function resolveRingableVolunteers(
   if (available.length === 0 && !usedFallback) {
     const fallback = await services.settings.getFallbackGroup(hubId)
     available = pickAvailable(fallback.userPubkeys)
+    usedFallback = true
     logger.info('On-shift volunteers unavailable — tried fallback group', {
       hubId,
       fallbackCount: fallback.userPubkeys.length,
@@ -142,7 +153,7 @@ export async function resolveRingableVolunteers(
     })
   }
 
-  return { available }
+  return { available, usedFallback }
 }
 
 // ---------------------------------------------------------------------------

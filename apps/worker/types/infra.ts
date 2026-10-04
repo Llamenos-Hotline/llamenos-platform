@@ -51,8 +51,14 @@ export interface Env {
   TWILIO_ACCOUNT_SID: string
   TWILIO_AUTH_TOKEN: string
   TWILIO_PHONE_NUMBER: string
-  ADMIN_PUBKEY: string
-  ADMIN_DECRYPTION_PUBKEY?: string // Separate pubkey for note/hub key encryption (falls back to ADMIN_PUBKEY)
+  // The platform admin's two keys, as two incompatible types — see
+  // apps/worker/lib/hpke-recipient.ts. Ed25519 verifies the admin's request
+  // signatures; X25519 is the HPKE recipient admin envelopes are sealed to.
+  // The brands make `ADMIN_DECRYPTION_PUBKEY || ADMIN_PUBKEY` a type error
+  // wherever a recipient is required (#1283): it used to type-check, and the
+  // envelopes it produced were unopenable by anyone.
+  ADMIN_PUBKEY: import('../lib/hpke-recipient').Ed25519AuthPubkey
+  ADMIN_DECRYPTION_PUBKEY?: import('../lib/hpke-recipient').HpkeRecipientPubkey
   HOTLINE_NAME: string
   ENVIRONMENT: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)

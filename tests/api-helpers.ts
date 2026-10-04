@@ -445,6 +445,55 @@ export function generateTestKeypair(): { seedHex: string; pubkey: string } {
   return { seedHex, pubkey }
 }
 
+// ── Invite Redemption ─────────────────────────────────────────────
+
+/**
+ * A distinct simulated client address, for endpoints rate limited per client.
+ *
+ * The dev and CI servers run with `TRUST_PROXY_HEADERS=true` precisely so the
+ * suite can present itself as many clients rather than one. Without a
+ * `CF-Connecting-IP` every request in every Playwright worker falls into the
+ * single bucket for 127.0.0.1, so the suite's own parallelism — not the
+ * behaviour under test — decides who gets a 429.
+ */
+export function simulatedClientIp(): string {
+  const octet = () => 1 + Math.floor(Math.random() * 254)
+  return `10.${octet()}.${octet()}.${octet()}`
+}
+
+/**
+ * Redeem an invite as ONE client, distinct from every other redeemer.
+ *
+ * `POST /api/invites/redeem` is rate limited to 5 per minute per client
+ * (`apps/worker/routes/invites.ts`) — an anti-enumeration control, and not
+ * something any scenario here is asserting. Sharing one bucket across the
+ * suite made that control answer 429 to whichever redemption happened to be
+ * sixth, which is how "two users simultaneously redeem the same invite code"
+ * came to observe ZERO successes instead of one (#1480).
+ *
+ * Each redeemer is a different person, so each gets its own address. Pass
+ * `clientIp` explicitly when a scenario needs two redemptions to come from the
+ * same client.
+ */
+export async function redeemInviteViaApi<T = unknown>(
+  request: APIRequestContext,
+  code: string,
+  seedHex: string,
+  clientIp: string = simulatedClientIp(),
+): Promise<{ status: number; data: T }> {
+  const path = '/api/invites/redeem'
+  const pubkey = seedHexToPubkey(seedHex)
+  const timestamp = Date.now()
+  const token = bytesToHex(
+    ed25519.sign(buildAuthMessage(pubkey, timestamp, 'POST', path), hexToBytes(seedHex)),
+  )
+  const res = await request.post(path, {
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': clientIp },
+    data: { code, pubkey, timestamp, token },
+  })
+  return { status: res.status(), data: (await safeJson(res)) as T }
+}
+
 // ── User CRUD ─────────────────────────────────────────────────────
 
 export interface CreateUserResult {

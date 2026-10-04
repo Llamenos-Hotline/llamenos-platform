@@ -66,6 +66,7 @@ interface WorkflowStep {
 }
 interface WorkflowJob {
   steps: WorkflowStep[]
+  env?: Record<string, string>
 }
 interface WorkflowDoc {
   jobs: Record<string, WorkflowJob>
@@ -83,6 +84,29 @@ function smokeStepScript(): string {
     throw new Error(`no "${STEP_NAME}" step with a run: block found — the parser must not pass vacuously`)
   }
   return step.run
+}
+
+/** The `fleet-review:` job's own `env:` map, read from the same YAML — the
+ *  faithful emulation of what GitHub injects into every `run:` step in the
+ *  job. Values that are `${{ ... }}` expressions are skipped (nothing here
+ *  can evaluate them); the plain literals, which is what
+ *  `FLEET_REVIEWER_TOOLS` is, come through verbatim.
+ *
+ *  Read rather than retyped on purpose: hand-writing the tool list here
+ *  would let the harness SUPPLY a value the workflow had stopped declaring,
+ *  so the step would keep passing in the suite while every real review ran
+ *  with the full default tool set, Bash included. Reading it means deleting
+ *  it from the YAML leaves it genuinely unset, and the step's own
+ *  "FLEET_REVIEWER_TOOLS resolved to nothing" guard then fires here too. */
+function jobEnv(): Record<string, string> {
+  const doc = parseYaml(readFileSync(FLEET_REVIEW_YML, 'utf8')) as WorkflowDoc
+  const job = doc.jobs['fleet-review']
+  if (!job) throw new Error('no "fleet-review" job found in fleet-review.yml — the parser must not pass vacuously')
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(job.env ?? {})) {
+    if (typeof v === 'string' && !v.includes('${{')) out[k] = v
+  }
+  return out
 }
 
 /** The pre-fix shape: strips the `set +e` line this PR adds, reproducing
@@ -173,6 +197,7 @@ function runStep(script: string, runMode: 'fail' | 'bad-verdict' | 'bad-model' |
     encoding: 'utf8',
     env: {
       ...process.env,
+      ...jobEnv(),
       PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}`,
       RUNNER_TEMP: runnerTemp,
       FLEET_REVIEW_MODEL: 'test-model',
@@ -289,7 +314,19 @@ function withoutTheSharedSource(script: string): string {
   expect(afterFiLine, 'could not find the closing "fi" line after the resolution block — this mutation is vacuous').toBeGreaterThan(afterEndMarkerLine)
   const before = script.slice(0, startIdx)
   const after = script.slice(afterFiLine)
-  const hardcoded = 'rev_binary="claude"\n          rev_model="hardcoded-mismatched-model"\n\n'
+  // The excised region spans `rev_tools=` too (it sits between `rev_model=`
+  // and the unparseable-output guard), so the replacement has to restore it.
+  // It is restored as the env reference the real step uses — NOT as a
+  // retyped literal — because `rev_tools` does not come from the imported
+  // source this mutation removes: it comes from the job's
+  // `FLEET_REVIEWER_TOOLS`, deliberately, since this YAML runs at the head
+  // while the checkout is the base. Retyping the list here would make the
+  // mutation also mutate something it is not about, and leaving it unset
+  // would trip the step's own "FLEET_REVIEWER_TOOLS resolved to nothing"
+  // guard — failing for the wrong reason, which proves nothing about the
+  // binary/model rail this mutation exists to exercise.
+  const hardcoded = 'rev_binary="claude"\n          rev_model="hardcoded-mismatched-model"\n'
+    + '          rev_tools="$FLEET_REVIEWER_TOOLS"\n\n'
   const mutated = before + hardcoded + after
   expect(mutated, 'mutation produced no change — vacuous').not.toBe(script)
   return mutated

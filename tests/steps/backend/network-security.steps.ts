@@ -207,8 +207,9 @@ Then('the digits should be stored server-side only', async ({ world: _world }) =
 
 // ── Invite Redemption Steps ─────────────────────────────────────
 
-Given('an invite code exists', async ({ request, world }) => {
+Given('an invite code exists', async ({ request, world, workerHub }) => {
   const { data } = await apiPost<{ code?: string; invite?: { code: string } }>(request, '/invites', {
+    hubId: workerHub,
     name: uniqueName('Sec Invite'),
     phone: uniquePhone(),
     roleIds: ['role-volunteer'],
@@ -407,11 +408,12 @@ Given('a volunteer-permissioned user', async ({ request, world }) => {
   getNetworkSecState(world).volunteerDeviceKey = vol.deviceKey
 })
 
-When('they try to create an invite with admin role', async ({ request, world }) => {
+When('they try to create an invite with admin role', async ({ request, world, workerHub }) => {
   const res = await apiPost(
     request,
     '/invites',
     {
+      hubId: workerHub,
       name: uniqueName('Esc Invite'),
       phone: uniquePhone(),
       roleIds: ['role-super-admin'],

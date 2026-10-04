@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   verifierArgs,
+  reviewFilesSection,
+  REVIEWER_TOOLS,
   decodeEngineOutput,
   parseVerdict,
   stripReviewerControlFiles,
@@ -682,6 +684,26 @@ describe('verifierArgs: the reviewer invocation', () => {
     expect(verifierArgs({ model: 'sonnet', maxTurns: 20, exportDir: '/x' })).toContain('20')
   })
 
+  it('withholds the shell, because a shell read costs one turn per file', () => {
+    // #1445's cause, pinned. A live re-run of that PR's own prompt under the
+    // old argv produced `tools: Bashx13 Readx1`, `num_turns=11`,
+    // `permission_denials=0` and no verdict: `--permission-mode plan`
+    // forbids EDITS, not COMMANDS, so the reviewer walked the export with
+    // `cat`/`find`/`grep`/`sed` — one file per turn — and exhausted the
+    // budget mid-sentence.
+    //
+    // `--tools` restricts the AVAILABLE set (so the model never sees Bash and
+    // cannot plan around it), unlike `--allowedTools`, which only governs
+    // approval of a tool that is still present. Asserted as the whole list,
+    // not just "no Bash": a reviewer that cannot search cannot check whether
+    // a diff stayed inside its lane, so dropping Grep or Glob would be a
+    // capability regression this rail must also catch.
+    const a = args()
+    expect(a[a.indexOf('--tools') + 1]).toBe('Read,Grep,Glob')
+    expect(a.join(' ')).not.toMatch(/\bBash\b/)
+    expect(a.join(' ')).not.toMatch(/\bWebFetch\b/)
+  })
+
   it('hands the export by --add-dir and never as the working directory', () => {
     // The project root is a separate empty dir — see invokeVerifierEngine's
     // comment on #812, where the PR under review WAS the project and its own
@@ -736,5 +758,37 @@ describe('summarised churn: what an exhausted review spent its turns on', () => 
     const run = decodeEngineOutput(raw, '')
     expect(parseVerdict(run.assistantText)).toBe('PASS')
     expect(run.diagnostics).toMatch(/num_turns=2/)
+  })
+})
+
+describe('reviewFilesSection: how the reviewer is told to reach the export', () => {
+  const section = () => reviewFilesSection(['a/b.ts'], '/tmp/export-xyz')
+
+  it('spells out the absolute path every tool needs, because the cwd is empty', () => {
+    // The working directory is a separate empty scratch dir
+    // (`invokeVerifierEngine`), so an unqualified Grep/Glob searches nothing
+    // and an unqualified Read fails outright — #1445's transcript ends on
+    // `File does not exist. Note: your current working directory is
+    // /tmp/llamenos-fleet-reviewer-root-...`. Without being told, the
+    // reviewer falls back to shelling out, which is the churn itself:
+    // measured on #1445's own prompt, `--tools` alone still exhausted one of
+    // two runs (`Grepx10 Readx5`) until this text arrived with it.
+    const text = section()
+    expect(text).toMatch(/working directory is NOT the export/)
+    expect(text).toMatch(/path: \/tmp\/export-xyz/)
+    expect(text).toMatch(/\/tmp\/export-xyz\/<path>/)
+  })
+
+  it('names the three tools it actually has, and that there is no shell', () => {
+    // Must stay in step with `REVIEWER_TOOLS`: a prompt that promises a tool
+    // `--tools` withholds sends the reviewer looking for it, and a prompt
+    // that omits one it has leaves that one unused.
+    const text = section()
+    for (const tool of REVIEWER_TOOLS) expect(text).toContain(tool)
+    expect(text).toMatch(/no shell/)
+  })
+
+  it('tells the reviewer a tool call costs a turn — the budget is not free', () => {
+    expect(section()).toMatch(/every tool call spends one turn/)
   })
 })
