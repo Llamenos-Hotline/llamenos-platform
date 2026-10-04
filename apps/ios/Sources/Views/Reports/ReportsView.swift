@@ -9,7 +9,7 @@ struct ReportsView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
     @State private var viewModelBox = ViewModelBox<ReportsViewModel>()
-    @State private var selectedReportType: ClientReportTypeDefinition?
+    @State private var selectedReportType: CMSReportTypeListResponseReportType?
 
     var body: some View {
         let vm = resolvedViewModel

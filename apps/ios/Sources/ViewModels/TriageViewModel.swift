@@ -52,7 +52,7 @@ final class TriageViewModel {
     }
 
     /// Report type definitions for resolving labels.
-    var reportTypes: [ClientReportTypeDefinition] = []
+    var reportTypes: [CMSReportTypeListResponseReportType] = []
 
     init(apiService: APIService, cryptoService: CryptoService) {
         self.apiService = apiService

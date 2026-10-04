@@ -23,11 +23,11 @@ final class ReportsViewModel {
     /// Report type definitions fetched from CMS settings.
     /// Populated from `GET /api/settings/cms/report-types` (preferred) with fallback
     /// to `GET /api/reports/types` (legacy).
-    var reportTypes: [ClientReportTypeDefinition] = []
+    var reportTypes: [CMSReportTypeListResponseReportType] = []
 
     /// CMS report types fetched directly from the settings endpoint.
     /// Includes full CMS-specific fields (hubId, isSystem, numberingEnabled, etc.).
-    var cmsReportTypes: [ClientReportTypeDefinition] = []
+    var cmsReportTypes: [CMSReportTypeListResponseReportType] = []
 
     /// Current status filter.
     var selectedFilter: ReportStatusFilter = .all
@@ -66,7 +66,7 @@ final class ReportsViewModel {
     }
 
     /// Mobile-optimized, non-archived report types available for submission.
-    var mobileReportTypes: [ClientReportTypeDefinition] {
+    var mobileReportTypes: [CMSReportTypeListResponseReportType] {
         reportTypes.filter { $0.mobileOptimized && !$0.isArchived }
     }
 
@@ -243,12 +243,14 @@ final class ReportsViewModel {
             // Encode body with a plain encoder (no snake_case conversion).
             // The backend expects camelCase keys (reportTypeId, encryptedContent,
             // readerEnvelopes), but APIService.encoder uses convertToSnakeCase.
-            let body = CreateTypedReportRequest(
-                title: title,
+            let body = CreateReportBody(
                 category: nil,
-                reportTypeId: reportTypeId,
                 encryptedContent: encrypted.encryptedContent,
-                readerEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes.map { env in
+                    SharedAdminEnvelope(ct: env.ct, enc: env.enc, pubkey: env.pubkey)
+                },
+                reportTypeID: reportTypeId,
+                title: title
             )
             let plainEncoder = JSONEncoder()
             let rawBody = try plainEncoder.encode(body)
@@ -359,7 +361,7 @@ final class ReportsViewModel {
 
     private func fetchReportTypes() async {
         do {
-            let response: ClientReportTypesResponse = try await apiService.request(
+            let response: CMSReportTypeListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/reports/types")
             )
