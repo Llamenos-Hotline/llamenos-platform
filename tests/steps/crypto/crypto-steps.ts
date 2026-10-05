@@ -41,6 +41,8 @@ import { expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import * as clientLabels from '@shared/crypto-labels'
+import { buildAuthMessage } from '@shared/auth-message'
+import { bytesToHex } from '@shared/encoding'
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
 const CRYPTO_LABELS_JSON = resolve(__dirname_, '../../../packages/protocol/crypto-labels.json')
@@ -667,13 +669,13 @@ Then('deriving with a different secret should produce a different code', async (
 
 // ─── Auth tokens ────────────────────────────────────────────────────────
 
-type ParsedToken = { pubkey: string; timestamp: number; token: string }
+type ParsedToken = { pubkey: string; timestamp: number; token: string; nonce?: string }
 
 async function createToken(page: Page, method: string, path: string, timestamp: number) {
   return page.evaluate(
     async ({ m, p: pth, ts }) => {
       const plat = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-        createAuthToken(ts: number, method: string, path: string, nonce?: string): Promise<string>
+        createAuthToken(ts: number, method: string, path: string): Promise<string>
       }
       return JSON.parse(await plat.createAuthToken(ts, m, pth))
     },
@@ -734,9 +736,13 @@ Then('the two tokens should have different signatures', async ({ page }) => {
 })
 
 /**
- * Rebuild the exact message the device signs and verify it with Ed25519.
- * Format (Rust build_auth_message, mirrored in tests/mocks/tauri-core.ts):
- *   llamenos:device-auth:v1:{pubkey}:{timestamp}:{method}:{path}
+ * Verify a token against the exact message the device signed.
+ *
+ * The message comes from the canonical shared builder in Node — never rebuilt
+ * by hand in the page, and never from a label literal. It must carry the
+ * token's own nonce: the signer generates one, and a message assembled without
+ * it is a different domain (`LABEL_DEVICE_AUTH_NO_NONCE`) that verification
+ * correctly rejects.
  */
 async function verifyToken(
   page: Page,
@@ -744,18 +750,15 @@ async function verifyToken(
   method: string,
   path: string,
 ): Promise<boolean> {
+  const msgHex = bytesToHex(buildAuthMessage(token.pubkey, token.timestamp, method, path, token.nonce))
   return page.evaluate(
-    async ({ t, m, p: pth }) => {
+    async ({ t, hex }) => {
       const plat = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
         ed25519Verify(messageHex: string, sigHex: string, pubkeyHex: string): Promise<boolean>
       }
-      const msg = `llamenos:device-auth:v1:${t.pubkey}:${t.timestamp}:${m}:${pth}`
-      const msgHex = Array.from(new TextEncoder().encode(msg), b =>
-        b.toString(16).padStart(2, '0'),
-      ).join('')
-      return plat.ed25519Verify(msgHex, t.token, t.pubkey)
+      return plat.ed25519Verify(hex, t.token, t.pubkey)
     },
-    { t: token, m: method, p: path },
+    { t: token, hex: msgHex },
   ) as Promise<boolean>
 }
 

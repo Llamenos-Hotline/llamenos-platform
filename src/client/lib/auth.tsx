@@ -271,8 +271,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       keyManager.markUnlocked(pubkeyHex)
       // Create auth token using CryptoState (device key never leaves Rust)
       const tokenJson = await createAuthToken(Date.now(), 'POST', '/api/auth/login')
-      const parsed = JSON.parse(tokenJson)
-      await login(pubkeyHex, parsed.timestamp, parsed.token)
+      const parsed = JSON.parse(tokenJson) as { timestamp: number; token: string; nonce?: string }
+      // Forward the nonce Rust generated and signed — dropping it means the
+      // server verifies a message that was never signed (#1389).
+      await login(pubkeyHex, parsed.timestamp, parsed.token, parsed.nonce)
       const me = await getMe()
       lastApiActivity.current = Date.now()
       setState({
@@ -318,8 +320,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Sync key-manager state so getAuthHeaders() can produce auth tokens
       keyManager.markUnlocked(pubkeyHex)
       const tokenJson = await createAuthToken(Date.now(), 'POST', '/api/auth/login')
-      const parsed = JSON.parse(tokenJson)
-      await login(pubkeyHex, parsed.timestamp, parsed.token)
+      const parsed = JSON.parse(tokenJson) as { timestamp: number; token: string; nonce?: string }
+      // Forward the nonce Rust generated and signed — dropping it means the
+      // server verifies a message that was never signed (#1389).
+      await login(pubkeyHex, parsed.timestamp, parsed.token, parsed.nonce)
       const me = await getMe()
       lastApiActivity.current = Date.now()
       setState({

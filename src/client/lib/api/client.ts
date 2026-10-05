@@ -37,21 +37,15 @@ export async function getAuthHeaders(method: string, apiPath: string): Promise<R
   // Use CryptoState for Schnorr auth if unlocked
   if (keyManager.isUnlocked()) {
     try {
-      const nonce = randomNonce()
-      const token = await createAuthToken(monotoneNow(), method, getApiPath(apiPath), nonce)
+      // No nonce argument: Rust generates and signs its own, and returns it
+      // inside the token JSON that travels in the Bearer header.
+      const token = await createAuthToken(monotoneNow(), method, getApiPath(apiPath))
       return { 'Authorization': `Bearer ${token}` }
     } catch {
       return {}
     }
   }
   return {}
-}
-
-/** Generate a random hex nonce for replay protection. */
-function randomNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
 }
 
 /**

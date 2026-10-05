@@ -32,6 +32,8 @@ function makeMock() {
   )
 }
 
+const STARTED_AT = new Date('2026-10-03T12:00:00.000Z')
+
 const activeCall = {
   callId: 'CA-caller-1',
   hubId: HUB,
@@ -39,6 +41,23 @@ const activeCall = {
   callerNumber: 'hashed-caller',
   callerLast4: '4567',
   status: 'in-progress',
+  startedAt: STARTED_AT,
+}
+
+// A call_records row as the table defines it: started_at and encrypted_content are
+// NOT NULL. The routes project these onto `callRecordResponseSchema`, so a mock that
+// omits them would make the projection throw where the real row never could.
+const endedRecord = {
+  callId: activeCall.callId,
+  hubId: HUB,
+  callerLast4: '4567',
+  answeredBy: PUBKEY,
+  startedAt: STARTED_AT,
+  endedAt: new Date('2026-10-03T12:04:00.000Z'),
+  duration: 240,
+  status: 'completed',
+  encryptedContent: 'enc',
+  adminEnvelopes: [],
 }
 
 function setup() {
@@ -46,10 +65,10 @@ function setup() {
   const callsSvc = {
     getActiveCallById: vi.fn().mockResolvedValue(activeCall),
     getActiveCallByCallId: vi.fn().mockResolvedValue(activeCall),
-    getCallRecord: vi.fn().mockResolvedValue({ callId: activeCall.callId, status: 'completed' }),
+    getCallRecord: vi.fn().mockResolvedValue(endedRecord),
     endCall: vi.fn(async () => {
       order.push('endCall')
-      return { callId: activeCall.callId, status: 'completed' }
+      return endedRecord
     }),
   }
   const services = {
@@ -121,7 +140,7 @@ describe('provider hang-up on in-app call actions', () => {
       const res = await post(app, '/CA-caller-1/hangup')
 
       expect(res.status).toBe(200)
-      expect((await res.json()).call.callId).toBe('CA-caller-1')
+      expect((await res.json()).call.id).toBe('CA-caller-1')
       expect(mockAdapter().actions).toEqual([{ type: 'hangup', callSid: 'CA-caller-1' }])
     })
 

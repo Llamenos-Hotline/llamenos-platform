@@ -6,7 +6,7 @@ import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   changedFilesFrom, addedLinesFrom, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
-  judgeTargetRun, parseVitestJson,
+  judgeTargetRun, parseVitestJson, parseVitestFailures,
 } from '../../orchestrator/src/verify.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -571,6 +571,103 @@ describe('parseVitestJson', () => {
   })
 })
 
+// --- #1510/#1495: a failure signal must identify itself. The gate used to
+// report "3 failed test(s), 2 failed suite(s)" and nothing else, so a failure
+// that happens ONLY under the gate (it runs the head as a `git archive`
+// export against the BASE checkout's node_modules) could not be named, and
+// therefore could not be reproduced. The names were in the result file the
+// gate already reads the counts from; they were simply thrown away.
+
+describe('parseVitestFailures', () => {
+  const report = (testResults: unknown[]): string => JSON.stringify({ ...GREEN_COUNTS, testResults })
+
+  it('names each failed assertion by file and full name, with the first line of its error', () => {
+    const text = report([{
+      name: '/root/apps/worker/__tests__/unit/a.test.ts',
+      status: 'failed',
+      assertionResults: [
+        { fullName: 'suite > passes', status: 'passed' },
+        { fullName: 'suite > breaks', status: 'failed', failureMessages: ['AssertionError: expected 1 to be 2\n    at x.ts:1:1'] },
+      ],
+    }])
+    expect(parseVitestFailures(text, '/root')).toEqual([
+      {
+        file: 'apps/worker/__tests__/unit/a.test.ts',
+        test: 'suite > breaks',
+        message: 'AssertionError: expected 1 to be 2 at x.ts:1:1',
+      },
+    ])
+  })
+
+  it('keeps the absolute path when no test root is given', () => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'failed',
+      assertionResults: [{ fullName: 'breaks', status: 'failed', failureMessages: [] }],
+    }])
+    expect(parseVitestFailures(text)).toEqual([{ file: '/root/a.test.ts', test: 'breaks' }])
+  })
+
+  it('reports a file that failed before any test ran — the case the counts show only as a failed suite', () => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'failed', assertionResults: [],
+      message: "Error: Cannot find module '@llamenos/nope'",
+    }])
+    expect(parseVitestFailures(text, '/root')).toEqual([
+      { file: 'a.test.ts', message: "Error: Cannot find module '@llamenos/nope'" },
+    ])
+  })
+
+  it('reports nothing for a wholly passing report', () => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'passed',
+      assertionResults: [{ fullName: 'ok', status: 'passed' }],
+    }])
+    expect(parseVitestFailures(text, '/root')).toEqual([])
+  })
+
+  it.each([
+    ['unparseable text', 'not json'],
+    ['a non-object document', '[]'],
+    ['a document with no testResults', '{"numFailedTests": 3}'],
+    ['a testResults that is not an array', '{"testResults": "nope"}'],
+    ['entries that are not objects', '{"testResults": [null, 7, "x"]}'],
+  ])('returns [] rather than throwing for %s — it may never change a verdict', (_label, text) => {
+    expect(parseVitestFailures(text, '/root')).toEqual([])
+  })
+
+  it.each([
+    ['a GitHub token', 'failed with ghp_abcdefghijklmnopqrstuvwxyz0123', 'ghp_'],
+    ['a connection URL with credentials', 'connect postgres://admin:hunter2@db.internal:5432/llamenos failed', 'hunter2'],
+    ['an env assignment', 'env dump: SIGNAL_NOTIFIER_BEARER_TOKEN=s3cr3tvalue12345 was wrong', 's3cr3tvalue12345'],
+    ['an Authorization header', 'sent Authorization: Bearer abcdefghijklmnop0123', 'abcdefghijklmnop0123'],
+    ['a DATABASE_URL assignment', 'DATABASE_URL="postgres://x/y" was unset', 'postgres://x/y'],
+  ])('scrubs %s out of a failure message', (_label, raw, secret) => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'failed',
+      assertionResults: [{ fullName: 'leaks', status: 'failed', failureMessages: [raw] }],
+    }])
+    const message = parseVitestFailures(text, '/root')[0]?.message ?? ''
+    expect(message).not.toContain(secret)
+    expect(message).toContain('redacted')
+  })
+
+  it('leaves a public key alone — redacting every `…Key` would cost the diagnostic this exists to buy', () => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'failed',
+      assertionResults: [{ fullName: 'differs', status: 'failed', failureMessages: ['expected publicKey: "abc123def456" to match'] }],
+    }])
+    expect(parseVitestFailures(text, '/root')[0]?.message).toContain('abc123def456')
+  })
+
+  it('bounds a single failure message so one crash dump cannot flood the log', () => {
+    const text = report([{
+      name: '/root/a.test.ts', status: 'failed',
+      assertionResults: [{ fullName: 'huge', status: 'failed', failureMessages: ['x'.repeat(50_000)] }],
+    }])
+    expect((parseVitestFailures(text, '/root')[0]?.message ?? '').length).toBeLessThanOrEqual(201)
+  })
+})
+
 describe('judgeTargetRun', () => {
   const exited = (exitCode: number, output = ''): TestRunResult => ({ exitCode, signal: undefined, output })
   const killed = (signal: string): TestRunResult => ({ exitCode: undefined, signal, output: '' })
@@ -632,6 +729,61 @@ describe('judgeTargetRun', () => {
     expect(o).toEqual({
       passed: true, evidence: 't: result file read — 0 failed test(s), 0 failed suite(s), 10 passed, 2 skipped/todo, of 12 test(s)',
     })
+  })
+
+  // #1510: the counts alone are a verdict with no subject.
+  const failingReport = (count: number): string => vitestJson({
+    numFailedTests: count, numFailedTestSuites: 1, numPassedTests: Math.max(0, 12 - count), numTotalTests: 12 + count, success: false,
+    testResults: [{
+      name: '/root/apps/worker/__tests__/unit/recording.test.ts',
+      status: 'failed',
+      assertionResults: Array.from({ length: count }, (_v, i) => ({
+        fullName: `call recording notice > case ${i}`,
+        status: 'failed',
+        failureMessages: [`AssertionError: case ${i} is wrong`],
+      })),
+    }],
+  })
+
+  it('NAMES the failing tests, not just their count', () => {
+    const reason = reasonOf(judgeTargetRun('t', exited(1), failingReport(2), '/root'))
+    expect(reason).toMatch(/^t: tests failed — 2 failed test\(s\)/)
+    expect(reason).toContain('apps/worker/__tests__/unit/recording.test.ts > call recording notice > case 0')
+    expect(reason).toContain('apps/worker/__tests__/unit/recording.test.ts > call recording notice > case 1')
+    expect(reason).toContain('AssertionError: case 1 is wrong')
+  })
+
+  it('caps the list and says how many it left out, so a 400-failure run stays readable', () => {
+    const reason = reasonOf(judgeTargetRun('t', exited(1), failingReport(40), '/root'))
+    expect(reason).toContain('call recording notice > case 11')
+    expect(reason).not.toContain('call recording notice > case 12')
+    expect(reason).toContain('(+28 more failure(s) not listed)')
+    expect(reason.length).toBeLessThan(8000)
+  })
+
+  it('names a suite that failed before any test ran, which the counts show only as a failed suite', () => {
+    const text = vitestJson({
+      numFailedTests: 0, numFailedTestSuites: 1, success: false,
+      testResults: [{ name: '/root/a.test.ts', status: 'failed', assertionResults: [], message: 'Error: boom on import' }],
+    })
+    const reason = reasonOf(judgeTargetRun('t', exited(1), text, '/root'))
+    expect(reason).toContain('a.test.ts (failed before any test ran)')
+    expect(reason).toContain('Error: boom on import')
+  })
+
+  it("scrubs the runner's own output tail — a dying runner's stderr is where an env dump lands", () => {
+    const run = exited(137, 'FATAL\nDATABASE_URL=postgres://admin:hunter2@db/llamenos\ntoken ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    const reason = reasonOf(judgeTargetRun('t', run, undefined))
+    expect(reason).toContain('last output:')
+    expect(reason).not.toContain('hunter2')
+    expect(reason).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123')
+  })
+
+  it('SAYS SO when the result named no failure, instead of printing a bare count — and falls back to the output tail', () => {
+    const text = vitestJson({ numFailedTests: 3, numFailedTestSuites: 2, numPassedTests: 9, success: false })
+    const reason = reasonOf(judgeTargetRun('t', exited(1, 'FAIL somewhere\n'), text, '/root'))
+    expect(reason).toMatch(/the result file named no individual failure/)
+    expect(reason).toContain('last output: FAIL somewhere')
   })
 })
 
@@ -720,6 +872,27 @@ describe('phase 2 runs nothing the commit under judgement controls in vitest mai
     expect(report.passed).toBe(false)
     expect(report.reasons.join('\n')).toMatch(/tests failed — 1 failed test\(s\)/)
     expect(existsSync(executed)).toBe(false)
+  }, TIMEOUT)
+
+  // The break-it proof for #1510's observability fix: a deliberately broken
+  // test, run through the real gate path end to end, must come back NAMED.
+  // Before this, the same run reported "1 failed test(s)" and nothing else.
+  it('NAMES a deliberately broken test in the gate report, not just its count', async () => {
+    const dir = trustedRepo()
+    const head = headExport(cleanup, dir, {
+      'tests/orchestrator/broken.test.ts':
+        "import { describe, it, expect } from 'vitest'\n" +
+        "describe('a named suite', () => { it('is deliberately broken', () => { expect(1).toBe(2) }) })\n",
+    })
+
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: fleetLane, testDir: head })
+    expect(report.passed).toBe(false)
+    const reasons = report.reasons.join('\n')
+    expect(reasons).toMatch(/tests failed — 1 failed test\(s\)/)
+    expect(reasons).toContain('tests/orchestrator/broken.test.ts > a named suite is deliberately broken')
+    expect(reasons).toContain('expected 1 to be 2')
+    // Relative to the export, not the runner's absolute temp path.
+    expect(reasons).not.toContain(head)
   }, TIMEOUT)
 
   it("never searches the export for a PostCSS config: one that forges green on exit cannot pass a failing test", async () => {

@@ -11,7 +11,12 @@ import XCTest
 /// (79215a4c…af9183, ci.yml TEST_ADMIN_PUBKEY); `seedHex` is its Ed25519 seed, the
 /// same fixture as ADMIN_SEED in tests/helpers.ts. Requests carry the per-request
 /// Ed25519 token the server verifies in apps/worker/lib/auth.ts: a signature over
-/// `LABEL_DEVICE_AUTH:pubkey:timestamp:METHOD:path`.
+/// `LABEL_DEVICE_AUTH:pubkey:timestamp:METHOD:path:nonce`.
+///
+/// Header auth is the nonce-bearing domain — the server rejects the nonce-less
+/// shape (which has its own label, `LABEL_DEVICE_AUTH_NO_NONCE`) on every route
+/// that does not explicitly opt in. A harness that signed the other shape would
+/// be testing a path the app never takes.
 enum TestAdminAPI {
     static let seedHex = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
 
@@ -81,9 +86,10 @@ enum TestAdminAPI {
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hexString: seedHex))
         let pubkey = key.publicKey.rawRepresentation.hexString
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        let message = "\(CryptoLabels.LABEL_DEVICE_AUTH):\(pubkey):\(timestamp):\(method):\(path)"
+        let nonce = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let message = "\(CryptoLabels.LABEL_DEVICE_AUTH):\(pubkey):\(timestamp):\(method):\(path):\(nonce)"
         let token = try key.signature(for: Data(message.utf8)).hexString
-        let json = try JSONSerialization.data(withJSONObject: ["pubkey": pubkey, "timestamp": timestamp, "token": token])
+        let json = try JSONSerialization.data(withJSONObject: ["pubkey": pubkey, "timestamp": timestamp, "token": token, "nonce": nonce])
         return String(decoding: json, as: UTF8.self)
     }
 }
