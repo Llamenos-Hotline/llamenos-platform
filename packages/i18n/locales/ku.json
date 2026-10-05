@@ -4665,15 +4665,15 @@
     "voicemailPrompt": "Niha kes tune ku banga we bibersivîne. Ji kerema xwe piştî dengê bîpê peyamek bihêlin.",
     "voicemailThanks": "Spas ji bo peyama we. Bi xatirê te."
   },
-  "enrol": {
+  "enroll": {
     "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enrol",
+    "failedTitle": "Couldn’t enroll",
     "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
     "errorNotFound": "Invite not found. Check the code and try again.",
     "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
     "errorRateLimited": "Too many attempts. Wait a moment and try again.",
     "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
     "retry": "Retry",
     "continueWithout": "Continue without enrolling"
   }

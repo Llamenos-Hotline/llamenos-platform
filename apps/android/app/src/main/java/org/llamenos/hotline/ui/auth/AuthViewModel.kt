@@ -50,8 +50,8 @@ data class AuthUiState(
     val hubUrl: String = "",
     val inviteCode: String = "",
 
-    // Invite-code enrolment (#1345)
-    val enrolment: EnrolmentState = EnrolmentState.NotApplicable,
+    // Invite-code enrollment (#1345)
+    val enrollment: EnrollmentState = EnrollmentState.NotApplicable,
 
     // PIN
     val pin: String = "",
@@ -71,7 +71,7 @@ data class AuthUiState(
 )
 
 /** Classified redemption failure, mapped to a localized message by the UI. */
-enum class EnrolmentError {
+enum class EnrollmentError {
     INVALID_CODE,
     NOT_FOUND,
     EXPIRED,
@@ -81,17 +81,17 @@ enum class EnrolmentError {
 }
 
 /**
- * Invite-code enrolment progress (#1345).
+ * Invite-code enrollment progress (#1345).
  *
  * [NotApplicable] when no invite code was entered — the identity is created
  * locally and used as before. [Redeemed]/[Skipped] both end authenticated.
  */
-sealed interface EnrolmentState {
-    data object NotApplicable : EnrolmentState
-    data object Redeeming : EnrolmentState
-    data object Redeemed : EnrolmentState
-    data class Failed(val error: EnrolmentError) : EnrolmentState
-    data object Skipped : EnrolmentState
+sealed interface EnrollmentState {
+    data object NotApplicable : EnrollmentState
+    data object Redeeming : EnrollmentState
+    data object Redeemed : EnrollmentState
+    data class Failed(val error: EnrollmentError) : EnrollmentState
+    data object Skipped : EnrollmentState
 }
 
 /**
@@ -196,32 +196,32 @@ class AuthViewModel @Inject constructor(
     /**
      * Redeem the entered invite code against the server, registering this
      * identity as a hub member. Called automatically after identity creation
-     * when an invite code is present; [retryEnrolment] re-enters here after a
+     * when an invite code is present; [retryEnrollment] re-enters here after a
      * failure. Only resolves [AuthUiState.isAuthenticated] on success or when
-     * the user skips ([skipEnrolment]).
+     * the user skips ([skipEnrollment]).
      */
     fun redeemInvite(code: String) {
-        _uiState.update { it.copy(enrolment = EnrolmentState.Redeeming) }
+        _uiState.update { it.copy(enrollment = EnrollmentState.Redeeming) }
         viewModelScope.launch {
             inviteRepository.redeemInvite(code)
                 .onSuccess {
                     _uiState.update {
                         it.copy(
-                            enrolment = EnrolmentState.Redeemed,
+                            enrollment = EnrollmentState.Redeemed,
                             isAuthenticated = true,
                         )
                     }
                 }
                 .onFailure { e ->
                     _uiState.update {
-                        it.copy(enrolment = EnrolmentState.Failed(classifyRedeemFailure(e)))
+                        it.copy(enrollment = EnrollmentState.Failed(classifyRedeemFailure(e)))
                     }
                 }
         }
     }
 
     /** Retry a failed redemption with the same invite code. */
-    fun retryEnrolment() {
+    fun retryEnrollment() {
         val code = _uiState.value.inviteCode
         if (InviteCodeParser.extract(code) != null) redeemInvite(code)
     }
@@ -229,24 +229,24 @@ class AuthViewModel @Inject constructor(
     /**
      * Give up on enrolling for now and enter the app with the local identity.
      * The server still doesn't know this pubkey, so signed requests will 401
-     * until an enrolment succeeds — surfaced by the existing auth-error flow.
+     * until an enrollment succeeds — surfaced by the existing auth-error flow.
      */
-    fun skipEnrolment() {
+    fun skipEnrollment() {
         _uiState.update {
-            it.copy(enrolment = EnrolmentState.Skipped, isAuthenticated = true)
+            it.copy(enrollment = EnrollmentState.Skipped, isAuthenticated = true)
         }
     }
 
-    private fun classifyRedeemFailure(e: Throwable): EnrolmentError = when (e) {
+    private fun classifyRedeemFailure(e: Throwable): EnrollmentError = when (e) {
         is ApiException -> when (e.code) {
-            400 -> EnrolmentError.INVALID_CODE
-            404 -> EnrolmentError.NOT_FOUND
-            410 -> EnrolmentError.EXPIRED
-            429 -> EnrolmentError.RATE_LIMITED
-            else -> EnrolmentError.UNKNOWN
+            400 -> EnrollmentError.INVALID_CODE
+            404 -> EnrollmentError.NOT_FOUND
+            410 -> EnrollmentError.EXPIRED
+            429 -> EnrollmentError.RATE_LIMITED
+            else -> EnrollmentError.UNKNOWN
         }
-        is IOException -> EnrolmentError.NETWORK
-        else -> EnrolmentError.UNKNOWN
+        is IOException -> EnrollmentError.NETWORK
+        else -> EnrollmentError.UNKNOWN
     }
 
     /**
@@ -344,7 +344,7 @@ class AuthViewModel @Inject constructor(
                 }
 
                 // Keys exist locally now. If the volunteer entered an invite
-                // code, enrol before declaring authentication — the identity
+                // code, enroll before declaring authentication — the identity
                 // is only useful once the server knows it (#1345).
                 onIdentityCreated()
             } catch (e: Exception) {

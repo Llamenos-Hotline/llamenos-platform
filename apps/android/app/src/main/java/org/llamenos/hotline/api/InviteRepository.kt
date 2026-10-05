@@ -10,7 +10,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Enrolment via invite-code redemption (#1345).
+ * Enrollment via invite-code redemption (#1345).
  *
  * Wraps the public invite routes in apps/worker/routes/invites.ts:
  * - POST /api/invites/redeem — registers this device's identity against an
