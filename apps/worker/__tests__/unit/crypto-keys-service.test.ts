@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { CryptoKeysService, CryptoKeyError } from '../../services/crypto-keys'
+import {
+  CryptoKeysService,
+  CryptoKeyError,
+  computeEntryHash,
+  assertCanonicalSigchainPayload,
+} from '../../services/crypto-keys'
 import { sha256 } from '@noble/hashes/sha2.js'
 
 // Mock ed25519Verify for sigchain signature validation
@@ -110,7 +115,7 @@ function makeLinkBody(overrides: {
   seqNo: number
   linkType: string
   payload: unknown
-  prevHash: string
+  prevHash: string | null
   signature?: string
   signerDeviceId?: string
   signerPubkey?: string
@@ -169,11 +174,11 @@ describe('CryptoKeysService — Sigchain', () => {
       expect(result).toEqual([])
     })
 
-    it('returns links ordered by seqNo ascending', async () => {
+    it('returns links ordered by seqNo ascending, genesis prevHash normalized to null', async () => {
       const links = [
-        makeLink({ seqNo: 0, hash: 'h0', prevHash: '' }),
-        makeLink({ seqNo: 1, hash: 'h1', prevHash: 'h0' }),
+        makeLink({ seqNo: 1, hash: 'h1', prevHash: '' }),
         makeLink({ seqNo: 2, hash: 'h2', prevHash: 'h1' }),
+        makeLink({ seqNo: 3, hash: 'h3', prevHash: 'h2' }),
       ]
 
       const db = {
@@ -190,24 +195,31 @@ describe('CryptoKeysService — Sigchain', () => {
       const result = await svc.getSigchain('user-pk1')
 
       expect(result).toHaveLength(3)
-      expect(result[0].seqNo).toBe(0)
-      expect(result[1].seqNo).toBe(1)
-      expect(result[2].seqNo).toBe(2)
+      expect(result[0].seqNo).toBe(1)
+      expect(result[1].seqNo).toBe(2)
+      expect(result[2].seqNo).toBe(3)
+      // Genesis prevHash is stored as '' (NOT NULL column) but the wire
+      // contract is JSON null (crate verify_sigchain requires prevHash=null
+      // on the first link).
+      expect(result[0].prevHash).toBeNull()
+      expect(result[1].prevHash).toBe('h1')
       expect(typeof result[0].createdAt).toBe('string')
     })
   })
 
   describe('appendSigchainLink', () => {
-    it('appends genesis link (seqNo=0, prevHash="")', async () => {
+    it('appends genesis link (seqNo=1, prevHash=null)', async () => {
       const body = makeLinkBody({
-        seqNo: 0,
+        seqNo: 1,
         linkType: 'genesis',
         payload: { type: 'user_init', deviceId: 'dev-1' },
-        prevHash: '',
+        prevHash: null,
       })
 
+      // The DB column is NOT NULL — the service persists genesis prevHash as ''
+      // and returns it normalized to null.
       const insertedRow = makeLink({
-        seqNo: 0,
+        seqNo: 1,
         hash: body.hash,
         prevHash: '',
       })
@@ -232,10 +244,78 @@ describe('CryptoKeysService — Sigchain', () => {
       const svc = new CryptoKeysService(db as never)
       const result = await svc.appendSigchainLink('user-pk1', body)
 
-      expect(result.seqNo).toBe(0)
+      expect(result.seqNo).toBe(1)
       expect(result.hash).toBe(body.hash)
-      expect(result.prevHash).toBe('')
+      expect(result.prevHash).toBeNull()
       expect(db.insert).toHaveBeenCalled()
+    })
+
+    it('accepts legacy genesis prevHash="" as an alias for null', async () => {
+      const body = makeLinkBody({
+        seqNo: 1,
+        linkType: 'genesis',
+        payload: { type: 'user_init', deviceId: 'dev-1' },
+        prevHash: '',
+      })
+
+      const insertedRow = makeLink({
+        seqNo: 1,
+        hash: body.hash,
+        prevHash: '',
+      })
+
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue([]),
+              }),
+            }),
+          }),
+        }),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([insertedRow]),
+          }),
+        }),
+      }
+
+      const svc = new CryptoKeysService(db as never)
+      const result = await svc.appendSigchainLink('user-pk1', body)
+      expect(result.seqNo).toBe(1)
+      expect(result.prevHash).toBeNull()
+    })
+
+    it('rejects legacy genesis seqNo=0 with 409', async () => {
+      const body = makeLinkBody({
+        seqNo: 0, // pre-#1029 genesis shape — the crate verifier requires seq=1
+        linkType: 'genesis',
+        payload: { type: 'user_init', deviceId: 'dev-1' },
+        prevHash: '',
+      })
+
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue([]),
+              }),
+            }),
+          }),
+        }),
+      }
+
+      const svc = new CryptoKeysService(db as never)
+      try {
+        await svc.appendSigchainLink('user-pk1', body)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CryptoKeyError)
+        expect((err as CryptoKeyError).status).toBe(409)
+        expect((err as CryptoKeyError).message).toContain('expected 1, got 0')
+      }
     })
 
     it('appends link with correct seqNo and prevHash', async () => {
@@ -282,7 +362,7 @@ describe('CryptoKeysService — Sigchain', () => {
 
     it('rejects seqNo mismatch with 409', async () => {
       const existingLinks = [
-        makeLink({ seqNo: 0, hash: 'h0', prevHash: '' }),
+        makeLink({ seqNo: 1, hash: 'h1', prevHash: '' }),
       ]
 
       const db = {
@@ -298,10 +378,10 @@ describe('CryptoKeysService — Sigchain', () => {
       }
 
       const body = makeLinkBody({
-        seqNo: 5, // should be 1
+        seqNo: 5, // should be 2
         linkType: 'device_add',
         payload: {},
-        prevHash: 'h0',
+        prevHash: 'h1',
       })
 
       const svc = new CryptoKeysService(db as never)
@@ -311,13 +391,13 @@ describe('CryptoKeysService — Sigchain', () => {
       } catch (err) {
         expect(err).toBeInstanceOf(CryptoKeyError)
         expect((err as CryptoKeyError).status).toBe(409)
-        expect((err as CryptoKeyError).message).toContain('expected 1, got 5')
+        expect((err as CryptoKeyError).message).toContain('expected 2, got 5')
       }
     })
 
     it('rejects prevHash mismatch with 409', async () => {
       const existingLinks = [
-        makeLink({ seqNo: 0, hash: 'h0', prevHash: '' }),
+        makeLink({ seqNo: 1, hash: 'h1', prevHash: '' }),
       ]
 
       const db = {
@@ -333,10 +413,10 @@ describe('CryptoKeysService — Sigchain', () => {
       }
 
       const body = makeLinkBody({
-        seqNo: 1,
+        seqNo: 2,
         linkType: 'device_add',
         payload: {},
-        prevHash: 'wrong-hash', // should be 'h0'
+        prevHash: 'wrong-hash', // should be 'h1'
       })
 
       const svc = new CryptoKeysService(db as never)
@@ -352,7 +432,7 @@ describe('CryptoKeysService — Sigchain', () => {
 
     it('rejects seqNo=0 when chain already has genesis', async () => {
       const existingLinks = [
-        makeLink({ seqNo: 0, hash: 'h0', prevHash: '' }),
+        makeLink({ seqNo: 1, hash: 'h1', prevHash: '' }),
       ]
 
       const db = {
@@ -368,7 +448,7 @@ describe('CryptoKeysService — Sigchain', () => {
       }
 
       const body = makeLinkBody({
-        seqNo: 0, // should be 1
+        seqNo: 0, // should be 2
         linkType: 'genesis',
         payload: {},
         prevHash: '',
@@ -400,7 +480,7 @@ describe('CryptoKeysService — Sigchain', () => {
         insert: vi.fn().mockReturnValue({
           values: vi.fn().mockReturnValue({
             returning: vi.fn().mockResolvedValue([
-              makeLink({ seqNo: 0, hash: 'h0', prevHash: '', createdAt: new Date() }),
+              makeLink({ seqNo: 1, hash: 'h1', prevHash: '', createdAt: new Date() }),
             ]),
           }),
         }),
@@ -409,10 +489,10 @@ describe('CryptoKeysService — Sigchain', () => {
 
     it('accepts link with correctly computed canonical hash', async () => {
       const body = makeLinkBody({
-        seqNo: 0,
+        seqNo: 1,
         linkType: 'genesis',
         payload: { type: 'user_init', deviceId: 'dev-1' },
-        prevHash: '',
+        prevHash: null,
       })
 
       const svc = new CryptoKeysService(makeGenesisDb() as never)
@@ -422,10 +502,10 @@ describe('CryptoKeysService — Sigchain', () => {
 
     it('rejects link with tampered payload (hash mismatch, 400)', async () => {
       const body = makeLinkBody({
-        seqNo: 0,
+        seqNo: 1,
         linkType: 'genesis',
         payload: { type: 'user_init', deviceId: 'dev-1' },
-        prevHash: '',
+        prevHash: null,
       })
       // Tamper with the payload AFTER the hash was computed
       body.payload = { type: 'user_init', deviceId: 'TAMPERED' }
@@ -445,11 +525,11 @@ describe('CryptoKeysService — Sigchain', () => {
       const svc = new CryptoKeysService(makeGenesisDb() as never)
       try {
         await svc.appendSigchainLink('user-pk1', {
-          seqNo: 0,
+          seqNo: 1,
           linkType: 'genesis',
           payload: { type: 'user_init' },
           signature: 'aa'.repeat(64),
-          prevHash: '',
+          prevHash: null,
           hash: 'bb'.repeat(32), // arbitrary hash, not computed from content
           signerDeviceId: SIGNER_DEVICE_ID,
           signerPubkey: SIGNER_PUBKEY,
@@ -464,16 +544,16 @@ describe('CryptoKeysService — Sigchain', () => {
     })
 
     it('canonical hash is deterministic across identical inputs', () => {
-      const hash1 = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
-      const hash2 = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
+      const hash1 = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
+      const hash2 = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
       expect(hash1).toBe(hash2)
     })
 
     it('canonical hash differs when any field changes', () => {
-      const base = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
-      const diffSeq = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
-      const diffTs = computeTestHash(0, null, '2026-02-01T00:00:00Z', SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
-      const diffPayload = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'device_add' })
+      const base = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
+      const diffSeq = computeTestHash(2, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
+      const diffTs = computeTestHash(1, null, '2026-02-01T00:00:00Z', SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'user_init' })
+      const diffPayload = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { type: 'device_add' })
 
       expect(base).not.toBe(diffSeq)
       expect(base).not.toBe(diffTs)
@@ -482,9 +562,165 @@ describe('CryptoKeysService — Sigchain', () => {
 
     it('canonical hash sorts nested payload keys', () => {
       // {b: 1, a: 2} and {a: 2, b: 1} should produce the same hash
-      const hash1 = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { b: 1, a: 2 })
-      const hash2 = computeTestHash(0, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { a: 2, b: 1 })
+      const hash1 = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { b: 1, a: 2 })
+      const hash2 = computeTestHash(1, null, TIMESTAMP, SIGNER_DEVICE_ID, SIGNER_PUBKEY, { a: 2, b: 1 })
       expect(hash1).toBe(hash2)
+    })
+  })
+
+  describe('appendSigchainLink — canonical number rule (#1029)', () => {
+    function makeEmptyChainDb(insertedRow: MockLink) {
+      return {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue([]),
+              }),
+            }),
+          }),
+        }),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([insertedRow]),
+          }),
+        }),
+      }
+    }
+
+    function genesisBodyWith(payload: unknown) {
+      return makeLinkBody({
+        seqNo: 1,
+        linkType: 'genesis',
+        payload,
+        prevHash: null,
+      })
+    }
+
+    it('accepts payloads whose numbers are all integers ≤ 2^53 (incl. nested)', async () => {
+      const body = genesisBodyWith({ type: 'user_init', nested: { counts: [1, 9007199254740991] } })
+      const svc = new CryptoKeysService(
+        makeEmptyChainDb(makeLink({ seqNo: 1, hash: body.hash, prevHash: '' })) as never,
+      )
+      const result = await svc.appendSigchainLink('user-pk1', body)
+      expect(result.seqNo).toBe(1)
+    })
+
+    it('rejects fractional payload numbers with 400', async () => {
+      // serde_json serializes 1.5 as "1.5" but collapses vary by platform for
+      // other forms (1.0 → "1" in JS) — floats are outside the canonical domain.
+      const body = genesisBodyWith({ type: 'user_init', n: 1.5 })
+      const svc = new CryptoKeysService(
+        makeEmptyChainDb(makeLink({ seqNo: 1, hash: body.hash, prevHash: '' })) as never,
+      )
+      try {
+        await svc.appendSigchainLink('user-pk1', body)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CryptoKeyError)
+        expect((err as CryptoKeyError).status).toBe(400)
+        expect((err as CryptoKeyError).message).toContain('payload.n')
+      }
+    })
+
+    it('rejects payload integers beyond 2^53 with 400 (issue #1029 repro)', async () => {
+      // 12345678901234567890 rounds silently in JS — hashing it would bind
+      // bytes no other platform can reproduce (the exact #1029 divergence).
+      const body = genesisBodyWith({ type: 'x', n: 12345678901234567890 })
+      const svc = new CryptoKeysService(
+        makeEmptyChainDb(makeLink({ seqNo: 1, hash: body.hash, prevHash: '' })) as never,
+      )
+      try {
+        await svc.appendSigchainLink('user-pk1', body)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CryptoKeyError)
+        expect((err as CryptoKeyError).status).toBe(400)
+        expect((err as CryptoKeyError).message).toContain('payload.n')
+      }
+    })
+
+    it('rejects numbers nested in arrays and objects with the JSON path', async () => {
+      const body = genesisBodyWith({ type: 'user_init', a: { b: [{ c: 0.1 }] } })
+      const svc = new CryptoKeysService(
+        makeEmptyChainDb(makeLink({ seqNo: 1, hash: body.hash, prevHash: '' })) as never,
+      )
+      try {
+        await svc.appendSigchainLink('user-pk1', body)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CryptoKeyError)
+        expect((err as CryptoKeyError).message).toContain('payload.a.b[0].c')
+      }
+    })
+
+    it('assertCanonicalSigchainPayload passes integer-only payloads', () => {
+      expect(() => assertCanonicalSigchainPayload({ a: 1, b: [2, { c: 3 }], d: null })).not.toThrow()
+    })
+
+    it('assertCanonicalSigchainPayload rejects non-integer numbers', () => {
+      expect(() => assertCanonicalSigchainPayload({ a: 1.5 })).toThrow(CryptoKeyError)
+      expect(() => assertCanonicalSigchainPayload({ a: Number.MAX_SAFE_INTEGER + 1 })).toThrow(CryptoKeyError)
+    })
+  })
+
+  describe('computeEntryHash — cross-language vectors (packages/crypto sigchain.rs)', () => {
+    // Pinned by test_cross_language_vectors in packages/crypto/src/sigchain.rs
+    // (cargo test -- --nocapture). Any platform implementing sigchain
+    // verification MUST produce these hashes.
+    const VECTOR_1_GENESIS = '7993a9e36114d2dff4fd882aa7261231beed2d5109aa84e01c8f46ee49e896a4'
+    const VECTOR_2_CHAINED = '2944558cc144bc39d1910a5ac26f5811cacd8678a70f88655e8baa37ecff0c2e'
+    const VECTOR_3_DEVICE_ADD = '9fa457d087b537494dd0761ff5f5ec1651f844229cccda9f8cbb92342d618e2e'
+
+    function toHex(bytes: Uint8Array): string {
+      const HEX = '0123456789abcdef'
+      let hex = ''
+      for (let i = 0; i < bytes.length; i++) {
+        hex += HEX[bytes[i] >> 4] + HEX[bytes[i] & 0x0f]
+      }
+      return hex
+    }
+
+    it('vector 1: genesis entry (seq=1, prevHash=null)', () => {
+      const hash = computeEntryHash(
+        1,
+        null,
+        '2026-01-01T00:00:00Z',
+        'device-001',
+        'ab01cd02',
+        JSON.parse('{"type":"user_init","deviceId":"device-001"}'),
+      )
+      expect(hash).toBe(VECTOR_1_GENESIS)
+    })
+
+    it('vector 1 canonical JSON matches the crate-pinned string byte-for-byte', () => {
+      // Pinned verbatim in sigchain.rs::test_cross_language_vectors.
+      const canonicalJson = '{"payload":{"deviceId":"device-001","type":"user_init"},"prevHash":null,"seq":1,"signerDeviceId":"device-001","signerPubkey":"ab01cd02","timestamp":"2026-01-01T00:00:00Z"}'
+      expect(toHex(sha256(new TextEncoder().encode(canonicalJson)))).toBe(VECTOR_1_GENESIS)
+    })
+
+    it('vector 2: chained entry (prevHash = 0xaa × 32)', () => {
+      const hash = computeEntryHash(
+        2,
+        'aa'.repeat(32),
+        '2026-01-01T00:01:00Z',
+        'device-001',
+        'ab01cd02',
+        JSON.parse('{"type":"puk_rotate","generation":2}'),
+      )
+      expect(hash).toBe(VECTOR_2_CHAINED)
+    })
+
+    it('vector 3: device_add entry chained on vector 2', () => {
+      const hash = computeEntryHash(
+        3,
+        VECTOR_2_CHAINED,
+        '2026-01-01T00:02:00Z',
+        'device-001',
+        'ab01cd02',
+        JSON.parse('{"type":"device_add","deviceId":"device-002","devicePubkey":"ff00ee11"}'),
+      )
+      expect(hash).toBe(VECTOR_3_DEVICE_ADD)
     })
   })
 
@@ -503,7 +739,7 @@ describe('CryptoKeysService — Sigchain', () => {
         insert: vi.fn().mockReturnValue({
           values: vi.fn().mockReturnValue({
             returning: vi.fn().mockResolvedValue([
-              makeLink({ seqNo: 0, hash: 'h0', prevHash: '', createdAt: new Date() }),
+              makeLink({ seqNo: 1, hash: 'h1', prevHash: '', createdAt: new Date() }),
             ]),
           }),
         }),
@@ -511,10 +747,10 @@ describe('CryptoKeysService — Sigchain', () => {
     }
 
     const genesisBody = makeLinkBody({
-      seqNo: 0,
+      seqNo: 1,
       linkType: 'genesis',
       payload: { type: 'user_init', deviceId: 'dev-1' },
-      prevHash: '',
+      prevHash: null,
     })
 
     it('accepts entry with valid Ed25519 signature', async () => {
@@ -574,10 +810,10 @@ describe('CryptoKeysService — Sigchain', () => {
       })
 
       const body = makeLinkBody({
-        seqNo: 0,
+        seqNo: 1,
         linkType: 'genesis',
         payload: { type: 'user_init' },
-        prevHash: '',
+        prevHash: null,
       })
 
       const db = {
@@ -585,7 +821,7 @@ describe('CryptoKeysService — Sigchain', () => {
         insert: vi.fn().mockReturnValue({
           values: vi.fn().mockReturnValue({
             returning: vi.fn().mockResolvedValue([
-              makeLink({ seqNo: 0, hash: body.hash, prevHash: '' }),
+              makeLink({ seqNo: 1, hash: body.hash, prevHash: '' }),
             ]),
           }),
         }),

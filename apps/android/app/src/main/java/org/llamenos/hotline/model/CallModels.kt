@@ -1,6 +1,5 @@
 package org.llamenos.hotline.model
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 // ── Generated response types ────────────────────────────────────────────────
@@ -9,14 +8,14 @@ typealias CallRecord = org.llamenos.protocol.CallRecordResponse
 typealias CallHistoryRecord = org.llamenos.protocol.SharedCall
 
 /**
- * Active call — a call currently ringing or in progress.
- * Client-only type because the API returns `callId` (DB column name) whereas the
- * generated ActiveCallsResponseCall expects `id`. This data class handles the
- * actual wire format with @SerialName mapping.
+ * Active call — a call currently ringing or in progress, as `/calls/active` sends it.
+ * The server keys it `id`, like the generated `SharedCall` (#1129). It never sends the
+ * caller's number or its HMAC, only `callerLast4`, so `callerNumber` is always null.
  */
 @Serializable
 data class ActiveCall(
-    @SerialName("callId") val id: String,
+    val id: String,
+    val callerLast4: String? = null,
     val callerNumber: String? = null,
     val answeredBy: String? = null,
     val startedAt: String,

@@ -100,11 +100,11 @@ describe('sigchain routes', () => {
 
   describe('POST /users/:targetPubkey/sigchain', () => {
     const validLink = {
-      seqNo: 0,
+      seqNo: 1,
       linkType: 'genesis',
       payload: { key: 'value' },
       signature: 'a'.repeat(128),
-      prevHash: '',
+      prevHash: null,
       hash: 'b'.repeat(64),
       signerDeviceId: 'dev-1',
       signerPubkey: 'cc'.repeat(32),

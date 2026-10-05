@@ -617,6 +617,7 @@
     "errorBreak": "Waa lagu guul dareeystay cusbooneysiga nasashada",
     "errorClockIn": "Waa lagu guul dareeystay gelitaanka wareegga",
     "errorClockOut": "Waa lagu guul dareeystay ka bixitaanka wareegga",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Waa lagu guul dareeystay cusbooneysiinta",
     "goOnBreak": "Nasasho qaado",
     "help": "Caawimaad",
@@ -716,6 +717,7 @@
       "archived": "La kaydiyay",
       "suspended": "La hakiyay"
     },
+    "switchFooter": "Taabo xarun si aad u beddesho macnaha firfircoon. Xarunta firfircoon ayaa go'aamisa xogta aad aragto.",
     "switchHub": "Bedel xarun",
     "title": "Maamulidda Xarumaha",
     "urlLabel": "URL-ka Xarunta",
@@ -734,6 +736,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Waxa sirta ah ee xaruntan lagama furi karo qalabkan weli",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -3563,7 +3566,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "badge": {
     "onCall": "Wicitaan ku jiraa",
@@ -4539,6 +4544,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4660,5 +4667,17 @@
     "unavailableMessage": "Waan ka xunnahay, hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan dib u isku day habeenkii dambe. Nabad gelyo.",
     "voicemailPrompt": "Hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan ka dib fariin dhig dhawaaqa kadib.",
     "voicemailThanks": "Waad ku mahadsan tahay fariintaada. Nabad gelyo."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

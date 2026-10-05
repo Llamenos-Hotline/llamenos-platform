@@ -12,7 +12,7 @@ import {
 } from '../db/schema'
 import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
-import { computeEntryHash } from './crypto-keys'
+import { assertCanonicalSigchainPayload, computeEntryHash } from './crypto-keys'
 
 const logger = createLogger('service.recovery-group')
 
@@ -36,7 +36,8 @@ export interface SigchainLinkInsert {
   linkType: string
   payload: unknown
   signature: string
-  prevHash: string
+  /** null for a genesis link (seqNo 1); stored as '' in the NOT NULL DB column. */
+  prevHash: string | null
   hash: string
   signerDeviceId: string
   signerPubkey: string
@@ -737,7 +738,8 @@ export class RecoveryGroupService {
     sigchainSeqNo: number
     sigchainPayload: Record<string, unknown>
     signature: string
-    prevHash: string
+    /** null for a genesis link (seqNo 1); '' accepted as a legacy alias. */
+    prevHash: string | null
     hash: string
     signerDeviceId: string
     timestamp: string
@@ -833,8 +835,10 @@ export class RecoveryGroupService {
         .orderBy(desc(sigchainLinks.seqNo))
         .limit(1)
 
-      const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
-      const expectedPrevHash = currentHead?.hash ?? ''
+      const expectedSeqNo = currentHead === undefined ? 1 : currentHead.seqNo + 1
+      const expectedPrevHash = currentHead?.hash ?? null
+      // '' on the wire is a legacy alias for JSON null (genesis only).
+      const normalizedPrevHash = prevHash === '' ? null : prevHash
 
       if (sigchainSeqNo !== expectedSeqNo) {
         throw new RecoveryGroupError(
@@ -842,16 +846,20 @@ export class RecoveryGroupService {
           409,
         )
       }
-      if (prevHash !== expectedPrevHash) {
+      if (normalizedPrevHash !== expectedPrevHash) {
         throw new RecoveryGroupError(
           'sigchain prevHash mismatch: does not match current chain head',
           409,
         )
       }
 
+      // Same canonical-number rule as appendSigchainLink — payload numbers
+      // must be integers ≤ 2^53 or JS and serde_json serialize differently.
+      assertCanonicalSigchainPayload(sigchainPayload)
+
       const recomputedHash = computeEntryHash(
         sigchainSeqNo,
-        prevHash === '' ? null : prevHash,
+        normalizedPrevHash,
         timestamp,
         signerDeviceId,
         session.newDevicePubkey,
@@ -872,7 +880,8 @@ export class RecoveryGroupService {
           linkType: 'recovery-device-add',
           payload: sigchainPayload,
           signature,
-          prevHash,
+          // DB column is NOT NULL; genesis (null) is stored as ''.
+          prevHash: normalizedPrevHash ?? '',
           hash,
           signerDeviceId,
           signerPubkey: session.newDevicePubkey,
@@ -887,7 +896,7 @@ export class RecoveryGroupService {
         linkType: inserted.linkType,
         payload: inserted.payload,
         signature: inserted.signature,
-        prevHash: inserted.prevHash,
+        prevHash: inserted.prevHash === '' ? null : inserted.prevHash,
         hash: inserted.hash,
         signerDeviceId: inserted.signerDeviceId,
         signerPubkey: inserted.signerPubkey,
