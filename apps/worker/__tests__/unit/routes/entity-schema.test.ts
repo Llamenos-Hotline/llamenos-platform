@@ -182,7 +182,8 @@ describe('entity-schema routes', () => {
       expect(res.status).toBe(200)
     })
 
-    it('uses hubId from query param when provided', async () => {
+    // #1044: inside /hubs/:hubId a query hub must not widen the request to another hub
+    it('refuses a query hubId that differs from the path hub', async () => {
       const getEntityTypesSpy = vi.fn().mockResolvedValue({ entityTypes: [] })
       const { app } = createTestApp({
         permissions: ['settings:read'],
@@ -191,8 +192,19 @@ describe('entity-schema routes', () => {
       })
 
       const res = await app.request('/cms/entity-types?hubId=hub-2')
+      expect(res.status).toBe(403)
+      expect(getEntityTypesSpy).not.toHaveBeenCalled()
+    })
+
+    it('honours a query hubId outside a hub for a super-admin', async () => {
+      const getEntityTypesSpy = vi.fn().mockResolvedValue({ entityTypes: [] })
+      const { app } = createTestApp({
+        permissions: ['*'],
+        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+      })
+
+      const res = await app.request('/cms/entity-types?hubId=hub-2')
       expect(res.status).toBe(200)
-      // Query param takes precedence over context hubId
       expect(getEntityTypesSpy).toHaveBeenCalledWith('hub-2')
     })
 

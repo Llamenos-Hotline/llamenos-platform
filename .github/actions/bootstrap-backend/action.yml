@@ -10,6 +10,7 @@ inputs:
       Admin X25519 HPKE recipient key — a DIFFERENT key from admin_pubkey, and required
       whenever it is set. The app refuses to boot rather than seal admin envelopes to an
       Ed25519 signing key, which succeeds and produces notes nobody can decrypt (#1283).
+
     required: true
   with_sidecars:
     description: 'Start signal-notifier and sip-bridge sidecars (true/false)'

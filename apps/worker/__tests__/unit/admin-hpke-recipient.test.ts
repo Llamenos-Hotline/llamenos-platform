@@ -174,11 +174,12 @@ describe('sealing to the Ed25519 key instead of the X25519 one', () => {
 
   function openAdminEnvelope(sealedHex: { enc: string; ct: string }): Uint8Array {
     const envelope = new Uint8Array([...hexToBytes(sealedHex.enc), ...hexToBytes(sealedHex.ct)])
+    // Stored-record format (#1393): the label is HPKE info, and there is no AAD.
     return hpkeOpen(
       adminX25519Secret,
       envelope,
       new TextEncoder().encode(LABEL_MESSAGE),
-      new TextEncoder().encode(`${LABEL_MESSAGE}:key-wrap`),
+      new Uint8Array(0),
     )
   }
 

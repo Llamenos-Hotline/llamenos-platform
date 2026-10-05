@@ -46,6 +46,7 @@ import {
 } from '@protocol/schemas/recovery-group'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { safeFetch } from '../lib/safe-fetch'
+import { callerHasHubAccess } from '../lib/hub-scope'
 
 // ---------------------------------------------------------------------------
 // Inline zod schemas — small, backend-only surface not shared with other
@@ -93,14 +94,14 @@ const recoveryListSessionsResponseSchema = z.array(z.object({
 }))
 
 const recoveryCompleteSchema = z.object({
-  /** Next sigchain seqNo for the recovering user's chain. */
-  sigchainSeqNo: z.number().int().nonnegative(),
+  /** Next sigchain seqNo for the recovering user's chain. 1 if the chain is empty (crate verifier: first link has seq=1). */
+  sigchainSeqNo: z.number().int().positive(),
   /** Must include { sessionId, contributingHolderPubkeys }. Server independently verifies both. */
   sigchainPayload: z.record(z.string(), z.unknown()),
   /** Ed25519 signature over `hash`, made with the NEW device's own key (self-authorizing). Hex. */
   signature: z.string().regex(/^[0-9a-f]{128}$/i, 'Must be 64-byte Ed25519 signature in hex'),
-  /** SHA-256 hash of the previous sigchain link (hex), or empty string if this is seq 0. */
-  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex or empty string'),
+  /** SHA-256 hash of the previous sigchain link (hex). null if this is the genesis link ('' accepted as a legacy alias). */
+  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex, empty string, or null').nullable(),
   /** SHA-256 hash of this link's canonical form (hex). Server recomputes and verifies. */
   hash: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be SHA-256 hex'),
   /** Device ID the new device wants to register itself under. */
@@ -118,7 +119,7 @@ const recoveryCompleteResponseSchema = z.object({
     linkType: z.string(),
     payload: z.unknown(),
     signature: z.string(),
-    prevHash: z.string(),
+    prevHash: z.string().nullable(),
     hash: z.string(),
     signerDeviceId: z.string(),
     signerPubkey: z.string(),
@@ -159,15 +160,13 @@ authenticatedRoutes.post('/enroll',
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')
-    const user = c.get('user')
 
     // Enforce hub-scoping: recovery:manage is a GLOBAL permission grant and
     // says nothing about which hub(s) the caller actually belongs to
     // (multi-hub axiom). Without this, a manager scoped to one hub could
     // create/replace ANY hub's recovery group by supplying an arbitrary
     // hubId — mirrors the check on GET /sessions and POST /rotate.
-    const hubRoles = user.hubRoles ?? []
-    if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === body.hubId)) {
+    if (!callerHasHubAccess(c, body.hubId)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
@@ -219,7 +218,6 @@ authenticatedRoutes.post('/rotate',
     const body = c.req.valid('json')
     const services = c.get('services')
     const callerPubkey = c.get('pubkey')
-    const user = c.get('user')
 
     // Enforce hub-scoping: recovery:manage is a GLOBAL permission grant and
     // says nothing about which hub(s) the caller actually belongs to
@@ -227,8 +225,7 @@ authenticatedRoutes.post('/rotate',
     // rotate — i.e. destroy/corrupt — ANY hub's recovery group and every
     // member's recovery envelope by supplying an arbitrary hubId. Mirrors
     // the identical check on GET /sessions and POST /enroll.
-    const hubRoles = user.hubRoles ?? []
-    if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === body.hubId)) {
+    if (!callerHasHubAccess(c, body.hubId)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
@@ -281,16 +278,14 @@ authenticatedRoutes.get('/sessions',
     const hubId = c.req.query('hubId')
     if (!hubId) return c.json({ error: 'Missing hubId query parameter' }, 400)
 
-    const user = c.get('user')
 
     // Enforce hub-scoping: caller must be a member of the requested hub.
-    // Global admins (no hubRoles) have unrestricted access. Mirrors the
+    // Super-admins pass everywhere; no other global role reaches into a hub. Mirrors the
     // identical check on GET /session/:id — recovery:view alone is a
     // global permission grant and says nothing about which hub(s) the
     // caller actually belongs to (multi-hub axiom: a user can hold
     // recovery:view globally while being scoped to only one hub).
-    const hubRoles = user.hubRoles ?? []
-    if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === hubId)) {
+    if (!callerHasHubAccess(c, hubId)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
@@ -322,13 +317,11 @@ authenticatedRoutes.get('/:hubId',
   async (c) => {
     const hubId = c.req.param('hubId')
     const services = c.get('services')
-    const user = c.get('user')
 
     // Enforce hub-scoping: recovery:view is a GLOBAL permission grant and
     // says nothing about which hub(s) the caller actually belongs to.
     // Mirrors the identical check on GET /sessions and GET /session/:id.
-    const hubRoles = user.hubRoles ?? []
-    if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === hubId)) {
+    if (!callerHasHubAccess(c, hubId)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
@@ -410,16 +403,14 @@ authenticatedRoutes.get('/session/:id',
   requirePermission('recovery:view'),
   async (c) => {
     const sessionId = c.req.param('id')
-    const user = c.get('user')
     const services = c.get('services')
 
     try {
       const session = await services.recoveryGroup.getSession(sessionId)
 
       // Enforce hub-scoping: caller must be a member of the session's hub.
-      // Global admins (no hubRoles) have unrestricted access.
-      const hubRoles = user.hubRoles ?? []
-      if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === session.hubId)) {
+      // Super-admins pass everywhere; no other global role reaches into a hub.
+      if (!callerHasHubAccess(c, session.hubId)) {
         return c.json({ error: 'Session not found' }, 404)
       }
 
@@ -459,7 +450,6 @@ authenticatedRoutes.post('/session/:id/emergency',
     const body = c.req.valid('json')
     const services = c.get('services')
     const callerPubkey = c.get('pubkey')
-    const user = c.get('user')
 
     // HIGH-W6: Enforce approverPubkey matches the authenticated caller — prevent impersonation
     if (body.approverPubkey !== callerPubkey) {
@@ -473,8 +463,7 @@ authenticatedRoutes.post('/session/:id/emergency',
       // approver scoped to one hub must not be able to bypass another
       // hub's delay timer. Mirrors the identical check on GET /session/:id.
       const session = await services.recoveryGroup.getSession(sessionId)
-      const hubRoles = user.hubRoles ?? []
-      if (hubRoles.length > 0 && !hubRoles.some((hr) => hr.hubId === session.hubId)) {
+      if (!callerHasHubAccess(c, session.hubId)) {
         return c.json({ error: 'Session not found' }, 404)
       }
 
@@ -518,7 +507,6 @@ authenticatedRoutes.post('/session/:id/cancel',
     const callerPubkey = c.get('pubkey')
     const permissions = c.get('permissions')
     const services = c.get('services')
-    const user = c.get('user')
 
     const hasManagePermission = checkPermission(permissions, 'recovery:manage')
 
@@ -536,9 +524,7 @@ authenticatedRoutes.post('/session/:id/cancel',
       // rather than a 403 that would confirm the session exists.
       const session = await services.recoveryGroup.getSession(sessionId)
       const isRecoveringUser = callerPubkey === session.userPubkey
-      const hubRoles = user.hubRoles ?? []
-      const scopedManagePermission = hasManagePermission &&
-        (hubRoles.length === 0 || hubRoles.some((hr) => hr.hubId === session.hubId))
+      const scopedManagePermission = hasManagePermission && callerHasHubAccess(c, session.hubId)
 
       if (!isRecoveringUser && hasManagePermission && !scopedManagePermission) {
         return c.json({ error: 'Session not found' }, 404)

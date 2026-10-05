@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { createMiddleware } from 'hono/factory'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { scoreVolunteers } from '../lib/assignment-scorer'
@@ -33,7 +34,7 @@ import { audit } from '../services/audit'
 import { mergeRecordsBodySchema, mergeRecordsResponseSchema } from '@protocol/schemas/entity-merge'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED, KIND_RECORD_ASSIGNED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
-import { resolvePermissions } from '@shared/permissions'
+import { resolveHubRoleIds, resolvePermissions } from '@shared/permissions'
 import { determineEnvelopeRecipients } from '../lib/envelope-recipients'
 import type { HubMemberInfo } from '../lib/envelope-recipients'
 import type { Services } from '../services'
@@ -49,30 +50,60 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
 }
 
 /**
- * Resolve hub members with their role slugs and permissions
- * for envelope recipient determination.
+ * Resolve the people who hold authority in `hubId`, with the role slugs and
+ * permissions they hold THERE, for envelope recipient determination.
+ *
+ * Recipients are the hub's members (their `hubRoles` assignment) plus
+ * super-admins — the only global roles that reach into a hub. Users of other
+ * hubs are never returned, however broad their roles elsewhere: the client
+ * HPKE-wraps record keys for exactly this list, so a cross-hub entry here would
+ * hand another hub's member a key to this hub's records (#1037).
+ *
+ * Without a hub (an unscoped request for a hubless record) only global roles
+ * apply, as for every other unscoped route.
  */
-async function resolveHubMembers(services: Services): Promise<HubMemberInfo[]> {
-  // Get all role definitions
+async function resolveHubMembers(services: Services, hubId: string): Promise<HubMemberInfo[]> {
   const { roles: roleDefs } = await services.settings.getRoles()
-
-  // Get all users (hub members)
   const { users: allUsers } = await services.identity.getUsers()
 
   return allUsers
     .filter(v => v.active)
     .map(v => {
-      const resolvedPerms = resolvePermissions(v.roles, roleDefs as import('@shared/permissions').Role[])
-      const roleSlugs = v.roles
-        .map(roleId => roleDefs.find(r => r.id === roleId)?.slug)
-        .filter((s): s is string => !!s)
+      const roleIds = hubId
+        ? resolveHubRoleIds(v.roles, v.hubRoles ?? [], roleDefs, hubId)
+        : v.roles
       return {
         pubkey: v.pubkey,
-        roles: roleSlugs,
-        permissions: resolvedPerms,
+        roles: roleIds
+          .map(roleId => roleDefs.find(r => r.id === roleId)?.slug)
+          .filter((s): s is string => !!s),
+        permissions: resolvePermissions(roleIds, roleDefs),
       }
     })
+    .filter(m => m.permissions.length > 0)
 }
+
+// First path segments of the literal (non-record-id) routes below.
+const NON_RECORD_SEGMENTS = new Set([
+  'by-number', 'envelope-recipients', 'by-contact', 'interactions', 'convert-from-report', 'merge',
+])
+
+/**
+ * Inside /hubs/:hubId, every /:id route may only touch a record of that hub.
+ * A record of another hub is indistinguishable from a missing one (404) —
+ * otherwise a member of Hub B could read, edit, assign or delete Hub A's
+ * records by id through Hub B's URL.
+ */
+const recordInPathHub = createMiddleware<AppEnv>(async (c, next) => {
+  const hubId = c.get('hubId')
+  const id = c.req.param('id')
+  if (!hubId || !id || NON_RECORD_SEGMENTS.has(id)) return next()
+  const record = await c.get('services').cases.get(id)
+  if (record.hubId !== hubId) return c.json({ error: 'Record not found' }, 404)
+  return next()
+})
+records.use('/:id', recordInPathHub)
+records.use('/:id/*', recordInPathHub)
 
 // --- List records (paginated, with filters) ---
 records.get('/',
@@ -167,6 +198,8 @@ records.get('/by-number/:number',
 
     const services = c.get('services')
     const record = await services.cases.getByNumber(number)
+    const pathHub = c.get('hubId')
+    if (pathHub && record.hubId !== pathHub) return c.json({ error: 'Record not found' }, 404)
 
     // If user can only see assigned records, verify assignment
     if (accessLevel !== 'all') {
@@ -214,8 +247,9 @@ records.get('/envelope-recipients',
     // Fetch entity type definition
     const entityType = await services.settings.getEntityTypeById(entityTypeId)
 
-    // Resolve hub members with permissions
-    const hubMembers = await resolveHubMembers(services)
+    // Resolve hub members with permissions — the members of the hub the new
+    // record will belong to (the path hub)
+    const hubMembers = await resolveHubMembers(services, c.get('hubId') ?? '')
 
     // assignedTo from query (for existing records) or empty for new records
     const assignedToParam = c.req.query('assignedTo')
@@ -481,8 +515,8 @@ records.get('/:id/envelope-recipients',
     // Fetch entity type definition
     const entityType = await services.settings.getEntityTypeById(record.entityTypeId)
 
-    // Resolve hub members with permissions
-    const hubMembers = await resolveHubMembers(services)
+    // Resolve the members of the hub the record belongs to
+    const hubMembers = await resolveHubMembers(services, record.hubId ?? '')
 
     const recipients = determineEnvelopeRecipients(entityType, record.assignedTo, hubMembers)
     return c.json(recipients)

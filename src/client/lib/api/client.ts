@@ -176,7 +176,14 @@ export async function request<T>(path: string, options: RequestInit & { retries?
         offlineQueue.replay(getAuthHeadersForReplay).catch(() => {})
       }
 
-      return res.json()
+      // 204 No Content (and 205) carry no body, and several routes use them —
+      // `/devices/register`, `/devices/voip-token`, `DELETE /sessions/:id`.
+      // `res.json()` on an empty body throws a SyntaxError, which surfaced as
+      // "device encryption key registration failed" on a registration the
+      // server had already accepted.
+      if (res.status === 204 || res.status === 205) return undefined as T
+      const text = await res.text()
+      return (text ? JSON.parse(text) : undefined) as T
     } catch (err) {
       if (err instanceof ApiError) throw err
       if (err instanceof OfflineQueuedError) throw err

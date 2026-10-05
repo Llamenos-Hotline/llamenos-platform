@@ -3,7 +3,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { checkRateLimit } from '../lib/helpers'
 import { hashIP, getClientIp } from '../lib/crypto'
-import { verifyAuthToken } from '../lib/auth'
+import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
 import { requirePermission } from '../middleware/permission-guard'
 import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
@@ -100,24 +100,31 @@ invites.post('/redeem',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Verify Ed25519 auth token signature.
+    // Verify the Ed25519 auth token signature, then burn it: a redemption binds a
+    // new device key to an identity, so each signed request is single-use (#1367).
+    // It is consumed before the rate limit and the redemption itself, so a signed
+    // request that is refused for any later reason still cannot be replayed.
     //
-    // `redeemInviteBodySchema` has no `nonce` field, so the redeemer signs the
-    // nonce-less message shape — a distinct domain-separation label
-    // (`LABEL_DEVICE_AUTH_NO_NONCE`), which is what makes this token useless
-    // against any other endpoint. It is also the only route that opts into the
-    // nonce-less domain; everywhere else a missing nonce is a hard rejection.
-    //
-    // Replay of the redemption itself is tracked separately in #1367 and
-    // bounded by `redeemInvite` consuming the invite code atomically.
+    // `nonce` is optional in `redeemInviteBodySchema`. A client that sends none
+    // signed the nonce-less message shape — a distinct domain-separation label
+    // (`LABEL_DEVICE_AUTH_NO_NONCE`, #1509), which is what makes that token
+    // useless against any other endpoint; this is the only route that opts into
+    // the nonce-less domain, and everywhere else a missing nonce is a hard
+    // rejection. A client that sends a nonce verifies in the canonical
+    // nonce-ful domain instead. Either way the verified token is consumed
+    // exactly once below.
     const inviteUrl = new URL(c.req.url)
-    const isValid = await verifyAuthToken(
-      { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token },
+    const authPayload = { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token, nonce: body.nonce }
+    const isValid = verifyAuthToken(
+      authPayload,
       c.req.method,
       inviteUrl.pathname,
       { allowMissingNonce: true },
     )
     if (!isValid) {
+      return c.json({ error: 'Authentication failed' }, 401)
+    }
+    if (!(await consumeAuthToken(authPayload, services.identity))) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
 
