@@ -1,8 +1,11 @@
 import { execFile, spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { chmod, copyFile, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { accessSync, constants as fsConstants } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { EngineId, Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { gh } from './gh.js'
@@ -175,41 +178,87 @@ Check, at minimum:
 ${VERDICT_CONTRACT}`
 
 /**
- * The engine every `fleet/review` verdict now comes from — always `claude`,
- * regardless of `authorEngine`. This is an operator decision (#812), not an
- * oversight: `fleet/review` moved off a thin per-call API hit to a full
- * Claude Code SESSION running on a dedicated self-hosted runner
- * (`llamenos-review-box`) with the operator's own Max subscription and real
- * tools (read, grep, the whole export), because a session that can actually
- * explore the diff reviews better than a 2-3-turn API call ever could — see
- * `fleet-review.yml`'s header for the evidence (most of the old opencode
- * engine's failures were infrastructure: turn-budget exhaustion, quota,
- * UNREADABLE verdicts, not genuine misses).
+ * The engine every `fleet/review` verdict comes from FIRST — KIMI, by
+ * operator decision (2026-10-04), regardless of `authorEngine`. Claude is
+ * the FALLBACK engine (see `invokeVerifierEngine`). The order is an
+ * availability-first choice, and the measurement behind it is blunt:
+ * 2026-10-04 the operator's claude account hit its WEEKLY QUOTA and every
+ * Fleet Review run failed `NO-VERDICT:engine-unavailable` — one vendor's
+ * quota stopped the ENTIRE merge train. Pinning the COMMON path to the
+ * claude subscription keeps that failure mode permanently live; running
+ * kimi primary and claude only when kimi cannot run removes it (kimi's
+ * own quota is a different account with its own limits, and a kimi outage
+ * degrades to claude rather than to a stalled merge train). The repo's own
+ * design notes already named this shape: "Kimi-primary with Claude fallback
+ * on unreachable, so a flaky reviewer costs a retry rather than a blocked
+ * merge."
  *
- * THE HONEST COST: when `authorEngine` is `claude` (every configured lane's
- * default — see `LANES` in config.ts), the reviewer is now the SAME MODEL
- * FAMILY as the worker that wrote the diff. It is still a genuinely
- * different process — a separate session with no shared context, on a
- * separate machine, that never sees the author's reasoning or scratch
- * state — but it is no longer an independent VENDOR the way `opencode`
- * (Kimi) was. A model does not review its own blind spots as well as a
- * different model would. The mitigation is operational, not code: run the
- * reviewer on a different MODEL TIER than the lanes use (e.g. `opus` here
- * while lanes stay on `sonnet`) once budget allows — `FLEET_REVIEW_MODEL`
- * (below) is exactly the dial for that, so raising the tier later is a repo
- * variable, not a code change. For a lane whose `authorEngine` is
- * `opencode` (a Kimi-for-Coding lane, per `LaneOverride`), `claude` remains
- * genuinely non-author on every axis.
+ * THE CLAUDE FALLBACK: when the kimi invocation CANNOT RUN — missing binary,
+ * a brief past the sanity ceiling, timeout, crash, an
+ * unreachable-class error — `invokeVerifierEngine` retries the SAME brief
+ * through `claude` before giving up. The fallback fires ONLY on that
+ * cannot-run family, never on a substantive verdict: a kimi PASS/FAIL is
+ * returned as-is, an auth-failure-looking error is reported as-is on EITHER
+ * arm (see `canFallbackAfterFailure` for why an auth problem never crosses
+ * engines silently), and an exhausted budget is reported as-is. A verdict
+ * that needed the fallback is always labelled — `toSecondOpinion` prefixes
+ * the text with "reviewed by claude (kimi unavailable)", and every primary
+ * verdict is labelled with the engine that produced it — so an operator can
+ * tell exactly which engine judged a diff from the check output alone.
+ *
+ * THE OPERATOR DIALS (all env vars / repo variables, never code changes):
+ *   `FLEET_REVIEW_PRIMARY`   — `kimi` (default) | `claude`; selects which
+ *                              engine runs first. Flipping it back is how an
+ *                              operator re-pins the review to claude.
+ *   `FLEET_REVIEW_FALLBACK`  — `on` (default) | `off`; disables crossing to
+ *                              the other engine on a cannot-run failure
+ *                              (either direction).
+ *   `FLEET_REVIEW_KIMI_MODEL`— optional kimi model override; UNSET means
+ *                              kimi resolves its own configured default.
+ *   `FLEET_REVIEW_MODEL`     — the claude model tier (default `sonnet`),
+ *                              used whenever claude runs.
+ *
+ * THE HONEST COST — vendor diversity: when `authorEngine` is `claude`
+ * (every configured lane's default — see `LANES` in config.ts), a kimi
+ * reviewer IS an independent vendor on the diff: different model family,
+ * different failure modes, no shared blind spots — the pairing this
+ * project's threat model prefers, now on the COMMON path. When
+ * `authorEngine` is `opencode` (a Kimi-for-Coding lane, per `LaneOverride`),
+ * the reviewer and the author share a vendor: a Kimi model reviewing
+ * Kimi-authored output shares its blind spots exactly the way the retired
+ * claude/claude pairing did. It is still a genuinely different process — a
+ * separate session with no shared context, on a separate machine, that
+ * never sees the author's reasoning or scratch state — but it is not an
+ * independent vendor on those lanes. The mitigation is operational, not
+ * code: run the reviewer on a different MODEL TIER than the lanes use via
+ * `FLEET_REVIEW_KIMI_MODEL` or the runner's kimi configuration once tiers
+ * are available, or set `FLEET_REVIEW_PRIMARY=claude` — for a Kimi-authored
+ * lane, claude remains genuinely non-author on every axis, which is exactly
+ * why the primary selector exists as a variable rather than a constant.
  *
  * `EngineId` keeps its `opencode` value for AUTHOR engines (a lane may still
  * dispatch its WORKER through opencode/Kimi — see `engines.ts`/`config.ts`);
- * only the REVIEWER side retired it. `authorEngine` stays a parameter,
- * rather than this function losing it entirely, so a future third reviewer
- * engine is one line here, not a signature change at every call site.
+ * only the REVIEWER side selects between `kimi` and `claude`. `authorEngine`
+ * stays a parameter, rather than this function losing it entirely, so a
+ * future per-lane or third-engine selection is one line here, not a
+ * signature change at every call site.
  */
-export function verifierFor(authorEngine: EngineId): EngineId {
+export function verifierFor(authorEngine: EngineId): ReviewRunEngine {
   void authorEngine
-  return 'claude'
+  return reviewPrimaryEngine()
+}
+
+/**
+ * Which reviewer engine runs FIRST: the `FLEET_REVIEW_PRIMARY` env var
+ * (`kimi` default, `claude` selectable), read PER CALL so a test — or an
+ * operator exporting it for one local run — sees it take effect without a
+ * process restart. Any value other than the literal `claude` selects kimi:
+ * the default must never be defeated by a typo, and the smoke step's
+ * `reviewerInvocationFor` import resolves through this exact function, so
+ * the smoke test and the real review can never disagree about the order.
+ */
+export function reviewPrimaryEngine(): ReviewRunEngine {
+  return process.env['FLEET_REVIEW_PRIMARY'] === 'claude' ? 'claude' : 'kimi'
 }
 
 /**
@@ -342,38 +391,253 @@ export function classifyEngineFailure(text: string): EngineFailureKind {
   return 'engine-unavailable'
 }
 
-/** The binary and model a `ReviewerCommand` invocation actually runs — see
- *  `reviewerInvocationFor`, the one function both the smoke test and the
- *  real review call to get this. */
-export interface ReviewerInvocation { readonly engine: EngineId; readonly binary: string; readonly model: string }
+/**
+ * The binary name of the kimi reviewer engine. Kimi is the PRIMARY reviewer
+ * (see `reviewPrimaryEngine`); claude is the fallback. `FLEET_REVIEW_FALLBACK`
+ * is the ONE toggle for crossing engines on a cannot-run failure — it is
+ * direction-agnostic, because the fallback is simply "the engine that did
+ * not run first", whichever order `FLEET_REVIEW_PRIMARY` selects. Read PER
+ * CALL so a test — or an operator exporting it for one local run — sees it
+ * take effect without a process restart. Anything other than the literal
+ * `off` (including unset) keeps the fallback ON: this is a fail-safe
+ * direction, the same one the whole review gate uses — an unrecognised
+ * value must never silently turn the required non-author review into "no
+ * fallback exists", the way an unrecognised value turning it ON would at
+ * worst spend one extra engine call. The workflow's job env pins the
+ * default explicitly (`vars.FLEET_REVIEW_FALLBACK || 'on'`), so the repo
+ * variable is the operator's dial exactly as `FLEET_REVIEW_PRIMARY` is.
+ */
+export const KIMI_REVIEWER_ENGINE = 'kimi'
+
+export function fallbackReviewerEnabled(): boolean {
+  return (process.env['FLEET_REVIEW_FALLBACK'] ?? 'on') !== 'off'
+}
 
 /**
- * The ONE place that maps a resolved reviewer `EngineId` to a runnable
- * binary. Throws for anything it does not know how to invoke — a resolved
- * engine with no wired invocation must be a loud, immediate failure here,
- * never a silent fallback to whatever the caller assumed the binary was.
- * This is what makes "the smoke test and the real review agree on the
- * engine" a property of the CODE rather than a coincidence of two
- * hand-kept literals: there is exactly one function that can name a binary
- * at all, and it refuses outright for anything besides `claude`.
- *
- * Exported (rather than kept file-private, like the rest of
- * `reviewerInvocationFor`'s helpers) specifically so the hard-fail contract
- * is directly testable: `verifierFor` cannot itself be driven to return
- * anything but `'claude'` today, so a test exercising `reviewerInvocationFor`
- * alone could never observe this function refusing a second engine. See the
- * "MUTATION" test in review.test.ts, which calls this directly with
- * `'opencode'` and asserts the throw — proving a resolved engine can never
- * silently acquire an invocation nobody wired for it.
+ * The optional kimi model override (`FLEET_REVIEW_KIMI_MODEL`, env/repo
+ * variable), read PER CALL. EMPTY/UNSET is meaningful and is the DEFAULT:
+ * kimi then resolves its own configured `default_model` from its own
+ * configuration on the runner — the same "no `--model`" posture that lets a
+ * claude-side model-id rejection fall back to kimi, now on the primary arm.
+ * This exists so an operator who wants tier separation (the vendor-diversity
+ * mitigation named above `verifierFor`) has a dial for it; nothing in this
+ * file invents a model id.
  */
-export function reviewerBinaryFor(engine: EngineId): string {
-  if (engine !== 'claude') {
-    throw new Error(
-      `reviewerInvocationFor: engine "${engine}" has no wired reviewer invocation — only "claude" is ` +
-      'supported since #812 retired the opencode reviewer; this is a hard failure, never a silent fallback',
-    )
+export function kimiReviewModel(): string {
+  return process.env['FLEET_REVIEW_KIMI_MODEL'] ?? ''
+}
+
+/**
+ * Auth-failure-shaped text, aligned with the smoke step's `classify()`
+ * (fleet-review.yml) — the one family of engine-unavailable failures that
+ * must NOT cross to the other engine, on EITHER arm. The reasoning is
+ * deliberately conservative, and worth stating because it is the asymmetry
+ * in this design:
+ *
+ *   - A quota / weekly-limit / overload / timeout / crash / missing binary
+ *     means the ENGINE could not be reached or could not run. Nothing about
+ *     the reviewer's trust posture changed; the other engine can carry the
+ *     same brief. That is the cannot-run family the fallback exists for,
+ *     whichever engine ran first.
+ *   - An auth-failure-shaped error is AMBIGUOUS in a way quota is not. Most
+ *     often it means the runner's login for that engine expired — an
+ *     operator-action defect that the smoke step's `engine-auth`
+ *     classification exists to make LOUD, and silently routing the gate's
+ *     security review to another vendor would hide exactly the degradation
+ *     an operator most needs to see. Less often, auth-shaped text can be
+ *     how an engine surfaces a refused or malformed session. Neither shape
+ *     is one the gate may paper over with a green check from a different
+ *     vendor. So: no crossing; the failure reports as `engine-unavailable`
+ *     exactly as it did before this file knew about fallback — symmetric on
+ *     both arms (a kimi auth failure is just as loud as a claude one).
+ *   - `'engine-misconfigured'` (a `--model` id the engine itself refuses)
+ *     DOES cross: the other engine resolves its own model — kimi from its
+ *     own configuration (it never receives `FLEET_REVIEW_MODEL`, a claude
+ *     model id), claude from `FLEET_REVIEW_MODEL` — so a model-id rejection
+ *     on one side genuinely says nothing about whether the other can run.
+ *   - `'budget-exhausted'` does NOT cross: the engine answered, ran a full
+ *     session, and spent its whole budget without a verdict. That is not
+ *     "the engine cannot run" — it is "this brief under this budget cannot
+ *     produce a verdict", which re-running VERBATIM through another engine
+ *     would simply repeat at a second vendor's expense (see
+ *     `classifyEngineFailure`'s own comment on the retry loop that advice
+ *     creates).
+ *   - A substantive verdict (PASS/FAIL) never reaches this predicate at
+ *     all: `invokeVerifierEngine` returns a reached run without looking at
+ *     the fallback. A FAIL is never "retried" anywhere in this design, on
+ *     either arm.
+ */
+const FALLBACK_AUTH_RE =
+  /\b401\b|unauthorized|invalid.*(api.?key|token|credential)|not logged in|please (run|login|re-?authenticate)|authenticat(e|ion)? (fail|error|required)/i
+
+export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: string): boolean {
+  if (failureKind === 'budget-exhausted') return false
+  if (failureKind === 'engine-misconfigured') return true
+  return !FALLBACK_AUTH_RE.test(text)
+}
+
+/**
+ * A SANITY CEILING on the brief's length, not an argv limit — that is the
+ * whole point of the file-based passing below. The kimi brief is written to a
+ * temp file and passed as `-p @<file>` (verified against the installed
+ * binary: kimi reads the prompt from the file), so no kernel
+ * `MAX_ARG_STRLEN` (131,072) ever applies — real diffs exceeded even that,
+ * and a 181,571-char brief (#1517) came back UNREADABLE as a result.
+ *
+ * What the ceiling remains good for is pure abuse-prevention: a diff so
+ * large it would take hours of review time and gigabytes of context is not
+ * something this gate should hand to any engine. A brief past this bound is
+ * a cannot-run result exactly like a missing binary: with the fallback
+ * enabled it degrades to claude (whose stdin pipe has no length cap either),
+ * and with the fallback disabled it reports `engine-unavailable`.
+ */
+export const KIMI_PROMPT_MAX_CHARS = 2_000_000 // sanity ceiling only — file-based -p @<file> passing has no argv limit
+
+/**
+ * `command -v kimi` as code: scans `pathEnv` (the PATH the engine will
+ * actually inherit — the allowlisted env, not necessarily this process's
+ * own) for an executable named `kimi`, returning the resolved engine name
+ * when found and `undefined` when not. A missing binary is a CANNOT-RUN
+ * condition whichever position kimi holds: when kimi is primary it sends
+ * the run to the claude fallback arm, and when kimi is the fallback it is
+ * reported exactly as it would have been before this file knew about
+ * fallback. Either way the gate never half-runs.
+ */
+export function kimiBinaryOnPath(pathEnv: string | undefined): string | undefined {
+  if (pathEnv === undefined || pathEnv === '') return undefined
+  for (const dir of pathEnv.split(delimiter)) {
+    if (dir === '') continue
+    try {
+      accessSync(join(dir, KIMI_REVIEWER_ENGINE), fsConstants.X_OK)
+      return KIMI_REVIEWER_ENGINE
+    } catch { /* not executable here — keep scanning */ }
   }
-  return 'claude'
+  return undefined
+}
+
+/**
+ * The read-only agent profile the kimi reviewer runs under (`--agent-file`)
+ * — PRIMARY or fallback, the profile is per-engine not per-position —
+ * committed next to this file. It is this fleet's kimi equivalent of
+ * claude's `--tools Read,Grep,Glob`: kimi's `-p` mode runs a full agent CLI
+ * under the auto permission policy with the default tool set (shell
+ * included) and no `--tools` flag, so WITHOUT this profile the kimi
+ * reviewer would be a read-only reviewer in name only. The profile's
+ * frontmatter `tools:` allowlist is enforced again at execution time per
+ * the engine's own documentation, so the brief's "you have exactly three
+ * tools" claim stays TRUE on the kimi path, and `Bash` is not merely
+ * denied but absent. `tests/orchestrator/guards.test.ts` pins the
+ * profile's tool list equal to `REVIEWER_TOOLS` and the workflow's smoke
+ * step references this exact file.
+ *
+ * Resolved from this module's own URL (never cwd) so the CI path — where
+ * this code runs from the BASE checkout — finds the BASE copy, the same
+ * version-boundary discipline as the rest of this gate.
+ */
+export const REVIEWER_AGENT_FILE = fileURLToPath(
+  new URL('../reviewer-readonly.agent.md', import.meta.url))
+
+/**
+ * The kimi reviewer's argv — identical whether kimi runs FIRST or as the
+ * fallback, because the brief must never change with position. Deliberately
+ * NOT shaped like `verifierArgs`:
+ *   - `-p @<file>` carries the brief by FILE REFERENCE: `runKimiOnce` writes
+ *     the SAME brief verbatim to a unique temp file (same diff, same
+ *     contract, whichever engine ran before it) and passes `@${path}`. kimi
+ *     reads the prompt from the file (verified against the installed
+ *     binary), so the brief's length is bounded by nothing but disk — the
+ *     kernel's 131,072-char `MAX_ARG_STRLEN` argv-element cap never applies,
+ *     which is what the old one-element `-p <prompt>` form died on (#1517's
+ *     181,571-char brief failed the exec with `E2BIG` before the engine
+ *     spoke). `KIMI_PROMPT_MAX_CHARS` guards only against absurdly large
+ *     briefs now, not the argv limit.
+ *   - `--model` appears ONLY when `kimiReviewModel()` returns a value
+ *     (the optional `FLEET_REVIEW_KIMI_MODEL` override): unset means kimi
+ *     resolves its own configured default — the posture that lets a
+ *     model-id rejection on one engine say nothing about the other.
+ *     `FLEET_REVIEW_MODEL` (and `review-and-merge`'s tier override) name
+ *     CLAUDE model ids and are never passed here.
+ *   - `--agent-file` installs the read-only tool profile (see
+ *     `REVIEWER_AGENT_FILE`) — kimi's structural answer to claude's
+ *     `--tools`/`--permission-mode plan` pair.
+ *   - `--add-dir` grants read access to the export, mirroring the claude
+ *     invocation's grant; the working directory stays the empty scratch
+ *     root `invokeVerifierEngine` creates.
+ */
+export function kimiArgs(input: { promptRef: string; exportDir: string; model?: string }): string[] {
+  const args = ['--output-format', 'stream-json', '-p', input.promptRef,
+    '--agent-file', REVIEWER_AGENT_FILE, '--add-dir', input.exportDir]
+  if (input.model !== undefined && input.model !== '') args.push('--model', input.model)
+  return args
+}
+
+/**
+ * Reads the kimi `--output-format stream-json` envelope (verified against
+ * the installed binary: one JSON object per line — `system.version` and
+ * `session.resume_hint` meta events around `role: "assistant"` messages
+ * whose string `content` is the assistant text; tool calls arrive as
+ * assistant messages with `tool_calls` followed by `role: "tool"` results).
+ *
+ * The VERDICT contract is IDENTICAL to the claude path: the assistant text
+ * the verdict may come from is the FINAL assistant message with text —
+ * kimi's answer, whole, exactly as claude's `.result` is — so `parseVerdict`
+ * judges the same final line either way. Non-JSON output falls back to
+ * treating stdout as the text, the same envelope-less tolerance
+ * `decodeEngineOutput` carries, so an engine build that changes its stream
+ * shape still reviews rather than failing on its envelope (its verdict then
+ * simply has to survive `parseVerdict`, which a bare-text answer does).
+ */
+export function decodeKimiOutput(stdout: string, stderr: string): Pick<EngineRun, 'assistantText' | 'diagnostics'> {
+  const diagnostics = stderr.trim().slice(-2000)
+  const events: Record<string, unknown>[] = []
+  for (const line of stdout.split('\n')) {
+    const t = line.trim()
+    if (t === '') continue
+    try { events.push(JSON.parse(t) as Record<string, unknown>) } catch { /* not an event line */ }
+  }
+  if (events.length === 0) return { assistantText: stdout, diagnostics }
+  // Last assistant text wins — the same "final line" selection `parseVerdict`
+  // applies on top of it, so an intermediate reasoning message can never
+  // supply the verdict the way the final answer's last line does.
+  let text = ''
+  for (const ev of events) {
+    if (ev['role'] !== 'assistant') continue
+    const content = ev['content']
+    if (typeof content === 'string' && content.trim() !== '') text = content
+  }
+  return { assistantText: text, diagnostics }
+}
+
+/** The engine, binary, and model a reviewer invocation actually runs — see
+ *  `reviewerInvocationFor`, the one function both the smoke test and the
+ *  real review call to get this. `model` is the engine's own dial: a claude
+ *  model tier (`FLEET_REVIEW_MODEL`, default `sonnet`), or the optional
+ *  `FLEET_REVIEW_KIMI_MODEL` override for kimi — EMPTY when kimi runs with
+ *  its own configured default. */
+export interface ReviewerInvocation { readonly engine: ReviewRunEngine; readonly binary: string; readonly model: string }
+
+/**
+ * The ONE place that maps a resolved reviewer engine to a runnable binary.
+ * Throws for anything it does not know how to invoke — a resolved engine
+ * with no wired invocation must be a loud, immediate failure here, never a
+ * silent fallback to whatever the caller assumed the binary was. This is
+ * what makes "the smoke test and the real review agree on the engine" a
+ * property of the CODE rather than a coincidence of two hand-kept literals:
+ * there is exactly one function that can name a reviewer binary at all.
+ *
+ * Exported (rather than kept file-private) specifically so the hard-fail
+ * contract is directly testable. See the "MUTATION" test in review.test.ts,
+ * which calls this directly with `'opencode'` and asserts the throw —
+ * proving a resolved engine can never silently acquire an invocation nobody
+ * wired for it.
+ */
+export function reviewerBinaryFor(engine: ReviewRunEngine): string {
+  if (engine === 'kimi') return KIMI_REVIEWER_ENGINE
+  if (engine === 'claude') return 'claude'
+  throw new Error(
+    `reviewerInvocationFor: engine "${engine}" has no wired reviewer invocation — only "kimi" and "claude" ` +
+    'are reviewer engines; this is a hard failure, never a silent fallback',
+  )
 }
 
 /**
@@ -404,7 +668,11 @@ export function reviewerBinaryFor(engine: EngineId): string {
  */
 export function reviewerInvocationFor(authorEngine: EngineId): ReviewerInvocation {
   const engine = verifierFor(authorEngine)
-  return { engine, binary: reviewerBinaryFor(engine), model: REVIEWER_MODEL }
+  return {
+    engine,
+    binary: reviewerBinaryFor(engine),
+    model: engine === 'claude' ? REVIEWER_MODEL : kimiReviewModel(),
+  }
 }
 
 /**
@@ -703,11 +971,14 @@ export async function exportReviewSnapshot(worktree: string, headSha: string): P
  *
  * Read this list for what it honestly is, not more: `HOME` and `PATH` are
  * here because the reviewer (always `claude` — see `verifierFor`) NEEDS them
- * to run at all. `HOME` is load-bearing, not incidental: on
- * `llamenos-review-box` (the self-hosted runner this job runs on — see
- * `fleet-review.yml`), `claude` is already logged in under the operator's
- * own account, and that login state is what `HOME` gives the reviewer
- * access to — it is the ENTIRE authentication mechanism for this job. No
+ * to run at all. `HOME` is load-bearing, not incidental: `claude`
+ * authenticates from login state on disk under its config dir, and that
+ * config dir is resolved from `HOME` — it is the ENTIRE authentication
+ * mechanism for this job. Since #1460 the `HOME` the reviewer actually gets
+ * is NOT the one in this process's environment: `verifierEnv` replaces it
+ * with the gate-owned directory from `prepareReviewerHome`, which holds the
+ * one credential file and nothing else. The entry stays in this allowlist
+ * because the replacement still has to be delivered through it. No
  * `FLEET_REVIEW_API_KEY` or `ANTHROPIC_API_KEY` value is forwarded into this
  * env on purpose: setting `ANTHROPIC_API_KEY` here would make `claude`
  * prefer metered per-token billing over the already-authenticated
@@ -720,33 +991,221 @@ export async function exportReviewSnapshot(worktree: string, headSha: string): P
  * populated by this job today.
  *
  * This allowlist does NOT and CANNOT make the verifier's environment safe
- * on its own: `HOME` alone is enough for it to read `~/.config/gh/
- * hosts.yml` and `~/.ssh` as plain files, regardless of whether
- * `GH_TOKEN`/`SSH_AUTH_SOCK` are set. Excluding `GH_TOKEN`, `GITHUB_TOKEN`,
- * `SSH_AUTH_SOCK`, and `GIT_ASKPASS` removes the CONVENIENT path and costs
- * nothing — worth doing regardless — but it is not the defense this fleet
- * relies on. That defense is GitHub's per-SHA required statuses (see the
- * comment above `gitState`).
+ * on its own. Before #1460 the gap it could not close was the biggest one:
+ * `HOME` alone was enough to read `~/.config/gh/hosts.yml` and `~/.ssh` as
+ * plain files, regardless of whether `GH_TOKEN`/`SSH_AUTH_SOCK` were set.
+ * The gate-owned `HOME` does close exactly that — those paths no longer
+ * resolve to anything for the reviewer — but it closes it by PATH, not by
+ * capability: a reviewer with a shell could still reach the operator's real
+ * home by absolute path, which is why `REVIEWER_TOOLS` withholding `Bash`
+ * is the other half and neither is sufficient alone. Excluding `GH_TOKEN`,
+ * `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, and `GIT_ASKPASS` removes the CONVENIENT
+ * path and costs nothing — worth doing regardless — but it is not the
+ * defense this fleet relies on. That defense is GitHub's per-SHA required
+ * statuses (see the comment above `gitState`).
  */
 const VERIFIER_ENV_ALLOWLIST: readonly string[] = [
   'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TMP', 'TEMP',
   'ANTHROPIC_API_KEY',
 ]
 
-function verifierEnv(): NodeJS.ProcessEnv {
+/**
+ * `home` is the GATE-OWNED directory from `prepareReviewerHome`, and it
+ * REPLACES the inherited `HOME` rather than adding to it — read that
+ * function's doc comment for why. `HOME` stays in the allowlist above
+ * because the reviewer still needs one to run at all; what changed is that
+ * the one it gets is a directory this gate built, holding exactly one file.
+ *
+ * `CLAUDE_CONFIG_DIR` is absent from the allowlist on purpose: forwarding it
+ * would let the operator's own config dir reassert itself and route the
+ * reviewer straight back to the CLAUDE.md, hooks, skills and MCP servers the
+ * gate-owned HOME exists to exclude.
+ */
+function verifierEnv(home: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const key of VERIFIER_ENV_ALLOWLIST) {
     const value = process.env[key]
     if (value !== undefined) env[key] = value
   }
+  env['HOME'] = home
   return env
 }
 
+/**
+ * The reviewer's HOME is GATE-OWNED, not the runner's (#1460, #1511).
+ *
+ * `--tools` (#1458) restricts the BUILT-IN tool set and nothing else. It
+ * does not filter MCP tools, and it does not stop the engine loading the
+ * invoking user's own configuration out of `$HOME`. On
+ * `llamenos-review-box` — a self-hosted box, not a fresh VM — that
+ * configuration is the operator's, and three things in it reached straight
+ * into every review session:
+ *
+ *   1. MCP servers from `$HOME/.claude/mcp.json` and from `enabledPlugins`,
+ *      arriving as extra callable tools. A write-capable one means the
+ *      read-only reviewer is not read-only. This is the one item a
+ *      gate-owned HOME does NOT fully close, which is why
+ *      `--strict-mcp-config` is a separate, independently load-bearing half
+ *      of this fix: measured on the installed 2.1.280 binary, a session run
+ *      under a FRESH gate-owned HOME with `--tools default` still loaded 26
+ *      MCP tools — `mcp__claude_ai_*` connectors including `create`,
+ *      `update`, `delete`, Drive and Gmail — because those are attached to
+ *      the ACCOUNT the credential file authenticates as, not to anything in
+ *      `$HOME`. The same invocation with `--strict-mcp-config` loaded zero.
+ *      (`--tools Read,Grep,Glob` happens to exclude them in this build too,
+ *      so the two flags cover for each other today; `--strict-mcp-config` is
+ *      the one that removes them at the source, and a build where `--tools`
+ *      stops filtering MCP is exactly the regression it defends against.)
+ *   2. Hooks from `$HOME/.claude/settings.json`, which execute as part of
+ *      session startup — before the model says a word, and independently of
+ *      anything this gate decides.
+ *   3. `$HOME/.claude/CLAUDE.md` and `$HOME/.claude/skills`, prepended as
+ *      TRUSTED instructions. This is the one that actually blocked merges:
+ *      the operator's user-level CLAUDE.md demands planning workflows and
+ *      skill invocation, the smoke prompt asks for a bare fixed string, and
+ *      the reviewer — seeing two conflicting instruction sources, neither
+ *      from a real user — declined the smoke as a prompt-injection attempt,
+ *      3/3 runs on #1510 (#1511). `root` being a `mktemp -d` empty
+ *      directory does nothing about it: clearing the WORKING directory does
+ *      not clear USER-level config.
+ *
+ * So the gate's own environment was ambient and unreviewed, in the one
+ * process whose entire job is to read untrusted content. That is the mirror
+ * image of the invariant #665 established from the other side (PR content
+ * is data, never code), and this closes it: a fresh directory per run,
+ * which the engine sees as `$HOME`, holding EXACTLY ONE provisioned file.
+ *
+ * ## Why one file, and why that one
+ *
+ * `claude` on this runner authenticates from login state on disk, not from
+ * an environment variable: no `ANTHROPIC_API_KEY` is forwarded on purpose
+ * (see `VERIFIER_ENV_ALLOWLIST`), because setting one would switch the
+ * reviewer to metered per-token billing — the exact cost the self-hosted
+ * box exists to avoid. That state is a single file,
+ * `<config dir>/.credentials.json`, and the config dir is
+ * `$CLAUDE_CONFIG_DIR ?? $HOME/.claude`. A gate-owned `$HOME` therefore
+ * moves the credential lookup with it, so that one file has to be
+ * provisioned — and NOTHING else may be, because copying the config
+ * directory wholesale would reinstate every item above.
+ *
+ * ## Why a hard link rather than a copy
+ *
+ * The OAuth access token expires on the order of hours and `claude`
+ * refreshes it in place, rewriting that file. Against a COPY the refresh
+ * lands in a directory this function deletes, so the refreshed (and
+ * possibly rotated) token is discarded while the operator's own store keeps
+ * a superseded one — a slow walk towards a login that stops working, which
+ * on a required check means every merge in the repo stops with it. A HARD
+ * LINK is the same inode: the engine's refresh writes through to the single
+ * authoritative store, and the box's login state can never fork from the
+ * gate's view of it.
+ *
+ * A hard link, specifically, and never a symlink: `claude` opens this file
+ * with `O_NOFOLLOW` and has an explicit `refused-symlink` state for it
+ * (verified against the installed 2.1.280 binary), so a symlink here would
+ * read as "not logged in" — a gate-wide outage dressed as an auth failure.
+ * A hard link is an ordinary regular file to `lstat` and to `O_NOFOLLOW`.
+ *
+ * The link is why the gate HOME is created INSIDE the operator's home
+ * rather than under `TMPDIR`: `link(2)` cannot cross filesystems, and
+ * `/tmp` is routinely a different one. `EXDEV`/`EPERM` still falls back to
+ * a 0600 copy — degraded (the refresh can fork) but never broken.
+ *
+ * A missing source file is NOT an error here: the reviewer then runs
+ * genuinely unauthenticated and the smoke step's `engine-auth`
+ * classification names it, which is a far better failure than this function
+ * throwing something the caller would have to re-classify.
+ */
+export const REVIEWER_HOME_PREFIX = '.llamenos-review-home-'
+
+/** Where, relative to the reviewer's gate-owned HOME, the one provisioned
+ *  file goes. Carried as a literal in `fleet-review.yml` as well — the
+ *  smoke step builds the same HOME in shell and cannot import this across
+ *  the head-YAML/base-checkout version boundary (#1464) — and
+ *  `tests/orchestrator/guards.test.ts` pins the two equal. */
+export const REVIEWER_CREDENTIALS_RELPATH = '.claude/.credentials.json'
+
+export interface ReviewerHome {
+  /** The value to pass as `HOME` to the engine. */
+  dir: string
+  /** True when the credential file was provisioned as a hard link (so a
+   *  token refresh writes through to the operator's store), false when it
+   *  had to be copied, and undefined when there was no source file at all. */
+  linked?: boolean
+  cleanup(): Promise<void>
+}
+
+/** The config directory the OPERATOR's `claude` uses — the source of the one
+ *  file the reviewer's HOME is seeded with. `CLAUDE_CONFIG_DIR` is honoured
+ *  because an operator who relocated their config dir keeps their
+ *  credentials there too; it is deliberately NOT forwarded to the reviewer
+ *  (it is absent from `VERIFIER_ENV_ALLOWLIST`), so the reviewer always
+ *  resolves its own config dir from the gate-owned `HOME`. */
+function operatorConfigDir(): string {
+  return process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude')
+}
+
+/**
+ * Creates the gate-owned HOME and provisions the single credential file
+ * into it. See `REVIEWER_HOME_PREFIX` above for the whole rationale.
+ *
+ * Never logs, returns or throws the file's CONTENT — only whether it was
+ * linked, copied, or absent.
+ */
+export async function prepareReviewerHome(): Promise<ReviewerHome> {
+  // Inside the operator's home so `link(2)` below stays on one filesystem.
+  const dir = await mkdtemp(join(homedir(), REVIEWER_HOME_PREFIX))
+  const cleanup = async (): Promise<void> => { await rm(dir, { recursive: true, force: true }) }
+  try {
+    await chmod(dir, 0o700)
+    const dst = join(dir, REVIEWER_CREDENTIALS_RELPATH)
+    await mkdir(join(dir, '.claude'), { recursive: true, mode: 0o700 })
+    const src = join(operatorConfigDir(), '.credentials.json')
+    try {
+      await link(src, dst)
+      return { dir, linked: true, cleanup }
+    } catch (e) {
+      // ENOENT: nothing to provision — the reviewer runs unauthenticated and
+      // the smoke step names that `engine-auth`. Anything else (EXDEV across
+      // filesystems, EPERM under a hardened mount) degrades to a copy.
+      if ((e as { code?: string }).code === 'ENOENT') return { dir, cleanup }
+      await copyFile(src, dst)
+      await chmod(dst, 0o600)
+      return { dir, linked: false, cleanup }
+    }
+  } catch (e) {
+    await cleanup()
+    throw e
+  }
+}
+
+/**
+ * Which engine an `EngineRun`'s outcome came from. Every verdict the fleet
+ * publishes carries this attribution (via `toSecondOpinion`'s text): the
+ * primary verdict reads "reviewed by kimi", a fallback verdict reads
+ * "reviewed by claude (kimi unavailable)" — the visibility half of the
+ * fallback design, as load-bearing as the fallback itself: a green check
+ * whose provenance is invisible would let the engine order silently drift.
+ */
+export type ReviewRunEngine = 'claude' | 'kimi'
+
 export interface EngineRun {
   /** False for a crash, a timeout, a non-zero exit or a missing binary
-   *  (which now includes a `--model` id `claude` itself refuses to run —
-   *  see `classifyEngineFailure` and `failureKind`). */
+   *  (which includes a `--model` id the engine itself refuses to run —
+   *  see `classifyEngineFailure` and `failureKind`), or a kimi invocation
+   *  skipped because its binary is absent or the brief exceeds the sanity
+   *  ceiling (`KIMI_PROMPT_MAX_CHARS`). */
   reached: boolean
+  /** The engine this run's outcome came from — always set for runs
+   *  `invokeVerifierEngine` produced. */
+  engine?: ReviewRunEngine
+  /** Set ONLY when `engine` ran as the FALLBACK: the value is the PRIMARY
+   *  engine that failed cannot-run first. Undefined means `engine` ran
+   *  first (or no fallback was attempted). This is what lets
+   *  `toSecondOpinion` phrase the attribution as "reviewed by <engine>"
+   *  for a primary verdict vs "reviewed by <engine> (<primary> unavailable)"
+   *  for a fallback one — without baking the order into the attributor. */
+  fallbackFor?: ReviewRunEngine
   /** The model's own words — the only text a verdict may be read from. */
   assistantText: string
   /** Engine errors and stderr, for a human reading an UNREADABLE verdict. */
@@ -807,14 +1266,17 @@ function summariseStream(events: Record<string, unknown>[]): string {
 
 /**
  * Persists the raw event stream beside the review report, so the churn can be
- * read after the fact and not just summarised.
+ * read after the fact and not just summarised. `label` distinguishes the
+ * primary engine's transcript from the fallback's — a fallback run writes
+ * both, and an unlabelled pair would leave a reader guessing which engine
+ * the second file came from.
  *
  * `FLEET_REVIEW_REPORT_DIR` is already uploaded wholesale by
  * `fleet-review.yml`'s "Upload review report" step, so dropping a file in it
  * needs no workflow change. Best-effort by design: a reviewer that produced a
  * verdict must never fail because its transcript could not be written.
  */
-async function writeSessionTranscript(stdout: string, stderr: string): Promise<void> {
+async function writeSessionTranscript(label: string, stdout: string, stderr: string): Promise<void> {
   const dir = process.env['FLEET_REVIEW_REPORT_DIR']
   if (dir === undefined || dir === '') return
   try {
@@ -823,8 +1285,8 @@ async function writeSessionTranscript(stdout: string, stderr: string): Promise<v
     // single name would leave only the last one's session behind — the same
     // last-writer-wins shape that made the scoped cache artifact necessary.
     const stamp = `${process.pid}-${events(stdout)}`
-    await writeFile(join(dir, `session-${stamp}.jsonl`), stdout, 'utf8')
-    if (stderr.trim() !== '') await writeFile(join(dir, `session-${stamp}.stderr.txt`), stderr, 'utf8')
+    await writeFile(join(dir, `session-${label}-${stamp}.jsonl`), stdout, 'utf8')
+    if (stderr.trim() !== '') await writeFile(join(dir, `session-${label}-${stamp}.stderr.txt`), stderr, 'utf8')
   } catch { /* never fail a review over its own diagnostics */ }
 }
 
@@ -966,17 +1428,22 @@ export const REVIEWER_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob']
 
 export function verifierArgs(input: { model: string; maxTurns: number; exportDir: string }): string[] {
   return ['--print', '--output-format', 'stream-json', '--verbose',
-    '--permission-mode', 'plan', '--tools', REVIEWER_TOOLS.join(','),
+    '--permission-mode', 'plan', '--strict-mcp-config',
+    '--tools', REVIEWER_TOOLS.join(','),
     '--model', input.model,
     '--max-turns', String(input.maxTurns), '--add-dir', input.exportDir]
 }
 
 /**
- * Invokes the reviewer (always `claude` — see `verifierFor`) directly by
- * argv — no shell, matching every other subprocess call in this fleet —
- * with the prompt piped over stdin rather than passed as an argv element,
- * so its length is never bounded by the OS argv limit and it can never be
- * mistaken for a CLI flag.
+ * Invokes the reviewer directly by argv — no shell, matching every other
+ * subprocess call in this fleet. KIMI runs FIRST (see `reviewPrimaryEngine`);
+ * claude is the fallback engine. The claude prompt is piped over stdin
+ * rather than passed as an argv element, so its length is never bounded by
+ * the OS argv limit and it can never be mistaken for a CLI flag; the kimi
+ * brief is written to a temp file and passed as `-p @<file>` (kimi reads the
+ * prompt from the file — verified against the installed binary), so the
+ * kernel's 131,072-char `MAX_ARG_STRLEN` argv-element cap never applies;
+ * `KIMI_PROMPT_MAX_CHARS` guards only against absurdly large briefs.
  *
  * THE PROJECT ROOT IS AN EMPTY DIRECTORY THIS FUNCTION CREATES — NEVER THE
  * EXPORT. An agent CLI treats its working directory as a project and loads
@@ -985,14 +1452,60 @@ export function verifierArgs(input: { model: string; maxTurns: number; exportDir
  * PR-committed `.opencode/tool/x.ts` or `.opencode/plugin/x.ts` was imported
  * and run in-process, and an `opencode.json` `mcp` entry was spawned as a
  * command — on the reviewer runner, next to the review key, before the model
- * said a word. `claude` never had that failure mode (its own project root
- * was already this empty scratch directory before opencode was retired — see
- * the `--add-dir` grant below), but the invariant is stated as unconditional
- * on purpose: the export's path reaches the engine only as TEXT inside the
- * prompt (`buildReviewPrompt`), plus the one read grant it needs to open it,
- * regardless of which engine is asking.
+ * said a word. Neither current reviewer engine has that failure mode (the
+ * working directory is this empty scratch dir regardless of which engine is
+ * asking), and the invariant is stated unconditionally on purpose: the
+ * export's path reaches the engine only as TEXT inside the prompt
+ * (`buildReviewPrompt`), plus the one read grant it needs to open it. The
+ * kimi `--agent-file` profile keeps the kimi reviewer's tool set to
+ * Read/Grep/Glob (see `REVIEWER_AGENT_FILE`), the structural equivalent of
+ * claude's `--tools`/`--permission-mode plan` pair — neither engine may be a
+ * read-only reviewer in name only, whichever position it runs in.
  *
- * Layered on top:
+ * THE ORDER, and exactly when the fallback fires (see the comment above
+ * `verifierFor` for the design, `reviewPrimaryEngine` for the dial, and
+ * `canFallbackAfterFailure` for the taxonomy):
+ *
+ *   1. The PRIMARY engine (`kimi` by default) is attempted. A kimi attempt
+ *      that never reaches a verdict because its binary is absent, the brief
+ *      exceeds the sanity ceiling, the call crashed, timed out, or returned
+ *      an unreachable-class error is a CANNOT-RUN result — not a verdict.
+ *   2. Only then — and only when the failure is in the cannot-run family,
+ *      the fallback toggle is on (`FLEET_REVIEW_FALLBACK`, default on), and
+ *      the SAME brief can be carried — does the OTHER engine (`claude`) run.
+ *      With `FLEET_REVIEW_PRIMARY=claude` the two arms swap positions
+ *      symmetrically: claude first, kimi as its cannot-run fallback.
+ *   3. Any condition failing returns the primary's result UNCHANGED — the
+ *      pre-fallback failure shape, `NO-VERDICT:engine-unavailable` and all.
+ *
+ *   Never fired on: a substantive PASS/FAIL from EITHER engine (returned
+ *   as-is — a FAIL is never "retried" through another engine), an
+ *   auth-failure-shaped error on EITHER arm (ambiguous — an expired runner
+ *   login must stay loud; the gate never crosses engines silently on auth
+ *   problems), or an exhausted turn budget (the brief, not the engine, is
+ *   what failed). Both engines failing produces one UNREADABLE naming both.
+ *
+ * ONE HONEST DIFFERENCE between the engines' environments, carried in
+ * `fleet-review.yml`'s header too: claude runs under a GATE-OWNED HOME
+ * provisioned with exactly one credential file (`prepareReviewerHome`),
+ * which keeps the operator's own claude config — MCP servers, hooks,
+ * user-level CLAUDE.md — out of the reviewer session. Kimi's authentication
+ * and provider configuration are entangled in its own config directory
+ * (`~/.kimi-code`: config.toml, OAuth tokens, credentials) in a way claude's
+ * single-credentials-file design is not, so there is no cheap equivalent of
+ * the one-file gate HOME; the kimi reviewer runs with the operator's real
+ * HOME so its login state resolves, PRIMARY or fallback. What bounds the
+ * kimi reviewer all the same: the read-only agent profile (no shell, no edit
+ * tools, no MCP tools, no sub-agent delegation — enforced at execution per
+ * the engine's own documentation), the stripped export and empty project
+ * root above, and — as for every reviewer — GitHub's per-SHA required
+ * statuses as the actual defense against a tampering reviewer (see the
+ * comment above `gitState`). The user-level skills/instructions under the
+ * operator's home may reach the kimi session the way they did the
+ * pre-#1460 claude one; that residual is operator-controlled configuration
+ * on a self-hosted box, and it is stated rather than hidden.
+ *
+ * Layered on top (claude path; the kimi path inherits the equivalents):
  *   - the export has had `REVIEWER_CONTROL_NAMES` and symlinks stripped
  *     before this is called — on its own sufficient against a
  *     project-root-poisoning reproduction, because there is nothing left to
@@ -1001,6 +1514,14 @@ export function verifierArgs(input: { model: string; maxTurns: number; exportDir
  *     edit files. It does NOT withhold a shell — #1445's transcript shows
  *     thirteen successful `Bash` calls under this exact mode, with zero
  *     permission denials — which is why the next bullet exists;
+ *   - `--strict-mcp-config` together with a gate-owned `HOME` (see
+ *     `prepareReviewerHome`): the two halves of "the reviewer loads no
+ *     configuration this gate did not name". `--tools` restricts BUILT-IN
+ *     tools only, so without the first the account's own MCP connectors —
+ *     26 of them on this account, write-capable ones included, and NOT
+ *     removable by a clean HOME because they travel with the credentials —
+ *     arrive as extra callable tools; and without the second the runner's
+ *     `CLAUDE.md`, hooks, skills and plugins load anyway (#1460, #1511);
  *   - `--tools Read,Grep,Glob` (see `REVIEWER_TOOLS`): the available tool
  *     set, not a permission allowlist, so `Bash` and `WebFetch` are not
  *     present to be reached for at all. This is what actually enforces
@@ -1021,13 +1542,17 @@ export function verifierArgs(input: { model: string; maxTurns: number; exportDir
  * never pointed at the author's real worktree either — see the V1 fix note
  * above `gitState`.
  *
- * `model`, when given, overrides `reviewerInvocationFor(authorEngine).model`.
- * Added for `review-and-merge.ts`'s operator command, which always reviews
- * with `claude` at a model tier deliberately different from the authoring
- * lanes' own default (`cli.ts`'s `DEFAULT_MODEL`, `'sonnet'`). Every other
- * property below — the read-only permission mode, the env allowlist, the
- * empty project root, the export as the one readable directory — is
- * unchanged and shared by both callers.
+ * `model`, when given, overrides the resolved claude model
+ * (`reviewerInvocationFor(authorEngine).model`). Added for
+ * `review-and-merge.ts`'s operator command, which reviews at a claude model
+ * tier deliberately different from the authoring lanes' own default
+ * (`cli.ts`'s `DEFAULT_MODEL`, `'sonnet'`). The override names a CLAUDE
+ * tier: it applies whenever claude runs (primary under
+ * `FLEET_REVIEW_PRIMARY=claude`, or as the fallback); the kimi reviewer
+ * never receives it and resolves `FLEET_REVIEW_KIMI_MODEL` or its own
+ * configured default (see `kimiArgs`). Every other property below — the
+ * read-only posture, the env allowlist, the empty project root, the export
+ * as the one readable directory — is unchanged and shared by both engines.
  */
 export async function invokeVerifierEngine(input: {
   authorEngine: EngineId
@@ -1037,70 +1562,241 @@ export async function invokeVerifierEngine(input: {
   timeoutMs: number
   model?: string
 }): Promise<EngineRun> {
-  // `reviewerInvocationFor` — never a literal `'claude'`/`REVIEWER_MODEL`
-  // pair inlined here — is what ties this call to the exact same resolution
-  // the smoke test proves works (see that function's doc comment for why
-  // the two hardcoded literals this replaced were never actually a fix).
-  // `input.model`, when given, overrides the resolved default — see the doc
-  // comment above this function for why `review-and-merge.ts` needs that.
-  const { binary, model: defaultModel } = reviewerInvocationFor(input.authorEngine)
-  const model = input.model ?? defaultModel
+  // `reviewerInvocationFor` — never a literal engine/model pair inlined here
+  // — is what ties this call to the exact same resolution the smoke test
+  // proves works (see that function's doc comment for why the two hardcoded
+  // literals this replaced were never actually a fix). Only the claude
+  // fields are consumed: `input.model`, when given, overrides the resolved
+  // claude default — see the doc comment above this function for why
+  // `review-and-merge.ts` needs that. The primary/fallback positions come
+  // from `reviewPrimaryEngine()` (the same source `verifierFor` resolves),
+  // so this function and the smoke step cannot disagree about the order.
+  const inv = reviewerInvocationFor(input.authorEngine)
+  const claudeModel = input.model ?? (inv.engine === 'claude' ? inv.model : REVIEWER_MODEL)
+  const primary = reviewPrimaryEngine()
   const projectRoot = await mkdtemp(join(tmpdir(), 'llamenos-fleet-reviewer-root-'))
+  // The claude reviewer's HOME is this gate's, never the runner's — see
+  // `prepareReviewerHome`. Created before the call and removed in the
+  // `finally` below, so no review session ever shares one with another.
+  const reviewerHome = await prepareReviewerHome()
   try {
-    const env = verifierEnv()
-    const args = verifierArgs({ model, maxTurns: input.maxTurns, exportDir: input.exportDir })
+    const claudeEnv = verifierEnv(reviewerHome.dir)
+    // The kimi reviewer keeps the operator's real HOME (see the doc comment
+    // above): kimi authenticates from its own login state under its own
+    // config directory, which the gate HOME does not provision.
+    const kimiEnv = allowlistedEnv()
 
-    try {
-      // execFile (unlike execFileSync) has no `input` option — the prompt must
-      // be written to the child's own stdin instead. `promisify(execFile)`
-      // still returns a `PromiseWithChild`, so `.child` is available
-      // synchronously before the promise settles.
-      const call = execFileAsync(binary, args, {
-        cwd: projectRoot,
-        env,
-        timeout: input.timeoutMs,
-        maxBuffer: 16 * 1024 * 1024,
-      })
-      call.child?.stdin?.end(input.prompt)
-      const { stdout, stderr } = await call
-      await writeSessionTranscript(stdout, stderr ?? '')
-      return { reached: true, ...decodeEngineOutput(stdout, stderr ?? '') }
-    } catch (e) {
-      // A crash, a timeout, a missing binary, or (see `classifyEngineFailure`)
-      // a model id the binary refuses to run at all. An unreachable reviewer
-      // is not a pass — keep whatever partial output exists (often none) for
-      // the log, and let the caller record this explicitly as UNREADABLE
-      // rather than silently falling through parseVerdict's own "no VERDICT
-      // line" path.
-      const err = e as { stdout?: string; stderr?: string }
-      // The transcript matters MOST here. An exhausted budget exits non-zero,
-      // so this is the arm #1445 took — and the arm that previously left a
-      // 268-byte artifact and no record of the ten turns.
-      await writeSessionTranscript(err.stdout ?? '', err.stderr ?? '')
-      const decoded = decodeEngineOutput(err.stdout ?? '', err.stderr ?? '')
-      const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
-      return { reached: false, failureKind, ...decoded }
+    // ── Position 1: the PRIMARY engine ──
+    const primaryRun = primary === 'kimi'
+      ? await runKimiOnce({ prompt: input.prompt, exportDir: input.exportDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
+      : await runClaudeOnce({ model: claudeModel, prompt: input.prompt, exportDir: input.exportDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
+    if (primaryRun.reached) return primaryRun
+
+    // ── Position 2: the OTHER engine, only on a cannot-run failure ──
+    // Every condition below is a reason to return the primary's failure
+    // exactly as the pre-fallback code would have: fallback disabled by the
+    // operator; the failure not in the cannot-run family (auth-shaped
+    // ambiguity, exhausted budget); or a brief past the sanity ceiling that
+    // neither engine should be handed (claude's stdin pipe has no length cap,
+    // so only `KIMI_PROMPT_MAX_CHARS` bounds this).
+    if (!fallbackReviewerEnabled()) return primaryRun
+    if (!canFallbackAfterFailure(primaryRun.failureKind ?? 'engine-unavailable',
+      `${primaryRun.assistantText}\n${primaryRun.diagnostics}`)) return primaryRun
+
+    const fallbackRun = primary === 'kimi'
+      ? await runClaudeOnce({ model: claudeModel, prompt: input.prompt, exportDir: input.exportDir, projectRoot, env: claudeEnv, maxTurns: input.maxTurns, timeoutMs: input.timeoutMs })
+      : await runKimiOnce({ prompt: input.prompt, exportDir: input.exportDir, projectRoot, env: kimiEnv, timeoutMs: input.timeoutMs })
+    if (fallbackRun.reached) return { ...fallbackRun, fallbackFor: primary }
+
+    // Both engines failed: one UNREADABLE naming both, classed by the
+    // fallback's own failure (there is no third engine to try).
+    return {
+      reached: false,
+      engine: fallbackRun.engine,
+      fallbackFor: primary,
+      assistantText: '',
+      failureKind: fallbackRun.failureKind ?? 'engine-unavailable',
+      diagnostics: [
+        `${primary} could not run (${primaryRun.failureKind ?? 'engine-unavailable'}); the ${fallbackRun.engine} fallback also failed (${fallbackRun.failureKind ?? 'engine-unavailable'}).`,
+        primaryRun.diagnostics,
+        fallbackRun.diagnostics,
+      ].filter((x) => x.trim() !== '').join('\n'),
     }
   } finally {
     await rm(projectRoot, { recursive: true, force: true })
+    await reviewerHome.cleanup()
   }
 }
 
+/**
+ * ONE kimi invocation — everything about calling kimi lives here so the
+ * primary and fallback positions run the IDENTICAL argv, env, decode and
+ * classification; position only decides WHEN this runs and how the result
+ * is attributed. Pre-flight cannot-run conditions (missing binary, brief
+ * over the sanity ceiling) are reported as `engine-unavailable` runs rather
+ * than thrown, so the orchestration in `invokeVerifierEngine` can treat them
+ * exactly like a crashed or timed-out call.
+ */
+async function runKimiOnce(input: {
+  prompt: string
+  exportDir: string
+  projectRoot: string
+  env: NodeJS.ProcessEnv
+  timeoutMs: number
+}): Promise<EngineRun> {
+  if (input.prompt.length > KIMI_PROMPT_MAX_CHARS) {
+    return {
+      reached: false, engine: 'kimi', assistantText: '',
+      failureKind: 'engine-unavailable',
+      diagnostics: `kimi invocation skipped: the brief is ${input.prompt.length} chars, over the ${KIMI_PROMPT_MAX_CHARS}-char sanity ceiling`,
+    }
+  }
+  if (kimiBinaryOnPath(input.env['PATH']) === undefined) {
+    return {
+      reached: false, engine: 'kimi', assistantText: '',
+      failureKind: 'engine-unavailable',
+      diagnostics: 'kimi CLI is not on PATH for the reviewer environment — cannot run',
+    }
+  }
+  // The brief rides a FILE, not an argv element: kimi supports `-p @<file>`
+  // (verified against the installed binary), and a single argv element is
+  // capped by the kernel at MAX_ARG_STRLEN (131,072 chars) — real diffs now
+  // exceed even that (#1517's brief was 181,571 chars and every kimi run on
+  // it died with E2BIG before the engine spoke). 0600 because the brief
+  // contains the full diff.
+  const briefPath = join(tmpdir(), `llamenos-review-brief-${randomBytes(8).toString('hex')}.md`)
+  try {
+    await writeFile(briefPath, input.prompt, { mode: 0o600 })
+    const call = execFileAsync(KIMI_REVIEWER_ENGINE,
+      kimiArgs({ promptRef: `@${briefPath}`, exportDir: input.exportDir, model: kimiReviewModel() }), {
+        cwd: input.projectRoot,
+        env: input.env,
+        timeout: input.timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    // `-p` never reads stdin; end the pipe so a build that DOES look at it
+    // sees EOF immediately instead of hanging the session open.
+    call.child?.stdin?.end()
+    const { stdout, stderr } = await call
+    await writeSessionTranscript('kimi', stdout, stderr ?? '')
+    return { reached: true, engine: 'kimi', ...decodeKimiOutput(stdout, stderr ?? '') }
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string }
+    await writeSessionTranscript('kimi', err.stdout ?? '', err.stderr ?? '')
+    const decoded = decodeKimiOutput(err.stdout ?? '', err.stderr ?? '')
+    const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
+    return { reached: false, engine: 'kimi', failureKind, ...decoded }
+  } finally {
+    await rm(briefPath, { force: true })
+  }
+}
+
+/**
+ * ONE claude invocation — the mirror of `runKimiOnce`: same argv
+ * (`verifierArgs`), same gate-owned HOME env, same decode and
+ * classification, wherever in the order claude runs. A crash, a timeout, a
+ * missing binary, or (see `classifyEngineFailure`) a model id the binary
+ * refuses to run at all all land here as `reached: false`; an unreachable
+ * reviewer is not a pass — whatever partial output exists (often none) is
+ * kept for the log, and the caller records this explicitly as UNREADABLE
+ * rather than silently falling through parseVerdict's own "no VERDICT line"
+ * path.
+ */
+async function runClaudeOnce(input: {
+  model: string
+  prompt: string
+  exportDir: string
+  projectRoot: string
+  env: NodeJS.ProcessEnv
+  maxTurns: number
+  timeoutMs: number
+}): Promise<EngineRun> {
+  try {
+    // execFile (unlike execFileSync) has no `input` option — the prompt must
+    // be written to the child's own stdin instead. `promisify(execFile)`
+    // still returns a `PromiseWithChild`, so `.child` is available
+    // synchronously before the promise settles.
+    const call = execFileAsync('claude',
+      verifierArgs({ model: input.model, maxTurns: input.maxTurns, exportDir: input.exportDir }), {
+        cwd: input.projectRoot,
+        env: input.env,
+        timeout: input.timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    call.child?.stdin?.end(input.prompt)
+    const { stdout, stderr } = await call
+    await writeSessionTranscript('claude', stdout, stderr ?? '')
+    return { reached: true, engine: 'claude', ...decodeEngineOutput(stdout, stderr ?? '') }
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string }
+    // The transcript matters MOST here. An exhausted budget exits non-zero,
+    // so this is the arm #1445 took — and the arm that previously left a
+    // 268-byte artifact and no record of the ten turns.
+    await writeSessionTranscript('claude', err.stdout ?? '', err.stderr ?? '')
+    const decoded = decodeEngineOutput(err.stdout ?? '', err.stderr ?? '')
+    const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
+    return { reached: false, engine: 'claude', failureKind, ...decoded }
+  }
+}
+
+/**
+ * The env-var allowlist WITHOUT the gate-owned HOME override — what the kimi
+ * fallback runs under. `verifierEnv` (claude) swaps `HOME` for the gate's
+ * directory; the fallback deliberately keeps the inherited `HOME` so kimi's
+ * own login state under its own config directory resolves (see
+ * `invokeVerifierEngine`'s doc comment). The credential-bearing exclusions
+ * (`GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, and the
+ * review key) apply identically to both engines.
+ */
+function allowlistedEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of VERIFIER_ENV_ALLOWLIST) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  return env
+}
+
 /** Exported alongside `invokeVerifierEngine` for `review-and-merge.ts`, which
- *  calls that function directly (with `engine: 'claude'` and its own model
- *  override) and needs the same EngineRun -> verdict/text mapping every other
- *  caller of this file's reviewer gets — never a second, hand-rolled copy of
- *  "no output reached = UNREADABLE, otherwise parse the final line". */
+ *  calls that function directly (with its own claude model override) and
+ *  needs the same EngineRun -> verdict/text mapping every other caller of
+ *  this file's reviewer gets — never a second, hand-rolled copy of "no
+ *  output reached = UNREADABLE, otherwise parse the final line".
+ *
+ *  ATTRIBUTION is applied here, once, so EVERY consumer of a verdict (the CI
+ *  check summary, the PR comment the review loop posts, the check-run
+ *  review-and-merge writes) names the engine that produced it and which
+ *  position it ran in: a primary verdict is prefixed "reviewed by <engine>",
+ *  a fallback verdict "reviewed by <engine> (<primary> unavailable)", and a
+ *  double failure names both engines. The prefix goes ABOVE the reviewer's
+ *  text, never into it — `parseVerdict` and `verdictSummary` both select the
+ *  FINAL line, so the verdict line itself stays the reviewer's own last line
+ *  and the attribution cannot be mistaken for part of the review. EngineRuns
+ *  built outside `invokeVerifierEngine` (test doubles) carry no `engine` and
+ *  get no attribution at all. */
 export function toSecondOpinion(run: EngineRun): SecondOpinionResult {
   const shown = run.assistantText.trim().length > 0 ? run.assistantText : run.diagnostics
   if (!run.reached) {
+    const bothDown = run.fallbackFor !== undefined
+      ? `(both reviewer engines failed: ${run.fallbackFor} could not run and the ${run.engine} fallback also failed) `
+      : ''
     return {
       verdict: 'UNREADABLE',
-      text: shown.length > 0 ? shown : '(reviewer engine was unreachable)',
+      text: bothDown + (shown.length > 0 ? shown : '(reviewer engine was unreachable)'),
       failureKind: run.failureKind ?? 'engine-unavailable',
+      engine: run.engine,
     }
   }
-  return { verdict: parseVerdict(run.assistantText), text: shown.length > 0 ? shown : '(reviewer produced no assistant text)' }
+  const attribution = run.engine === undefined
+    ? ''
+    : run.fallbackFor !== undefined
+      ? `reviewed by ${run.engine} (${run.fallbackFor} unavailable)\n\n`
+      : `reviewed by ${run.engine}\n\n`
+  return {
+    verdict: parseVerdict(run.assistantText),
+    text: attribution + (shown.length > 0 ? shown : '(reviewer produced no assistant text)'),
+    engine: run.engine,
+  }
 }
 
 export interface SecondOpinionInput {
@@ -1130,6 +1826,13 @@ export interface SecondOpinionInput {
 export interface SecondOpinionResult {
   verdict: 'PASS' | 'FAIL' | 'UNREADABLE'
   text: string
+  /** Which engine produced this outcome, and — via `EngineRun.fallbackFor` —
+   *  in which position: the `text` of a reached verdict is prefixed
+   *  "reviewed by <engine>" for a primary run or "reviewed by <engine>
+   *  (<primary> unavailable)" for a fallback run; an UNREADABLE after both
+   *  engines failed names both. `undefined` only for results built outside
+   *  `toSecondOpinion` (e.g. an injected test double). */
+  engine?: ReviewRunEngine
   /** Only ever set when `verdict === 'UNREADABLE'` — distinguishes a bad
    *  engine/model configuration (`'engine-misconfigured'`, see
    *  `EngineFailureKind`) from a transient failure to reach an otherwise

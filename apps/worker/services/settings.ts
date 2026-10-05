@@ -1037,8 +1037,17 @@ export class SettingsService {
       .from(providerConfigs)
       .where(isNull(providerConfigs.hubId))
       .limit(1)
-    const messagingConfig = row.messagingConfig as MessagingConfig | null
-    const setupState = row.setupState as SetupState | null
+    // These two columns hold partially-written JSON. `getSettings()` upserts the
+    // singleton row with `setup_state = '{}'`, so on every fresh install
+    // `row.setupState` is present but empty — casting it `as SetupState | null`
+    // claimed `selectedChannels` was always an array, and `setupState?.…` guarded
+    // only the null case. `{}` therefore threw a TypeError, `GET /api/config`
+    // caught it and reported every channel disabled, and the desktop — which
+    // gates its whole Conversations page on those flags — showed "No messaging
+    // channels enabled" on a deployment that had channels configured.
+    // `Partial<>` is what the data actually is, and makes the guards mandatory.
+    const messagingConfig = row.messagingConfig as Partial<MessagingConfig> | null
+    const setupState = row.setupState as Partial<SetupState> | null
 
     const voiceEnabled =
       !!providerConfig ||
@@ -1050,12 +1059,12 @@ export class SettingsService {
 
     return {
       voice: voiceEnabled,
-      sms: messagingConfig?.enabledChannels.includes('sms') ?? false,
-      whatsapp: messagingConfig?.enabledChannels.includes('whatsapp') ?? false,
-      signal: messagingConfig?.enabledChannels.includes('signal') ?? false,
-      rcs: messagingConfig?.enabledChannels.includes('rcs') ?? false,
-      telegram: messagingConfig?.enabledChannels.includes('telegram') ?? false,
-      reports: setupState?.selectedChannels.includes('reports') ?? false,
+      sms: messagingConfig?.enabledChannels?.includes('sms') ?? false,
+      whatsapp: messagingConfig?.enabledChannels?.includes('whatsapp') ?? false,
+      signal: messagingConfig?.enabledChannels?.includes('signal') ?? false,
+      rcs: messagingConfig?.enabledChannels?.includes('rcs') ?? false,
+      telegram: messagingConfig?.enabledChannels?.includes('telegram') ?? false,
+      reports: setupState?.selectedChannels?.includes('reports') ?? false,
     }
   }
 
@@ -1599,24 +1608,15 @@ export class SettingsService {
       )
     }
 
-    // Check slug uniqueness
-    const [existing] = await this.db
-      .select()
-      .from(rolesTable)
-      .where(eq(rolesTable.slug, slug))
-    if (existing) {
-      throw new ServiceError(
-        409,
-        `Role slug "${slug}" already exists`,
-      )
-    }
-
     const now = new Date()
     const id = data.id ?? `role-${crypto.randomUUID()}`
 
     const roleDescription = description ?? ''
 
-    await this.db.insert(rolesTable).values({
+    // Slug uniqueness is enforced atomically by the unique index: a
+    // check-then-insert let two concurrent creates of the same slug both pass
+    // the check, and the loser surfaced the unique violation as a 500.
+    const inserted = await this.db.insert(rolesTable).values({
       id,
       name: data.name ?? null,
       slug,
@@ -1629,6 +1629,14 @@ export class SettingsService {
       createdAt: now,
       updatedAt: now,
     })
+      .onConflictDoNothing({ target: rolesTable.slug })
+      .returning({ id: rolesTable.id })
+    if (inserted.length === 0) {
+      throw new ServiceError(
+        409,
+        `Role slug "${slug}" already exists`,
+      )
+    }
 
     if (envelopes && envelopes.length > 0) {
       for (const env of envelopes) {
@@ -1768,24 +1776,15 @@ export class SettingsService {
       throw new ServiceError(404, 'User not found')
     }
 
-    const { resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
+    const { resolveAllRoleIds, resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
     const allRoles = await this.getRoles()
     const hubRoles = Array.isArray(user.hubRoles) ? user.hubRoles as Array<{ hubId: string; roleIds: string[] }> : []
 
-    let permissions: string[]
-    if (hubId) {
-      // Resolve for a specific hub (global + that hub's roles)
-      permissions = resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
-    } else {
-      // Union global permissions with all hub-scoped permissions
-      const allPerms = new Set<string>(resolvePermissions(user.roles ?? [], allRoles.roles))
-      for (const assignment of hubRoles) {
-        for (const p of resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, assignment.hubId)) {
-          allPerms.add(p)
-        }
-      }
-      permissions = Array.from(allPerms)
-    }
+    const permissions = hubId
+      // Resolve for a specific hub (that hub's roles; super-admin globals)
+      ? resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
+      // Union of global permissions and every hub's permissions
+      : resolvePermissions(resolveAllRoleIds(user.roles ?? [], hubRoles), allRoles.roles)
     return { userId, permissions }
   }
 

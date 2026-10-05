@@ -104,6 +104,7 @@ describe('outgoing apns-topic header — regular push (push-dispatch.ts)', () =>
       platform: 'ios',
       pushToken: 'device-token-abc',
       wakeKeyPublic: 'deadbeef',
+      x25519Pubkey: null,
       registeredAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
     }
@@ -141,6 +142,7 @@ describe('outgoing apns-topic header — regular push (push-dispatch.ts)', () =>
       platform: 'ios',
       pushToken: 'device-token-abc',
       wakeKeyPublic: 'deadbeef',
+      x25519Pubkey: null,
       registeredAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
     }

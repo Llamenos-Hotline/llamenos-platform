@@ -371,6 +371,16 @@ RustBuffer uniffi_llamenos_core_fn_func_generate_ephemeral_keypair_mobile(RustCa
 RustBuffer uniffi_llamenos_core_fn_func_get_public_key(RustBuffer secret_key_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BASE64URL_TO_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BASE64URL_TO_HEX
+RustBuffer uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(RustBuffer b64, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
+RustBuffer uniffi_llamenos_core_fn_func_mobile_build_auth_message(RustBuffer pubkey_hex, uint64_t timestamp, RustBuffer method, RustBuffer path, RustBuffer nonce, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CLEAR_EPHEMERAL_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CLEAR_EPHEMERAL_KEY
 void uniffi_llamenos_core_fn_func_mobile_clear_ephemeral_key(RustCallStatus *_Nonnull out_status
@@ -395,6 +405,11 @@ void uniffi_llamenos_core_fn_func_mobile_clear_wake_key(RustCallStatus *_Nonnull
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CONTENT_AAD_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CONTENT_AAD_HEX
+RustBuffer uniffi_llamenos_core_fn_func_mobile_content_aad_hex(RustBuffer label, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN
 RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token(uint64_t timestamp, RustBuffer method, RustBuffer path, RustCallStatus *_Nonnull out_status
@@ -403,6 +418,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token(uint64_t timest
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN_FROM_SIGNING_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN_FROM_SIGNING_KEY
 RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token_from_signing_key(RustBuffer signing_key_hex, uint64_t timestamp, RustBuffer method, RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN_WITHOUT_NONCE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_CREATE_AUTH_TOKEN_WITHOUT_NONCE
+RustBuffer uniffi_llamenos_core_fn_func_mobile_create_auth_token_without_nonce(uint64_t timestamp, RustBuffer method, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_DRAFT
@@ -490,6 +510,11 @@ int8_t uniffi_llamenos_core_fn_func_mobile_has_wake_key(RustCallStatus *_Nonnull
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HEX_TO_BASE64URL
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HEX_TO_BASE64URL
+RustBuffer uniffi_llamenos_core_fn_func_mobile_hex_to_base64url(RustBuffer hex_str, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HPKE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_HPKE_OPEN
 RustBuffer uniffi_llamenos_core_fn_func_mobile_hpke_open(RustBuffer envelope, RustBuffer expected_label, RustBuffer aad_hex, RustCallStatus *_Nonnull out_status
@@ -524,6 +549,16 @@ int8_t uniffi_llamenos_core_fn_func_mobile_is_unlocked(RustCallStatus *_Nonnull 
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_IS_VALID_PIN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_IS_VALID_PIN
 int8_t uniffi_llamenos_core_fn_func_mobile_is_valid_pin(RustBuffer pin, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_KEY_WRAP_AAD_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_KEY_WRAP_AAD_HEX
+RustBuffer uniffi_llamenos_core_fn_func_mobile_key_wrap_aad_hex(RustBuffer label, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_LABEL_TO_ID
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_LABEL_TO_ID
+uint8_t uniffi_llamenos_core_fn_func_mobile_label_to_id(RustBuffer label, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_LOAD_HUB_KEY
@@ -601,17 +636,22 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_sign(RustBuffer message_hex, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SYMMETRIC_DECRYPT
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SYMMETRIC_DECRYPT
-RustBuffer uniffi_llamenos_core_fn_func_mobile_symmetric_decrypt(RustBuffer ciphertext_hex, RustBuffer key_hex, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_llamenos_core_fn_func_mobile_symmetric_decrypt(RustBuffer ciphertext_hex, RustBuffer key_hex, RustBuffer aad_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SYMMETRIC_ENCRYPT
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SYMMETRIC_ENCRYPT
-RustBuffer uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(RustBuffer plaintext_hex, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(RustBuffer plaintext_hex, RustBuffer aad_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_UNLOCK
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_UNLOCK
 RustBuffer uniffi_llamenos_core_fn_func_mobile_unlock(RustBuffer data, RustBuffer pin, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_VERIFY_AUTH_TOKEN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_VERIFY_AUTH_TOKEN
+int8_t uniffi_llamenos_core_fn_func_mobile_verify_auth_token(RustBuffer token, RustBuffer method, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_WAKE_KEY_PUBKEY
@@ -1030,6 +1070,18 @@ uint16_t uniffi_llamenos_core_checksum_func_get_public_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BASE64URL_TO_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BASE64URL_TO_HEX
+uint16_t uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BUILD_AUTH_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BUILD_AUTH_MESSAGE
+uint16_t uniffi_llamenos_core_checksum_func_mobile_build_auth_message(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CLEAR_EPHEMERAL_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CLEAR_EPHEMERAL_KEY
 uint16_t uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key(void
@@ -1054,6 +1106,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_clear_wake_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CONTENT_AAD_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CONTENT_AAD_HEX
+uint16_t uniffi_llamenos_core_checksum_func_mobile_content_aad_hex(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN
 uint16_t uniffi_llamenos_core_checksum_func_mobile_create_auth_token(void
@@ -1063,6 +1121,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_create_auth_token(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN_FROM_SIGNING_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN_FROM_SIGNING_KEY
 uint16_t uniffi_llamenos_core_checksum_func_mobile_create_auth_token_from_signing_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN_WITHOUT_NONCE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_CREATE_AUTH_TOKEN_WITHOUT_NONCE
+uint16_t uniffi_llamenos_core_checksum_func_mobile_create_auth_token_without_nonce(void
     
 );
 #endif
@@ -1162,6 +1226,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_has_wake_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HEX_TO_BASE64URL
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HEX_TO_BASE64URL
+uint16_t uniffi_llamenos_core_checksum_func_mobile_hex_to_base64url(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HPKE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_HPKE_OPEN
 uint16_t uniffi_llamenos_core_checksum_func_mobile_hpke_open(void
@@ -1201,6 +1271,18 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_is_unlocked(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_IS_VALID_PIN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_IS_VALID_PIN
 uint16_t uniffi_llamenos_core_checksum_func_mobile_is_valid_pin(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_KEY_WRAP_AAD_HEX
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_KEY_WRAP_AAD_HEX
+uint16_t uniffi_llamenos_core_checksum_func_mobile_key_wrap_aad_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_LABEL_TO_ID
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_LABEL_TO_ID
+uint16_t uniffi_llamenos_core_checksum_func_mobile_label_to_id(void
     
 );
 #endif
@@ -1303,6 +1385,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_UNLOCK
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_UNLOCK
 uint16_t uniffi_llamenos_core_checksum_func_mobile_unlock(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_VERIFY_AUTH_TOKEN
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_VERIFY_AUTH_TOKEN
+uint16_t uniffi_llamenos_core_checksum_func_mobile_verify_auth_token(void
     
 );
 #endif

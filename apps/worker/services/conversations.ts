@@ -18,6 +18,7 @@ import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
 import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { ServiceError } from './settings'
 
@@ -415,6 +416,7 @@ export class ConversationsService {
   async handleIncoming(
     incoming: IncomingMessage,
     /**
+    /**
      * The platform admin's X25519 HPKE recipient, or `undefined` when the
      * deployment has none. Typed as a brand so an Ed25519 auth key — which is
      * also 64 hex characters, and which the messaging router used to pass here
@@ -495,10 +497,20 @@ export class ConversationsService {
 
     // Encrypt the message content using envelope pattern. An absent admin
     // recipient means one fewer reader, never a substituted key (#1283).
-    const readerPubkeys: string[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
-    if (conv.assignedTo && conv.assignedTo !== adminDecryptionPubkey) {
-      readerPubkeys.push(conv.assignedTo)
-    }
+    //
+    // #1021: `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // pubkey — the key that signs their auth tokens (see `claim()` and
+    // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
+    // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
+    // accepts any 32 bytes, so it neither threw nor warned. Resolve the
+    // assignee to the X25519 encryption keys of their registered devices
+    // instead — one envelope per device, and no envelope at all for a user
+    // with no device key on file (never a fallback to the auth key).
+    const readerPubkeys: string[] = await buildReaderPubkeys(
+      this.db,
+      adminDecryptionPubkey,
+      conv.assignedTo ? [conv.assignedTo] : [],
+    )
 
     const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
 

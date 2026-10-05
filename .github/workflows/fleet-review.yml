@@ -45,6 +45,8 @@
 #    "Decide whether to run the review engine" step is what used to be the
 #    `if:`, and its `not-requested` branch FAILS rather than skipping. A
 #    review requested from somebody else is a red check, never a green skip.
+#    (A PUSH is not that case — see invariant 2: it concludes on the PR's
+#    last earned verdict, a real conclusion, never a skip.)
 #    Pinned by a rail in tests/orchestrator/guards.test.ts.
 # 2. A PUSH MAY REPUBLISH A VERDICT; IT MAY NEVER START ONE (#1284).
 #    `synchronize` IS a trigger now — this invariant used to forbid it
@@ -63,13 +65,30 @@
 #    verdict cache, which is keyed on the DIFF HASH (`review-cache.ts`), so a
 #    rebase with an unchanged diff is a `cache-hit` — no model call, the
 #    stored verdict republished on the new head. A push that DID change the
-#    diff has nothing cached, and the gate concludes `not-requested`: a red
-#    check saying so, still no model call. `run-engine` is unreachable on a
-#    push, and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
+#    diff carries the verdict this PR last EARNED forward (`carried`,
+#    `lastEarnedVerdict` in review-cache.ts) — a PASS stays green, a FAIL
+#    stays red, the check naming the head it was earned on — or, on a PR no
+#    review was ever earned on, concludes green saying so (`unreviewed`).
+#    Still no model call either way. `run-engine` is unreachable on a push,
+#    and not by luck — `isRepublishOnlyEvent` (ci.ts) is passed to
 #    `decideReviewGate` as `republishOnly`, which refuses `run-engine`
 #    outright rather than resting on a `synchronize` payload happening to
 #    carry no `requested_reviewer`. Pinned by rails in
 #    tests/orchestrator/guards.test.ts.
+#
+#    WHY A PUSH NEVER TURNS THE CHECK RED ON ITS OWN ACCOUNT. It used to
+#    conclude `not-requested` — a red "nobody asked" — on every push that
+#    changed a Tier 2 diff, and GitHub sends no fresh `review_requested` for
+#    a login that is still requested, so the only way back to green was to
+#    remove and re-add the reviewer by hand, after every push. The operator's
+#    rule: reviews fire only from a review request, and "if there's a review
+#    there's a review; if another review is needed it can be requested". A
+#    verdict, once earned, stands until somebody asks for another. The one
+#    red a push can produce by itself is `carry-unreadable`: the history
+#    could not be read, and "could not look" must never carry a FAIL into a
+#    green. Correctness is gated on every push regardless — `ci-status`,
+#    `gitleaks`, `CodeQL` and `fleet/verify` — and the merge queue tests the
+#    real merge commit.
 #
 #    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
 #    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
@@ -97,8 +116,10 @@
 #      gh api repos/<o>/<r>/issues/<n>/events \
 #        --jq '[.[] | select(.event|test("review_request"))] | last'
 #    `reviewNotRequestedAdvice` (ci.ts) is what stops the red check sending
-#    its reader into that loop. The remaining gap — a verdict that can be
-#    RECORDED when no event can be made to fire — is #1471, still open.
+#    its reader into that loop. The recording gap that compounded it — a
+#    verdict `review-and-merge` could not POST with PAT auth — is fixed by
+#    the GitHub-App recorder (#1487): app-scoped, fails closed, no PAT
+#    fallback; it goes live with the App's provisioning (#1483).
 #
 #    The republish arm never runs on `llamenos-review-box` — see `runs-on`
 #    below. It cannot reach the engine, so it must not queue in front of a
@@ -154,18 +175,22 @@
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
 #                             check so a docs-only PR never sits red.
-#   `not-requested`         → FAIL. Tier 2, no cached PASS, and either this
-#                             review request was not for us, or this was a
-#                             PUSH (#1284) — which changed the diff, so
-#                             nothing the PR already earned covers the new
-#                             head. Still no model call either way. Its
+#   `carried`               → a PUSH (#1284) that changed the diff: the
+#                             verdict this PR last earned, restated with the
+#                             head it was earned on. PASS → SUCCESS, FAIL →
+#                             RED. No model call.
+#   `unreviewed`            → SUCCESS. A push, and no review has ever been
+#                             earned on this PR. No model call.
+#   `carry-unreadable`      → FAIL. A push, and the PR's review history could
+#                             not be read. No model call.
+#   `not-requested`         → FAIL. Tier 2, no cached PASS, and this review
+#                             request was not for us. No model call. Its
 #                             ADVICE is `reviewNotRequestedAdvice` (ci.ts),
 #                             which refuses to print "request a review from
 #                             X" when the live `requested_reviewers` already
 #                             lists X — that re-request emits no event, so
 #                             the old fixed advice sent every reader into the
-#                             one loop that cannot terminate (#1471). It
-#                             names the dispatch instead.
+#                             one loop that cannot terminate (#1471).
 #   `run-engine`            → the real review, then the label clear. Reached
 #                             from a `review_requested`, or from a
 #                             `workflow_dispatch` — both run the same review
@@ -199,11 +224,87 @@
 # literal first step of every job here. If the box is offline this job
 # QUEUES — a PR simply cannot merge until it is back, which is fail-closed.
 #
-# The honest cost: the fleet's workers author with `claude` and the reviewer
-# is also `claude` — a different session on a different machine with no
-# shared context, but no longer an independent VENDOR. `FLEET_REVIEW_MODEL`
-# (a repo variable, never a code change) is the dial for running the reviewer
-# on a different model tier than the lanes use.
+# The honest cost — vendor diversity: when the diff's author engine is
+# `claude` (every configured lane's default), a kimi reviewer IS an
+# independent vendor — a different model family with different failure modes
+# and no shared blind spots, the pairing this project's threat model prefers,
+# now on the COMMON path. When the author engine is `opencode` (a
+# Kimi-for-Coding lane), the reviewer and the author share a vendor: a Kimi
+# model reviewing Kimi-authored output shares its blind spots exactly the way
+# the retired claude/claude pairing did — still a genuinely different process
+# (separate session, separate machine, no shared context), but not an
+# independent vendor on those lanes. The mitigation is operational, not
+# code: run the reviewer on a different MODEL TIER than the lanes use (the
+# `FLEET_REVIEW_KIMI_MODEL` repo variable, or the runner's kimi
+# configuration), or set `FLEET_REVIEW_PRIMARY=claude` — for a Kimi-authored
+# lane, claude remains genuinely non-author on every axis. Stated, not
+# alarmed: the alternative this replaces was a claude-only reviewer, which
+# had the same-vendor problem on the claude-authored lanes AND stopped the
+# whole merge train whenever the claude account hit a quota wall.
+#
+# KIMI-PRIMARY, CLAUDE FALLBACK (operator decision, 2026-10-04; the measured
+# need: every Fleet Review run was failing `NO-VERDICT:engine-unavailable`
+# because the operator's claude account hit its WEEKLY QUOTA — one vendor's
+# quota stopped the ENTIRE merge train, because the review engine was
+# hard-pinned to claude). The review engine is now ordered exactly as this
+# repo's own design notes already named: "Kimi-primary with Claude fallback
+# on unreachable, so a flaky reviewer costs a retry rather than a blocked
+# merge."
+#   - `invokeVerifierEngine` (orchestrator/src/review.ts) runs kimi FIRST,
+#     under a committed read-only agent profile
+#     (`orchestrator/reviewer-readonly.agent.md`, kimi's equivalent of
+#     `--tools Read,Grep,Glob` — enforced at execution, so the kimi reviewer
+#     has no shell and no edit tools either). Only a CANNOT-RUN failure —
+#     missing binary, a brief too large for one `-p` argv element, timeout,
+#     crash, an unreachable-class error — retries the SAME brief through
+#     `claude` (`--print --output-format stream-json`, gate-owned HOME,
+#     `--tools Read,Grep,Glob`) before giving up.
+#   - NEVER on anything else: a substantive PASS/FAIL from either engine is
+#     returned as-is (a FAIL is never "retried" through another engine); an
+#     AUTH-failure-shaped error on EITHER arm does not cross engines (it is
+#     ambiguous — most often an expired runner login the operator must see,
+#     per this file's own `engine-auth` classification, not paper over); an
+#     exhausted turn budget does not cross (the brief, not the engine,
+#     failed). See `canFallbackAfterFailure` (review.ts) for the taxonomy.
+#   - EVERY verdict is labelled: the check output and the PR comment carry
+#     "reviewed by kimi" for a primary verdict or "reviewed by claude (kimi
+#     unavailable)" for a fallback one — a green check's provenance is never
+#     invisible, and the label is what stops the engine order from silently
+#     drifting.
+#   - ONE containment difference between the engines, honest because #1460
+#     taught this file to be: claude's reviewer runs under a GATE-OWNED HOME
+#     holding exactly one provisioned credential file. Kimi's authentication
+#     is entangled across its own config directory (`~/.kimi-code`: config,
+#     OAuth tokens, credentials) in a way that has no one-file equivalent,
+#     so the kimi reviewer runs with the runner's real HOME and may see the
+#     operator's user-level kimi configuration — the pre-#1460 claude
+#     posture. What bounds it regardless: the read-only agent profile (no
+#     shell, no writes, no MCP tools, no sub-agents), the stripped export,
+#     the empty scratch project root, and GitHub's per-SHA required statuses
+#     as the actual defense against a tampering reviewer (review.ts, above
+#     `gitState`).
+#
+# Operator dials (all repo variables, never code changes):
+#   FLEET_REVIEW_PRIMARY    — `kimi` (default) | `claude`; which engine runs
+#                           first. Flipping it back re-pins review to claude.
+#   FLEET_REVIEW_FALLBACK   — `on` (default) | `off`; disables crossing to
+#                           the other engine on a cannot-run failure
+#                           (either direction — one toggle, because the
+#                           fallback is simply the engine that did not run
+#                           first).
+#   FLEET_REVIEW_KIMI_MODEL — optional kimi model override; UNSET means kimi
+#                           resolves its own configured default.
+#   FLEET_REVIEW_MODEL      — the claude model tier (default sonnet), used
+#                           whenever claude runs.
+#
+# Runner prerequisite (llamenos-review-box): the `kimi` CLI must be on the
+# PATH the job inherits — one line if it is not (runner infrastructure
+# itself is deliberately untouched by this file):
+#   sudo ln -sf "$HOME/.kimi-code/bin/kimi" /usr/local/bin/kimi
+# and logged in once as the operator (`kimi login`). If `kimi` is absent,
+# every review starts on claude instead (a missing primary is a cannot-run
+# condition like any other) — a runner without kimi degrades to the
+# claude-only gate this file had before 2026-10-04, never a half-run one.
 name: Fleet Review
 
 on:
@@ -217,7 +318,8 @@ on:
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
   # exact diff (`cache-hit`), conclude on its own terms (`low-tier`,
-  # `bot-authored`), or go red — never a model call, structurally
+  # `bot-authored`), or carry the PR's last earned verdict forward
+  # (`carried`/`unreviewed`) — never a model call, structurally
   # (`republishOnly`, ci.ts). Without it a rebase leaves the new head with no
   # `fleet/review` at all and the PR unmergeable until a human removes and
   # re-adds the reviewer by hand.
@@ -388,7 +490,7 @@ jobs:
       contents: read
       # Used only on the workflow_dispatch path (`gh api .../pulls/$pr`) to
       # resolve the PR's branch name and base/head SHAs. The `pull_request`
-      # (labeled) path needs no API call at all — the label event's own
+      # (review_requested) path needs no API call at all — the event's own
       # payload already carries all three.
       pull-requests: read
       # Read-only, for the review-cache lookup (`review-cache.ts`'s
@@ -413,28 +515,39 @@ jobs:
     # difference too.
     timeout-minutes: 30
 
-    # Repo Settings > Secrets and variables > Actions > Variables — so
-    # raising the reviewer's model tier is an operator action (one repo
-    # variable), never a code change or a PR. The smoke-test step below and
-    # the "Review" step both key off this; `review.ts`'s `REVIEWER_MODEL`
-    # reads the identical env var with the identical default, so a variable
-    # change moves the smoke test and the real review together. There is no
-    # `FLEET_REVIEW_PROVIDER` any more — `claude`, pre-authenticated on this
-    # runner, is the only provider now (see the file header).
+    # Repo Settings > Secrets and variables > Actions > Variables — the
+    # engine ORDER and the model tiers are operator actions (repo variables),
+    # never code changes or PRs. Every variable below is read with the
+    # IDENTICAL name and default by review.ts (`reviewPrimaryEngine`,
+    # `fallbackReviewerEnabled`, `kimiReviewModel`, `REVIEWER_MODEL`), and the
+    # smoke-test step reads the same env vars — so a variable change moves the
+    # smoke test and the real review together, and the smoke step can never be
+    # more tolerant of an outage than the review it gates.
+    #
+    # There is no `FLEET_REVIEW_PROVIDER` any more — the engine order is
+    # `FLEET_REVIEW_PRIMARY` (`kimi` default, `claude` selectable), and the
+    # fallback is simply "the engine that did not run first", toggled by one
+    # variable, `FLEET_REVIEW_FALLBACK` (`on` default, `off` disables crossing
+    # in either direction). See the file header for the design and its honest
+    # costs.
     #
     # #891 banned a silent literal default for the review engine, but that
     # was about a swappable PROVIDER id going stale and being guessed at
     # invisibly (`kimi-for-coding`, retired twice under everyone's feet — see
     # the comment above `DEFAULT_OPENCODE_MODEL` in `orchestrator/src/
     # review.ts`, kept for that history even though it no longer drives this
-    # job). This job has no provider left to guess at: `claude` is the only
-    # engine (`reviewerBinaryFor` hard-fails for anything else), and
-    # `'sonnet'` is a real, always-valid model tier, not a dead id someone
-    # forgot to update — the smoke test below still classifies a bad
-    # `FLEET_REVIEW_MODEL` as `engine-misconfigured` before the real review
-    # ever runs, so an operator TYPO is still loud, just not an unconfigured
-    # variable being silently invisible the way an absent provider id was.
+    # job). The remaining defaults are real, always-valid values (`kimi` and
+    # `claude` are both installed binaries on this runner, `'sonnet'` is a
+    # real claude tier, and an empty `FLEET_REVIEW_KIMI_MODEL` means "kimi's
+    # own configured default" rather than a guessed id) — the smoke test
+    # below still classifies a bad `FLEET_REVIEW_MODEL` as
+    # `engine-misconfigured` before the real review ever runs, so an operator
+    # TYPO is still loud, just not an unconfigured variable being silently
+    # invisible the way an absent provider id was.
     env:
+      FLEET_REVIEW_PRIMARY: ${{ vars.FLEET_REVIEW_PRIMARY || 'kimi' }}
+      FLEET_REVIEW_FALLBACK: ${{ vars.FLEET_REVIEW_FALLBACK || 'on' }}
+      FLEET_REVIEW_KIMI_MODEL: ${{ vars.FLEET_REVIEW_KIMI_MODEL }}
       FLEET_REVIEW_MODEL: ${{ vars.FLEET_REVIEW_MODEL || 'sonnet' }}
       # The reviewer's tool restriction, carried BY THIS WORKFLOW rather than
       # imported from `orchestrator/src/review.ts` at gate time. It must
@@ -454,6 +567,25 @@ jobs:
       # re-arms. A literal here crosses no version boundary, and the drift
       # it could otherwise hide is caught by the test above instead.
       FLEET_REVIEWER_TOOLS: Read,Grep,Glob
+      # The reviewer's gate-owned HOME (#1460, #1511), carried as literals
+      # here for the SAME version-boundary reason as FLEET_REVIEWER_TOOLS
+      # above: this YAML is the head's, the checkout is the base's, so a
+      # `bun -e` import of a symbol the head adds deadlocks the gate for the
+      # PR that adds it (#1464). `tests/orchestrator/guards.test.ts` pins
+      # both equal to `REVIEWER_HOME_PREFIX` and
+      # `REVIEWER_CREDENTIALS_RELPATH` in orchestrator/src/review.ts, at a
+      # commit where the YAML and the module are necessarily the same
+      # version.
+      #
+      # Why the smoke step builds a HOME at all, rather than leaving it to
+      # the real review: the smoke exists to name a configuration problem
+      # BEFORE every real review fails opaquely as `engine-unavailable`. An
+      # engine that cannot authenticate from a gate-owned HOME — because the
+      # provisioned credential file is absent, or the installed build
+      # resolves its login state somewhere this does not reach — must be
+      # caught here, where it is classified, not there.
+      FLEET_REVIEWER_HOME_PREFIX: .llamenos-review-home-
+      FLEET_REVIEWER_CREDENTIALS_RELPATH: .claude/.credentials.json
 
     steps:
       # MANDATORY, and must stay the literal first step: a self-hosted
@@ -852,10 +984,14 @@ jobs:
       #     read, or a review it asks for (by label or by its own content)
       #     does not resolve to a known agent. Fail closed — "we could not
       #     work out what to review" never becomes "nothing needed it".
-      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts). Either
-      #     the review was requested from somebody else, or this was a PUSH
-      #     that changed the diff (#1284), which can never start a review
-      #     whatever else is true (`republishOnly`, ci.ts). Exiting 1
+      #   - `carried` / `unreviewed` / `carry-unreadable` → a PUSH that
+      #     changed the diff (#1284), which can never start a review whatever
+      #     else is true (`republishOnly`, ci.ts). `carried` restates the
+      #     verdict the PR last earned (exit 0 on PASS, 1 on FAIL);
+      #     `unreviewed` exits 0 — nobody has asked; `carry-unreadable` exits
+      #     1 — the history could not be read. Every later step skips.
+      #   - `not-requested` → exits 1 (see `runReviewGate` in cli.ts): the
+      #     review was requested from somebody else. Exiting 1
       #     stops every later step from running at all (GitHub Actions does
       #     not run subsequent steps after a failure unless they opt in with
       #     `if: always()`/`if: failure()` — none of the engine steps do)
@@ -969,13 +1105,22 @@ jobs:
       # trailing line must fail HERE, not pass the smoke step and then make
       # every real review UNREADABLE.
       #
-      # A failure here is ALWAYS a job failure — nothing below turns a bad
-      # engine call into a pass. A failure names WHY, on one line, before the
-      # job goes red, distinguishing three causes so an operator never has to
-      # open the log to tell "the account hit a usage limit" (`engine-quota`)
-      # from "the runner's claude login expired" (`engine-auth`) from
-      # everything else (`engine-unavailable` — a bad model id, a missing
-      # binary, or the engine running but never producing a valid verdict).
+      # A failure here is a job failure — nothing below turns a bad engine
+      # call into a pass — with exactly ONE tolerated exception in each
+      # direction: whichever engine `reviewerInvocationFor` resolves as
+      # PRIMARY gets smoked first, and a primary failure in the CANNOT-RUN
+      # family (quota, overload, timeout, crash, a model-id rejection,
+      # missing binary — everything except `engine-auth`, deliberately) re-runs
+      # the same health question through the OTHER engine before the step
+      # fails, because a cannot-run primary is precisely the state the
+      # fallback exists for and failing the smoke there would stop the review
+      # that could still run (file header). A failure names WHY, on one line,
+      # before the job goes red, distinguishing three causes so an operator
+      # never has to open the log to tell "the account hit a usage limit"
+      # (`engine-quota`) from "the runner's engine login expired"
+      # (`engine-auth`) from everything else (`engine-unavailable` — a bad
+      # model id, a missing binary, or the engine running but never producing
+      # a valid verdict).
       - name: Smoke-test the review engine
         id: smoke
         if: steps.gate.outputs.outcome == 'run-engine'
@@ -1004,6 +1149,7 @@ jobs:
           root="$(mktemp -d)"
           # Set before engine resolution runs, so `fail()` can reference them
           # under `set -u` even if resolution itself is what failed.
+          rev_engine=""
           rev_binary=""
           rev_model=""
 
@@ -1075,15 +1221,27 @@ jobs:
           engine_json="$(bun -e '
             import { reviewerInvocationFor } from "./orchestrator/src/review.ts"
             const inv = reviewerInvocationFor("claude")
-            console.log(JSON.stringify({ binary: inv.binary, model: inv.model }))
+            console.log(JSON.stringify({ engine: inv.engine, binary: inv.binary, model: inv.model }))
           ' 2>"$RUNNER_TEMP/engine-resolve-stderr.log")"
           engine_status=$?
           engine_err="$(cat "$RUNNER_TEMP/engine-resolve-stderr.log" 2>/dev/null || true)"
           if [ "$engine_status" -ne 0 ]; then
             fail "engine-misconfigured" "$engine_json"$'\n'"$engine_err"
           fi
+          rev_engine="$(printf '%s' "$engine_json" | jq -r '.engine')"
           rev_binary="$(printf '%s' "$engine_json" | jq -r '.binary')"
           rev_model="$(printf '%s' "$engine_json" | jq -r '.model')"
+          # The ENGINE is what selects the branch below; it must always
+          # resolve. The model may be EMPTY for kimi — that is the
+          # meaningful "kimi's own configured default" state (see
+          # `kimiReviewModel`), not a resolution failure — so only claude is
+          # held to a nonempty tier here.
+          if [ -z "$rev_engine" ] || [ "$rev_engine" = "null" ] || [ -z "$rev_binary" ] || [ "$rev_binary" = "null" ]; then
+            fail "engine-misconfigured" "reviewerInvocationFor printed unparseable output: $engine_json"$'\n'"$engine_err"
+          fi
+          if [ "$rev_engine" = "claude" ] && { [ -z "$rev_model" ] || [ "$rev_model" = "null" ]; }; then
+            fail "engine-misconfigured" "reviewerInvocationFor resolved claude without a model tier: $engine_json"$'\n'"$engine_err"
+          fi
           # The reviewer's tool restriction, from this workflow's own `env:`
           # — NOT imported from review.ts, because this YAML is the head's
           # while the checkout is the base's (see FLEET_REVIEWER_TOOLS).
@@ -1101,33 +1259,315 @@ jobs:
           if [ -z "$rev_tools" ]; then
             fail "engine-misconfigured" "FLEET_REVIEWER_TOOLS resolved to nothing — the reviewer would run with the full default tool set, Bash included"
           fi
-          if [ -z "$rev_binary" ] || [ "$rev_binary" = "null" ] || [ -z "$rev_model" ] || [ "$rev_model" = "null" ]; then
-            fail "engine-misconfigured" "reviewerInvocationFor printed unparseable output: $engine_json"$'\n'"$engine_err"
-          fi
 
           if ! command -v "$rev_binary" >/dev/null 2>&1; then
             fail "engine-unavailable" "the $rev_binary CLI is not on PATH on this runner"
           fi
 
-          run_out="$(cd "$root" && printf 'Reply with exactly: VERDICT: PASS\n' \
-            | "$rev_binary" --print --permission-mode plan --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+          # GATE-OWNED HOME (#1460, #1511) — the shell twin of
+          # `prepareReviewerHome` in review.ts; read that function's doc
+          # comment for the full rationale, which is not repeated here.
+          #
+          # In short: `--tools` restricts BUILT-IN tools only, so the
+          # runner's own `$HOME/.claude` still reached into every review —
+          # its MCP servers as extra callable tools, its `settings.json`
+          # hooks executing at session start, and its user-level `CLAUDE.md`
+          # and skills prepended as trusted instructions. The last of those
+          # is what blocked merges: the reviewer saw the operator's workflow
+          # instructions conflicting with this step's fixed-string prompt
+          # and declined it as a prompt-injection attempt, 3/3 runs on #1510.
+          # `root` being an empty `mktemp -d` does nothing about it —
+          # clearing the WORKING directory does not clear USER-level config.
+          #
+          # Created inside $HOME on purpose: `ln` (a HARD link, never a
+          # symlink — claude opens this file with O_NOFOLLOW and refuses a
+          # symlinked one) cannot cross filesystems, and a hard link is what
+          # keeps a token refresh writing through to the operator's single
+          # authoritative store instead of into a directory this step
+          # deletes. `cp` is the cross-device fallback.
+          #
+          # An ABSENT source file is deliberately not fatal here: the engine
+          # then runs unauthenticated and the call below fails with
+          # auth language, which `classify` names `engine-auth` — a far
+          # better diagnosis than this block guessing.
+          rev_home="$(mktemp -d "$HOME/${FLEET_REVIEWER_HOME_PREFIX}XXXXXX")"
+          if [ -z "$rev_home" ] || [ ! -d "$rev_home" ]; then
+            # Guarded explicitly: an empty `rev_home` would otherwise reach
+            # `env HOME=""`, which hands the engine NO home at all and fails
+            # as an unexplained auth error several steps later.
+            fail "engine-misconfigured" "could not create the reviewer HOME under $HOME — mktemp -d failed"
+          fi
+          trap 'rm -rf "$rev_home"' EXIT
+          chmod 700 "$rev_home"
+          rev_creds="$rev_home/$FLEET_REVIEWER_CREDENTIALS_RELPATH"
+          mkdir -p "$(dirname "$rev_creds")"
+          chmod 700 "$(dirname "$rev_creds")"
+          src_creds="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+          if [ -f "$src_creds" ]; then
+            ln "$src_creds" "$rev_creds" 2>/dev/null || cp "$src_creds" "$rev_creds"
+            chmod 600 "$rev_creds"
+          fi
+
+          # `--strict-mcp-config` with no `--mcp-config` alongside it means
+          # the reviewer loads ZERO MCP servers — and this is NOT redundant
+          # with the gate-owned HOME above. Measured on the installed 2.1.280
+          # binary: a session under a FRESH gate-owned HOME with
+          # `--tools default` still loaded 26 MCP tools (`mcp__claude_ai_*`
+          # connectors, `create`/`update`/`delete`/Drive/Gmail among them),
+          # because those are attached to the ACCOUNT the credential file
+          # authenticates as, not to anything in $HOME. The same invocation
+          # with this flag loaded zero. It is passed here as well as in
+          # `verifierArgs` so a runner whose claude build rejects the flag is
+          # named as a configuration problem by this step, rather than
+          # failing every real review as an opaque `engine-unavailable`.
+          # The smoke prompt asks a QUESTION with a real answer, and makes the
+          # verdict the ANSWER to it (#1511's third suggestion). The old
+          # prompt dictated the verdict string outright — a health check that
+          # asks a model to bypass its own judgement and emit a fixed
+          # attestation, which is indistinguishable from an injected
+          # instruction and was refused on exactly those grounds. Measured on
+          # the installed 2.1.280 binary: the old prompt is refused even
+          # under a clean HOME ("I have no review content in front of me, so
+          # that string would falsely imply something was checked"); this one
+          # returned `VERDICT: PASS` as its exact final line on 3/3 runs
+          # under a clean HOME and 2/2 under a deliberately poisoned one. The
+          # verdict is now EARNED, which is why it is stable.
+          #
+          # No apostrophes anywhere in it, deliberately: it is carried as
+          # single-quoted shell words.
+          smoke_prompt="$(printf '%s\n' \
+            'This is the health check for an automated code-review pipeline, not a code review. The only thing being tested is whether this pipeline can read your answer.' \
+            '' \
+            'Question: is 2 + 2 equal to 4?' \
+            '' \
+            'Answer it. Whatever else you write, the LAST line of your reply must be exactly "VERDICT: PASS" if the answer is yes, or exactly "VERDICT: FAIL" if it is no. Nothing may follow that line.')"
+
+          # The read-only agent profile ANY kimi invocation runs under
+          # (primary or fallback), committed at the base checkout this job
+          # runs from (the same relative-path discipline as the `bun -e`
+          # imports above, for the same version-boundary reason — never
+          # import a symbol the base may not have). Without this profile a
+          # kimi reviewer runs its full default tool set, shell included — a
+          # read-only reviewer in name only — so a missing profile is a hard
+          # configuration failure, not a degradation.
+          # Resolve ABSOLUTE before any `cd`: the invocations below run from a
+          # scratch dir ($root), where a relative path would dangle (the kimi
+          # smoke failed with ENOENT on $root/orchestrator/... otherwise).
+          fallback_agent="$(readlink -f orchestrator/reviewer-readonly.agent.md)"
+          # kimi model suffix, from the SAME resolved invocation as the
+          # binary ($rev_model is the kimi model when rev_engine is kimi):
+          # EMPTY means kimi resolves its own configured default, and the
+          # suffix is passed UNQUOTED on purpose — a model id never contains
+          # whitespace, and an empty suffix must expand to no argument at
+          # all. (review.ts's `kimiArgs` builds the identical argv.)
+          kimi_model_suffix=""
+          if [ "$rev_engine" = "kimi" ] && [ -n "$rev_model" ] && [ "$rev_model" != "null" ]; then
+            kimi_model_suffix="--model $rev_model"
+          fi
+
+          # kimi_verdict: extract the final assistant message from a kimi
+          # stream-json envelope (one JSON object per line; assistant text
+          # is the string `content` of the LAST `role:"assistant"` event —
+          # `decodeKimiOutput` in review.ts is the base-code twin of this
+          # extraction) and judge it with the base's own `parseVerdict`.
+          # jq, not a `bun -e` import of the decoder, for the version-
+          # boundary reason above: this step must be able to smoke-test the
+          # very PR that introduces the decoder. The extracted text is left
+          # in KIMI_SMOKE_TEXT for the caller's excerpt-on-failure path.
+          # $1: the raw kimi stdout. $2: the engine label for the verdict
+          # line. Exits 0 only on a parsed PASS.
+          kimi_verdict() {
+            KIMI_SMOKE_TEXT="$(printf '%s' "$1" | jq -rs '[.[] | select(type == "object" and .role == "assistant") | .content | select(type == "string")] | last // ""' 2>/dev/null)"
+            # Exported, not an assignment-prefix on printf: an env prefix on a
+            # pipeline's first command does NOT reach later commands (bun
+            # would see an undefined label).
+            export SMOKE_ENGINE_LABEL="$2"
+            printf '%s' "$KIMI_SMOKE_TEXT" | bun -e '
+              import { parseVerdict } from "./orchestrator/src/review.ts"
+              const text = await Bun.stdin.text()
+              console.log(text)
+              const verdict = parseVerdict(text)
+              console.log("smoke verdict (parseVerdict of " + process.env.SMOKE_ENGINE_LABEL + " output): " + verdict)
+              process.exit(verdict === "PASS" ? 0 : 1)
+            '
+          }
+
+          # claude_verdict: judge plain --print output with the base's
+          # parseVerdict — same function, same final line, same rule as every
+          # other arm. $1: the engine's stdout. $2: the engine label.
+          claude_verdict() {
+            export SMOKE_ENGINE_LABEL="$2"
+            printf '%s' "$1" | bun -e '
+              import { parseVerdict } from "./orchestrator/src/review.ts"
+              const text = await Bun.stdin.text()
+              console.log(text)
+              const verdict = parseVerdict(text)
+              console.log("smoke verdict (parseVerdict of " + process.env.SMOKE_ENGINE_LABEL + " output): " + verdict)
+              process.exit(verdict === "PASS" ? 0 : 1)
+            '
+          }
+
+          # Scrub+cap a model's prose for a one-line public log excerpt
+          # (shared by every ANSWERED-without-readable-verdict arm below):
+          # newlines flattened, 300 characters, anything token-shaped
+          # redacted — this text is the model's own words printed into a
+          # public job log and must not become a way for engine output to
+          # carry a credential into one.
+          scrub_excerpt() {
+            printf '%s' "$1" | tr -d '\000' | tr '\n\r\t' '   ' \
+              | sed -E 's#(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9._-]{16,}|[A-Za-z0-9+/]{40,}={0,2})#[redacted]#g' \
+              | cut -c1-300
+          }
+
+          # ──────────────────────────────────────────────────────────────
+          # PRIMARY: kimi (the default order — see the file header). The
+          # claude-primary branch below is the same step with the arms
+          # swapped; both stay because FLEET_REVIEW_PRIMARY can select
+          # either, and during the bootstrap window this step runs from the
+          # HEAD YAML against a BASE checkout whose
+          # `reviewerInvocationFor` still resolves claude — the branch is
+          # chosen from the RESOLVED engine, never from an env var read
+          # directly, so the smoke test and the real review always smoke
+          # the same engine by construction.
+          # ──────────────────────────────────────────────────────────────
+          if [ "$rev_engine" = "kimi" ]; then
+            if [ ! -f "$fallback_agent" ]; then
+              fail "engine-misconfigured" "the primary reviewer engine resolved to kimi but the read-only agent profile $fallback_agent is missing from this checkout — refusing to run a reviewer with its full default tool set (shell included)"
+            fi
+            # The kimi reviewer runs under the RUNNER'S OWN HOME, NOT the
+            # gate-owned claude HOME built above: kimi authenticates from
+            # its own login state under its own config directory, which the
+            # gate-owned HOME does not provision (file header, "ONE
+            # containment difference"). The read-only agent profile — not
+            # HOME isolation — is what bounds the kimi reviewer's tool set.
+            run_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+            run_status=$?
+            run_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+            if [ "$run_status" -ne 0 ]; then
+              engine_class="$(classify "$run_out"$'\n'"$run_err")"
+              # CLAUDE FALLBACK TOLERANCE. A kimi failure in the CANNOT-RUN
+              # family is exactly the state the fallback exists for (file
+              # header): failing the smoke on a kimi outage would stop the
+              # review that could still run on claude. So when, and only
+              # when, the class is a fallback-eligible cannot-run, the
+              # fallback is not disabled, and a claude binary is on PATH,
+              # the smoke holds the fallback to the SAME health question and
+              # the SAME verdict contract before the step fails.
+              # `engine-auth` NEVER tolerates: an expired runner login must
+              # stay loud (see the file header and `canFallbackAfterFailure`
+              # in review.ts — the real review applies the identical rule,
+              # so the smoke can never be more tolerant than the gate it
+              # guards).
+              if [ "$engine_class" != "engine-auth" ] \
+                  && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
+                  && command -v claude >/dev/null 2>&1; then
+                fb_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+                  | env HOME="$rev_home" claude --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+                fb_status=$?
+                fb_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
+                if [ "$fb_status" -ne 0 ]; then
+                  fail "engine-unavailable" "kimi failed ($engine_class) and the claude fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+                fi
+                verdict_out="$(claude_verdict "$fb_out" "claude fallback")"
+                verdict_status=$?
+                if [ "$verdict_status" -ne 0 ]; then
+                  excerpt="$(scrub_excerpt "$fb_out")"
+                  fail "engine-unavailable" "kimi failed ($engine_class) and the claude fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
+                fi
+                printf '%s\n' "$verdict_out"
+                echo "review engine smoke test OK (engine=claude fallback; kimi unavailable: $engine_class)"
+                # The primary verdict check below must not run: kimi's output
+                # is its failure text, and the step has already concluded.
+                exit 0
+              fi
+              fail "$engine_class" "$run_out"$'\n'"$run_err"
+            fi
+
+            verdict_out="$(kimi_verdict "$run_out" "kimi")"
+            verdict_status=$?
+            if [ "$verdict_status" -ne 0 ]; then
+              # Partial #1508, kimi arm: name what the engine ACTUALLY said,
+              # on the line directly under the headline — the engine ran and
+              # answered, and `parseVerdict` could not read a verdict out of
+              # the answer. That is not "could not be run", and reporting it
+              # as one sends a reader to check runner health for a reviewer
+              # that answered perfectly well.
+              excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
+              fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
+            fi
+            printf '%s\n' "$verdict_out"
+            echo "review engine smoke test OK (engine=kimi)"
+            exit 0
+          fi
+
+          # ──────────────────────────────────────────────────────────────
+          # PRIMARY: claude (FLEET_REVIEW_PRIMARY=claude, or the resolved
+          # engine during the bootstrap window — see the comment on the
+          # branch above).
+          # ──────────────────────────────────────────────────────────────
+          run_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+            | env HOME="$rev_home" "$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
           run_status=$?
           run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
           if [ "$run_status" -ne 0 ]; then
-            fail "$(classify "$run_out"$'\n'"$run_err")" "$run_out"$'\n'"$run_err"
+            engine_class="$(classify "$run_out"$'\n'"$run_err")"
+            # KIMI FALLBACK TOLERANCE — the mirror of the claude arm above:
+            # a claude failure in the CANNOT-RUN family (quota, overload,
+            # timeout, crash, a model-id rejection — the measured 2026-10-04
+            # failure that put kimi first) re-runs the SAME health question
+            # through the kimi fallback before the step fails, when and only
+            # when the fallback is not disabled and a kimi binary is on
+            # PATH. `engine-auth` NEVER tolerates, either direction.
+            if [ "$engine_class" != "engine-auth" ] \
+                && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
+                && command -v kimi >/dev/null 2>&1; then
+              if [ ! -f "$fallback_agent" ]; then
+                fail "engine-misconfigured" "the kimi fallback is needed (claude failed: $engine_class) but the read-only agent profile $fallback_agent is missing from this checkout — refusing to run a fallback reviewer with its full default tool set (shell included)"
+              fi
+              # The fallback runs under the RUNNER'S OWN HOME, NOT the
+              # gate-owned claude HOME built above: kimi authenticates from
+              # its own login state under its own config directory, which
+              # the gate-owned HOME does not provision (file header, "ONE
+              # containment difference"). The read-only agent profile — not
+              # HOME isolation — is what bounds the fallback's tool set.
+              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              fb_status=$?
+              fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+              if [ "$fb_status" -ne 0 ]; then
+                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+              fi
+              verdict_out="$(kimi_verdict "$fb_out" "kimi fallback")"
+              verdict_status=$?
+              if [ "$verdict_status" -ne 0 ]; then
+                excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
+                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
+              fi
+              printf '%s\n' "$verdict_out"
+              echo "review engine smoke test OK (engine=kimi fallback; claude unavailable: $engine_class)"
+              # The claude verdict check below must not run: claude's output
+              # is its failure text, and the step has already concluded.
+              exit 0
+            fi
+            fail "$engine_class" "$run_out"$'\n'"$run_err"
           fi
 
-          verdict_out="$(printf '%s' "$run_out" | bun -e '
-            import { parseVerdict } from "./orchestrator/src/review.ts"
-            const text = await Bun.stdin.text()
-            console.log(text)
-            const verdict = parseVerdict(text)
-            console.log("smoke verdict (parseVerdict of claude output): " + verdict)
-            process.exit(verdict === "PASS" ? 0 : 1)
-          ')"
+          verdict_out="$(claude_verdict "$run_out" "claude")"
           verdict_status=$?
           if [ "$verdict_status" -ne 0 ]; then
-            fail "engine-unavailable" "$verdict_out"
+            # Partial #1508: name what the engine ACTUALLY said, on the line
+            # directly under the headline. `engine-unavailable`'s own detail
+            # string is "the review engine could not be run", which is false
+            # on this arm — the engine ran and answered, and `parseVerdict`
+            # could not read a verdict out of the answer. That one-line
+            # excerpt is what would have named #1511's prompt-injection
+            # refusal on the FIRST run instead of the third plus a human.
+            # Splitting the token itself (`engine-unreadable`, and a retry)
+            # is the rest of #1508 and is NOT done here: a new member of the
+            # NO-VERDICT taxonomy has to travel through `classifyEngineFailure`,
+            # the outcome titles and the check-name mapping, which is a
+            # bigger change than this one belongs in.
+            excerpt="$(scrub_excerpt "$run_out")"
+            fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
           fi
           printf '%s\n' "$verdict_out"
           echo "review engine smoke test OK (engine=$rev_binary model=$rev_model)"
@@ -1297,6 +1737,22 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      # The SAME record under the exact review set's namespace, when the set
+      # carries a profile (`reviewSetTag`, review-cache.ts). `runReviewCi`
+      # records both namespaces; with one output key, GitHub kept only the
+      # last name written — the general one — so a PR with a profile in its
+      # set (every crypto-content PR) never had a scoped artifact to hit, and
+      # every re-request after a rebase of it was a full review.
+      # Each namespace has its own output and its own upload step now.
+      - name: Cache the verdict under its exact review set, if it has a profile
+        if: always() && steps.review.outputs.cache_artifact_name_scoped != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.review.outputs.cache_artifact_name_scoped }}
+          path: ${{ runner.temp }}/review-cache
+          retention-days: 30
+          if-no-files-found: ignore
+
       # ── Name this run's outcome (#1230) ─────────────────────────────────
       # `fleet/review` has well over a dozen distinct outcomes and used to
       # render every red one identically — `fleet/review: fail`, with the
@@ -1344,6 +1800,8 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RESULT_FILE: ${{ runner.temp }}/fleet-review-result
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          # The head a CARRIED verdict was earned on — not this run's head.
+          EARNED_SHA: ${{ steps.gate.outputs.earned_sha }}
         run: |
           set -euo pipefail
           engine_failure=""
@@ -1361,6 +1819,8 @@ jobs:
             case "$OUTCOME" in
               low-tier) token="PASS:low-tier" ;;
               cache-hit) token="PASS:cached" ;;
+              carried) token="PASS:carried" ;;
+              unreviewed) token="PASS:unreviewed" ;;
               run-engine)
                 case "$result" in
                   pass) token="PASS:reviewed" ;;
@@ -1381,7 +1841,16 @@ jobs:
             case "$OUTCOME" in
               '') token="NO-VERDICT:gate-error" ;;
               not-requested) token="NO-VERDICT:not-requested" ;;
+              carry-unreadable) token="NO-VERDICT:carry-unreadable" ;;
               review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
+              carried)
+                # The gate exits 1 on a carried FAIL and 0 on a carried PASS.
+                if [ "$GATE_CONCLUSION" = "failure" ]; then
+                  token="REJECTED:carried"
+                else
+                  token="NO-VERDICT:unclassified"
+                fi
+                ;;
               cache-hit)
                 # The gate exits 1 on a cached FAIL and 0 on a cached PASS.
                 if [ "$GATE_CONCLUSION" = "failure" ]; then
@@ -1424,10 +1893,14 @@ jobs:
           case "$token" in
             PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
             PASS:cached) detail="this exact diff and review set already passed; not reviewed again" ;;
+            PASS:carried) detail="a push; the PASS this PR last earned stands — request a review to review this head" ;;
+            PASS:unreviewed) detail="a push, and no review has been requested on this PR; request one if this change needs it" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:unclassified) detail="passed by a path this step has no name for; read the log" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
             REJECTED:cached) detail="this exact diff was already rejected; push a fix" ;;
+            REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
+            NO-VERDICT:carry-unreadable) detail="a push, and this PR's last verdict could not be read; re-run the job" ;;
             NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
             NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
@@ -1456,6 +1929,10 @@ jobs:
               level="notice"
               meaning="The check concluded success."
               ;;
+            REJECTED:carried)
+              level="error"
+              meaning="A reviewer read an earlier head of this PR and rejected it, and nobody has requested a review since. A push never starts a review: fix the code, then request a review to have the new head judged."
+              ;;
             REJECTED:*)
               level="error"
               meaning="A reviewer read this diff and rejected it. Its findings are on the PR as a comment naming the head it judged. Change the code: re-requesting a review of an unchanged diff restates the same verdict."
@@ -1471,7 +1948,11 @@ jobs:
             echo
             echo "$meaning"
             echo
-            echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            if [ -n "${EARNED_SHA:-}" ]; then
+              echo "Verdict earned on: \`${EARNED_SHA}\`. Current head: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            else
+              echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------

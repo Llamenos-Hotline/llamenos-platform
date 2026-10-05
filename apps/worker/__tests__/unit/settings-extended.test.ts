@@ -801,6 +801,39 @@ describe('SettingsService.getEnabledChannels', () => {
     const result = await service.getEnabledChannels({})
     expect(result.voice).toBe(false)
   })
+
+  /**
+   * On a real deployment `system_settings.setup_state` is `{}` — that is what
+   * `getSettings()` upserts for the singleton row, so it is the shape every
+   * fresh install has until the setup wizard writes to it. `getEnabledChannels`
+   * read `row.setupState` directly and cast it `as SetupState | null`, then did
+   * `setupState?.selectedChannels.includes(...)`: the `?.` guards a null row but
+   * not a present-and-empty one, so `{}` threw a TypeError.
+   *
+   * `GET /api/config` catches that and returns every channel `false`, and the
+   * desktop gates its whole Conversations page on those flags
+   * (`src/client/lib/config.tsx` `hasAnyMessaging`) — so a deployment with
+   * `enabledChannels: ['signal']` persisted rendered "No messaging channels
+   * enabled" and the messaging UI was unreachable.
+   *
+   * Every other test here supplies a complete `setupState` or `null`, which is
+   * exactly why this was never caught. Do not "fix" this case by giving the
+   * fixture a fuller object than production has.
+   */
+  it('reads channels when setupState is the empty object a fresh install stores', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([
+      [makeSettingsRow({
+        messagingConfig: { enabledChannels: ['signal'], inactivityTimeout: 60, maxConcurrentPerUser: 5, requireAssignment: false },
+        setupState: {},
+      })],
+      [],
+    ])
+
+    const result = await service.getEnabledChannels({})
+    expect(result.signal).toBe(true)
+    expect(result.reports).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1167,7 +1200,10 @@ describe('SettingsService.createRole', () => {
 
   it('throws 409 when slug already exists', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([makeRole({ slug: 'existing' })])
+    // The slug's unique index swallowed the insert (ON CONFLICT DO NOTHING
+    // returned no row) — this is also what the loser of a concurrent
+    // same-slug create sees, so it must be a 409, never a 500.
+    db.$setInsertResult([])
 
     await expect(
       service.createRole({ name: 'New', slug: 'existing', permissions: ['read'], description: 'Test' }),
@@ -1176,7 +1212,7 @@ describe('SettingsService.createRole', () => {
 
   it('creates role with valid data', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([]) // slug check: not found
+    db.$setInsertResult([{ id: 'role-new' }]) // insert won: no slug conflict
 
     const result = await service.createRole({
       name: 'Observer',

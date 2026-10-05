@@ -18,6 +18,7 @@ import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
+import { hasHubPermission, permissionGranted, resolvePermissions } from '@shared/permissions'
 
 const logger = createLogger('messaging')
 
@@ -261,7 +262,15 @@ messaging.post('/:channel/webhook',
   // characters, so nothing objected, and the resulting envelopes could not be
   // opened by the admin or anyone else. `adminHpkeRecipient` returns the X25519
   // key or nothing, and the parameter's type now rejects the Ed25519 one.
-  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env))
+  //
+  // #1140: `hubId` must be forwarded. It is read from `?hub=` above and used for
+  // the relay event and the push below, but was omitted here — so every inbound
+  // conversation was created with `hub_id = NULL`, and
+  // `GET /hubs/:hubId/conversations` filters on `eq(conversations.hubId, hubId)`.
+  // The desktop client only ever calls that hub-scoped path, so inbound messages
+  // were invisible on desktop. The dev simulation route forwards a hubId from its
+  // request body, which is why every backend BDD messaging scenario passed.
+  const convResult = await services.conversations.handleIncoming(incoming, adminHpkeRecipient(c.env), hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -340,11 +349,18 @@ async function tryAutoAssign(
 
     // 3. Get user details to filter by channel capability
     const { users: allUsers } = await services.identity.getUsers()
+    const { roles: roleDefs } = await services.settings.getRoles()
+    // The assignee must be able to claim conversations in the conversation's
+    // hub — a volunteer removed from the hub may linger in its shift roster (#1037).
+    const canClaimHere = (v: (typeof allUsers)[number]) => hubId
+      ? hasHubPermission(v.roles, v.hubRoles ?? [], roleDefs, hubId, 'conversations:claim')
+      : permissionGranted(resolvePermissions(v.roles, roleDefs), 'conversations:claim')
     const onShiftVolunteers = allUsers.filter(v =>
       onShiftPubkeys.includes(v.pubkey) &&
       v.active &&
       !v.onBreak &&
-      v.messagingEnabled !== false
+      v.messagingEnabled !== false &&
+      canClaimHere(v)
     )
 
     // Filter by channel capability

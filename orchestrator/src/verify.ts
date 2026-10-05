@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve as resolvePath, sep } from 'node:path'
+import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeAcross } from './scope.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
+import { scrubSecrets } from './github-app.js'
 import type { Lane } from './config.js'
 
 const execFileAsync = promisify(execFile)
@@ -268,6 +269,86 @@ function vitestArgv(route: TestRoute, config: string, testRoot: string, outputFi
   return ['run', '--config', config, '--root', testRoot, route.target, '--reporter=json', `--outputFile=${outputFile}`]
 }
 
+/** One `resolve.alias` entry: a package name, and the directory inside the
+ *  test root that its imports must resolve to. */
+export interface WorkspaceAlias {
+  /** The package name exactly as it is imported (`@llamenos/i18n`). Vite
+   *  matches a string `find` against the whole specifier or against a
+   *  `<find>/…` subpath, so one entry covers `@llamenos/i18n/languages` too. */
+  find: string
+  replacement: string
+}
+
+/**
+ * Every workspace package the TRUSTED install links into `node_modules`,
+ * re-pointed at the same relative directory inside `testRoot` (#1525).
+ *
+ * The `__dirname` aliases in the vitest configs (`@shared/*`, `@worker/*`,
+ * `@protocol/*`, `@/*`) already follow the export, because `prepareTestRoot`
+ * installs the trusted config's BYTES into the export root and `__dirname` is
+ * then the export. A workspace package has no alias at all: `@llamenos/i18n`
+ * is a real package name, resolved through `node_modules/@llamenos/i18n`,
+ * which `bun install` writes as the relative symlink `../../packages/i18n` —
+ * relative to the checkout holding the install, which under this gate is the
+ * BASE. So every bare workspace import under the gate loaded the base's copy,
+ * and the gate judged the PR's code against `main`'s `packages/i18n`,
+ * `packages/crypto`, `apps/worker` and so on. That fails a PR which ADDS to a
+ * workspace package (#1510) and — the direction that matters — silently
+ * PASSES one that breaks it.
+ *
+ * DERIVED, never enumerated. The list is read off the trusted install itself,
+ * so a sixth workspace package, a rename, a new scope, or a package whose
+ * directory does not match its name (`@llamenos/worker` → `apps/worker`) is
+ * covered the moment `bun install` links it — there is no list for anyone to
+ * forget to extend. A `tests/orchestrator` rail re-derives the expected set
+ * from the root `package.json` workspaces and fails if any linked workspace
+ * package comes back without an alias.
+ *
+ * A link is a workspace package iff its REALPATH lands inside the trusted
+ * worktree and outside its `node_modules`. Realpath, not `readlink` resolved
+ * against the directory walked into: a scope directory can itself be a
+ * symlink, in which case the relative target is relative to the link's real
+ * parent and resolving it against the walked path names a directory that does
+ * not exist. Everything else in `node_modules` — every published dependency —
+ * realpaths outside the worktree and is left alone: this re-points the PR's
+ * OWN packages, never the dependency tree, which must keep coming from the
+ * trusted install.
+ */
+export async function workspaceAliases(worktree: string, testRoot: string): Promise<WorkspaceAlias[]> {
+  const modules = join(resolvePath(worktree), 'node_modules')
+  const [realWorktree, realModules] = await Promise.all([
+    realpath(worktree).catch(() => undefined),
+    realpath(modules).catch(() => undefined),
+  ])
+  if (realWorktree === undefined || realModules === undefined) return []
+
+  const specifiers: string[] = []
+  for (const entry of await readdir(modules, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('@')) {
+      for (const scoped of await readdir(join(modules, entry.name)).catch(() => [])) {
+        specifiers.push(`${entry.name}/${scoped}`)
+      }
+      continue
+    }
+    specifiers.push(entry.name)
+  }
+
+  const out: WorkspaceAlias[] = []
+  for (const specifier of specifiers) {
+    const target = await realpath(join(modules, specifier)).catch(() => undefined)
+    if (target === undefined) continue
+    if (!target.startsWith(realWorktree + sep)) continue
+    if (target === realModules || target.startsWith(realModules + sep)) continue
+    out.push({ find: specifier, replacement: resolvePath(testRoot, relative(realWorktree, target)) })
+  }
+  // Longest name first, so a package whose name prefixes another's
+  // (`@scope/a` and `@scope/ab` are both legal) can never shadow it, and the
+  // order is stable rather than filesystem-dependent.
+  out.sort((a, b) => b.find.length - a.find.length || a.find.localeCompare(b.find))
+  return out
+}
+
 type Prepared = { ok: true; config: string } | { ok: false; reason: string }
 
 /**
@@ -336,11 +417,29 @@ async function prepareTestRoot(
     }
   }
 
+  // Appended, never prepended: vite's alias list is first-match-wins, so a
+  // more specific entry the trusted config already carries — notably
+  // `@llamenos/crypto/ffi` → the pure-TS mock, since the real module loads a
+  // native .so through `bun:ffi` — must keep winning over the whole-package
+  // entry generated here.
+  const aliases = await workspaceAliases(worktree, testRoot)
+
   const wrapper = join(resultDir, `${route.target.replaceAll('/', '_')}.vitest.config.mjs`)
   await writeFile(wrapper, [
     `import loaded from ${JSON.stringify(rootConfig)}`,
+    `const workspace = ${JSON.stringify(aliases)}`,
+    '// Vite accepts `resolve.alias` as either an array of {find,replacement}',
+    '// or an object; normalised to the array form so the workspace entries can',
+    '// be appended in a defined order.',
+    'const entries = (a) => Array.isArray(a) ? a : Object.entries(a ?? {}).map(([find, replacement]) => ({ find, replacement }))',
     '// Inline PostCSS options: vite never searches the test root for a PostCSS config.',
-    'const pin = (c) => ({ ...c, css: { ...(c.css ?? {}), postcss: {} } })',
+    '// Workspace aliases: bare `@scope/pkg` imports resolve into the test root,',
+    '// not through node_modules into the trusted checkout that holds the install.',
+    'const pin = (c) => ({',
+    '  ...c,',
+    '  css: { ...(c.css ?? {}), postcss: {} },',
+    '  resolve: { ...(c.resolve ?? {}), alias: [...entries(c.resolve?.alias), ...workspace] },',
+    '})',
     "export default typeof loaded === 'function' ? async (env) => pin(await loaded(env)) : pin(loaded)",
     '',
   ].join('\n'), { flag: 'wx' })
@@ -414,11 +513,177 @@ export function parseVitestJson(text: string): VitestJsonCounts | undefined {
 }
 
 /** The last few lines of the runner's own output, for a reader of the job log
- *  when no result could be read — bounded so a crash dump cannot flood it. */
+ *  when no result could be read — bounded so a crash dump cannot flood it, and
+ *  scrubbed, because a dying runner's stderr is exactly where an env dump or a
+ *  connection string ends up (`scrubTestOutput`, defined below). */
 function outputTail(output: string): string {
-  const lines = output.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
+  const lines = scrubTestOutput(output).split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
   if (lines.length === 0) return ' (runner printed nothing)'
   return `; last output: ${lines.slice(-5).join(' | ')}`
+}
+
+// ---------------------------------------------------------------------------
+// Naming the failures (#1495 — a failure signal must identify itself)
+// ---------------------------------------------------------------------------
+
+/**
+ * How many failing tests get named in the job log. A diff-targeted run that
+ * breaks a shared module can fail hundreds of tests at once; the first dozen
+ * are enough to identify the cause, and the count is always printed in full
+ * alongside them, so nothing is hidden by the cap — only repeated.
+ */
+const MAX_NAMED_FAILURES = 12
+/** Per-failure message budget. One line, enough for an assertion diff's head. */
+const MAX_FAILURE_MESSAGE = 200
+/** Hard ceiling on the whole named-failures block, whatever the above produce. */
+const MAX_FAILURE_BLOCK = 6000
+
+/** One failing test (or one file that failed before any test could run). */
+export interface VitestFailure {
+  /** The test file, relative to the test root when one was given. */
+  file: string
+  /** `describe > it`, or `undefined` for a file that failed to load/collect
+   *  at all — which has no test name to report, only a file and an error. */
+  test?: string
+  /** First line of the failure, scrubbed and truncated. */
+  message?: string
+}
+
+/**
+ * Secrets never reach the job log. `scrubSecrets` covers the credential
+ * shapes the orchestrator itself handles (PEMs, JWTs, every `gh*_` token
+ * form); these three patterns cover what a TEST's failure message can carry
+ * that those miss — a connection URL with inline credentials (the
+ * `DATABASE_URL` shape above all), an assignment whose NAME ends in
+ * `TOKEN`/`SECRET`/`PASSWORD`/`APIKEY`/`PRIVATEKEY`/`DATABASE_URL`/`DSN`
+ * echoed out of an env dump, and an `Authorization: Bearer` header printed
+ * by a failing HTTP assertion. A bare `…KEY` is deliberately NOT matched:
+ * `publicKey` and `hubKey` appear all over this repo's assertions and are
+ * diagnostics, not secrets — redacting them would cost the readability this
+ * whole change exists to buy.
+ *
+ * Applied to every byte of runner-derived text this module prints, not just
+ * to messages that look suspicious: a scrubber applied selectively is a
+ * scrubber with a gap.
+ */
+function scrubTestOutput(text: string): string {
+  return scrubSecrets(text)
+    .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[redacted]@')
+    .replace(
+      /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|PRIVATEKEY|PRIVATE_KEY|DATABASE_URL|DSN))\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi,
+      '$1$2[redacted]',
+    )
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 [redacted]')
+}
+
+/** One line, scrubbed, bounded. Scrub BEFORE flattening and truncating —
+ *  the other order can cut a secret's tail off and defeat its own pattern.
+ *  The test root is stripped out of stack frames too: under the gate it is a
+ *  throwaway `RUNNER_TEMP` path that is pure noise in a log, and dropping it
+ *  buys back characters for the part of the message that identifies the
+ *  failure. */
+function failureLine(raw: string, testRoot: string | undefined): string {
+  const scrubbed = scrubTestOutput(raw).replace(/\s+/g, ' ').trim()
+  const local = testRoot === undefined ? scrubbed : scrubbed.split(resolvePath(testRoot) + sep).join('')
+  return local.length > MAX_FAILURE_MESSAGE ? `${local.slice(0, MAX_FAILURE_MESSAGE)}…` : local
+}
+
+function relativeToRoot(file: string, testRoot: string | undefined): string {
+  if (testRoot === undefined) return file
+  const prefix = resolvePath(testRoot) + sep
+  return file.startsWith(prefix) ? file.slice(prefix.length) : file
+}
+
+/**
+ * Pulls the IDENTITY of each failure out of vitest's JSON report — the file,
+ * the `describe > it` name, and the first line of the assertion error.
+ *
+ * This is the half of the report `judgeTargetRun` used to throw away. The
+ * counts alone ("3 failed test(s)") are a verdict with no subject: the gate
+ * runs against a `git archive` export of the head with the BASE checkout's
+ * `node_modules`, so a test can fail here and nowhere else, and an operator
+ * who cannot name it cannot reproduce it either. Everything needed to name it
+ * is already in the file the gate reads — see #1510, where three failures
+ * were unidentifiable for a day.
+ *
+ * Tolerant by construction: the report's shape is validated field by field
+ * and anything unrecognised is skipped rather than thrown on. This function
+ * only ever produces TEXT FOR A LOG — it must never be able to change, or
+ * crash, a verdict `judgeTargetRun` has already reached from the counts.
+ */
+export function parseVitestFailures(text: string, testRoot?: string): VitestFailure[] {
+  let doc: unknown
+  try {
+    doc = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (typeof doc !== 'object' || doc === null) return []
+  const files = (doc as Record<string, unknown>).testResults
+  if (!Array.isArray(files)) return []
+
+  const out: VitestFailure[] = []
+  for (const entry of files) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const f = entry as Record<string, unknown>
+    const file = relativeToRoot(typeof f.name === 'string' ? f.name : '(unknown file)', testRoot)
+    const assertions = Array.isArray(f.assertionResults) ? f.assertionResults : []
+
+    let named = 0
+    for (const a of assertions) {
+      if (typeof a !== 'object' || a === null) continue
+      const r = a as Record<string, unknown>
+      if (r.status !== 'failed') continue
+      named++
+      const messages = Array.isArray(r.failureMessages) ? r.failureMessages.filter((m) => typeof m === 'string') : []
+      const message = messages.length > 0 ? failureLine(messages[0] as string, testRoot) : undefined
+      out.push({
+        file,
+        test: typeof r.fullName === 'string' && r.fullName.length > 0
+          ? r.fullName
+          : (typeof r.title === 'string' ? r.title : '(unnamed test)'),
+        ...(message !== undefined && message.length > 0 ? { message } : {}),
+      })
+    }
+
+    // A file that failed with no failing assertion in it never got as far as
+    // running a test — an import error, a collection error, a `beforeAll`
+    // throw. Its `message` is the only identity it has, and it is precisely
+    // the case the counts render as a bare "N failed suite(s)".
+    if (f.status === 'failed' && named === 0) {
+      const message = typeof f.message === 'string' && f.message.length > 0 ? failureLine(f.message, testRoot) : undefined
+      out.push({ file, ...(message !== undefined ? { message } : {}) })
+    }
+  }
+  return out
+}
+
+/**
+ * Renders the failures for the job log: one indented line per failure, its
+ * message beneath it, capped three ways (count, per-message length, total
+ * block size) so a 400-failure run cannot flood the log it exists to make
+ * readable. The elision is always stated, never silent.
+ *
+ * When the report named nothing — a shape this parser does not recognise —
+ * it says SO and falls back to the runner's own output tail. "Could not name
+ * them" and "there were none to name" must not look alike (#1495).
+ */
+function namedFailures(resultText: string, run: TestRunResult, testRoot: string | undefined): string {
+  const failures = parseVitestFailures(resultText, testRoot)
+  if (failures.length === 0) {
+    return `; the result file named no individual failure, so the counts above are all it carried${outputTail(run.output)}`
+  }
+  const shown = failures.slice(0, MAX_NAMED_FAILURES)
+  const lines = shown.map((f) => {
+    const head = f.test === undefined ? `${f.file} (failed before any test ran)` : `${f.file} > ${f.test}`
+    return f.message === undefined ? `    ${head}` : `    ${head}\n      ${f.message}`
+  })
+  if (failures.length > shown.length) {
+    lines.push(`    (+${failures.length - shown.length} more failure(s) not listed)`)
+  }
+  const block = lines.join('\n')
+  const bounded = block.length > MAX_FAILURE_BLOCK ? `${block.slice(0, MAX_FAILURE_BLOCK)}\n    (truncated)` : block
+  return `; failing:\n${bounded}`
 }
 
 function describeExit(run: TestRunResult): string {
@@ -438,7 +703,9 @@ export type TargetOutcome = { passed: true; evidence: string } | { passed: false
  * tell" case says which one it was, so the job log distinguishes a runner
  * that died from one that wrote garbage from one that wrote nothing.
  */
-export function judgeTargetRun(target: string, run: TestRunResult, resultText: string | undefined): TargetOutcome {
+export function judgeTargetRun(
+  target: string, run: TestRunResult, resultText: string | undefined, testRoot?: string,
+): TargetOutcome {
   if (resultText === undefined) {
     if (run.exitCode !== 0) {
       return {
@@ -463,7 +730,7 @@ export function judgeTargetRun(target: string, run: TestRunResult, resultText: s
   const summary = `${counts.numFailedTests} failed test(s), ${counts.numFailedTestSuites} failed suite(s), ` +
     `${counts.numPassedTests} passed, ${notRun} skipped/todo, of ${counts.numTotalTests} test(s)`
   if (counts.numFailedTests > 0 || counts.numFailedTestSuites > 0) {
-    return { passed: false, reason: `${target}: tests failed — ${summary}` }
+    return { passed: false, reason: `${target}: tests failed — ${summary}${namedFailures(resultText, run, testRoot)}` }
   }
   if (executed <= 0) {
     return {
@@ -601,7 +868,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
         const outputFile = join(resultDir, `${route.target.replaceAll('/', '_')}.json`)
         const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
-        const outcome = judgeTargetRun(route.target, run, resultText)
+        const outcome = judgeTargetRun(route.target, run, resultText, testRoot)
         if (outcome.passed) {
           testResults.push(outcome.evidence)
         } else {

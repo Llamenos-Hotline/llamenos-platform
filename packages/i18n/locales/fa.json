@@ -617,6 +617,7 @@
     "errorBreak": "به‌روزرسانی وضعیت استراحت ناموفق بود",
     "errorClockIn": "ثبت ورود به شیفت ناموفق بود",
     "errorClockOut": "ثبت خروج از شیفت ناموفق بود",
+    "errorInAppCallsUnavailable": "ورود به شیفت ثبت شد، اما این دستگاه نمی‌تواند تماس‌ها را در برنامه دریافت کند. دوباره ورود به شیفت را امتحان کنید.",
     "errorRefresh": "بازنشانی ناموفق بود",
     "goOnBreak": "استراحت کردن",
     "help": "راهنما",
@@ -716,6 +717,7 @@
       "archived": "بایگانی شده",
       "suspended": "تعلیق شده"
     },
+    "switchFooter": "برای تغییر زمینهٔ فعال روی یک هاب ضربه بزنید. هاب فعال تعیین می‌کند چه داده‌هایی می‌بینید.",
     "switchHub": "تغییر هاب",
     "title": "مدیریت هاب",
     "urlLabel": "نشانی هاب",
@@ -734,6 +736,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "محتوای رمزگذاری‌شدهٔ این هاب هنوز روی این دستگاه باز نمی‌شود",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -2202,7 +2205,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "admin": {
     "spamSettings": "مقابله با هرزنامه",
@@ -4539,6 +4544,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4660,5 +4667,17 @@
     "unavailableMessage": "متاسفانه در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعداً دوباره تلاش کنید. خداحافظ.",
     "voicemailPrompt": "در حال حاضر کسی برای پاسخگویی به تماس شما در دسترس نیست. لطفاً بعد از صدای بوق پیام بگذارید.",
     "voicemailThanks": "از پیام شما سپاسگزاریم. خداحافظ."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
