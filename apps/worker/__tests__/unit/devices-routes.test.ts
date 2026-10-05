@@ -161,7 +161,7 @@ describe('devices routes', () => {
       expect(res.status).toBe(204)
       expect(services.identity.registerDevice).toHaveBeenCalledWith('user-pk-1', {
         platform: 'desktop',
-        pushToken: null,
+        pushToken: undefined,
         wakeKeyPublic: undefined,
         ed25519Pubkey: 'ed-pk',
         x25519Pubkey: 'x-pk',

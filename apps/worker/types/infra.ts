@@ -59,6 +59,7 @@ export interface Env {
   // envelopes it produced were unopenable by anyone.
   ADMIN_PUBKEY: import('../lib/hpke-recipient').Ed25519AuthPubkey
   ADMIN_DECRYPTION_PUBKEY?: import('../lib/hpke-recipient').HpkeRecipientPubkey
+
   HOTLINE_NAME: string
   ENVIRONMENT: string
   WEBHOOK_BASE_URL?: string        // Public base URL used for webhook signature verification (prevents Host header spoofing)
@@ -127,6 +128,13 @@ export interface DeviceRecord {
   /** Empty string for desktop devices, which register without a push token (#1548) */
   pushToken: string
   wakeKeyPublic: string      // X25519 pubkey (hex) for wake-tier HPKE
+  /**
+   * X25519 pubkey (hex) for full-tier HPKE and every other envelope sealed to
+   * this device. Null when the client has not published one — in that case the
+   * device gets no full-tier payload. It is NEVER substituted with the user's
+   * Ed25519 auth pubkey, which is not an HPKE recipient (#1021).
+   */
+  x25519Pubkey: string | null
   registeredAt: string
   lastSeenAt: string
 }

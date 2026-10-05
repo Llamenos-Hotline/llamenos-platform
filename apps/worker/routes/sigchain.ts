@@ -25,7 +25,8 @@ const sigchainLinkSchema = z.object({
   linkType: z.string(),
   payload: z.unknown(),
   signature: z.string(),
-  prevHash: z.string(),
+  /** null for the genesis link (seqNo 1); stored as '' in the DB. */
+  prevHash: z.string().nullable(),
   hash: z.string(),
   signerDeviceId: z.string(),
   signerPubkey: z.string(),
@@ -37,13 +38,15 @@ const sigchainResponseSchema = z.object({
 })
 
 const appendLinkBodySchema = z.object({
-  seqNo: z.number().int().nonnegative(),
+  /** 1 for the genesis link, then last seqNo + 1 (crate verifier: first link has seq=1). */
+  seqNo: z.number().int().positive(),
   linkType: z.enum(['genesis', 'device_add', 'device_remove', 'key_rotate', 'puk_epoch']),
+  /** Object; all numbers must be integers ≤ 2^53 (canonical-JSON number rule). */
   payload: z.record(z.string(), z.unknown()),
   /** Ed25519 signature over entry hash, hex. */
   signature: z.string().regex(/^[0-9a-f]{128}$/i, 'Must be 64-byte Ed25519 signature in hex'),
-  /** SHA-256 hash of the previous link (hex). Empty string for genesis. */
-  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex or empty string'),
+  /** SHA-256 hash of the previous link (hex). null for the genesis link ('' accepted as a legacy alias). */
+  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex, empty string, or null').nullable(),
   /** SHA-256 hash of this link's canonical form (hex). Server recomputes and verifies. */
   hash: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be SHA-256 hex'),
   /** Device ID of the signing device. */

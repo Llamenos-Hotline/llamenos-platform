@@ -10,8 +10,16 @@ export interface DeviceForEviction {
   id: string
   lastSeenAt: Date | null
   pushToken: string | null
-  /** Phase 6 key-agreement pubkey — the desktop registration identity key (#1548) */
-  x25519Pubkey?: string | null
+  /** The device's own Ed25519 signing key — its stable identity. */
+  ed25519Pubkey?: string | null
+}
+
+/** What a registration claims to identify itself by. */
+export interface RegistrationIdentity {
+  /** The device's Ed25519 signing key, when the client holds one. */
+  ed25519Pubkey?: string | null
+  /** The push endpoint, when the client has a push distributor configured. */
+  pushToken?: string | null
 }
 
 export type RegistrationDecision =
@@ -22,35 +30,37 @@ export type RegistrationDecision =
  * Decide whether a device registration should update an existing device
  * or insert a new one (possibly evicting the LRU device).
  *
- * - If a device with the same pushToken already exists: update it
- * - If matchX25519Key is given (desktop registrations have no push token) and a
- *   device with that X25519 pubkey exists: update it
- * - If at capacity (>= maxDevices): evict the device with oldest lastSeenAt
- * - Otherwise: plain insert
+ * Matching is by the device's Ed25519 signing key first and its push token
+ * second. The signing key is the device's identity: it survives a push
+ * endpoint rotation, and it is the only handle a client without push (the
+ * Tauri desktop) has. Matching on the push token alone meant a rotated ntfy
+ * endpoint registered a *second* row for the same physical device, and after
+ * five rotations the LRU eviction below started deleting other real devices'
+ * HPKE keys.
  *
- * A null pushToken never matches — tokenless (desktop) rows would otherwise
- * all collapse onto each other.
+ * - If a device with the same ed25519Pubkey exists: update it
+ * - Else if a device with the same pushToken exists: update it
+ * - Else if at capacity (>= maxDevices): evict the device with oldest lastSeenAt
+ * - Otherwise: plain insert
  */
 export function decideDeviceRegistration(
   existingDevices: DeviceForEviction[],
-  pushToken: string | null,
+  identity: RegistrationIdentity,
   maxDevices: number = MAX_DEVICES_PER_VOLUNTEER,
-  matchX25519Key?: string | null,
 ): RegistrationDecision {
-  // Desktop re-registration is identified by its X25519 key, not a push token.
-  if (matchX25519Key) {
-    const keyMatch = existingDevices.find((d) => d.x25519Pubkey === matchX25519Key)
-    if (keyMatch) {
-      return { action: 'update_existing', deviceId: keyMatch.id }
-    }
+  const byIdentity = identity.ed25519Pubkey
+    ? existingDevices.find((d) => d.ed25519Pubkey === identity.ed25519Pubkey)
+    : undefined
+  if (byIdentity) {
+    return { action: 'update_existing', deviceId: byIdentity.id }
   }
 
-  // Check for existing device with same pushToken (mobile only — desktop has none)
-  if (pushToken !== null) {
-    const existing = existingDevices.find((d) => d.pushToken === pushToken)
-    if (existing) {
-      return { action: 'update_existing', deviceId: existing.id }
-    }
+  // Fall back to the push endpoint for clients that register no signing key.
+  const existing = identity.pushToken
+    ? existingDevices.find((d) => d.pushToken === identity.pushToken)
+    : undefined
+  if (existing) {
+    return { action: 'update_existing', deviceId: existing.id }
   }
 
   // Check if at capacity

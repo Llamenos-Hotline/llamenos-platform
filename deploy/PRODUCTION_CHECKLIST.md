@@ -38,6 +38,7 @@ Detailed procedures are in `docs/runbooks/`:
       `bun run bootstrap-admin` prints, a different value from `ADMIN_PUBKEY`.
       Required whenever `ADMIN_PUBKEY` is set; the server refuses to boot without
       it rather than encrypt notes to a key that cannot decrypt them (#1283).
+
 - [ ] `DOMAIN` set to actual production domain
 - [ ] `ACME_EMAIL` set for Let's Encrypt notifications
 - [ ] `ENVIRONMENT=production` (not development)

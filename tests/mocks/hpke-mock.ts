@@ -1,21 +1,43 @@
 /**
- * Mock HPKE envelope primitive (X25519 + HKDF-SHA256 + AES-256-GCM) shared by
- * the Tauri IPC mock (tauri-core.ts — what the desktop webview calls under
- * Playwright) and the Node-side seeding helpers (tests/crypto-helpers.ts).
+ * The HPKE envelope primitive the Tauri IPC mock serves to the desktop webview
+ * under Playwright (tauri-core.ts), shared with the Node-side seeding helpers
+ * (tests/crypto-helpers.ts).
  *
- * The desktop client under Playwright cannot open envelopes made with the
- * real RFC 9180 suite: `hpke_open_key_from_state` is served by this mock, so
- * anything a test seeds through the API for the UI to decrypt must be sealed
- * with the SAME primitive. Keeping one implementation here — imported by both
- * sides — is what stops the two from drifting apart (issue #796).
+ * It is the REAL suite — RFC 9180 DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 +
+ * AES-256-GCM, the same one `packages/crypto/src/hpke_envelope.rs` uses.
+ *
+ * It used to be a bespoke construction: X25519 ECDH, then
+ * `hkdf(sha256, shared, salt=∅, info="hpke-v3:<label>", 44)` split into a key
+ * and a nonce. Self-consistent, and interoperable with nothing. Its own
+ * docstring recorded the consequence — "the desktop client under Playwright
+ * cannot open envelopes made with the real RFC 9180 suite" — which meant no
+ * desktop test could ever exercise reading what the *server* writes. The
+ * server/desktop AAD disagreement that made every message render as
+ * `[Encrypted]` was invisible to this suite for exactly that reason: the
+ * harness could not have noticed, because it never spoke the wire format.
+ *
+ * The label still becomes the HPKE `info` (the Albrecht defense) and the
+ * labelId is still checked against the expected label before any key material
+ * is touched, so the mock enforces what the Rust implementation enforces.
  *
  * Pure module: no `window`, no Tauri imports, safe to load from Node.
  */
-import { x25519 } from '@noble/curves/ed25519.js'
-import { hkdf } from '@noble/hashes/hkdf.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { gcm } from '@noble/ciphers/aes.js'
-import { randomBytes, utf8ToBytes, hexToBytes } from '@noble/hashes/utils.js'
+import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
+import { hexToBytes } from '@noble/hashes/utils.js'
+
+/** Matches `packages/crypto/src/hpke_envelope.rs`: X25519-HKDF-SHA256-AES256GCM. */
+const suite = new CipherSuite({
+  kem: KemId.DhkemX25519HkdfSha256,
+  kdf: KdfId.HkdfSha256,
+  aead: AeadId.Aes256Gcm,
+})
+
+/** hpke-js takes ArrayBuffers; a Uint8Array view may be a slice of a larger one. */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.length)
+  copy.set(bytes)
+  return copy.buffer
+}
 
 export function base64urlEncode(bytes: Uint8Array): string {
   const b64 = btoa(String.fromCharCode(...bytes))
@@ -62,71 +84,63 @@ export function labelToId(label: string): number {
   return id
 }
 
-// ── HPKE mock (X25519 + HKDF-SHA256 + AES-256-GCM) ─────────────────
+// ── HPKE (RFC 9180, X25519-HKDF-SHA256-AES256GCM) ──────────────────
 
-export function hpkeSealMock(
+export async function hpkeSealMock(
   plaintext: Uint8Array,
   recipientPubkeyHex: string,
   label: string,
   aad: Uint8Array,
-): { v: number; labelId: number; enc: string; ct: string } {
+): Promise<{ v: number; labelId: number; enc: string; ct: string }> {
   const labelId = labelToId(label)
+  const recipientPublicKey = await suite.importKey(
+    'raw',
+    toArrayBuffer(hexToBytes(recipientPubkeyHex)),
+    true,
+  )
 
-  // Generate ephemeral X25519 keypair
-  const ephSeed = randomBytes(32)
-  const ephPub = x25519.getPublicKey(ephSeed)
-  const recipientPub = hexToBytes(recipientPubkeyHex)
-
-  // ECDH shared secret
-  const sharedSecret = x25519.getSharedSecret(ephSeed, recipientPub)
-
-  // HKDF extract + expand
-  const info = utf8ToBytes(`hpke-v3:${label}`)
-  const derived = hkdf(sha256, sharedSecret, new Uint8Array(0), info, 44)
-
-  const aesKey = derived.slice(0, 32)
-  const nonce = derived.slice(32, 44)
-
-  // AES-256-GCM encrypt with AAD
-  const cipher = gcm(aesKey, nonce, aad)
-  const ct = cipher.encrypt(plaintext)
+  const { enc, ct } = await suite.seal(
+    { recipientPublicKey, info: new TextEncoder().encode(label) },
+    plaintext,
+    aad,
+  )
 
   return {
     v: 3,
     labelId,
-    enc: base64urlEncode(ephPub),
-    ct: base64urlEncode(ct),
+    enc: base64urlEncode(new Uint8Array(enc)),
+    ct: base64urlEncode(new Uint8Array(ct)),
   }
 }
 
-export function hpkeOpenMock(
+export async function hpkeOpenMock(
   envelope: { v: number; labelId: number; enc: string; ct: string },
   recipientSecretHex: string,
   expectedLabel: string,
   aad: Uint8Array,
-): Uint8Array {
+): Promise<Uint8Array> {
   if (envelope.v !== 3) throw new Error(`Unsupported HPKE version: ${envelope.v}`)
   const expectedId = labelToId(expectedLabel)
   if (envelope.labelId !== expectedId) {
     throw new Error(`Label mismatch: expected ${expectedId}, got ${envelope.labelId}`)
   }
 
-  const ephPub = base64urlDecode(envelope.enc)
-  const ct = base64urlDecode(envelope.ct)
-  const recipientSecret = hexToBytes(recipientSecretHex)
+  const recipientKey = await suite.importKey(
+    'raw',
+    toArrayBuffer(hexToBytes(recipientSecretHex)),
+    false,
+  )
 
-  // ECDH shared secret
-  const sharedSecret = x25519.getSharedSecret(recipientSecret, ephPub)
+  const plaintext = await suite.open(
+    {
+      recipientKey,
+      enc: toArrayBuffer(base64urlDecode(envelope.enc)),
+      info: new TextEncoder().encode(expectedLabel),
+    },
+    toArrayBuffer(base64urlDecode(envelope.ct)),
+    aad,
+  )
 
-  // HKDF extract + expand
-  const info = utf8ToBytes(`hpke-v3:${expectedLabel}`)
-  const derived = hkdf(sha256, sharedSecret, new Uint8Array(0), info, 44)
-
-  const aesKey = derived.slice(0, 32)
-  const nonce = derived.slice(32, 44)
-
-  // AES-256-GCM decrypt with AAD
-  const cipher = gcm(aesKey, nonce, aad)
-  return cipher.decrypt(ct)
+  return new Uint8Array(plaintext)
 }
 

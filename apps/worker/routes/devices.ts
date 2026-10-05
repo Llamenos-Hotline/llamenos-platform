@@ -2,8 +2,7 @@
  * Device registration API routes.
  *
  * GET    /api/devices         — List current user's registered devices.
- * POST   /api/devices/register — Register/update device (push token + Phase 6 crypto keys;
- *                                desktop: X25519 key only, no push token — #1548 groundwork).
+ * POST   /api/devices/register — Register/update device (push token + Phase 6 crypto keys).
  * DELETE /api/devices/:id     — Deregister a specific device (triggers PUK rotation).
  * DELETE /api/devices         — Remove all devices for current user (logout).
  */
@@ -96,16 +95,19 @@ devicesRoutes.get('/',
 
 /**
  * POST /api/devices/register
- * Register or update a device push token for the authenticated volunteer.
- * Also accepts Phase 6 per-device crypto keys (ed25519Pubkey, x25519Pubkey).
+ * Register or update a device's push endpoint and/or its per-device crypto keys.
+ *
+ * Either half may be omitted: the Tauri desktop has no push distributor and
+ * registers only `ed25519Pubkey` + `x25519Pubkey`, which is what makes it
+ * addressable for HPKE at all. See `registerDeviceBodySchema`.
  */
 devicesRoutes.post('/register',
   describeRoute({
     tags: ['Devices'],
-    summary: 'Register or update device push token and crypto keys',
+    summary: 'Register or update a device push endpoint and/or its crypto keys',
     responses: {
       204: { description: 'Device registered' },
-      429: { description: 'Rate limit exceeded (5/hour)' },
+      429: { description: 'Rate limit exceeded (strict bucket: 5/minute)' },
       500: { description: 'Failed to register device' },
       ...authErrors,
       400: { description: 'Invalid body, or push endpoint rejected (PUSH_ENDPOINT_NOT_TRUSTED: off the configured ntfy origin; PUSH_RELAY_NOT_CONFIGURED: no ntfy broker configured)' },
@@ -120,15 +122,14 @@ devicesRoutes.post('/register',
 
     // Only URL-format tokens (UnifiedPush endpoints) are fetched by the server —
     // opaque tokens (APNs, FCM) are not URLs and never leave the vendor APIs.
-    // Desktop registrations (#1548) carry no push token at all.
-    if (body.pushToken && body.pushToken.includes('://')) {
+    if (body.pushToken?.includes('://')) {
       const rejection = pushEndpointRejection(c.env, body.pushToken)
       if (rejection) return c.json(rejection, 400)
     }
 
     await services.identity.registerDevice(pubkey, {
       platform: body.platform,
-      pushToken: body.pushToken ?? null,
+      pushToken: body.pushToken,
       wakeKeyPublic: body.wakeKeyPublic,
       ed25519Pubkey: body.ed25519Pubkey,
       x25519Pubkey: body.x25519Pubkey,

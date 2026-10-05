@@ -158,7 +158,7 @@ Given('I sent a message in a conversation', async ({ page, backendRequest, worke
 
   const outboundBody = `Outbound delivery probe ${Date.now()}`
   const base = `/hubs/${workerHub}/conversations/${seeded.conversationId}`
-  const { encryptedContent, readerEnvelopes } = encryptMessageForDesktop(outboundBody, [ADMIN_SEED])
+  const { encryptedContent, readerEnvelopes } = await encryptMessageForDesktop(outboundBody, [ADMIN_SEED])
   const send = await apiPost<{ id?: string }>(backendRequest, `${base}/messages`, {
     encryptedContent,
     readerEnvelopes,

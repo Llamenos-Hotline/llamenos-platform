@@ -617,6 +617,7 @@
     "errorBreak": "Mola durumu güncellenemedi",
     "errorClockIn": "Vardiya başlatılamadı",
     "errorClockOut": "Vardiya sonlandırılamadı",
+    "errorInAppCallsUnavailable": "Vardiya başlatıldı, ancak bu cihaz uygulama içi aramaları alamıyor. Vardiyayı yeniden başlatmayı deneyin.",
     "errorRefresh": "Yenileme başarısız oldu",
     "goOnBreak": "Mola Ver",
     "help": "Yardım",
@@ -716,6 +717,7 @@
       "archived": "Arşivlenmiş",
       "suspended": "Askıya Alınmış"
     },
+    "switchFooter": "Etkin bağlamını değiştirmek için bir merkeze dokun. Etkin merkez hangi verileri göreceğini belirler.",
     "switchHub": "Merkez değiştir",
     "title": "Merkez Yönetimi",
     "urlLabel": "Merkez URL",
@@ -734,6 +736,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Bu merkezdeki şifreli içerik bu cihazda henüz açılamıyor",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -3647,7 +3650,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "cancel": "İptal",
   "deepLinkConfirmCancel": "İptal",
@@ -4539,6 +4544,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4660,5 +4667,17 @@
     "unavailableMessage": "Üzgünüz, şu anda aramanızı yanıtlayacak kimse yok. Lütfen daha sonra tekrar deneyin. Hoşça kalın.",
     "voicemailPrompt": "Şu anda aramanızı yanıtlayacak kimse yok. Lütfen sinyal sesinden sonra mesajınızı bırakın.",
     "voicemailThanks": "Mesajınız için teşekkür ederiz. Hoşça kalın."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

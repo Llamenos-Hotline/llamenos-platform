@@ -5,9 +5,10 @@
  * pushToken), so the desktop client could never upload its X25519 identity key.
  * This test pins the server-side contract that unblocks it: a desktop device
  * registers with no push token, the row persists with push_token IS NULL, a
- * mobile registration without a push token is still refused by the schema, and
- * re-registering the same desktop X25519 key updates the existing row instead
- * of duplicating it.
+ * registration that carries neither a push endpoint nor an identity key is
+ * still refused by the schema, and re-registering the same desktop device
+ * (matched on its Ed25519 signing key, as src/client/lib/device-registration.ts
+ * sends it) updates the existing row instead of duplicating it.
  *
  * Requires postgres at DATABASE_URL. Each run gets its own database, created
  * with the real migrations and dropped on teardown.
@@ -91,7 +92,6 @@ describe('desktop device registration (#1548 groundwork)', () => {
 
     await identity.registerDevice(pubkey, {
       platform: 'desktop',
-      pushToken: null,
       x25519Pubkey: HEX64,
       ed25519Pubkey: HEX64,
       deviceName: 'Workstation',
@@ -113,19 +113,19 @@ describe('desktop device registration (#1548 groundwork)', () => {
     expect(rows[0].push_token).toBeNull()
   })
 
-  it('re-registering the same desktop X25519 key updates the row, not a duplicate', async () => {
+  it('re-registering the same desktop device updates the row, not a duplicate', async () => {
     const pubkey = freshPubkey()
     await db.insert(schema.users).values({ pubkey })
 
     await identity.registerDevice(pubkey, {
       platform: 'desktop',
-      pushToken: null,
+      ed25519Pubkey: HEX64,
       x25519Pubkey: HEX64,
       deviceName: 'First name',
     })
     await identity.registerDevice(pubkey, {
       platform: 'desktop',
-      pushToken: null,
+      ed25519Pubkey: HEX64,
       x25519Pubkey: HEX64,
       deviceName: 'Renamed',
     })
@@ -136,18 +136,18 @@ describe('desktop device registration (#1548 groundwork)', () => {
     expect(detail.deviceName).toBe('Renamed')
   })
 
-  it('two desktop devices with different X25519 keys are distinct rows', async () => {
+  it('two desktop devices with different identity keys are distinct rows', async () => {
     const pubkey = freshPubkey()
     await db.insert(schema.users).values({ pubkey })
 
     await identity.registerDevice(pubkey, {
       platform: 'desktop',
-      pushToken: null,
+      ed25519Pubkey: HEX64,
       x25519Pubkey: HEX64,
     })
     await identity.registerDevice(pubkey, {
       platform: 'desktop',
-      pushToken: null,
+      ed25519Pubkey: 'cd'.repeat(32),
       x25519Pubkey: 'cd'.repeat(32),
     })
 
@@ -155,8 +155,8 @@ describe('desktop device registration (#1548 groundwork)', () => {
     expect(devices).toHaveLength(2)
   })
 
-  it('mobile registration without a push token is rejected by the request schema', () => {
-    for (const platform of ['ios', 'android'] as const) {
+  it('a registration with neither a push token nor an X25519 key is rejected', () => {
+    for (const platform of ['ios', 'android', 'desktop'] as const) {
       const parsed = registerDeviceBodySchema.safeParse({
         platform,
         wakeKeyPublic: HEX64,
@@ -165,11 +165,14 @@ describe('desktop device registration (#1548 groundwork)', () => {
     }
   })
 
-  it('desktop registration without an X25519 key is rejected by the request schema', () => {
-    const parsed = registerDeviceBodySchema.safeParse({ platform: 'desktop' })
+  it('a push registration without a wake key is rejected by the request schema', () => {
+    const parsed = registerDeviceBodySchema.safeParse({
+      platform: 'android',
+      pushToken: 'https://ntfy.example.com/up-abc',
+    })
     expect(parsed.success).toBe(false)
     if (!parsed.success) {
-      expect(parsed.error.issues.some(i => i.path.includes('x25519Pubkey'))).toBe(true)
+      expect(parsed.error.issues.some(i => i.path.includes('wakeKeyPublic'))).toBe(true)
     }
   })
 
