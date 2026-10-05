@@ -27,7 +27,7 @@
  */
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { callHistoryResponseSchema } from '@protocol/schemas/calls'
-import { apiGet, apiPost, apiPut, apiDelete } from '../api-helpers'
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '../api-helpers'
 import {
   requireAdminSeed,
   pacedWrite,
@@ -40,6 +40,16 @@ import {
   liveMarker,
   present,
   getLiveConfig,
+  pacedStrict,
+  freshIdentity,
+  redeemInvite,
+  retireLiveIdentity,
+  readTelephonyProvider,
+  inboundDriveRefusal,
+  postProviderWebhook,
+  liveCallSid,
+  liveCallerNumber,
+  type LiveTelephonyProvider,
 } from './helpers'
 
 interface Presence {
@@ -745,6 +755,471 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
 })
 
 // ───────────────────────────────────────────────────────────────────
+// Answering
+//
+// This block is declared BEFORE the history block on purpose, and the
+// config runs the suite serially in one worker. R1's last clause is "an
+// admin sees the call in history", and the two tests that check the paging
+// and the per-ROW payload need the hub to HAVE call records — one of them
+// used to fail loudly on that precondition and the other used to skip. Two
+// completed calls land here, so by the time those run there is something
+// for them to read. Moving this below them silently takes both back to
+// reporting a missing precondition.
+// ───────────────────────────────────────────────────────────────────
+
+/**
+ * R1's middle clause, which nothing could reach before: a volunteer who is
+ * scheduled AND clocked in is rung by an inbound call, answers it, and the
+ * call becomes theirs.
+ *
+ * The inbound call is driven through the deployment's own webhook chain,
+ * signed with the credential its own PBX signs with — see
+ * `postProviderWebhook` in ./helpers for exactly which parts of that are the
+ * real thing (all of the worker's call handling) and which are not (SIP and
+ * RTP; no telephone is involved).
+ *
+ * ## Why this is safe to run against a live hotline
+ *
+ * The subject is the operator's own identity, as the ring block above
+ * explains — a volunteer who joined by invite is the wrong subject for a ring
+ * case. Three deliberate choices keep a real caller out of the way:
+ *
+ *  - the subject's `callPreference` is set to `browser` for the duration, so
+ *    `startParallelRinging` takes the relay/VoIP path and dials NO phone. On a
+ *    deployment with a working trunk, leaving it `phone` would ring the
+ *    operator's actual handset. It is restored afterwards.
+ *  - every driven call uses its own caller number, so it neither consumes nor
+ *    is refused by the hub's per-caller spam window (3/minute by default), and
+ *    a real caller's window is untouched.
+ *  - each call is ended before the next is driven, so the subject is never
+ *    left `busy` and a genuine caller arriving mid-run still rings them.
+ *
+ * Nothing is deleted. Two call records are left behind, identifiable by a
+ * `r1-live-` call id, which is what "write something identifiable" means here
+ * — and they are the records the history block then reads.
+ */
+test.describe('R1 — a rung volunteer answers an inbound call', () => {
+  test.skip(!adminSeed, 'STAGING_ADMIN_SEED is required: this block writes shifts and clock-ins')
+  test.describe.configure({ mode: 'serial', timeout: 240_000 })
+
+  let seed: string
+  let hubId: string
+  let subject: string
+  let provider: LiveTelephonyProvider | null = null
+  /** Why no call can be driven here, or null. An absent credential only. */
+  let refusal: string | null = null
+  /** The number a caller has to dial to reach this hub. */
+  let hotlineNumber = ''
+  let originalCallPreference: string | undefined
+  let shiftId: string | null = null
+  let clockedIn = false
+  /** The second identity, for first-pickup-wins. */
+  let second: { seedHex: string; pubkey: string } | null = null
+  /** Call ids this block drove and has not yet ended. */
+  const unfinished = new Set<string>()
+
+  /** The provider, narrowed. Only ever called after `refusal` is null. */
+  const signer = () => present(provider, 'the deployment\'s telephony provider')
+  /** The deployment under check, narrowed. */
+  const target = (baseURL: string | undefined) =>
+    present(baseURL, 'a baseURL — playwright.live.config.ts must set one')
+
+  test.beforeAll(async ({ request }) => {
+    seed = requireAdminSeed()
+    hubId = await resolveHubId(request)
+    subject = adminPubkeyFromSeed(seed)
+
+    provider = await readTelephonyProvider(request, seed, hubId)
+    refusal = inboundDriveRefusal(provider)
+    if (refusal) return
+
+    // The dialled number is how `/incoming` finds the hub (`getHubByPhone`, an
+    // exact match on an ACTIVE hub's `phone_number`). A hub without one cannot
+    // receive a call at all, which is a readiness failure rather than a
+    // credential this run lacks — so it is reported as one.
+    const cfg = await request.get('/api/config')
+    const hubs = (await cfg.json() as { hubs?: Array<{ id: string; phoneNumber?: string }> }).hubs ?? []
+    hotlineNumber = hubs.find(h => h.id === hubId)?.phoneNumber ?? ''
+    expect(
+      hotlineNumber,
+      `hub ${hubId} has no phone number, so no inbound call can be routed to it: `
+      + '`/api/telephony/incoming` matches the dialled number against an active hub\'s '
+      + '`phoneNumber` exactly, and an unmatched number rings nobody and reaches no hub. '
+      + 'Set the hub\'s number on the hub settings screen',
+    ).not.toBe('')
+
+    // Captcha moves the ring to `/captcha`, which needs digits the server
+    // generates and never discloses — a deployment choice this suite cannot
+    // drive through, and the one legitimate non-credential refusal here.
+    const spam = await apiGet<{ voiceCaptchaEnabled?: boolean }>(
+      request, `/hubs/${hubId}/settings/spam`, seed)
+    expect(spam.status, 'GET /api/hubs/:id/settings/spam').toBe(200)
+    if (spam.data.voiceCaptchaEnabled) {
+      refusal = 'this hub has the voice CAPTCHA on, so ringing happens after a digit '
+        + 'challenge whose expected digits the server generates and never sends — no suite '
+        + 'can answer it. Turn the CAPTCHA off on the spam settings screen to check the '
+        + 'answer path, and see apps/worker/routes/telephony.ts /captcha'
+      return
+    }
+
+    // `browser` so no real handset is dialled; read back, because a preference
+    // that silently failed to change would mean the next call rings a phone.
+    const me = await apiGet<{ callPreference?: string }>(request, `/users/${subject}`, seed)
+    expect(me.status, 'GET /api/users/:pubkey').toBe(200)
+    originalCallPreference = me.data.callPreference
+    await setCallPreference(request, 'browser')
+
+    // The second volunteer exists BEFORE the shift, so both can be named on it.
+    // Both have to be genuinely RUNG for the first-pickup-wins test to be about
+    // first-pickup-wins: if only the first is rung, the answer route refuses
+    // the second at its `resolveRingableVolunteers` check (403 "Not rung for
+    // this call") and the 409 guard is never reached — so removing the guard
+    // would still leave the test passing on a refusal that means something
+    // else entirely.
+    second = await inviteSecondVolunteer(request)
+
+    await schedule(request, [subject, second.pubkey])
+    await setClockedIn(request, seed, true)
+    await setClockedIn(request, second.seedHex, true)
+  })
+
+  test.afterAll(async ({ request, baseURL }) => {
+    if (!seed || !hubId) return
+    // Never leave a driven call holding the subject busy: `getBusyPubkeys`
+    // would then remove them from the ring set for every real caller.
+    for (const callSid of unfinished) {
+      if (provider && baseURL) {
+        await postProviderWebhook(request, provider, baseURL,
+          `/api/telephony/call-status?parentCallSid=${callSid}`,
+          { callSid, status: 'completed' })
+      }
+    }
+    unfinished.clear()
+    // Captured into a const: `second` is a mutable binding, so narrowing it
+    // with `if (second)` does not survive into the deferred callback below.
+    const racer = second
+    if (racer) {
+      await pacedWrite('POST /api/hubs/:id/shifts/clock-out (second volunteer)', () =>
+        apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, racer.seedHex))
+    }
+    if (clockedIn) {
+      await pacedWrite('POST /api/hubs/:id/shifts/clock-out', () =>
+        apiPost(request, `/hubs/${hubId}/shifts/clock-out`, {}, seed))
+      clockedIn = false
+    }
+    if (shiftId) {
+      await pacedWrite('DELETE /api/hubs/:id/shifts/:id', () =>
+        apiDelete(request, `/hubs/${hubId}/shifts/${shiftId}`, seed))
+      shiftId = null
+    }
+    if (originalCallPreference) await setCallPreference(request, originalCallPreference)
+    if (second) await retireLiveIdentity(request, seed, second.pubkey)
+  })
+
+  /**
+   * Set the subject's call preference, through the ADMIN user route rather
+   * than `PATCH /auth/me/profile`.
+   *
+   * Both can do it, but every `/api/auth/*` path — reads included — is in the
+   * `strict` rate-limit tier: 5 requests a minute shared with `/invites`,
+   * keyed by client IP. Reading the preference, writing it, reading it back
+   * and restoring it is four of those five before this block has created its
+   * invite, and the fifth request comes back 429. `/api/users/:pubkey` is in
+   * the ordinary `write` tier (30/min), which this costs two of.
+   */
+  async function setCallPreference(request: APIRequestContext, callPreference: string): Promise<void> {
+    const { status } = await pacedWrite('PATCH /api/users/:pubkey', () =>
+      apiPatch(request, `/users/${subject}`, { callPreference }, seed))
+    expect(status, 'PATCH /api/users/:pubkey').toBe(200)
+    const me = await apiGet<{ callPreference?: string }>(request, `/users/${subject}`, seed)
+    expect(
+      me.data.callPreference,
+      `callPreference did not become "${callPreference}" — with "phone" and a phone number on `
+      + 'file, driving a call would dial a real handset',
+    ).toBe(callPreference)
+  }
+
+  /** The subject on an all-day, every-day shift. `startTime === endTime` is
+   *  how `isShiftActive` expresses 24 hours; `00:00`–`23:59` is half-open and
+   *  leaves the volunteer off-shift for the last minute of every day. */
+  async function schedule(request: APIRequestContext, userPubkeys: string[]): Promise<void> {
+    const id = crypto.randomUUID()
+    const created = await pacedWrite('POST /api/hubs/:id/shifts', () =>
+      apiPost(request, `/hubs/${hubId}/shifts`, {
+        id,
+        encryptedName: liveMarker('answer'),
+        startTime: '00:00',
+        endTime: '00:00',
+        days: [0, 1, 2, 3, 4, 5, 6],
+        ringGroupId: null,
+        userPubkeys,
+      }, seed))
+    expect(created.status, 'POST /api/hubs/:id/shifts').toBe(201)
+    shiftId = id
+  }
+
+  /** Clock one identity in or out, as THAT identity — clocking in is the
+   *  volunteer's own consent and `role-volunteer` carries
+   *  `shifts:set-availability` to give it. */
+  async function setClockedIn(
+    request: APIRequestContext,
+    asSeed: string,
+    want: boolean,
+  ): Promise<void> {
+    const route = want ? 'clock-in' : 'clock-out'
+    const { status } = await pacedWrite(`POST /api/hubs/:id/shifts/${route}`, () =>
+      apiPost(request, `/hubs/${hubId}/shifts/${route}`, {}, asSeed))
+    // 404 on clock-out is the end state already holding.
+    if (!(status === 404 && !want)) {
+      expect(status, `POST /api/hubs/:id/shifts/${route}`).toBe(200)
+    }
+    if (asSeed === seed) clockedIn = want
+  }
+
+  /**
+   * Drive one inbound call to the point where it is ringing, and return its id.
+   *
+   * Both webhooks are asserted, not fired and forgotten. `/incoming` must come
+   * back naming THIS hub — that is the dialled-number lookup working, and a
+   * call that resolved to no hub rings nobody over the relay however healthy
+   * the rest looks. The record is then waited for rather than slept on:
+   * `startParallelRinging` runs as a background task, so the webhook returns
+   * before the row exists.
+   */
+  async function driveRingingCall(
+    request: APIRequestContext,
+    baseURL: string,
+  ): Promise<string> {
+    const callSid = liveCallSid()
+    const callerNumber = liveCallerNumber()
+
+    const incoming = await postProviderWebhook(
+      request, signer(), baseURL, '/api/telephony/incoming',
+      { callSid, callerNumber, calledNumber: hotlineNumber })
+    expect(
+      incoming.status,
+      'POST /api/telephony/incoming was refused. 403 means the signature this suite computed '
+      + 'from the provider credential did not match — for the bridge adapter the signed URL is '
+      + 'the RAW url the app process sees, which behind a TLS-terminating proxy is http://, and '
+      + 'for Twilio it is WEBHOOK_BASE_URL\'s origin, which this suite cannot read. Both '
+      + 'renderings were tried (helpers.ts signableUrls)',
+    ).toBe(200)
+    expect(
+      incoming.body,
+      `the IVR answered the call but its response does not carry hub ${hubId}, so the dialled `
+      + `number ${hotlineNumber} did not resolve to this hub — the call would reach no hub's `
+      + 'members and ring nobody (ringing.ts: "Call resolved to no hub")',
+    ).toContain(hubId)
+
+    const language = await postProviderWebhook(
+      request, signer(), baseURL, `/api/telephony/language-selected?hub=${hubId}`,
+      { callSid, callerNumber, digits: '2' })
+    expect(language.status, 'POST /api/telephony/language-selected').toBe(200)
+    unfinished.add(callSid)
+
+    // `startParallelRinging` creates the record before it looks anybody up, so
+    // this appearing is the call being registered, not the ring succeeding.
+    await expect.poll(
+      async () => {
+        const { data } = await apiGet<{ calls?: CallRecord[] }>(
+          request, `/hubs/${hubId}/calls/active`, seed)
+        return (data.calls ?? []).some(call => rowId(call) === callSid)
+      },
+      {
+        timeout: 30_000,
+        message: `the inbound webhooks were accepted but no call record appeared for ${callSid}. `
+          + '`startParallelRinging` registers the call before resolving anybody, so its absence '
+          + 'means the chain stopped earlier: the caller was banned, the hub\'s per-caller rate '
+          + 'limit refused the call, or the hub resolved to none',
+      },
+    ).toBe(true)
+
+    return callSid
+  }
+
+  /** This call as the hub currently holds it, active or finished. */
+  async function activeCall(request: APIRequestContext, callSid: string): Promise<CallRecord | undefined> {
+    const { data } = await apiGet<{ calls?: CallRecord[] }>(
+      request, `/hubs/${hubId}/calls/active`, seed)
+    return (data.calls ?? []).find(call => rowId(call) === callSid)
+  }
+
+  /** End a driven call the way the PBX reports a caller hanging up. */
+  async function endCall(request: APIRequestContext, baseURL: string, callSid: string): Promise<void> {
+    const res = await postProviderWebhook(
+      request, signer(), baseURL, `/api/telephony/call-status?parentCallSid=${callSid}`,
+      { callSid, status: 'completed' })
+    expect(res.status, 'POST /api/telephony/call-status').toBe(200)
+    unfinished.delete(callSid)
+  }
+
+  test('a volunteer who is scheduled and clocked in is rung, answers, and the call becomes theirs', async ({ request, baseURL }) => {
+    test.skip(!!refusal, refusal ?? '')
+
+    // The ring set first, read off the server's own resolver. Without this the
+    // answer below could succeed for a subject the deployment would never have
+    // rung, and the test would be about the route rather than about routing.
+    const routing = await apiGet<RingDecision>(request, `/hubs/${hubId}/calls/routing`, seed)
+    expect(routing.status, 'GET /api/hubs/:id/calls/routing').toBe(200)
+    expect(
+      present(routing.data.volunteers, 'the routing oracle\'s `volunteers` list')
+        .map(v => v.pubkey),
+      'the subject was put on an all-day shift and clocked in, but the server would not ring '
+      + 'them — so the answer below would prove nothing about a RUNG volunteer',
+    ).toContain(subject)
+
+    const callSid = await driveRingingCall(request, target(baseURL))
+
+    const ringing = present(await activeCall(request, callSid), 'the call this test drove')
+    expect(ringing.status, 'a newly rung call').toBe('ringing')
+    expect(ringing.answeredBy, 'a call nobody has answered yet').toBeFalsy()
+
+    // The volunteer's "Answer" button, on a call that genuinely exists and is
+    // genuinely ringing. 200 here is R1's middle clause, which until now had
+    // only ever been checked as a 404 for a call that did not exist.
+    const answered = await pacedWrite('POST /api/hubs/:id/calls/:callId/answer', () =>
+      apiPost<{ call?: CallRecord }>(request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, seed))
+    expect(
+      answered.status,
+      'POST /api/hubs/:id/calls/:callId/answer for a call this volunteer was rung for',
+    ).toBe(200)
+    const call = present(answered.data.call, 'the answered call in the response')
+    expect(
+      call.answeredBy,
+      'the answer succeeded but the call did not become this volunteer\'s',
+    ).toBe(subject)
+    expect(call.status, 'an answered call').toBe('in-progress')
+
+    // ...and the server agrees when asked again, rather than only in the reply
+    // to the write.
+    const held = present(await activeCall(request, callSid), 'the call after it was answered')
+    expect(
+      held.answeredBy,
+      'the answer route reported the call as answered, but the hub\'s active calls still do '
+      + 'not show it belonging to the volunteer who answered',
+    ).toBe(subject)
+
+    await endCall(request, target(baseURL), callSid)
+  })
+
+  test('the second volunteer to answer is refused cleanly, and the call stays with the first', async ({ request, baseURL }) => {
+    test.skip(!!refusal, refusal ?? '')
+
+    // Both volunteers must be in the ring set, or the second's refusal below
+    // could come from the answer route's "Not rung for this call" check
+    // instead of from first-pickup-wins — and the test would still pass with
+    // the guard removed.
+    const routing = await apiGet<RingDecision>(request, `/hubs/${hubId}/calls/routing`, seed)
+    expect(routing.status, 'GET /api/hubs/:id/calls/routing').toBe(200)
+    const rung = present(routing.data.volunteers, 'the routing oracle\'s `volunteers` list')
+      .map(v => v.pubkey)
+    expect(
+      rung,
+      'the operator is not in the ring set, so they cannot be the FIRST to pick up',
+    ).toContain(subject)
+    expect(
+      rung,
+      'the second volunteer was put on the same all-day shift and clocked in, but the server '
+      + 'would not ring them — so their refusal below would prove nothing about first pickup '
+      + 'winning, only that an unrung volunteer is turned away',
+    ).toContain(present(second, 'the second volunteer').pubkey)
+
+    const callSid = await driveRingingCall(request, target(baseURL))
+
+    const first = await pacedWrite('POST answer (first)', () =>
+      apiPost<{ call?: CallRecord }>(request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, seed))
+    expect(first.status, 'the first volunteer to answer').toBe(200)
+    expect(present(first.data.call, 'the answered call').answeredBy).toBe(subject)
+
+    const racer = present(second, 'the second volunteer')
+    const race = await pacedWrite('POST answer (second)', () => apiPost<{ error?: string }>(
+      request, `/hubs/${hubId}/calls/${callSid}/answer`, {}, racer.seedHex))
+    expect(
+      race.status,
+      'a second volunteer answering a call that is already answered must be refused with 409, '
+      + `and got ${race.status} (${JSON.stringify(race.data)}). What each other answer means: `
+      + '200 — first-pickup-wins does not hold and two volunteers are now on one caller, which '
+      + 'is the regression #1072 closed; 500 — the guard is a database error surfacing rather '
+      + 'than a decision the route made; 403 "Not rung for this call" — this volunteer dropped '
+      + 'out of the ring set between being clocked in and answering, so the race never ran; '
+      + '403 "Access denied" — they hold no role in this hub and never had `calls:answer`',
+    ).toBe(409)
+
+    const after = present(
+      await activeCall(request, callSid),
+      'the call after the second answer attempt',
+    )
+    expect(
+      after.answeredBy,
+      'the second answer was refused but the call changed hands anyway',
+    ).toBe(subject)
+    expect(after.status, 'the call after the refused second answer').toBe('in-progress')
+
+    await endCall(request, target(baseURL), callSid)
+
+    // The history row this leaves is the second of the two the history block
+    // needs; the assertions on its shape live there.
+    await expect.poll(
+      async () => (await apiGet<History>(request, `/hubs/${hubId}/calls/history?limit=1`, seed)).data.total,
+      {
+        timeout: 45_000,
+        message: 'the answered call was reported completed but never reached the admin\'s '
+          + 'history — `endCall` moves the row, so it is still sitting in active calls',
+      },
+    ).toBeGreaterThanOrEqual(2)
+
+    const newest = (await apiGet<History>(
+      request, `/hubs/${hubId}/calls/history?limit=1`, seed)).data.calls[0]
+    expect(
+      rowId(newest),
+      'the newest history row is not the call this test just completed',
+    ).toBe(callSid)
+    expect(
+      newest.answeredBy,
+      'the call reached history, but without the volunteer who answered it — an admin '
+      + 'reviewing this call cannot tell who took it',
+    ).toBe(subject)
+    expect(newest.status, 'an answered, completed call in history').toBe('completed')
+  })
+
+  /**
+   * A second volunteer, created the way the operator creates one: an invite
+   * naming `role-volunteer`, redeemed by a fresh identity.
+   *
+   * The role is named EXPLICITLY. An invite with no `roleIds` grants whatever
+   * the hub's template designates, which may be nothing (#1446) — and a member
+   * with no hub role is refused by `hubContext` before any call logic runs.
+   */
+  async function inviteSecondVolunteer(request: APIRequestContext): Promise<{ seedHex: string; pubkey: string }> {
+    const created = await pacedStrict('POST /api/invites', () =>
+      apiPost<{ invite?: { code?: string } }>(request, '/invites', {
+        name: liveMarker('second-volunteer'),
+        phone: '',
+        roleIds: ['role-volunteer'],
+        hubId,
+      }, seed))
+    expect(created.status, 'POST /api/invites').toBe(201)
+    const code = present(created.data.invite?.code, 'the created invite\'s code')
+
+    const identity = freshIdentity()
+    const redeemed = await redeemInvite(request, code, identity.seedHex)
+    expect(redeemed.status, 'POST /api/invites/redeem').toBe(200)
+
+    const hubRoles = (redeemed.body as { volunteer?: { hubRoles?: Array<{ hubId: string; roleIds: string[] }> } })
+      ?.volunteer?.hubRoles ?? []
+    expect(
+      hubRoles.find(r => r.hubId === hubId)?.roleIds ?? [],
+      `the redeemed volunteer holds no role in hub ${hubId}, so every hub-scoped route answers `
+      + '403 "Access denied" before reaching any call logic — the race below would be measuring '
+      + 'a permission refusal',
+    ).toContain('role-volunteer')
+
+    return identity
+  }
+})
+
+
+// ───────────────────────────────────────────────────────────────────
 // History
 // ───────────────────────────────────────────────────────────────────
 
@@ -818,9 +1293,11 @@ test.describe('R1 — an admin sees the call in history', () => {
       'this hub has fewer than two call records, so neither the ?limit= paging nor the '
       + '?dateFrom= filter below can be exercised — every assertion about them would hold '
       + 'whether or not they work, which is how this test passed for months without '
-      + 'touching either. R1 claims "an admin sees the call in history"; take a couple of '
-      + 'calls on this deployment (the Twilio half of this suite places one, and the ring '
-      + 'block above leaves records where it can run) and re-run',
+      + 'touching either. R1 claims "an admin sees the call in history"; two completed '
+      + 'records normally arrive from the answering block above, which drives and answers '
+      + 'two calls — so this failing means THAT block was refused (it reports why: no '
+      + 'telephony provider, a provider whose signature cannot be produced, or the hub\'s '
+      + 'voice CAPTCHA). Take a couple of calls on this deployment and re-run',
     ).toBeGreaterThanOrEqual(2)
 
     expect(
