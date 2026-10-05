@@ -230,6 +230,22 @@ describe('auth routes', () => {
       expect(body.roles).toContain('role-volunteer')
     })
 
+    it('returns hub-scoped roles for a member with no global role', async () => {
+      mockVerifyAuthToken.mockResolvedValue(true)
+      const { app, user } = createApp()
+      Object.assign(user, { roles: [], hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }] })
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'aabb1122eeff3344', timestamp: Date.now(), token: 'valid' }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.roles).toEqual(['role-volunteer'])
+    })
+
     it('rate limits in production', async () => {
       mockCheckRateLimit.mockResolvedValue(true)
       const { app } = createApp()
@@ -334,6 +350,21 @@ describe('auth routes', () => {
       expect(body.pubkey).toBe('aabb1122eeff3344')
       expect(body.permissions).toBeDefined()
       expect(body.webauthnRegistered).toBe(false)
+    })
+
+    it('describes a hub-only member by their hub roles, not as role-less', async () => {
+      // Hub invites and hub user creation grant only hub-scoped roles (#1037).
+      // Clients treat an empty `roles` list as "no account" and sign the user
+      // out, so roles/permissions/primaryRole must all be account-wide.
+      const { app, user } = createApp()
+      Object.assign(user, { roles: [], hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }] })
+
+      const res = await app.request('/auth/me', {}, defaultEnv)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.roles).toEqual(['role-volunteer'])
+      expect(body.permissions).toEqual(['calls:answer'])
+      expect(body.primaryRole).toMatchObject({ id: 'role-volunteer' })
     })
 
     /**

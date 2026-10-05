@@ -53,7 +53,7 @@ vi.mock('@llamenos/crypto/ffi', () => ({
 
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
-import { inArray } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import type { Database } from '../../db'
 import type { Services } from '../../services'
 import * as schema from '../../db/schema'
@@ -127,6 +127,18 @@ async function makeHub(name: string): Promise<string> {
   return id
 }
 
+/** Grant `pubkey` the volunteer role assignment in `hub` — hub membership is
+ * the isolation boundary (#1044): without it, a call to `hub` must not ring
+ * them no matter what the schedule says. */
+async function makeMember(pubkey: string, hub: string): Promise<void> {
+  const [row] = await db.select({ hubRoles: users.hubRoles }).from(users).where(eq(users.pubkey, pubkey))
+  const existing = (row?.hubRoles ?? []) as Array<{ hubId: string; roleIds: string[] }>
+  if (existing.some(hr => hr.hubId === hub)) return
+  await db.update(users)
+    .set({ hubRoles: [...existing, { hubId: hub, roleIds: ['role-volunteer'] }] })
+    .where(eq(users.pubkey, pubkey))
+}
+
 /** Put `pubkeys` on a shift covering right now in `hub`, via the real service. */
 async function schedule(hub: string, pubkeys: string[]): Promise<void> {
   await shiftsService.create(hub, {
@@ -162,12 +174,14 @@ beforeAll(async () => {
     calls: new CallsService(db),
   } as unknown as Services
 
-  // Every test user is an active, non-break volunteer with the global volunteer
-  // role (which resolves to permissions in every hub), reachable by phone.
+  // Every test user is an active, non-break volunteer reachable by phone. Hub
+  // authority comes from the per-hub assignment each test grants with
+  // `makeMember` — a global role that is not super-admin grants nothing inside
+  // a hub (#1044), so scheduling alone must not make anyone ringable.
   await db.insert(users).values(
     ALL_PUBKEYS.map((pubkey, i) => ({
       pubkey,
-      roles: ['role-volunteer'],
+      roles: [],
       displayName: pubkey.slice(0, 12),
       phone: `+1555000${String(i).padStart(4, '0')}`,
       active: true,
@@ -192,6 +206,7 @@ afterAll(async () => {
 describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', () => {
   it('scheduled AND clocked in — rings', async () => {
     const hub = await makeHub('both')
+    await makeMember(PK_BOTH, hub)
     await schedule(hub, [PK_BOTH])
     await activeShiftsService.clockIn(PK_BOTH, hub)
 
@@ -232,6 +247,8 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
 
   it('rings only the intersection when part of the roster has clocked in', async () => {
     const hub = await makeHub('partial')
+    await makeMember(PK_BOTH, hub)
+    await makeMember(PK_SCHEDULED_ONLY, hub)
     await schedule(hub, [PK_BOTH, PK_SCHEDULED_ONLY])
     await activeShiftsService.clockIn(PK_BOTH, hub)
     // Clocked into the hub but absent from its schedule — must not ring either.
@@ -246,6 +263,8 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
     // than be dropped. The fallback is deliberately NOT gated on clocking in —
     // PK_FALLBACK never clocks in anywhere in this test.
     const hub = await makeHub('unmanned')
+    await makeMember(PK_SCHEDULED_ONLY, hub)
+    await makeMember(PK_FALLBACK, hub)
     await schedule(hub, [PK_SCHEDULED_ONLY])
     await settingsService.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
 
@@ -255,6 +274,8 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
   it('clocking out returns the hub to the fallback group', async () => {
     // The full R1 clock-in lifecycle through the real routes' service methods.
     const hub = await makeHub('lifecycle')
+    await makeMember(PK_BOTH, hub)
+    await makeMember(PK_FALLBACK, hub)
     await schedule(hub, [PK_BOTH])
     await settingsService.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
 
