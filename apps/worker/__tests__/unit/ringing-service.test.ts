@@ -8,6 +8,7 @@ import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { incCounter } from '../../routes/metrics'
 import { publishEvent } from '../../lib/ws-events'
+import { dispatchVoipPushFromService } from '../../lib/voip-push'
 import { KIND_CALL_RING } from '@shared/event-kinds'
 
 const TEST_HMAC_SECRET = 'a'.repeat(64)
@@ -64,7 +65,7 @@ function makeUser(overrides: {
   onBreak?: boolean
   callPreference?: string
   phone?: string | null
-  /** Global role ids. Default: the instance-wide volunteer role. */
+  /** Global role ids. Default: none — hub authority comes from hubRoles (#1037). */
   roles?: string[]
   hubRoles?: { hubId: string; roleIds: string[] }[]
 }) {
@@ -75,8 +76,9 @@ function makeUser(overrides: {
     onBreak: overrides.onBreak ?? false,
     callPreference: overrides.callPreference ?? 'phone',
     phone: 'phone' in overrides ? overrides.phone : '+15551234567',
-    roles: overrides.roles ?? ['role-volunteer'],
-    hubRoles: overrides.hubRoles ?? [],
+    roles: overrides.roles ?? ([] as string[]),
+    // Members of the hub the tests ring (hub-1) unless a test says otherwise
+    hubRoles: overrides.hubRoles ?? [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
   }
 }
 
@@ -328,7 +330,7 @@ describe('startParallelRinging', () => {
     })
 
     it('clocked in but NOT scheduled — does not ring', async () => {
-      // An admin never put them on the schedule. Clocking in cannot enrol you.
+      // An admin never put them on the schedule. Clocking in cannot enroll you.
       const services = makeServices({
         onShiftPubkeys: [],
         clockedInPubkeys: ['pk-clocked'],
@@ -432,8 +434,8 @@ describe('startParallelRinging', () => {
       onShiftPubkeys: ['pk-busy', 'pk-free'],
       busyPubkeys: ['pk-busy'],
       allUsers: [
-        makeUser({ pubkey: 'pk-busy', phone: '+15550000001' }),
-        makeUser({ pubkey: 'pk-free', phone: '+15550000002' }),
+        makeUser({ pubkey: 'pk-busy', phone: '+15550000001', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+        makeUser({ pubkey: 'pk-free', phone: '+15550000002', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
       ],
     })
     ;(services.calls.createCallToken as ReturnType<typeof vi.fn>).mockImplementation(
@@ -452,7 +454,10 @@ describe('startParallelRinging', () => {
       onShiftPubkeys: ['pk-busy'],
       fallbackPubkeys: ['pk-fallback'],
       busyPubkeys: ['pk-busy'],
-      allUsers: [makeUser({ pubkey: 'pk-busy' }), makeUser({ pubkey: 'pk-fallback' })],
+      allUsers: [
+        makeUser({ pubkey: 'pk-busy', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+        makeUser({ pubkey: 'pk-fallback', hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }),
+      ],
     })
 
     const result = await startParallelRinging('CA-busy2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
@@ -600,12 +605,15 @@ describe('startParallelRinging', () => {
 
     const services = makeServices({
       onShiftPubkeys: ['pk-1'],
-      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'both' })],
+      // No hub to be a member of — global-scope authority is the global roles
+      allUsers: [makeUser({ pubkey: 'pk-1', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })],
     })
 
-    await startParallelRinging('CA-8', '+15551234567', 'http://localhost', makeEnv(), services, '')
+    const result = await startParallelRinging('CA-8', '+15551234567', 'http://localhost', makeEnv(), services, '')
 
-    // VoIP push should NOT be dispatched for empty hubId
+    // The volunteer IS rung (so the assertion below is not vacuous) ...
+    expect(result.ringing).toBe(true)
+    // ... but VoIP push should NOT be dispatched for empty hubId
     expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
   })
 
@@ -690,5 +698,54 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
     recordRingLegs('CA-boom', ['LEG-A'])
     mockAdapter.cancelRinging.mockRejectedValueOnce(new Error('provider down'))
     await expect(cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-boom', 'LEG-X')).resolves.toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub isolation (#1037): only people who can act IN THIS HUB ring
+// ---------------------------------------------------------------------------
+
+describe('startParallelRinging — hub isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('does not ring a rostered volunteer who is no longer a member of the hub', async () => {
+    const services = makeServices({
+      onShiftPubkeys: ['pk-removed', 'pk-member'],
+      allUsers: [
+        makeUser({ pubkey: 'pk-removed', phone: '+15550000001', hubRoles: [] }),
+        makeUser({ pubkey: 'pk-member', phone: '+15550000002' }),
+      ],
+    })
+
+    await startParallelRinging('CA-iso', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    const rung = mockAdapter.ringVolunteers.mock.calls[0][0].volunteers.map((v: { phone: string }) => v.phone)
+    expect(rung).toEqual(['+15550000002'])
+  })
+
+  it('does not ring a member of a different hub, nor a non-super-admin global role holder', async () => {
+    // callPreference 'both' so a leak would show on every ring path: phone, relay, VoIP push
+    const other = makeUser({ pubkey: 'pk-other-hub', callPreference: 'both', hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }] })
+    const globalOnly = makeUser({ pubkey: 'pk-global', callPreference: 'both', roles: ['role-volunteer'], hubRoles: [] })
+    const services = makeServices({
+      onShiftPubkeys: ['pk-other-hub', 'pk-global'],
+      allUsers: [other, globalOnly],
+    })
+
+    const result = await startParallelRinging('CA-iso2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
+
+    // Neither is eligible in hub-1, so the call is unroutable ...
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
+    // ... and nobody is told a caller is waiting, on any channel.
+    expect(mockAdapter.ringVolunteers).not.toHaveBeenCalled()
+    expect(services.calls.createCallToken).not.toHaveBeenCalled()
+    expect(publishEvent).not.toHaveBeenCalled()
+    expect(dispatchVoipPushFromService).not.toHaveBeenCalled()
+    // The call record is still created, in hub-1 only, so the caller can reach
+    // voicemail (#1069 registers the call before any volunteer lookup).
+    expect(services.calls.addCall).toHaveBeenCalledTimes(1)
+    expect(services.calls.addCall).toHaveBeenCalledWith('hub-1', expect.objectContaining({ callId: 'CA-iso2' }))
   })
 })

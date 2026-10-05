@@ -828,7 +828,7 @@ struct TypedReportCreateView: View {
         do {
             // Encrypt the file content with a random AES-256-GCM key
             let plaintextHex = data.map { String(format: "%02x", $0) }.joined()
-            let (ciphertextHex, fileKeyHex) = try appState.cryptoService.symmetricEncrypt(plaintextHex: plaintextHex)
+            let (ciphertextHex, fileKeyHex) = try appState.cryptoService.symmetricEncrypt(plaintextHex: plaintextHex, aadHex: "")
 
             // Convert ciphertext hex back to Data for upload
             let encryptedData = hexToData(ciphertextHex)

@@ -31,6 +31,7 @@ import { ProviderTemplateService } from './provider-setup/templates'
 import { HubOnboardService } from './provider-setup/hub-onboard'
 import { ErasureService } from './erasure'
 import { RetentionService } from './retention'
+import { HubShredService } from './hub-shred'
 import { RingGroupsService } from './ring-groups'
 import { ShiftOverridesService } from './shift-overrides'
 import { ActiveShiftsService } from './active-shifts'
@@ -68,6 +69,8 @@ export interface Services {
   hubOnboard: HubOnboardService
   erasure: ErasureService
   retention: RetentionService
+  /** The hub crypto-shred executor (spec §4). Takes the blob-storage binding at construction. */
+  hubShred: HubShredService
   ringGroups: RingGroupsService
   shiftOverrides: ShiftOverridesService
   activeShifts: ActiveShiftsService
@@ -87,6 +90,11 @@ export interface ServicesOpts {
   notifierApiKey?: string
   /** Secret shared with the sidecar for signing client registration tokens. Falls back to hmacSecret. */
   notifierTokenSecret?: string
+  /**
+   * Object-storage binding (Env.BLOB_STORAGE) — required for the hub shred to
+   * destroy file envelope mirrors. Wired by the server entrypoint.
+   */
+  blobStorage?: { delete(key: string): Promise<void> }
 }
 
 export function createServices(db: Database, opts?: ServicesOpts): Services {
@@ -108,6 +116,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', opts?.env?.DOMAIN ?? 'localhost')
 
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
+  const hubShred = new HubShredService(db, opts?.blobStorage)
 
   const services: Services = {
     identity,
@@ -132,8 +141,11 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
-    erasure: new ErasureService(db, identity),
+    erasure: new ErasureService(db, identity, {
+      deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
+    }),
     retention: new RetentionService(db),
+    hubShred,
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
     activeShifts: new ActiveShiftsService(db),
@@ -196,4 +208,5 @@ export {
   ShiftAvailabilityService,
   ShiftRequestsService,
   RecoveryGroupService,
+  HubShredService,
 }

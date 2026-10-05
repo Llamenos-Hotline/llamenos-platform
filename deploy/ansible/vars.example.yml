@@ -119,6 +119,7 @@ admin_pubkey: ""
 # it becomes permanently unreadable with no error at write or read time
 # (#1283). Empty is valid only when admin_pubkey is also empty — the
 # bootstrap-via-desktop path, where no admin key is configured at all.
+
 admin_decryption_pubkey: ""
 
 # HMAC secret for hashing phone numbers and IPs

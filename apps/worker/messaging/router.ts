@@ -18,6 +18,7 @@ import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { webhookAuth } from '../middleware/webhook-auth'
+import { hasHubPermission, permissionGranted, resolvePermissions } from '@shared/permissions'
 
 const logger = createLogger('messaging')
 
@@ -348,11 +349,18 @@ async function tryAutoAssign(
 
     // 3. Get user details to filter by channel capability
     const { users: allUsers } = await services.identity.getUsers()
+    const { roles: roleDefs } = await services.settings.getRoles()
+    // The assignee must be able to claim conversations in the conversation's
+    // hub — a volunteer removed from the hub may linger in its shift roster (#1037).
+    const canClaimHere = (v: (typeof allUsers)[number]) => hubId
+      ? hasHubPermission(v.roles, v.hubRoles ?? [], roleDefs, hubId, 'conversations:claim')
+      : permissionGranted(resolvePermissions(v.roles, roleDefs), 'conversations:claim')
     const onShiftVolunteers = allUsers.filter(v =>
       onShiftPubkeys.includes(v.pubkey) &&
       v.active &&
       !v.onBreak &&
-      v.messagingEnabled !== false
+      v.messagingEnabled !== false &&
+      canClaimHere(v)
     )
 
     // Filter by channel capability
