@@ -38,6 +38,9 @@ const DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
+/** Stored records seal with no AAD; the label is bound as the HPKE info. */
+const NO_AAD = new Uint8Array(0)
+
 function urlFor(name: string): string {
   const url = new URL(DATABASE_URL)
   url.pathname = `/${name}`
@@ -52,9 +55,10 @@ export function reader(): { secret: Uint8Array; pubkey: string } {
 }
 
 /**
- * The real decrypt path: unwrap the content key out of an HPKE envelope.
- * `env` is the { enc, ct } pair stored in an envelope column; `label` is the
- * crypto context label the seal used (defaults to the message label).
+ * The real decrypt path: unwrap the content key out of an HPKE envelope,
+ * exactly as a reader opens a stored record (apps/worker/lib/crypto.ts):
+ * HPKE info = label, no AAD — client-sealed and server-sealed records share
+ * the format and carry no format marker.
  */
 export function openEnvelope(
   secret: Uint8Array,
@@ -64,7 +68,7 @@ export function openEnvelope(
   const envelope = new Uint8Array(hexToBytes(env.enc).length + hexToBytes(env.ct).length)
   envelope.set(hexToBytes(env.enc), 0)
   envelope.set(hexToBytes(env.ct), hexToBytes(env.enc).length)
-  return hpkeOpen(secret, envelope, utf8ToBytes(label), utf8ToBytes(`${label}:key-wrap`))
+  return hpkeOpen(secret, envelope, utf8ToBytes(label), NO_AAD)
 }
 
 /** Unwrap AND open, returning the plaintext. Throws if either step fails. */
@@ -76,7 +80,7 @@ export function readSealed(
 ): string {
   const key = openEnvelope(secret, env, label)
   return new TextDecoder().decode(
-    symmetricDecrypt(key, hexToBytes(encryptedContent), utf8ToBytes(label)),
+    symmetricDecrypt(key, hexToBytes(encryptedContent), NO_AAD),
   )
 }
 
@@ -120,7 +124,7 @@ export async function expectNoteReadable(
   const [row] = await db.select().from(schema.notes).where(eq(schema.notes.id, noteId))
   const key = openEnvelope(secret, row!.authorEnvelope as { enc: string; ct: string })
   const plain = new TextDecoder().decode(
-    symmetricDecrypt(key, hexToBytes(row!.encryptedContent), utf8ToBytes(LABEL_MESSAGE)),
+    symmetricDecrypt(key, hexToBytes(row!.encryptedContent), NO_AAD),
   )
   expect(plain).toBe(expectedPlaintext)
 }
