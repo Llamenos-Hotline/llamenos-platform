@@ -20,8 +20,15 @@ let intervalId: ReturnType<typeof setInterval> | null = null
 interface ErasureExpiryWorkerOpts {
   erasureService: ErasureService
   auditService: AuditService
-  /** Required to execute hub-scope (crypto-shred) requests. */
-  hubShred?: HubShredService
+  /**
+   * Executes hub-scope (crypto-shred) requests. REQUIRED — it was optional,
+   * and `src/server/index.ts` never passed it, so every hub marked for shred
+   * hit the `if (!opts.hubShred) return` below and stayed readable forever
+   * while the request sat pending past its deadline (#1566). There is no
+   * caller that wants this worker without a shred executor: a hub-scope
+   * request it cannot execute is a privacy promise it cannot keep.
+   */
+  hubShred: HubShredService
 }
 
 type ExpiredRequest = Awaited<ReturnType<ErasureService['getExpiredPendingRequests']>>[number]
@@ -37,10 +44,8 @@ export async function processExpiredRequest(
 ): Promise<void> {
   if (request.scope === 'hub' || request.userId === null) {
     // Hub-scoped requests are crypto-shreds, not person erasures: they have
-    // no userId and a different executor. Without a shred service they are
-    // left pending rather than silently treated as a no-op person erasure.
+    // no userId and a different executor.
     if (request.scope !== 'hub' || !request.hubId) return
-    if (!opts.hubShred) return
 
     // IMP-2: CAS claim — skip if another worker already claimed it
     const claimed = await opts.erasureService.markExecuting(request.id)

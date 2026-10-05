@@ -43,18 +43,31 @@ import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
 
-export interface TaskSchedulerDeps {
+/**
+ * The service-registry half of the scheduler's dependencies.
+ *
+ * Every field is REQUIRED, and `schedulerServiceDeps()` (services/index.ts) is
+ * the only thing that builds it. That is deliberate: these fields used to be
+ * optional and each worker was gated on `if (deps.x)`, so the entrypoint could
+ * omit one and nothing — not tsc, not a test, not a log line — would say so.
+ * Three workers were dead on every deployment for that reason (#1127, #1566).
+ * An omission here is now a compile error at the call site.
+ */
+export type TaskSchedulerServiceDeps = {
   blastsService: BlastsService
   settingsService: SettingsService
+  retentionService: RetentionService
+  auditService: AuditService
+  erasureService: ErasureService
+  identityService: IdentityService
+  hubShred: HubShredService
+}
+
+export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
   resolveAdapter: AdapterResolver
   resolveIdentifier: (subscriberId: string) => Promise<string | null>
   onBlastProgress?: BlastProgressCallback
   onBlastStatusChange?: BlastStatusCallback
-  retentionService?: RetentionService
-  auditService?: AuditService
-  erasureService?: ErasureService
-  identityService?: IdentityService
-  hubShred?: HubShredService
 }
 
 export class TaskScheduler {
@@ -66,53 +79,43 @@ export class TaskScheduler {
    * Start all background task workers.
    * Call this after all services are initialized.
    */
-  start(deps?: TaskSchedulerDeps): void {
+  start(deps: TaskSchedulerDeps): void {
     if (this.started) return
     this.started = true
 
-    if (deps) {
-      // Start blast delivery worker
-      startBlastWorker({
-        blastsService: deps.blastsService,
-        settingsService: deps.settingsService,
-        resolveAdapter: deps.resolveAdapter,
-        resolveIdentifier: deps.resolveIdentifier,
-        onProgress: deps.onBlastProgress,
-        onStatusChange: deps.onBlastStatusChange,
-      })
+    // No `if (deps.x)` gates: every dependency is required, so a worker that
+    // is listed here always runs. A missing one cannot reach this method.
+    startBlastWorker({
+      blastsService: deps.blastsService,
+      settingsService: deps.settingsService,
+      resolveAdapter: deps.resolveAdapter,
+      resolveIdentifier: deps.resolveIdentifier,
+      onProgress: deps.onBlastProgress,
+      onStatusChange: deps.onBlastStatusChange,
+    })
 
-      // Start scheduled blast poller
-      startScheduledBlastPoller(deps.blastsService)
+    startScheduledBlastPoller(deps.blastsService)
 
-      if (deps.retentionService && deps.auditService) {
-        startRetentionPurgeWorker({
-          retentionService: deps.retentionService,
-          auditService: deps.auditService,
-          settingsService: deps.settingsService,
-        })
-      }
+    startRetentionPurgeWorker({
+      retentionService: deps.retentionService,
+      auditService: deps.auditService,
+      settingsService: deps.settingsService,
+    })
 
-      if (deps.auditService && deps.identityService) {
-        startAuditChainVerifyWorker({
-          auditService: deps.auditService,
-          identityService: deps.identityService,
-        })
-      }
+    startAuditChainVerifyWorker({
+      auditService: deps.auditService,
+      identityService: deps.identityService,
+    })
 
-      if (deps.erasureService && deps.auditService) {
-        startErasureExpiryWorker({
-          erasureService: deps.erasureService,
-          auditService: deps.auditService,
-          hubShred: deps.hubShred,
-        })
-      }
+    startErasureExpiryWorker({
+      erasureService: deps.erasureService,
+      auditService: deps.auditService,
+      hubShred: deps.hubShred,
+    })
 
-      if (deps.erasureService) {
-        startReEncryptionWorker({
-          erasureService: deps.erasureService,
-        })
-      }
-    }
+    startReEncryptionWorker({
+      erasureService: deps.erasureService,
+    })
 
     logger.info('Started')
   }
