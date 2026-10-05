@@ -580,7 +580,7 @@ export async function registerDeviceKeyViaApi(
  */
 export async function createVolunteerViaApi(
   request: APIRequestContext,
-  options?: { name?: string; phone?: string; roleIds?: string[] },
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
 ): Promise<CreateUserResult> {
   const user = await createUserViaApi(request, options)
   await registerDeviceKeyViaApi(request, user.seedHex)
