@@ -392,6 +392,14 @@ export function permissionGranted(grantedPermissions: string[], required: string
 }
 
 /**
+ * Look up a role definition, falling back to DEFAULT_ROLES for system role IDs
+ * (see resolvePermissions for why).
+ */
+export function findRole(roleId: string, roles: Role[]): Pick<Role, 'id' | 'name' | 'permissions'> | undefined {
+  return roles.find(r => r.id === roleId) ?? DEFAULT_ROLES.find(r => r.id === roleId)
+}
+
+/**
  * Resolve effective permissions from multiple role IDs.
  * Returns the union of all permissions from all roles.
  *
@@ -403,8 +411,7 @@ export function permissionGranted(grantedPermissions: string[], required: string
 export function resolvePermissions(roleIds: string[], roles: Role[]): string[] {
   const perms = new Set<string>()
   for (const roleId of roleIds) {
-    const role = roles.find(r => r.id === roleId)
-      ?? DEFAULT_ROLES.find(r => r.id === roleId)
+    const role = findRole(roleId, roles)
     if (role) {
       for (const p of role.permissions) perms.add(p)
     }
@@ -447,9 +454,22 @@ export function getPrimaryRole(roleIds: string[], roles: Role[]): Role | undefin
 // --- Hub-Scoped Permission Resolution ---
 
 /**
+ * True when the user's GLOBAL roles grant the `*` wildcard — the deliberate
+ * super-admin concept (`role-super-admin`, restored for ADMIN_PUBKEY by the
+ * auth middleware). This is the ONLY way a global role carries authority
+ * inside a hub.
+ */
+export function isSuperAdmin(globalRoles: string[], allRoleDefs: Role[]): boolean {
+  return permissionGranted(resolvePermissions(globalRoles, allRoleDefs), '*')
+}
+
+/**
  * Check if a user has a specific permission within a hub.
- * Super-admin (global '*' permission) bypasses hub checks.
- * Otherwise, checks hub-specific role assignments.
+ *
+ * Hub membership is the isolation boundary: only a super-admin's global roles
+ * reach into a hub. Every other global role is ignored here — a volunteer or
+ * hub-admin role that is not attached to `hubId` via `hubRoles` grants nothing
+ * in that hub (#1037).
  */
 export function hasHubPermission(
   globalRoles: string[],
@@ -458,21 +478,41 @@ export function hasHubPermission(
   hubId: string,
   permission: string,
 ): boolean {
-  // Super-admin bypasses all hub checks
-  const globalPerms = resolvePermissions(globalRoles, allRoleDefs)
-  if (permissionGranted(globalPerms, permission)) return true
-
-  // Check hub-specific roles
-  const assignment = hubRoles.find(hr => hr.hubId === hubId)
-  if (!assignment) return false
-
-  const hubPerms = resolvePermissions(assignment.roleIds, allRoleDefs)
-  return permissionGranted(hubPerms, permission)
+  return permissionGranted(
+    resolveHubPermissions(globalRoles, hubRoles, allRoleDefs, hubId),
+    permission,
+  )
 }
 
 /**
- * Resolve all effective permissions for a user within a specific hub.
- * Includes global permissions (from globalRoles) plus hub-specific permissions.
+ * The role IDs that carry authority for a user inside `hubId`.
+ *
+ * - Super-admin (global `*`): their global roles plus any hub assignment.
+ * - Everyone else: exactly the roles assigned to them in `hubId` via
+ *   `hubRoles`. Non-super-admin global roles contribute NOTHING — honouring
+ *   them would make hub membership meaningless, because a global role applies
+ *   to every hub on the server and survives removal from a hub (#1037).
+ */
+export function resolveHubRoleIds(
+  globalRoles: string[],
+  hubRoles: { hubId: string; roleIds: string[] }[],
+  allRoleDefs: Role[],
+  hubId: string,
+): string[] {
+  const roleIds = new Set<string>()
+  if (isSuperAdmin(globalRoles, allRoleDefs)) {
+    for (const id of globalRoles) roleIds.add(id)
+  }
+  const assignment = hubRoles.find(hr => hr.hubId === hubId)
+  if (assignment) {
+    for (const id of assignment.roleIds) roleIds.add(id)
+  }
+  return Array.from(roleIds)
+}
+
+/**
+ * Resolve all effective permissions for a user within a specific hub —
+ * the permissions of {@link resolveHubRoleIds}.
  */
 export function resolveHubPermissions(
   globalRoles: string[],
@@ -480,19 +520,24 @@ export function resolveHubPermissions(
   allRoleDefs: Role[],
   hubId: string,
 ): string[] {
-  const perms = new Set<string>()
-  // Global permissions always apply
-  for (const p of resolvePermissions(globalRoles, allRoleDefs)) {
-    perms.add(p)
+  return resolvePermissions(resolveHubRoleIds(globalRoles, hubRoles, allRoleDefs, hubId), allRoleDefs)
+}
+
+/**
+ * Every role ID the user holds anywhere: global roles plus every hub
+ * assignment. For describing the account (UI gating, "is this person an admin
+ * somewhere") — NEVER for authorising an action: authority inside a hub is
+ * {@link resolveHubPermissions}, and outside a hub it is the global roles.
+ */
+export function resolveAllRoleIds(
+  globalRoles: string[],
+  hubRoles: { hubId: string; roleIds: string[] }[],
+): string[] {
+  const roleIds = new Set<string>(globalRoles)
+  for (const assignment of hubRoles) {
+    for (const id of assignment.roleIds) roleIds.add(id)
   }
-  // Hub-specific permissions
-  const assignment = hubRoles.find(hr => hr.hubId === hubId)
-  if (assignment) {
-    for (const p of resolvePermissions(assignment.roleIds, allRoleDefs)) {
-      perms.add(p)
-    }
-  }
-  return Array.from(perms)
+  return Array.from(roleIds)
 }
 
 /**
@@ -504,8 +549,7 @@ export function getUserHubIds(
   hubRoles: { hubId: string; roleIds: string[] }[],
   allRoleDefs: Role[],
 ): string[] | null {
-  const globalPerms = resolvePermissions(globalRoles, allRoleDefs)
-  if (permissionGranted(globalPerms, '*')) return null // all hubs
+  if (isSuperAdmin(globalRoles, allRoleDefs)) return null // all hubs
   return hubRoles.map(hr => hr.hubId)
 }
 

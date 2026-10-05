@@ -409,6 +409,18 @@ describe('POST /reports', () => {
     )
   })
 
+  it('writes conversionStatus: pending into metadata at creation', async () => {
+    const { app, mockConversations } = makeApp({ permissions: ['reports:create'] })
+    await app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'My Report', encryptedContent: 'enc', readerEnvelopes: [testEnvelope] }),
+    })
+    expect(mockConversations.create).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ conversionStatus: 'pending' }) }),
+    )
+  })
+
   it('includes type:report in metadata', async () => {
     const { app, mockConversations } = makeApp({ permissions: ['reports:create'] })
     await app.request('/', {

@@ -142,6 +142,9 @@ reports.post('/',
         reportTitle: body.title,
         reportCategory: body.category,
         reportTypeId: body.reportTypeId,
+        // New reports start in the 'pending' triage bucket so they appear in the
+        // default conversionStatus=pending triage queue.
+        conversionStatus: 'pending',
       },
     })
 

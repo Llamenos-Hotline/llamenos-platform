@@ -631,7 +631,7 @@ Given('a contact with PII data exists', async ({ backendRequest: request, casesW
   await createTrackedContact(request, casesWorld, `PII Contact ${Date.now()}`, { hubId: workerHub })
 })
 
-Given('I am logged in as a volunteer without PII access', async ({ page, backendRequest: request }) => {
+Given('I am logged in as a volunteer without PII access', async ({ page, backendRequest: request, workerHub }) => {
   // Create a volunteer with default role-volunteer (no contacts:view-pii permission)
   // but with contacts:view so they can access the contact directory
   const { createRoleViaApi, createVolunteerViaApi } = await import('../../api-helpers')
@@ -646,9 +646,12 @@ Given('I am logged in as a volunteer without PII access', async ({ page, backend
       'settings:read',
     ],
   })
+  // A member of the worker hub: a global role that is not super-admin grants
+  // nothing inside a hub (#1037), so a hubless account could not open the directory.
   const vol = await createVolunteerViaApi(request, {
     name: `PII Restricted Vol ${Date.now()}`,
     roleIds: [role.id],
+    hubId: workerHub,
   })
   await loginAsVolunteer(page, vol.nsec)
 })

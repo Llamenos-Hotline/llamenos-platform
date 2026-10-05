@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.shifts
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,12 +13,14 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.llamenos.hotline.R
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ShiftResponse
 import org.llamenos.hotline.model.ShiftsListResponse
+import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.CreateShiftJoinRequestBody
 import org.llamenos.protocol.SharedCreateShiftJoinRequestBodyType
 import org.llamenos.protocol.ShiftJoinRequestResponse
@@ -33,6 +36,8 @@ data class ShiftsUiState(
     val isRefreshing: Boolean = false,
     val isClockingInOut: Boolean = false,
     val error: String? = null,
+    /** Set when clocked in but this device could not be registered to ring. */
+    @StringRes val callSetupErrorRes: Int? = null,
     val showDropConfirmation: String? = null, // shift ID if dialog is showing
 )
 
@@ -51,6 +56,7 @@ class ShiftsViewModel @Inject constructor(
     private val apiService: ApiService,
     private val activeHubState: ActiveHubState,
     private val shiftClockRepository: ShiftClockRepository,
+    private val sipRegistrar: SipRegistrar,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ShiftsUiState())
@@ -114,14 +120,21 @@ class ShiftsViewModel @Inject constructor(
      * Clock in to the active hub's shift roster.
      */
     fun clockIn() {
-        clockAction("Failed to clock in") { hubId -> shiftClockRepository.clockIn(hubId) }
+        clockAction("Failed to clock in") { hubId ->
+            shiftClockRepository.clockIn(hubId)
+            reportCallSetup(sipRegistrar.registerMemberHubs())
+        }
     }
 
     /**
      * Clock out of the active hub's shift roster.
      */
     fun clockOut() {
-        clockAction("Failed to clock out") { hubId -> shiftClockRepository.clockOut(hubId) }
+        clockAction("Failed to clock out") { hubId ->
+            shiftClockRepository.clockOut(hubId)
+            _uiState.update { it.copy(callSetupErrorRes = null) }
+            reportCallSetup(sipRegistrar.syncWithShift(shiftClockRepository.clockedIn.value.isNotEmpty()))
+        }
     }
 
     private fun clockAction(failure: String, action: suspend (hubId: String) -> Unit) {
@@ -139,6 +152,15 @@ class ShiftsViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.update { it.copy(isClockingInOut = false, error = e.message ?: failure) }
             }
+        }
+    }
+
+    /**
+     * Retry registering this device for in-app calls after a failed attempt.
+     */
+    fun retryCallSetup() {
+        viewModelScope.launch {
+            reportCallSetup(sipRegistrar.registerMemberHubs())
         }
     }
 
@@ -204,6 +226,16 @@ class ShiftsViewModel @Inject constructor(
      * Clear the error state.
      */
     fun clearError() {
-        _uiState.update { it.copy(error = null) }
+        _uiState.update { it.copy(error = null, callSetupErrorRes = null) }
+    }
+
+    private fun reportCallSetup(result: SipRegistrar.Result?) {
+        when (result) {
+            is SipRegistrar.Result.Failed ->
+                _uiState.update { it.copy(callSetupErrorRes = R.string.dashboard_error_in_app_calls_unavailable) }
+            is SipRegistrar.Result.Registered, is SipRegistrar.Result.NotAvailable ->
+                _uiState.update { it.copy(callSetupErrorRes = null) }
+            null -> {}
+        }
     }
 }
