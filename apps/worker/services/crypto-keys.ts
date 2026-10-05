@@ -12,6 +12,7 @@ import { sigchainLinks, pukEnvelopes, mlsPendingMessages } from '../db/schema'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { sha256 } from '@noble/hashes/sha2.js'
+import { timingSafeCompare } from '../lib/timing-safe'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -170,6 +171,18 @@ function findNonCanonicalNumber(value: unknown, path: string): string | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Constant-time equality for chain hashes. `null` appears only for the
+ * genesis link's prevHash (crate verifier contract); null-vs-null is a match,
+ * null-vs-hash is not. Non-null hashes are compared with timingSafeCompare so
+ * an attacker probing the chain head or a claimed hash learns nothing from
+ * response timing (B-M15).
+ */
+export function chainHashesEqual(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return a === b
+  return timingSafeCompare(a, b)
+}
+
+/**
  * Transaction type accepted by functions that must run inside a caller-owned
  * transaction (so the advisory lock below is scoped to, and released by, that
  * same transaction's commit/rollback).
@@ -280,7 +293,7 @@ export async function appendValidatedSigchainLink(
       409,
     )
   }
-  if (normalizedPrevHash !== expectedPrevHash) {
+  if (!chainHashesEqual(normalizedPrevHash, expectedPrevHash)) {
     throw new CryptoKeyError(
       'sigchain prevHash mismatch: does not match current chain head',
       409,
@@ -311,7 +324,7 @@ export async function appendValidatedSigchainLink(
     signerPubkey,
     link.payload,
   )
-  if (recomputedHash !== link.hash.toLowerCase()) {
+  if (!timingSafeCompare(recomputedHash, link.hash.toLowerCase())) {
     throw new CryptoKeyError(
       'sigchain hash mismatch: recomputed hash does not match claimed hash — payload may have been tampered',
       400,
@@ -379,7 +392,7 @@ export function findSigchainBreak(
     if (link.seqNo !== expectedSeqNo) {
       return { seqNo: link.seqNo, reason: `expected seqNo ${expectedSeqNo}, found ${link.seqNo}` }
     }
-    if (link.prevHash !== expectedPrevHash) {
+    if (!chainHashesEqual(link.prevHash, expectedPrevHash)) {
       return { seqNo: link.seqNo, reason: 'prevHash does not match the previous link\'s hash — chain is forked or tampered' }
     }
     expectedSeqNo = link.seqNo + 1

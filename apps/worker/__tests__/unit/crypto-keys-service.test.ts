@@ -4,6 +4,7 @@ import {
   CryptoKeyError,
   computeEntryHash,
   assertCanonicalSigchainPayload,
+  chainHashesEqual,
 } from '../../services/crypto-keys'
 import { sha256 } from '@noble/hashes/sha2.js'
 
@@ -735,6 +736,32 @@ describe('CryptoKeysService — Sigchain', () => {
         JSON.parse('{"type":"device_add","deviceId":"device-002","devicePubkey":"ff00ee11"}'),
       )
       expect(hash).toBe(VECTOR_3_DEVICE_ADD)
+    })
+  })
+
+  describe('chainHashesEqual — constant-time chain hash comparison', () => {
+    const H1 = 'aa'.repeat(32)
+
+    it('accepts two identical hashes', () => {
+      expect(chainHashesEqual(H1, H1)).toBe(true)
+    })
+
+    it('rejects two hashes differing in the last nibble', () => {
+      expect(chainHashesEqual(H1, 'aa'.repeat(31) + 'ab')).toBe(false)
+    })
+
+    it('rejects two hashes differing in the first nibble', () => {
+      expect(chainHashesEqual(H1, 'ba' + 'aa'.repeat(31))).toBe(false)
+    })
+
+    it('rejects hashes of different lengths', () => {
+      expect(chainHashesEqual(H1, 'aa'.repeat(31))).toBe(false)
+    })
+
+    it('treats null as equal only to null (genesis prevHash)', () => {
+      expect(chainHashesEqual(null, null)).toBe(true)
+      expect(chainHashesEqual(null, H1)).toBe(false)
+      expect(chainHashesEqual(H1, null)).toBe(false)
     })
   })
 
