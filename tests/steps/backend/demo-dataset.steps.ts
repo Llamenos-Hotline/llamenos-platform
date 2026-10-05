@@ -27,6 +27,7 @@ import { getSharedState, setLastResponse } from './shared-state'
 import { apiGet, apiPost, devDelete, devGet, devPost, seedHexToPubkey } from '../../api-helpers'
 import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { DEMO_CALLS, DEMO_HUB } from '@worker/lib/demo-dataset'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 const HUB = DEMO_HUB.id
 const KEY = 'demo_dataset'
@@ -247,15 +248,16 @@ Then('every demo note decrypts to its authored text for the demo admin', async (
 
 Then('every demo call record decrypts for the demo admin with the fictional caller number', async ({ request, world }) => {
   const admin = ADMIN(world)
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string; callerLast4: string; encryptedContent: string; adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }> }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request, `/hubs/${HUB}/calls/history?limit=100`, admin.seedHex,
   )
   expect(status).toBe(200)
   expect(data.calls).toHaveLength(DEMO_CALLS.length)
   for (const call of data.calls) {
-    const envelope = call.adminEnvelopes.find(e => e.pubkey === admin.pubkey)
-    expect(envelope, `admin envelope for ${call.callId}`).toBeDefined()
-    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
+    const envelope = call.adminEnvelopes?.find(e => e.pubkey === admin.pubkey)
+    expect(envelope, `admin envelope for ${call.id}`).toBeDefined()
+    expect(call.encryptedContent, `encrypted metadata for ${call.id}`).toBeTruthy()
+    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent!, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
     expect(meta.callerNumber).toBe(`+1555555${call.callerLast4}`)
     expect(meta.callerNumber).toMatch(/^\+155555501\d\d$/)
   }

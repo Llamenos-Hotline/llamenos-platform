@@ -14,7 +14,6 @@ import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.CreateHubRequest
 import org.llamenos.hotline.model.CreateHubResponse
 import org.llamenos.hotline.model.Hub
-import org.llamenos.hotline.model.HubsListResponse
 import javax.inject.Inject
 
 /**
@@ -72,7 +71,7 @@ class HubManagementViewModel @Inject constructor(
                 )
             }
             try {
-                val response = apiService.request<HubsListResponse>("GET", "/api/hubs")
+                val response = apiService.getHubs()
                 _uiState.update {
                     it.copy(
                         hubs = response.hubs,
