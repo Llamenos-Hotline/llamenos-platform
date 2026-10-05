@@ -425,7 +425,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
 
   3. Encrypt content with AES-256-GCM:
      iv = random(12)
-     ciphertext_with_tag = AES-256-GCM.encrypt(note_key, iv, UTF-8(json_string))
+     ciphertext_with_tag = AES-256-GCM.encrypt(note_key, iv, UTF-8(json_string), aad = UTF-8("llamenos:note-key"))
      // ciphertext_with_tag: variable length + 16-byte GCM tag appended
      encrypted_content = hex(iv || ciphertext_with_tag)
 
@@ -434,7 +434,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
        recipientPk = hex_to_bytes(author_x25519_pubkey_hex),
        plaintext   = note_key,
        info        = UTF-8("llamenos:note-key"),
-       aad         = empty
+       aad         = UTF-8("llamenos:note-key:key-wrap")
      )
      author_envelope = {
        enc: hex(author_sealed[0..32]),   // 32-byte HPKE encapsulated key → 64 hex chars
@@ -448,7 +448,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
          recipientPk = hex_to_bytes(admin_x25519_pubkey_hex),
          plaintext   = note_key,
          info        = UTF-8("llamenos:note-key"),
-         aad         = empty
+         aad         = UTF-8("llamenos:note-key:key-wrap")
        )
        admin_envelopes.push({
          pubkey: admin_x25519_pubkey_hex,   // 64 hex chars
@@ -477,7 +477,7 @@ decryptNoteV2(encrypted_content_hex, envelope: KeyEnvelope, device_x25519_secret
        enc         = enc_bytes,
        ciphertext  = ct_bytes,
        info        = UTF-8("llamenos:note-key"),
-       aad         = empty
+       aad         = UTF-8("llamenos:note-key:key-wrap")
      )
      // note_key: 32 bytes
 
@@ -485,7 +485,7 @@ decryptNoteV2(encrypted_content_hex, envelope: KeyEnvelope, device_x25519_secret
      data = hex_to_bytes(encrypted_content_hex)
      iv   = data[0..12]
      ciphertext_with_tag = data[12..]
-     plaintext = AES-256-GCM.decrypt(note_key, iv, ciphertext_with_tag)
+     plaintext = AES-256-GCM.decrypt(note_key, iv, ciphertext_with_tag, aad = UTF-8("llamenos:note-key"))
 
   3. Parse JSON:
      json_string = UTF-8_decode(plaintext)
@@ -529,12 +529,12 @@ encryptMessage(plaintext_string, reader_x25519_pubkey_hexes[]):
   1. Generate per-message symmetric key:
      message_key = random(32)
 
-  2. Encrypt content with AES-256-GCM:
+  2. Encrypt content with AES-256-GCM (NO AAD — stored-record format, #1393):
      iv = random(12)
      ciphertext_with_tag = AES-256-GCM.encrypt(
        key     = message_key,
        iv      = iv,
-       aad     = UTF-8("llamenos:message"),
+       aad     = empty,
        message = UTF-8(plaintext_string)
      )
      encrypted_content = hex(iv || ciphertext_with_tag)
@@ -546,7 +546,7 @@ encryptMessage(plaintext_string, reader_x25519_pubkey_hexes[]):
          recipientPk = hex_to_bytes(reader_x25519_pubkey_hex),
          plaintext   = message_key,
          info        = UTF-8("llamenos:message"),
-         aad         = UTF-8("llamenos:message:key-wrap")
+         aad         = empty
        )
        reader_envelopes.push({
          pubkey: reader_x25519_pubkey_hex,   // 64 hex chars
@@ -560,6 +560,19 @@ encryptMessage(plaintext_string, reader_x25519_pubkey_hexes[]):
        readerEnvelopes:  reader_envelopes     // RecipientEnvelope[] { pubkey, enc, ct }
      }
 ```
+
+> **Stored records carry no AAD (#1393).** Messages are sealed by two different
+> writers — the server (inbound webhooks) and clients (outbound replies) — and
+> the two share a conversation with no format marker, so a reader cannot tell
+> which AAD to supply. The only AAD a reader can supply is therefore empty, and
+> the label is bound as the HPKE `info` instead (enforced at open). This is
+> implemented canonically in `apps/worker/lib/crypto.ts` (`NO_AAD`), Rust
+> `open_record_for_reader`, mobile `mobile_decrypt_message`, and the desktop
+> client's `encryptMessage`/`decryptMessage`. The canonical non-empty AAD pair
+> from §2.3 is for notes, files, and contact identifiers only — never for
+> `LABEL_MESSAGE` or `LABEL_CALL_META`. (This section previously specified
+> `UTF-8(label)` / `UTF-8("{label}:key-wrap")` here; that spelling is retired
+> and must be refused, not accepted.)
 
 #### Decryption
 
@@ -578,7 +591,7 @@ decryptMessage(encrypted_content_hex, reader_envelopes[], device_x25519_secret_k
        enc         = enc_bytes,
        ciphertext  = ct_bytes,
        info        = UTF-8("llamenos:message"),
-       aad         = UTF-8("llamenos:message:key-wrap")
+       aad         = empty
      )
 
   3. Decrypt content with AES-256-GCM:
@@ -588,7 +601,7 @@ decryptMessage(encrypted_content_hex, reader_envelopes[], device_x25519_secret_k
      plaintext = AES-256-GCM.decrypt(
        key        = message_key,
        iv         = iv,
-       aad        = UTF-8("llamenos:message"),
+       aad        = empty,
        ciphertext = ciphertext_with_tag
      )
 
@@ -600,8 +613,8 @@ decryptMessage(encrypted_content_hex, reader_envelopes[], device_x25519_secret_k
 When the server receives an inbound message via a messaging webhook (SMS/WhatsApp/Signal), it encrypts the plaintext immediately using the same envelope pattern:
 
 1. Server generates a random `message_key`.
-2. Server encrypts the plaintext with AES-256-GCM (AAD=`UTF-8(LABEL_MESSAGE)`).
-3. Server wraps `message_key` for each authorized reader (assigned volunteer + all admins) via HPKE with `LABEL_MESSAGE`. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
+2. Server encrypts the plaintext with AES-256-GCM with **empty AAD** (stored-record format, see the note above).
+3. Server wraps `message_key` for each authorized reader (assigned volunteer + all admins) via HPKE with `LABEL_MESSAGE` as `info` and **empty AAD**. See `apps/worker/lib/crypto.ts` `encryptMessageForStorage()`.
 4. Plaintext is discarded from memory. The server cannot read stored messages after this point.
 
 ### 2.5 Call Record Metadata Encryption
@@ -636,7 +649,7 @@ encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
   3. ciphertext_with_tag = AES-256-GCM.encrypt(
        key     = record_key,
        iv      = iv,
-       aad     = UTF-8("llamenos:call-meta"),
+       aad     = empty,
        message = UTF-8(JSON.stringify(metadata_object))
      )
   4. encrypted_content = hex(iv || ciphertext_with_tag)
@@ -645,7 +658,7 @@ encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
          recipientPk = hex_to_bytes(pk),
          plaintext   = record_key,
          info        = UTF-8("llamenos:call-meta"),
-         aad         = UTF-8("llamenos:call-meta:key-wrap")
+         aad         = empty
        )
        return {
          pubkey: pk,
@@ -656,7 +669,7 @@ encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
   6. Return { encryptedContent, adminEnvelopes }
 ```
 
-Decryption: `HPKE.Open(device_x25519_secret_key, enc_bytes, ct_bytes, info=UTF-8("llamenos:call-meta"), aad=UTF-8("llamenos:call-meta:key-wrap"))` returns `record_key`. Then AES-256-GCM decrypt using `iv = data[0..12]`, `aad = UTF-8("llamenos:call-meta")`.
+Decryption: `HPKE.Open(device_x25519_secret_key, enc_bytes, ct_bytes, info=UTF-8("llamenos:call-meta"), aad=empty)` returns `record_key`. Then AES-256-GCM decrypt using `iv = data[0..12]`, `aad = empty`. Call records are stored records — the same no-AAD format as §2.4.
 
 ### 2.6 Key Storage (PIN-Encrypted)
 

@@ -19,7 +19,7 @@ import {
   createHubViaApi,
   createShiftViaApi,
   createVolunteerViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   listAuditLogViaApi,
   setFallbackGroupViaApi,
 } from '../../api-helpers'
@@ -41,7 +41,7 @@ function secondHubId(world: Record<string, unknown>): string {
 
 After({ tags: '@demo-mode' }, async ({ request, world }) => {
   const id = getState<string | undefined>(world, SECOND_HUB_KEY)
-  if (id) await deleteHubViaApi(request, id).catch(() => {})
+  if (id) await deleteHubViaApiIfPresent(request, id)
 })
 
 function demoPath(hubId: string, suffix: string): string {
@@ -111,7 +111,7 @@ After({ tags: '@demo-mode' }, async ({ request }) => {
     instanceFallbackDirty = false
     await setFallbackGroupViaApi(request, [])
   }
-  for (const hubId of extraHubIds.splice(0)) await deleteHubViaApi(request, hubId).catch(() => {})
+  for (const hubId of extraHubIds.splice(0)) await deleteHubViaApiIfPresent(request, hubId)
 })
 
 Given('a volunteer is in the instance-wide fallback group', async ({ request, world }) => {

@@ -21,7 +21,7 @@ import {
   createUserViaApi,
   createRoleViaApi,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   addHubMemberViaApi,
   generateTestKeypair,
   ADMIN_SEED,
@@ -107,7 +107,7 @@ Before({ tags: '@backend' }, async ({ world }) => {
 After({ tags: '@backend' }, async ({ request, world }) => {
   const s = getS(world)
   if (s.secondHubId) {
-    await deleteHubViaApi(request, s.secondHubId).catch(() => {})
+    await deleteHubViaApiIfPresent(request, s.secondHubId)
   }
 })
 

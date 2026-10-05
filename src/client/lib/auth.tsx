@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { ensureDeviceRegistered, resetDeviceRegistrationCache } from '@/lib/device-registration'
 import { useTranslation } from 'react-i18next'
 import {
   deviceImportAndLoad,
@@ -129,6 +130,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOnApiActivity(markActivity)
     return () => setOnApiActivity(null)
   }, [markActivity])
+
+  // Register this device's X25519 encryption key with the server.
+  //
+  // Nothing can HPKE-wrap a message, transcription or call record to a user
+  // whose devices carry no X25519 key, and before this the desktop registered
+  // no device at all — so every server-written envelope reached the client with
+  // no envelope addressed to it and rendered as `[Encrypted]`.
+  //
+  // Runs once authenticated AND unlocked, because the key lives in Rust
+  // CryptoState and `getDevicePubkeys()` returns null while locked.
+  useEffect(() => {
+    if (!state.publicKey || !state.isKeyUnlocked) return
+    let cancelled = false
+    ensureDeviceRegistered().catch((err) => {
+      if (cancelled) return
+      // Loud, not fatal: the session is usable, but E2EE content written while
+      // this is failing will not be readable on this device.
+      console.error('[auth] device encryption key registration failed', err)
+    })
+    return () => { cancelled = true }
+  }, [state.publicKey, state.isKeyUnlocked])
 
   // Session expiry warning — check every 60s if idle > 30 min.
   // Server uses sliding expiry (extends 8h on each validated request), so only truly
@@ -509,6 +531,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Revoke server-side session token before clearing local state
     apiLogout()
     keyManager.lock()
+    resetDeviceRegistrationCache()
     sessionStorage.removeItem('llamenos-session-token')
     // Clean up encrypted drafts from localStorage
     const draftKeys = Object.keys(localStorage).filter(k => k.startsWith('llamenos-draft:'))

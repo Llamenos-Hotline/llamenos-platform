@@ -1,27 +1,33 @@
 /**
  * The one definition of an envelope's additional authenticated data (AAD).
  *
- * `docs/protocol/PROTOCOL.md` §2.4 specifies two distinct, non-empty AAD
- * values for every envelope-pattern ciphertext:
+ * Two AAD conventions coexist, adjudicated on main (#1393):
  *
- *   content  (AES-256-GCM) : aad = UTF-8(label)
- *   key wrap (HPKE)        : aad = UTF-8(`${label}:key-wrap`)
+ *   Canonical (notes, files, contact identifiers):
+ *     content  (AES-256-GCM) : aad = UTF-8(label)
+ *     key wrap (HPKE)        : aad = UTF-8(`${label}:key-wrap`)
+ *     with the label additionally bound as the HPKE `info` (the Albrecht
+ *     defense, enforced at open by `packages/crypto/src/hpke_envelope.rs`).
+ *     Rust `encrypt_note` / `hpke_wrap_key` and the mobile FFI exports bind
+ *     exactly this — a call site passing empty AAD beside one of those labels
+ *     is the #1517-family defect.
  *
- * with the label additionally bound as the HPKE `info` (the Albrecht defense,
- * enforced at open by `packages/crypto/src/hpke_envelope.rs`). The two AADs
- * must differ: `hpkeSeal` is used both to carry content directly and to wrap a
- * content key under the *same* label, and only the AAD separates those two
- * meanings.
+ *   Stored records (conversation messages, call metadata): NO AAD on either
+ *     layer, label as HPKE `info` only. Client-sealed and server-sealed
+ *     messages share a conversation with no format marker, so a reader cannot
+ *     tell which AAD to supply — the reader's only viable AAD is empty. This
+ *     is implemented canonically in `apps/worker/lib/crypto.ts` (`NO_AAD`),
+ *     Rust `open_record_for_reader`, and the mobile `mobile_decrypt_message`.
+ *     Do NOT derive an AAD from this module for LABEL_MESSAGE or
+ *     LABEL_CALL_META.
  *
- * Before this module the rule was written out by hand on each side, and the
- * two hands disagreed: the server derived both AADs (`apps/worker/lib/crypto.ts`),
- * the desktop passed empty for both (`src/client/lib/platform.ts`). Every
- * message the server wrote was therefore undecryptable by every desktop
- * client, failing the HPKE tag check first and the AES-GCM tag check second.
- *
- * Two implementations of a wire format is the defect. There is now one, and
- * both sides import it. Anything that needs an AAD must call these functions —
- * never re-spell `${label}:key-wrap` at a call site.
+ * Before this module the canonical rule was written out by hand on each side,
+ * and the two hands disagreed: the server derived both AADs while the desktop
+ * passed empty for both, so every message the server wrote was undecryptable
+ * by every desktop client (#1456, `[Encrypted]`). Two implementations of a
+ * wire format is the defect. There is now one, and every party imports it.
+ * Anything that needs a canonical AAD must call these functions — never
+ * re-spell `${label}:key-wrap` at a call site.
  */
 import { utf8ToBytes, bytesToHex } from './encoding'
 

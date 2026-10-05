@@ -1,5 +1,5 @@
 {
-  "id": "6dcf5c36-74f8-41f1-bc19-8810f039df63",
+  "id": "c8bfd292-ea8b-4244-b18b-fa957c0d9cb7",
   "prevId": "cf9b3e2b-52c3-4ed3-a0c1-d07c4f2770e9",
   "version": "7",
   "dialect": "postgresql",
@@ -3007,6 +3007,13 @@
           "notNull": true,
           "default": 72
         },
+        "hub_shred_delay_hours": {
+          "name": "hub_shred_delay_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 48
+        },
         "emergency_override_enabled": {
           "name": "emergency_override_enabled",
           "type": "boolean",
@@ -3046,11 +3053,30 @@
           "primaryKey": true,
           "notNull": true
         },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'user'"
+        },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "hub_id": {
+          "name": "hub_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previous_status": {
+          "name": "previous_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",
@@ -3132,6 +3158,21 @@
           "method": "btree",
           "with": {}
         },
+        "erasure_requests_hub_id_idx": {
+          "name": "erasure_requests_hub_id_idx",
+          "columns": [
+            {
+              "expression": "hub_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "erasure_requests_status_idx": {
           "name": "erasure_requests_status_idx",
           "columns": [
@@ -3167,7 +3208,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "erasure_requests_scope_subject": {
+          "name": "erasure_requests_scope_subject",
+          "value": "(scope = 'user' AND user_id IS NOT NULL AND hub_id IS NULL)\n       OR (scope = 'hub'  AND hub_id  IS NOT NULL AND user_id IS NULL)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.re_encryption_jobs": {
@@ -3180,11 +3226,18 @@
           "primaryKey": true,
           "notNull": true
         },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'user'"
+        },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "hub_id": {
           "name": "hub_id",
@@ -5394,6 +5447,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "hub_key_generation": {
+          "name": "hub_key_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -7368,7 +7428,7 @@
               "nulls": "last"
             }
           ],
-          "isUnique": true,
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}

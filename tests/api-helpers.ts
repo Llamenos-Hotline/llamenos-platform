@@ -255,8 +255,29 @@ export async function deleteHubViaApi(
 ): Promise<void> {
   const { status } = await apiDelete(request, `/hubs/${hubId}`)
   if (status !== 200 && status !== 204) {
-    // Non-fatal: log but don't throw — teardown should not fail tests
-    console.warn(`Failed to delete hub ${hubId}: ${status}`)
+    // Loud on purpose (#1502). This used to console.warn, which made a hub
+    // that would not delete indistinguishable from one that did — no suite
+    // could observe the broken files.conversation_id cascade, for two
+    // releases. Teardown that genuinely may race a delete should use
+    // deleteHubViaApiIfPresent, which tolerates 404 and nothing else.
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
+  }
+}
+
+/**
+ * Teardown for a hub the scenario itself may already have deleted.
+ *
+ * Tolerates 404 and NOTHING else: a hub that is gone is fine, a hub the server
+ * refuses to delete is still a failure. Prefer `deleteHubViaApi` whenever the
+ * hub is certain to exist.
+ */
+export async function deleteHubViaApiIfPresent(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<void> {
+  const { status } = await apiDelete(request, `/hubs/${hubId}`)
+  if (status !== 200 && status !== 204 && status !== 404) {
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
   }
 }
 
@@ -1500,7 +1521,7 @@ export async function createContactByNameViaApi(
   // Encrypt the summary the way the desktop client's encryptMessage does, for
   // the admin reader, so the directory renders the contact instead of the
   // "Restricted" placeholder (issue #796).
-  const { encryptedContent: encryptedSummary, readerEnvelopes } = encryptMessageForDesktop(
+  const { encryptedContent: encryptedSummary, readerEnvelopes } = await encryptMessageForDesktop(
     JSON.stringify({ displayName, contactType, tags: [] }),
     [seedHex],
   )
