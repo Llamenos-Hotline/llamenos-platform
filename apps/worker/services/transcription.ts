@@ -3,7 +3,6 @@ import type { Services } from '../services'
 import { getTelephonyFromService } from '../lib/service-factories'
 import { encryptMessageForStorage } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
-import { adminHpkeRecipient } from '../lib/hpke-recipient'
 
 const logger = createLogger('services.transcription')
 
@@ -40,12 +39,15 @@ export async function maybeTranscribe(
 
     if (result.text) {
       // Envelope encryption: single ciphertext, wrapped key for user + admin.
-      // The admin reader is the X25519 recipient or nothing — ADMIN_PUBKEY is
-      // an Ed25519 signing key and sealing to it would make this transcript
-      // unreadable by everyone, silently (#1283).
-      const adminPubkey = adminHpkeRecipient(env)
-      const readerPubkeys = [userPubkey]
-      if (adminPubkey && adminPubkey !== userPubkey) readerPubkeys.push(adminPubkey)
+      // #1283: no `|| env.ADMIN_PUBKEY` fallback — that is the Ed25519 signing
+      // key, not an HPKE recipient. #1021: `userPubkey` is the answering
+      // volunteer's Ed25519 auth key (it comes from `calls.answeredBy`), so it
+      // is resolved to their devices' X25519 encryption keys rather than
+      // sealed to directly.
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [userPubkey],
+      )
 
       const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
@@ -96,12 +98,15 @@ export async function transcribeVoicemail(
       // Voicemails: envelope encryption for admin only. With no admin HPKE
       // recipient configured there is no reader at all, and storing a
       // ciphertext nobody can open is worse than not transcribing (#1283).
-      const adminPubkey = adminHpkeRecipient(env)
-      if (!adminPubkey) {
+      const readerPubkeys = await services.identity.buildReaderPubkeys(
+        env.ADMIN_DECRYPTION_PUBKEY,
+        [],
+      )
+      if (readerPubkeys.length === 0) {
         logger.warn('Voicemail transcription skipped: no ADMIN_DECRYPTION_PUBKEY, so no reader could open it', { callSid })
         return
       }
-      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, [adminPubkey])
+      const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(result.text, readerPubkeys)
       await services.records.createNote({
         callId: callSid,
         authorPubkey: 'system:voicemail',
