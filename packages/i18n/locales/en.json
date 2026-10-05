@@ -1745,6 +1745,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Take a Break",
     "help": "Help",
@@ -2382,6 +2383,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "Encrypted content in this hub can't be opened on this device yet",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2394,6 +2396,7 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "Tap a hub to switch your active context. The active hub determines which data you see.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
@@ -2420,6 +2423,8 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2480,7 +2485,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -4660,5 +4667,17 @@
     "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
     "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
     "voicemailThanks": "Thank you for your message. Goodbye."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

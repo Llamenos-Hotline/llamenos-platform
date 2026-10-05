@@ -37,6 +37,7 @@ type RecordLike = {
   assignedTo: string[]
   entityTypeId?: string
   caseNumber?: string
+  hubId?: string
 }
 
 function makeApp(opts: {
@@ -44,6 +45,8 @@ function makeApp(opts: {
   pubkey?: string
   record?: RecordLike
   hubId?: string
+  users?: Array<{ pubkey: string; active: boolean; roles: string[]; hubRoles: { hubId: string; roleIds: string[] }[] }>
+  roles?: Array<{ id: string; slug: string; permissions: string[] }>
 } = {}) {
   const {
     permissions = ['cases:read-all', 'cases:create', 'cases:update', 'cases:delete', 'cases:assign', 'cases:link'],
@@ -51,12 +54,14 @@ function makeApp(opts: {
     record = { id: 'rec-1', createdBy: 'owner-pub', assignedTo: ['assignee-pub'], entityTypeId: 'et-1' },
     hubId = 'hub-1',
   } = opts
+  // Records live in the app's hub unless a test says otherwise
+  const hubRecord = { hubId, ...opts.record ?? record }
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockCases = {
     list: vi.fn().mockResolvedValue({ records: [], total: 0 }),
-    get: vi.fn().mockResolvedValue(record),
-    getByNumber: vi.fn().mockResolvedValue(record),
+    get: vi.fn().mockResolvedValue(hubRecord),
+    getByNumber: vi.fn().mockResolvedValue(hubRecord),
     create: vi.fn().mockResolvedValue(record),
     update: vi.fn().mockResolvedValue(record),
     delete: vi.fn().mockResolvedValue(undefined),
@@ -79,10 +84,10 @@ function makeApp(opts: {
   const mockSettings = {
     getEntityTypeById: vi.fn().mockResolvedValue({ id: 'et-1', numberingEnabled: false }),
     generateCaseNumber: vi.fn().mockResolvedValue({ number: 'CASE-001' }),
-    getRoles: vi.fn().mockResolvedValue({ roles: [] }),
+    getRoles: vi.fn().mockResolvedValue({ roles: opts.roles ?? [] }),
   }
   const mockIdentity = {
-    getUsers: vi.fn().mockResolvedValue({ users: [] }),
+    getUsers: vi.fn().mockResolvedValue({ users: opts.users ?? [] }),
   }
   const mockShifts = {
     getCurrentVolunteers: vi.fn().mockResolvedValue([]),
@@ -423,5 +428,68 @@ describe('GET /records/by-contact/:contactId — IDOR hub isolation', () => {
     expect(body.records).toHaveLength(0)
     // listByContact must have been called with hub-B, not hub-A
     expect(mockCases.listByContact).toHaveBeenCalledWith('contact-1', 'hub-B')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub isolation (#1037) — a record of another hub is invisible from this hub
+// ---------------------------------------------------------------------------
+
+describe('records — hub isolation', () => {
+  const foreign = { id: 'rec-a', createdBy: 'owner', assignedTo: [], entityTypeId: 'et-1', hubId: 'hub-A' }
+
+  it.each([
+    ['GET', '/rec-a'],
+    ['PATCH', '/rec-a'],
+    ['DELETE', '/rec-a'],
+    ['GET', '/rec-a/envelope-recipients'],
+    ['POST', '/rec-a/assign'],
+    ['GET', '/rec-a/contacts'],
+  ])('%s %s returns 404 for a record of another hub', async (method, path) => {
+    const { app, mockCases } = makeApp({ hubId: 'hub-B', record: foreign })
+    const res = await app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(method === 'GET' || method === 'DELETE' ? {} : { body: JSON.stringify({ pubkeys: ['x'] }) }),
+    })
+    expect(res.status).toBe(404)
+    expect(mockCases.update).not.toHaveBeenCalled()
+    expect(mockCases.delete).not.toHaveBeenCalled()
+    expect(mockCases.assign).not.toHaveBeenCalled()
+  })
+
+  it('GET /by-number/:number returns 404 for a record of another hub', async () => {
+    const { app } = makeApp({ hubId: 'hub-B', record: { ...foreign, caseNumber: 'CASE-1' } })
+    const res = await app.request('/by-number/CASE-1')
+    expect(res.status).toBe(404)
+  })
+
+  it('names only members of the record\'s hub (and super-admins) as envelope recipients', async () => {
+    const roles = [
+      { id: 'role-super-admin', slug: 'super-admin', permissions: ['*'] },
+      { id: 'role-hub-admin', slug: 'hub-admin', permissions: ['cases:*'] },
+      { id: 'role-volunteer', slug: 'volunteer', permissions: ['cases:read-own'] },
+    ]
+    const users = [
+      { pubkey: 'member-admin', active: true, roles: [], hubRoles: [{ hubId: 'hub-B', roleIds: ['role-hub-admin'] }] },
+      // Admin of ANOTHER hub, and a legacy global hub-admin: neither may receive hub-B keys
+      { pubkey: 'other-hub-admin', active: true, roles: [], hubRoles: [{ hubId: 'hub-A', roleIds: ['role-hub-admin'] }] },
+      { pubkey: 'global-hub-admin', active: true, roles: ['role-hub-admin'], hubRoles: [] },
+      { pubkey: 'super', active: true, roles: ['role-super-admin'], hubRoles: [] },
+    ]
+    const { app } = makeApp({
+      hubId: 'hub-B',
+      record: { id: 'rec-b', createdBy: 'member-admin', assignedTo: [], entityTypeId: 'et-1' },
+      users,
+      roles,
+    })
+    const res = await app.request('/rec-b/envelope-recipients')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { summary: string[]; fields: string[]; pii: string[] }
+    const everyone = new Set([...body.summary, ...body.fields, ...body.pii])
+    expect(everyone.has('member-admin')).toBe(true)
+    expect(everyone.has('super')).toBe(true)
+    expect(everyone.has('other-hub-admin')).toBe(false)
+    expect(everyone.has('global-hub-admin')).toBe(false)
   })
 })

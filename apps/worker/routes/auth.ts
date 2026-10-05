@@ -11,7 +11,7 @@ import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { getPrimaryRole } from '@shared/permissions'
+import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
@@ -73,7 +73,8 @@ auth.post('/login',
         return c.json({ ok: true, roles: ['role-super-admin'] })
       }
 
-      return c.json({ ok: true, roles: volunteer.roles })
+      // Account-wide, like /auth/me — never used to authorise.
+      return c.json({ ok: true, roles: resolveAllRoleIds(volunteer.roles, volunteer.hubRoles ?? []) })
     } catch {
       return c.json({ error: 'Authentication failed' }, 401)
     }
@@ -153,8 +154,15 @@ auth.get('/me',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const user = c.get('user')
-    const permissions = c.get('permissions')
     const allRoles = c.get('allRoles')
+
+    // Describes the account for client UI gating: everything the user holds,
+    // globally or in any hub. A member whose roles are all hub-scoped (hub
+    // invites, hub user creation — #1037) would otherwise look role-less.
+    // The server never authorises from this set: inside a hub the hub's own
+    // assignment applies (middleware/hub.ts), outside one the global roles.
+    const accountRoleIds = resolveAllRoleIds(user.roles, user.hubRoles ?? [])
+    const permissions = resolvePermissions(accountRoleIds, allRoles)
 
     const { credentials: webauthnCreds } = await services.identity.getWebAuthnCredentials(pubkey)
     const webauthnSettings = await services.identity.getWebAuthnSettings()
@@ -162,7 +170,7 @@ auth.get('/me',
     const isAdmin = checkPermission(permissions, 'settings:manage')
     const webauthnRequired = isAdmin ? webauthnSettings.requireForAdmins : webauthnSettings.requireForUsers
 
-    const primaryRole = getPrimaryRole(user.roles, allRoles)
+    const primaryRole = getPrimaryRole(accountRoleIds, allRoles)
 
     // Derive epoch-scoped server event key for client-side decryption (H1 + H5 fix)
     // Key changes each epoch for forward secrecy. Client receives current + previous epoch keys.
@@ -182,7 +190,10 @@ auth.get('/me',
 
     return c.json({
       pubkey: user.pubkey,
-      roles: user.roles,
+      // Same account-wide set as `permissions` and `primaryRole`: a member
+      // whose only roles are hub-scoped must not look role-less — clients
+      // treat an empty role list as "no account" and sign the user out.
+      roles: accountRoleIds,
       permissions,
       primaryRole: primaryRole ? { id: primaryRole.id, name: primaryRole.name, slug: primaryRole.slug } : null,
       name: user.name,

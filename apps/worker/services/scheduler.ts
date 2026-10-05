@@ -38,6 +38,7 @@ import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
+import type { HubShredService } from './hub-shred'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
@@ -64,6 +65,9 @@ export interface TaskSchedulerDeps {
   auditService: AuditService
   erasureService: ErasureService
   identityService: IdentityService
+  // Optional, as upstream declares it: the erasure-expiry worker treats
+  // the hub crypto-shred step as opt-in and skips it when absent.
+  hubShred?: HubShredService
 }
 
 export class TaskScheduler {
@@ -111,6 +115,7 @@ export class TaskScheduler {
       startErasureExpiryWorker({
         erasureService: deps.erasureService,
         auditService: deps.auditService,
+        hubShred: deps.hubShred,
       })
 
       startReEncryptionWorker({

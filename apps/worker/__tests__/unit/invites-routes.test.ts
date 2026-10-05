@@ -13,12 +13,14 @@ import type { AppEnv } from '@worker/types/infra'
 // ---------------------------------------------------------------------------
 
 const mockVerifyAuthToken = vi.fn()
+const mockConsumeAuthToken = vi.fn()
 const mockCheckRateLimit = vi.fn().mockResolvedValue(false)
 const mockHashIP = vi.fn().mockReturnValue('hashed')
 const mockAudit = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('@worker/lib/auth', () => ({
   verifyAuthToken: (...args: unknown[]) => mockVerifyAuthToken(...args),
+  consumeAuthToken: (...args: unknown[]) => mockConsumeAuthToken(...args),
 }))
 
 vi.mock('@worker/lib/helpers', () => ({
@@ -74,7 +76,7 @@ const allRoles = [
 function createApp(
   permissions: string[] = ['invites:read', 'invites:create', 'invites:revoke'],
   user: { pubkey: string; roles: string[]; hubRoles?: Array<{ hubId: string; roleIds: string[] }> } =
-    { pubkey: 'creator-pk', roles: ['role-hub-admin'] },
+    { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-hub-admin'] }] },
 ) {
   const app = new Hono<AppEnv>()
   const services = {
@@ -120,7 +122,8 @@ const defaultEnv = { HMAC_SECRET: 'test' } as never
 describe('invites routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockVerifyAuthToken.mockResolvedValue(true)
+    mockVerifyAuthToken.mockReturnValue(true)
+    mockConsumeAuthToken.mockResolvedValue(true)
     mockCheckRateLimit.mockResolvedValue(false)
   })
 
@@ -162,7 +165,7 @@ describe('invites routes', () => {
     })
 
     it('rejects invalid signature', async () => {
-      mockVerifyAuthToken.mockResolvedValue(false)
+      mockVerifyAuthToken.mockReturnValue(false)
       const { app } = createApp()
 
       const res = await app.request('/invites/redeem', {
@@ -183,7 +186,7 @@ describe('invites routes', () => {
 
     it('rate limits redemption attempts', async () => {
       // Signature check happens first, then rate limit
-      mockVerifyAuthToken.mockResolvedValue(true)
+      mockVerifyAuthToken.mockReturnValue(true)
       mockCheckRateLimit.mockResolvedValue(true)
       const { app } = createApp()
 
@@ -199,6 +202,36 @@ describe('invites routes', () => {
       }, defaultEnv)
 
       expect(res.status).toBe(429)
+    })
+
+    it('verifies the signed nonce and consumes the token before redeeming', async () => {
+      const { app, services } = createApp()
+      const body = { code: 'INV-123', pubkey: 'new-user', timestamp: Date.now(), token: 'valid-sig', nonce: 'ab'.repeat(16) }
+
+      const res = await app.request('/invites/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      const authPayload = { pubkey: body.pubkey, timestamp: body.timestamp, token: body.token, nonce: body.nonce }
+      expect(mockVerifyAuthToken).toHaveBeenCalledWith(authPayload, 'POST', '/invites/redeem', { allowMissingNonce: true })
+      expect(mockConsumeAuthToken).toHaveBeenCalledWith(authPayload, services.identity)
+    })
+
+    it('rejects a replayed token without redeeming', async () => {
+      mockConsumeAuthToken.mockResolvedValue(false)
+      const { app, services } = createApp()
+
+      const res = await app.request('/invites/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'INV-123', pubkey: 'new-user', timestamp: Date.now(), token: 'valid-sig' }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(401)
+      expect(services.identity.redeemInvite).not.toHaveBeenCalled()
     })
   })
 
@@ -298,7 +331,10 @@ describe('invites routes', () => {
     })
 
     it('honours an explicitly named hub when the server has several', async () => {
-      const { app, services } = createApp(['*'])
+      const { app, services } = createApp(
+        ['*'],
+        { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-hub-admin'] }] },
+      )
       services.settings.getHubs.mockResolvedValue({
         hubs: [{ id: 'hub-a', status: 'active' }, { id: 'hub-b', status: 'active' }],
       })
