@@ -255,8 +255,29 @@ export async function deleteHubViaApi(
 ): Promise<void> {
   const { status } = await apiDelete(request, `/hubs/${hubId}`)
   if (status !== 200 && status !== 204) {
-    // Non-fatal: log but don't throw — teardown should not fail tests
-    console.warn(`Failed to delete hub ${hubId}: ${status}`)
+    // Loud on purpose (#1502). This used to console.warn, which made a hub
+    // that would not delete indistinguishable from one that did — no suite
+    // could observe the broken files.conversation_id cascade, for two
+    // releases. Teardown that genuinely may race a delete should use
+    // deleteHubViaApiIfPresent, which tolerates 404 and nothing else.
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
+  }
+}
+
+/**
+ * Teardown for a hub the scenario itself may already have deleted.
+ *
+ * Tolerates 404 and NOTHING else: a hub that is gone is fine, a hub the server
+ * refuses to delete is still a failure. Prefer `deleteHubViaApi` whenever the
+ * hub is certain to exist.
+ */
+export async function deleteHubViaApiIfPresent(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<void> {
+  const { status } = await apiDelete(request, `/hubs/${hubId}`)
+  if (status !== 200 && status !== 204 && status !== 404) {
+    throw new Error(`Failed to delete hub ${hubId}: ${status}`)
   }
 }
 
@@ -494,9 +515,18 @@ export interface CreateUserResult {
 /** @deprecated Use CreateUserResult instead */
 export type CreateVolunteerResult = CreateUserResult
 
+/**
+ * Create a user as the admin.
+ *
+ * With `hubId`, the user is created as a MEMBER of that hub (`POST /hubs/:hubId/users`):
+ * `roleIds` become their role assignment in that hub (and, per the server's current
+ * semantics, their global roles too). Without it, `roleIds` are GLOBAL roles only,
+ * which carry no authority inside any hub unless one of them is super-admin (#1037) —
+ * use `hubId` for any actor that acts in a hub.
+ */
 export async function createUserViaApi(
   request: APIRequestContext,
-  options?: { name?: string; phone?: string; roleIds?: string[] },
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
 ): Promise<CreateUserResult> {
   const name = options?.name ?? uniqueName('TestUser')
   const phone = options?.phone ?? uniquePhone()
@@ -504,7 +534,8 @@ export async function createUserViaApi(
 
   const { seedHex, pubkey } = generateTestKeypair()
 
-  const { status, data } = await apiPost(request, '/users', {
+  const path = options?.hubId ? `/hubs/${options.hubId}/users` : '/users'
+  const { status, data } = await apiPost(request, path, {
     name, phone, roleIds, pubkey,
   })
 
@@ -515,8 +546,67 @@ export async function createUserViaApi(
   return { pubkey, seedHex, nsec: seedHex, deviceKey: seedHex, name, phone }
 }
 
-/** @deprecated Use createUserViaApi instead */
-export const createVolunteerViaApi = createUserViaApi
+/**
+ * Register a device carrying this identity's X25519 encryption key.
+ *
+ * Uses the real `POST /devices/register` route — no test-only backdoor. The
+ * X25519 key is `x25519PubkeyFromSeed(seedHex)`, matching the convention every
+ * backend BDD helper uses to unwrap envelopes (`unwrapKey` treats the seed as
+ * the X25519 secret scalar).
+ */
+export async function registerDeviceKeyViaApi(
+  request: APIRequestContext,
+  seedHex: string,
+): Promise<string> {
+  const x25519Pubkey = x25519PubkeyFromSeed(seedHex)
+  const { status, data } = await apiPost(
+    request,
+    '/devices/register',
+    {
+      platform: 'ios',
+      // Opaque per-identity token: `registerDevice` keys devices by pushToken,
+      // so a unique one keeps repeat registrations idempotent per identity.
+      pushToken: `test-device-${seedHex.slice(0, 16)}`,
+      wakeKeyPublic: x25519Pubkey,
+      ed25519Pubkey: seedHexToPubkey(seedHex),
+      x25519Pubkey,
+      deviceName: 'backend-bdd',
+    },
+    seedHex,
+  )
+
+  if (status !== 204 && status !== 200) {
+    throw new Error(
+      `Failed to register device encryption key: ${status} ${JSON.stringify(data)}`,
+    )
+  }
+
+  return x25519Pubkey
+}
+
+/**
+ * Create a user who can actually READ their own encrypted data.
+ *
+ * `createUserViaApi` registers an identity: `pubkey` is the Ed25519 AUTH key,
+ * which is NOT an HPKE recipient and which the server must never seal to
+ * (#1021). Server-sealed records — inbound/outbound messages, transcriptions —
+ * resolve their readers through `devices.x25519Pubkey`, so a user with no
+ * device key on file gets no envelope at all.
+ *
+ * This helper adds that missing half, the way a real client does at device
+ * registration. Use it for any role that reads encrypted content (volunteers,
+ * assignees, message authors). Use plain `createUserViaApi` when the scenario
+ * is ABOUT devices and asserts exact device counts — device-lifecycle, PUK
+ * envelope distribution, MLS key packages, the device-cap race.
+ */
+export async function createVolunteerViaApi(
+  request: APIRequestContext,
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
+): Promise<CreateUserResult> {
+  const user = await createUserViaApi(request, options)
+  await registerDeviceKeyViaApi(request, user.seedHex)
+  return user
+}
 
 export async function deleteUserViaApi(
   request: APIRequestContext,
@@ -1431,7 +1521,7 @@ export async function createContactByNameViaApi(
   // Encrypt the summary the way the desktop client's encryptMessage does, for
   // the admin reader, so the directory renders the contact instead of the
   // "Restricted" placeholder (issue #796).
-  const { encryptedContent: encryptedSummary, readerEnvelopes } = encryptMessageForDesktop(
+  const { encryptedContent: encryptedSummary, readerEnvelopes } = await encryptMessageForDesktop(
     JSON.stringify({ displayName, contactType, tags: [] }),
     [seedHex],
   )

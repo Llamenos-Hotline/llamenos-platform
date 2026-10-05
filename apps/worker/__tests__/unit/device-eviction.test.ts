@@ -30,7 +30,7 @@ describe('decideDeviceRegistration', () => {
       makeDevice('d5', newer),
       makeDevice('d6', newer),
     ]
-    const decision = decideDeviceRegistration(devices, 'new-token', 5)
+    const decision = decideDeviceRegistration(devices, { pushToken: 'new-token' }, 5)
     expect(decision.action).toBe('insert')
     if (decision.action === 'insert') {
       expect(decision.evictDeviceId).toBe('d1')
@@ -42,7 +42,7 @@ describe('decideDeviceRegistration', () => {
       makeDevice('d1', new Date(), 'existing-token'),
       makeDevice('d2', new Date()),
     ]
-    const decision = decideDeviceRegistration(devices, 'existing-token')
+    const decision = decideDeviceRegistration(devices, { pushToken: 'existing-token' })
     expect(decision.action).toBe('update_existing')
     if (decision.action === 'update_existing') {
       expect(decision.deviceId).toBe('d1')
@@ -53,7 +53,7 @@ describe('decideDeviceRegistration', () => {
     const devices = Array.from({ length: 5 }, (_, i) =>
       makeDevice(`d${i}`, new Date(`2026-0${i + 1}-01T00:00:00Z`)),
     )
-    const decision = decideDeviceRegistration(devices, 'new-token')
+    const decision = decideDeviceRegistration(devices, { pushToken: 'new-token' })
     expect(decision.action).toBe('insert')
     if (decision.action === 'insert') {
       // d0 has the oldest date (2026-01-01)
@@ -66,7 +66,7 @@ describe('decideDeviceRegistration', () => {
       makeDevice('d1', new Date()),
       makeDevice('d2', new Date()),
     ]
-    const decision = decideDeviceRegistration(devices, 'new-token')
+    const decision = decideDeviceRegistration(devices, { pushToken: 'new-token' })
     expect(decision.action).toBe('insert')
     if (decision.action === 'insert') {
       expect(decision.evictDeviceId).toBeUndefined()
@@ -74,7 +74,7 @@ describe('decideDeviceRegistration', () => {
   })
 
   it('empty device list → plain insert', () => {
-    const decision = decideDeviceRegistration([], 'new-token')
+    const decision = decideDeviceRegistration([], { pushToken: 'new-token' })
     expect(decision.action).toBe('insert')
     if (decision.action === 'insert') {
       expect(decision.evictDeviceId).toBeUndefined()

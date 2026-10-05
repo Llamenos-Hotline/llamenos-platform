@@ -206,9 +206,11 @@ describe('GET /system/health', () => {
     const { app, mockIdentity, mockShifts } = makeApp()
     mockIdentity.getUsers.mockResolvedValue({
       users: [
-        { pubkey: 'pk1', active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
-        { pubkey: 'pk2', active: true, onBreak: true, roles: ['role-volunteer'], hubRoles: [] },
-        { pubkey: 'pk3', active: false, onBreak: false, roles: ['role-volunteer'], hubRoles: [] },
+        // Hub members of the hub the health route rings — global roles alone
+        // carry no authority inside a hub (#1044).
+        { pubkey: 'pk1', active: true, onBreak: false, roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] },
+        { pubkey: 'pk2', active: true, onBreak: true, roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] },
+        { pubkey: 'pk3', active: false, onBreak: false, roles: [], hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] },
       ],
     })
     mockShifts.getCurrentVolunteers.mockResolvedValue(['pk1', 'pk2'])

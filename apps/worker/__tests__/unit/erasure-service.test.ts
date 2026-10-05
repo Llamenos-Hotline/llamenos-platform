@@ -30,6 +30,7 @@ function buildService(coApproverUser: ReturnType<typeof makeAdminUser> | ReturnT
   vi.spyOn(service, 'getConfig').mockResolvedValue({
     hubId: 'hub-1',
     delayHours: 72,
+    hubShredDelayHours: 48,
     emergencyOverrideEnabled: true,
     updatedAt: new Date(),
     updatedBy: 'admin',
