@@ -69,6 +69,14 @@ pub const LABEL_DEVICE_PROVISION: &str = "llamenos:device-provision";
 /// HKDF salt for provisioning key derivation
 pub const LABEL_PROVISIONING_SALT: &str = "llamenos:provisioning:v1";
 
+/// AEAD associated data for the device provisioning key bundle.
+///
+/// Distinct from `LABEL_DEVICE_PROVISION` (which keys the AEAD) so that a
+/// payload from one provisioning bundle format can never authenticate under
+/// another: changing the bundle format means minting a new label, and an
+/// old-format payload simply fails the GCM tag check.
+pub const LABEL_DEVICE_PROVISION_BUNDLE: &str = "llamenos:device-provision-bundle:v1";
+
 // --- SAS Verification ---
 
 /// SAS HKDF salt for provisioning verification
@@ -532,6 +540,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     HMAC_IVR_MEDIA_URL, // 96
     // 97: nonce-less device auth message shape (#1389)
     LABEL_DEVICE_AUTH_NO_NONCE, // 97
+    // 98: Device provisioning key bundle
+    LABEL_DEVICE_PROVISION_BUNDLE, // 98
 ];
 
 /// Look up a label string by its numeric ID.
@@ -709,6 +719,10 @@ mod tests {
         );
         assert_eq!(LABEL_FIREHOSE_REPORT_WRAP, "llamenos:firehose:report-wrap");
         assert_eq!(HMAC_IVR_MEDIA_URL, "llamenos:ivr-media-url:v1");
+        assert_eq!(
+            LABEL_DEVICE_PROVISION_BUNDLE,
+            "llamenos:device-provision-bundle:v1"
+        );
     }
 
     /// Verify registry index stability.
@@ -767,7 +781,9 @@ mod tests {
         assert_eq!(id_to_label(93), Some(LABEL_FIREHOSE_AGENT_SEAL));
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
+        assert_eq!(id_to_label(96), Some(HMAC_IVR_MEDIA_URL));
         assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
+        assert_eq!(id_to_label(98), Some(LABEL_DEVICE_PROVISION_BUNDLE));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).
