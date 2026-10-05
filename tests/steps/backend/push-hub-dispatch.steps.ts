@@ -135,7 +135,7 @@ async function simulatePushDispatch(
 
 Given('a volunteer is registered in the hub', async ({ request, world }) => {
   const state = getScenarioState(world)
-  const vol = await createVolunteerViaApi(request, { name: uniqueName('PushTestVol') })
+  const vol = await createVolunteerViaApi(request, { name: uniqueName('PushTestVol'), hubId: state.hubId })
   getPushState(world).volunteerPubkey = vol.pubkey
   state.volunteers.push({ ...vol, onShift: false })
 })

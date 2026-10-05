@@ -18,6 +18,7 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
+import org.llamenos.hotline.ui.auth.resetForLock
 
 /**
  * Unit tests for AuthViewModel state machine transitions (v3 device key model).
@@ -203,6 +204,28 @@ class AuthViewModelTest {
         assertFalse(state.isConfirmingPin)
         assertFalse(state.pinMismatch)
         assertNull(state.error)
+    }
+
+    @Test
+    fun `lock path clears authenticated state`() {
+        // JVM tests cannot reach isAuthenticated = true through the crypto
+        // paths (native lib hard-fails), so assert the lock transition at its
+        // pure seam: the mapping resetPinEntry applies to the UI state.
+        val locked = AuthUiState(
+            isAuthenticated = true,
+            pin = "12345678",
+            confirmPin = "1234",
+            isConfirmingPin = true,
+            pinMismatch = true,
+            error = "stale",
+        ).resetForLock()
+
+        assertFalse(locked.isAuthenticated)
+        assertEquals("", locked.pin)
+        assertEquals("", locked.confirmPin)
+        assertFalse(locked.isConfirmingPin)
+        assertFalse(locked.pinMismatch)
+        assertNull(locked.error)
     }
 
     @Test
