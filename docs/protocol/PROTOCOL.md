@@ -1451,6 +1451,10 @@ Body: { "signature": hex, "payload": SigchainPayload }
 Response: SigchainEntry
 ```
 
+> Sigchain genesis and canonical-hash rules: see **Section 4.37 Sigchain** —
+> genesis is `seqNo = 1` with `prevHash = null`, and payload numbers must be
+> integers ≤ 2^53.
+
 Hub-scoped variants:
 ```
 GET /api/hubs/:hubId/users
@@ -2674,10 +2678,28 @@ Response: { "links": SigchainLink[] }
 
 POST /api/users/:targetPubkey/sigchain
 Auth: Required (self only)
-Body: { "seqNo": number, "linkType": "genesis"|"device_add"|"device_remove"|"key_rotate"|"puk_epoch", "payload": object, "signature": hex128, "prevHash": hex64|"", "hash": hex64 }
+Body: { "seqNo": number, "linkType": "genesis"|"device_add"|"device_remove"|"key_rotate"|"puk_epoch", "payload": object, "signature": hex128, "prevHash": hex64|null, "hash": hex64 }
 Response: SigchainLink (201)
-Error: 409 on hash-chain continuity violation
+Error: 409 on hash-chain continuity violation, 400 on non-canonical payload
 ```
+
+Canonical rules (binding — the crate verifier in `packages/crypto` is the
+client-side wire contract):
+
+- **Genesis**: the first link has `seqNo = 1` and `prevHash = null` (JSON
+  null, never `""`). Subsequent links have `seqNo = previous + 1` and
+  `prevHash` = the previous link's hash. (`""` is accepted as a legacy alias
+  for `null` and normalized; the canonical wire form is `null`.)
+- **Entry hash**: `SHA-256` of the compact UTF-8 JSON object
+  `{payload, prevHash, seq, signerDeviceId, signerPubkey, timestamp}` with
+  keys sorted lexicographically at every nesting level (recursive sort; the
+  top-level sort order is as listed). See `compute_entry_hash` in
+  `packages/crypto/src/sigchain.rs` for the full cross-platform
+  canonicalization algorithm and test vectors.
+- **Numbers**: all payload numbers must be plain integers ≤ 2^53. Integers
+  serialize without decimal points or exponents (`"seq":1`, never `"1.0"` or
+  `"1e0"`); anything else is rejected with 400 rather than hashed, because
+  platforms disagree on non-integer number formatting.
 
 ### 4.38 PUK (Per-User Key)
 

@@ -104,7 +104,8 @@ interface LinkInput {
   linkType: string
   payload: unknown
   signature: string
-  prevHash: string
+  /** null for genesis (seqNo 1); '' accepted as a legacy alias. */
+  prevHash: string | null
   hash: string
   signerDeviceId: string
   signerPubkey: string
@@ -112,7 +113,7 @@ interface LinkInput {
 }
 
 /** Build a correctly-signed link extending `prevHash` at `seqNo`. */
-function buildLink(seqNo: number, prevHash: string, payload: unknown): LinkInput {
+function buildLink(seqNo: number, prevHash: string | null, payload: unknown): LinkInput {
   const signerDeviceId = 'dev-1'
   const signerPubkey = 'aa'.repeat(32)
   const timestamp = '2026-01-01T00:00:00Z'
@@ -158,15 +159,16 @@ beforeEach(async () => {
 
 describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)', () => {
   it('lets exactly one of N concurrent appends at the same seqNo succeed; the rest get a 409', async () => {
-    const genesis = buildLink(0, '', { type: 'user_init', deviceId: 'dev-1' })
+    // Genesis is seqNo 1 with prevHash null (#1537 crate-verifier contract).
+    const genesis = buildLink(1, null, { type: 'user_init', deviceId: 'dev-1' })
     const genesisLink = await service.appendSigchainLink(USER_PUBKEY, genesis)
 
     const CONCURRENCY = 8
     // Every writer independently computes the next link from the SAME
-    // observed head (seqNo=1, prevHash=genesis.hash) — exactly what two
+    // observed head (seqNo=2, prevHash=genesis.hash) — exactly what two
     // devices racing to add themselves would do.
     const attempts = Array.from({ length: CONCURRENCY }, (_, i) =>
-      buildLink(1, genesisLink.hash, { type: 'device_add', deviceId: `new-device-${i}` }),
+      buildLink(2, genesisLink.hash, { type: 'device_add', deviceId: `new-device-${i}` }),
     )
 
     const results = await Promise.allSettled(
@@ -193,8 +195,9 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
     // never neither.
     const persisted = await service.getSigchain(USER_PUBKEY)
     expect(persisted).toHaveLength(2)
-    expect(persisted[0].seqNo).toBe(0)
-    expect(persisted[1].seqNo).toBe(1)
+    expect(persisted[0].seqNo).toBe(1)
+    expect(persisted[0].prevHash).toBeNull()
+    expect(persisted[1].seqNo).toBe(2)
     expect(persisted[1].prevHash).toBe(genesisLink.hash)
 
     // No two rows ever share (user_pubkey, seq_no) — the DB-level backstop
@@ -204,10 +207,10 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
   })
 
   it('serializes concurrent appends into a single valid chain across many rounds', async () => {
-    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(0, '', { type: 'user_init' }))
+    let head = await service.appendSigchainLink(USER_PUBKEY, buildLink(1, null, { type: 'user_init' }))
 
     for (let round = 0; round < 5; round++) {
-      const nextSeqNo = round + 1
+      const nextSeqNo = round + 2
       const attempts = Array.from({ length: 4 }, (_, i) =>
         buildLink(nextSeqNo, head.hash, { type: 'device_add', deviceId: `round-${round}-writer-${i}` }),
       )
@@ -222,11 +225,11 @@ describe('CryptoKeysService.appendSigchainLink under concurrent writers (#1146)'
 
     const persisted = await service.getSigchain(USER_PUBKEY)
     expect(persisted).toHaveLength(6) // genesis + 5 rounds
-    // The chain is contiguous and unforked: seqNo 0..5, each prevHash
-    // matching the previous link's hash.
+    // The chain is contiguous and unforked: seqNo 1..6, each prevHash
+    // matching the previous link's hash (null for genesis).
     for (let i = 0; i < persisted.length; i++) {
-      expect(persisted[i].seqNo).toBe(i)
-      expect(persisted[i].prevHash).toBe(i === 0 ? '' : persisted[i - 1].hash)
+      expect(persisted[i].seqNo).toBe(i + 1)
+      expect(persisted[i].prevHash).toBe(i === 0 ? null : persisted[i - 1].hash)
     }
   })
 })

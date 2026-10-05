@@ -24,7 +24,12 @@ export interface SigchainLinkRecord {
   linkType: string
   payload: unknown
   signature: string
-  prevHash: string
+  /**
+   * Hash of the previous link. `null` for the genesis link (seqNo 1) — the
+   * DB column is NOT NULL, so genesis rows store '' and are normalized to
+   * null on read. Matches the crate verifier's Option<String> wire form.
+   */
+  prevHash: string | null
   hash: string
   signerDeviceId: string
   signerPubkey: string
@@ -86,8 +91,10 @@ function canonicalizeJson(value: unknown): unknown {
  * ```
  *
  * - `payload` is recursively key-sorted (matches serde_json BTreeMap).
+ * - `payload` numbers must be canonical integers (see assertCanonicalSigchainPayload);
+ *   within that domain JS and serde_json serialize numbers identically.
  * - `prevHash` is `null` (not `""`) for genesis links (matches Rust Option<String>).
- * - `seq` is a number (matches Rust u64).
+ * - `seq` is a number (matches Rust u64; genesis seq is 1).
  */
 /**
  * Exported for reuse by services that append specialized sigchain link types
@@ -114,6 +121,48 @@ export function computeEntryHash(
   })
   const canonicalStr = JSON.stringify(canonical)
   return bytesToHex(sha256(new TextEncoder().encode(canonicalStr)))
+}
+
+/**
+ * Reject a sigchain payload whose numbers are not canonical integers.
+ *
+ * The cross-platform canonicalization spec (packages/crypto/src/sigchain.rs,
+ * `compute_entry_hash` rule 5) fixes integer formatting (`"seq":1`, never
+ * `"seq":1.0` or `"seq":1e0`), and the #1029 resolution restricts payload
+ * numbers to plain integers ≤ 2^53. JS `JSON.parse` collapses `1.0` → `1`
+ * and silently rounds integers beyond 2^53, so safe integers are the only
+ * number domain where `JSON.stringify` and serde_json produce identical
+ * bytes. A payload outside that domain is rejected (400) rather than hashed
+ * into canonical bytes no client verifier could reproduce.
+ */
+export function assertCanonicalSigchainPayload(payload: unknown): void {
+  const badPath = findNonCanonicalNumber(payload, 'payload')
+  if (badPath !== null) {
+    throw new CryptoKeyError(
+      `sigchain payload has non-canonical number at ${badPath}: payload numbers must be integers ≤ 2^53`,
+      400,
+    )
+  }
+}
+
+function findNonCanonicalNumber(value: unknown, path: string): string | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? null : path
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const bad = findNonCanonicalNumber(value[i], `${path}[${i}]`)
+      if (bad !== null) return bad
+    }
+    return null
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      const bad = findNonCanonicalNumber(nested, `${path}.${key}`)
+      if (bad !== null) return bad
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +200,10 @@ function mapSigchainRow(row: typeof sigchainLinks.$inferSelect): SigchainLinkRec
     linkType: row.linkType,
     payload: row.payload,
     signature: row.signature,
-    prevHash: row.prevHash,
+    // Genesis rows store '' (DB column is NOT NULL); the wire contract is
+    // JSON null — every client verifier (crate `verify_sigchain`) requires
+    // the first link to have prevHash == null.
+    prevHash: row.prevHash === '' ? null : row.prevHash,
     hash: row.hash,
     signerDeviceId: row.signerDeviceId,
     signerPubkey: row.signerPubkey,
@@ -168,14 +220,18 @@ function mapSigchainRow(row: typeof sigchainLinks.$inferSelect): SigchainLinkRec
  * `identity.revokeDevice` used to (#1146).
  *
  * The server verifies:
- *   1. seqNo === expected (last seqNo + 1, or 0 for genesis) — against the
- *      head read INSIDE this transaction, never a value the caller computed
+ *   1. seqNo === expected (last seqNo + 1, or 1 for genesis — the crate
+ *      verifier requires the first link to have seq=1) — against the head
+ *      read INSIDE this transaction, never a value the caller computed
  *      earlier or trusted from the client.
- *   2. prevHash matches the hash of the current chain head.
+ *   2. prevHash matches the hash of the current chain head (null for genesis —
+ *      the crate verifier requires prevHash=null on the first link; '' is
+ *      accepted on the wire as a legacy alias for null).
  *   3. The claimed `hash` is the canonical hash of the payload + metadata
  *      (prevents a correctly-signed hash from being paired with tampered
  *      content).
- *   4. Ed25519 `signature` over the entry hash is valid for the verification
+ *   4. Payload numbers are canonical integers ≤ 2^53.
+ *   5. Ed25519 `signature` over the entry hash is valid for the verification
  *      key (`userPubkey` by default; `options.verifySignatureAgainst` for
  *      self-authorizing link types like recovery-device-add, whose signer is
  *      the new device's own key, not the account's).
@@ -193,7 +249,8 @@ export async function appendValidatedSigchainLink(
     linkType: string
     payload: unknown
     signature: string
-    prevHash: string
+    /** null for a genesis link (seqNo 1); '' accepted as a legacy alias. */
+    prevHash: string | null
     hash: string
     signerDeviceId?: string
     signerPubkey?: string
@@ -212,8 +269,10 @@ export async function appendValidatedSigchainLink(
     .where(eq(sigchainLinks.userPubkey, userPubkey))
     .orderBy(desc(sigchainLinks.seqNo))
     .limit(1)
-  const expectedSeqNo = currentHead === undefined ? 0 : currentHead.seqNo + 1
-  const expectedPrevHash = currentHead?.hash ?? ''
+  const expectedSeqNo = currentHead === undefined ? 1 : currentHead.seqNo + 1
+  const expectedPrevHash = currentHead?.hash ?? null
+  // '' on the wire is a legacy alias for JSON null (genesis only).
+  const normalizedPrevHash = link.prevHash === '' ? null : link.prevHash
 
   if (link.seqNo !== expectedSeqNo) {
     throw new CryptoKeyError(
@@ -221,12 +280,17 @@ export async function appendValidatedSigchainLink(
       409,
     )
   }
-  if (link.prevHash !== expectedPrevHash) {
+  if (normalizedPrevHash !== expectedPrevHash) {
     throw new CryptoKeyError(
       'sigchain prevHash mismatch: does not match current chain head',
       409,
     )
   }
+
+  // Reject numbers JS and serde_json would serialize differently (floats,
+  // exponents, integers beyond 2^53) before hashing — see
+  // assertCanonicalSigchainPayload.
+  assertCanonicalSigchainPayload(link.payload)
 
   const signerDeviceId = link.signerDeviceId ?? ''
   const signerPubkey = link.signerPubkey ?? ''
@@ -241,7 +305,7 @@ export async function appendValidatedSigchainLink(
   // prevHash: empty string → null (Rust Option<String> serialization).
   const recomputedHash = computeEntryHash(
     link.seqNo,
-    link.prevHash === '' ? null : link.prevHash,
+    normalizedPrevHash,
     timestamp,
     signerDeviceId,
     signerPubkey,
@@ -282,7 +346,8 @@ export async function appendValidatedSigchainLink(
       linkType: link.linkType,
       payload: link.payload,
       signature: link.signature,
-      prevHash: link.prevHash,
+      // DB column is NOT NULL; genesis (null) is stored as ''.
+      prevHash: normalizedPrevHash ?? '',
       hash: link.hash,
       signerDeviceId,
       signerPubkey,
@@ -307,8 +372,9 @@ export async function appendValidatedSigchainLink(
 export function findSigchainBreak(
   links: Pick<SigchainLinkRecord, 'seqNo' | 'prevHash' | 'hash'>[],
 ): { seqNo: number; reason: string } | null {
-  let expectedSeqNo = 0
-  let expectedPrevHash = ''
+  // Genesis is seq 1 with prevHash null (crate verifier contract, #1537).
+  let expectedSeqNo = 1
+  let expectedPrevHash: string | null = null
   for (const link of links) {
     if (link.seqNo !== expectedSeqNo) {
       return { seqNo: link.seqNo, reason: `expected seqNo ${expectedSeqNo}, found ${link.seqNo}` }
@@ -357,17 +423,26 @@ export class CryptoKeysService {
    *
    * Runs inside a transaction holding the per-user advisory lock (see
    * `sigchainLockKey`) so a concurrent append can never read the same chain
-   * head and fork the chain — see `appendValidatedSigchainLink` for the full
-   * validation this performs.
+   * head and fork the chain. The server verifies:
+   *   1. seqNo === expected (last seqNo + 1, or 1 for genesis — the crate
+   *      verifier requires the first link to have seq=1)
+   *   2. prevHash matches the hash of the current chain head (null for
+   *      genesis — the crate verifier requires prevHash=null on the first
+   *      link; '' is accepted on the wire as a legacy alias for null)
+   *   3. The canonical entry hash recomputes to the claimed hash
+   *   4. Payload numbers are canonical integers ≤ 2^53
+   *   5. Ed25519 signature over the entry hash is valid for userPubkey
    *
-   * Returns the persisted link on success.
+   * See `appendValidatedSigchainLink` for the full validation this performs.
+   *
+   * Returns the persisted link on success (genesis prevHash returned as null).
    */
   async appendSigchainLink(userPubkey: string, link: {
     seqNo: number
     linkType: string
     payload: unknown
     signature: string
-    prevHash: string
+    prevHash: string | null
     hash: string
     signerDeviceId: string
     signerPubkey: string

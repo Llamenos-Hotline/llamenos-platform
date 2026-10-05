@@ -722,7 +722,8 @@ export class RecoveryGroupService {
     sigchainSeqNo: number
     sigchainPayload: Record<string, unknown>
     signature: string
-    prevHash: string
+    /** null for a genesis link (seqNo 1); '' accepted as a legacy alias. */
+    prevHash: string | null
     hash: string
     signerDeviceId: string
     timestamp: string
@@ -804,12 +805,12 @@ export class RecoveryGroupService {
 
       // appendValidatedSigchainLink is the single source of truth for
       // continuity (seqNo/prevHash against the head just read under the
-      // lock above), canonical-hash recomputation, and signature
-      // verification — the same checks every sigchain append path uses
-      // (#1146). Self-authorizing: verified against the NEW device's own
-      // key via verifySignatureAgainst, not the account's identity key —
-      // the account's identity key is exactly what was lost and is why
-      // recovery was needed.
+      // lock above), canonical-hash recomputation, canonical-payload
+      // number checks, and signature verification — the same checks every
+      // sigchain append path uses (#1146, #1537). Self-authorizing:
+      // verified against the NEW device's own key via verifySignatureAgainst,
+      // not the account's identity key — the account's identity key is
+      // exactly what was lost and is why recovery was needed.
       try {
         insertedLink = await appendValidatedSigchainLink(
           tx,

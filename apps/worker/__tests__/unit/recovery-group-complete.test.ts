@@ -136,12 +136,12 @@ beforeEach(() => {
 describe('RecoveryGroupService.completeRecovery', () => {
   it('takes the per-user advisory lock before reading the chain head', async () => {
     const payload = { sessionId: SESSION_ID, contributingHolderPubkeys: ['holder-1', 'holder-2'] }
-    const { hash, signature } = buildLink(0, '', payload)
+    const { hash, signature } = buildLink(1, '', payload)
 
     const tx = makeTx({
       currentHead: [],
       insertedRow: {
-        id: 'link-1', userPubkey: USER_PUBKEY, seqNo: 0, linkType: 'recovery-device-add',
+        id: 'link-1', userPubkey: USER_PUBKEY, seqNo: 1, linkType: 'recovery-device-add',
         payload, signature, prevHash: '', hash, signerDeviceId: SIGNER_DEVICE_ID,
         signerPubkey: NEW_DEVICE_PUBKEY, createdAt: new Date(),
       },
@@ -159,7 +159,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     const svc = new RecoveryGroupService(db as never)
     await svc.completeRecovery({
       sessionId: SESSION_ID,
-      sigchainSeqNo: 0,
+      sigchainSeqNo: 1,
       sigchainPayload: payload,
       signature,
       prevHash: '',
@@ -176,9 +176,9 @@ describe('RecoveryGroupService.completeRecovery', () => {
 
   it('returns the inserted sigchain link and completes the session atomically', async () => {
     const payload = { sessionId: SESSION_ID, contributingHolderPubkeys: ['holder-1', 'holder-2'] }
-    const { hash, signature } = buildLink(0, '', payload)
+    const { hash, signature } = buildLink(1, '', payload)
     const insertedRow = {
-      id: 'link-1', userPubkey: USER_PUBKEY, seqNo: 0, linkType: 'recovery-device-add',
+      id: 'link-1', userPubkey: USER_PUBKEY, seqNo: 1, linkType: 'recovery-device-add',
       payload, signature, prevHash: '', hash, signerDeviceId: SIGNER_DEVICE_ID,
       signerPubkey: NEW_DEVICE_PUBKEY, createdAt: new Date(),
     }
@@ -196,7 +196,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     const svc = new RecoveryGroupService(db as never)
     const result = await svc.completeRecovery({
       sessionId: SESSION_ID,
-      sigchainSeqNo: 0,
+      sigchainSeqNo: 1,
       sigchainPayload: payload,
       signature,
       prevHash: '',
@@ -212,9 +212,9 @@ describe('RecoveryGroupService.completeRecovery', () => {
 
   it('maps a continuity conflict (seqNo mismatch) to a 409 RecoveryGroupError', async () => {
     const payload = { sessionId: SESSION_ID, contributingHolderPubkeys: ['holder-1', 'holder-2'] }
-    const { hash, signature } = buildLink(0, '', payload)
-    // The chain already has a link at seqNo 0 — the claimed seqNo=0 is stale.
-    const tx = makeTx({ currentHead: [{ seqNo: 0, hash: 'existing-hash' }] })
+    const { hash, signature } = buildLink(1, '', payload)
+    // The chain already has a genesis link at seqNo 1 — the claimed seqNo=1 is stale (expected 2).
+    const tx = makeTx({ currentHead: [{ seqNo: 1, hash: 'existing-hash' }] })
 
     const db = {
       select: makeSequencedSelect([
@@ -229,7 +229,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
-        sigchainSeqNo: 0,
+        sigchainSeqNo: 1,
         sigchainPayload: payload,
         signature,
         prevHash: '',
@@ -241,7 +241,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
-        sigchainSeqNo: 0,
+        sigchainSeqNo: 1,
         sigchainPayload: payload,
         signature,
         prevHash: '',
@@ -258,7 +258,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
   it('maps an invalid self-authorizing signature to a 403 RecoveryGroupError', async () => {
     mockEd25519Verify.mockReturnValue(false)
     const payload = { sessionId: SESSION_ID, contributingHolderPubkeys: ['holder-1', 'holder-2'] }
-    const { hash, signature } = buildLink(0, '', payload)
+    const { hash, signature } = buildLink(1, '', payload)
     const tx = makeTx({ currentHead: [] })
 
     const db = {
@@ -274,7 +274,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
-        sigchainSeqNo: 0,
+        sigchainSeqNo: 1,
         sigchainPayload: payload,
         signature,
         prevHash: '',
@@ -299,7 +299,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
-        sigchainSeqNo: 0,
+        sigchainSeqNo: 1,
         sigchainPayload: { sessionId: 'wrong-session', contributingHolderPubkeys: ['holder-1', 'holder-2'] },
         signature: 'aa'.repeat(64),
         prevHash: '',
