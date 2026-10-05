@@ -57,8 +57,8 @@ pub fn hpke_wrap_key(
     recipient_pubkey_hex: &str,
     label: &str,
 ) -> Result<KeyEnvelope, CryptoError> {
-    let aad = format!("{label}:key-wrap");
-    let envelope = hpke_envelope::hpke_seal_key(key, recipient_pubkey_hex, label, aad.as_bytes())?;
+    let aad = crate::envelope_aad::key_wrap_aad(label);
+    let envelope = hpke_envelope::hpke_seal_key(key, recipient_pubkey_hex, label, &aad)?;
     // Convert from base64url → hex wire format
     let enc_bytes = URL_SAFE_NO_PAD
         .decode(&envelope.enc)
@@ -79,7 +79,7 @@ pub fn hpke_unwrap_key(
     secret_key_hex: &str,
     label: &str,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    let aad = format!("{label}:key-wrap");
+    let aad = crate::envelope_aad::key_wrap_aad(label);
     let enc_bytes = hex::decode(&envelope.enc).map_err(CryptoError::HexError)?;
     let ct_bytes = hex::decode(&envelope.ct).map_err(CryptoError::HexError)?;
     let label_id = crate::labels::label_to_id(label)
@@ -90,7 +90,7 @@ pub fn hpke_unwrap_key(
         enc: URL_SAFE_NO_PAD.encode(&enc_bytes),
         ct: URL_SAFE_NO_PAD.encode(&ct_bytes),
     };
-    hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, aad.as_bytes())
+    hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &aad)
 }
 
 // ── Helpers: AES-256-GCM symmetric encryption ───────────────────────

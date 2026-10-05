@@ -95,6 +95,8 @@ Given('every on-shift volunteer is on break', async ({ request, world }) => {
 Given('a volunteer who is not on shift is in the hub fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
   const fallback = await createVolunteerViaApi(request, { name: `BDD Fallback ${Date.now()}` })
+  // Only members who can answer in the hub are rung — a global role alone carries no hub authority (#1037)
+  await addHubMemberViaApi(request, state.hubId, fallback.pubkey, ['role-volunteer'])
   await setFallbackGroupViaApi(request, [fallback.pubkey], state.hubId)
   state.volunteers.push(fallback)
 })
@@ -115,6 +117,8 @@ After({ tags: '@demo-mode' }, async ({ request }) => {
 Given('a volunteer is in the instance-wide fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
   const vol = await createVolunteerViaApi(request, { name: `BDD Instance Fallback ${Date.now()}` })
+  // A member of the called hub, so the only thing keeping them from ringing is WHICH group is read
+  await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
   instanceFallbackDirty = true
   // No hubId: the un-hubbed route edits the instance-level group, not this hub's.
   await setFallbackGroupViaApi(request, [vol.pubkey])
