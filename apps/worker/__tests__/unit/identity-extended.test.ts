@@ -560,8 +560,17 @@ describe('IdentityService.redeemInvite', () => {
 describe('IdentityService.revokeInvite', () => {
   it('deletes the invite code', async () => {
     const { db, service } = setup()
+    db.$setDeleteResult([{ code: 'invite-code-abc' }])
 
     await service.revokeInvite('invite-code-abc')
+    expect(db.delete).toHaveBeenCalled()
+  })
+
+  it('404s when no invite of that code exists in the hub', async () => {
+    const { db, service } = setup()
+    db.$setDeleteResult([])
+
+    await expect(service.revokeInvite('invite-code-abc', 'hub-1')).rejects.toMatchObject({ status: 404 })
     expect(db.delete).toHaveBeenCalled()
   })
 })

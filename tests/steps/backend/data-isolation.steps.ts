@@ -610,22 +610,15 @@ Then(
     expect(author, `author "${authorName}" not found`).toBeTruthy()
     expect(hubEntry, `hub "${hubLabel}" not found`).toBeTruthy()
 
-    // The viewer accesses the hub directly — the response may be 200 (global
-    // volunteer role grants hub entry) but the note list must be filtered to
-    // their own authorPubkey, so the author's notes are never visible.
-    const { status, data } = await apiGet<{ notes: Array<{ id: string }> }>(
+    // The viewer is not a member of this hub, so the hub itself is closed to
+    // them — a global role is not hub membership (#1037). Nothing of the
+    // author's (not even a filtered list) may come back.
+    const { status, data } = await apiGet<{ notes?: Array<{ id: string }> }>(
       request,
       `/hubs/${hubEntry!.hubId}/notes`,
       viewer!.deviceKey,
     )
-    expect(status, `expected 200 for ${viewerName} accessing hub ${hubLabel}`).toBe(200)
-
-    const visibleNoteIds = data.notes.map(n => n.id)
-    for (const authorNoteId of author!.noteIds) {
-      expect(
-        visibleNoteIds,
-        `${viewerName} must not see ${authorName}'s note ${authorNoteId} in hub "${hubLabel}"`,
-      ).not.toContain(authorNoteId)
-    }
+    expect(status, `expected 403 for non-member ${viewerName} accessing hub ${hubLabel}`).toBe(403)
+    expect(data?.notes, `${viewerName} must not receive ${authorName}'s notes from hub "${hubLabel}"`).toBeUndefined()
   },
 )
