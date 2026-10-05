@@ -98,6 +98,9 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
 function ringRoster() {
   return {
     shifts: { getCurrentVolunteers: vi.fn().mockResolvedValue([VOLUNTEER]) },
+    activeShifts: {
+      listClockedInPubkeys: vi.fn().mockResolvedValue(new Set([VOLUNTEER])),
+    },
     identity: {
       getUsers: vi.fn().mockResolvedValue({
         users: [{
