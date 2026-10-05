@@ -1,28 +1,56 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import {
   verifierArgs,
   reviewFilesSection,
   REVIEWER_TOOLS,
   decodeEngineOutput,
+  decodeKimiOutput,
   parseVerdict,
   stripReviewerControlFiles,
   verifierFor,
   classifyEngineFailure,
   reviewerBinaryFor,
   reviewerInvocationFor,
+  canFallbackAfterFailure,
+  fallbackReviewerEnabled,
+  reviewPrimaryEngine,
+  kimiReviewModel,
+  kimiArgs,
+  kimiBinaryOnPath,
+  toSecondOpinion,
+  KIMI_PROMPT_MAX_CHARS,
+  KIMI_REVIEWER_ENGINE,
+  REVIEWER_AGENT_FILE,
 } from '../../orchestrator/src/review.js'
 
-// #812: `fleet/review` retired `opencode` as the reviewer engine entirely —
-// the reviewer is now always a `claude` session on a dedicated self-hosted
-// runner (see review.ts's doc comment above `verifierFor` for the full
-// rationale and the honest cost: same model family as the `claude`-authored
-// lanes, still a genuinely separate session on a separate machine).
-describe('verifierFor', () => {
-  it('always resolves to claude now, regardless of the author engine', () => {
+// The engine order: kimi PRIMARY (default), claude fallback — both selected
+// by `reviewPrimaryEngine`/`FLEET_REVIEW_PRIMARY`, never by `authorEngine`
+// (see review.ts's doc comment above `verifierFor` for the full rationale:
+// availability-first after the 2026-10-04 claude-quota outage, and the
+// honest vendor-diversity cost on Kimi-authored lanes).
+describe('verifierFor / reviewPrimaryEngine', () => {
+  const ENV = 'FLEET_REVIEW_PRIMARY'
+  let saved: string | undefined
+  beforeEach(() => { saved = process.env[ENV] })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
+  })
+
+  it('resolves the PRIMARY engine (kimi by default), regardless of the author engine', () => {
+    delete process.env[ENV]
+    expect(reviewPrimaryEngine()).toBe('kimi')
+    expect(verifierFor('claude')).toBe('kimi')
+    expect(verifierFor('opencode')).toBe('kimi')
+  })
+
+  it('FLEET_REVIEW_PRIMARY=claude flips the order back — the operator dial', () => {
+    process.env[ENV] = 'claude'
+    expect(reviewPrimaryEngine()).toBe('claude')
     expect(verifierFor('claude')).toBe('claude')
     expect(verifierFor('opencode')).toBe('claude')
   })
@@ -33,28 +61,41 @@ describe('verifierFor', () => {
 // agree until one of them changes. See `reviewerInvocationFor`'s own doc
 // comment in review.ts for the live incident this rail guards.
 describe('reviewerInvocationFor / reviewerBinaryFor', () => {
-  it('resolves claude for either author engine (verifierFor collapses both today)', () => {
-    expect(reviewerInvocationFor('claude')).toEqual({ engine: 'claude', binary: 'claude', model: expect.any(String) })
-    expect(reviewerInvocationFor('opencode')).toEqual({ engine: 'claude', binary: 'claude', model: expect.any(String) })
+  const ENV = 'FLEET_REVIEW_PRIMARY'
+  let saved: string | undefined
+  beforeEach(() => { saved = process.env[ENV] })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
   })
 
-  // MUTATION (per "audit gates by breaking them"): `verifierFor` cannot
-  // itself be driven to return anything but `'claude'` today, so a test
-  // that only calls `reviewerInvocationFor` could never observe
-  // `reviewerBinaryFor` refusing a second engine. Calling the hard-fail
-  // helper directly proves the contract holds independently of
-  // `verifierFor`'s current, coincidentally-single-valued behavior: if a
-  // future edit ever makes `verifierFor` resolve to `'opencode'` again
-  // without ALSO teaching `reviewerBinaryFor` how to invoke it, this is the
-  // function that turns that gap into a loud, immediate throw instead of a
-  // silent divergence from whatever the smoke test proved.
-  //
-  // Verified live: commenting out this function's `if` guard (so it always
-  // returns `'claude'` regardless of `engine`) makes this exact test fail
-  // with "expected [Function] to throw an error" — see the PR body for the
-  // transcript.
-  it('MUTATION: refuses (throws) for any engine besides claude — never a silent fallback', () => {
-    expect(() => reviewerBinaryFor('opencode')).toThrow(/no wired reviewer invocation/)
+  it('resolves kimi (binary kimi, own-default model) for either author engine by default', () => {
+    delete process.env[ENV]
+    expect(reviewerInvocationFor('claude')).toEqual({ engine: 'kimi', binary: 'kimi', model: expect.any(String) })
+    expect(reviewerInvocationFor('opencode')).toEqual({ engine: 'kimi', binary: 'kimi', model: expect.any(String) })
+  })
+
+  it('resolves claude with the FLEET_REVIEW_MODEL tier when the primary is claude', () => {
+    process.env[ENV] = 'claude'
+    expect(reviewerInvocationFor('claude')).toEqual({ engine: 'claude', binary: 'claude', model: expect.any(String) })
+  })
+
+  it('maps each reviewer engine to its own binary', () => {
+    expect(reviewerBinaryFor('kimi')).toBe('kimi')
+    expect(reviewerBinaryFor('claude')).toBe('claude')
+  })
+
+  // MUTATION (per "audit gates by breaking them"): calling the hard-fail
+  // helper directly proves the contract holds independently of what
+  // `verifierFor` currently resolves: if a future edit ever makes the
+  // engine resolution return something `reviewerBinaryFor` does not know
+  // how to invoke, this is the function that turns that gap into a loud,
+  // immediate throw instead of a silent divergence from whatever the smoke
+  // test proved.
+  it('MUTATION: refuses (throws) for any engine besides kimi/claude — never a silent fallback', () => {
+    // Cast: 'opencode' is deliberately NOT a ReviewRunEngine — the throw for
+    // unknown engines is the very contract under test.
+    expect(() => reviewerBinaryFor('opencode' as never)).toThrow(/no wired reviewer invocation/)
   })
 })
 
@@ -275,6 +316,29 @@ afterEach(() => {
 })
 
 describe('secondOpinion', () => {
+  // `runKimiOnce` preflights `kimiBinaryOnPath` before it ever execs, so a
+  // test that lets the kimi arm run MUST have a kimi binary on PATH — on a
+  // box without one (every CI runner) the preflight short-circuits the kimi
+  // arm as engine-unavailable and the claude fallback serves the verdict,
+  // which is exactly the production behavior but not what these tests judge.
+  // Same stub pattern as the end-to-end describe below.
+  let savedPath: string | undefined
+  let kimiBinDir: string
+
+  beforeEach(() => {
+    savedPath = process.env['PATH']
+    kimiBinDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-bin-'))
+    writeFileSync(join(kimiBinDir, 'kimi'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(kimiBinDir, 'kimi'), 0o755)
+    process.env['PATH'] = `${kimiBinDir}${delimiter}${savedPath ?? ''}`
+  })
+
+  afterEach(() => {
+    if (savedPath === undefined) delete process.env['PATH']
+    else process.env['PATH'] = savedPath
+    rmSync(kimiBinDir, { recursive: true, force: true })
+  })
+
   it('refuses to review a report that did not pass mechanical verification', async () => {
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const failedReport = {
@@ -288,13 +352,13 @@ describe('secondOpinion', () => {
     expect(mockExecFile).not.toHaveBeenCalled()
   })
 
-  // #812: the reviewer is always `claude` now, for EITHER author engine —
-  // proven against both `claude` and `opencode` authors, so a regression
-  // that reintroduces the old "other engine" bijection (which would make an
-  // `opencode`-authored lane's review invoke `claude` differently from a
-  // `claude`-authored one, or resurrect an `opencode` binary call) fails
-  // this test either way.
-  it.each(['claude', 'opencode'] as const)('runs the reviewer on claude regardless of the author engine (%s)', async (authorEngine) => {
+  // The reviewer engine is selected by `reviewPrimaryEngine`, NEVER by the
+  // author engine — proven against both `claude` and `opencode` authors, so
+  // a regression that reintroduces the old "other engine" bijection (which
+  // would make an `opencode`-authored lane's review invoke a different
+  // reviewer than a `claude`-authored one, or resurrect an `opencode` binary
+  // call) fails this test either way. Default order: kimi primary.
+  it.each(['claude', 'opencode'] as const)('runs the reviewer on the primary engine (kimi by default) regardless of the author engine (%s)', async (authorEngine) => {
     mockExecFileResolves('VERDICT: PASS')
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const worktree = makeAuthorWorktree()
@@ -308,10 +372,15 @@ describe('secondOpinion', () => {
     expect(result.verdict).toBe('PASS')
     expect(mockExecFile).toHaveBeenCalledTimes(1)
     const [binary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
-    expect(binary).toBe('claude')
+    expect(binary).toBe('kimi')
   })
 
   it('invokes claude in print mode, plan permission, with a max-turns budget and read access to the export', async () => {
+    // The claude argv shape, pinned: force claude first for this test — the
+    // kimi argv shape has its own rail in `kimiArgs` and the e2e suite.
+    const saved = process.env['FLEET_REVIEW_PRIMARY']
+    process.env['FLEET_REVIEW_PRIMARY'] = 'claude'
+    try {
     mockExecFileResolves('VERDICT: PASS')
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const worktree = makeAuthorWorktree()
@@ -330,6 +399,10 @@ describe('secondOpinion', () => {
     // Read-only, non-interactive posture: never the flag that lets a worker
     // write without being asked.
     expect(args).not.toContain('--dangerously-skip-permissions')
+    } finally {
+      if (saved === undefined) delete process.env['FLEET_REVIEW_PRIMARY']
+      else process.env['FLEET_REVIEW_PRIMARY'] = saved
+    }
   })
 
   it('treats an unreachable reviewer as UNREADABLE, not a pass', async () => {
@@ -345,19 +418,30 @@ describe('secondOpinion', () => {
     })
     expect(result.verdict).toBe('UNREADABLE')
     // A plain crash (no model-id complaint in the text) classifies as
-    // engine-unavailable — see `classifyEngineFailure` for the other branch.
+    // engine-unavailable on whichever engine produced it — see
+    // `classifyEngineFailure` for the other branch. kimi-primary means the
+    // crash is kimi's, the fallback crossing is the claude call, and the
+    // mock rejects both; what an operator sees is unchanged: UNREADABLE,
+    // engine-unavailable.
     expect(result.failureKind).toBe('engine-unavailable')
+    expect(result.engine).toBe('claude')
   })
 
   // #866: an unresolvable `--model` id is a MISCONFIGURATION, not an
   // unavailability — this is what let #866's own live incident (a bare
   // model shorthand handed to the wrong engine) surface as an opaque
   // "review unavailable" instead of naming the actual, fixable defect.
+  // Forced onto the claude arm via FLEET_REVIEW_PRIMARY (with kimi primary,
+  // a claude-shaped rejection text arrives via the fallback arm — railed in
+  // the e2e suite below).
   it('treats a claude "unrecognized model" rejection as UNREADABLE with failureKind engine-misconfigured', async () => {
+    const saved = process.env['FLEET_REVIEW_PRIMARY']
+    process.env['FLEET_REVIEW_PRIMARY'] = 'claude'
     const err = Object.assign(new Error('Command failed'), {
       stdout: "There's an issue with the selected model (bogus). It may not exist or you may not have access to it.",
       stderr: '"bogus" isn\'t described by this version\'s model catalog; [claude-code:unrecognized_model]',
     })
+    try {
     mockExecFileRejects(err)
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const worktree = makeAuthorWorktree()
@@ -370,9 +454,17 @@ describe('secondOpinion', () => {
     })
     expect(result.verdict).toBe('UNREADABLE')
     expect(result.failureKind).toBe('engine-misconfigured')
+    } finally {
+      if (saved === undefined) delete process.env['FLEET_REVIEW_PRIMARY']
+      else process.env['FLEET_REVIEW_PRIMARY'] = saved
+    }
   })
 
   it('requests more turns for a high-impact diff than a low-impact one', async () => {
+    // kimi has no --max-turns flag; the turn-budget contract is claude's.
+    const saved = process.env['FLEET_REVIEW_PRIMARY']
+    process.env['FLEET_REVIEW_PRIMARY'] = 'claude'
+    try {
     mockExecFileResolves('VERDICT: PASS')
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const worktree = makeAuthorWorktree()
@@ -395,6 +487,10 @@ describe('secondOpinion', () => {
     const lowImpactTurns = Number(args2[idx2 + 1])
 
     expect(highImpactTurns).toBeGreaterThan(lowImpactTurns)
+    } finally {
+      if (saved === undefined) delete process.env['FLEET_REVIEW_PRIMARY']
+      else process.env['FLEET_REVIEW_PRIMARY'] = saved
+    }
   })
 
   // --- V1 fix-round tests: the verifier must be isolated from the author ---
@@ -803,5 +899,440 @@ describe('reviewFilesSection: how the reviewer is told to reach the export', () 
 
   it('tells the reviewer a tool call costs a turn — the budget is not free', () => {
     expect(section()).toMatch(/every tool call spends one turn/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The kimi fallback (see the doc comments above `verifierFor` and
+// `invokeVerifierEngine` in review.ts, and fleet-review.yml's file header):
+// claude first, kimi only when claude CANNOT RUN; every fallback verdict
+// labelled; a substantive FAIL never retried.
+// ---------------------------------------------------------------------------
+
+describe('canFallbackAfterFailure: the cannot-run taxonomy', () => {
+  it('falls back on the whole cannot-run family: quota, weekly limit, overload, timeouts, crashes, missing binaries', () => {
+    for (const text of [
+      '429 Too Many Requests',
+      'usage limit reached — quota exceeded',
+      'weekly limit reached, resets on Monday',
+      'provider overloaded, retry later',
+      'connect ETIMEDOUT',
+      'spawn ENOENT',
+      'simulated: Unexpected server error from provider',
+      '',
+    ]) {
+      expect(canFallbackAfterFailure('engine-unavailable', text), text).toBe(true)
+    }
+  })
+
+  it('falls back on a claude model-id rejection — kimi resolves its own model', () => {
+    expect(canFallbackAfterFailure('engine-misconfigured',
+      '"bogus" isn\'t described by this version\'s model catalog; [claude-code:unrecognized_model]')).toBe(true)
+  })
+
+  it('does NOT fall back on auth-failure-shaped text — an expired login must stay loud', () => {
+    for (const text of [
+      'Error: not logged in. Please run /login to authenticate.',
+      '401 Unauthorized',
+      'invalid api key',
+      'authentication failed',
+    ]) {
+      expect(canFallbackAfterFailure('engine-unavailable', text), text).toBe(false)
+    }
+  })
+
+  it('does NOT fall back on an exhausted turn budget — the brief, not the engine, failed', () => {
+    expect(canFallbackAfterFailure('budget-exhausted', 'Reached max turns (10)')).toBe(false)
+  })
+})
+
+describe('fallbackReviewerEnabled: the FLEET_REVIEW_FALLBACK operator dial', () => {
+  const ENV = 'FLEET_REVIEW_FALLBACK'
+  let saved: string | undefined
+  beforeEach(() => { saved = process.env[ENV] })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
+  })
+
+  it('defaults to enabled (on) when unset — one toggle for both directions', () => {
+    delete process.env[ENV]
+    expect(fallbackReviewerEnabled()).toBe(true)
+  })
+  it('stays enabled for the explicit value', () => {
+    process.env[ENV] = 'on'
+    expect(fallbackReviewerEnabled()).toBe(true)
+  })
+  it('only the literal "off" disables it', () => {
+    process.env[ENV] = 'off'
+    expect(fallbackReviewerEnabled()).toBe(false)
+  })
+})
+
+describe('kimiReviewModel: the optional FLEET_REVIEW_KIMI_MODEL dial', () => {
+  const ENV = 'FLEET_REVIEW_KIMI_MODEL'
+  let saved: string | undefined
+  beforeEach(() => { saved = process.env[ENV] })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
+  })
+
+  it('unset means kimi resolves its own default (empty string, no --model)', () => {
+    delete process.env[ENV]
+    expect(kimiReviewModel()).toBe('')
+    expect(kimiArgs({ prompt: 'p', exportDir: '/x' })).not.toContain('--model')
+  })
+
+  it('set, it rides the kimi argv (wired by runKimiOnce exactly like this)', () => {
+    process.env[ENV] = 'kimi-for-coding-pro'
+    const args = kimiArgs({ prompt: 'p', exportDir: '/x', model: kimiReviewModel() })
+    expect(args[args.indexOf('--model') + 1]).toBe('kimi-for-coding-pro')
+  })
+})
+
+describe('kimiBinaryOnPath: command -v kimi as code', () => {
+  let dir: string
+  afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined as never })
+
+  it('finds an executable kimi on the given PATH', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    writeFileSync(join(dir, KIMI_REVIEWER_ENGINE), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(dir, KIMI_REVIEWER_ENGINE), 0o755)
+    expect(kimiBinaryOnPath(dir)).toBe(KIMI_REVIEWER_ENGINE)
+  })
+
+  it('returns undefined when kimi is absent — whichever position kimi holds, the gate never half-runs', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    expect(kimiBinaryOnPath(dir)).toBeUndefined()
+    expect(kimiBinaryOnPath('')).toBeUndefined()
+    expect(kimiBinaryOnPath(undefined)).toBeUndefined()
+  })
+
+  it('ignores a non-executable file named kimi', () => {
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-path-'))
+    writeFileSync(join(dir, KIMI_REVIEWER_ENGINE), 'not executable')
+    expect(kimiBinaryOnPath(dir)).toBeUndefined()
+  })
+})
+
+describe('decodeKimiOutput: the kimi stream-json envelope', () => {
+  // VERBATIM shape from the installed kimi binary (`kimi --output-format
+  // stream-json -p`), captured live while building this reviewer path: meta
+  // events around role:"assistant" messages whose string content is the
+  // assistant text. Hand-written fixtures would only prove the decoder
+  // matches a guess at the shape.
+  const PASS_STREAM = [
+    JSON.stringify({ role: 'meta', type: 'system.version', version: '2.1.1' }),
+    JSON.stringify({ role: 'assistant', content: 'VERDICT: PASS' }),
+    JSON.stringify({ role: 'meta', type: 'session.resume_hint', session_id: 's', command: 'kimi -r s', content: 'To resume this session: kimi -r s' }),
+  ].join('\n')
+
+  it('extracts the assistant text so the VERDICT final-line contract is identical to the claude path', () => {
+    const run = decodeKimiOutput(PASS_STREAM, '')
+    expect(run.assistantText).toBe('VERDICT: PASS')
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('reads a FAIL verdict with its reason the same way', () => {
+    const stream = PASS_STREAM.replace('VERDICT: PASS', 'VERDICT: FAIL — leaks the hub key into the log')
+    const run = decodeKimiOutput(stream, '')
+    expect(parseVerdict(run.assistantText)).toBe('FAIL')
+  })
+
+  it('takes the LAST assistant message — an intermediate reasoning message cannot supply the verdict', () => {
+    const stream = [
+      JSON.stringify({ role: 'assistant', content: 'My first read said the diff was fine.' }),
+      JSON.stringify({ role: 'assistant', content: 'On closer inspection:\nVERDICT: FAIL — weakens the session check' }),
+    ].join('\n')
+    expect(parseVerdict(decodeKimiOutput(stream, '').assistantText)).toBe('FAIL')
+  })
+
+  it('falls back to raw stdout when the output is not JSON, so an engine that changes its envelope still reviews', () => {
+    const plain = 'looks fine to me\nVERDICT: PASS'
+    const run = decodeKimiOutput(plain, '')
+    expect(run.assistantText).toBe(plain)
+    expect(parseVerdict(run.assistantText)).toBe('PASS')
+  })
+
+  it('keeps stderr as diagnostics', () => {
+    expect(decodeKimiOutput(PASS_STREAM, 'some stderr noise').diagnostics).toMatch(/some stderr noise/)
+  })
+})
+
+describe('kimiArgs: the kimi invocation (identical in either position)', () => {
+  it('carries the SAME brief as one -p argument, the read-only agent profile, and the export grant', () => {
+    const prompt = 'the full review brief\n## Diff\n...'
+    const args = kimiArgs({ prompt, exportDir: '/tmp/export' })
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(args[args.indexOf('-p') + 1]).toBe(prompt)
+    expect(args[args.indexOf('--add-dir') + 1]).toBe('/tmp/export')
+    expect(args[args.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
+  })
+
+  it('never asks for an auto/yolo permission mode and never names a claude model', () => {
+    const joined = kimiArgs({ prompt: 'x', exportDir: '/x' }).join(' ')
+    expect(joined).not.toMatch(/\byolo\b|\bauto\b|--dangerously/)
+  })
+
+  it('points --agent-file at a committed profile whose tool allowlist matches REVIEWER_TOOLS and disallows the shell', () => {
+    const profile = readFileSync(REVIEWER_AGENT_FILE, 'utf8')
+    for (const tool of REVIEWER_TOOLS) expect(profile).toMatch(new RegExp(`^\\s+- ${tool}$`, 'm'))
+    expect(profile).toMatch(/^tools:/m)
+    expect(profile).toMatch(/Bash/)
+    // And the workflow's smoke step references this exact committed file.
+    const yml = readFileSync(join(process.cwd(), '.github', 'workflows', 'fleet-review.yml'), 'utf8')
+    expect(yml).toContain('orchestrator/reviewer-readonly.agent.md')
+  })
+})
+
+describe('toSecondOpinion: engine attribution', () => {
+  it('labels a PRIMARY verdict "reviewed by <engine>" without disturbing the verdict line itself', () => {
+    const r = toSecondOpinion({ reached: true, engine: 'kimi', assistantText: 'looks fine\nVERDICT: PASS', diagnostics: '' })
+    expect(r.verdict).toBe('PASS')
+    expect(r.engine).toBe('kimi')
+    expect(r.text).toMatch(/^reviewed by kimi\n\n/)
+    // The attribution sits ABOVE the reviewer's text, so the same final-line
+    // selection every consumer uses still lands on the verdict line, never
+    // on the attribution.
+    expect(finalLineOf(r.text)).toBe('VERDICT: PASS')
+  })
+
+  it('labels a FALLBACK verdict "reviewed by <engine> (<primary> unavailable)"', () => {
+    const r = toSecondOpinion({ reached: true, engine: 'claude', fallbackFor: 'kimi', assistantText: 'VERDICT: PASS', diagnostics: '' })
+    expect(r.engine).toBe('claude')
+    expect(r.text).toMatch(/^reviewed by claude \(kimi unavailable\)\n\n/)
+    expect(finalLineOf(r.text)).toBe('VERDICT: PASS')
+  })
+
+  it('adds no attribution to EngineRuns built outside invokeVerifierEngine (no engine field)', () => {
+    const r = toSecondOpinion({ reached: true, assistantText: 'VERDICT: PASS', diagnostics: '' })
+    expect(r.text).toBe('VERDICT: PASS')
+  })
+
+  it('names both engines when the fallback also failed', () => {
+    const r = toSecondOpinion({ reached: false, engine: 'claude', fallbackFor: 'kimi', assistantText: '', diagnostics: 'kimi quota; claude unreachable', failureKind: 'engine-unavailable' })
+    expect(r.verdict).toBe('UNREADABLE')
+    expect(r.text).toContain('both reviewer engines failed')
+    expect(r.text).toContain('kimi could not run')
+  })
+
+  function finalLineOf(text: string): string | undefined {
+    return text.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0).at(-1)
+  }
+})
+
+describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked engines)', () => {
+  const ENV_FB = 'FLEET_REVIEW_FALLBACK'
+  const ENV_PRIMARY = 'FLEET_REVIEW_PRIMARY'
+  let savedFallback: string | undefined
+  let savedPrimary: string | undefined
+  let savedPath: string | undefined
+  let kimiDir: string
+  let snapshotDir: string
+
+  const okReport = {
+    passed: true as const, reasons: [], changedFiles: ['apps/worker/x.ts'], addedLines: 1,
+    impact: 'low' as const, impactReasons: [],
+  }
+
+  const QUOTA_ERR = Object.assign(new Error('Command failed'), {
+    stdout: '', stderr: '429 Too Many Requests — usage limit reached for this account',
+  })
+  const AUTH_ERR = Object.assign(new Error('Command failed'), {
+    stdout: '', stderr: 'Error: not logged in. Please run /login to authenticate.',
+  })
+  const KIMI_PASS_STREAM = JSON.stringify({ role: 'assistant', content: 'checked the diff\nVERDICT: PASS' })
+  const CLAUDE_PASS = 'checked the diff\nVERDICT: PASS'
+
+  beforeEach(() => {
+    savedFallback = process.env[ENV_FB]
+    savedPrimary = process.env[ENV_PRIMARY]
+    savedPath = process.env['PATH']
+    process.env[ENV_FB] = 'on'
+    delete process.env[ENV_PRIMARY] // kimi primary — the default
+    kimiDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-bin-'))
+    writeFileSync(join(kimiDir, 'kimi'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(kimiDir, 'kimi'), 0o755)
+    process.env['PATH'] = `${kimiDir}${delimiter}${savedPath ?? ''}`
+    snapshotDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-review-snapshot-'))
+  })
+
+  afterEach(() => {
+    if (savedFallback === undefined) delete process.env[ENV_FB]
+    else process.env[ENV_FB] = savedFallback
+    if (savedPrimary === undefined) delete process.env[ENV_PRIMARY]
+    else process.env[ENV_PRIMARY] = savedPrimary
+    process.env['PATH'] = savedPath
+    rmSync(kimiDir, { recursive: true, force: true })
+    rmSync(snapshotDir, { recursive: true, force: true })
+    mockExecFile.mockReset()
+  })
+
+  async function runSecondOpinion(diff = 'diff --git a/x b/x'){
+    const { secondOpinion } = await import('../../orchestrator/src/review.js')
+    return secondOpinion({
+      authorEngine: 'claude', pr: '1', snapshotDir, diff, report: okReport,
+    })
+  }
+
+  it('kimi PRIMARY happy path: one kimi call, no claude, verdict labelled "reviewed by kimi"', async () => {
+    mockExecFileResolves(KIMI_PASS_STREAM)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toMatch(/^reviewed by kimi\n\n/)
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+    const [binary, argv] = mockExecFile.mock.calls[0] as [string, string[], ...unknown[]]
+    expect(binary).toBe('kimi')
+    // The SAME brief: the -p argument carries the diff and the reviewer's
+    // contract, not a summary or a fresh prompt.
+    const brief = argv[argv.indexOf('-p') + 1] as string
+    expect(brief).toContain('diff --git a/x b/x')
+    expect(brief).toContain('non-author reviewer')
+    expect(brief).toContain('VERDICT: PASS')
+    expect(argv[argv.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
+    expect(argv[argv.indexOf('--add-dir') + 1]).toBe(snapshotDir)
+  })
+
+  it('kimi cannot-run (quota) → the SAME brief retries through claude, labelled "reviewed by claude (kimi unavailable)"', async () => {
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    mockExecFile.mockResolvedValueOnce({ stdout: CLAUDE_PASS, stderr: '' })
+
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('claude')
+    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\)\n\n/)
+
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+    const [kimiBinary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
+    const [claudeBinary, claudeArgv] = mockExecFile.mock.calls[1] as [string, string[], ...unknown[]]
+    expect(kimiBinary).toBe('kimi')
+    expect(claudeBinary).toBe('claude')
+    // claude's read-only posture is unchanged: plan mode, tool restriction,
+    // the export grant, never the skip-permissions flag.
+    expect(claudeArgv[claudeArgv.indexOf('--permission-mode') + 1]).toBe('plan')
+    expect(claudeArgv[claudeArgv.indexOf('--tools') + 1]).toBe(REVIEWER_TOOLS.join(','))
+    expect(claudeArgv[claudeArgv.indexOf('--add-dir') + 1]).toBe(snapshotDir)
+    expect(claudeArgv).not.toContain('--dangerously-skip-permissions')
+    // The brief reaches claude VERBATIM over stdin's twin: the prompt the
+    // kimi -p argument carried.
+    const kimiArgv = mockExecFile.mock.calls[0]?.[1] as string[]
+    expect(claudeArgv.join(' ')).not.toContain('diff --git') // prompt is NOT an argv element on the claude path
+    expect(kimiArgv[kimiArgv.indexOf('-p') + 1]).toContain('diff --git a/x b/x')
+  })
+
+  it('with the fallback toggle off, a kimi cannot-run reports engine-unavailable exactly as a fallback-less gate would — claude never invoked', async () => {
+    process.env[ENV_FB] = 'off'
+    mockExecFileRejects(QUOTA_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-unavailable')
+    expect(result.engine).toBe('kimi')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('an auth-failure-shaped KIMI error does NOT cross engines — it stays loud as engine-unavailable', async () => {
+    mockExecFileRejects(AUTH_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-unavailable')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toContain('not logged in')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('a substantive kimi FAIL is never retried through claude', async () => {
+    mockExecFileResolves(JSON.stringify({ role: 'assistant', content: 'VERDICT: FAIL — writes the hub key to the log' }))
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('FAIL')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).not.toContain('claude')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('kimi missing from PATH is a cannot-run: the review starts on claude instead (never a half-run)', async () => {
+    // A PATH with NO kimi at all — kimiDir itself holds the fake, so it
+    // cannot stand in for the absent case.
+    const bareDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-no-kimi-'))
+    process.env['PATH'] = bareDir
+    mockExecFileResolves(CLAUDE_PASS)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('claude')
+    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\)\n\n/)
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+    const [binary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
+    expect(binary).toBe('claude')
+    rmSync(bareDir, { recursive: true, force: true })
+  })
+
+  it('a brief over the single-argv-element cap cannot run kimi: claude carries it instead (E2BIG guard)', async () => {
+    mockExecFileResolves(CLAUDE_PASS)
+    const result = await runSecondOpinion(`diff --git a/x b/x\n${'x'.repeat(KIMI_PROMPT_MAX_CHARS + 1)}`)
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('claude')
+    expect(mockExecFile).toHaveBeenCalledTimes(1) // kimi never exec'd — skipped pre-flight
+  })
+
+  it('when BOTH engines fail, one UNREADABLE names both and carries both diagnostics', async () => {
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    mockExecFile.mockRejectedValueOnce(Object.assign(new Error('Command failed'), {
+      stdout: '', stderr: 'claude provider unreachable',
+    }))
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.engine).toBe('claude')
+    expect(result.text).toContain('both reviewer engines failed')
+    expect(result.text).toContain('usage limit reached')
+    expect(result.text).toContain('claude provider unreachable')
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('a claude-side failure as FALLBACK still classifies (model-id misconfiguration is visible even from the fallback arm)', async () => {
+    const err = Object.assign(new Error('Command failed'), {
+      stdout: "There's an issue with the selected model (bogus). It may not exist or you may not have access to it.",
+      stderr: '"bogus" isn\'t described by this version\'s model catalog; [claude-code:unrecognized_model]',
+    })
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR) // kimi primary: quota
+    mockExecFile.mockRejectedValueOnce(err)          // claude fallback: bad model id
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('engine-misconfigured')
+    expect(result.text).toContain('both reviewer engines failed')
+  })
+
+  it('FLEET_REVIEW_PRIMARY=claude restores claude-first order symmetrically (claude happy path, kimi untouched)', async () => {
+    process.env[ENV_PRIMARY] = 'claude'
+    mockExecFileResolves(CLAUDE_PASS)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('claude')
+    expect(result.text).toMatch(/^reviewed by claude\n\n/)
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+    const [binary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
+    expect(binary).toBe('claude')
+  })
+
+  it('claude-first order: a claude cannot-run retries through kimi, labelled "reviewed by kimi (claude unavailable)"', async () => {
+    process.env[ENV_PRIMARY] = 'claude'
+    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    mockExecFile.mockResolvedValueOnce({ stdout: KIMI_PASS_STREAM, stderr: '' })
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toMatch(/^reviewed by kimi \(claude unavailable\)\n\n/)
+    expect(mockExecFile).toHaveBeenCalledTimes(2)
+    const [firstBinary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
+    expect(firstBinary).toBe('claude')
+  })
+
+  it('claude-first order: a claude auth failure stays loud — kimi never invoked', async () => {
+    process.env[ENV_PRIMARY] = 'claude'
+    mockExecFileRejects(AUTH_ERR)
+    const result = await runSecondOpinion()
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.engine).toBe('claude')
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
   })
 })
