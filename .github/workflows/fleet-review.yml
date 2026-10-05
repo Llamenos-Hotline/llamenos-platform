@@ -1350,7 +1350,10 @@ jobs:
           # kimi reviewer runs its full default tool set, shell included — a
           # read-only reviewer in name only — so a missing profile is a hard
           # configuration failure, not a degradation.
-          fallback_agent="orchestrator/reviewer-readonly.agent.md"
+          # Resolve ABSOLUTE before any `cd`: the invocations below run from a
+          # scratch dir ($root), where a relative path would dangle (the kimi
+          # smoke failed with ENOENT on $root/orchestrator/... otherwise).
+          fallback_agent="$(readlink -f orchestrator/reviewer-readonly.agent.md)"
           # kimi model suffix, from the SAME resolved invocation as the
           # binary ($rev_model is the kimi model when rev_engine is kimi):
           # EMPTY means kimi resolves its own configured default, and the
