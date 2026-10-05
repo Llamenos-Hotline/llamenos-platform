@@ -20,6 +20,19 @@ DAY_OF_WEEK="$(date -u +%u)"
 DAY_OF_MONTH="$(date -u +%d)"
 MANIFEST_MODE=false
 
+# Encryption is mandatory. This runs BEFORE any plaintext is written to
+# disk, so a misconfigured host produces no backup rather than an
+# unencrypted one. See #1125: the config archive carries every service
+# .env, and both archives are uploaded to the same offsite remote, so an
+# unencrypted backup ships the secrets that protect the encrypted data.
+if [ -z "${AGE_RECIPIENT}" ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [config] FATAL: backup_age_public_key is not set." >&2
+  echo "  Refusing to write an unencrypted backup. Generate a key with" >&2
+  echo "  'age-keygen -o backup-key.txt', keep the private half OFF this host," >&2
+  echo "  and set backup_age_public_key in deploy/ansible/vars.yml." >&2
+  exit 1
+fi
+
 BACKUP_TYPE="daily"
 for arg in "$@"; do
   case "$arg" in
@@ -82,16 +95,10 @@ log "Config archive: ${DUMP_SIZE} bytes"
 DUMP_SHA256="$(sha256sum "${TAR_FILE}" | cut -d' ' -f1)"
 
 # Step 5: Encrypt with age (if configured)
-if [ -n "${AGE_RECIPIENT}" ]; then
-  FILENAME="llamenos-config-${TIMESTAMP}.tar.gz.age"
-  log "Encrypting backup with age..."
-  age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
-  rm -f "${TAR_FILE}"
-else
-  FILENAME="llamenos-config-${TIMESTAMP}.tar.gz"
-  mv "${TAR_FILE}" "${TMPDIR}/${FILENAME}"
-  log "WARNING: No age public key configured. Backup is NOT encrypted."
-fi
+FILENAME="llamenos-config-${TIMESTAMP}.tar.gz.age"
+log "Encrypting backup with age..."
+age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
+rm -f "${TAR_FILE}"
 
 FINAL_SIZE="$(stat -c%s "${TMPDIR}/${FILENAME}")"
 

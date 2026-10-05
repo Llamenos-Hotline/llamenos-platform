@@ -8,10 +8,31 @@
 # - Optional rclone upload to off-site storage
 # - Manifest logging with SHA-256 checksums
 
+- name: Skip if postgres not enabled on this deployment
+  ansible.builtin.meta: end_role
+  when: not (llamenos_postgres_enabled | default(true))
+
+- name: Skip if postgres is not assigned to this host
+  ansible.builtin.meta: end_role
+  when: >
+    groups.get('llamenos_db', []) | length > 0 and
+    inventory_hostname not in groups.get('llamenos_db', [])
+
+# Checked before reaching for apt so the role is a no-op on a host that
+# already has age (and so it can run unprivileged where age is provided
+# out of band, which is how playbooks/verify-backup-restore.yml exercises
+# these roles without root).
+- name: Check whether age is already installed
+  ansible.builtin.command: age --version
+  register: age_installed
+  changed_when: false
+  failed_when: false
+
 - name: Install age encryption tool
   ansible.builtin.apt:
     name: age
     state: present
+  when: age_installed.rc != 0
 
 - name: Create PostgreSQL backup directories
   ansible.builtin.file:
@@ -25,15 +46,6 @@
     - weekly
     - monthly
 
-- name: Create WAL archive directory
-  ansible.builtin.file:
-    path: "{{ backup_postgres_wal_dir }}"
-    state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_group }}"
-    mode: "0700"
-  when: backup_postgres_wal_enabled
-
 - name: Template PostgreSQL backup script
   ansible.builtin.template:
     src: backup-postgres.sh.j2
@@ -46,8 +58,12 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-postgres.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_pg_backup
-  changed_when: "'Backup complete' in initial_pg_backup.stdout"
-  ignore_errors: true
+  # The script prints "PostgreSQL backup complete" (lowercase b). The old
+  # match string was "Backup complete", so this task reported "ok" whether
+  # the backup ran or not -- and ignore_errors hid a hard failure on top
+  # of that (#1125). The script exits non-zero on any real failure, so no
+  # ignore_errors: a backup that cannot run must fail the deploy.
+  changed_when: "'backup complete' in initial_pg_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:

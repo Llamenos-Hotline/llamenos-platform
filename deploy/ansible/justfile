@@ -12,6 +12,18 @@
 #   ansible-vault encrypt vars.yml
 #   just setup-all
 
+# Deployment root on the target host. Mirrors `app_dir` in vars.yml.
+# NOTE: this must be a just variable, not `{{ app_dir | default(...) }}`.
+# That is Ansible expression syntax; just parses `{{ ... }}` as its own
+# interpolation and rejects the `|`, which made the entire justfile fail
+# to parse -- every recipe here, including `just backup` and
+# `just restore`, was unreachable (#1125).
+APP_DIR := env_var_or_default("LLAMENOS_APP_DIR", "/opt/llamenos")
+
+# Target host for the few recipes that ssh directly instead of going
+# through Ansible. Set LLAMENOS_HOST, or use the ansible-based recipes.
+HOST := env_var_or_default("LLAMENOS_HOST", "")
+
 # Default recipe: show available commands
 default:
     @just --list
@@ -126,9 +138,13 @@ restore *ARGS:
 restore-dry-run *ARGS:
     ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_dry_run=true {{ARGS}}
 
-# Test backup restoration in isolated container (non-destructive)
+# Restore the host's latest REAL backup into a scratch container (monthly drill)
 test-restore *ARGS:
     ansible-playbook playbooks/test-restore.yml --ask-vault-pass {{ARGS}}
+
+# Local round trip: back up known content, destroy it, restore, assert it came back
+verify-backup-restore *ARGS:
+    scripts/verify-backup-restore.sh {{ARGS}}
 
 # ── Observability ─────────────────────────────────────────────────
 
@@ -210,27 +226,27 @@ watchdog-status *ARGS:
 
 # Run maintenance cleanup manually
 maintenance-run *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/maintenance-cleanup.sh" --become --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "{{APP_DIR}}/scripts/maintenance-cleanup.sh" --become --ask-vault-pass {{ARGS}}
 
 # Run PostgreSQL vacuum manually
 vacuum-run *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/maintenance-vacuum.sh" --become --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "{{APP_DIR}}/scripts/maintenance-vacuum.sh" --become --ask-vault-pass {{ARGS}}
 
 # Check NTP drift status
 ntp-status *ARGS:
-    ansible all -m shell -a "chronyc tracking; echo '---'; tail -5 {{ app_dir | default('/opt/llamenos') }}/logs/ntp-monitor.log 2>/dev/null || echo 'No NTP monitor log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "chronyc tracking; echo '---'; tail -5 {{APP_DIR}}/logs/ntp-monitor.log 2>/dev/null || echo 'No NTP monitor log yet'" --ask-vault-pass {{ARGS}}
 
 # Check disk space and recent alerts
 disk-status *ARGS:
-    ansible all -m shell -a "df -h /opt/llamenos; echo '---'; tail -5 {{ app_dir | default('/opt/llamenos') }}/logs/disk-monitor.log 2>/dev/null || echo 'No disk monitor log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "df -h /opt/llamenos; echo '---'; tail -5 {{APP_DIR}}/logs/disk-monitor.log 2>/dev/null || echo 'No disk monitor log yet'" --ask-vault-pass {{ARGS}}
 
 # Check certificate expiry
 cert-status *ARGS:
-    ansible all -m shell -a "{{ app_dir | default('/opt/llamenos') }}/scripts/cert-monitor.sh 2>&1 || echo 'Cert monitor not configured'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "{{APP_DIR}}/scripts/cert-monitor.sh 2>&1 || echo 'Cert monitor not configured'" --ask-vault-pass {{ARGS}}
 
 # View recent watchdog logs
 watchdog-logs *ARGS:
-    ansible all -m shell -a "tail -50 {{ app_dir | default('/opt/llamenos') }}/logs/watchdog.log 2>/dev/null || echo 'No watchdog log yet'" --ask-vault-pass {{ARGS}}
+    ansible all -m shell -a "tail -50 {{APP_DIR}}/logs/watchdog.log 2>/dev/null || echo 'No watchdog log yet'" --ask-vault-pass {{ARGS}}
 
 # Deploy only auto-healing components
 deploy-auto-healing *ARGS:
@@ -242,15 +258,15 @@ deploy-auto-healing *ARGS:
 # Test alert delivery
 test-alerts *ARGS:
     ansible-playbook playbooks/deploy.yml --ask-vault-pass --tags alerting {{ARGS}}
-    ssh -t {{ ansible_host }} "{{ app_dir | default('/opt/llamenos') }}/alerting/test-alerts.sh"
+    ssh -t {{HOST}} "{{APP_DIR}}/alerting/test-alerts.sh"
 
 # View recent alerts
 alert-log *ARGS:
-    ssh {{ ansible_host }} "tail -50 {{ app_dir | default('/opt/llamenos') }}/alerting/alerts.log"
+    ssh {{HOST}} "tail -50 {{APP_DIR}}/alerting/alerts.log"
 
 # View current alert state
 alert-state *ARGS:
-    ssh {{ ansible_host }} "cat {{ app_dir | default('/opt/llamenos') }}/alerting/state.json | jq ."
+    ssh {{HOST}} "cat {{APP_DIR}}/alerting/state.json | jq ."
 
 # Run full disaster recovery test
 dr-test *ARGS:
@@ -258,13 +274,9 @@ dr-test *ARGS:
 
 # View DR drill history and next scheduled drill
 dr-status:
-    @cat {{ app_dir }}/dr-results/*.json 2>/dev/null | jq -s 'sort_by(.date) | .[-5:]' || echo "No DR test results found"
+    @cat {{APP_DIR}}/dr-results/*.json 2>/dev/null | jq -s 'sort_by(.date) | .[-5:]' || echo "No DR test results found"
     @echo ""
     @echo "DR Scenarios: docs/DR_SCENARIOS.md"
-
-# Restore from latest backup (production — use with caution)
-restore *ARGS:
-    ansible-playbook playbooks/test-restore.yml --ask-vault-pass {{ARGS}}
 
 # Generate secrets for a new deployment
 generate-secrets:

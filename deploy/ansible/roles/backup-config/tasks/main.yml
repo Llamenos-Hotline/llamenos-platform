@@ -9,10 +9,21 @@
 # - Retention policy (daily/weekly/monthly)
 # - Manifest logging with SHA-256 checksums
 
+# Checked before reaching for apt so the role is a no-op on a host that
+# already has age (and so it can run unprivileged where age is provided
+# out of band, which is how playbooks/verify-backup-restore.yml exercises
+# these roles without root).
+- name: Check whether age is already installed
+  ansible.builtin.command: age --version
+  register: age_installed
+  changed_when: false
+  failed_when: false
+
 - name: Install age encryption tool
   ansible.builtin.apt:
     name: age
     state: present
+  when: age_installed.rc != 0
 
 - name: Create config backup directories
   ansible.builtin.file:
@@ -38,8 +49,11 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-config.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_config_backup
-  changed_when: "'Backup complete' in initial_config_backup.stdout"
-  ignore_errors: true
+  # See the note in roles/backup-postgres/tasks/main.yml: the match string
+  # never matched the script's output and ignore_errors hid failures
+  # (#1125). The config archive holds every service .env, so a silent
+  # failure here means the secrets are not backed up at all.
+  changed_when: "'backup complete' in initial_config_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:

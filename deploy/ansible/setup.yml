@@ -60,6 +60,22 @@
     - observability
     - deploy
 
+# Backups are part of a deployment, not a separate thing an operator has
+# to remember to run by full path afterwards. Before this import, a
+# freshly deployed host had no backup scripts and no cron at all: nothing
+# in setup.yml, deploy.yml, deploy-official.sh or any workflow referenced
+# playbooks/backup.yml (#1125).
+#
+# It runs after deploy (the roles take an initial backup, which needs the
+# services up) and before smoke-check (so a host that cannot back itself
+# up fails the deploy rather than passing it).
+- name: Install and verify backups
+  ansible.builtin.import_playbook: playbooks/backup.yml
+  when: backup_enabled | default(true) | bool
+  tags:
+    - backup
+    - deploy
+
 - name: Smoke-check validation
   ansible.builtin.import_playbook: playbooks/smoke-check.yml
   tags:

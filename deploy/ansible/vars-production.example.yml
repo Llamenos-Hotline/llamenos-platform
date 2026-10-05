@@ -105,6 +105,7 @@ storage_secret_key: ""           # openssl rand -base64 24 (>= 16 chars)
 
 # ─── Backups (playbooks/backup.yml) ──────────────────────────────
 # age PUBLIC key only. Keep the private key OFF the server (age-keygen -o key.txt).
+# REQUIRED: preflight fails without it and no unencrypted backup path exists.
 backup_age_public_key: ""        # age1...  (59 chars)
 # Off-site copy (rclone remote you configured on the server). Empty = local only.
 backup_rclone_remote: ""

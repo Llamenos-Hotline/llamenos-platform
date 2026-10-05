@@ -22,6 +22,19 @@ DAY_OF_WEEK="$(date -u +%u)"
 DAY_OF_MONTH="$(date -u +%d)"
 MANIFEST_MODE=false
 
+# Encryption is mandatory. This runs BEFORE any plaintext is written to
+# disk, so a misconfigured host produces no backup rather than an
+# unencrypted one. See #1125: the config archive carries every service
+# .env, and both archives are uploaded to the same offsite remote, so an
+# unencrypted backup ships the secrets that protect the encrypted data.
+if [ -z "${AGE_RECIPIENT}" ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [rustfs] FATAL: backup_age_public_key is not set." >&2
+  echo "  Refusing to write an unencrypted backup. Generate a key with" >&2
+  echo "  'age-keygen -o backup-key.txt', keep the private half OFF this host," >&2
+  echo "  and set backup_age_public_key in deploy/ansible/vars.yml." >&2
+  exit 1
+fi
+
 BACKUP_TYPE="daily"
 for arg in "$@"; do
   case "$arg" in
@@ -37,43 +50,76 @@ log() {
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
 
-SYNC_DIR="${TMPDIR}/rustfs-sync"
-mkdir -p "${SYNC_DIR}"
-
 log "Starting ${BACKUP_TYPE} RustFS backup..."
 
-# Step 1: Sync bucket contents using rclone or aws CLI
-# Prefer rclone if available, fall back to aws s3 sync
-if command -v rclone &>/dev/null; then
-  rclone sync \
-    "s3:{{ backup_rustfs_bucket }}" \
-    "${SYNC_DIR}/" \
-    --s3-provider=Minio \
-    --s3-endpoint="http://localhost:9000" \
-    {% if backup_rustfs_remove_deleted %}--delete{% endif %} \
-    2>&1 || true
-elif command -v aws &>/dev/null; then
-  aws s3 sync \
-    "s3://{{ backup_rustfs_bucket }}/" \
-    "${SYNC_DIR}/" \
-    --endpoint-url="http://localhost:9000" \
-    {% if backup_rustfs_remove_deleted %}--delete{% endif %} \
-    2>&1 || true
-else
-  log "WARNING: Neither rclone nor aws CLI available. Attempting docker-based sync..."
-  CONTAINER_NAME="$(docker compose -f "${COMPOSE_FILE}" ps -q rustfs)"
-  docker compose -f "${COMPOSE_FILE}" exec -T rustfs \
-    sh -c "aws s3 sync s3://${RUSTFS_BUCKET}/ /tmp/rustfs-sync/ --endpoint-url http://localhost:9000 {% if backup_rustfs_remove_deleted %}--delete{% endif %} 2>&1" || true
-  docker cp "${CONTAINER_NAME}:/tmp/rustfs-sync/." "${SYNC_DIR}/" 2>/dev/null || true
+# Step 1: Archive the RustFS data volume directly.
+#
+# The previous implementation shelled `rclone sync s3:<bucket>` against a
+# remote named "s3" that no role ever configures, with no credentials, and
+# swallowed every failure with `|| true`; the `aws s3 sync` fallback ran
+# inside an image that has no AWS CLI. Every branch produced an empty
+# directory, which was then tarred and stored as the day's backup (#1125).
+#
+# RustFS persists objects as files under /data, which is a named Docker
+# volume. Reading that volume with a helper container needs no S3 client,
+# no credentials and no network, and it captures every object rather than
+# whatever a bucket listing happened to return.
+CONTAINER_ID="$(docker compose -f "${COMPOSE_FILE}" ps -q rustfs)"
+if [ -z "${CONTAINER_ID}" ]; then
+  log "FATAL: rustfs service is not running under ${COMPOSE_FILE}"
+  exit 1
 fi
 
-OBJECT_COUNT="$(find "${SYNC_DIR}" -type f | wc -l)"
-log "Synced ${OBJECT_COUNT} objects"
+{% raw %}
+DATA_VOLUME="$(docker inspect \
+  --format '{{ range .Mounts }}{{ if eq .Destination "/data" }}{{ .Name }}{{ end }}{{ end }}' \
+  "${CONTAINER_ID}")"
+{% endraw %}
 
-# Step 2: Tar and compress
+if [ -z "${DATA_VOLUME}" ]; then
+  log "FATAL: could not resolve the Docker volume backing /data on the rustfs container"
+  exit 1
+fi
+
+log "Archiving RustFS volume ${DATA_VOLUME}"
+
+HELPER_IMAGE="{{ backup_rustfs_helper_image | default('alpine:3.22') }}"
+
+OBJECT_COUNT="$(docker run --rm \
+  -v "${DATA_VOLUME}:/data:ro" \
+  "${HELPER_IMAGE}" \
+  sh -c 'find /data -type f | wc -l' | tr -d '[:space:]')"
+log "RustFS volume holds ${OBJECT_COUNT} files"
+
+# An empty result is now honest -- it means the volume really is empty,
+# not that the sync tooling silently failed -- so it is a loud warning
+# rather than an error, and the count goes into the manifest either way.
+# The unreadable-volume and service-down cases above are hard failures,
+# which is where the old "empty archive stored as today's backup" false
+# confidence actually came from.
+if [ "${OBJECT_COUNT}" -eq 0 ]; then
+  log "WARNING: the RustFS volume contains no files. This is expected only"
+  log "  on a deployment that has never stored an attachment."
+fi
+
+# Step 2: Stream the volume out as a tarball.
+#
+# The helper container runs as root (it has to, to read objects the
+# service wrote), so it must not create files in this script's working
+# directory: this script runs as the unprivileged deploy user, and a
+# root-owned staging tree here makes the cleanup below fail with EPERM.
+# Writing the tar to the redirect means the archive is created by THIS
+# shell, owned by the right user, with no intermediate copy on disk.
+#
+# The volume is mounted read-only, so the running service is untouched.
+# Objects written mid-archive may be missed -- the same window any
+# filesystem-level snapshot has. The pg_dump is the consistency anchor,
+# and attachments are immutable once written.
 TAR_FILE="${TMPDIR}/llamenos-rustfs-${TIMESTAMP}.tar.gz"
-tar -czf "${TAR_FILE}" -C "${SYNC_DIR}" .
-rm -rf "${SYNC_DIR}"
+docker run --rm \
+  -v "${DATA_VOLUME}:/data:ro" \
+  "${HELPER_IMAGE}" \
+  tar -czf - -C /data . > "${TAR_FILE}"
 
 DUMP_SIZE="$(stat -c%s "${TAR_FILE}")"
 log "Compressed archive: ${DUMP_SIZE} bytes"
@@ -82,16 +128,10 @@ log "Compressed archive: ${DUMP_SIZE} bytes"
 DUMP_SHA256="$(sha256sum "${TAR_FILE}" | cut -d' ' -f1)"
 
 # Step 4: Encrypt with age (if configured)
-if [ -n "${AGE_RECIPIENT}" ]; then
-  FILENAME="llamenos-rustfs-${TIMESTAMP}.tar.gz.age"
-  log "Encrypting backup with age..."
-  age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
-  rm -f "${TAR_FILE}"
-else
-  FILENAME="llamenos-rustfs-${TIMESTAMP}.tar.gz"
-  mv "${TAR_FILE}" "${TMPDIR}/${FILENAME}"
-  log "WARNING: No age public key configured. Backup is NOT encrypted."
-fi
+FILENAME="llamenos-rustfs-${TIMESTAMP}.tar.gz.age"
+log "Encrypting backup with age..."
+age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
+rm -f "${TAR_FILE}"
 
 FINAL_SIZE="$(stat -c%s "${TMPDIR}/${FILENAME}")"
 

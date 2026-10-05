@@ -124,16 +124,27 @@
 
 # ─── Scan Docker Compose File for Misconfigurations ─────────────────
 
+# Scans every per-service Compose project. The old single-path guard
+# pointed at {{ app_dir }}/docker-compose.yml, which the production deploy
+# never creates, so this scan degraded to a silent no-op (#1121).
 - name: Scan Docker Compose configuration
   ansible.builtin.shell: |
-    if [ -f "{{ app_dir }}/docker-compose.yml" ]; then
+    set -u
+    shopt -s nullglob
+    found=0
+    for f in {{ llamenos_compose_glob }}; do
+      found=1
+      echo "── ${f}"
       trivy config \
         --severity {{ security_scan_severity | default('CRITICAL,HIGH') }} \
         --exit-code 0 \
-        "{{ app_dir }}/docker-compose.yml" 2>&1 || true
-    else
-      echo "No docker-compose.yml found at {{ app_dir }}"
+        "${f}" 2>&1 || true
+    done
+    if [ "${found}" -eq 0 ]; then
+      echo "WARNING: no Compose projects found under {{ llamenos_compose_glob }}"
     fi
+  args:
+    executable: /bin/bash
   register: config_scan
   changed_when: false
   tags: [security-scan, config-scan]

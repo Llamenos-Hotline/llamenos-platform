@@ -139,7 +139,7 @@
           ansible.builtin.fail:
             msg: >
               Security update failed and has been rolled back. The previous version is running.
-              Check logs: docker compose -f {{ app_dir }}/docker-compose.yml logs app
+              Check logs: docker compose -f {{ llamenos_compose_app }} logs app
 
     # ─── Post-Update Scan ────────────────────────────────────────
     - name: Run post-update security scan
