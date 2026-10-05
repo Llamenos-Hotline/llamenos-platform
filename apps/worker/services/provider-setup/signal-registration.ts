@@ -75,6 +75,14 @@ const MAX_VERIFY_ATTEMPTS = 3
 /** Test verification code — bridge is not contacted in dev mode. */
 const TEST_VALID_CODE = '123456'
 
+/**
+ * Test phone number that deterministically simulates a bridge captcha
+ * requirement in dev mode — same testability pattern as TEST_VALID_CODE above.
+ * "555" numbers in the 5550100-5550199 range are reserved for fictional use
+ * (ATIS-0300051), so this can never collide with a real registration attempt.
+ */
+const TEST_CAPTCHA_REQUIRED_NUMBER = '+15555550199'
+
 export class SignalRegistrationService {
   private readonly isDev: boolean
 
@@ -102,6 +110,27 @@ export class SignalRegistrationService {
     const id = randomBytes(16).toString('hex')
     const expiresAt = new Date(Date.now() + REGISTRATION_TTL_MS)
     const bridgeUrl = params.bridgeUrl.replace(/\/+$/, '')
+
+    // Dev-mode-only sentinel: simulates the bridge rejecting registration with
+    // a captcha requirement, without a real bridge round-trip. The normal
+    // bridge call below is fire-and-forget (errors never surface synchronously),
+    // so this is the only way to deterministically exercise the captcha-failure
+    // response shape in a test environment that has no reachable signal-cli bridge.
+    if (this.isDev && params.phoneNumber === TEST_CAPTCHA_REQUIRED_NUMBER) {
+      await this.db.insert(signalRegistrations).values({
+        id,
+        hubId: params.hubId,
+        bridgeUrl,
+        phoneNumber: encryptedPhone,
+        method: params.method,
+        status: 'failed',
+        attempts: 0,
+        error: 'Signal requires a captcha. Obtain a captcha token from https://signalcaptchas.org/registration/generate.html and retry.',
+        expiresAt,
+      })
+      const row = await this.loadRow(id)
+      return this.toPublic(row)
+    }
 
     await this.db.insert(signalRegistrations).values({
       id,
@@ -286,6 +315,18 @@ export class SignalRegistrationService {
 
     if (!bridgeUrl) {
       return { registered: false, phoneNumberMasked: maskPhone(phone), error: 'No bridge URL configured' }
+    }
+
+    // In dev mode, a 'complete' registration was already confirmed via the
+    // TEST_VALID_CODE bypass in verifyCode() without a real bridge — there is
+    // nothing for a live bridge round-trip to confirm. Matches the A2P pattern
+    // where Twilio calls return synthetic data in dev mode (see verifyCode above).
+    if (this.isDev && row.status === 'complete') {
+      return {
+        registered: true,
+        phoneNumberMasked: maskPhone(phone),
+        uuid: `test-signal-uuid-${row.id.slice(0, 8)}`,
+      }
     }
 
     try {
