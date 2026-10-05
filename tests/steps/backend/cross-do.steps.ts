@@ -29,6 +29,7 @@ import {
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -123,9 +124,8 @@ Then('the call history should show a completed call', async ({ request, world })
     await simulateEndCall(request, getCrossDoState(world).callId!)
   }
   const hubId = getScenarioState(world).hubId
-  const { data } = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(request, `/hubs/${hubId}/calls/history`)
-  const calls = (data as { calls: Array<{ callId: string; status: string }> }).calls
-  const call = calls.find(c => c.callId === getCrossDoState(world).callId)
+  const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
+  const call = data.calls.find(c => c.id === getCrossDoState(world).callId)
   expect(call).toBeDefined()
   expect(call!.status).toBe('completed')
 })
@@ -396,9 +396,8 @@ Then('the call should go to voicemail', async ({ world }) => {
 
 Then('the call history should show an unanswered call', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
-  const { data } = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(request, `/hubs/${hubId}/calls/history`)
-  const calls = (data as { calls: Array<{ callId: string; status: string }> }).calls
-  const call = calls.find(c => c.callId === getCrossDoState(world).callId)
+  const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
+  const call = data.calls.find(c => c.id === getCrossDoState(world).callId)
   expect(call).toBeDefined()
   expect(call!.status).toBe('unanswered')
 })

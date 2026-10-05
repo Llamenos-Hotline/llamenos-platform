@@ -12,6 +12,7 @@ import {
   simulateVoicemail,
 } from '../../simulation-helpers'
 import { apiGet, apiPost, createVolunteerViaApi, addHubMemberViaApi } from '../../api-helpers'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 // ── Call Simulation ────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ Then('volunteer {int} no longer receives a ring', async ({ world }, _index: numb
 Then('the call history contains {int} entry/entries', async ({request, world}, count: number) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history` : '/calls/history'
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )
@@ -197,7 +198,7 @@ Then('the call history contains {int} entry/entries', async ({request, world}, c
 Then('the most recent call shows status {string}', async ({request, world}, expectedStatus: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
-  const { status, data } = await apiGet<{ calls: Array<{ status: string }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
   )
@@ -209,21 +210,22 @@ Then('the most recent call shows status {string}', async ({request, world}, expe
 Then('the most recent call shows caller {string}', async ({request, world}, _expectedCaller: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?limit=1` : '/calls/history?limit=1'
-  const { status, data } = await apiGet<{ calls: Array<{ callerLast4?: string; callerNumber?: string }> }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[] }>(
     request,
     path,
   )
   expect(status).toBe(200)
   expect(data.calls.length).toBeGreaterThan(0)
-  // Caller number is stored as a hash; callerLast4 is available for display
+  // The server sends only the last four digits; the full number is encrypted (#1129).
   const call = data.calls[0]
-  expect(call.callerLast4 || call.callerNumber).toBeTruthy()
+  expect(call.callerLast4).toBeTruthy()
+  expect(call.callerNumber).toBeUndefined()
 })
 
 When('the call history is filtered by status {string}', async ({ request, world }, filterStatus: string) => {
   const { hubId } = getScenarioState(world)
   const path = hubId ? `/hubs/${hubId}/calls/history?status=${filterStatus}` : `/calls/history?status=${filterStatus}`
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )
@@ -237,7 +239,7 @@ When('the call history is filtered to today\'s date', async ({ request, world })
   const path = hubId
     ? `/hubs/${hubId}/calls/history?dateFrom=${today}&dateTo=${today}`
     : `/calls/history?dateFrom=${today}&dateTo=${today}`
-  const { status, data } = await apiGet<{ calls: Array<{ callId: string }>; total: number }>(
+  const { status, data } = await apiGet<{ calls: CallRecord[]; total: number }>(
     request,
     path,
   )
