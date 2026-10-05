@@ -1405,12 +1405,16 @@ export class IdentityService {
 
       // 1. Append device_remove sigchain link (if client provided signed data).
       //
-      // Routed through appendValidatedSigchainLink — the same lock +
-      // continuity + hash/signature validation every other sigchain append
-      // uses — instead of inserting the client-supplied seqNo directly.
-      // appendValidatedSigchainLink takes the per-user advisory lock itself,
-      // so this insert is serialized against the public POST /sigchain
-      // route and recovery-group completion too, not just other revokes.
+      // Routed through appendValidatedSigchainLink — the same continuity +
+      // hash/signature validation every other sigchain append uses — instead
+      // of inserting the client-supplied seqNo directly. The caller must
+      // acquire the per-user advisory lock itself before calling it (the lock
+      // is NOT taken inside appendValidatedSigchainLink — see sigchainLockKey
+      // in crypto-keys.ts): this transaction takes the same lock the public
+      // POST /sigchain route and recovery-group completion take, so this
+      // insert serializes against them and a racing append rejects with a
+      // clean 409 continuity conflict instead of an unhandled unique-index
+      // 500.
       //
       // signerDeviceId/signerPubkey/timestamp are not yet part of the
       // revoke-device wire contract (packages/protocol/schemas/devices.ts
@@ -1430,8 +1434,13 @@ export class IdentityService {
         // to construct the service. Loading it only when a device is
         // actually being revoked keeps IdentityService's own import graph
         // native-FFI-free.
-        const { appendValidatedSigchainLink, CryptoKeyError } = await import('./crypto-keys')
+        const { appendValidatedSigchainLink, sigchainLockKey, CryptoKeyError } = await import('./crypto-keys')
         try {
+          // Per-user advisory lock BEFORE the chain-head read inside
+          // appendValidatedSigchainLink — same lock, same ordering as
+          // CryptoKeysService.appendSigchainLink and recovery-group
+          // completion.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sigchainLockKey(pubkey)}))`)
           await appendValidatedSigchainLink(tx, pubkey, {
             seqNo: sigchainData.sigchainSeqNo,
             linkType: 'device_remove',
