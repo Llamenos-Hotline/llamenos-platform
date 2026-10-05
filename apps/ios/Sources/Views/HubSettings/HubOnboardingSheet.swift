@@ -44,6 +44,7 @@ struct HubOnboardingSheet: View {
             }
         }
         .interactiveDismissDisabled(viewModel.isCompletingStep)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hub-onboarding-sheet")
     }
 
@@ -82,6 +83,7 @@ struct HubOnboardingSheet: View {
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-indicator")
     }
 
@@ -160,6 +162,7 @@ struct HubOnboardingSheet: View {
                 .padding(.top, 20)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-provider")
     }
 
@@ -188,6 +191,7 @@ struct HubOnboardingSheet: View {
                 .padding(.top, 20)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-phone")
     }
 
@@ -225,6 +229,7 @@ struct HubOnboardingSheet: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-channel-setup")
     }
 
@@ -268,6 +273,7 @@ struct HubOnboardingSheet: View {
                 .padding(.horizontal, 16)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-summary")
     }
 
@@ -309,6 +315,7 @@ struct HubOnboardingSheet: View {
             .padding(.bottom, 16)
             .accessibilityIdentifier("onboarding-done-btn")
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("onboarding-step-complete")
     }
 
