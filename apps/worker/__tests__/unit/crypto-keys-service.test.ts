@@ -4,6 +4,7 @@ import {
   CryptoKeyError,
   computeEntryHash,
   assertCanonicalSigchainPayload,
+  chainHashesEqual,
 } from '../../services/crypto-keys'
 import { sha256 } from '@noble/hashes/sha2.js'
 
@@ -27,6 +28,20 @@ vi.mock('@shared/encoding', () => ({
     return hex
   },
 }))
+
+// ---------------------------------------------------------------------------
+// Transaction mock — appendSigchainLink now runs inside this.db.transaction()
+// so it can hold a transaction-scoped advisory lock across the head-read +
+// insert (#1146). Mirrors the txProxy pattern in audit-service.test.ts.
+// ---------------------------------------------------------------------------
+
+function withTx<T extends { select?: unknown; insert?: unknown }>(db: T) {
+  const txProxy = { select: db.select, insert: db.insert, execute: vi.fn().mockResolvedValue(undefined) }
+  return {
+    ...db,
+    transaction: vi.fn().mockImplementation(async (fn: (tx: typeof txProxy) => unknown) => fn(txProxy)),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Canonical hash helper — mirrors the service's computeEntryHash exactly
@@ -241,7 +256,7 @@ describe('CryptoKeysService — Sigchain', () => {
         }),
       }
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       const result = await svc.appendSigchainLink('user-pk1', body)
 
       expect(result.seqNo).toBe(1)
@@ -281,7 +296,7 @@ describe('CryptoKeysService — Sigchain', () => {
         }),
       }
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       const result = await svc.appendSigchainLink('user-pk1', body)
       expect(result.seqNo).toBe(1)
       expect(result.prevHash).toBeNull()
@@ -307,7 +322,7 @@ describe('CryptoKeysService — Sigchain', () => {
         }),
       }
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       try {
         await svc.appendSigchainLink('user-pk1', body)
         expect.unreachable('should have thrown')
@@ -353,7 +368,7 @@ describe('CryptoKeysService — Sigchain', () => {
         }),
       }
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       const result = await svc.appendSigchainLink('user-pk1', body)
 
       expect(result.seqNo).toBe(2)
@@ -384,7 +399,7 @@ describe('CryptoKeysService — Sigchain', () => {
         prevHash: 'h1',
       })
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       try {
         await svc.appendSigchainLink('user-pk1', body)
         expect.unreachable('should have thrown')
@@ -419,7 +434,7 @@ describe('CryptoKeysService — Sigchain', () => {
         prevHash: 'wrong-hash', // should be 'h1'
       })
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       try {
         await svc.appendSigchainLink('user-pk1', body)
         expect.unreachable('should have thrown')
@@ -454,7 +469,7 @@ describe('CryptoKeysService — Sigchain', () => {
         prevHash: '',
       })
 
-      const svc = new CryptoKeysService(db as never)
+      const svc = new CryptoKeysService(withTx(db) as never)
       try {
         await svc.appendSigchainLink('user-pk1', body)
         expect.unreachable('should have thrown')
@@ -467,7 +482,7 @@ describe('CryptoKeysService — Sigchain', () => {
 
   describe('appendSigchainLink — hash recomputation (security audit P0)', () => {
     function makeGenesisDb() {
-      return {
+      return withTx({
         select: vi.fn().mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -484,7 +499,7 @@ describe('CryptoKeysService — Sigchain', () => {
             ]),
           }),
         }),
-      }
+      })
     }
 
     it('accepts link with correctly computed canonical hash', async () => {
@@ -570,7 +585,7 @@ describe('CryptoKeysService — Sigchain', () => {
 
   describe('appendSigchainLink — canonical number rule (#1029)', () => {
     function makeEmptyChainDb(insertedRow: MockLink) {
-      return {
+      return withTx({
         select: vi.fn().mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -585,7 +600,7 @@ describe('CryptoKeysService — Sigchain', () => {
             returning: vi.fn().mockResolvedValue([insertedRow]),
           }),
         }),
-      }
+      })
     }
 
     function genesisBodyWith(payload: unknown) {
@@ -724,9 +739,35 @@ describe('CryptoKeysService — Sigchain', () => {
     })
   })
 
+  describe('chainHashesEqual — constant-time chain hash comparison', () => {
+    const H1 = 'aa'.repeat(32)
+
+    it('accepts two identical hashes', () => {
+      expect(chainHashesEqual(H1, H1)).toBe(true)
+    })
+
+    it('rejects two hashes differing in the last nibble', () => {
+      expect(chainHashesEqual(H1, 'aa'.repeat(31) + 'ab')).toBe(false)
+    })
+
+    it('rejects two hashes differing in the first nibble', () => {
+      expect(chainHashesEqual(H1, 'ba' + 'aa'.repeat(31))).toBe(false)
+    })
+
+    it('rejects hashes of different lengths', () => {
+      expect(chainHashesEqual(H1, 'aa'.repeat(31))).toBe(false)
+    })
+
+    it('treats null as equal only to null (genesis prevHash)', () => {
+      expect(chainHashesEqual(null, null)).toBe(true)
+      expect(chainHashesEqual(null, H1)).toBe(false)
+      expect(chainHashesEqual(H1, null)).toBe(false)
+    })
+  })
+
   describe('appendSigchainLink — Ed25519 signature verification', () => {
     function makeGenesisDb() {
-      return {
+      return withTx({
         select: vi.fn().mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -743,7 +784,7 @@ describe('CryptoKeysService — Sigchain', () => {
             ]),
           }),
         }),
-      }
+      })
     }
 
     const genesisBody = makeLinkBody({
@@ -816,7 +857,7 @@ describe('CryptoKeysService — Sigchain', () => {
         prevHash: null,
       })
 
-      const db = {
+      const db = withTx({
         select: selectSpy,
         insert: vi.fn().mockReturnValue({
           values: vi.fn().mockReturnValue({
@@ -825,7 +866,7 @@ describe('CryptoKeysService — Sigchain', () => {
             ]),
           }),
         }),
-      }
+      })
 
       const svc = new CryptoKeysService(db as never)
       await svc.appendSigchainLink('user-pk1', body)

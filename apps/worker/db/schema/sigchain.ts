@@ -12,6 +12,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { users } from './users'
@@ -60,7 +61,13 @@ export const sigchainLinks = pgTable(
   },
   (table) => [
     index('sigchain_links_user_pubkey_idx').on(table.userPubkey),
-    index('sigchain_links_user_seq_idx').on(table.userPubkey, table.seqNo),
+    // UNIQUE, not a plain index: this is the load-bearing guard against a
+    // forked chain. Two concurrent appends at the same seqNo race the
+    // check-then-insert in appendSigchainLink (see the pg_advisory_xact_lock
+    // there for the application-level half of the fix); the database must
+    // refuse the loser's insert even if the lock is ever bypassed — e.g. by
+    // a future code path that forgets to take it. See issue #1146.
+    uniqueIndex('sigchain_links_user_seq_idx').on(table.userPubkey, table.seqNo),
     index('sigchain_links_hash_idx').on(table.hash),
   ],
 )
