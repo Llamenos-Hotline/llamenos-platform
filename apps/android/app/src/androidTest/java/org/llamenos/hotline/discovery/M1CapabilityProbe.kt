@@ -41,7 +41,7 @@ import java.net.URL
  * Drives the real app UI against a live backend to establish, per M1 flow,
  * whether it WORKS / is BROKEN / is ABSENT. Every step either succeeds or fails
  * the test with the exact state it saw; nothing is caught and nothing is skipped.
- * The only backdoors used are the ones the app has no UI for (device enrolment,
+ * The only backdoors used are the ones the app has no UI for (device enrollment,
  * shift seeding, telephony and messaging simulation) — each is marked `BACKDOOR`.
  *
  * Deliberately NOT done: [org.llamenos.hotline.steps.ScenarioHooks]' write of the
@@ -83,7 +83,7 @@ class M1CapabilityProbe {
 
     // ─── Flows ──────────────────────────────────────────────────────────────
 
-    /** Enrol a device, PIN-lock, reject a wrong PIN, unlock with the right one. */
+    /** Enroll a device, PIN-lock, reject a wrong PIN, unlock with the right one. */
     @Test
     fun auth() {
         val pubkey = createIdentityViaUi()
@@ -91,10 +91,10 @@ class M1CapabilityProbe {
         probe("auth", "activeHubId after first dashboard: ${activeHubId()}")
 
         val hub = createHub("probe-auth")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         pullToRefreshDashboard()
         Thread.sleep(3_000)
-        probe("auth", "after enrolment + dashboard refresh: activeHubId=${activeHubId()} connection=${textOf("connection-status")}")
+        probe("auth", "after enrollment + dashboard refresh: activeHubId=${activeHubId()} connection=${textOf("connection-status")}")
 
         // PIN lock from the dashboard top bar; Settings → Lock as the second entry point.
         Thread.sleep(2_000)
@@ -134,7 +134,7 @@ class M1CapabilityProbe {
             probe("auth", "6-digit prefix of the PIN: unlocked=$unlocked6 texts=${screenTexts()}")
         }
         probe("auth", "RESULT lockButtonLocks=$lockedFromDashboard correctPinUnlocks=$unlocked")
-        check(unlocked) { fail("auth", "the PIN set at enrolment cannot unlock the app") }
+        check(unlocked) { fail("auth", "the PIN set at enrollment cannot unlock the app") }
         check(lockedFromDashboard) { fail("auth", "the lock button dropped the keys but left the dashboard on screen") }
     }
 
@@ -143,7 +143,7 @@ class M1CapabilityProbe {
     fun logout() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-logout")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         tapTab("nav-settings")
         scrollClick("logout", "settings-logout-button")
         waitForTag("logout", "confirm-logout-button", 5_000)
@@ -157,7 +157,7 @@ class M1CapabilityProbe {
     fun notesCreate() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-notes")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         ensureActiveHub("notes", hub)
         val marker = "probe-note-${System.currentTimeMillis()}"
         stateFile.parentFile?.mkdirs()
@@ -197,7 +197,7 @@ class M1CapabilityProbe {
     fun notesDuringCall() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-quicknote")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         backdoor("quicknote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         val ring = backdoor("quicknote", "test-simulate/incoming-call", """{"callerNumber":"+15555550140","hubId":"$hub"}""")
         val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
@@ -234,7 +234,7 @@ class M1CapabilityProbe {
     fun notesFromCall() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-callnote")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         backdoor("callnote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("callnote", hub)
         val ring = backdoor("callnote", "test-simulate/incoming-call", """{"callerNumber":"+15555550130","hubId":"$hub"}""")
@@ -268,7 +268,7 @@ class M1CapabilityProbe {
     fun shifts() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-shifts")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         backdoor("shifts", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("shifts", hub)
 
@@ -304,7 +304,7 @@ class M1CapabilityProbe {
     fun calls() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-calls")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         backdoor("calls", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
 
         // 1. Pre-existing answered call
@@ -344,8 +344,8 @@ class M1CapabilityProbe {
         val pubkey = createIdentityViaUi()
         val hubA = createHub("probe-hub-a")
         val hubB = createHub("probe-hub-b")
-        enrol(pubkey, hubA, role)
-        enrol(pubkey, hubB, role)
+        enroll(pubkey, hubA, role)
+        enroll(pubkey, hubB, role)
         probe("hubs", "activeHubId the app chose: ${activeHubId()} (A=$hubA B=$hubB)")
 
         tapTab("nav-dashboard")
@@ -382,7 +382,7 @@ class M1CapabilityProbe {
     fun conversations() {
         val pubkey = createIdentityViaUi()
         val hub = createHub("probe-conv")
-        enrol(pubkey, hub, role)
+        enroll(pubkey, hub, role)
         ensureActiveHub("conversations", hub)
         val body = "probe-sms-${System.currentTimeMillis()}"
         backdoor(
@@ -454,14 +454,14 @@ class M1CapabilityProbe {
     /** Fresh install → hub URL → create identity → PIN twice → dashboard. Returns the signing pubkey. */
     private fun createIdentityViaUi(): String {
         launch()
-        waitForTag("enrol", "create-identity", 20_000)
+        waitForTag("enroll", "create-identity", 20_000)
         compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
         compose.onNodeWithTag("create-identity").performClick()
-        waitForTag("enrol", "pin-pad", 10_000)
+        waitForTag("enroll", "pin-pad", 10_000)
         enterPin(PIN)
         enterPin(PIN)
-        waitForTag("enrol", "dashboard-title", 20_000)
-        return checkNotNull(crypto().signingPubkeyHex) { fail("enrol", "no signing pubkey after identity creation") }
+        waitForTag("enroll", "dashboard-title", 20_000)
+        return checkNotNull(crypto().signingPubkeyHex) { fail("enroll", "no signing pubkey after identity creation") }
     }
 
     private fun enterPin(pin: String) {
@@ -565,9 +565,9 @@ class M1CapabilityProbe {
         return json.parseToJsonElement(body).jsonObject["id"]!!.jsonPrimitive.content
     }
 
-    /** Android has no invite-redemption UI, so enrolment goes through the dev backdoor. */
-    private fun enrol(pubkey: String, hubId: String, role: String) {
-        backdoor("enrol", "test-add-hub-member", """{"pubkey":"$pubkey","hubId":"$hubId","roleIds":["$role"]}""")
+    /** Android has no invite-redemption UI, so enrollment goes through the dev backdoor. */
+    private fun enroll(pubkey: String, hubId: String, role: String) {
+        backdoor("enroll", "test-add-hub-member", """{"pubkey":"$pubkey","hubId":"$hubId","roleIds":["$role"]}""")
     }
 
     private fun backdoor(flow: String, path: String, body: String): String {

@@ -50,11 +50,10 @@ async function auditDenial(c: Context<AppEnv>, required: string[]) {
 /** Like requirePermission(), but logs a denied-access audit entry instead of failing silently. */
 function requirePermissionAudited(...required: string[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
+    // hubContext has already bounded `permissions` to the hub (see requirePermission).
     const permissions = c.get('permissions')
-    const hubPermissions = c.get('hubPermissions') as string[] | undefined
     for (const perm of required) {
-      if (!permissionGranted(permissions, perm) &&
-          !(hubPermissions && permissionGranted(hubPermissions, perm))) {
+      if (!permissionGranted(permissions, perm)) {
         await auditDenial(c, [perm])
         return c.json({ error: 'Forbidden', required: perm }, 403)
       }
@@ -67,11 +66,7 @@ function requirePermissionAudited(...required: string[]) {
 function requireAnyPermissionAudited(...anyOf: string[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const permissions = c.get('permissions')
-    const hubPermissions = c.get('hubPermissions') as string[] | undefined
-    const hasAny = anyOf.some(perm =>
-      permissionGranted(permissions, perm) ||
-      (hubPermissions != null && permissionGranted(hubPermissions, perm)),
-    )
+    const hasAny = anyOf.some(perm => permissionGranted(permissions, perm))
     if (!hasAny) {
       await auditDenial(c, anyOf)
       return c.json({ error: 'Forbidden', required: anyOf }, 403)

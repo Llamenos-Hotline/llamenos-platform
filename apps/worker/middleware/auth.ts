@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import { authenticateRequest, parseAuthHeader, parseSessionHeader, validateToken } from '../lib/auth'
-import { resolvePermissions, permissionGranted } from '@shared/permissions'
+import { resolveAllRoleIds, resolvePermissions, permissionGranted } from '@shared/permissions'
 import { createLogger } from '../lib/logger'
 import { incError } from '../lib/error-counter'
 
@@ -96,9 +96,14 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
   c.set('permissions', permissions)
   c.set('allRoles', allRoles)
 
-  // WebAuthn enforcement: if enabled, require passkey registration
+  // WebAuthn enforcement: if enabled, require passkey registration.
+  // "Admin" means an admin ANYWHERE — a hub admin whose authority is purely
+  // hub-scoped must not escape the admin passkey requirement.
   const webauthnSettings = await services.identity.getWebAuthnSettings()
-  const isAdmin = permissionGranted(permissions, 'settings:manage')
+  const isAdmin = permissionGranted(
+    resolvePermissions(resolveAllRoleIds(authResult.user.roles, authResult.user.hubRoles ?? []), allRoles),
+    'settings:manage',
+  )
   // Strict boolean check: DB may store {}, null values, or undefined fields — only enforce
   // when the setting is explicitly `true`, not merely truthy.
   const webauthnRequired = isAdmin ? webauthnSettings.requireForAdmins === true : webauthnSettings.requireForUsers === true

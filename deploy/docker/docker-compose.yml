@@ -60,6 +60,7 @@ services:
       # and yields notes nobody can ever decrypt (#1283). `bun run bootstrap-admin`
       # prints both, derived from one seed.
       - "ADMIN_DECRYPTION_PUBKEY=${ADMIN_DECRYPTION_PUBKEY:?ADMIN_DECRYPTION_PUBKEY is required — the admin's X25519 key from `bun run bootstrap-admin`, not ADMIN_PUBKEY}"
+
       - HOTLINE_NAME=${HOTLINE_NAME:-Hotline}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       # Required by the app whenever ENVIRONMENT is production (the default above).

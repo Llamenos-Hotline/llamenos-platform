@@ -716,6 +716,7 @@
       "archived": "ከመዝገብ ቤት",
       "suspended": "ታግዷል"
     },
+    "switchFooter": "የሚሰሩበትን ሃብ ለመቀየር ሃቡን ይንኩ። ንቁ ሃብ የሚያዩትን መረጃ ይወስናል።",
     "switchHub": "ሃብ ቀይር",
     "title": "ሃብ አስተዳደር",
     "urlLabel": "የሃብ URL",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "በዚህ ሃብ ውስጥ ያለው የተመሰጠረ ይዘት በዚህ መሣሪያ ላይ እስካሁን ሊከፈት አይችልም",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -3996,7 +3998,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "actionRefresh": "Refresh",
   "continueButton": "ቀጥል",
@@ -4539,6 +4543,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4660,5 +4666,17 @@
     "unavailableMessage": "ይቅርታ፣ በአሁኑ ጊዜ ጥሪዎን ለመቀበል ማንም የለም። እባክዎ ቆየት ብለው ይሞክሩ። ቸር ይግጠምዎ።",
     "voicemailPrompt": "በአሁኑ ጊዜ ጥሪዎን ለመቀበል ማንም የለም። እባክዎ ከድምፅ ምልክቱ በኋላ መልእክት ይተዉ።",
     "voicemailThanks": "ለመልእክትዎ እናመሰግናለን። ቸር ይግጠምዎ።"
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
