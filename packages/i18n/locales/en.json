@@ -2482,7 +2482,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -4662,5 +4664,17 @@
     "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
     "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
     "voicemailThanks": "Thank you for your message. Goodbye."
+  },
+  "enrol": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enrol",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
