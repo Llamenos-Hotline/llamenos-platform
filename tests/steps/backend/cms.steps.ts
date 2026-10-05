@@ -43,7 +43,7 @@ import {
   createReportViaApi,
   createRoleViaApi,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   apiGet,
   apiPost,
 } from '../../api-helpers'
@@ -451,7 +451,7 @@ Then('the linked contact should have role {string}', async ({ request, world }, 
 
 After({ tags: '@contact-cases' }, async ({ request, world }) => {
   const otherHubId = getCmsState(world).otherHubId
-  if (otherHubId) await deleteHubViaApi(request, otherHubId).catch(() => {})
+  if (otherHubId) await deleteHubViaApiIfPresent(request, otherHubId)
 })
 
 Given('a contact exists in another hub', async ({ request, world }) => {

@@ -18,7 +18,7 @@ import {
   apiPut,
   apiDelete,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   createUserViaApi,
   createRoleViaApi,
   addHubMemberViaApi,
@@ -97,8 +97,8 @@ Before({ tags: '@hub-selfservice' }, async ({ request, world }) => {
 
 After({ tags: '@hub-selfservice' }, async ({ request, world }) => {
   const state = getSS(world)
-  await deleteHubViaApi(request, state.ownHubId).catch(() => {})
-  await deleteHubViaApi(request, state.otherHubId).catch(() => {})
+  await deleteHubViaApiIfPresent(request, state.ownHubId)
+  await deleteHubViaApiIfPresent(request, state.otherHubId)
   for (const id of state.templateIds) {
     await apiDelete(request, `/provider-templates/${id}`).catch(() => {})
   }
