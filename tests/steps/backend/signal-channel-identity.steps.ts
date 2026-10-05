@@ -38,7 +38,7 @@ interface IdentityState {
 function getIdentityState(world: Record<string, unknown>): IdentityState {
   const existing = getState<IdentityState | undefined>(world, STATE_KEY)
   if (existing) return existing
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const unique = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`
   const fresh: IdentityState = { uuid: `test-uuid-${unique}`, number: '+15550009999' }
   setState(world, STATE_KEY, fresh)
   return fresh

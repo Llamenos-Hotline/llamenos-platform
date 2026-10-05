@@ -86,7 +86,7 @@ Given('a queued message has failed {int} times', async ({ request, world, worker
   const enqueued = await enqueue(request, workerHub, inbound.conversationId, state.recipientIdentifier)
   state.messageId = enqueued.id
 
-  let last = enqueued
+  let last: { status: string; retryCount: number } = enqueued
   for (let i = 0; i < times; i++) {
     last = await markFailed(request, enqueued.id)
   }
@@ -105,7 +105,7 @@ Given('a queued message has been retried {int} times', async ({ request, world, 
   const enqueued = await enqueue(request, workerHub, inbound.conversationId, state.recipientIdentifier)
   state.messageId = enqueued.id
 
-  let last = enqueued
+  let last: { status: string; retryCount: number } = enqueued
   for (let i = 0; i < times; i++) {
     last = await markFailed(request, enqueued.id)
   }
@@ -142,7 +142,7 @@ Given('a dead-letter message exists', async ({ request, world, workerHub }) => {
   state.messageId = enqueued.id
 
   // Default maxRetries is 5 — the 6th failure crosses the dead-letter threshold.
-  let last = enqueued
+  let last: { status: string; retryCount: number } = enqueued
   for (let i = 0; i < 6; i++) {
     last = await markFailed(request, enqueued.id)
   }
