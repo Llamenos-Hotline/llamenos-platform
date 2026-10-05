@@ -617,6 +617,7 @@
     "errorBreak": "Не вдалося оновити статус перерви",
     "errorClockIn": "Не вдалося розпочати зміну",
     "errorClockOut": "Не вдалося завершити зміну",
+    "errorInAppCallsUnavailable": "Зміну розпочато, але цей пристрій не може приймати дзвінки в застосунку. Спробуйте розпочати зміну знову.",
     "errorRefresh": "Не вдалося оновити",
     "goOnBreak": "Взяти перерву",
     "help": "Допомога",
@@ -716,6 +717,7 @@
       "archived": "Архівований",
       "suspended": "Призупинений"
     },
+    "switchFooter": "Торкніться хаба, щоб змінити активний контекст. Активний хаб визначає, які дані ви бачите.",
     "switchHub": "Змінити хаб",
     "title": "Управління хабами",
     "urlLabel": "URL хабу",
@@ -734,6 +736,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Зашифрований вміст цього хаба поки не можна відкрити на цьому пристрої",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -3933,7 +3936,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "unlock": {
     "subtitle": "Введіть ваш PIN для розблокування",
@@ -4542,6 +4547,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4663,5 +4670,17 @@
     "unavailableMessage": "На жаль, зараз ніхто не може відповісти на ваш дзвінок. Будь ласка, спробуйте пізніше. До побачення.",
     "voicemailPrompt": "Зараз ніхто не може відповісти на ваш дзвінок. Будь ласка, залиште повідомлення після сигналу.",
     "voicemailThanks": "Дякуємо за ваше повідомлення. До побачення."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

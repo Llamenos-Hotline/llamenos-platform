@@ -43,7 +43,7 @@ import {
   createReportViaApi,
   createRoleViaApi,
   createHubViaApi,
-  deleteHubViaApi,
+  deleteHubViaApiIfPresent,
   apiGet,
   apiPost,
 } from '../../api-helpers'
@@ -451,7 +451,7 @@ Then('the linked contact should have role {string}', async ({ request, world }, 
 
 After({ tags: '@contact-cases' }, async ({ request, world }) => {
   const otherHubId = getCmsState(world).otherHubId
-  if (otherHubId) await deleteHubViaApi(request, otherHubId).catch(() => {})
+  if (otherHubId) await deleteHubViaApiIfPresent(request, otherHubId)
 })
 
 Given('a contact exists in another hub', async ({ request, world }) => {
@@ -568,9 +568,11 @@ Given('a volunteer exists with cases:read-own and cases:create permissions', asy
     permissions: ['cases:read-own', 'cases:create', 'cases:update-own'],
     description: 'Scoped record access',
   })
+  // Scoped role held IN the scenario hub — a global role grants nothing there (#1037)
   const vol = await createVolunteerViaApi(request, {
     name: `vol-scoped-${Date.now()}`,
     roleIds: [role.id],
+    hubId: getScenarioState(world).hubId,
   })
   getCmsState(world).volunteerDeviceKey = vol.deviceKey
   getCmsState(world).volunteerPubkey = vol.pubkey

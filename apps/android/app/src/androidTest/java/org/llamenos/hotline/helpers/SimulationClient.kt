@@ -208,8 +208,11 @@ object SimulationClient {
      * Corresponds to `POST /api/test-add-hub-member`.
      * Used by hub-switch tests to give the test user membership in specific hubs
      * without promoting to super-admin (which would show ALL hubs).
+     *
+     * [roleIds] has no default: the old default (`role-admin`) names a role that does not
+     * exist (the hub admin is `role-hub-admin`), and a member with it cannot list any hub.
      */
-    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String> = listOf("role-admin")): StatusResponse {
+    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String>): StatusResponse {
         val roleIdsJson = roleIds.joinToString(",") { "\"${escapeJson(it)}\"" }
         val body = """{"pubkey":"${escapeJson(pubkey)}","hubId":"${escapeJson(hubId)}","roleIds":[$roleIdsJson]}"""
         val responseText = post("/api/test-add-hub-member", body)
@@ -281,6 +284,35 @@ object SimulationClient {
         val token: String,
         val nonce: String? = null,
     )
+
+    /**
+     * Authenticated `GET`, signed with the admin identity above.
+     *
+     * The simulation routes write; nothing here could read a stored row back.
+     * `EnvelopeAadInteropTest` needs to see the *server's own* envelope exactly
+     * as the API serves it — reading it from the database or re-deriving it
+     * locally would prove nothing about the wire.
+     */
+    fun authorizedGet(path: String): String {
+        val url = URL("$hubUrl$path")
+        val conn = url.openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = "GET"
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.setRequestProperty("Authorization", adminAuthHeader("GET", path))
+            conn.setRequestProperty("X-Test-Secret", testSecret)
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) {
+                throw IOException("GET $path -> HTTP $code: $text")
+            }
+            text
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     /**
      * Create an isolated test hub through the route an operator uses.

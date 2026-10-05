@@ -617,6 +617,7 @@
     "errorBreak": "Nûvekirina rewşa bêhnvedanê bi ser neket",
     "errorClockIn": "Destpêkirina şiftê bi ser neket",
     "errorClockOut": "Qedandina şiftê bi ser neket",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Nûvekirin bi ser neket",
     "goOnBreak": "Bêhnvedanê Bigire",
     "help": "Alîkarî",
@@ -716,6 +717,7 @@
       "archived": "Arşîvkirî",
       "suspended": "Rawestandî"
     },
+    "switchFooter": "Li navendekê bixe da ku çarçoveya xwe ya çalak biguherînî. Navenda çalak diyar dike ku tu kîjan daneyan dibînî.",
     "switchHub": "Navend biguherîne",
     "title": "Birêvebirina Navendan",
     "urlLabel": "URL ya Navendê",
@@ -734,6 +736,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Naveroka şîfrekirî ya vê navendê hîn li ser vê amûrê nayê vekirin",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
@@ -3100,7 +3103,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "report": {
     "categoryNone": "Tu tişt tune",
@@ -4542,6 +4547,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4663,5 +4670,17 @@
     "unavailableMessage": "Bibore, niha kes tune ku banga we bibersivîne. Ji kerema xwe paşê dîsa biceribînin. Bi xatirê te.",
     "voicemailPrompt": "Niha kes tune ku banga we bibersivîne. Ji kerema xwe piştî dengê bîpê peyamek bihêlin.",
     "voicemailThanks": "Spas ji bo peyama we. Bi xatirê te."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
