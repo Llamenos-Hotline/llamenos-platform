@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -9,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import org.llamenos.hotline.telephony.LinphoneService
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.flow.filterIsInstance
@@ -33,12 +35,15 @@ import org.llamenos.hotline.ui.admin.AdminViewModel
 import org.llamenos.hotline.ui.admin.SchemaBrowserScreen
 import org.llamenos.hotline.ui.admin.ShiftDetailScreen
 import org.llamenos.hotline.ui.admin.UserDetailScreen
+import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
 import org.llamenos.hotline.ui.auth.InviteRedeemScreen
 import org.llamenos.hotline.ui.auth.InviteStage
+import org.llamenos.hotline.ui.auth.InviteUiState
 import org.llamenos.hotline.ui.auth.InviteViewModel
 import org.llamenos.hotline.ui.calls.CallHistoryScreen
 import org.llamenos.hotline.ui.calls.CallHistoryViewModel
+import org.llamenos.hotline.ui.calls.IncomingCallScreen
 import org.llamenos.hotline.ui.contacts.ContactsScreen
 import org.llamenos.hotline.ui.contacts.ContactsViewModel
 import org.llamenos.hotline.ui.contacts.ContactTimelineScreen
@@ -119,7 +124,7 @@ sealed interface LlamenosRoute {
         override val route = "pin_unlock"
     }
 
-    /** Redeem a validated invite with the device keys just created (enrolment). */
+    /** Redeem a validated invite with the device keys just created (enrollment). */
     data object InviteRedeem : LlamenosRoute {
         override val route = "invite_redeem"
     }
@@ -422,6 +427,7 @@ fun LlamenosNavigation(
     networkMonitor: NetworkMonitor,
     offlineQueue: OfflineQueue,
     versionChecker: VersionChecker,
+    linphoneService: LinphoneService,
     pendingDeepLink: DeepLinkDestination? = null,
     onDeepLinkConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -527,6 +533,63 @@ fun LlamenosNavigation(
             UpdateBanner(onDismiss = { showUpdateBanner = false })
         }
 
+        // Ringing inbound in-app call covers whatever screen is up — tabbed main screen,
+        // detail page, or the PIN unlock screen after a lockscreen full-screen intent.
+        // State comes from LinphoneService's IncomingCallTracker (driven by liblinphone's
+        // onCallStateChanged), so this composes identically whether the app was already
+        // foregrounded or just launched by the incoming-call notification.
+        val ringingCall by linphoneService.incomingCallTracker.ringingCall.collectAsState()
+        val ringing = ringingCall
+        val isUnlockedWhileRinging = remember(ringing) { cryptoService.isUnlocked }
+
+        Box(modifier = Modifier.weight(1f)) {
+            NavigationTree(
+                navController = navController,
+                startDestination = startDestination,
+                authViewModel = authViewModel,
+                inviteViewModel = inviteViewModel,
+                inviteState = inviteState,
+                uiState = uiState,
+                cryptoService = cryptoService,
+                webSocketService = webSocketService,
+                keystoreService = keystoreService,
+                networkMonitor = networkMonitor,
+                offlineQueue = offlineQueue,
+                pendingDeepLink = pendingDeepLink,
+                onDeepLinkConsumed = onDeepLinkConsumed,
+            )
+            if (ringing != null) {
+                IncomingCallScreen(
+                    info = ringing,
+                    isUnlocked = isUnlockedWhileRinging,
+                    onAccept = { linphoneService.acceptIncomingCall() },
+                    onDecline = { linphoneService.declineIncomingCall() },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The route tree, extracted so the incoming-call overlay can sit above it in a [Box].
+ * (Kept as a private composable to keep [LlamenosNavigation]'s structure readable.)
+ */
+@Composable
+private fun NavigationTree(
+    navController: androidx.navigation.NavHostController,
+    startDestination: String,
+    authViewModel: AuthViewModel,
+    inviteViewModel: InviteViewModel,
+    inviteState: InviteUiState,
+    uiState: AuthUiState,
+    cryptoService: CryptoService,
+    webSocketService: WebSocketService,
+    keystoreService: KeystoreService,
+    networkMonitor: NetworkMonitor,
+    offlineQueue: OfflineQueue,
+    pendingDeepLink: DeepLinkDestination?,
+    onDeepLinkConsumed: () -> Unit,
+) {
     NavHost(
         navController = navController,
         startDestination = startDestination,
@@ -1193,5 +1256,4 @@ fun LlamenosNavigation(
             )
         }
     }
-    } // Column
 }

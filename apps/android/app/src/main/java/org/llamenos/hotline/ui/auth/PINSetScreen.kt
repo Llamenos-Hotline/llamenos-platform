@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +41,21 @@ import org.llamenos.hotline.ui.components.PINPad
 import org.llamenos.hotline.ui.components.SecureWindowEffect
 
 /**
+ * Localised message for a failed invite redemption.
+ */
+@Composable
+private fun enrollmentErrorMessage(error: EnrollmentError): String = stringResource(
+    when (error) {
+        EnrollmentError.INVALID_CODE -> R.string.enroll_error_invalid_code
+        EnrollmentError.NOT_FOUND -> R.string.enroll_error_not_found
+        EnrollmentError.EXPIRED -> R.string.enroll_error_expired
+        EnrollmentError.RATE_LIMITED -> R.string.enroll_error_rate_limited
+        EnrollmentError.NETWORK -> R.string.enroll_error_network
+        EnrollmentError.UNKNOWN -> R.string.enroll_error_unknown
+    },
+)
+
+/**
  * PIN set screen with enter + confirm flow.
  *
  * Two phases:
@@ -46,6 +64,8 @@ import org.llamenos.hotline.ui.components.SecureWindowEffect
  *
  * On mismatch, shows error and resets to confirmation phase.
  * On match, encrypts the key with the PIN and navigates to dashboard.
+ * If an invite code was entered on the login screen, the redemption runs after
+ * key generation and its progress / failure is shown here (#1345).
  */
 @Composable
 fun PINSetScreen(
@@ -151,6 +171,7 @@ fun PINSetScreen(
                 ) {
                     PINPad(
                         pin = localPin,
+                        maxLength = PIN_MAX_LENGTH,
                         onPinChange = { newPin ->
                             localPin = newPin
                         },
@@ -166,6 +187,61 @@ fun PINSetScreen(
                 }
 
                 Spacer(Modifier.height(32.dp))
+
+                // Invite-code enrollment status (#1345). Shown after key generation
+                // while the server registers this identity against the invite code.
+                when (val enrollment = uiState.enrollment) {
+                    is EnrollmentState.Redeeming -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .testTag("enroll-redeeming"),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.enroll_redeeming),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("enroll-redeeming-label"),
+                        )
+                    }
+
+                    is EnrollmentState.Failed -> {
+                        Text(
+                            text = stringResource(R.string.enroll_failed_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = enrollmentErrorMessage(enrollment.error),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("enroll-error"),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = viewModel::retryEnrollment,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .testTag("enroll-retry"),
+                        ) {
+                            Text(stringResource(R.string.enroll_retry))
+                        }
+                        TextButton(
+                            onClick = viewModel::skipEnrollment,
+                            modifier = Modifier
+                                .testTag("enroll-skip"),
+                        ) {
+                            Text(stringResource(R.string.enroll_continue_without))
+                        }
+                    }
+
+                    else -> Unit
+                }
             }
 
             LoadingOverlay(

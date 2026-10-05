@@ -29,9 +29,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 
-/** The length of every device PIN: set, unlock and biometric enrolment use the same pad. */
-const val PIN_LENGTH = 8
-
 /**
  * Custom PIN pad composable with a numeric grid layout.
  *
@@ -39,12 +36,10 @@ const val PIN_LENGTH = 8
  * Does NOT use TextField or the system keyboard — all input is through
  * direct button taps for security (prevents keyboard capture/logging).
  *
- * Every pad takes exactly [PIN_LENGTH] digits: the pad that sets a PIN and every pad
- * that later checks it must agree, or the PIN that was set can never be entered again.
- *
  * @param pin Current PIN string (digits entered so far)
+ * @param maxLength Maximum PIN length (6-8 digits)
  * @param onPinChange Called when the PIN changes (digit added or removed)
- * @param onComplete Called when the PIN reaches [PIN_LENGTH] digits
+ * @param onComplete Called when the PIN reaches maxLength
  * @param errorMessage Optional error text to display below the PIN dots
  * @param enabled Whether PIN input is enabled. Set to false during lockout.
  * @param modifier Layout modifier
@@ -52,6 +47,7 @@ const val PIN_LENGTH = 8
 @Composable
 fun PINPad(
     pin: String,
+    maxLength: Int = 8,
     onPinChange: (String) -> Unit,
     onComplete: (String) -> Unit,
     errorMessage: String? = null,
@@ -77,7 +73,7 @@ fun PINPad(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.testTag("pin-dots"),
         ) {
-            repeat(PIN_LENGTH) { index ->
+            repeat(maxLength) { index ->
                 val isFilled = index < pin.length
                 Box(
                     modifier = Modifier
@@ -153,10 +149,10 @@ fun PINPad(
                             // Digit button
                             FilledTonalButton(
                                 onClick = {
-                                    if (enabled && pin.length < PIN_LENGTH) {
+                                    if (enabled && pin.length < maxLength) {
                                         val newPin = pin + label
                                         onPinChange(newPin)
-                                        if (newPin.length == PIN_LENGTH) {
+                                        if (newPin.length == maxLength) {
                                             onComplete(newPin)
                                         }
                                     }

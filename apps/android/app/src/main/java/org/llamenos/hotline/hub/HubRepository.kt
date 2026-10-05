@@ -105,4 +105,19 @@ class HubRepository @Inject constructor(
     private companion object {
         const val TAG = "HubRepository"
     }
+
+    /**
+     * Ensure an active hub is selected whenever the user lands on the dashboard with
+     * no persisted choice — after a fresh login and on session restore (PIN unlock).
+     * No-op when a hub is already selected (restored from DataStore, or chosen by the
+     * user in Hub Management).
+     *
+     * Hub-list fetch failures are non-fatal: the dashboard stays hub-less until the
+     * user picks a hub or a later attempt succeeds.
+     */
+    suspend fun ensureInitialHub() {
+        if (activeHubState.activeHubId.value != null) return
+        val hubs = runCatching { apiService.getHubs() }.getOrNull()?.hubs ?: return
+        loadInitialHub(hubs)
+    }
 }

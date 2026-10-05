@@ -235,6 +235,7 @@ fun PINUnlockScreen(
                 ) {
                     PINPad(
                         pin = localPin,
+                        maxLength = PIN_MAX_LENGTH,
                         onPinChange = { newPin ->
                             localPin = newPin
                             viewModel.updatePin(newPin)

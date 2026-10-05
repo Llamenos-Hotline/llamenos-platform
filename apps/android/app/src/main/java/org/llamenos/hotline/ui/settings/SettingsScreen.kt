@@ -86,6 +86,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.BuildConfig
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.WebSocketService
+import org.llamenos.hotline.ui.auth.PIN_MAX_LENGTH
 import org.llamenos.hotline.ui.components.PINPad
 
 /**
@@ -395,6 +396,7 @@ fun SettingsScreen(
             text = {
                 PINPad(
                     pin = biometricPinInput,
+                    maxLength = PIN_MAX_LENGTH,
                     onPinChange = { biometricPinInput = it },
                     onComplete = { completedPin -> onBiometricEvent(BiometricSectionEvent.SubmitPin(completedPin)) },
                     errorMessage = when (biometricState.pinError) {

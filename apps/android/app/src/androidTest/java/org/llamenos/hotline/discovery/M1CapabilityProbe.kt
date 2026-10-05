@@ -40,7 +40,7 @@ import java.net.URL
  * Drives the real app UI against a live backend to establish, per M1 flow,
  * whether it WORKS / is BROKEN / is ABSENT. Every step either succeeds or fails
  * the test with the exact state it saw; nothing is caught and nothing is skipped.
- * Enrolment is the real path: an admin creates an invite and grants hub membership
+ * Enrollment is the real path: an admin creates an invite and grants hub membership
  * through the admin API (as the desktop admin UI does), and the volunteer redeems the
  * invite in the Android UI. The only backdoors are for what no client can do here (hub
  * creation, the test admin's own registration, shift seeding, telephony and messaging
@@ -89,13 +89,13 @@ class M1CapabilityProbe {
     // ─── Flows ──────────────────────────────────────────────────────────────
 
     /**
-     * Enrol by invite, get a hub without visiting Hub Management, then lock from both entry
+     * Enroll by invite, get a hub without visiting Hub Management, then lock from both entry
      * points and after the activity is recreated: every lock shows the PIN pad, a wrong
      * PIN is rejected, and the PIN that was set unlocks.
      */
     @Test
     fun auth() {
-        val (pubkey, hub) = enrolViaInvite("auth", "probe-auth")
+        val (pubkey, hub) = enrollViaInvite("auth", "probe-auth")
         probe("auth", "enrolled by invite, signing pubkey ${pubkey.take(12)}…")
         ensureActiveHub("auth", hub)
 
@@ -128,7 +128,7 @@ class M1CapabilityProbe {
 
     /** An invite code the server does not know is refused on the login screen. */
     @Test
-    fun enrolmentRejectsUnknownInvite() {
+    fun enrollmentRejectsUnknownInvite() {
         launch()
         waitForTag("invite", "create-identity", 20_000)
         compose.onNodeWithTag("hub-url-input").performTextReplacement(hubUrl)
@@ -142,12 +142,12 @@ class M1CapabilityProbe {
     }
 
     /**
-     * Enrol by pasting the whole invite link (which also names the hub), then log out from
+     * Enroll by pasting the whole invite link (which also names the hub), then log out from
      * Settings: must land back on the login screen.
      */
     @Test
     fun logout() {
-        enrolViaInvite("logout", "probe-logout", asLink = true)
+        enrollViaInvite("logout", "probe-logout", asLink = true)
         tapTab("nav-settings")
         scrollClick("logout", "settings-logout-button")
         waitForTag("logout", "confirm-logout-button", 5_000)
@@ -159,7 +159,7 @@ class M1CapabilityProbe {
     /** Phase 1: create and save a note. State is kept for [notesAfterRestart]. */
     @Test
     fun notesCreate() {
-        val (_, hub) = enrolViaInvite("notes", "probe-notes")
+        val (_, hub) = enrollViaInvite("notes", "probe-notes")
         ensureActiveHub("notes", hub)
         val marker = "probe-note-${System.currentTimeMillis()}"
         stateFile.parentFile?.mkdirs()
@@ -197,7 +197,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun notesDuringCall() {
-        val (pubkey, hub) = enrolViaInvite("quicknote", "probe-quicknote")
+        val (pubkey, hub) = enrollViaInvite("quicknote", "probe-quicknote")
         backdoor("quicknote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         val ring = backdoor("quicknote", "test-simulate/incoming-call", """{"callerNumber":"+15555550140","hubId":"$hub"}""")
         val callId = json.parseToJsonElement(ring).jsonObject["callId"]!!.jsonPrimitive.content
@@ -232,7 +232,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun notesFromCall() {
-        val (pubkey, hub) = enrolViaInvite("callnote", "probe-callnote")
+        val (pubkey, hub) = enrollViaInvite("callnote", "probe-callnote")
         backdoor("callnote", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("callnote", hub)
         val ring = backdoor("callnote", "test-simulate/incoming-call", """{"callerNumber":"+15555550130","hubId":"$hub"}""")
@@ -264,7 +264,7 @@ class M1CapabilityProbe {
     /** View the schedule, clock in, clock out. */
     @Test
     fun shifts() {
-        val (pubkey, hub) = enrolViaInvite("shifts", "probe-shifts")
+        val (pubkey, hub) = enrollViaInvite("shifts", "probe-shifts")
         backdoor("shifts", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
         ensureActiveHub("shifts", hub)
 
@@ -298,7 +298,7 @@ class M1CapabilityProbe {
      */
     @Test
     fun calls() {
-        val (pubkey, hub) = enrolViaInvite("calls", "probe-calls")
+        val (pubkey, hub) = enrollViaInvite("calls", "probe-calls")
         backdoor("calls", "test-create-shift", """{"pubkey":"$pubkey","hubId":"$hub"}""")
 
         // 1. Pre-existing answered call
@@ -335,7 +335,7 @@ class M1CapabilityProbe {
     /** List hubs, switch the active hub, and receive a call ring from the non-active hub. */
     @Test
     fun hubs() {
-        val (pubkey, hubA) = enrolViaInvite("hubs", "probe-hub-a")
+        val (pubkey, hubA) = enrollViaInvite("hubs", "probe-hub-a")
         val hubB = createHub("probe-hub-b")
         addHubMember("hubs", pubkey, hubB)
         probe("hubs", "activeHubId the app chose: ${activeHubId()} (A=$hubA B=$hubB)")
@@ -372,7 +372,7 @@ class M1CapabilityProbe {
     /** An inbound SMS creates a conversation; open it, read it, reply. */
     @Test
     fun conversations() {
-        val (_, hub) = enrolViaInvite("conversations", "probe-conv")
+        val (_, hub) = enrollViaInvite("conversations", "probe-conv")
         ensureActiveHub("conversations", hub)
         val body = "probe-sms-${System.currentTimeMillis()}"
         backdoor(
@@ -446,7 +446,7 @@ class M1CapabilityProbe {
     }
 
     /**
-     * Enrolment as a volunteer does it (#1345): an admin creates an invite for [role] into
+     * Enrollment as a volunteer does it (#1345): an admin creates an invite for [role] into
      * a new hub, and the volunteer redeems it on a fresh install (hub URL + invite code →
      * PIN twice). Redemption is what grants the hub membership (#1474), so the invite
      * names the hub — this server has many, and an unnamed hub is refused as ambiguous.
@@ -456,7 +456,7 @@ class M1CapabilityProbe {
      * [asLink]: paste the invite link instead, leaving the hub URL empty — the app must
      * take both the code and the hub from the link.
      */
-    private fun enrolViaInvite(flow: String, hubName: String, asLink: Boolean = false): Pair<String, String> {
+    private fun enrollViaInvite(flow: String, hubName: String, asLink: Boolean = false): Pair<String, String> {
         val hub = createHub(hubName)
         val invite = adminApi(
             flow, "POST", "/api/invites",
@@ -478,7 +478,7 @@ class M1CapabilityProbe {
         enterPin(PIN)
         waitForAnyTag(flow, 20_000, "dashboard-title", "invite-redeem-error")
         check(has("dashboard-title")) { fail(flow, "invite redemption failed: ${textOf("invite-redeem-error")}") }
-        val pubkey = checkNotNull(crypto().signingPubkeyHex) { fail(flow, "no signing pubkey after enrolment") }
+        val pubkey = checkNotNull(crypto().signingPubkeyHex) { fail(flow, "no signing pubkey after enrollment") }
         probe(flow, "invite redeemed in the UI; the app is on the dashboard")
         addHubMember(flow, pubkey, hub)
         return pubkey to hub
@@ -490,7 +490,7 @@ class M1CapabilityProbe {
         enterPin(PIN)
         val unlocked = pollFor(15_000) { has("dashboard-title") }
         probe(flow, "$context: the PIN unlocks=$unlocked keys unlocked=${crypto().isUnlocked}")
-        check(unlocked) { fail(flow, "$context: the PIN set at enrolment did not unlock the app; texts=${screenTexts()}") }
+        check(unlocked) { fail(flow, "$context: the PIN set at enrollment did not unlock the app; texts=${screenTexts()}") }
     }
 
     private fun enterPin(pin: String) {

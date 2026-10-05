@@ -58,7 +58,7 @@ import org.llamenos.hotline.ui.components.LoadingOverlay
  *
  * Entry paths:
  * 1. "Create New Identity" with an invite code or link -> the invite is validated, then
- *    PINSetScreen, then the invite is redeemed (enrolment: the server learns the identity)
+ *    PINSetScreen, then the invite is redeemed (enrollment: the server learns the identity)
  * 2. "Create New Identity" without an invite -> PINSetScreen (a local identity only)
  *
  * Device linking was removed from the pilot build (#1405); it returns when the

@@ -175,6 +175,7 @@ secrets:
   # set: the app refuses to boot rather than seal admin envelopes to an Ed25519
   # key, which succeeds and makes every note permanently undecryptable (#1283).
   adminDecryptionPubkey: ""
+
   postgresPassword: ""  # Required
   hmacSecret: ""         # Required: 64-char hex, generate with: openssl rand -hex 32
   twilioAccountSid: ""

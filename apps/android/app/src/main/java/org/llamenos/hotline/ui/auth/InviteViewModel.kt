@@ -18,7 +18,7 @@ import java.io.IOException
 import java.util.UUID
 import javax.inject.Inject
 
-/** Where an invite is in the enrolment flow: Login → PIN set → redeem → dashboard. */
+/** Where an invite is in the enrollment flow: Login → PIN set → redeem → dashboard. */
 enum class InviteStage { NONE, VALIDATING, VALID, REDEEMING, REDEEMED }
 
 data class InviteUiState(
@@ -31,7 +31,7 @@ data class InviteUiState(
 )
 
 /**
- * Enrolment by invite (#1345).
+ * Enrollment by invite (#1345).
  *
  * Scoped to the auth NavHost so the invite survives Login → PIN set → redeem. The
  * invite is validated before the user chooses a PIN, and redeemed once the new device
@@ -98,12 +98,13 @@ class InviteViewModel @Inject constructor(
         _uiState.update { it.copy(stage = InviteStage.REDEEMING, errorRes = null) }
         viewModelScope.launch {
             val errorRes = try {
-                inviteRepository.redeem(code)
-                null
+                when (val failure = inviteRepository.redeemInvite(code).exceptionOrNull()) {
+                    null -> null
+                    is IOException -> R.string.connection_failed
+                    else -> R.string.onboarding_redeem_failed
+                }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: IOException) {
-                R.string.connection_failed
             } catch (_: Exception) {
                 R.string.onboarding_redeem_failed
             }

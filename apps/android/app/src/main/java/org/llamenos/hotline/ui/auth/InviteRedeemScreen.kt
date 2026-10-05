@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 
 /**
- * Last step of enrolment by invite: redeem the invite with the device keys just created
+ * Last step of enrollment by invite: redeem the invite with the device keys just created
  * at PIN set, then continue to the dashboard. A failed redemption stays here with the
  * error and a retry — the keys are already stored, so retrying needs no new PIN.
  */
