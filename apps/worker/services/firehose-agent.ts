@@ -412,6 +412,7 @@ export class FirehoseAgentService {
     // accepted by DHKEM(X25519) as 32 arbitrary bytes, producing a second
     // envelope that no secret key could ever open (#1283).
     const adminRecipient = adminHpkeRecipient(this.env)
+
     const recipientPubkeys = [
       ...new Set([conn.agentPubkey, ...(adminRecipient ? [adminRecipient] : [])]),
     ]
