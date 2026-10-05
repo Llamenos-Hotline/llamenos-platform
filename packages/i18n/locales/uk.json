@@ -716,6 +716,7 @@
       "archived": "Архівований",
       "suspended": "Призупинений"
     },
+    "switchFooter": "Торкніться хаба, щоб змінити активний контекст. Активний хаб визначає, які дані ви бачите.",
     "switchHub": "Змінити хаб",
     "title": "Управління хабами",
     "urlLabel": "URL хабу",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "Зашифрований вміст цього хаба поки не можна відкрити на цьому пристрої",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"

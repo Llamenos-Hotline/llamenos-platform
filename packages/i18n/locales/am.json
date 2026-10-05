@@ -716,6 +716,7 @@
       "archived": "ከመዝገብ ቤት",
       "suspended": "ታግዷል"
     },
+    "switchFooter": "የሚሰሩበትን ሃብ ለመቀየር ሃቡን ይንኩ። ንቁ ሃብ የሚያዩትን መረጃ ይወስናል።",
     "switchHub": "ሃብ ቀይር",
     "title": "ሃብ አስተዳደር",
     "urlLabel": "የሃብ URL",
@@ -734,6 +735,7 @@
     "descriptionPlaceholder": "Hub description",
     "emptyMessage": "You haven't joined any hubs yet",
     "emptyTitle": "No Hubs",
+    "keyUnavailable": "በዚህ ሃብ ውስጥ ያለው የተመሰጠረ ይዘት በዚህ መሣሪያ ላይ እስካሁን ሊከፈት አይችልም",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
     "yourHubs": "Your Hubs"
