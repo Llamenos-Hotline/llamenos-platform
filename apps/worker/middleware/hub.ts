@@ -27,7 +27,8 @@ export async function hubContext(c: Context<AppEnv>, next: Next): Promise<Respon
     throw err // Propagate DB errors as 500
   }
 
-  // Resolve hub-scoped permissions
+  // Resolve hub-scoped permissions: super-admin globals + this hub's assignment.
+  // Non-super-admin global roles grant nothing here (#1037).
   const hubPermissions = resolveHubPermissions(
     user.roles,
     user.hubRoles || [],
@@ -53,6 +54,12 @@ export async function hubContext(c: Context<AppEnv>, next: Next): Promise<Respon
 
   c.set('hubId', hubId)
   c.set('hubPermissions', hubPermissions)
+  // Inside a hub, the hub-resolved set IS the caller's authority. Replacing
+  // `permissions` (resolved from global roles by the auth middleware) means every
+  // guard and every inline `c.get('permissions')` check downstream is hub-bounded;
+  // leaving the global set in place would let a non-super-admin global role
+  // authorize actions in a hub the caller is not a member of.
+  c.set('permissions', hubPermissions)
 
   await next()
 }
