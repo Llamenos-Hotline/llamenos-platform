@@ -241,7 +241,8 @@
 
           To pre-configure an admin:
             1. Generate a keypair: bun run bootstrap-admin
-            2. Copy the hex public key to admin_pubkey in vars.yml
+            2. Copy the ADMIN_PUBKEY value (a PUBLIC key) to admin_pubkey in vars.yml.
+               Never use the value printed under the SECRET heading — admin keys are served to every user.
       when: admin_pubkey is not defined or admin_pubkey | length == 0
 
     - name: Assert admin_pubkey is a valid 64-character hex string (if set)
@@ -250,14 +251,15 @@
           - admin_pubkey | length == 64
           - admin_pubkey | regex_search('^[0-9a-f]{64}$') is truthy
         fail_msg: |
-          INVALID: 'admin_pubkey' must be a 64-character lowercase hex string (Nostr public key).
+          INVALID: 'admin_pubkey' must be a 64-character lowercase hex string (Ed25519 public key).
 
           Current value: {{ admin_pubkey }}
           Length: {{ admin_pubkey | length }} chars (expected: 64)
 
           To fix:
             1. Generate a keypair: bun run bootstrap-admin
-            2. Copy the hex public key to admin_pubkey in vars.yml
+            2. Copy the ADMIN_PUBKEY value (a PUBLIC key) to admin_pubkey in vars.yml.
+               Never use the value printed under the SECRET heading — admin keys are served to every user.
         success_msg: "admin_pubkey: {{ admin_pubkey[:8] }}... (64 chars)"
       when: admin_pubkey is defined and admin_pubkey | length > 0
 

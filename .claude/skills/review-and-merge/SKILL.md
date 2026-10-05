@@ -41,6 +41,15 @@ agent triggers a real merge, rather than trusting them to be remembered:
    approval before this command will merge it (`needs-codeowner`); it never approves on the
    operator's behalf.
 
+And one that is specific to this command rather than to merging in general:
+
+6. **A verdict is recorded as a GitHub App, or not at all (#1483).** The `fleet/review`
+   check-run is posted with a short-lived App installation token minted per invocation
+   (`orchestrator/src/github-app.ts`), because the Checks API refuses a PAT. Nothing else in
+   the command uses that token, nothing persists it, and no failure path prints the key, the
+   JWT or the token. Without working credentials the command refuses *before* reviewing
+   rather than reviewing and then losing the answer.
+
 ## Running it
 
 ```bash
@@ -48,6 +57,15 @@ llamenos-fleet review-and-merge <pr-number>
 ```
 
 - Exit **0** only for `merged` or `already-merged`.
+- Exit **1** for `cannot-record` — the `llamenos-fleet-review` GitHub App credentials
+  (`FLEET_REVIEW_APP_ID` + `~/.llamenos-fleet/review-app.pem`, mode 600) are absent or
+  unusable, so the command refused **before** spending a review and posted nothing. The
+  Checks API refuses a PAT, and there is no fallback by design (#1483) — a PAT-written
+  commit status could override a red check run, which is fail-open. Use the CI gate until
+  the App exists; see `orchestrator/README.md` ("Recording a verdict").
+- Exit **1** for `review-unrecorded` — the review RAN and its verdict could not be written
+  to GitHub. The verdict is LOST, nothing was posted, nothing was merged. The command says
+  so plainly rather than reporting a success it did not achieve.
 - Exit **1** for `not-mergeable` (with the reason — unreviewed head, red check, missing
   `fleet/review`, or a real `FAIL`/`UNREADABLE` verdict) or `needs-codeowner` (bot-authored
   PR awaiting human approval) — both are refusals, not errors to retry past.

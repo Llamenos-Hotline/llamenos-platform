@@ -13,7 +13,7 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
-import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS } from '../../orchestrator/src/review.js'
+import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
@@ -327,6 +327,59 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
     const hits = orchestratorSources().filter(({ text }) => CHECK_RUNS_CREATE.test(text))
     expect(hits.map((h) => h.file)).toEqual([REVIEW_AND_MERGE_FILE])
+
+    // And that one file must ACTUALLY post there. Deleting the request and
+    // leaving the module comment behind kept this rail green when it was
+    // deliberately sabotaged — the same false-green shape as a check once
+    // satisfied by a YAML *comment* naming a config file. The endpoint in
+    // prose is not the endpoint in a request.
+    expect(hits[0]?.text, 'the one permitted file mentions the endpoint but does not POST to it')
+      .toMatch(/method:\s*'POST'[\s\S]{0,200}check-runs`/)
+  })
+
+  /**
+   * #1483 added the only credential in this orchestrator that is not the
+   * operator's own `gh` auth: a GitHub App private key, exchanged for a
+   * short-lived installation token so the Checks API (which refuses a PAT)
+   * will accept the verdict above.
+   *
+   * These two rails bound that capability to one file each, in the same
+   * spirit as the one above and for the same reason: the check-run POST is
+   * the one local write path this design trusts, and a SECOND place that can
+   * mint an App token — or a second place that reads the key off disk — is a
+   * second ungoverned way to write a verdict, with the added property that
+   * whoever added it would also be handling key material.
+   *
+   * Note the division: `github-app.ts` holds the AUTH and never names the
+   * endpoint, `review-and-merge.ts` holds the one CALL and never reads the
+   * key. That is what keeps both rails satisfiable at once rather than one
+   * being traded for the other.
+   */
+  it('mints a GitHub App installation token from exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /access_tokens/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  it('reads the GitHub App private key in exactly one file (github-app.ts)', () => {
+    const GITHUB_APP_FILE = join(process.cwd(), 'orchestrator', 'src', 'github-app.ts')
+    const hits = orchestratorSources().filter(({ text }) => /review-app\.pem|createSign\(/.test(text))
+    expect(hits.map((h) => h.file)).toEqual([GITHUB_APP_FILE])
+  })
+
+  /**
+   * The rejected shortcut, kept rejected. `POST /statuses/<sha>` accepts a
+   * PAT and satisfies a required context — which is exactly why it must not
+   * exist here: a PAT-written green status under the `fleet/review` context
+   * name could override a red check run. Fail-open, and explicitly rejected
+   * on #1483. `ci.ts`'s own comment above `VERIFY_JOB`/`REVIEW_JOB` rejected
+   * a same-named STATUS once already, for the separate reason that it makes
+   * fork PRs unmergeable; this is the second, independent reason.
+   */
+  it('never writes a commit status as an alternative to a check-run', () => {
+    for (const { file, text } of orchestratorSources()) {
+      expect(text, `${file} writes a commit status — see #1483`).not.toMatch(/\/statuses\//)
+    }
   })
 })
 
@@ -554,7 +607,7 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // smoke test is the only place a runner whose `claude` build rejects the
     // flag gets named as a configuration problem instead of failing every
     // real review as an opaque `engine-unavailable`.
-    expect(text).toMatch(/\| "\$rev_binary" --print --permission-mode plan --tools "\$rev_tools" --model "\$rev_model"/)
+    expect(text).toMatch(/\| env HOME="\$rev_home" "\$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "\$rev_tools" --model "\$rev_model"/)
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
       .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
@@ -593,12 +646,88 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
       .toMatch(/rev_tools="\$FLEET_REVIEWER_TOOLS"/)
   })
 
+  // #1460/#1511: the reviewer's HOME is the gate's, not the runner's. Both
+  // halves of that live here as literals for the SAME version-boundary
+  // reason as the tool list above (#1464 — the head's YAML runs against the
+  // base's checkout, so importing a symbol the head adds deadlocks the gate
+  // for the PR adding it), and this is the assertion that makes carrying
+  // them as literals safe: it runs where the YAML and review.ts are the
+  // same commit.
+  it('carries the gate-owned HOME literals, equal to REVIEWER_HOME_PREFIX / REVIEWER_CREDENTIALS_RELPATH in the source', () => {
+    const text = fleetReviewJobText()
+    const prefix = /^\s*FLEET_REVIEWER_HOME_PREFIX:\s*(\S+)\s*$/m.exec(text)
+    if (prefix === null) throw new Error('FLEET_REVIEWER_HOME_PREFIX not set in the fleet-review job env')
+    expect(prefix[1], 'the workflow\'s FLEET_REVIEWER_HOME_PREFIX has drifted from REVIEWER_HOME_PREFIX in orchestrator/src/review.ts')
+      .toBe(REVIEWER_HOME_PREFIX)
+    const relpath = /^\s*FLEET_REVIEWER_CREDENTIALS_RELPATH:\s*(\S+)\s*$/m.exec(text)
+    if (relpath === null) throw new Error('FLEET_REVIEWER_CREDENTIALS_RELPATH not set in the fleet-review job env')
+    expect(relpath[1], 'the workflow\'s FLEET_REVIEWER_CREDENTIALS_RELPATH has drifted from REVIEWER_CREDENTIALS_RELPATH in orchestrator/src/review.ts')
+      .toBe(REVIEWER_CREDENTIALS_RELPATH)
+    // And they are what the step actually builds the HOME from, not merely
+    // declared in `env:` and then ignored.
+    expect(text, 'the smoke step does not build its HOME from the env-carried prefix')
+      .toMatch(/rev_home="\$\(mktemp -d "\$HOME\/\$\{FLEET_REVIEWER_HOME_PREFIX\}XXXXXX"\)"/)
+    expect(text, 'the smoke step does not place the credential file at the env-carried relative path')
+      .toMatch(/rev_creds="\$rev_home\/\$FLEET_REVIEWER_CREDENTIALS_RELPATH"/)
+  })
+
+  // The reviewer must load no MCP server the gate did not name. `--tools`
+  // covers BUILT-IN tools only, so without this flag an MCP server
+  // configured on the runner arrives as an extra callable tool regardless —
+  // and a write-capable one makes a reviewer that is supposed to be
+  // read-only writable (#1460). Asserted on the smoke invocation as well as
+  // in `verifierArgs` (see review.test.ts) so a claude build that rejects
+  // the flag is named as a configuration problem instead of failing every
+  // real review as an opaque `engine-unavailable`.
+  it('passes --strict-mcp-config and never a --mcp-config that would reintroduce one', () => {
+    // Scoped to the invocation LINE, not the whole job: the surrounding
+    // comments legitimately say "`--strict-mcp-config` with no
+    // `--mcp-config` alongside it", which a whole-job absence check would
+    // trip on its own explanation.
+    const invocation = /^.*\| env HOME="\$rev_home" "\$rev_binary".*$/m.exec(fleetReviewJobText())
+    if (invocation === null) throw new Error('the smoke step\'s engine invocation line was not found')
+    expect(invocation[0], 'the smoke invocation does not pass --strict-mcp-config').toContain('--strict-mcp-config')
+    expect(invocation[0], 'a --mcp-config would hand the reviewer MCP servers again')
+      .not.toMatch(/(^|\s)--mcp-config(\s|=|$)/)
+  })
+
+  // #1511's third cause, pinned. The smoke prompt used to be
+  // `Reply with exactly: VERDICT: PASS` — a health check that asks the model
+  // to bypass its own judgement and emit a fixed attestation. That is
+  // indistinguishable from an injected instruction, and the reviewer refused
+  // it on exactly those grounds, 3/3 runs on #1510, reported as
+  // `NO-VERDICT:engine-unavailable`. Measured on the installed binary, it is
+  // refused even under a clean HOME, so the HOME fix alone does not settle
+  // it: the prompt has to ask a QUESTION whose answer IS the verdict, so the
+  // verdict is earned rather than dictated.
+  it('asks the engine a question with a real answer, never to emit a fixed verdict string', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke prompt is back to dictating a fixed verdict string — the exact shape #1511 was refused for')
+      .not.toMatch(/Reply with exactly/i)
+    const prompt = /smoke_prompt="\$\(printf[\s\S]*?\)"/.exec(text)
+    if (prompt === null) throw new Error('the smoke prompt was not found — this rail would pass vacuously')
+    expect(prompt[0], 'the smoke prompt asks the engine nothing').toContain('?')
+    // Both verdicts have to be reachable from the prompt, or it is still
+    // dictating one answer rather than asking for the right one.
+    expect(prompt[0]).toContain('VERDICT: PASS')
+    expect(prompt[0]).toContain('VERDICT: FAIL')
+    // Single-quoted shell words: an apostrophe in the prompt would end the
+    // quoting and mangle the invocation.
+    const body = prompt[0].slice(prompt[0].indexOf("'"))
+    expect(body.split("'").length % 2, 'the smoke prompt has an unbalanced apostrophe — the shell quoting is broken').toBe(1)
+  })
+
   it('never imports the tool list across the head-YAML/base-checkout version boundary', () => {
     const text = fleetReviewJobText()
     // Any `bun -e` import naming REVIEWER_TOOLS is the deadlock, restored.
     for (const m of text.matchAll(/import \{([^}]*)\} from "\.\/orchestrator\/src\/review\.ts"/g)) {
       expect(m[1], 'a gate-time import names REVIEWER_TOOLS again — this deadlocks fleet/review for any PR that changes it')
         .not.toMatch(/\bREVIEWER_TOOLS\b/)
+      // Same trap, same ban, for the #1460 HOME-isolation constants: they
+      // are literals in `env:` precisely because importing them here would
+      // deadlock the gate for the PR that introduced them.
+      expect(m[1], 'a gate-time import names a REVIEWER_HOME_* / REVIEWER_CREDENTIALS_* symbol — this deadlocks fleet/review for any PR that changes it')
+        .not.toMatch(/\bREVIEWER_(HOME_PREFIX|CREDENTIALS_RELPATH)\b/)
     }
   })
 
@@ -628,6 +757,92 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
 
   it('never passes --dangerously-skip-permissions to the reviewer', () => {
     expect(fleetReviewYamlText()).not.toContain('--dangerously-skip-permissions')
+  })
+
+  // The engine order and the fallback toggle (fleet-review.yml's file
+  // header): both must be repo variables read through the job env, exactly
+  // like FLEET_REVIEW_MODEL — and review.ts must read the identical env vars
+  // so the smoke step's branch and tolerance arms and the real review can
+  // never disagree about which engine runs first or whether crossing is
+  // armed.
+  it('declares FLEET_REVIEW_PRIMARY (kimi default) and FLEET_REVIEW_FALLBACK (on default, off disables), and review.ts reads the identical env vars', () => {
+    const text = fleetReviewJobText()
+    const primary = /^\s*FLEET_REVIEW_PRIMARY:\s*(.+?)\s*$/m.exec(text)
+    if (primary === null) throw new Error('FLEET_REVIEW_PRIMARY not set in the fleet-review job env')
+    expect(primary[1]).toBe("${{ vars.FLEET_REVIEW_PRIMARY || 'kimi' }}")
+    const fallback = /^\s*FLEET_REVIEW_FALLBACK:\s*(.+?)\s*$/m.exec(text)
+    if (fallback === null) throw new Error('FLEET_REVIEW_FALLBACK not set in the fleet-review job env')
+    expect(fallback[1]).toBe("${{ vars.FLEET_REVIEW_FALLBACK || 'on' }}")
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review).toContain("process.env['FLEET_REVIEW_PRIMARY']")
+    expect(review).toContain("process.env['FLEET_REVIEW_FALLBACK']")
+    expect(review).toContain("process.env['FLEET_REVIEW_KIMI_MODEL']")
+  })
+
+  // The fallback reviewer must be a READ-ONLY reviewer in fact, not in name:
+  // kimi's `-p` mode runs a full agent CLI (shell included) with no --tools
+  // flag, so the only thing standing between "fallback reviewer" and
+  // "arbitrary code execution next to the review key" is the committed
+  // agent profile's tool allowlist, enforced again at execution time. These
+  // rails pin the profile's shape the same way FLEET_REVIEWER_TOOLS is
+  // pinned for claude.
+  it('the committed fallback agent profile exists, allows exactly REVIEWER_TOOLS, and disallows the shell', () => {
+    const profilePath = join(process.cwd(), 'orchestrator', 'reviewer-readonly.agent.md')
+    expect(existsSync(profilePath), 'orchestrator/reviewer-readonly.agent.md is missing').toBe(true)
+    const profile = readFileSync(profilePath, 'utf8')
+    const toolsM = /^tools:\s*\n((?:\s*-\s*\S+\n)*)/m.exec(profile)
+    if (toolsM === null) throw new Error('the fallback agent profile has no tools: allowlist — it would run with every tool, Bash included')
+    const allowed = [...toolsM[1].matchAll(/^\s*-\s*(\S+)\s*$/gm)].map((x) => x[1])
+    expect(allowed, 'the fallback profile\'s tool allowlist has drifted from REVIEWER_TOOLS')
+      .toEqual([...REVIEWER_TOOLS])
+    expect(profile, 'the fallback profile must disallow Bash even as a belt-and-braces deny')
+      .toMatch(/^disallowedTools:/m)
+    expect(profile).toMatch(/^\s*-\s*Bash\s*$/m)
+    // The profile must not silently re-grow delegation: a reviewer that can
+    // dispatch sub-agents is not the tool set the prompt promises.
+    expect(profile).not.toMatch(/^subagents:\s*\*\s*$/m)
+  })
+
+  // And the fallback must actually RUN under that profile, in the smoke
+  // step's tolerance arm and in review.ts's real fallback invocation alike.
+  it('the smoke step\'s fallback arm invokes kimi under the committed profile with the stream-json envelope', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke step\'s fallback arm does not invoke kimi').toContain('kimi --output-format stream-json -p "$smoke_prompt"')
+    expect(text, 'the smoke step\'s fallback arm does not pass the read-only agent profile')
+      .toMatch(/--agent-file "\$fallback_agent"/)
+    expect(text, 'the fallback arm\'s profile path has drifted from the committed file')
+      .toContain('orchestrator/reviewer-readonly.agent.md')
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review, 'kimiArgs does not install the read-only agent profile').toContain("'--agent-file', REVIEWER_AGENT_FILE")
+    // kimi never receives a claude model id and never an auto/yolo mode; its
+    // own optional model override (FLEET_REVIEW_KIMI_MODEL) is the only
+    // --model, and it is gated on being nonempty.
+    const argsM = /export function kimiArgs[\s\S]*?\n\}/.exec(review)
+    if (argsM === null) throw new Error('kimiArgs not found in review.ts')
+    expect(argsM[0]).toContain("args.push('--model', input.model)")
+    expect(argsM[0]).not.toMatch(/\byolo\b|--auto\b/)
+    expect(argsM[0]).not.toContain('REVIEWER_MODEL')
+  })
+
+  // The tolerance arms' three guards in EACH direction, pinned: never on
+  // engine-auth (an expired runner login stays loud), never when the
+  // operator dial is off, never without the other engine's binary on PATH
+  // (no half-run). Removing any guard makes this rail fail — the arms are
+  // what keep one engine's outage from stopping the merge train AND what
+  // keep it from becoming a silent pass.
+  it('the smoke step\'s fallback arms are gated on not-auth, the operator dial, and the other engine being on PATH — both directions', () => {
+    const text = fleetReviewJobText()
+    const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
+    expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
+    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(2)
+    expect(text).toContain('command -v claude >/dev/null 2>&1')
+    expect(text).toContain('command -v kimi >/dev/null 2>&1')
+    // And the primary branch is selected from the RESOLVED engine — never
+    // from an env var read directly — so the smoke test and the real review
+    // smoke the same engine by construction (including the bootstrap
+    // window, when the base checkout still resolves claude).
+    expect(text).toContain('if [ "$rev_engine" = "kimi" ]; then')
+    expect(text).toContain('console.log(JSON.stringify({ engine: inv.engine, binary: inv.binary, model: inv.model }))')
   })
 
   it('review.ts reads the reviewer model from FLEET_REVIEW_MODEL, defaulting to sonnet, not a bare literal', () => {
@@ -2054,18 +2269,48 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     expect(outcome.verdict.verdict).toBe('FAIL')
   })
 
-  // The load-bearing one. A push that CHANGED the diff has nothing to
-  // republish, and must never spend a model call — no matter what
-  // `requested` says. Without the `republishOnly ||` guard in the gate this
-  // returns `run-engine`, which is one model review per push on every open
-  // PR.
-  it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
-    const cache = fakeCache()
+  // The load-bearing one. A push that CHANGED the diff has nothing cached,
+  // and must never spend a model call — no matter what `requested` says.
+  // Without the `republishOnly` guard in the gate this returns
+  // `run-engine`, which is one model review per push on every open PR. It
+  // is not red on its own account either (#1394): the PR's last earned
+  // verdict is carried forward, and a PR nobody asked about is green.
+  const earned = { verdict: 'PASS' as const, headSha: 'earned9', runUrl: 'https://example/run/9', text: 'VERDICT: PASS (carried)' }
+  for (const [label, last, kind] of [
+    ['a PASS was earned', { kind: 'found', earned }, 'carried'],
+    ['a FAIL was earned', { kind: 'found', earned: { ...earned, verdict: 'FAIL' } }, 'carried'],
+    ['nothing was ever earned', { kind: 'none', runsSearched: 3 }, 'unreviewed'],
+    ['the history is unreadable', { kind: 'unreadable', reason: 'api down' }, 'carry-unreadable'],
+  ] as const) {
+    it(`a push that changed the diff never reaches run-engine, even when requested is true — ${label}`, async () => {
+      const cache = fakeCache()
+      const outcome = await decideReviewGate({
+        ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+        cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+        lastVerdict: async () => last,
+      })
+      expect(outcome.kind).toBe(kind)
+      if (outcome.kind === 'carried' && last.kind === 'found') expect(outcome.earned).toEqual(last.earned)
+    })
+  }
+
+  it('a push with no last-verdict lookup wired fails closed — never "nothing was earned", which is green', async () => {
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
-      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => fakeCache(), requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('carry-unreadable')
+  })
+
+  it('a review request never pays for the last-verdict lookup', async () => {
+    let asked = 0
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => fakeCache(), requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      lastVerdict: async () => { asked += 1; return { kind: 'none', runsSearched: 0 } },
+    })
+    expect(outcome.kind).toBe('run-engine')
+    expect(asked).toBe(0)
   })
 
   // A named reviewer profile must not be the loophole either: a labelled PR
@@ -2079,14 +2324,15 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
+      lastVerdict: async () => ({ kind: 'none', runsSearched: 0 }),
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('unreviewed')
   })
 
   // A docs-only push still concludes green on its own terms — the tier
   // branch sits ahead of the request/republish branch and must stay there,
   // or an ordinary push to a docs PR would go red for no reason.
-  it('a docs-only push still concludes low-tier, not not-requested', async () => {
+  it('a docs-only push still concludes low-tier, ahead of the carry', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],
