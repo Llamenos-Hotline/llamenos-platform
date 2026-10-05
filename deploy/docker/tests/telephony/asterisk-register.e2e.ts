@@ -121,6 +121,9 @@ test('a volunteer SIP identity registers against the PBX, and deletion revokes i
     expect(first.username).toMatch(new RegExp(`^\\d+:${expectedUsername}$`))
     // credential = base64(HMAC-SHA1(TURN_SECRET, username)) — RFC 8489
     // time-limited credentials, verifiable against the shared secret here.
+    // HMAC-SHA1 is what RFC 8489 §9.2 (and coturn) mandate for TURN
+    // long-term credentials; it is not a choice this test can upgrade.
+    // codeql[js/weak-cryptographic-algorithm]
     const expectedCredential = createHmac('sha1', TURN_SECRET).update(first.username ?? '').digest('base64')
     expect(timingSafeEqualString(first.credential ?? '', expectedCredential)).toBe(true)
   } else {

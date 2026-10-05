@@ -15,6 +15,10 @@ export interface RegisterResult {
   reason: string
 }
 
+// RFC 3261 §22.4 mandates MD5 for SIP digest authentication — the PBX
+// (Asterisk) only ever issues MD5 challenges, so a REGISTER client cannot
+// choose a stronger hash here.
+// codeql[js/weak-cryptographic-algorithm] codeql[js/insufficient-password-hash]
 function md5(input: string): string {
   return createHash('md5').update(input).digest('hex')
 }
