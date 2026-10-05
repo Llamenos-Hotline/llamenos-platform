@@ -316,6 +316,29 @@ afterEach(() => {
 })
 
 describe('secondOpinion', () => {
+  // `runKimiOnce` preflights `kimiBinaryOnPath` before it ever execs, so a
+  // test that lets the kimi arm run MUST have a kimi binary on PATH — on a
+  // box without one (every CI runner) the preflight short-circuits the kimi
+  // arm as engine-unavailable and the claude fallback serves the verdict,
+  // which is exactly the production behavior but not what these tests judge.
+  // Same stub pattern as the end-to-end describe below.
+  let savedPath: string | undefined
+  let kimiBinDir: string
+
+  beforeEach(() => {
+    savedPath = process.env['PATH']
+    kimiBinDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-kimi-bin-'))
+    writeFileSync(join(kimiBinDir, 'kimi'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(kimiBinDir, 'kimi'), 0o755)
+    process.env['PATH'] = `${kimiBinDir}${delimiter}${savedPath ?? ''}`
+  })
+
+  afterEach(() => {
+    if (savedPath === undefined) delete process.env['PATH']
+    else process.env['PATH'] = savedPath
+    rmSync(kimiBinDir, { recursive: true, force: true })
+  })
+
   it('refuses to review a report that did not pass mechanical verification', async () => {
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const failedReport = {
