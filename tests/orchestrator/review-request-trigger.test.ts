@@ -405,6 +405,20 @@ describe('rail: advice that cannot work says so (#1471)', () => {
     expect(advice({ alreadyRequested: ['Rhonda-Rodododo'] })).toContain('ALREADY a requested reviewer')
   })
 
+  it('the already-requested case names the working recovery: a comment review by the requested login, then a true re-add', () => {
+    const text = advice({ alreadyRequested: [OPERATOR] })
+    // The comment review is what genuinely empties the list where a REST
+    // DELETE is reverted by CODEOWNERS — measured on #1378 (#1471).
+    expect(text).toMatch(/gh pr review 1184 --comment/)
+    // ... and only with the list genuinely empty does the re-add emit
+    // `review_requested` and reach the rollup.
+    expect(text).toMatch(/requested_reviewers/)
+    expect(text).toMatch(/review_requested/)
+    // It must never recommend an approving review — that would stand in for
+    // the gate's verdict (and the forbidden-flag rail pins the literal).
+    expect(text).not.toMatch(/gh pr review 1184 --approve/)
+  })
+
   it('an UNREADABLE requested-reviewer list is not an empty one — it never claims the re-request works', () => {
     const text = advice({ alreadyRequested: undefined })
     expect(text).not.toContain('ALREADY a requested reviewer')

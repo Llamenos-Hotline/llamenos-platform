@@ -123,16 +123,34 @@ describe('hubContext middleware', () => {
     expect(body.error).toBe('Access denied')
   })
 
-  it('grants access when user has global roles with permissions', async () => {
-    const user = makeUser({ roles: ['role-volunteer'] })
+  // #1037: a non-super-admin global role is not hub membership. A volunteer
+  // invited by Hub A must not be admitted to every other hub on the server.
+  it('denies a user whose only role is a non-super-admin global role', async () => {
+    const user = makeUser({ roles: ['role-volunteer'], hubRoles: [] })
     const { app } = createApp(user)
     app.use('/hub/:hubId', hubContext)
     app.get('/hub/:hubId', (c) => c.json({ hubId: c.get('hubId') }))
 
     const res = await app.request('/hub/hub-1')
+    expect(res.status).toBe(403)
+  })
+
+  it('bounds `permissions` to the hub assignment, dropping global roles', async () => {
+    const user = makeUser({
+      roles: ['role-hub-admin'],
+      hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
+    })
+    const { app } = createApp(user)
+    app.use('/hub/:hubId', hubContext)
+    app.get('/hub/:hubId', (c) => c.json({ permissions: c.get('permissions') }))
+
+    const res = await app.request('/hub/hub-1')
     expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.hubId).toBe('hub-1')
+    const body = await res.json() as { permissions: string[] }
+    expect(body.permissions).toContain('calls:answer')
+    // role-hub-admin is global only — it must not authorise anything in hub-1
+    expect(body.permissions).not.toContain('users:*')
+    expect(body.permissions).not.toContain('settings:*')
   })
 
   it('grants access to super admin for any hub', async () => {
