@@ -1521,7 +1521,7 @@ export async function createContactByNameViaApi(
   // Encrypt the summary the way the desktop client's encryptMessage does, for
   // the admin reader, so the directory renders the contact instead of the
   // "Restricted" placeholder (issue #796).
-  const { encryptedContent: encryptedSummary, readerEnvelopes } = encryptMessageForDesktop(
+  const { encryptedContent: encryptedSummary, readerEnvelopes } = await encryptMessageForDesktop(
     JSON.stringify({ displayName, contactType, tags: [] }),
     [seedHex],
   )

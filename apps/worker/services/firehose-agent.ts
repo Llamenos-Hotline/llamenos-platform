@@ -12,6 +12,7 @@
  * Circuit breaker: 3 consecutive extraction failures auto-pause the connection.
  */
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import {
   LABEL_FIREHOSE_AGENT_SEAL,
@@ -503,7 +504,7 @@ export class FirehoseAgentService {
       secretKey,
       envelope,
       utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT),
-      utf8ToBytes(`${LABEL_FIREHOSE_BUFFER_ENCRYPT}:key-wrap`),
+      keyWrapAad(LABEL_FIREHOSE_BUFFER_ENCRYPT),
     )
   }
 
@@ -513,7 +514,7 @@ export class FirehoseAgentService {
    */
   private decryptWithWindowKey(encryptedHex: string, windowKey: Uint8Array): string {
     const bytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(windowKey, bytes, utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT))
+    const plaintext = symmetricDecrypt(windowKey, bytes, contentAad(LABEL_FIREHOSE_BUFFER_ENCRYPT))
     return new TextDecoder().decode(plaintext)
   }
 

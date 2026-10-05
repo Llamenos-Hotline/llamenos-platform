@@ -225,3 +225,125 @@ fn androids_label_id_table_matches_the_registry() {
         );
     }
 }
+
+/// Notes, files, and contact identifiers are canonical-AAD envelopes on every
+/// platform: `content_aad(label)` on the content layer, `key_wrap_aad(label)`
+/// on the key wrap. A call site passing an empty AAD beside one of those
+/// labels is the #1517-family defect recurring — writer and reader look
+/// self-consistent on one platform, and every other platform fails the tag
+/// check with no hint of why. Hub-key and PUK envelopes are exempt: every
+/// implementation of those passes empty (or the PUK per-device AAD) by
+/// agreement, so the pair interoperates.
+#[test]
+fn mobile_never_seals_canonical_envelopes_with_empty_aad() {
+    const CANONICAL_LABELS: [&str; 5] = [
+        "LABEL_NOTE_KEY",
+        "LABEL_FILE_KEY",
+        "LABEL_FILE_METADATA",
+        "LABEL_CONTACT_ID",
+        "LABEL_CONTACT_PROFILE",
+    ];
+    let mut offenders = Vec::new();
+    for dir in ["apps/android/app/src/main", "apps/ios/Sources"] {
+        let root = repo_root().join(dir);
+        let mut stack = vec![root];
+        while let Some(path) = stack.pop() {
+            let entries = match std::fs::read_dir(&path) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let is_source = matches!(
+                    p.extension().and_then(|e| e.to_str()),
+                    Some("kt") | Some("swift")
+                );
+                // The generated binding is not a hand-written call site.
+                let is_generated = p.to_string_lossy().contains("/org/llamenos/core/");
+                if !is_source || is_generated {
+                    continue;
+                }
+                if let Ok(body) = std::fs::read_to_string(&p) {
+                    for line in body.lines() {
+                        // Comment lines may quote the defect while explaining
+                        // it; only code may commit it.
+                        let t = line.trim_start();
+                        if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
+                            continue;
+                        }
+                        let on_canonical_label = CANONICAL_LABELS.iter().any(|l| line.contains(l));
+                        let passes_empty_aad = line.contains("NO_AAD")
+                            || line.contains("noAad")
+                            || line.contains("aadHex: \"\"");
+                        if on_canonical_label && passes_empty_aad {
+                            offenders.push(format!("{}: {t}", p.display()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these mobile call sites seal a canonical-AAD envelope (note / file / \
+         contact) with an empty AAD, which no other platform can open: {offenders:#?}"
+    );
+}
+
+/// The desktop call sites for the same envelopes are scanned the same way.
+///
+/// `src/client/lib/platform.ts` seals notes and wraps file/contact keys;
+/// `src/client/lib/file-crypto.ts` seals file content and metadata;
+/// `src/client/components/signal-notification-section.tsx` seals Signal
+/// contact identifiers. A crypto entry point invoked on the same source line
+/// as one of the canonical labels must not pass an empty AAD literal — the
+/// pre-fix shape of this line was `hpkeSealKey(keyHex, pub, LABEL_NOTE_KEY, '')`.
+#[test]
+fn desktop_never_seals_canonical_envelopes_with_empty_aad() {
+    const CANONICAL_LABELS: [&str; 5] = [
+        "LABEL_NOTE_KEY",
+        "LABEL_FILE_KEY",
+        "LABEL_FILE_METADATA",
+        "LABEL_CONTACT_ID",
+        "LABEL_CONTACT_PROFILE",
+    ];
+    const ENCRYPT_FNS: [&str; 4] = [
+        "hpkeSealKey",
+        "hpkeOpenKeyFromState",
+        "aesGcmEncrypt",
+        "aesGcmDecrypt",
+    ];
+    let files = [
+        "src/client/lib/platform.ts",
+        "src/client/lib/file-crypto.ts",
+        "src/client/components/signal-notification-section.tsx",
+    ];
+    let mut offenders = Vec::new();
+    for file in files {
+        let body = read(file);
+        for line in body.lines() {
+            let t = line.trim_start();
+            // Comment lines may quote the defect while explaining it; only
+            // code may commit it.
+            if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
+                continue;
+            }
+            let on_canonical_label = CANONICAL_LABELS.iter().any(|l| line.contains(l));
+            let is_envelope_call = ENCRYPT_FNS.iter().any(|f| line.contains(f));
+            let passes_empty_aad = line.contains("''") || line.contains("\"\"");
+            if on_canonical_label && is_envelope_call && passes_empty_aad {
+                offenders.push(format!("{file}: {t}"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these desktop call sites seal a canonical-AAD envelope (note / file / \
+         contact) with an empty AAD, which no other implementation can open: \
+         {offenders:#?}"
+    );
+}

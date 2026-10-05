@@ -82,10 +82,13 @@ private func keyWrapAad(_ label: String) throws -> String {
     try mobileKeyWrapAadHex(label: label)
 }
 
-/// No AAD. §2.3 specifies an empty AAD for the note envelope, and the file,
-/// hub-key and contact envelopes have no server-written counterpart. Named
-/// rather than defaulted so an empty AAD is always a decision, never an
-/// omission.
+/// No AAD. Only hub-key envelopes still carry an empty AAD: every writer and
+/// reader of that envelope (desktop `hub-key-manager.ts`, iOS, Android) passes
+/// empty consistently, so the pair interoperates. Any envelope that crosses to
+/// the server, the desktop, or another mobile client binds `contentAad` /
+/// `keyWrapAad` instead — an empty AAD there made the implementations mutually
+/// unreadable. Named rather than defaulted so an empty AAD is always a
+/// decision, never an omission.
 private let noAad = ""
 
 /// Wire (`enc` and `ct` both hex, per §2.3/§2.4) -> the UniFFI record, which
@@ -312,12 +315,12 @@ final class CryptoService: @unchecked Sendable {
     func encryptNote(payload: String, recipientPubkeys: [String]) throws -> (ciphertextHex: String, envelopes: [(pubkey: String, envelope: HpkeEnvelope)]) {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
         let plaintextHex = payload.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
-        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: noAad)
+        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: try contentAad(CryptoLabels.LABEL_NOTE_KEY))
         let ciphertextHex = result[0]
         let keyHex = result[1]
         var envelopes: [(pubkey: String, envelope: HpkeEnvelope)] = []
         for pubkey in recipientPubkeys {
-            let sealed = try ffiMobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: pubkey, label: CryptoLabels.LABEL_NOTE_KEY, aadHex: noAad)
+            let sealed = try ffiMobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: pubkey, label: CryptoLabels.LABEL_NOTE_KEY, aadHex: try keyWrapAad(CryptoLabels.LABEL_NOTE_KEY))
             let wire = try toWireEnvelope(sealed)
             envelopes.append((pubkey: pubkey, envelope: HpkeEnvelope(v: sealed.v, labelId: sealed.labelId, enc: wire.enc, ct: wire.ct)))
         }
@@ -329,8 +332,8 @@ final class CryptoService: @unchecked Sendable {
     func decryptNote(ciphertextHex: String, envelope: HpkeEnvelope) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
         let ffiEnvelope = try toFfiEnvelope(label: CryptoLabels.LABEL_NOTE_KEY, enc: envelope.enc, ct: envelope.ct)
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: ffiEnvelope, expectedLabel: CryptoLabels.LABEL_NOTE_KEY, aadHex: noAad)
-        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex, aadHex: noAad)
+        let keyHex = try ffiMobileHpkeOpenKey(envelope: ffiEnvelope, expectedLabel: CryptoLabels.LABEL_NOTE_KEY, aadHex: try keyWrapAad(CryptoLabels.LABEL_NOTE_KEY))
+        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex, aadHex: try contentAad(CryptoLabels.LABEL_NOTE_KEY))
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted note")
         }
@@ -407,12 +410,12 @@ final class CryptoService: @unchecked Sendable {
         guard let encPubkey = encryptionPubkeyHex else { throw CryptoServiceError.noKeyLoaded }
         let allReaders = Array(Set([encPubkey] + readerPubkeys))
         let plaintextHex = jsonPayload.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
-        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: noAad)
+        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: try contentAad(label))
         let ciphertextHex = result[0]
         let keyHex = result[1]
         var envelopes: [RecipientEnvelope] = []
         for pubkey in allReaders {
-            let hpkeEnv = try ffiMobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: pubkey, label: label, aadHex: noAad)
+            let hpkeEnv = try ffiMobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: pubkey, label: label, aadHex: try keyWrapAad(label))
             envelopes.append(RecipientEnvelope(ct: hpkeEnv.ct, enc: hpkeEnv.enc, pubkey: pubkey))
         }
         return (ciphertextHex, envelopes)
@@ -427,8 +430,8 @@ final class CryptoService: @unchecked Sendable {
     /// - Returns: Decrypted JSON string.
     func decryptContactData(ciphertextHex: String, envelope: HpkeEnvelope, label: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: label, aadHex: noAad)
-        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex, aadHex: noAad)
+        let keyHex = try ffiMobileHpkeOpenKey(envelope: envelope, expectedLabel: label, aadHex: try keyWrapAad(label))
+        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: ciphertextHex, keyHex: keyHex, aadHex: try contentAad(label))
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted contact data")
         }
@@ -704,9 +707,10 @@ final class CryptoService: @unchecked Sendable {
         // Random 32-byte file key
         let fileKeyHex = ffiMobileRandomBytesHex()
 
-        // AES-GCM encrypt file content with file key
+        // AES-GCM encrypt file content with file key, binding the canonical
+        // content AAD for LABEL_FILE_KEY.
         let dataHex = data.map { String(format: "%02x", $0) }.joined()
-        let encryptedResult = try ffiMobileSymmetricEncrypt(plaintextHex: dataHex, aadHex: noAad)
+        let encryptedResult = try ffiMobileSymmetricEncrypt(plaintextHex: dataHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_KEY))
         // symmetric_encrypt returns [ciphertextHex, randomKeyHex] — but we need to encrypt with our file key.
         // Use the dedicated key-based encrypt: encrypt dataHex with fileKeyHex via symmetric_decrypt's inverse.
         // Actually, mobile_symmetric_encrypt generates its own random key. We need to use the file key instead.
@@ -725,7 +729,7 @@ final class CryptoService: @unchecked Sendable {
                 keyHex: actualFileKeyHex,
                 recipientPubkeyHex: pubkey,
                 label: CryptoLabels.LABEL_FILE_KEY,
-                aadHex: noAad
+                aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_KEY)
             )
             keyEnvelopes.append((pubkey: pubkey, envelope: envelope))
         }
@@ -733,14 +737,14 @@ final class CryptoService: @unchecked Sendable {
         // Encrypt metadata for each recipient with LABEL_FILE_METADATA
         var metaEnvelopes: [(pubkey: String, encryptedContent: String, envelope: HpkeEnvelope)] = []
         for pubkey in recipientPubkeys {
-            let metaEncResult = try ffiMobileSymmetricEncrypt(plaintextHex: metadataHex, aadHex: noAad)
+            let metaEncResult = try ffiMobileSymmetricEncrypt(plaintextHex: metadataHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_METADATA))
             let encMetaHex = metaEncResult[0]
             let metaKeyHex = metaEncResult[1]
             let envelope = try ffiMobileHpkeSealKey(
                 keyHex: metaKeyHex,
                 recipientPubkeyHex: pubkey,
                 label: CryptoLabels.LABEL_FILE_METADATA,
-                aadHex: noAad
+                aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_METADATA)
             )
             metaEnvelopes.append((pubkey: pubkey, encryptedContent: encMetaHex, envelope: envelope))
         }
@@ -754,7 +758,7 @@ final class CryptoService: @unchecked Sendable {
         return try ffiMobileHpkeOpenKey(
             envelope: envelope,
             expectedLabel: CryptoLabels.LABEL_FILE_KEY,
-            aadHex: noAad
+            aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_KEY)
         )
     }
 
@@ -767,9 +771,9 @@ final class CryptoService: @unchecked Sendable {
         let keyHex = try ffiMobileHpkeOpenKey(
             envelope: envelope,
             expectedLabel: CryptoLabels.LABEL_FILE_METADATA,
-            aadHex: noAad
+            aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_METADATA)
         )
-        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: encryptedContentHex, keyHex: keyHex, aadHex: noAad)
+        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: encryptedContentHex, keyHex: keyHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_METADATA))
         guard let data = hexToData(plaintextHex),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -784,7 +788,7 @@ final class CryptoService: @unchecked Sendable {
     /// Decrypt file content using a previously-unwrapped file key.
     func decryptFileContent(encryptedContentHex: String, fileKeyHex: String) throws -> Data {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: encryptedContentHex, keyHex: fileKeyHex, aadHex: noAad)
+        let plaintextHex = try ffiMobileSymmetricDecrypt(ciphertextHex: encryptedContentHex, keyHex: fileKeyHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_KEY))
         guard let data = hexToData(plaintextHex) else {
             throw CryptoServiceError.decryptionFailed("Failed to convert decrypted hex to Data")
         }
