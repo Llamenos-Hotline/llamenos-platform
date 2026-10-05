@@ -55,6 +55,7 @@ import {
 import { decideDeviceRegistration } from '../lib/device-eviction'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { getUserHpkeRecipients } from '../lib/device-recipients'
+import { resolveHpkeRecipients } from './reader-keys'
 const INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 const CHALLENGE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 const PROVISION_ROOM_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -1362,6 +1363,11 @@ export class IdentityService {
       // device twice and the multi-row upsert hit "ON CONFLICT DO UPDATE
       // cannot affect row a second time", surfacing as a 500.
       .orderBy(asc(devices.registeredAt), asc(devices.id))
+  }
+
+  /** HPKE recipient keys for a server-sealed envelope — see `resolveHpkeRecipients`. */
+  async resolveHpkeRecipients(readers: ReadonlyArray<string | null | undefined>): Promise<string[]> {
+    return resolveHpkeRecipients(this.db, readers)
   }
 
   async deleteDeviceById(pubkey: string, deviceId: string): Promise<boolean> {

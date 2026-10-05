@@ -16,6 +16,7 @@ import {
   createVolunteerViaApi,
   getMeViaApi,
   testEndpointAccess,
+  seedHexToPubkey,
   ADMIN_SEED,
 } from '../../api-helpers'
 import {
@@ -83,6 +84,46 @@ Given('an admin with a known keypair', async ({ world }) => {
 
 Given('a third party with a different keypair', async ({ world }) => {
   getSecTestState(world).thirdPartyKeypair = generateTestKeypair()
+})
+
+/**
+ * Register a device for `seedHex`'s user that publishes its X25519 key-agreement
+ * key, as the Android client does. That key — never the Ed25519 auth key — is
+ * what the server may seal to on the user's behalf.
+ */
+async function registerDeviceEncryptionKey(
+  request: import('@playwright/test').APIRequestContext,
+  seedHex: string,
+  pushToken: string,
+): Promise<void> {
+  const { status, data } = await apiPost(
+    request,
+    '/devices/register',
+    {
+      platform: 'android',
+      pushToken,
+      wakeKeyPublic: generateTestKeypair().pubkey,
+      x25519Pubkey: x25519PubkeyFromSeed(seedHex),
+    },
+    seedHex,
+  )
+  expect(status, `device registration failed: ${JSON.stringify(data)}`).toBe(204)
+}
+
+Given('the volunteer has registered a device encryption key', async ({ request, world }) => {
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair, 'the scenario needs a registered volunteer first').toBeDefined()
+  await registerDeviceEncryptionKey(
+    request,
+    state.volunteerKeypair!.seedHex,
+    `e2ee-roundtrip-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  )
+})
+
+Given('the admin has registered a device encryption key', async ({ request }) => {
+  // The admin is shared by every parallel scenario: one fixed push token keeps
+  // this to a single device row that re-registration updates in place.
+  await registerDeviceEncryptionKey(request, ADMIN_SEED, 'e2ee-roundtrip-admin-device')
 })
 
 Given('a hub with {int} admins with known keypairs', async ({request, world}, count: number) => {
@@ -221,20 +262,13 @@ interface StoredMessage {
   readerEnvelopes?: Array<{ pubkey: string; ct: string; enc: string }>
 }
 
-/**
- * Fetch the stored message back as `readerSeedHex`, open the reader envelope
- * addressed to that reader's X25519 key, and return the plaintext.
- *
- * The server seals inbound messages itself, so this is the only way to assert
- * that a reader can actually read one. Asserting HTTP 200 on the conversation
- * says nothing about whether the envelope opens.
- */
-async function decryptStoredMessageAs(
+/** Fetch the scenario's stored message back over the API as `readerSeedHex`. */
+async function fetchStoredMessageAs(
   request: import('@playwright/test').APIRequestContext,
   world: Record<string, unknown>,
   readerSeedHex: string,
   readerLabel: string,
-): Promise<string> {
+): Promise<StoredMessage> {
   const scenario = getScenarioState(world)
   expect(scenario.conversationId, 'no conversation was created').toBeDefined()
   expect(scenario.messageId, 'no message was recorded').toBeDefined()
@@ -249,17 +283,35 @@ async function decryptStoredMessageAs(
   const message = data.messages.find(m => m.id === scenario.messageId)
   expect(message, `${readerLabel} cannot see message ${scenario.messageId}`).toBeTruthy()
   expect(message!.encryptedContent, 'message has no ciphertext').toBeTruthy()
+  return message!
+}
+
+/**
+ * Fetch the stored message back as `readerSeedHex`, open the reader envelope
+ * addressed to that reader's X25519 key, and return the plaintext.
+ *
+ * The server seals inbound messages itself, so this is the only way to assert
+ * that a reader can actually read one. Asserting HTTP 200 on the conversation
+ * says nothing about whether the envelope opens.
+ */
+async function decryptStoredMessageAs(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  readerSeedHex: string,
+  readerLabel: string,
+): Promise<string> {
+  const message = await fetchStoredMessageAs(request, world, readerSeedHex, readerLabel)
 
   const readerX25519 = x25519PubkeyFromSeed(readerSeedHex)
-  const envelope = message!.readerEnvelopes?.find(e => e.pubkey === readerX25519)
+  const envelope = message.readerEnvelopes?.find(e => e.pubkey === readerX25519)
   expect(
     envelope,
     `no reader envelope addressed to ${readerLabel}'s X25519 key ${readerX25519}; ` +
-      `the server sealed to ${JSON.stringify(message!.readerEnvelopes?.map(e => e.pubkey))}`,
+      `the server sealed to ${JSON.stringify(message.readerEnvelopes?.map(e => e.pubkey))}`,
   ).toBeTruthy()
 
   const messageKey = await unwrapKey(envelope!.ct, envelope!.enc, readerSeedHex, LABEL_MESSAGE)
-  return decryptContent(message!.encryptedContent!, messageKey, LABEL_MESSAGE)
+  return decryptContent(message.encryptedContent!, messageKey, LABEL_MESSAGE)
 }
 
 When('a message {string} is encrypted for volunteer and admin', async ({ request, world }, messageText: string) => {
@@ -310,6 +362,19 @@ Then('the volunteer can decrypt the message to {string}', async ({ request, worl
 Then('the admin can decrypt the message to {string}', async ({ request, world }, expectedText: string) => {
   const plaintext = await decryptStoredMessageAs(request, world, ADMIN_SEED, 'the admin')
   expect(plaintext).toBe(expectedText)
+})
+
+Then('no reader envelope is addressed to an auth key', async ({ request, world }) => {
+  const state = getSecTestState(world)
+  expect(state.volunteerKeypair).toBeDefined()
+  // A user's pubkey is their Ed25519 auth key. HPKE would treat those bytes as
+  // an X25519 point whose secret no device holds, so an envelope addressed to
+  // it can never be opened (#1021).
+  const message = await fetchStoredMessageAs(request, world, ADMIN_SEED, 'the admin')
+  expect(message.readerEnvelopes?.length, 'message has no reader envelopes').toBeGreaterThan(0)
+  const sealedTo = message.readerEnvelopes!.map(e => e.pubkey)
+  expect(sealedTo, "sealed to the volunteer's auth key").not.toContain(state.volunteerKeypair!.pubkey)
+  expect(sealedTo, "sealed to the admin's auth key").not.toContain(seedHexToPubkey(ADMIN_SEED))
 })
 
 When('a volunteer encrypts a note {string}', async ({request, world}, noteText: string) => {

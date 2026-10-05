@@ -33,11 +33,24 @@ Feature: E2EE Roundtrip
   @backend
   Scenario: Message encrypt-store-decrypt roundtrip
     Given a volunteer with a known keypair
+    And the volunteer has registered a device encryption key
     And an admin with a known keypair
+    And the admin has registered a device encryption key
     When a message "Help me" is encrypted for volunteer and admin
     And the encrypted message is stored on the server
     Then the volunteer can decrypt the message to "Help me"
     And the admin can decrypt the message to "Help me"
+    And no reader envelope is addressed to an auth key
+
+  @backend
+  Scenario: The server never seals a message to an auth key
+    Given a volunteer with a known keypair
+    And an admin with a known keypair
+    And the admin has registered a device encryption key
+    When a message "No device key yet" is encrypted for volunteer and admin
+    And the encrypted message is stored on the server
+    Then no reader envelope is addressed to an auth key
+    And the admin can decrypt the message to "No device key yet"
 
   @backend
   Scenario: Multi-admin envelope verification
