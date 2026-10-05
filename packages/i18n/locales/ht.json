@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Ou kòmanse sèvis ou, men aparèy sa a pa ka resevwa apèl nan aplikasyon an. Eseye kòmanse sèvis la ankò.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Pran yon Pòz",
     "help": "Help",

@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "शिफ़्ट शुरू हो गई, लेकिन यह डिवाइस ऐप में कॉल प्राप्त नहीं कर सकता। फिर से शिफ़्ट शुरू करने का प्रयास करें।",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Go On Break",
     "help": "Help",

@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Đã vào ca, nhưng thiết bị này không thể nhận cuộc gọi trong ứng dụng. Hãy thử vào ca lại.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Nghỉ giải lao",
     "help": "Help",

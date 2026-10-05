@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Service commencé, mais cet appareil ne peut pas recevoir d'appels dans l'application. Réessayez de commencer votre service.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Prendre une pause",
     "help": "Help",

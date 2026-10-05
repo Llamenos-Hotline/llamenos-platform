@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "근무를 시작했지만 이 기기에서 앱 내 통화를 받을 수 없습니다. 다시 근무 시작을 시도하세요.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Go On Break",
     "help": "Help",

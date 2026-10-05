@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Turno iniciado, pero este dispositivo no puede recibir llamadas en la app. Intenta iniciar el turno de nuevo.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Tomar un Descanso",
     "help": "Help",

@@ -1745,6 +1745,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Take a Break",
     "help": "Help",

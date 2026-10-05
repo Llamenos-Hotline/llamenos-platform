@@ -617,6 +617,7 @@
     "errorBreak": "የእረፍት ሁኔታን ማዘመን አልተሳካም",
     "errorClockIn": "መግባት አልተሳካም",
     "errorClockOut": "መውጣት አልተሳካም",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "ማደስ አልተሳካም",
     "goOnBreak": "እረፍት ውሰድ",
     "help": "እገዛ",

@@ -617,6 +617,7 @@
     "errorBreak": "Waa lagu guul dareeystay cusbooneysiga nasashada",
     "errorClockIn": "Waa lagu guul dareeystay gelitaanka wareegga",
     "errorClockOut": "Waa lagu guul dareeystay ka bixitaanka wareegga",
+    "errorInAppCallsUnavailable": "Clocked in, but this device can't receive in-app calls. Try clocking in again.",
     "errorRefresh": "Waa lagu guul dareeystay cusbooneysiinta",
     "goOnBreak": "Nasasho qaado",
     "help": "Caawimaad",

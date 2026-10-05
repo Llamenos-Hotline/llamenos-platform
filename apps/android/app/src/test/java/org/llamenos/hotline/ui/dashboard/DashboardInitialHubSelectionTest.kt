@@ -37,6 +37,7 @@ import org.llamenos.hotline.model.Hub
 import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.SharedHubDetailResponseStatus
 
 /**
@@ -140,6 +141,7 @@ class DashboardInitialHubSelectionTest {
                 activeHubState,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
+                mockk<SipRegistrar>(relaxed = true),
                 hubRepository,
             )
             advanceUntilIdle()
@@ -173,6 +175,7 @@ class DashboardInitialHubSelectionTest {
                 state,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
+                mockk<SipRegistrar>(relaxed = true),
                 hubRepository,
             )
             advanceUntilIdle()
