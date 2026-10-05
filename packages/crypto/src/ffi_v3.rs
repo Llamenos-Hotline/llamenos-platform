@@ -334,18 +334,18 @@ pub fn mobile_hpke_open_key(
 /// Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
 /// Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
 ///
-/// `aad_hex` is required, not defaulted. `docs/protocol/PROTOCOL.md` §2.3/§2.4
-/// bind `UTF-8(label)` to the content layer of every envelope-pattern
-/// ciphertext — notes, messages, call metadata, files, contact identifiers —
-/// and `UTF-8("{label}:key-wrap")` to the key wrap; this function previously
-/// had no AAD parameter at all, so Android and iOS were structurally incapable
-/// of producing or reading a conformant content ciphertext. A defaulted empty
-/// AAD would have reproduced exactly that defect while appearing to fix it.
-/// Derive the value with [`crate::envelope_aad::content_aad_hex`] — exported to
-/// mobile as `mobile_content_aad_hex` — and pass `""` only for an envelope that
-/// is written and read exclusively with empty AAD on every implementation
-/// (today: hub-key and PUK flows), never for an envelope that crosses to the
-/// server, the desktop, or another mobile client.
+/// `aad_hex` is required, not defaulted. The canonical-AAD envelopes (notes,
+/// files, contact identifiers — `docs/protocol/PROTOCOL.md` §2.3) bind
+/// `UTF-8(label)` to the content layer and `UTF-8("{label}:key-wrap")` to the
+/// key wrap; this function previously had no AAD parameter at all, so Android
+/// and iOS were structurally incapable of producing or reading a conformant
+/// content ciphertext. A defaulted empty AAD would have reproduced exactly
+/// that defect while appearing to fix it. Derive the value with
+/// [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
+/// `mobile_content_aad_hex` — and pass `""` for the envelopes every
+/// implementation agrees carry no AAD: stored records (messages, call
+/// metadata — #1393, read by `open_record_for_reader` / `mobile_decrypt_message`)
+/// and the hub-key/PUK flows. Never pass `""` beside a canonical label.
 #[uniffi::export]
 pub fn mobile_symmetric_encrypt(
     plaintext_hex: String,

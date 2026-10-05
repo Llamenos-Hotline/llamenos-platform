@@ -911,11 +911,12 @@ function hexToBase64url(hex: string): string {
 /**
  * WebCrypto AES-GCM parameters, binding `aadHex` as `additionalData`.
  *
- * `aadHex` is required at every call site rather than defaulted: the server
- * binds a non-empty AAD to every envelope it writes (see `@shared/envelope-aad`),
- * and a silently-defaulted empty AAD is exactly how the desktop came to be
- * unable to decrypt anything the server produced. An explicit `''` is a
- * deliberate statement that this ciphertext carries no AAD.
+ * `aadHex` is required at every call site rather than defaulted: the
+ * canonical-AAD envelopes (notes, files, contacts) bind a non-empty AAD from
+ * `@shared/envelope-aad`, while stored records (messages, call metadata) bind
+ * none at all — main's #1393 format, empty AAD with the label as HPKE `info`.
+ * An explicit `''` is a deliberate statement that this ciphertext carries no
+ * AAD, not a forgotten one.
  */
 function aesGcmParams(iv: Uint8Array<ArrayBuffer>, aadHex: string): AesGcmParams {
   const params: AesGcmParams = { name: 'AES-GCM', iv }
@@ -993,10 +994,10 @@ function toWireEnvelope(ipc: HpkeEnvelope): { enc: string; ct: string } {
  * Resolves signing pubkey to encryption pubkey if needed,
  * and returns hex-encoded enc/ct wire format.
  *
- * The wrap is sealed under `keyWrapAad(label)` — the same derivation Rust's
- * `hpke_wrap_key` and the server's `encryptMessageForStorage` bind — so any
- * implementation can open it. Empty AAD here is what made desktop-sealed file
- * and metadata keys unopenable elsewhere.
+ * The wrap is sealed under `keyWrapAad(label)` — the canonical convention
+ * Rust's `hpke_wrap_key` binds — for the canonical-AAD envelopes (file and
+ * metadata keys, notes, contacts). Stored records (messages, call metadata)
+ * do NOT go through here: they carry empty AAD (see `encryptMessage`).
  */
 export async function hpkeWrapKey(
   keyHex: string,
@@ -1089,6 +1090,15 @@ export async function decryptLegacyNote(
 /**
  * Encrypt a message for multiple readers.
  * Random AES-256-GCM key, HPKE-wrapped per reader.
+ *
+ * Stored records (messages, call metadata) carry NO AAD on either layer — the
+ * label is bound as the HPKE `info` only. Client-sealed and server-sealed
+ * messages share a conversation with no format marker, so a reader cannot know
+ * which AAD to supply; main's #1393 adjudicated the format as empty AAD
+ * everywhere (worker `NO_AAD`, Rust `open_record_for_reader`, mobile
+ * `mobile_decrypt_message`). Sealing with the canonical `contentAad`/
+ * `keyWrapAad` here would make desktop-written messages unreadable on every
+ * other platform. Canonical AAD is for notes/files/contacts only.
  */
 export async function encryptMessage(
   plaintext: string,
@@ -1097,12 +1107,12 @@ export async function encryptMessage(
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
-  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, contentAadHex(LABEL_MESSAGE))
+  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, '')
 
   const readerEnvelopes: RecipientEnvelope[] = await Promise.all(
     readerPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, keyWrapAadHex(LABEL_MESSAGE))
+      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, '')
       return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
@@ -1128,8 +1138,8 @@ export async function decryptMessage(
 
   try {
     const hpkeEnvelope = toIpcEnvelope(5 /* LABEL_MESSAGE */, myEnvelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, keyWrapAadHex(LABEL_MESSAGE))
-    return await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_MESSAGE))
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_MESSAGE, '')
+    return await aesGcmDecrypt(encryptedContent, keyHex, '')
   } catch (err) {
     // An envelope addressed to this device that will not open is a defect, not
     // a permission boundary: either the writer sealed to the wrong key or the
@@ -1143,6 +1153,10 @@ export async function decryptMessage(
 /**
  * Decrypt a call record by finding our admin envelope and decrypting.
  * Uses LABEL_CALL_META for key unwrapping (distinct from message label).
+ *
+ * Call records are stored records: empty AAD on both layers, label as HPKE
+ * `info` only — the same convention the server's
+ * `encryptCallRecordForStorage` and Rust `open_record_for_reader` bind.
  */
 export async function decryptCallRecord(
   encryptedContent: string,
@@ -1158,8 +1172,8 @@ export async function decryptCallRecord(
 
   try {
     const hpkeEnvelope = toIpcEnvelope(6 /* LABEL_CALL_META */, myEnvelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, keyWrapAadHex(LABEL_CALL_META))
-    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_CALL_META))
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, '')
+    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, '')
     return JSON.parse(plaintext)
   } catch (err) {
     reportEnvelopeOpenFailure('call-record', err)

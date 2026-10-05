@@ -16,6 +16,10 @@
  *    label bound as HPKE `info` — implemented canonically in
  *    `packages/crypto/src/encryption.rs` (`open_record_for_reader`) and the
  *    mobile FFI (`mobile_decrypt_message`).
+ * 4. This branch's desktop-side canonical-AAD switch was aligned back to that
+ *    stored-record format (`src/client/lib/platform.ts` `encryptMessage` /
+ *    `decryptMessage` / `decryptCallRecord`): the desktop writes and reads
+ *    empty AAD, so server↔desktop↔mobile messages are mutually readable.
  *
  * The `@shared/envelope-aad` module remains the single definition for the
  * canonical-label envelopes (notes, files, contacts — Rust `encrypt_note` /
@@ -28,10 +32,10 @@
  *   - both AAD layers for canonical labels derive from `@shared/envelope-aad`
  */
 import { describe, it, expect } from 'vitest'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { hpkeOpen, hpkeSeal, randomBytes, symmetricDecrypt, symmetricEncrypt } from '@llamenos/crypto/ffi'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META } from '@shared/crypto-labels'
 import { contentAad, keyWrapAad, contentAadHex, keyWrapAadHex, KEY_WRAP_AAD_SUFFIX } from '@shared/envelope-aad'
 import { encryptMessageForStorage, encryptCallRecordForStorage } from '../../lib/crypto'
 import { hpkeRecipientPubkey } from '../../lib/hpke-recipient'
@@ -57,22 +61,25 @@ function packEnvelope(enc: string, ct: string): Uint8Array {
 }
 
 describe('@shared/envelope-aad is the single definition', () => {
+  // LABEL_NOTE_KEY is the example on purpose: canonical AAD is for notes,
+  // files, and contacts. Stored-record labels (message, call-meta) must never
+  // carry it — they are pinned to empty AAD in the describes below.
   it('derives the content AAD as UTF-8(label)', () => {
-    expect(contentAad(LABEL_MESSAGE)).toEqual(utf8ToBytes('llamenos:message'))
-    expect(contentAadHex(LABEL_MESSAGE)).toBe(bytesToHex(utf8ToBytes('llamenos:message')))
+    expect(contentAad(LABEL_NOTE_KEY)).toEqual(utf8ToBytes('llamenos:note-key'))
+    expect(contentAadHex(LABEL_NOTE_KEY)).toBe(bytesToHex(utf8ToBytes('llamenos:note-key')))
   })
 
   it('derives the key-wrap AAD as UTF-8(label + suffix), distinct from the content AAD', () => {
-    expect(keyWrapAad(LABEL_MESSAGE)).toEqual(utf8ToBytes('llamenos:message:key-wrap'))
-    expect(keyWrapAadHex(LABEL_MESSAGE)).toBe(bytesToHex(utf8ToBytes('llamenos:message:key-wrap')))
+    expect(keyWrapAad(LABEL_NOTE_KEY)).toEqual(utf8ToBytes('llamenos:note-key:key-wrap'))
+    expect(keyWrapAadHex(LABEL_NOTE_KEY)).toBe(bytesToHex(utf8ToBytes('llamenos:note-key:key-wrap')))
     expect(KEY_WRAP_AAD_SUFFIX).toBe(':key-wrap')
     // The separation is the point: hpkeSeal carries content directly *and*
     // wraps content keys under the same label, and only the AAD tells them apart.
-    expect(keyWrapAadHex(LABEL_MESSAGE)).not.toBe(contentAadHex(LABEL_MESSAGE))
+    expect(keyWrapAadHex(LABEL_NOTE_KEY)).not.toBe(contentAadHex(LABEL_NOTE_KEY))
   })
 
   it('separates labels from one another', () => {
-    expect(keyWrapAadHex(LABEL_MESSAGE)).not.toBe(keyWrapAadHex(LABEL_CALL_META))
+    expect(keyWrapAadHex(LABEL_NOTE_KEY)).not.toBe(keyWrapAadHex(LABEL_CALL_META))
   })
 })
 
@@ -171,5 +178,67 @@ describe('server-written call records use the same stored-record format', () => 
       utf8ToBytes(LABEL_MESSAGE),
       new Uint8Array(0),
     )).toThrow()
+  })
+})
+
+describe('desktop-sealed messages use the stored-record format too', () => {
+  /**
+   * `src/client/lib/platform.ts` `encryptMessage` seals through the same Rust
+   * IPC primitives exercised below — `hpke_seal_key` (RFC 9180, info = label)
+   * and WebCrypto AES-256-GCM — with empty AAD on both layers and hex
+   * enc/ct on the wire (the `toWireEnvelope` conversion). Reproducing that
+   * shape here and opening it with the real FFI pins the other direction of
+   * the cross-platform contract: a message the desktop wrote must be readable
+   * by the server-side rewrap paths, the Rust reader, and mobile.
+   */
+  const plaintext = 'outbound reply sealed on the desktop'
+
+  function sealDesktopShape(recipientPubkeyHex: string) {
+    const contentKey = randomBytes(32)
+    // Desktop aesGcmEncrypt(plaintext, key, '') → hex(iv || ct || tag)
+    const encryptedContent = bytesToHex(symmetricEncrypt(contentKey, utf8ToBytes(plaintext), new Uint8Array(0)))
+    // Desktop hpkeSealKey(key, pub, LABEL_MESSAGE, '') → enc(32) || ct+tag, wire hex
+    const sealed = hpkeSeal(hexToBytes(recipientPubkeyHex), contentKey, utf8ToBytes(LABEL_MESSAGE), new Uint8Array(0))
+    return {
+      encryptedContent,
+      envelope: {
+        enc: bytesToHex(sealed.subarray(0, 32)),
+        ct: bytesToHex(sealed.subarray(32)),
+      },
+    }
+  }
+
+  it('opens with empty AAD under the real FFI, exactly like a server-written message', () => {
+    const { secret, recipient } = makeReader()
+    const { encryptedContent, envelope } = sealDesktopShape(recipient)
+
+    const messageKey = hpkeOpen(
+      secret,
+      packEnvelope(envelope.enc, envelope.ct),
+      utf8ToBytes(LABEL_MESSAGE),
+      new Uint8Array(0),
+    )
+    const opened = symmetricDecrypt(messageKey, hexToBytes(encryptedContent), new Uint8Array(0))
+    expect(new TextDecoder().decode(opened)).toBe(plaintext)
+  })
+
+  it('refuses the retired canonical AAD pair at both layers', () => {
+    const { secret, recipient } = makeReader()
+    const { encryptedContent, envelope } = sealDesktopShape(recipient)
+
+    expect(() => hpkeOpen(
+      secret,
+      packEnvelope(envelope.enc, envelope.ct),
+      utf8ToBytes(LABEL_MESSAGE),
+      keyWrapAad(LABEL_MESSAGE),
+    )).toThrow()
+
+    const messageKey = hpkeOpen(
+      secret,
+      packEnvelope(envelope.enc, envelope.ct),
+      utf8ToBytes(LABEL_MESSAGE),
+      new Uint8Array(0),
+    )
+    expect(() => symmetricDecrypt(messageKey, hexToBytes(encryptedContent), contentAad(LABEL_MESSAGE))).toThrow()
   })
 })

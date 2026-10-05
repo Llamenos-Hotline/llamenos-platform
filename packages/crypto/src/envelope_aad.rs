@@ -1,20 +1,26 @@
 //! The one definition, on the Rust side, of an envelope's additional
 //! authenticated data (AAD).
 //!
-//! `docs/protocol/PROTOCOL.md` §2.4 specifies two distinct AAD values for an
-//! envelope-pattern ciphertext:
+//! Two AAD conventions coexist, adjudicated on main (#1393):
 //!
 //! ```text
-//! content  (AES-256-GCM) : aad = UTF-8(label)
-//! key wrap (HPKE)        : aad = UTF-8(`${label}:key-wrap`)
+//! Canonical (notes, files, contact identifiers):
+//!   content  (AES-256-GCM) : aad = UTF-8(label)
+//!   key wrap (HPKE)        : aad = UTF-8(`${label}:key-wrap`)
+//!
+//! Stored records (conversation messages, call metadata):
+//!   no AAD on either layer; the label is bound as the HPKE `info` only
 //! ```
 //!
-//! with the label additionally bound as the HPKE `info` (the Albrecht defense,
-//! enforced at open by [`crate::hpke_envelope`]). The two AADs **must** differ:
+//! The canonical AADs **must** differ from each other:
 //! [`crate::hpke_envelope::hpke_seal`] carries content directly *and*
 //! [`crate::hpke_envelope::hpke_seal_key`] wraps a content key, under the
 //! *same* label — so the HPKE `info` does not separate those two meanings.
-//! Only the AAD does.
+//! Only the AAD does. Stored records get no AAD at all because client-sealed
+//! and server-sealed messages share a conversation with no format marker: a
+//! reader cannot tell which AAD to supply, so the only viable AAD is empty
+//! (worker `NO_AAD`, [`crate::encryption::open_record_for_reader`]. Never
+//! derive an AAD from this module for `LABEL_MESSAGE` or `LABEL_CALL_META`.
 //!
 //! This module mirrors `packages/shared/envelope-aad.ts`, which is the
 //! definition every TypeScript surface imports. Two languages cannot share one

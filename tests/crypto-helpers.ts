@@ -7,7 +7,7 @@
  * - Wire format: hex(nonce_12 || ciphertext || tag_16)
  */
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
-import { contentAad, keyWrapAad } from '@shared/envelope-aad'
+import { keyWrapAad } from '@shared/envelope-aad'
 import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -63,15 +63,20 @@ export interface DesktopReaderEnvelope {
 }
 
 /**
- * Encrypt `plaintext` exactly as the server and the desktop client do, so the
- * UI can decrypt what a test seeds through the API:
- *   - content:  hex(iv(12) || AES-256-GCM(ct || tag)), AAD = UTF-8(label)
- *   - key wrap: HPKE seal under LABEL_MESSAGE, AAD = UTF-8(label + ':key-wrap'),
- *               one envelope per reader
+ * Encrypt `plaintext` exactly as the desktop client's `encryptMessage` does, so the
+ * UI can decrypt what a test seeds through the API. Messages are stored
+ * records (#1393): NO AAD on either layer, the label bound as HPKE `info` only —
+ * the same format the server's `encryptMessageForStorage` writes, so both
+ * directions interop:
+ *   - content:  hex(iv(12) || AES-256-GCM(ct || tag)), aad = empty
+ *   - key wrap: HPKE seal under LABEL_MESSAGE, info = label, aad = empty,
+ *               one envelope per reader; enc/ct both hex (wire format)
  *
- * The AAD comes from `@shared/envelope-aad`, the same module `apps/worker/lib/crypto.ts`
- * and `src/client/lib/platform.ts` use — a seeder that spells the wire format
- * out for itself is a seeder that can pass while production is broken.
+ * The HPKE primitive is the real RFC 9180 suite (`tests/mocks/hpke-mock.ts`),
+ * the one the Playwright Tauri IPC mock serves and the Rust FFI implements, so
+ * this seeder interoperates with the mocked desktop client AND the real Rust
+ * core. The canonical `contentAad`/`keyWrapAad` pair is for notes/files/contacts
+ * only — never derive it for LABEL_MESSAGE.
  *
  * Readers are given as Ed25519 signing seeds (the identity a test logs in with).
  */
@@ -82,7 +87,7 @@ export async function encryptMessageForDesktop(
   const contentKey = generateContentKey()
   const iv = new Uint8Array(12)
   crypto.getRandomValues(iv)
-  const sealed = gcm(contentKey, iv, contentAad(LABEL_MESSAGE)).encrypt(utf8ToBytes(plaintext))
+  const sealed = gcm(contentKey, iv).encrypt(utf8ToBytes(plaintext))
   const packed = new Uint8Array(iv.length + sealed.length)
   packed.set(iv)
   packed.set(sealed, iv.length)
@@ -90,7 +95,7 @@ export async function encryptMessageForDesktop(
   const readerEnvelopes = await Promise.all(
     readerSigningSeedHexes.map(async (seedHex) => {
       const pubkey = deviceEncryptionPubkeyFromSigningSeed(seedHex)
-      const envelope = await hpkeSealMock(contentKey, pubkey, LABEL_MESSAGE, keyWrapAad(LABEL_MESSAGE))
+      const envelope = await hpkeSealMock(contentKey, pubkey, LABEL_MESSAGE, new Uint8Array(0))
       return {
         pubkey,
         enc: bytesToHex(base64urlDecode(envelope.enc)),
