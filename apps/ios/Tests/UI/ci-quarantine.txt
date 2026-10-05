@@ -14,24 +14,6 @@ DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More 
 # The clock in/out card only renders when the hub has scheduled shifts.
 DashboardUITests/testNavigateToShiftsTab  # clock card hidden without scheduled shifts — #1241
 
-# provider-status / usage / channels are called without /onboard (404) and decoded as the wrong shapes.
-HubCommunicationsUITests/testBackButtonAppearsAfterFirstStep  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testChannelChecklistIdentifier  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testChannelChecklistShowsAllToggles  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testChannelSetupStepRendersContent  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testChannelTogglesAreIndependentlyToggleable  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testNextButtonAppearsAfterTemplateStep  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testNoProviderStateShowsSetupButton  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testOnboardingCancelDismissesSheet  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testOnboardingSheetAppearsOnSetupTap  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testOnboardingSheetShowsCancelButton  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testOnboardingSheetShowsStepIndicator  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testPhoneNumberStepRendersContent  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testProviderStepRendersContent  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testStartFromScratchOptionExists  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testSummaryStepRendersContent  # Communications contract mismatch — #1242
-HubCommunicationsUITests/testTemplateListAppearsOnFirstStep  # Communications contract mismatch — #1242
-
 # Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
 RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
 
@@ -53,8 +35,6 @@ EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1
 # The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
 CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
 
-# Switching hubs fetches a hub key first, and no client ever creates one (#1042): every switch 404s.
-HubSwitchUITests/testHubSwitchUpdatesDataScope  # tapping a hub never switches the active hub — #1262
 # The Blasts screen renders none of its four states — no list, empty state, loading
 # or error — while GET /blasts returns 200. Navigation succeeds and the data
 # arrives; the view produces nothing. Not a flake: the same single test failed on

@@ -4,9 +4,9 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   runReviewCi, decideReviewGate,
@@ -16,6 +16,7 @@ import {
 import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
+import { workspaceAliases } from '../../orchestrator/src/verify.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 describe('rail: a live lane must have a write scope', () => {
@@ -97,6 +98,78 @@ describe('rail: the fleet cannot merge its own changes', () => {
     for (const f of configs) {
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
       expect(HIGH_IMPACT_PATHS, `${f} is missing from HIGH_IMPACT_PATHS`).toContain(f)
+    }
+  })
+
+  // #1525. `prepareTestRoot` re-points every workspace package at the test
+  // root by DERIVING the list from the trusted install, so a sixth package
+  // needs no edit anywhere. This is the rail that keeps it derived: the
+  // expected set is re-derived here, independently, from the root
+  // `package.json` workspaces, and every one of them must come back with an
+  // alias. A future edit that replaces the scan with a hardcoded list passes
+  // only until the next package is added — at which point this fails.
+  //
+  // `trustedCheckout` is NOT the cwd: under fleet/verify this suite runs
+  // inside a `git archive` export whose `node_modules` is a symlink to the
+  // BASE checkout's install. Following it to its realpath names the checkout
+  // that actually holds the workspace links, in both environments.
+  it('every workspace package in the install is re-pointed at the test root — none enumerated', async () => {
+    const trustedCheckout = dirname(realpathSync(join(process.cwd(), 'node_modules')))
+    const manifest = JSON.parse(readFileSync(join(trustedCheckout, 'package.json'), 'utf8')) as {
+      workspaces?: string[]
+    }
+    const patterns = manifest.workspaces ?? []
+    expect(patterns.length, 'root package.json declares no workspaces').toBeGreaterThan(0)
+
+    const dirs: string[] = []
+    for (const pattern of patterns) {
+      if (pattern.endsWith('/*')) {
+        const parent = pattern.slice(0, -2)
+        for (const name of readdirSync(join(trustedCheckout, parent))) dirs.push(posix.join(parent, name))
+      } else {
+        dirs.push(pattern)
+      }
+    }
+    const expected = dirs
+      .map((rel) => {
+        const pkg = join(trustedCheckout, rel, 'package.json')
+        if (!existsSync(pkg)) return undefined
+        const name = (JSON.parse(readFileSync(pkg, 'utf8')) as { name?: string }).name
+        return name === undefined ? undefined : { find: name, replacement: join('/export', rel) }
+      })
+      .filter((e): e is { find: string; replacement: string } => e !== undefined)
+    expect(expected.length, 'no workspace package has a name').toBeGreaterThan(0)
+
+    const aliases = await workspaceAliases(trustedCheckout, '/export')
+    const missing = expected.filter((e) => !aliases.some((a) => a.find === e.find && a.replacement === e.replacement))
+    expect(missing, `workspace packages with no alias into the test root: ${JSON.stringify(missing)}`).toEqual([])
+  })
+
+  // The generated entries land in `resolve.alias`. Vitest's own `test.alias`
+  // merges into the same list with a precedence this gate does not control,
+  // so a root config that starts declaring one must be a deliberate decision
+  // made while reading this comment — not a silent re-opening of #1525.
+  it('no root vitest config declares test.alias, which would merge ahead of the generated entries', () => {
+    const configs = trackedFiles().filter((f) => /^vitest\.[^/]+\.config\.ts$/.test(f))
+    expect(configs.length).toBeGreaterThan(0)
+    for (const f of configs) {
+      const src = readFileSync(join(process.cwd(), f), 'utf8')
+      // The `test: { … }` block, brace-matched rather than regex-spanned: a
+      // lazy `[\s\S]*?` runs straight past the block's closing brace and
+      // finds the `alias:` in the sibling `resolve: { … }`, which every one
+      // of these configs has. Read, never imported — this gate does not
+      // execute the configs it judges.
+      const open = src.indexOf('{', src.search(/\btest\s*:/))
+      if (open < 0) continue
+      let depth = 0
+      let close = open
+      for (; close < src.length; close++) {
+        const ch = src[close]
+        if (ch === '{') depth++
+        else if (ch === '}' && --depth === 0) break
+      }
+      const block = src.slice(open, close)
+      expect(/\balias\s*:/.test(block), `${f} declares test.alias — see #1525 before allowing it`).toBe(false)
     }
   })
 
@@ -757,6 +830,92 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
 
   it('never passes --dangerously-skip-permissions to the reviewer', () => {
     expect(fleetReviewYamlText()).not.toContain('--dangerously-skip-permissions')
+  })
+
+  // The engine order and the fallback toggle (fleet-review.yml's file
+  // header): both must be repo variables read through the job env, exactly
+  // like FLEET_REVIEW_MODEL — and review.ts must read the identical env vars
+  // so the smoke step's branch and tolerance arms and the real review can
+  // never disagree about which engine runs first or whether crossing is
+  // armed.
+  it('declares FLEET_REVIEW_PRIMARY (kimi default) and FLEET_REVIEW_FALLBACK (on default, off disables), and review.ts reads the identical env vars', () => {
+    const text = fleetReviewJobText()
+    const primary = /^\s*FLEET_REVIEW_PRIMARY:\s*(.+?)\s*$/m.exec(text)
+    if (primary === null) throw new Error('FLEET_REVIEW_PRIMARY not set in the fleet-review job env')
+    expect(primary[1]).toBe("${{ vars.FLEET_REVIEW_PRIMARY || 'kimi' }}")
+    const fallback = /^\s*FLEET_REVIEW_FALLBACK:\s*(.+?)\s*$/m.exec(text)
+    if (fallback === null) throw new Error('FLEET_REVIEW_FALLBACK not set in the fleet-review job env')
+    expect(fallback[1]).toBe("${{ vars.FLEET_REVIEW_FALLBACK || 'on' }}")
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review).toContain("process.env['FLEET_REVIEW_PRIMARY']")
+    expect(review).toContain("process.env['FLEET_REVIEW_FALLBACK']")
+    expect(review).toContain("process.env['FLEET_REVIEW_KIMI_MODEL']")
+  })
+
+  // The fallback reviewer must be a READ-ONLY reviewer in fact, not in name:
+  // kimi's `-p` mode runs a full agent CLI (shell included) with no --tools
+  // flag, so the only thing standing between "fallback reviewer" and
+  // "arbitrary code execution next to the review key" is the committed
+  // agent profile's tool allowlist, enforced again at execution time. These
+  // rails pin the profile's shape the same way FLEET_REVIEWER_TOOLS is
+  // pinned for claude.
+  it('the committed fallback agent profile exists, allows exactly REVIEWER_TOOLS, and disallows the shell', () => {
+    const profilePath = join(process.cwd(), 'orchestrator', 'reviewer-readonly.agent.md')
+    expect(existsSync(profilePath), 'orchestrator/reviewer-readonly.agent.md is missing').toBe(true)
+    const profile = readFileSync(profilePath, 'utf8')
+    const toolsM = /^tools:\s*\n((?:\s*-\s*\S+\n)*)/m.exec(profile)
+    if (toolsM === null) throw new Error('the fallback agent profile has no tools: allowlist — it would run with every tool, Bash included')
+    const allowed = [...toolsM[1].matchAll(/^\s*-\s*(\S+)\s*$/gm)].map((x) => x[1])
+    expect(allowed, 'the fallback profile\'s tool allowlist has drifted from REVIEWER_TOOLS')
+      .toEqual([...REVIEWER_TOOLS])
+    expect(profile, 'the fallback profile must disallow Bash even as a belt-and-braces deny')
+      .toMatch(/^disallowedTools:/m)
+    expect(profile).toMatch(/^\s*-\s*Bash\s*$/m)
+    // The profile must not silently re-grow delegation: a reviewer that can
+    // dispatch sub-agents is not the tool set the prompt promises.
+    expect(profile).not.toMatch(/^subagents:\s*\*\s*$/m)
+  })
+
+  // And the fallback must actually RUN under that profile, in the smoke
+  // step's tolerance arm and in review.ts's real fallback invocation alike.
+  it('the smoke step\'s fallback arm invokes kimi under the committed profile with the stream-json envelope', () => {
+    const text = fleetReviewJobText()
+    expect(text, 'the smoke step\'s fallback arm does not invoke kimi').toContain('kimi --output-format stream-json -p "$smoke_prompt"')
+    expect(text, 'the smoke step\'s fallback arm does not pass the read-only agent profile')
+      .toMatch(/--agent-file "\$fallback_agent"/)
+    expect(text, 'the fallback arm\'s profile path has drifted from the committed file')
+      .toContain('orchestrator/reviewer-readonly.agent.md')
+    const review = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'review.ts'), 'utf8')
+    expect(review, 'kimiArgs does not install the read-only agent profile').toContain("'--agent-file', REVIEWER_AGENT_FILE")
+    // kimi never receives a claude model id and never an auto/yolo mode; its
+    // own optional model override (FLEET_REVIEW_KIMI_MODEL) is the only
+    // --model, and it is gated on being nonempty.
+    const argsM = /export function kimiArgs[\s\S]*?\n\}/.exec(review)
+    if (argsM === null) throw new Error('kimiArgs not found in review.ts')
+    expect(argsM[0]).toContain("args.push('--model', input.model)")
+    expect(argsM[0]).not.toMatch(/\byolo\b|--auto\b/)
+    expect(argsM[0]).not.toContain('REVIEWER_MODEL')
+  })
+
+  // The tolerance arms' three guards in EACH direction, pinned: never on
+  // engine-auth (an expired runner login stays loud), never when the
+  // operator dial is off, never without the other engine's binary on PATH
+  // (no half-run). Removing any guard makes this rail fail — the arms are
+  // what keep one engine's outage from stopping the merge train AND what
+  // keep it from becoming a silent pass.
+  it('the smoke step\'s fallback arms are gated on not-auth, the operator dial, and the other engine being on PATH — both directions', () => {
+    const text = fleetReviewJobText()
+    const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
+    expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
+    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(2)
+    expect(text).toContain('command -v claude >/dev/null 2>&1')
+    expect(text).toContain('command -v kimi >/dev/null 2>&1')
+    // And the primary branch is selected from the RESOLVED engine — never
+    // from an env var read directly — so the smoke test and the real review
+    // smoke the same engine by construction (including the bootstrap
+    // window, when the base checkout still resolves claude).
+    expect(text).toContain('if [ "$rev_engine" = "kimi" ]; then')
+    expect(text).toContain('console.log(JSON.stringify({ engine: inv.engine, binary: inv.binary, model: inv.model }))')
   })
 
   it('review.ts reads the reviewer model from FLEET_REVIEW_MODEL, defaulting to sonnet, not a bare literal', () => {
@@ -2183,18 +2342,48 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     expect(outcome.verdict.verdict).toBe('FAIL')
   })
 
-  // The load-bearing one. A push that CHANGED the diff has nothing to
-  // republish, and must never spend a model call — no matter what
-  // `requested` says. Without the `republishOnly ||` guard in the gate this
-  // returns `run-engine`, which is one model review per push on every open
-  // PR.
-  it('a push that changed the diff concludes not-requested, never run-engine, even when requested is true', async () => {
-    const cache = fakeCache()
+  // The load-bearing one. A push that CHANGED the diff has nothing cached,
+  // and must never spend a model call — no matter what `requested` says.
+  // Without the `republishOnly` guard in the gate this returns
+  // `run-engine`, which is one model review per push on every open PR. It
+  // is not red on its own account either (#1394): the PR's last earned
+  // verdict is carried forward, and a PR nobody asked about is green.
+  const earned = { verdict: 'PASS' as const, headSha: 'earned9', runUrl: 'https://example/run/9', text: 'VERDICT: PASS (carried)' }
+  for (const [label, last, kind] of [
+    ['a PASS was earned', { kind: 'found', earned }, 'carried'],
+    ['a FAIL was earned', { kind: 'found', earned: { ...earned, verdict: 'FAIL' } }, 'carried'],
+    ['nothing was ever earned', { kind: 'none', runsSearched: 3 }, 'unreviewed'],
+    ['the history is unreadable', { kind: 'unreadable', reason: 'api down' }, 'carry-unreadable'],
+  ] as const) {
+    it(`a push that changed the diff never reaches run-engine, even when requested is true — ${label}`, async () => {
+      const cache = fakeCache()
+      const outcome = await decideReviewGate({
+        ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+        cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+        lastVerdict: async () => last,
+      })
+      expect(outcome.kind).toBe(kind)
+      if (outcome.kind === 'carried' && last.kind === 'found') expect(outcome.earned).toEqual(last.earned)
+    })
+  }
+
+  it('a push with no last-verdict lookup wired fails closed — never "nothing was earned", which is green', async () => {
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
-      cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
+      cacheFor: () => fakeCache(), requested: true, republishOnly: true, reviewSet: generalOnly, log: () => {},
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('carry-unreadable')
+  })
+
+  it('a review request never pays for the last-verdict lookup', async () => {
+    let asked = 0
+    const outcome = await decideReviewGate({
+      ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
+      cacheFor: () => fakeCache(), requested: true, republishOnly: false, reviewSet: generalOnly, log: () => {},
+      lastVerdict: async () => { asked += 1; return { kind: 'none', runsSearched: 0 } },
+    })
+    expect(outcome.kind).toBe('run-engine')
+    expect(asked).toBe(0)
   })
 
   // A named reviewer profile must not be the loophole either: a labelled PR
@@ -2208,14 +2397,15 @@ describe('rail: decideReviewGate enforces the four fleet/review branches (cache-
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: tier2Files,
       cacheFor: () => cache, requested: true, republishOnly: true, reviewSet: withProfile, log: () => {},
+      lastVerdict: async () => ({ kind: 'none', runsSearched: 0 }),
     })
-    expect(outcome.kind).toBe('not-requested')
+    expect(outcome.kind).toBe('unreviewed')
   })
 
   // A docs-only push still concludes green on its own terms — the tier
   // branch sits ahead of the request/republish branch and must stay there,
   // or an ordinary push to a docs PR would go red for no reason.
-  it('a docs-only push still concludes low-tier, not not-requested', async () => {
+  it('a docs-only push still concludes low-tier, ahead of the carry', async () => {
     const cache = fakeCache()
     const outcome = await decideReviewGate({
       ctx: ctx(), prDiff: async () => diff, changedFiles: async () => ['docs/epics/EP01-foo.md'],

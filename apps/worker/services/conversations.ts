@@ -19,7 +19,11 @@ import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import { getUserHpkeRecipients, messageReaders } from '../lib/device-recipients'
 import { ServiceError } from './settings'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('services.conversations')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -415,6 +419,7 @@ export class ConversationsService {
   async handleIncoming(
     incoming: IncomingMessage,
     /**
+    /**
      * The platform admin's X25519 HPKE recipient, or `undefined` when the
      * deployment has none. Typed as a brand so an Ed25519 auth key — which is
      * also 64 hex characters, and which the messaging router used to pass here
@@ -496,21 +501,51 @@ export class ConversationsService {
     // Encrypt the message content using envelope pattern. An absent admin
     // recipient means one fewer reader, never a substituted key (#1283).
     //
-    // `conversations.assigned_to` holds the assignee's Ed25519 *identity*
+    // #1021: `conversations.assigned_to` holds the assignee's Ed25519 *identity*
     // pubkey — the key that signs their auth tokens (see `claim()` and
     // `POST /conversations/:id/claim`, which store `c.get('pubkey')`). Sealing
     // to it produced a well-formed envelope that nobody can open: DHKEM(X25519)
     // accepts any 32 bytes, so it neither threw nor warned. This is the same
     // defect as #1283, at a second site.
     //
-    // The server cannot seal to the assignee instead: `users` carries only the
-    // Ed25519 `pubkey`, and `devices.x25519_pubkey` — the one column that could
-    // supply a real HPKE recipient — is not populated by any client today. So
-    // the honest list is the admin alone. The type below makes re-adding a
-    // non-X25519 key a compile error rather than silent, permanent data loss.
-    const readerPubkeys: HpkeRecipientPubkey[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
+    // `devices.x25519_pubkey` is the one column that can supply a real HPKE
+    // recipient for a user, and the desktop now populates it on unlock
+    // (`src/client/lib/device-registration.ts`). `getUserHpkeRecipients` is the
+    // only path from a user id to that key, and the branded type below makes
+    // re-adding a non-X25519 key a compile error rather than silent, permanent
+    // data loss.
+    const assigneeRecipients = conv.assignedTo
+      ? await getUserHpkeRecipients(this.db, conv.assignedTo)
+      : []
+    if (conv.assignedTo && assigneeRecipients.length === 0) {
+      // Never silent: the assigned volunteer will not be able to read this
+      // message, and the only way they ever will is by registering a device.
+      // The message is still stored — dropping an inbound crisis message
+      // would be worse than one an admin has to relay.
+      logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
+        conversationId: conv.id,
+      })
+    }
+    const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
 
-    const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    // An EMPTY reader list — no admin decryption key configured AND nobody
+    // with a registered device — is a deployment-level failure, and the
+    // contract (see `messageReaders`) is loud-but-stored, never dropped: a
+    // thrown error here escapes the webhook handler as a 500, after the
+    // replay-guard has already consumed the delivery slot, so the provider's
+    // retry is answered with an idempotent 200 and the crisis message is
+    // silently lost. Store the record with no content instead: no plaintext
+    // is persisted, the conversation shows the message arrived, and the error
+    // log above is the operator's signal to fix the deployment.
+    let encrypted: { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] }
+    if (readerPubkeys.length === 0) {
+      logger.error('no HPKE recipient for inbound message (no admin decryption key, no registered device) — storing an unreadable record rather than dropping it', {
+        conversationId: conv.id,
+      })
+      encrypted = { encryptedContent: '', readerEnvelopes: [] }
+    } else {
+      encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    }
 
     const msg = await this.addMessage({
       conversationId: conv.id,

@@ -38,6 +38,12 @@ export async function generateHubKey(): Promise<void> {
  * Wrap the hub key (stored in CryptoState) for a specific member using HPKE via Rust.
  * Uses LABEL_HUB_KEY_WRAP domain separation to prevent cross-context attacks.
  * The hub key NEVER enters JavaScript — Rust wraps it directly.
+ *
+ * The empty AAD is deliberate and load-bearing: iOS and Android unwrap hub
+ * keys with an empty AAD too, so the pair interoperates across platforms.
+ * This is the one envelope family that does NOT use the canonical
+ * `contentAad`/`keyWrapAad` convention — changing only one side would make
+ * every hub key unreadable on the others.
  */
 export async function wrapHubKeyForMember(
   memberPubkeyHex: string,
@@ -63,6 +69,9 @@ export async function wrapHubKeyForMembers(
 /**
  * Unwrap a hub key from an HPKE envelope and store it in Rust CryptoState.
  * The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
+ *
+ * Empty AAD — must stay in lockstep with `wrapHubKeyForMember` above and the
+ * mobile clients; see the note there.
  */
 export async function unwrapHubKey(
   envelope: HpkeEnvelope,

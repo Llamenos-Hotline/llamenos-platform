@@ -56,6 +56,7 @@ env:
   # seal admin envelopes to an Ed25519 signing key (#1283).
   TEST_ADMIN_DECRYPTION_PUBKEY: "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
 
+
 jobs:
   # ─── Detect Changed Files ─────────────────────────────────────
   # A PR's changes decide which platform jobs matter (#664) — this job is the
@@ -865,6 +866,7 @@ jobs:
         with:
           admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
           admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
+
           with_sidecars: 'true'
           wait_for_signal: 'true'
           wait_for_sip_bridge: 'true'
