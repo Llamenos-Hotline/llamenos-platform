@@ -257,7 +257,7 @@ describe('the signing keys whose seeds this repository published', () => {
       const erasure = new ErasureService({} as never, identity)
       vi.spyOn(erasure, 'getMyRequest').mockResolvedValue(null)
       vi.spyOn(erasure, 'getConfig').mockResolvedValue({
-        hubId: 'hub-1', delayHours: 72, emergencyOverrideEnabled: true, updatedAt: new Date(), updatedBy: LIVE,
+        hubId: 'hub-1', delayHours: 72, hubShredDelayHours: 48, emergencyOverrideEnabled: true, updatedAt: new Date(), updatedBy: LIVE,
       })
       signatures.acceptAll = true
       try {
