@@ -173,7 +173,15 @@ class ServicePushDispatcher implements PushDispatcher {
 
     for (const device of deviceList) {
       const encryptedWake = encryptWakePayload(wakePayload, device.wakeKeyPublic)
-      const encryptedFull = encryptFullPayload(fullPayload, userPubkey)
+      // #1021 (sibling): the full tier used to be sealed to `userPubkey`, the
+      // user's Ed25519 auth key, which is not an HPKE recipient — no device
+      // could ever decrypt it. It is a per-device tier, so seal it to that
+      // device's registered X25519 encryption key. A device that has not
+      // published one gets the wake tier only, rather than an envelope that
+      // merely looks encrypted.
+      const encryptedFull = device.x25519Pubkey
+        ? encryptFullPayload(fullPayload, device.x25519Pubkey)
+        : ''
 
       const success = await this.sendToDevice(device, encryptedWake, encryptedFull, wakePayload)
       if (!success) {

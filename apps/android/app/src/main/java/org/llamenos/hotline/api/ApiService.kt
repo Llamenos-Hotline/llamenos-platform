@@ -14,6 +14,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ClearPushTokenRequest
+import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.OkResponse
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.model.RecoveryContributeRequest
@@ -28,6 +29,7 @@ import org.llamenos.hotline.model.RecoverySessionStatus
 import org.llamenos.hotline.model.RecoveryVerifyRequest
 import org.llamenos.hotline.model.RecoveryVerifyResponse
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.telephony.SipConnectionParams
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -35,6 +37,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 class ApiException(val code: Int, override val message: String) : Exception("HTTP $code: $message")
+
+/**
+ * Request tag for public endpoints that prove identity in their body or not at all
+ * (invite validation and redemption). [AuthInterceptor] sends these without a signature,
+ * so they work before any device key exists, and they are never queued for offline replay.
+ */
+object UnsignedRequest
 
 /**
  * REST API client for the llamenos Worker backend.
@@ -156,6 +165,7 @@ class ApiService @Inject constructor(
      * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
      * @param path API path (e.g., "/api/v1/identity")
      * @param body Optional request body (will be JSON-serialized)
+     * @param signed false for public endpoints; see [UnsignedRequest]
      * @return Deserialized response of type T
      * @throws ApiException on non-2xx responses
      * @throws IOException on network errors
@@ -164,6 +174,7 @@ class ApiService @Inject constructor(
         method: String,
         path: String,
         body: Any? = null,
+        signed: Boolean = true,
     ): T = withContext(ioDispatcher) {
         val baseUrl = getBaseUrl()
         val url = "$baseUrl$path"
@@ -187,13 +198,14 @@ class ApiService @Inject constructor(
                     else -> null
                 }
             )
+            .apply { if (!signed) tag(UnsignedRequest::class.java, UnsignedRequest) }
             .build()
 
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (signed && OfflineQueue.isQueueableMethod(httpMethod)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")
@@ -222,6 +234,7 @@ class ApiService @Inject constructor(
         method: String,
         path: String,
         body: Any? = null,
+        signed: Boolean = true,
     ): Unit = withContext(ioDispatcher) {
         val baseUrl = getBaseUrl()
         val url = "$baseUrl$path"
@@ -245,13 +258,14 @@ class ApiService @Inject constructor(
                     else -> null
                 }
             )
+            .apply { if (!signed) tag(UnsignedRequest::class.java, UnsignedRequest) }
             .build()
 
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
             // On network error for write operations, enqueue for offline replay
-            if (OfflineQueue.isQueueableMethod(httpMethod)) {
+            if (signed && OfflineQueue.isQueueableMethod(httpMethod)) {
                 val bodyString = body?.let { bodyValue ->
                     val serializer = serializer(bodyValue::class.java)
                     @Suppress("UNCHECKED_CAST")
@@ -350,6 +364,21 @@ class ApiService @Inject constructor(
     suspend fun getHubKey(hubId: String): HubKeyEnvelopeResponse {
         return request("GET", "/api/hubs/$hubId/key")
     }
+
+    /**
+     * Hubs visible to the current user: the hubs they are a member of (a super admin sees
+     * every active hub). This is the member-hub list for multi-hub routing.
+     */
+    suspend fun getHubs(): HubsListResponse = request("GET", "/api/hubs")
+
+    // ---- Telephony API ----
+
+    /**
+     * SIP credentials for in-app calling (Linphone). Not hub-scoped: the server derives them
+     * from the platform telephony provider. Responds 400 when the user's call preference is
+     * phone-only or the provider has no SIP endpoint, and 404 when no provider is configured.
+     */
+    suspend fun getSipConnectionParams(): SipConnectionParams = request("GET", "/api/telephony/sip-token")
 
     // ---- Recovery Group API ----
 

@@ -34,7 +34,7 @@ Before(async ({ world }) => {
 
 Given('a hub admin user in hub {string}', async ({ request, world, workerHub }) => {
   const s = getS(world)
-  s.hubAdmin = await createUserViaApi(request, { roleIds: ['role-hub-admin'] })
+  s.hubAdmin = await createUserViaApi(request, { roleIds: ['role-hub-admin'], hubId: workerHub })
   s.hubId = workerHub
 })
 
