@@ -208,8 +208,11 @@ object SimulationClient {
      * Corresponds to `POST /api/test-add-hub-member`.
      * Used by hub-switch tests to give the test user membership in specific hubs
      * without promoting to super-admin (which would show ALL hubs).
+     *
+     * [roleIds] has no default: the old default (`role-admin`) names a role that does not
+     * exist (the hub admin is `role-hub-admin`), and a member with it cannot list any hub.
      */
-    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String> = listOf("role-admin")): StatusResponse {
+    fun addHubMember(pubkey: String, hubId: String, roleIds: List<String>): StatusResponse {
         val roleIdsJson = roleIds.joinToString(",") { "\"${escapeJson(it)}\"" }
         val body = """{"pubkey":"${escapeJson(pubkey)}","hubId":"${escapeJson(hubId)}","roleIds":[$roleIdsJson]}"""
         val responseText = post("/api/test-add-hub-member", body)

@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.InviteCodeParser
 import org.llamenos.hotline.model.RedeemInviteRequest
+import org.llamenos.protocol.InviteValidationResponse
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,6 +33,10 @@ class InviteRepository @Inject constructor(
     companion object {
         const val REDEEM_PATH = "/api/invites/redeem"
     }
+
+    /** `GET /api/invites/validate/:code` — whether the code can still be redeemed. */
+    suspend fun validate(code: String): InviteValidationResponse =
+        apiService.request("GET", "/api/invites/validate/$code", signed = false)
 
     /**
      * Redeem an invite code for the current device identity.

@@ -1,0 +1,12 @@
+# M1 capability probe — required flows (the ratchet).
+#
+# Each line is `<M1CapabilityProbe method> [probeRole]`; the role defaults to
+# role-volunteer. `./gradlew m1ProbeGate` (and every `connectedDebugAndroidTest`) runs each
+# listed flow in its own process from a fresh install, and fails if any does not pass.
+#
+# Add a flow in the same PR that makes it pass. Never remove one to get green: a flow
+# that stops passing is a regression, and this list is how it gets caught.
+logout
+shifts role-hub-admin
+auth
+enrolmentRejectsUnknownInvite

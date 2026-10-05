@@ -1,5 +1,7 @@
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Properties
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -187,6 +189,134 @@ val copyFeatureFiles by tasks.registering(Copy::class) {
 tasks.named("preBuild") {
     dependsOn(copyTestVectors)
     dependsOn(copyFeatureFiles)
+}
+
+/**
+ * The M1 capability probe as a ratcheting gate.
+ *
+ * `M1CapabilityProbe` drives the real app against a live backend, one flow per test
+ * method. Every method named in `src/androidTest/m1-probe-required.txt` must pass, each
+ * in its own instrumentation process after `pm clear` (every flow starts from a fresh
+ * install). The list is the floor: a PR that makes another method pass adds it in the
+ * same PR, and a regression below the list fails the build. There is no exemption list —
+ * a method that is not listed is simply not claimed yet.
+ *
+ * The Cucumber runner only runs JUnit classes when `cucumberUseAndroidJUnitRunner=true`
+ * is passed, which is why `connectedDebugAndroidTest` alone never ran the probe.
+ */
+abstract class M1ProbeGate @Inject constructor(
+    private val execOps: ExecOperations,
+) : DefaultTask() {
+    @get:InputFile
+    abstract val requiredList: RegularFileProperty
+
+    @get:Internal
+    abstract val adb: RegularFileProperty
+
+    /** Forwarded to the probe (`testHubUrl`, `testSecret`). */
+    @get:Input
+    abstract val probeArgs: MapProperty<String, String>
+
+    @get:OutputDirectory
+    abstract val reportDir: DirectoryProperty
+
+    private data class Required(val method: String, val role: String?) {
+        val label get() = if (role == null) method else "$method[$role]"
+    }
+
+    private fun adb(vararg args: String): String {
+        val out = ByteArrayOutputStream()
+        execOps.exec {
+            commandLine(adb.get().asFile.absolutePath, *args)
+            standardOutput = out
+            errorOutput = out
+            isIgnoreExitValue = true
+        }
+        return out.toString(Charsets.UTF_8)
+    }
+
+    @TaskAction
+    fun run() {
+        val required = requiredList.get().asFile.readLines()
+            .map { it.substringBefore('#').trim() }
+            .filter { it.isNotEmpty() }
+            .map { line ->
+                val parts = line.split(Regex("\\s+"))
+                check(parts.size <= 2) { "m1-probe-required.txt: expected '<method> [role]', got '$line'" }
+                Required(parts[0], parts.getOrNull(1))
+            }
+        if (required.isEmpty()) throw GradleException("m1-probe-required.txt lists no probe methods — a gate that runs nothing passes nothing")
+
+        // adb honours ANDROID_SERIAL; without it, more than one device is ambiguous.
+        val devices = adb("devices").lines().drop(1).count { it.endsWith("\tdevice") }
+        if (devices == 0) throw GradleException("M1 probe gate: no device connected")
+        if (devices > 1 && System.getenv("ANDROID_SERIAL").isNullOrEmpty()) {
+            throw GradleException("M1 probe gate: $devices devices connected — set ANDROID_SERIAL")
+        }
+
+        val reports = reportDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val failed = mutableListOf<String>()
+        for (entry in required) {
+            adb("shell", "pm", "clear", "$APP_ID")
+            adb("logcat", "-c")
+            val args = buildList {
+                addAll(listOf("shell", "am", "instrument", "-w", "-e", "cucumberUseAndroidJUnitRunner", "true"))
+                addAll(listOf("-e", "class", "$PROBE_CLASS#${entry.method}"))
+                probeArgs.get().forEach { (k, v) -> addAll(listOf("-e", k, v)) }
+                entry.role?.let { addAll(listOf("-e", "probeRole", it)) }
+                add(INSTRUMENTATION)
+            }
+            val output = adb(*args.toTypedArray())
+            val evidence = adb("logcat", "-d", "-s", "PROBE:*")
+            val name = entry.label.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+            reports.resolve("$name.instrument.txt").writeText(output)
+            reports.resolve("$name.probe.txt").writeText(evidence)
+            // Exactly one test, and it passed. "OK (0 tests)" is a probe method that no
+            // longer exists, and must fail like any other regression.
+            val passed = Regex("^OK \\(1 test\\)", RegexOption.MULTILINE).containsMatchIn(output)
+            logger.lifecycle("M1 probe ${if (passed) "PASS" else "FAIL"} ${entry.label}")
+            if (!passed) {
+                failed += entry.label
+                logger.error(evidence.lines().filter { "PROBE" in it }.takeLast(25).joinToString("\n"))
+            }
+        }
+        if (failed.isNotEmpty()) {
+            throw GradleException(
+                "M1 probe gate: ${failed.size} of ${required.size} required flows regressed: $failed " +
+                    "(evidence: ${reports.absolutePath})",
+            )
+        }
+        logger.lifecycle("M1 probe gate: all ${required.size} required flows pass")
+    }
+
+    companion object {
+        const val APP_ID = "org.llamenos.hotline.debug"
+        const val PROBE_CLASS = "org.llamenos.hotline.discovery.M1CapabilityProbe"
+        const val INSTRUMENTATION = "org.llamenos.hotline/org.llamenos.hotline.CucumberHiltRunner"
+    }
+}
+
+val m1ProbeGate = tasks.register<M1ProbeGate>("m1ProbeGate") {
+    group = "verification"
+    description = "Runs every required M1 capability probe flow against the live backend (testHubUrl)."
+    dependsOn("installDebug", "installDebugAndroidTest")
+    requiredList = layout.projectDirectory.file("src/androidTest/m1-probe-required.txt")
+    adb = androidComponents.sdkComponents.adb
+    val prefix = "android.testInstrumentationRunnerArguments."
+    probeArgs = listOf("testHubUrl", "testSecret")
+        .mapNotNull { key -> (project.findProperty(prefix + key) as String?)?.let { key to it } }
+        .toMap()
+    reportDir = layout.buildDirectory.dir("reports/m1-probe")
+    // Never cached: it measures a live server and device, not its inputs.
+    outputs.upToDateWhen { false }
+}
+
+// The Android E2E job runs `connectedDebugAndroidTest`; the gate rides on it so CI enforces
+// the ratchet wherever the Cucumber suite runs. The connected task uninstalls the APKs when
+// it finishes, so the gate's own installs must come after it.
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach { finalizedBy(m1ProbeGate) }
+tasks.matching { it.name == "installDebug" || it.name == "installDebugAndroidTest" }.configureEach {
+    mustRunAfter("connectedDebugAndroidTest")
 }
 
 dependencies {
