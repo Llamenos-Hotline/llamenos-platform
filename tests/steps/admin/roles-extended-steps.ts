@@ -226,9 +226,12 @@ Given('a volunteer with {string} role', async ({ request, rolesWorld, workerHub 
   const role = roles.find(r => r.name === roleName)
   expect(role).toBeTruthy()
 
+  // The Volunteers page lists the active hub's members only (#1044), so the
+  // volunteer must be created in the worker hub, not as a global-role account.
   const vol = await createVolunteerViaApi(request, {
     name: `RoleTest ${Date.now()}`,
     roleIds: [role!.id],
+    hubId: workerHub,
   })
   // Kept in the rolesWorld fixture, not on `window`: the old window stash did not
   // survive the page navigation in the next step, so the dropdown step silently no-op'd.
@@ -265,9 +268,12 @@ Given('I changed a volunteer\'s role to {string}', async ({ request, rolesWorld,
   // Setup: a volunteer holding the role (assigned through the API).
   const role = (await listRolesViaApi(request)).find(r => r.name === roleName)
   expect(role, `role "${roleName}" must exist`).toBeTruthy()
+  // The Volunteers page lists the active hub's members only (#1044), so the
+  // volunteer must be created in the worker hub, not as a global-role account.
   const vol = await createVolunteerViaApi(request, {
     name: `Badge ${Date.now()}`,
     roleIds: [role!.id],
+    hubId: workerHub,
   })
   rolesWorld.volunteerNsec = vol.nsec
   // Hub-scoped list (#1044) — see the note in "a volunteer with {string} role".
