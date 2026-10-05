@@ -5,6 +5,7 @@
 import { Given, Before, getState, setState } from './fixtures'
 import {
   createVolunteerViaApi,
+  addHubMemberViaApi,
   createShiftViaApi,
   createBanViaApi,
   clockInViaApi,
@@ -80,6 +81,9 @@ Given('{int} volunteers are on shift', async ({ request, world }, count: number)
     const vol = await createVolunteerViaApi(request, {
       name: `BDD Vol ${Date.now()}-${i}`,
     })
+    // Only members who can answer in the hub are rung / may claim its
+    // conversations — a global role alone carries no hub authority (#1037)
+    await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
     volunteers.push({ ...vol, onShift: true })
   }
 

@@ -490,7 +490,7 @@ export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: st
  * unusually large diff degrades to the other engine rather than a
  * confusing `E2BIG`.
  */
-export const KIMI_PROMPT_MAX_CHARS = 120_000 // MAX_ARG_STRLEN is 131072; stay under with headroom
+export const KIMI_PROMPT_MAX_CHARS = 131_000 // MAX_ARG_STRLEN 131072 incl null terminator; file-based prompts are the real fix (follow-up)
 
 /**
  * `command -v kimi` as code: scans `pathEnv` (the PATH the engine will

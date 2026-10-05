@@ -494,9 +494,18 @@ export interface CreateUserResult {
 /** @deprecated Use CreateUserResult instead */
 export type CreateVolunteerResult = CreateUserResult
 
+/**
+ * Create a user as the admin.
+ *
+ * With `hubId`, the user is created as a MEMBER of that hub (`POST /hubs/:hubId/users`):
+ * `roleIds` become their role assignment in that hub (and, per the server's current
+ * semantics, their global roles too). Without it, `roleIds` are GLOBAL roles only,
+ * which carry no authority inside any hub unless one of them is super-admin (#1037) —
+ * use `hubId` for any actor that acts in a hub.
+ */
 export async function createUserViaApi(
   request: APIRequestContext,
-  options?: { name?: string; phone?: string; roleIds?: string[] },
+  options?: { name?: string; phone?: string; roleIds?: string[]; hubId?: string },
 ): Promise<CreateUserResult> {
   const name = options?.name ?? uniqueName('TestUser')
   const phone = options?.phone ?? uniquePhone()
@@ -504,7 +513,8 @@ export async function createUserViaApi(
 
   const { seedHex, pubkey } = generateTestKeypair()
 
-  const { status, data } = await apiPost(request, '/users', {
+  const path = options?.hubId ? `/hubs/${options.hubId}/users` : '/users'
+  const { status, data } = await apiPost(request, path, {
     name, phone, roleIds, pubkey,
   })
 

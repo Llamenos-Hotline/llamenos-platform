@@ -4,9 +4,9 @@ import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
 import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   runReviewCi, decideReviewGate,
@@ -16,6 +16,7 @@ import {
 import { DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
+import { workspaceAliases } from '../../orchestrator/src/verify.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 describe('rail: a live lane must have a write scope', () => {
@@ -97,6 +98,78 @@ describe('rail: the fleet cannot merge its own changes', () => {
     for (const f of configs) {
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
       expect(HIGH_IMPACT_PATHS, `${f} is missing from HIGH_IMPACT_PATHS`).toContain(f)
+    }
+  })
+
+  // #1525. `prepareTestRoot` re-points every workspace package at the test
+  // root by DERIVING the list from the trusted install, so a sixth package
+  // needs no edit anywhere. This is the rail that keeps it derived: the
+  // expected set is re-derived here, independently, from the root
+  // `package.json` workspaces, and every one of them must come back with an
+  // alias. A future edit that replaces the scan with a hardcoded list passes
+  // only until the next package is added — at which point this fails.
+  //
+  // `trustedCheckout` is NOT the cwd: under fleet/verify this suite runs
+  // inside a `git archive` export whose `node_modules` is a symlink to the
+  // BASE checkout's install. Following it to its realpath names the checkout
+  // that actually holds the workspace links, in both environments.
+  it('every workspace package in the install is re-pointed at the test root — none enumerated', async () => {
+    const trustedCheckout = dirname(realpathSync(join(process.cwd(), 'node_modules')))
+    const manifest = JSON.parse(readFileSync(join(trustedCheckout, 'package.json'), 'utf8')) as {
+      workspaces?: string[]
+    }
+    const patterns = manifest.workspaces ?? []
+    expect(patterns.length, 'root package.json declares no workspaces').toBeGreaterThan(0)
+
+    const dirs: string[] = []
+    for (const pattern of patterns) {
+      if (pattern.endsWith('/*')) {
+        const parent = pattern.slice(0, -2)
+        for (const name of readdirSync(join(trustedCheckout, parent))) dirs.push(posix.join(parent, name))
+      } else {
+        dirs.push(pattern)
+      }
+    }
+    const expected = dirs
+      .map((rel) => {
+        const pkg = join(trustedCheckout, rel, 'package.json')
+        if (!existsSync(pkg)) return undefined
+        const name = (JSON.parse(readFileSync(pkg, 'utf8')) as { name?: string }).name
+        return name === undefined ? undefined : { find: name, replacement: join('/export', rel) }
+      })
+      .filter((e): e is { find: string; replacement: string } => e !== undefined)
+    expect(expected.length, 'no workspace package has a name').toBeGreaterThan(0)
+
+    const aliases = await workspaceAliases(trustedCheckout, '/export')
+    const missing = expected.filter((e) => !aliases.some((a) => a.find === e.find && a.replacement === e.replacement))
+    expect(missing, `workspace packages with no alias into the test root: ${JSON.stringify(missing)}`).toEqual([])
+  })
+
+  // The generated entries land in `resolve.alias`. Vitest's own `test.alias`
+  // merges into the same list with a precedence this gate does not control,
+  // so a root config that starts declaring one must be a deliberate decision
+  // made while reading this comment — not a silent re-opening of #1525.
+  it('no root vitest config declares test.alias, which would merge ahead of the generated entries', () => {
+    const configs = trackedFiles().filter((f) => /^vitest\.[^/]+\.config\.ts$/.test(f))
+    expect(configs.length).toBeGreaterThan(0)
+    for (const f of configs) {
+      const src = readFileSync(join(process.cwd(), f), 'utf8')
+      // The `test: { … }` block, brace-matched rather than regex-spanned: a
+      // lazy `[\s\S]*?` runs straight past the block's closing brace and
+      // finds the `alias:` in the sibling `resolve: { … }`, which every one
+      // of these configs has. Read, never imported — this gate does not
+      // execute the configs it judges.
+      const open = src.indexOf('{', src.search(/\btest\s*:/))
+      if (open < 0) continue
+      let depth = 0
+      let close = open
+      for (; close < src.length; close++) {
+        const ch = src[close]
+        if (ch === '{') depth++
+        else if (ch === '}' && --depth === 0) break
+      }
+      const block = src.slice(open, close)
+      expect(/\balias\s*:/.test(block), `${f} declares test.alias — see #1525 before allowing it`).toBe(false)
     }
   })
 
