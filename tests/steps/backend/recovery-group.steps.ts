@@ -211,7 +211,7 @@ function canonicalizeJson(value: unknown): unknown {
 
 function computeSigchainLinkHash(
   seqNo: number,
-  prevHash: string,
+  prevHash: string | null,
   payload: unknown,
   signerDeviceId: string,
   signerPubkey: string,
@@ -1136,8 +1136,8 @@ When('the new device completes recovery with a self-authorizing sigchain link', 
   const s = getS(world)
   const cer = s.ceremony!
 
-  const seqNo = 0
-  const prevHash = ''
+  const seqNo = 1
+  const prevHash = null
   const timestamp = new Date().toISOString()
   const signerDeviceId = `recovered-device-${cer.newDeviceEdPubkey.slice(0, 8)}`
   const payload = {

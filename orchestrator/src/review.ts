@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
 import { chmod, copyFile, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { accessSync, constants as fsConstants } from 'node:fs'
@@ -193,7 +194,7 @@ ${VERDICT_CONTRACT}`
  * merge."
  *
  * THE CLAUDE FALLBACK: when the kimi invocation CANNOT RUN — missing binary,
- * a brief too large for one `-p` argv element, timeout, crash, an
+ * a brief past the sanity ceiling, timeout, crash, an
  * unreachable-class error — `invokeVerifierEngine` retries the SAME brief
  * through `claude` before giving up. The fallback fires ONLY on that
  * cannot-run family, never on a substantive verdict: a kimi PASS/FAIL is
@@ -476,21 +477,21 @@ export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: st
 }
 
 /**
- * Linux caps a single argv element at `MAX_ARG_STRLEN` (32 × PAGE_SIZE, so
- * 128 KiB on this fleet's runners): one argument longer than that fails the
- * exec with `E2BIG` before the engine speaks. The claude path carries the
- * brief over STDIN for exactly this reason (see `invokeVerifierEngine`); the
- * kimi path — primary or fallback — carries it as the `-p` VALUE (one argv
- * element) because that is the invocation this engine supports. A brief
- * past this bound makes a kimi invocation cannot-run BEFORE it starts,
- * which the orchestration treats like any other cannot-run: with the
- * fallback enabled it degrades to claude (whose stdin pipe has no such
- * cap), and with the fallback disabled it reports `engine-unavailable`.
- * Fleet diffs are lane-scoped and far below this; the guard exists so an
- * unusually large diff degrades to the other engine rather than a
- * confusing `E2BIG`.
+ * A SANITY CEILING on the brief's length, not an argv limit — that is the
+ * whole point of the file-based passing below. The kimi brief is written to a
+ * temp file and passed as `-p @<file>` (verified against the installed
+ * binary: kimi reads the prompt from the file), so no kernel
+ * `MAX_ARG_STRLEN` (131,072) ever applies — real diffs exceeded even that,
+ * and a 181,571-char brief (#1517) came back UNREADABLE as a result.
+ *
+ * What the ceiling remains good for is pure abuse-prevention: a diff so
+ * large it would take hours of review time and gigabytes of context is not
+ * something this gate should hand to any engine. A brief past this bound is
+ * a cannot-run result exactly like a missing binary: with the fallback
+ * enabled it degrades to claude (whose stdin pipe has no length cap either),
+ * and with the fallback disabled it reports `engine-unavailable`.
  */
-export const KIMI_PROMPT_MAX_CHARS = 131_000 // MAX_ARG_STRLEN 131072 incl null terminator; file-based prompts are the real fix (follow-up)
+export const KIMI_PROMPT_MAX_CHARS = 2_000_000 // sanity ceiling only — file-based -p @<file> passing has no argv limit
 
 /**
  * `command -v kimi` as code: scans `pathEnv` (the PATH the engine will
@@ -540,8 +541,16 @@ export const REVIEWER_AGENT_FILE = fileURLToPath(
  * The kimi reviewer's argv — identical whether kimi runs FIRST or as the
  * fallback, because the brief must never change with position. Deliberately
  * NOT shaped like `verifierArgs`:
- *   - `-p <prompt>` carries the SAME brief verbatim (same diff, same
- *     contract, whichever engine ran before it).
+ *   - `-p @<file>` carries the brief by FILE REFERENCE: `runKimiOnce` writes
+ *     the SAME brief verbatim to a unique temp file (same diff, same
+ *     contract, whichever engine ran before it) and passes `@${path}`. kimi
+ *     reads the prompt from the file (verified against the installed
+ *     binary), so the brief's length is bounded by nothing but disk — the
+ *     kernel's 131,072-char `MAX_ARG_STRLEN` argv-element cap never applies,
+ *     which is what the old one-element `-p <prompt>` form died on (#1517's
+ *     181,571-char brief failed the exec with `E2BIG` before the engine
+ *     spoke). `KIMI_PROMPT_MAX_CHARS` guards only against absurdly large
+ *     briefs now, not the argv limit.
  *   - `--model` appears ONLY when `kimiReviewModel()` returns a value
  *     (the optional `FLEET_REVIEW_KIMI_MODEL` override): unset means kimi
  *     resolves its own configured default — the posture that lets a
@@ -554,11 +563,9 @@ export const REVIEWER_AGENT_FILE = fileURLToPath(
  *   - `--add-dir` grants read access to the export, mirroring the claude
  *     invocation's grant; the working directory stays the empty scratch
  *     root `invokeVerifierEngine` creates.
- * The brief is one argv element here, which is what `KIMI_PROMPT_MAX_CHARS`
- * guards.
  */
-export function kimiArgs(input: { prompt: string; exportDir: string; model?: string }): string[] {
-  const args = ['--output-format', 'stream-json', '-p', input.prompt,
+export function kimiArgs(input: { promptRef: string; exportDir: string; model?: string }): string[] {
+  const args = ['--output-format', 'stream-json', '-p', input.promptRef,
     '--agent-file', REVIEWER_AGENT_FILE, '--add-dir', input.exportDir]
   if (input.model !== undefined && input.model !== '') args.push('--model', input.model)
   return args
@@ -1186,8 +1193,8 @@ export interface EngineRun {
   /** False for a crash, a timeout, a non-zero exit or a missing binary
    *  (which includes a `--model` id the engine itself refuses to run —
    *  see `classifyEngineFailure` and `failureKind`), or a kimi invocation
-   *  skipped because its binary is absent or the brief exceeds one argv
-   *  element (`KIMI_PROMPT_MAX_CHARS`). */
+   *  skipped because its binary is absent or the brief exceeds the sanity
+   *  ceiling (`KIMI_PROMPT_MAX_CHARS`). */
   reached: boolean
   /** The engine this run's outcome came from — always set for runs
    *  `invokeVerifierEngine` produced. */
@@ -1433,7 +1440,10 @@ export function verifierArgs(input: { model: string; maxTurns: number; exportDir
  * claude is the fallback engine. The claude prompt is piped over stdin
  * rather than passed as an argv element, so its length is never bounded by
  * the OS argv limit and it can never be mistaken for a CLI flag; the kimi
- * brief rides one `-p` argv element, which `KIMI_PROMPT_MAX_CHARS` guards.
+ * brief is written to a temp file and passed as `-p @<file>` (kimi reads the
+ * prompt from the file — verified against the installed binary), so the
+ * kernel's 131,072-char `MAX_ARG_STRLEN` argv-element cap never applies;
+ * `KIMI_PROMPT_MAX_CHARS` guards only against absurdly large briefs.
  *
  * THE PROJECT ROOT IS AN EMPTY DIRECTORY THIS FUNCTION CREATES — NEVER THE
  * EXPORT. An agent CLI treats its working directory as a project and loads
@@ -1458,8 +1468,8 @@ export function verifierArgs(input: { model: string; maxTurns: number; exportDir
  *
  *   1. The PRIMARY engine (`kimi` by default) is attempted. A kimi attempt
  *      that never reaches a verdict because its binary is absent, the brief
- *      exceeds one argv element, the call crashed, timed out, or returned an
- *      unreachable-class error is a CANNOT-RUN result — not a verdict.
+ *      exceeds the sanity ceiling, the call crashed, timed out, or returned
+ *      an unreachable-class error is a CANNOT-RUN result — not a verdict.
  *   2. Only then — and only when the failure is in the cannot-run family,
  *      the fallback toggle is on (`FLEET_REVIEW_FALLBACK`, default on), and
  *      the SAME brief can be carried — does the OTHER engine (`claude`) run.
@@ -1586,8 +1596,9 @@ export async function invokeVerifierEngine(input: {
     // Every condition below is a reason to return the primary's failure
     // exactly as the pre-fallback code would have: fallback disabled by the
     // operator; the failure not in the cannot-run family (auth-shaped
-    // ambiguity, exhausted budget); or a brief the other engine cannot
-    // carry either (the kimi argv cap — claude's stdin pipe has none).
+    // ambiguity, exhausted budget); or a brief past the sanity ceiling that
+    // neither engine should be handed (claude's stdin pipe has no length cap,
+    // so only `KIMI_PROMPT_MAX_CHARS` bounds this).
     if (!fallbackReviewerEnabled()) return primaryRun
     if (!canFallbackAfterFailure(primaryRun.failureKind ?? 'engine-unavailable',
       `${primaryRun.assistantText}\n${primaryRun.diagnostics}`)) return primaryRun
@@ -1622,9 +1633,9 @@ export async function invokeVerifierEngine(input: {
  * primary and fallback positions run the IDENTICAL argv, env, decode and
  * classification; position only decides WHEN this runs and how the result
  * is attributed. Pre-flight cannot-run conditions (missing binary, brief
- * over the single-argv-element cap) are reported as `engine-unavailable`
- * runs rather than thrown, so the orchestration in `invokeVerifierEngine`
- * can treat them exactly like a crashed or timed-out call.
+ * over the sanity ceiling) are reported as `engine-unavailable` runs rather
+ * than thrown, so the orchestration in `invokeVerifierEngine` can treat them
+ * exactly like a crashed or timed-out call.
  */
 async function runKimiOnce(input: {
   prompt: string
@@ -1637,7 +1648,7 @@ async function runKimiOnce(input: {
     return {
       reached: false, engine: 'kimi', assistantText: '',
       failureKind: 'engine-unavailable',
-      diagnostics: `kimi invocation skipped: the brief is ${input.prompt.length} chars, over the ${KIMI_PROMPT_MAX_CHARS}-char single-argv-element cap for -p`,
+      diagnostics: `kimi invocation skipped: the brief is ${input.prompt.length} chars, over the ${KIMI_PROMPT_MAX_CHARS}-char sanity ceiling`,
     }
   }
   if (kimiBinaryOnPath(input.env['PATH']) === undefined) {
@@ -1647,9 +1658,17 @@ async function runKimiOnce(input: {
       diagnostics: 'kimi CLI is not on PATH for the reviewer environment — cannot run',
     }
   }
+  // The brief rides a FILE, not an argv element: kimi supports `-p @<file>`
+  // (verified against the installed binary), and a single argv element is
+  // capped by the kernel at MAX_ARG_STRLEN (131,072 chars) — real diffs now
+  // exceed even that (#1517's brief was 181,571 chars and every kimi run on
+  // it died with E2BIG before the engine spoke). 0600 because the brief
+  // contains the full diff.
+  const briefPath = join(tmpdir(), `llamenos-review-brief-${randomBytes(8).toString('hex')}.md`)
   try {
+    await writeFile(briefPath, input.prompt, { mode: 0o600 })
     const call = execFileAsync(KIMI_REVIEWER_ENGINE,
-      kimiArgs({ prompt: input.prompt, exportDir: input.exportDir, model: kimiReviewModel() }), {
+      kimiArgs({ promptRef: `@${briefPath}`, exportDir: input.exportDir, model: kimiReviewModel() }), {
         cwd: input.projectRoot,
         env: input.env,
         timeout: input.timeoutMs,
@@ -1667,6 +1686,8 @@ async function runKimiOnce(input: {
     const decoded = decodeKimiOutput(err.stdout ?? '', err.stderr ?? '')
     const failureKind = classifyEngineFailure(`${decoded.assistantText}\n${decoded.diagnostics}`)
     return { reached: false, engine: 'kimi', failureKind, ...decoded }
+  } finally {
+    await rm(briefPath, { force: true })
   }
 }
 

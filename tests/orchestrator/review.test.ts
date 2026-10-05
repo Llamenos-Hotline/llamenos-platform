@@ -981,12 +981,12 @@ describe('kimiReviewModel: the optional FLEET_REVIEW_KIMI_MODEL dial', () => {
   it('unset means kimi resolves its own default (empty string, no --model)', () => {
     delete process.env[ENV]
     expect(kimiReviewModel()).toBe('')
-    expect(kimiArgs({ prompt: 'p', exportDir: '/x' })).not.toContain('--model')
+    expect(kimiArgs({ promptRef: '@p', exportDir: '/x' })).not.toContain('--model')
   })
 
   it('set, it rides the kimi argv (wired by runKimiOnce exactly like this)', () => {
     process.env[ENV] = 'kimi-for-coding-pro'
-    const args = kimiArgs({ prompt: 'p', exportDir: '/x', model: kimiReviewModel() })
+    const args = kimiArgs({ promptRef: '@p', exportDir: '/x', model: kimiReviewModel() })
     expect(args[args.indexOf('--model') + 1]).toBe('kimi-for-coding-pro')
   })
 })
@@ -1061,17 +1061,22 @@ describe('decodeKimiOutput: the kimi stream-json envelope', () => {
 })
 
 describe('kimiArgs: the kimi invocation (identical in either position)', () => {
-  it('carries the SAME brief as one -p argument, the read-only agent profile, and the export grant', () => {
-    const prompt = 'the full review brief\n## Diff\n...'
-    const args = kimiArgs({ prompt, exportDir: '/tmp/export' })
+  it('carries the brief by FILE REFERENCE as the -p value, plus the read-only agent profile and the export grant', () => {
+    const args = kimiArgs({ promptRef: '@/tmp/llamenos-review-brief-abc.md', exportDir: '/tmp/export' })
     expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
-    expect(args[args.indexOf('-p') + 1]).toBe(prompt)
+    expect(args[args.indexOf('-p') + 1]).toBe('@/tmp/llamenos-review-brief-abc.md')
     expect(args[args.indexOf('--add-dir') + 1]).toBe('/tmp/export')
     expect(args[args.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
   })
 
+  it('never puts the raw brief in argv — the -p value is a @<file> reference, never the diff itself', () => {
+    const joined = kimiArgs({ promptRef: '@/tmp/brief.md', exportDir: '/x' }).join(' ')
+    expect(joined).not.toContain('diff --git')
+    expect(joined).toMatch(/-p @\S+/)
+  })
+
   it('never asks for an auto/yolo permission mode and never names a claude model', () => {
-    const joined = kimiArgs({ prompt: 'x', exportDir: '/x' }).join(' ')
+    const joined = kimiArgs({ promptRef: '@/tmp/brief.md', exportDir: '/x' }).join(' ')
     expect(joined).not.toMatch(/\byolo\b|\bauto\b|--dangerously/)
   })
 
@@ -1177,7 +1182,16 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
   }
 
   it('kimi PRIMARY happy path: one kimi call, no claude, verdict labelled "reviewed by kimi"', async () => {
-    mockExecFileResolves(KIMI_PASS_STREAM)
+    // The brief reaches kimi as a FILE: argv carries `-p @<path>`, and the
+    // file at that path holds the full brief. Capture the content while the
+    // file exists (runKimiOnce deletes it in a finally).
+    let briefRef = ''
+    let briefContent = ''
+    mockExecFile.mockImplementationOnce(async (_binary: string, argv: string[]) => {
+      briefRef = argv[argv.indexOf('-p') + 1] as string
+      briefContent = readFileSync(briefRef.slice(1), 'utf8')
+      return { stdout: KIMI_PASS_STREAM, stderr: '' }
+    })
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('kimi')
@@ -1185,18 +1199,31 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     expect(mockExecFile).toHaveBeenCalledTimes(1)
     const [binary, argv] = mockExecFile.mock.calls[0] as [string, string[], ...unknown[]]
     expect(binary).toBe('kimi')
-    // The SAME brief: the -p argument carries the diff and the reviewer's
-    // contract, not a summary or a fresh prompt.
-    const brief = argv[argv.indexOf('-p') + 1] as string
-    expect(brief).toContain('diff --git a/x b/x')
-    expect(brief).toContain('non-author reviewer')
-    expect(brief).toContain('VERDICT: PASS')
+    // The SAME brief, by file reference: the -p value is a `@<path>`
+    // reference whose file carries the diff and the reviewer's contract,
+    // not a summary or a fresh prompt — and the raw brief is NOT an argv
+    // element (no MAX_ARG_STRLEN cap can bite).
+    expect(briefRef).toMatch(/^@\S+\.md$/)
+    expect(argv[argv.indexOf('-p') + 1]).toBe(briefRef)
+    expect(briefContent).toContain('diff --git a/x b/x')
+    expect(briefContent).toContain('non-author reviewer')
+    expect(briefContent).toContain('VERDICT: PASS')
+    expect(argv.join(' ')).not.toContain('diff --git')
     expect(argv[argv.indexOf('--agent-file') + 1]).toBe(REVIEWER_AGENT_FILE)
     expect(argv[argv.indexOf('--add-dir') + 1]).toBe(snapshotDir)
+    // The temp brief file is deleted after the run — success path.
+    expect(existsSync(briefRef.slice(1))).toBe(false)
   })
 
   it('kimi cannot-run (quota) → the SAME brief retries through claude, labelled "reviewed by claude (kimi unavailable)"', async () => {
-    mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
+    // Capture the kimi brief file's content before runKimiOnce's finally
+    // deletes it — by the time the claude fallback runs, the file is gone.
+    let kimiBrief = ''
+    mockExecFile.mockImplementationOnce(async (_binary: string, argv: string[]) => {
+      const ref = argv[argv.indexOf('-p') + 1] as string
+      kimiBrief = readFileSync(ref.slice(1), 'utf8')
+      throw QUOTA_ERR
+    })
     mockExecFile.mockResolvedValueOnce({ stdout: CLAUDE_PASS, stderr: '' })
 
     const result = await runSecondOpinion()
@@ -1215,11 +1242,10 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     expect(claudeArgv[claudeArgv.indexOf('--tools') + 1]).toBe(REVIEWER_TOOLS.join(','))
     expect(claudeArgv[claudeArgv.indexOf('--add-dir') + 1]).toBe(snapshotDir)
     expect(claudeArgv).not.toContain('--dangerously-skip-permissions')
-    // The brief reaches claude VERBATIM over stdin's twin: the prompt the
-    // kimi -p argument carried.
-    const kimiArgv = mockExecFile.mock.calls[0]?.[1] as string[]
+    // The brief reached claude VERBATIM over stdin's twin: the brief file
+    // the kimi `-p @<file>` reference pointed at.
     expect(claudeArgv.join(' ')).not.toContain('diff --git') // prompt is NOT an argv element on the claude path
-    expect(kimiArgv[kimiArgv.indexOf('-p') + 1]).toContain('diff --git a/x b/x')
+    expect(kimiBrief).toContain('diff --git a/x b/x')
   })
 
   it('with the fallback toggle off, a kimi cannot-run reports engine-unavailable exactly as a fallback-less gate would — claude never invoked', async () => {
@@ -1267,12 +1293,26 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     rmSync(bareDir, { recursive: true, force: true })
   })
 
-  it('a brief over the single-argv-element cap cannot run kimi: claude carries it instead (E2BIG guard)', async () => {
+  it('a brief over the sanity ceiling cannot run kimi: claude carries it instead (guard)', async () => {
     mockExecFileResolves(CLAUDE_PASS)
     const result = await runSecondOpinion(`diff --git a/x b/x\n${'x'.repeat(KIMI_PROMPT_MAX_CHARS + 1)}`)
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('claude')
     expect(mockExecFile).toHaveBeenCalledTimes(1) // kimi never exec'd — skipped pre-flight
+  })
+
+  it('the temp brief file is deleted even when kimi fails (failure path)', async () => {
+    let briefPath = ''
+    mockExecFile.mockImplementationOnce(async (_binary: string, argv: string[]) => {
+      const ref = argv[argv.indexOf('-p') + 1] as string
+      briefPath = ref.slice(1)
+      readFileSync(briefPath, 'utf8') // the file exists while kimi runs
+      throw QUOTA_ERR
+    })
+    mockExecFile.mockResolvedValueOnce({ stdout: CLAUDE_PASS, stderr: '' })
+    await runSecondOpinion()
+    expect(briefPath).not.toBe('')
+    expect(existsSync(briefPath)).toBe(false)
   })
 
   it('when BOTH engines fail, one UNREADABLE names both and carries both diagnostics', async () => {

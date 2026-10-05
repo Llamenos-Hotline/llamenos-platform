@@ -2,6 +2,9 @@ package org.llamenos.hotline.crypto
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.llamenos.hotline.model.NotePayload
@@ -218,6 +221,16 @@ class CryptoService @Inject constructor() {
             try { org.llamenos.core.mobileIsUnlocked() } catch (_: Exception) { false }
         } else { false }
 
+    private val _unlockedState = MutableStateFlow(false)
+
+    /**
+     * Whether device keys are loaded, as a stream: `true` after [generateDeviceKeys] or
+     * [unlockWithPin], `false` after [lock]. Every caller of [lock] (the Lock buttons, the
+     * background auto-lock, logout) is followed by the UI through this, so a locked app
+     * never keeps showing unlocked screens.
+     */
+    val unlockedState: StateFlow<Boolean> = _unlockedState.asStateFlow()
+
     /** Whether any device identity has been set (even if locked). */
     val hasIdentity: Boolean get() = signingPubkeyHex != null
 
@@ -256,6 +269,7 @@ class CryptoService @Inject constructor() {
                 this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
                 this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
                 this@CryptoService.deviceId = state.deviceId
+                _unlockedState.value = true
                 EncryptedDeviceKeys(
                     kdfVersion = ffiResult.kdfVersion,
                     salt = ffiResult.salt,
@@ -304,6 +318,7 @@ class CryptoService @Inject constructor() {
                 this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
                 this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
                 this@CryptoService.deviceId = state.deviceId
+                _unlockedState.value = true
                 state
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Decryption failed: incorrect PIN", e)
@@ -320,6 +335,7 @@ class CryptoService @Inject constructor() {
             try { org.llamenos.core.mobileLock() } catch (_: Exception) {}
         }
         testHubKeys.clear()
+        _unlockedState.value = false
     }
 
     // ---- Auth Token (Ed25519) ----
@@ -338,6 +354,42 @@ class CryptoService @Inject constructor() {
      */
     fun createAuthTokenSync(method: String, path: String): AuthToken {
         return createAuthTokenInternal(method, path)
+    }
+
+    /**
+     * Create an Ed25519 auth token signed WITHOUT a nonce.
+     *
+     * Only for routes whose wire schema has no `nonce` field — today that is
+     * `POST /api/invites/redeem` alone. The message is signed under
+     * `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the server accepts only on routes
+     * that opt in, so this token is useless anywhere else. Every other call
+     * site must use [createAuthToken].
+     */
+    suspend fun createAuthTokenWithoutNonce(method: String, path: String): AuthToken =
+        withContext(computeDispatcher) {
+            createAuthTokenWithoutNonceInternal(method, path)
+        }
+
+    private fun createAuthTokenWithoutNonceInternal(method: String, path: String): AuthToken {
+        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        if (!isUnlocked) throw CryptoException("No key loaded")
+
+        val timestamp = System.currentTimeMillis()
+        return try {
+            val ffiToken = org.llamenos.core.mobileCreateAuthTokenWithoutNonce(
+                timestamp = timestamp.toULong(),
+                method = method,
+                path = path,
+            )
+            AuthToken(
+                pubkey = ffiToken.pubkey,
+                timestamp = ffiToken.timestamp.toLong(),
+                token = ffiToken.token,
+                nonce = ffiToken.nonce,
+            )
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Auth token creation failed: ${e.message}", e)
+        }
     }
 
     private fun createAuthTokenInternal(method: String, path: String): AuthToken {
@@ -364,6 +416,39 @@ class CryptoService @Inject constructor() {
             throw CryptoException("Auth token creation failed: ${e.message}", e)
         }
     }
+
+    /**
+     * Proof of key ownership for invite redemption (`POST [path]`).
+     *
+     * The redeem body carries `{pubkey, timestamp, token}` and has no nonce field
+     * (protocol `RedeemInviteBody`), so the server verifies the signature over the
+     * nonce-less device-auth message. [createAuthToken] always signs a fresh nonce into
+     * the message, which that body cannot carry.
+     */
+    suspend fun createInviteRedemptionToken(path: String): AuthToken =
+        withContext(computeDispatcher) {
+            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            if (!isUnlocked) throw CryptoException("No key loaded")
+            val pubkey = signingPubkeyHex ?: throw CryptoException("No device identity")
+            val timestamp = System.currentTimeMillis()
+            try {
+                // The canonical nonce-less builder (#1509) — never hand-assemble the
+                // signed string.
+                val message = org.llamenos.core.mobileBuildAuthMessage(
+                    pubkeyHex = pubkey,
+                    timestamp = timestamp.toULong(),
+                    method = "POST",
+                    path = path,
+                    nonce = null,
+                )
+                val signature = org.llamenos.core.mobileSign(
+                    messageHex = message.joinToString("") { "%02x".format(it) },
+                )
+                AuthToken(pubkey = pubkey, timestamp = timestamp, token = signature)
+            } catch (e: org.llamenos.core.CryptoException) {
+                throw CryptoException("Invite redemption signature failed: ${e.message}", e)
+            }
+        }
 
     // ---- Note Encryption (HPKE) ----
 

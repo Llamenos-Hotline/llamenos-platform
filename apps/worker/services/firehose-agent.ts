@@ -520,7 +520,7 @@ export class FirehoseAgentService {
 
   /**
    * Decrypt an HPKE envelope-encrypted value using the agent's secret key.
-   * Uses LABEL_MESSAGE for key unwrapping (encryptMessageForStorage default).
+   * Inverse of encryptMessageForStorage: LABEL_MESSAGE as HPKE info, no AAD.
    */
   private decryptEnvelope(
     encryptedHex: string,
@@ -528,7 +528,7 @@ export class FirehoseAgentService {
     secretKey: Uint8Array,
   ): string {
     const labelBytes = utf8ToBytes(LABEL_MESSAGE)
-    const aadKeyWrap = keyWrapAad(LABEL_MESSAGE)
+    const noAad = new Uint8Array(0)
 
     // Reconstruct the HPKE envelope: enc(32) || ct
     const encBytes = hexToBytes(envelope.enc)
@@ -538,11 +538,11 @@ export class FirehoseAgentService {
     hpkeEnvelope.set(ctBytes, encBytes.length)
 
     // Unwrap the per-message key via HPKE
-    const messageKey = hpkeOpen(secretKey, hpkeEnvelope, labelBytes, aadKeyWrap)
+    const messageKey = hpkeOpen(secretKey, hpkeEnvelope, labelBytes, noAad)
 
     // Decrypt the content with AES-256-GCM
     const contentBytes = hexToBytes(encryptedHex)
-    const plaintext = symmetricDecrypt(messageKey, contentBytes, contentAad(LABEL_MESSAGE))
+    const plaintext = symmetricDecrypt(messageKey, contentBytes, noAad)
 
     return new TextDecoder().decode(plaintext)
   }

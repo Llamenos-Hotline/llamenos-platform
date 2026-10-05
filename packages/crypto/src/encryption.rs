@@ -322,6 +322,137 @@ pub fn decrypt_call_record(
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
+// ── Stored multi-reader records (the wire format on the server) ─────
+//
+// Every record that one party seals for several readers and the server stores
+// (conversation messages, call-record metadata) is opened by one reader here,
+// whoever sealed it — a client, or the server itself on webhook receipt:
+//
+//   encryptedContent = hex(iv(12) || AES-256-GCM(content_key, plaintext, aad = ∅) || tag(16))
+//   envelope         = { pubkey, enc, ct }
+//     enc    = the 32-byte HPKE encapsulated key
+//     ct     = HPKE(info = label, aad = ∅).Seal(content_key): 48 bytes
+//     pubkey = the reader's address — their account (Ed25519) key or their X25519
+//              key. A lookup tag only: the wrap is always sealed to an X25519 key.
+//
+// `enc` and `ct` are hex as sealed here and by the server. Clients also write
+// base64url (desktop `ct`, iOS/Android both, #1022), so the reader takes either;
+// the two encodings of a fixed-length field have different lengths, so this is
+// decoding, not trial decryption.
+//
+// There is no AAD because the envelope carries no format marker, and the same
+// conversation holds client-sealed and server-sealed messages side by side: a
+// reader could not know which AAD to supply. The label is still bound — it is
+// the HPKE `info`, so a wrap sealed under any other label fails to open — and the
+// content key is fresh per record and wrapped under that one label only.
+//
+// `encrypt_message` / `decrypt_message` / `decrypt_call_record` above use an
+// AAD-bearing variant that nothing stores any more. They remain only because
+// `tests/interop.rs` pins them and the tracked Android UniFFI binding checks the
+// checksums of their `ffi.rs` exports at load; use the functions below.
+
+/// A reader of a stored record: where the envelope is addressed, and the X25519
+/// key the content key is sealed to. The two differ when `address` is an
+/// account's Ed25519 key.
+#[derive(Debug, Clone)]
+pub struct RecordReader {
+    /// Envelope `pubkey`: the reader's Ed25519 account key or X25519 key (hex).
+    pub address: String,
+    /// X25519 public key the HPKE wrap is sealed to (hex, 64 chars).
+    pub encryption_pubkey: String,
+}
+
+/// Decode a fixed-length wire field written as hex or as unpadded base64url.
+fn decode_wire_bytes<const N: usize>(field: &str, value: &str) -> Result<[u8; N], CryptoError> {
+    let bytes = if value.len() == 2 * N {
+        hex::decode(value).map_err(CryptoError::HexError)?
+    } else if value.len() == (4 * N).div_ceil(3) {
+        URL_SAFE_NO_PAD
+            .decode(value)
+            .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url {field}: {e}")))?
+    } else {
+        return Err(CryptoError::InvalidFormat(format!(
+            "{field} must be {N} bytes as hex or base64url, got {} chars",
+            value.len()
+        )));
+    };
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// HPKE encapsulated key (X25519): 32 bytes.
+const WIRE_ENC_LEN: usize = 32;
+/// HPKE-sealed 32-byte content key: key + 16-byte AES-GCM tag.
+const WIRE_KEY_CT_LEN: usize = 48;
+
+/// Seal `plaintext` for several readers in the stored-record format.
+pub fn seal_record_for_readers(
+    plaintext: &[u8],
+    readers: &[RecordReader],
+    label: &str,
+) -> Result<EncryptedMessage, CryptoError> {
+    let content_key = Zeroizing::new(random_bytes_32());
+    let packed = aes256gcm_encrypt(&content_key, plaintext, &[])?;
+
+    let reader_envelopes = readers
+        .iter()
+        .map(|reader| {
+            let sealed =
+                hpke_envelope::hpke_seal_key(&content_key, &reader.encryption_pubkey, label, &[])?;
+            let enc: [u8; WIRE_ENC_LEN] = decode_wire_bytes("enc", &sealed.enc)?;
+            let ct: [u8; WIRE_KEY_CT_LEN] = decode_wire_bytes("ct", &sealed.ct)?;
+            Ok(RecipientKeyEnvelope {
+                pubkey: reader.address.clone(),
+                enc: hex::encode(enc),
+                ct: hex::encode(ct),
+            })
+        })
+        .collect::<Result<Vec<_>, CryptoError>>()?;
+
+    Ok(EncryptedMessage {
+        encrypted_content: hex::encode(packed),
+        reader_envelopes,
+    })
+}
+
+/// Open a stored record with the envelope addressed to any of `reader_addresses`.
+///
+/// Every envelope is compared (constant time, no early exit). The label is the
+/// caller's expected label; the envelope is rebuilt with that label's registry ID
+/// and `hpke_open` binds it as HPKE `info`, so an envelope sealed under any other
+/// label fails. All failures past envelope lookup are `DecryptionFailed`.
+pub fn open_record_for_reader(
+    encrypted_content: &str,
+    envelopes: &[RecipientKeyEnvelope],
+    reader_addresses: &[&str],
+    secret_key_hex: &str,
+    label: &str,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let mut found: Option<&RecipientKeyEnvelope> = None;
+    for envelope in envelopes {
+        for address in reader_addresses {
+            if ct_hex_eq(&envelope.pubkey, address) {
+                found = Some(envelope);
+            }
+        }
+    }
+    let envelope = found.ok_or(CryptoError::DecryptionFailed)?;
+
+    let label_id = crate::labels::label_to_id(label)
+        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))?;
+    let hpke_env = HpkeEnvelope {
+        v: 3,
+        label_id,
+        enc: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_ENC_LEN>("enc", &envelope.enc)?),
+        ct: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_KEY_CT_LEN>("ct", &envelope.ct)?),
+    };
+    let content_key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &[])?;
+
+    let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
+    Ok(Zeroizing::new(aes256gcm_decrypt(&content_key, &data, &[])?))
+}
+
 // ── HKDF-based Symmetric Encryption (drafts, export) ────────────────
 
 /// Derive a symmetric encryption key from a secret key and label using HKDF.
@@ -857,5 +988,184 @@ mod tests {
                 decrypt_note(&encrypted.encrypted_content, &envelope, admin_sk).unwrap();
             assert_eq!(decrypted, payload);
         }
+    }
+
+    // ── Stored multi-reader records ─────────────────────────────────
+
+    fn reader(address: &str, encryption_pubkey: &str) -> RecordReader {
+        RecordReader {
+            address: address.to_string(),
+            encryption_pubkey: encryption_pubkey.to_string(),
+        }
+    }
+
+    fn open_utf8(
+        record: &EncryptedMessage,
+        address: &str,
+        sk: &str,
+        label: &str,
+    ) -> Result<String, CryptoError> {
+        let pt = open_record_for_reader(
+            &record.encrypted_content,
+            &record.reader_envelopes,
+            &[address],
+            sk,
+            label,
+        )?;
+        Ok(String::from_utf8(pt.to_vec()).unwrap())
+    }
+
+    fn b64(hex_str: &str) -> String {
+        URL_SAFE_NO_PAD.encode(hex::decode(hex_str).unwrap())
+    }
+
+    #[test]
+    fn stored_record_opens_for_every_reader() {
+        let (admin_sk, admin_pk) = gen_keypair();
+        let (vol_sk, vol_pk) = gen_keypair();
+        // The admin's envelope is addressed by an account key that is not its X25519 key.
+        let admin_account = hex::encode(random_bytes_32());
+        let record = seal_record_for_readers(
+            b"caller texted: I need help",
+            &[reader(&admin_account, &admin_pk), reader(&vol_pk, &vol_pk)],
+            LABEL_MESSAGE,
+        )
+        .unwrap();
+
+        assert_eq!(record.reader_envelopes[0].pubkey, admin_account);
+        for env in &record.reader_envelopes {
+            assert_eq!(env.enc.len(), 64, "enc is hex");
+            assert_eq!(env.ct.len(), 96, "ct is hex");
+        }
+        assert_eq!(
+            open_utf8(&record, &admin_account, &admin_sk, LABEL_MESSAGE).unwrap(),
+            "caller texted: I need help"
+        );
+        assert_eq!(
+            open_utf8(&record, &vol_pk, &vol_sk, LABEL_MESSAGE).unwrap(),
+            "caller texted: I need help"
+        );
+        // Right address, wrong key: the admin cannot open the volunteer's wrap.
+        assert!(matches!(
+            open_utf8(&record, &vol_pk, &admin_sk, LABEL_MESSAGE),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn stored_record_opens_every_encoding_clients_write() {
+        let (sk, pk) = gen_keypair();
+        let sealed = seal_record_for_readers(
+            b"{\"callerNumber\":\"+15555550100\"}",
+            &[reader(&pk, &pk)],
+            LABEL_CALL_META,
+        )
+        .unwrap();
+        let env = &sealed.reader_envelopes[0];
+        // hex/hex (server), hex enc + base64url ct (desktop, demo seeder), base64url both (iOS, Android)
+        for (enc, ct) in [
+            (env.enc.clone(), env.ct.clone()),
+            (env.enc.clone(), b64(&env.ct)),
+            (b64(&env.enc), b64(&env.ct)),
+        ] {
+            let record = EncryptedMessage {
+                encrypted_content: sealed.encrypted_content.clone(),
+                reader_envelopes: vec![RecipientKeyEnvelope {
+                    pubkey: pk.clone(),
+                    enc,
+                    ct,
+                }],
+            };
+            assert_eq!(
+                open_utf8(&record, &pk, &sk, LABEL_CALL_META).unwrap(),
+                "{\"callerNumber\":\"+15555550100\"}"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_record_rejects_a_wrap_sealed_under_another_label() {
+        let (sk, pk) = gen_keypair();
+        let record = seal_record_for_readers(b"meta", &[reader(&pk, &pk)], LABEL_MESSAGE).unwrap();
+        assert!(matches!(
+            open_utf8(&record, &pk, &sk, LABEL_CALL_META),
+            Err(CryptoError::DecryptionFailed)
+        ));
+        let record =
+            seal_record_for_readers(b"meta", &[reader(&pk, &pk)], LABEL_CALL_META).unwrap();
+        assert!(matches!(
+            open_utf8(&record, &pk, &sk, LABEL_MESSAGE),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn stored_record_does_not_open_the_aad_variant() {
+        // What the server sealed before this change (AAD `<label>:key-wrap` on the
+        // wrap, the label on the content). Nothing that the reader opens.
+        let (sk, pk) = gen_keypair();
+        let old = encrypt_message("inbound sms", &[pk.clone()]).unwrap();
+        assert!(matches!(
+            open_utf8(&old, &pk, &sk, LABEL_MESSAGE),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn stored_record_without_an_envelope_for_the_reader_fails() {
+        let (_, pk) = gen_keypair();
+        let (other_sk, other_pk) = gen_keypair();
+        let record = seal_record_for_readers(b"x", &[reader(&pk, &pk)], LABEL_MESSAGE).unwrap();
+        assert!(matches!(
+            open_utf8(&record, &other_pk, &other_sk, LABEL_MESSAGE),
+            Err(CryptoError::DecryptionFailed)
+        ));
+    }
+
+    #[test]
+    fn stored_record_rejects_malformed_field_lengths() {
+        let (sk, pk) = gen_keypair();
+        let mut record = seal_record_for_readers(b"x", &[reader(&pk, &pk)], LABEL_MESSAGE).unwrap();
+        record.reader_envelopes[0].enc.pop();
+        assert!(matches!(
+            open_utf8(&record, &pk, &sk, LABEL_MESSAGE),
+            Err(CryptoError::InvalidFormat(_))
+        ));
+    }
+
+    /// Sealed by the server's own code path — `encryptCallRecordForStorage` and
+    /// `encryptMessageForStorage` in apps/worker/lib/crypto.ts, run under bun
+    /// against the real `bun:ffi` library — for the test-only X25519 secret
+    /// 0x42 × 32. Pins that the crate reader opens the bytes the server writes.
+    #[test]
+    fn stored_record_opens_what_the_server_seals() {
+        let sk = hex::encode([0x42u8; 32]);
+        let pk = "132c442be010fbd57e72603328aa76e71fccc1503aae219327d14d9c9993f472";
+        let meta = EncryptedMessage {
+            encrypted_content: "c051dc202c3e464cbf0c4b6a65adb545b784937f79dc0d74b8f358248c9dfd137fb65d8dc549def0e8115b2b33d3ab1990ebcbd67f7ce07dc35593bcf5b63fc808d583cd67971ece8cb270b7b3".into(),
+            reader_envelopes: vec![RecipientKeyEnvelope {
+                pubkey: pk.into(),
+                enc: "e7c2202975c785477394ad4e43f015514f1a70d82f551c7ca38fa2adb1ba4f70".into(),
+                ct: "9fef5211a4d177e5b2a9df2c9722b09a78f564875fa7705b2b568f40b813c4b79dabcae7889dcccaf8aa790a8fbf353b".into(),
+            }],
+        };
+        assert_eq!(
+            open_utf8(&meta, pk, &sk, LABEL_CALL_META).unwrap(),
+            r#"{"answeredBy":null,"callerNumber":"+15555550142"}"#
+        );
+        assert!(open_utf8(&meta, pk, &sk, LABEL_MESSAGE).is_err());
+
+        let msg = EncryptedMessage {
+            encrypted_content: "25464e1980d26d912aa328311c0d5a124230c59ebcb75d069489a777fb5a2578e6f890994d84d138d06469c28368e1b67f696496168e20b32b799d7e829bf860b9d2".into(),
+            reader_envelopes: vec![RecipientKeyEnvelope {
+                pubkey: pk.into(),
+                enc: "2c86dc186de86a642b75f81ed5a2685fb05cb83899af18b8b5dbb8747bbdba02".into(),
+                ct: "98a0670b9bafa46b0a291d6ac8c5d7c50bb9580a66a07770e716258ddd75f4c11c20b7863775050769540aa80d6f1f75".into(),
+            }],
+        };
+        assert_eq!(
+            open_utf8(&msg, pk, &sk, LABEL_MESSAGE).unwrap(),
+            "inbound sms: can someone call me back?"
+        );
     }
 }

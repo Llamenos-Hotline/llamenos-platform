@@ -229,7 +229,7 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
   })
 
   it('clocked in but NOT scheduled — does not ring', async () => {
-    // Clocking in cannot enrol you: only an admin's schedule entry can.
+    // Clocking in cannot enroll you: only an admin's schedule entry can.
     const hub = await makeHub('clockonly')
     await activeShiftsService.clockIn(PK_CLOCKED_ONLY, hub)
 

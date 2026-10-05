@@ -1,26 +1,31 @@
 /**
- * The AAD of an envelope is a wire format, and it is derived in one place.
+ * Stored-record envelopes carry NO AAD; canonical-label envelopes derive
+ * their AAD in one place.
  *
- * `encryptMessageForStorage` (server) and `decryptMessage` (desktop,
- * `src/client/lib/platform.ts`) used to spell the AAD out independently, and
- * disagreed: the server bound `UTF-8(label)` to the content and
- * `UTF-8("${label}:key-wrap")` to the HPKE key wrap, while the desktop bound
- * nothing to either. Every message, transcription and call record the server
- * wrote was therefore unopenable on the desktop — it failed the HPKE tag check
- * first, and `decryptMessage` swallowed that as `null`, which the UI rendered
- * as `[Encrypted]`.
+ * History, in order:
  *
- * `docs/protocol/PROTOCOL.md` §2.4 already specified the server's convention
- * normatively, and `packages/crypto/src/encryption.rs` (`encrypt_message` /
- * `decrypt_message`) implements it, so the server was right and the clients
- * moved. These tests pin that decision against the real Rust FFI:
+ * 1. `encryptMessageForStorage` (server) bound `UTF-8(label)` /
+ *    `UTF-8("${label}:key-wrap")` while every client bound nothing, so every
+ *    server-sealed message was unopenable anywhere (#1456, `[Encrypted]`).
+ * 2. This branch made the desktop supply the canonical AAD pair, derived once
+ *    from `@shared/envelope-aad`.
+ * 3. Main's #1393 re-adjudicated the stored-record wire format: client-sealed
+ *    and server-sealed messages share a conversation with no format marker,
+ *    so a reader cannot know which AAD to supply. Stored records (messages,
+ *    call metadata) now seal and open with empty AAD on every layer, with the
+ *    label bound as HPKE `info` — implemented canonically in
+ *    `packages/crypto/src/encryption.rs` (`open_record_for_reader`) and the
+ *    mobile FFI (`mobile_decrypt_message`).
  *
- *   - the canonical AAD pair opens what the server writes
- *   - each of the three other combinations fails, at the layer it should
- *   - both sides derive the AAD from `@shared/envelope-aad`, not by hand
+ * The `@shared/envelope-aad` module remains the single definition for the
+ * canonical-label envelopes (notes, files, contacts — Rust `encrypt_note` /
+ * `hpke_wrap_key` bind it, and #1528's mobile FFI exports derive from the
+ * same rule). These tests pin the merged convention against the real Rust FFI:
  *
- * Revert the desktop to empty AAD and the `desktop convention` case below
- * stops failing — which is the whole bug.
+ *   - stored records open with empty AAD, and refuse the retired AAD-bearing
+ *     spellings at the layer each belongs to
+ *   - the label is still enforced — opening with the wrong label's info fails
+ *   - both AAD layers for canonical labels derive from `@shared/envelope-aad`
  */
 import { describe, it, expect } from 'vitest'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
@@ -73,8 +78,9 @@ describe('@shared/envelope-aad is the single definition', () => {
 
 describe('server-written message envelopes, opened with the real FFI', () => {
   const plaintext = 'the caller said they are safe now'
+  const NO_AAD = new Uint8Array(0)
 
-  it('opens with the canonical AAD pair', () => {
+  it('opens with empty AAD on both layers (#1393 stored-record format)', () => {
     const { secret, recipient } = makeReader()
     const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(plaintext, [recipient])
     expect(readerEnvelopes).toHaveLength(1)
@@ -83,13 +89,13 @@ describe('server-written message envelopes, opened with the real FFI', () => {
       secret,
       packEnvelope(readerEnvelopes[0].enc, readerEnvelopes[0].ct),
       utf8ToBytes(LABEL_MESSAGE),
-      keyWrapAad(LABEL_MESSAGE),
+      NO_AAD,
     )
-    const opened = symmetricDecrypt(messageKey, hexToBytes(encryptedContent), contentAad(LABEL_MESSAGE))
+    const opened = symmetricDecrypt(messageKey, hexToBytes(encryptedContent), NO_AAD)
     expect(new TextDecoder().decode(opened)).toBe(plaintext)
   })
 
-  it('refuses the desktop convention — empty AAD on both layers — at the HPKE layer', () => {
+  it('refuses the retired canonical key-wrap AAD at the HPKE layer', () => {
     const { secret, recipient } = makeReader()
     const { readerEnvelopes } = encryptMessageForStorage(plaintext, [recipient])
 
@@ -97,11 +103,11 @@ describe('server-written message envelopes, opened with the real FFI', () => {
       secret,
       packEnvelope(readerEnvelopes[0].enc, readerEnvelopes[0].ct),
       utf8ToBytes(LABEL_MESSAGE),
-      new Uint8Array(0),
+      keyWrapAad(LABEL_MESSAGE),
     )).toThrow()
   })
 
-  it('refuses the right key-wrap AAD with no content AAD, at the content layer', () => {
+  it('refuses the retired canonical content AAD at the content layer', () => {
     const { secret, recipient } = makeReader()
     const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(plaintext, [recipient])
 
@@ -109,12 +115,12 @@ describe('server-written message envelopes, opened with the real FFI', () => {
       secret,
       packEnvelope(readerEnvelopes[0].enc, readerEnvelopes[0].ct),
       utf8ToBytes(LABEL_MESSAGE),
-      keyWrapAad(LABEL_MESSAGE),
+      NO_AAD,
     )
-    expect(() => symmetricDecrypt(messageKey, hexToBytes(encryptedContent), new Uint8Array(0))).toThrow()
+    expect(() => symmetricDecrypt(messageKey, hexToBytes(encryptedContent), contentAad(LABEL_MESSAGE))).toThrow()
   })
 
-  it('refuses a content AAD taken from a different label', () => {
+  it('still refuses a tampered ciphertext even with the right key and AAD', () => {
     const { secret, recipient } = makeReader()
     const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(plaintext, [recipient])
 
@@ -122,9 +128,11 @@ describe('server-written message envelopes, opened with the real FFI', () => {
       secret,
       packEnvelope(readerEnvelopes[0].enc, readerEnvelopes[0].ct),
       utf8ToBytes(LABEL_MESSAGE),
-      keyWrapAad(LABEL_MESSAGE),
+      NO_AAD,
     )
-    expect(() => symmetricDecrypt(messageKey, hexToBytes(encryptedContent), contentAad(LABEL_CALL_META))).toThrow()
+    const tampered = hexToBytes(encryptedContent)
+    tampered[tampered.length - 1] ^= 0x01
+    expect(() => symmetricDecrypt(messageKey, tampered, NO_AAD)).toThrow()
   })
 
   it('refuses the content AAD where the key-wrap AAD belongs', () => {
@@ -140,8 +148,8 @@ describe('server-written message envelopes, opened with the real FFI', () => {
   })
 })
 
-describe('server-written call records use the same derivation', () => {
-  it('opens with the LABEL_CALL_META AAD pair and not the LABEL_MESSAGE one', () => {
+describe('server-written call records use the same stored-record format', () => {
+  it('opens with empty AAD under LABEL_CALL_META, and refuses the LABEL_MESSAGE info', () => {
     const { secret, recipient } = makeReader()
     const { encryptedContent, adminEnvelopes } = encryptCallRecordForStorage(
       { answeredBy: null, callerNumber: '+15550001111' },
@@ -152,16 +160,16 @@ describe('server-written call records use the same derivation', () => {
       secret,
       packEnvelope(adminEnvelopes[0].enc, adminEnvelopes[0].ct),
       utf8ToBytes(LABEL_CALL_META),
-      keyWrapAad(LABEL_CALL_META),
+      new Uint8Array(0),
     )
-    const opened = symmetricDecrypt(recordKey, hexToBytes(encryptedContent), contentAad(LABEL_CALL_META))
+    const opened = symmetricDecrypt(recordKey, hexToBytes(encryptedContent), new Uint8Array(0))
     expect(JSON.parse(new TextDecoder().decode(opened)).callerNumber).toBe('+15550001111')
 
     expect(() => hpkeOpen(
       secret,
       packEnvelope(adminEnvelopes[0].enc, adminEnvelopes[0].ct),
-      utf8ToBytes(LABEL_CALL_META),
-      keyWrapAad(LABEL_MESSAGE),
+      utf8ToBytes(LABEL_MESSAGE),
+      new Uint8Array(0),
     )).toThrow()
   })
 })

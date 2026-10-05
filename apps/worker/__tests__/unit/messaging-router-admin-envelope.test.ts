@@ -60,18 +60,20 @@ function makeAdmin() {
   }
 }
 
-/** Open one envelope with the given X25519 secret, or `null` if it is not ours. */
+/** Open one envelope with the given X25519 secret, or `null` if it is not ours.
+ *  Opens the stored-record format every reader uses (`open_record_for_reader`):
+ *  HPKE info = label, no AAD on either the wrap or the content. */
 function tryOpen(
   secret: Uint8Array,
   envelope: RecipientEnvelope,
   encryptedContent: string,
 ): string | null {
   const labelBytes = utf8ToBytes(LABEL_MESSAGE)
-  const aadKeyWrap = utf8ToBytes(`${LABEL_MESSAGE}:key-wrap`)
+  const noAad = new Uint8Array(0)
   try {
     const sealed = new Uint8Array([...hexToBytes(envelope.enc), ...hexToBytes(envelope.ct)])
-    const messageKey = hpkeOpen(secret, sealed, labelBytes, aadKeyWrap)
-    return new TextDecoder().decode(symmetricDecrypt(messageKey, hexToBytes(encryptedContent), labelBytes))
+    const messageKey = hpkeOpen(secret, sealed, labelBytes, noAad)
+    return new TextDecoder().decode(symmetricDecrypt(messageKey, hexToBytes(encryptedContent), noAad))
   } catch {
     return null
   }

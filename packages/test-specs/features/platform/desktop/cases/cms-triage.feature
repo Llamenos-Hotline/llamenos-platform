@@ -24,8 +24,7 @@ Feature: CMS Triage Queue
     When I click the "In Progress" status tab
     Then the in progress status tab should be active
 
-  # @fixme: the seeded report never appears in the triage queue — #1206
-  @triage @fixme
+  @triage
   Scenario: Selecting a report shows its content
     Given a CMS report type with case conversion exists
     And a triage-eligible report exists
@@ -34,8 +33,7 @@ Feature: CMS Triage Queue
     Then the triage report content should be visible
     And the report type label should be visible
 
-  # @fixme: the seeded report never appears in the triage queue — #1206
-  @triage @fixme
+  @triage
   Scenario: Create case from report via inline panel
     Given a CMS report type with case conversion exists
     And a triage-eligible report exists
@@ -47,8 +45,7 @@ Feature: CMS Triage Queue
     Then a toast "Case created" should appear
     And the linked cases section should show at least one case
 
-  # @fixme: the seeded report never appears in the triage queue — #1206
-  @triage @fixme
+  @triage
   Scenario: Mark report as in progress
     Given a CMS report type with case conversion exists
     And a triage-eligible report exists
@@ -57,8 +54,7 @@ Feature: CMS Triage Queue
     And I click the mark in progress button
     Then a toast "Status updated" should appear
 
-  # @fixme: the seeded report never appears in the triage queue — #1206
-  @triage @fixme
+  @triage
   Scenario: Mark report as completed
     Given a CMS report type with case conversion exists
     And a triage-eligible report exists
@@ -77,8 +73,7 @@ Feature: CMS Triage Queue
     When I look at the navigation sidebar
     Then the "Triage" nav link should be visible
 
-  # @fixme: the seeded report never appears in the triage queue — #1206
-  @triage @fixme
+  @triage
   Scenario: Linked cases update after case creation
     Given a CMS report type with case conversion exists
     And a triage-eligible report with a linked case exists
