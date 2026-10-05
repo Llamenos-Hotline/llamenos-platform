@@ -171,7 +171,7 @@ fun PINSetScreen(
                 ) {
                     PINPad(
                         pin = localPin,
-                        maxLength = 8,
+                        maxLength = PIN_MAX_LENGTH,
                         onPinChange = { newPin ->
                             localPin = newPin
                         },

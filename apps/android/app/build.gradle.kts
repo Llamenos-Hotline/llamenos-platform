@@ -247,6 +247,9 @@ dependencies {
     testImplementation(libs.roborazzi)
     testImplementation(libs.roborazzi.compose)
     testImplementation(libs.robolectric)
+    // Compose UI tests on the JVM via Robolectric (e.g. PIN pad entry tests)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
 
     androidTestImplementation(libs.espresso)
     androidTestImplementation(platform(libs.compose.bom))
