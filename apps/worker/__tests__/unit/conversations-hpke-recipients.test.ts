@@ -49,12 +49,13 @@ const VOL = volunteerKeys('11'.repeat(32))
 const ADMIN_X25519 = hpkeRecipientPubkey('ab'.repeat(32))!
 
 const LABEL = utf8ToBytes(LABEL_MESSAGE)
-const AAD = utf8ToBytes(`${LABEL_MESSAGE}:key-wrap`)
+// Stored-record format (#1393): the label is HPKE info, and there is no AAD.
+const NO_AAD = new Uint8Array(0)
 
 function openWith(secret: Uint8Array, encryptedContent: string, env: { enc: string; ct: string }): string {
   const sealed = new Uint8Array([...hexToBytes(env.enc), ...hexToBytes(env.ct)])
-  const key = hpkeOpen(secret, sealed, LABEL, AAD)
-  return bytesToUtf8(symmetricDecrypt(key, hexToBytes(encryptedContent), LABEL))
+  const key = hpkeOpen(secret, sealed, LABEL, NO_AAD)
+  return bytesToUtf8(symmetricDecrypt(key, hexToBytes(encryptedContent), NO_AAD))
 }
 
 describe('Ed25519 identity keys are not HPKE recipients', () => {
@@ -99,8 +100,9 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       metadata: null, messageCount: 1,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
     }
-    // handleIncoming's conversation lookup, then addMessage's getById.
-    db.$setSelectResults([[conv], [conv]])
+    // handleIncoming's conversation lookup, then buildReaderPubkeys' device-key
+    // resolution (the assignee has no device key on file), then addMessage's getById.
+    db.$setSelectResults([[conv], [], [conv]])
     db.$setInsertResult([{ id: 'msg-1', conversationId: 'conv-1' }])
 
     await service.handleIncoming({

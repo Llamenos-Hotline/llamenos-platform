@@ -9,6 +9,8 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
+import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
+import type { Context } from 'hono'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
 // Under a hub, every read and write is confined to that hub's members.
@@ -67,6 +69,31 @@ users.get('/:targetPubkey',
   },
 )
 
+/**
+ * Inside a hub, resolve the target user as a member of that hub, or 404 — a
+ * hub must not be able to read, edit or delete people who are not its members,
+ * nor learn whether they exist. Outside a hub, the plain lookup.
+ */
+async function loadTarget(c: Context<AppEnv>, targetPubkey: string) {
+  const services = c.get('services')
+  const hubId = c.get('hubId')
+  return hubId
+    ? services.identity.getHubUser(targetPubkey, hubId, c.get('allRoles'))
+    : services.identity.getUser(targetPubkey)
+}
+
+/**
+ * True when changing the target account (deactivate / delete) would reach past
+ * the hub in the path: they belong to another hub or hold a global role. Only a
+ * super-admin may do that from inside a hub; a hub admin removes the person
+ * from their own hub instead.
+ */
+async function affectsOtherHubs(c: Context<AppEnv>, targetPubkey: string, hubId: string): Promise<boolean> {
+  const target = await c.get('services').identity.getUserInternal(targetPubkey)
+  if (!target) return false
+  return target.roles.length > 0 || (target.hubRoles ?? []).some(hr => hr.hubId !== hubId)
+}
+
 users.post('/',
   describeRoute({
     tags: ['Users'],
@@ -89,23 +116,28 @@ users.post('/',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
-    const hubId = c.get('hubId') || null
+    const hubId = c.get('hubId')
+    const roleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || ['role-volunteer']
+
+    // The creator must already hold every permission they grant (prevents privilege escalation)
+    const denied = checkRoleGrant(c, roleIds)
+    if (denied) return c.json({ error: denied.error }, denied.status)
 
     const result = await services.identity.createUser({
       pubkey: body.pubkey,
       name: body.name,
       phone: body.phone,
-      roleIds: (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || ['role-volunteer'],
+      roleIds,
+      // Created under a hub: a member of it, or they would vanish from its own user list
+      hubId,
       encryptedSecretKey: body.encryptedSecretKey || '',
       // Epic 340: User profile extensions
       ...(body.specializations && { specializations: body.specializations }),
       ...(body.maxCaseAssignments !== undefined && { maxCaseAssignments: body.maxCaseAssignments }),
       ...(body.supervisorPubkey && { supervisorPubkey: body.supervisorPubkey }),
-      // Created under a hub: a member of it, or they would vanish from its own user list
-      ...(hubId && { hubId }),
     })
 
-    await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: body.roleIds || body.roles }, undefined, hubId)
+    await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: roleIds }, undefined, hubId ?? null)
 
     return c.json(result.volunteer, 201)
   },
@@ -135,12 +167,23 @@ users.patch('/:targetPubkey',
     const pubkey = c.get('pubkey')
     const targetPubkey = c.req.param('targetPubkey')
     const body = c.req.valid('json')
+    const hubId = c.get('hubId')
 
-    const result = await services.identity.updateUser(targetPubkey, body, true, c.get('hubId'))
+    // The editor must already hold every permission they grant (prevents privilege escalation)
+    if (body.roles) {
+      const denied = checkRoleGrant(c, body.roles)
+      if (denied) return c.json({ error: denied.error }, denied.status)
+    }
+    if (hubId && body.active === false && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
+      return c.json({
+        error: 'This user belongs to other hubs — remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead of deactivating the account',
+      }, 409)
+    }
 
-    const hubId = c.get('hubId') || null
-    if (body.roles) await audit(services.audit, 'rolesChanged', pubkey, { target: targetPubkey, roles: body.roles }, undefined, hubId)
-    if (body.active === false) await audit(services.audit, 'userDeactivated', pubkey, { target: targetPubkey }, undefined, hubId)
+    const result = await services.identity.updateUser(targetPubkey, body, true, hubId)
+
+    if (body.roles) await audit(services.audit, 'rolesChanged', pubkey, { target: targetPubkey, roles: body.roles }, undefined, hubId ?? null)
+    if (body.active === false) await audit(services.audit, 'userDeactivated', pubkey, { target: targetPubkey }, undefined, hubId ?? null)
     // Revoke all sessions when deactivating or changing roles
     if (body.active === false || body.roles) {
       await services.identity.revokeAllSessions(targetPubkey)
@@ -172,12 +215,20 @@ users.delete('/:targetPubkey',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const targetPubkey = c.req.param('targetPubkey')
+    const hubId = c.get('hubId')
+
+    await loadTarget(c, targetPubkey)
+    if (hubId && !callerIsSuperAdmin(c) && await affectsOtherHubs(c, targetPubkey, hubId)) {
+      return c.json({
+        error: 'This user belongs to other hubs — remove them from this hub (DELETE /api/hubs/:hubId/members/:pubkey) instead of deleting the account',
+      }, 409)
+    }
+
     // Revoke all sessions before deletion — proceed even if this fails
     // (orphaned sessions will expire naturally via TTL)
     await services.identity.revokeAllSessions(targetPubkey).catch(() => {})
     await services.identity.deleteUser(targetPubkey)
-    const hubId = c.get('hubId') || null
-    await audit(services.audit, 'userRemoved', pubkey, { target: targetPubkey }, undefined, hubId)
+    await audit(services.audit, 'userRemoved', pubkey, { target: targetPubkey }, undefined, hubId ?? null)
     return c.json({ ok: true })
   },
 )

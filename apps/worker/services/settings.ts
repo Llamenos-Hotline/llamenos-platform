@@ -1608,24 +1608,15 @@ export class SettingsService {
       )
     }
 
-    // Check slug uniqueness
-    const [existing] = await this.db
-      .select()
-      .from(rolesTable)
-      .where(eq(rolesTable.slug, slug))
-    if (existing) {
-      throw new ServiceError(
-        409,
-        `Role slug "${slug}" already exists`,
-      )
-    }
-
     const now = new Date()
     const id = data.id ?? `role-${crypto.randomUUID()}`
 
     const roleDescription = description ?? ''
 
-    await this.db.insert(rolesTable).values({
+    // Slug uniqueness is enforced atomically by the unique index: a
+    // check-then-insert let two concurrent creates of the same slug both pass
+    // the check, and the loser surfaced the unique violation as a 500.
+    const inserted = await this.db.insert(rolesTable).values({
       id,
       name: data.name ?? null,
       slug,
@@ -1638,6 +1629,14 @@ export class SettingsService {
       createdAt: now,
       updatedAt: now,
     })
+      .onConflictDoNothing({ target: rolesTable.slug })
+      .returning({ id: rolesTable.id })
+    if (inserted.length === 0) {
+      throw new ServiceError(
+        409,
+        `Role slug "${slug}" already exists`,
+      )
+    }
 
     if (envelopes && envelopes.length > 0) {
       for (const env of envelopes) {
@@ -1777,24 +1776,15 @@ export class SettingsService {
       throw new ServiceError(404, 'User not found')
     }
 
-    const { resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
+    const { resolveAllRoleIds, resolveHubPermissions, resolvePermissions } = await import('@shared/permissions')
     const allRoles = await this.getRoles()
     const hubRoles = Array.isArray(user.hubRoles) ? user.hubRoles as Array<{ hubId: string; roleIds: string[] }> : []
 
-    let permissions: string[]
-    if (hubId) {
-      // Resolve for a specific hub (global + that hub's roles)
-      permissions = resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
-    } else {
-      // Union global permissions with all hub-scoped permissions
-      const allPerms = new Set<string>(resolvePermissions(user.roles ?? [], allRoles.roles))
-      for (const assignment of hubRoles) {
-        for (const p of resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, assignment.hubId)) {
-          allPerms.add(p)
-        }
-      }
-      permissions = Array.from(allPerms)
-    }
+    const permissions = hubId
+      // Resolve for a specific hub (that hub's roles; super-admin globals)
+      ? resolveHubPermissions(user.roles ?? [], hubRoles, allRoles.roles, hubId)
+      // Union of global permissions and every hub's permissions
+      : resolvePermissions(resolveAllRoleIds(user.roles ?? [], hubRoles), allRoles.roles)
     return { userId, permissions }
   }
 
@@ -2530,7 +2520,13 @@ export class SettingsService {
       enc: string
       ct: string
     }>
+    /** Generation of the hub key these wraps belong to (hubs.hub_key_generation). */
+    generation: number
   }> {
+    const [hub] = await this.db
+      .select({ generation: hubsTable.hubKeyGeneration })
+      .from(hubsTable)
+      .where(eq(hubsTable.id, hubId))
     const rows = await this.db
       .select()
       .from(hubKeys)
@@ -2542,9 +2538,16 @@ export class SettingsService {
         enc: r.enc,
         ct: r.ct,
       })),
+      generation: hub?.generation ?? 0,
     }
   }
 
+  /**
+   * Replace all hub-key envelopes. A caller that read the wraps earlier MUST
+   * pass `expectedGeneration`: if the generation moved on (a rotation, or a
+   * crypto-shred that destroyed the key), the cached wraps no longer describe
+   * the hub's current key and re-installing them would be a replay.
+   */
   async setHubKeyEnvelopes(
     hubId: string,
     data: {
@@ -2553,6 +2556,7 @@ export class SettingsService {
         enc: string
         ct: string
       }>
+      expectedGeneration?: number
     },
   ): Promise<{ ok: true }> {
     // Validate hub exists
@@ -2562,6 +2566,18 @@ export class SettingsService {
       .where(eq(hubsTable.id, hubId))
     if (!hub) {
       throw new ServiceError(404, 'Hub not found')
+    }
+    if (hub.status === 'shredded') {
+      throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
+    }
+    if (
+      data.expectedGeneration !== undefined &&
+      data.expectedGeneration !== hub.hubKeyGeneration
+    ) {
+      throw new ServiceError(
+        409,
+        `Hub key generation mismatch: expected ${data.expectedGeneration}, current ${hub.hubKeyGeneration}`,
+      )
     }
 
     // Replace all envelopes in a transaction
