@@ -992,6 +992,11 @@ function toWireEnvelope(ipc: HpkeEnvelope): { enc: string; ct: string } {
  * Wrap a symmetric key for a recipient using HPKE.
  * Resolves signing pubkey to encryption pubkey if needed,
  * and returns hex-encoded enc/ct wire format.
+ *
+ * The wrap is sealed under `keyWrapAad(label)` — the same derivation Rust's
+ * `hpke_wrap_key` and the server's `encryptMessageForStorage` bind — so any
+ * implementation can open it. Empty AAD here is what made desktop-sealed file
+ * and metadata keys unopenable elsewhere.
  */
 export async function hpkeWrapKey(
   keyHex: string,
@@ -999,7 +1004,7 @@ export async function hpkeWrapKey(
   label: string,
 ): Promise<KeyEnvelope> {
   const encPubkey = await resolveEncryptionPubkey(recipientPubkey)
-  const envelope = await hpkeSealKey(keyHex, encPubkey, label, '')
+  const envelope = await hpkeSealKey(keyHex, encPubkey, label, keyWrapAadHex(label))
   return toWireEnvelope(envelope)
 }
 
@@ -1020,6 +1025,11 @@ function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
  * Encrypt a note payload with per-note forward secrecy.
  * Generates a random AES-256-GCM key, encrypts content, then HPKE-wraps
  * the key for the author and each admin.
+ *
+ * Both layers carry the canonical envelope AAD (`contentAad` / `keyWrapAad`
+ * for LABEL_NOTE_KEY) — the same convention Rust's `encrypt_note` binds, so a
+ * note sealed here opens there and vice versa. The previous empty AAD made the
+ * two implementations mutually unreadable.
  */
 export async function encryptNote(
   payloadJson: string,
@@ -1031,18 +1041,18 @@ export async function encryptNote(
   const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
 
   // AES-256-GCM encrypt content
-  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, '')
+  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, contentAadHex(LABEL_NOTE_KEY))
 
   // HPKE-wrap key for author
   const authorEncPub = await resolveEncryptionPubkey(authorPubkey)
-  const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, '')
+  const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
   const authorEnvelope: KeyEnvelope = toWireEnvelope(authorHpke)
 
   // HPKE-wrap key for each admin
   const adminEnvelopes: RecipientEnvelope[] = await Promise.all(
     adminPubkeys.map(async (pubkey) => {
       const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, '')
+      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
       return { pubkey, ...toWireEnvelope(hpke) }
     }),
   )
@@ -1060,8 +1070,8 @@ export async function decryptNote(
   try {
     // Reconstruct HpkeEnvelope from the stored key envelope
     const hpkeEnvelope = toIpcEnvelope(0 /* LABEL_NOTE_KEY */, envelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, '')
-    return await aesGcmDecrypt(encryptedContent, keyHex, '')
+    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
+    return await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_NOTE_KEY))
   } catch (err) {
     reportEnvelopeOpenFailure('note', err)
     return null

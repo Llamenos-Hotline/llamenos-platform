@@ -7,6 +7,7 @@
 
 import type { EncryptedFileMetadata, FileKeyEnvelope } from '@shared/types'
 import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
+import { contentAadHex } from '@shared/envelope-aad'
 import {
   unwrapFileKey as platformUnwrapFileKey,
   decryptFileMetadata as platformDecryptFileMetadata,
@@ -100,13 +101,14 @@ export async function encryptFile(
   // Generate random symmetric key for file content
   const fileKeyHex = bytesToHex(randomBytes(32))
 
-  // AES-256-GCM encrypt file content
-  // Empty AAD: the file key is wrapped under LABEL_FILE_KEY, which already
-  // domain-separates it; no server path writes this format.
+  // AES-256-GCM encrypt file content under the canonical content AAD for
+  // LABEL_FILE_KEY — the same derivation every other implementation binds, so
+  // the file opens on any client. `hpkeWrapKey` seals the key under the
+  // matching key-wrap AAD.
   const encryptedContentHex = await aesGcmEncrypt(
     bytesToHex(plaintextBytes),
     fileKeyHex,
-    '',
+    contentAadHex(LABEL_FILE_KEY),
   )
   const encryptedContent = hexToBytes(encryptedContentHex)
 
@@ -123,7 +125,7 @@ export async function encryptFile(
   const encryptedMetadataList = await Promise.all(
     recipientPubkeys.map(async (pubkey) => {
       const metadataKeyHex = bytesToHex(randomBytes(32))
-      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex, '')
+      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex, contentAadHex(LABEL_FILE_METADATA))
       const { enc, ct } = await hpkeWrapKey(metadataKeyHex, pubkey, LABEL_FILE_METADATA)
       return { pubkey, encryptedContent: encContent, enc, ct }
     })
@@ -148,7 +150,7 @@ export async function decryptFile(
 
   const data = new Uint8Array(encryptedContent)
   const encryptedHex = bytesToHex(data)
-  const plaintextHex = await aesGcmDecrypt(encryptedHex, fileKeyHex, '')
+  const plaintextHex = await aesGcmDecrypt(encryptedHex, fileKeyHex, contentAadHex(LABEL_FILE_KEY))
   const plaintext = hexToBytes(plaintextHex)
 
   // Compute checksum for verification

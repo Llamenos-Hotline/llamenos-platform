@@ -419,8 +419,12 @@ class CryptoService @Inject constructor() {
         org.llamenos.core.mobileKeyWrapAadHex(label)
 
     /**
-     * No AAD. `PROTOCOL.md` §2.3 specifies an empty AAD for the note envelope,
-     * and the file envelopes have no server-written counterpart at all. Spelled
+     * No AAD. Only PUK-unwrap and hub-key envelopes still carry an empty AAD:
+     * every writer and reader of those envelopes passes empty consistently, so
+     * each pair interoperates. (PUK wraps bind their own per-device AAD in
+     * Rust.) Every envelope that crosses to the server, the desktop, or
+     * another mobile client binds `contentAad` / `keyWrapAad` instead — an
+     * empty AAD there made the implementations mutually unreadable. Spelled
      * out rather than defaulted so that an empty AAD is always a decision
      * someone made against the spec, never a parameter someone forgot.
      */
@@ -445,7 +449,7 @@ class CryptoService @Inject constructor() {
                 .joinToString("") { "%02x".format(it) }
             val result = org.llamenos.core.mobileSymmetricEncrypt(
                 plaintextHex = plaintextHex,
-                aadHex = NO_AAD,
+                aadHex = contentAad(CryptoLabels.LABEL_NOTE_KEY),
             )
             val ciphertextHex = result[0]
             val keyHex = result[1]
@@ -455,7 +459,7 @@ class CryptoService @Inject constructor() {
                     keyHex = keyHex,
                     recipientPubkeyHex = pubkey,
                     label = CryptoLabels.LABEL_NOTE_KEY,
-                    aadHex = NO_AAD,
+                    aadHex = keyWrapAad(CryptoLabels.LABEL_NOTE_KEY),
                 )
                 val wire = toWireEnvelope(hpkeEnv)
                 NoteEnvelope(
@@ -491,12 +495,12 @@ class CryptoService @Inject constructor() {
             val keyHex = org.llamenos.core.mobileHpkeOpenKey(
                 envelope = toFfiEnvelope(envelope),
                 expectedLabel = CryptoLabels.LABEL_NOTE_KEY,
-                aadHex = NO_AAD,
+                aadHex = keyWrapAad(CryptoLabels.LABEL_NOTE_KEY),
             )
             val plaintextHex = org.llamenos.core.mobileSymmetricDecrypt(
                 ciphertextHex = ciphertextHex,
                 keyHex = keyHex,
-                aadHex = NO_AAD,
+                aadHex = contentAad(CryptoLabels.LABEL_NOTE_KEY),
             )
             val bytes = hexToBytes(plaintextHex)
             val plaintext = String(bytes, Charsets.UTF_8)
@@ -1057,11 +1061,12 @@ class CryptoService @Inject constructor() {
             val checksumBytes = digest.digest(data)
             val checksum = checksumBytes.joinToString("") { "%02x".format(it) }
 
-            // Encrypt file content — mobileSymmetricEncrypt returns [ciphertextHex, keyHex]
+            // Encrypt file content under the canonical content AAD for
+            // LABEL_FILE_KEY — mobileSymmetricEncrypt returns [ciphertextHex, keyHex]
             val dataHex = data.joinToString("") { "%02x".format(it) }
             val encResult = org.llamenos.core.mobileSymmetricEncrypt(
                 plaintextHex = dataHex,
-                aadHex = NO_AAD,
+                aadHex = contentAad(CryptoLabels.LABEL_FILE_KEY),
             )
             val encryptedContentHex = encResult[0]
             val fileKeyHex = encResult[1]
@@ -1073,7 +1078,7 @@ class CryptoService @Inject constructor() {
                     keyHex = fileKeyHex,
                     recipientPubkeyHex = pubkey,
                     label = CryptoLabels.LABEL_FILE_KEY,
-                    aadHex = NO_AAD,
+                    aadHex = keyWrapAad(CryptoLabels.LABEL_FILE_KEY),
                 )
                 FileKeyEnvelope(pubkey = pubkey, enc = env.enc, ct = env.ct)
             }
@@ -1094,7 +1099,7 @@ class CryptoService @Inject constructor() {
             val metaEnvelopes = recipientPubkeys.map { pubkey ->
                 val metaResult = org.llamenos.core.mobileSymmetricEncrypt(
                     plaintextHex = metaHex,
-                    aadHex = NO_AAD,
+                    aadHex = contentAad(CryptoLabels.LABEL_FILE_METADATA),
                 )
                 val encMetaHex = metaResult[0]
                 val metaKeyHex = metaResult[1]
@@ -1102,7 +1107,7 @@ class CryptoService @Inject constructor() {
                     keyHex = metaKeyHex,
                     recipientPubkeyHex = pubkey,
                     label = CryptoLabels.LABEL_FILE_METADATA,
-                    aadHex = NO_AAD,
+                    aadHex = keyWrapAad(CryptoLabels.LABEL_FILE_METADATA),
                 )
                 EncryptedFileMetadataEnvelope(
                     pubkey = pubkey,
@@ -1135,7 +1140,7 @@ class CryptoService @Inject constructor() {
             org.llamenos.core.mobileHpkeOpenKey(
                 envelope = ffiEnvelope,
                 expectedLabel = CryptoLabels.LABEL_FILE_KEY,
-                aadHex = NO_AAD,
+                aadHex = keyWrapAad(CryptoLabels.LABEL_FILE_KEY),
             )
         } catch (e: org.llamenos.core.CryptoException) {
             throw CryptoException("File key decryption failed: ${e.message}", e)
@@ -1161,12 +1166,12 @@ class CryptoService @Inject constructor() {
             val keyHex = org.llamenos.core.mobileHpkeOpenKey(
                 envelope = ffiEnvelope,
                 expectedLabel = CryptoLabels.LABEL_FILE_METADATA,
-                aadHex = NO_AAD,
+                aadHex = keyWrapAad(CryptoLabels.LABEL_FILE_METADATA),
             )
             val plaintextHex = org.llamenos.core.mobileSymmetricDecrypt(
                 ciphertextHex = encryptedContentHex,
                 keyHex = keyHex,
-                aadHex = NO_AAD,
+                aadHex = contentAad(CryptoLabels.LABEL_FILE_METADATA),
             )
             val bytes = hexToBytes(plaintextHex)
             json.decodeFromString<FileMetadata>(String(bytes, Charsets.UTF_8))
@@ -1189,7 +1194,7 @@ class CryptoService @Inject constructor() {
             val plaintextHex = org.llamenos.core.mobileSymmetricDecrypt(
                 ciphertextHex = encryptedContentHex,
                 keyHex = fileKeyHex,
-                aadHex = NO_AAD,
+                aadHex = contentAad(CryptoLabels.LABEL_FILE_KEY),
             )
             hexToBytes(plaintextHex)
         } catch (e: org.llamenos.core.CryptoException) {

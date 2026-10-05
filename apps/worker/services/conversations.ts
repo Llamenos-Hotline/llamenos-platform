@@ -528,7 +528,24 @@ export class ConversationsService {
     }
     const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
 
-    const encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    // An EMPTY reader list — no admin decryption key configured AND nobody
+    // with a registered device — is a deployment-level failure, and the
+    // contract (see `messageReaders`) is loud-but-stored, never dropped: a
+    // thrown error here escapes the webhook handler as a 500, after the
+    // replay-guard has already consumed the delivery slot, so the provider's
+    // retry is answered with an idempotent 200 and the crisis message is
+    // silently lost. Store the record with no content instead: no plaintext
+    // is persisted, the conversation shows the message arrived, and the error
+    // log above is the operator's signal to fix the deployment.
+    let encrypted: { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] }
+    if (readerPubkeys.length === 0) {
+      logger.error('no HPKE recipient for inbound message (no admin decryption key, no registered device) — storing an unreadable record rather than dropping it', {
+        conversationId: conv.id,
+      })
+      encrypted = { encryptedContent: '', readerEnvelopes: [] }
+    } else {
+      encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
+    }
 
     const msg = await this.addMessage({
       conversationId: conv.id,

@@ -174,4 +174,57 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     // claiming a reader who cannot read — the message is still stored.
     expect(recipients).toEqual([ADMIN_X25519])
   })
+
+  it('stores the inbound message even when NO reader exists anywhere — never drops it', async () => {
+    const { db } = createMockDb(['conversations', 'messages', 'files', 'contactIdentifiers'])
+
+    const insertedValues: Array<Record<string, unknown>> = []
+    const realInsert = db.insert as unknown as (...a: unknown[]) => { values: (v: unknown) => unknown }
+    ;(db as unknown as { insert: unknown }).insert = (...args: unknown[]) => {
+      const chain = realInsert(...args)
+      const realValues = chain.values.bind(chain)
+      return {
+        ...chain,
+        values: (v: unknown) => {
+          insertedValues.push(v as Record<string, unknown>)
+          return realValues(v)
+        },
+      }
+    }
+
+    const service = new ConversationsService(db as any, 'hmac-secret', 'admin-pubkey')
+    // An unassigned waiting conversation: no assignee device lookup runs, and
+    // this test passes NO admin recipient — the reader list is empty.
+    const conv = {
+      id: 'conv-3', hubId: 'hub-1', channelType: 'sms',
+      contactIdentifierHash: 'hash3', contactLast4: '4567',
+      assignedTo: null, status: 'waiting',
+      metadata: null, messageCount: 0,
+      lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+    }
+    // handleIncoming's conversation lookup, then addMessage's getById.
+    db.$setSelectResults([[conv], [conv]])
+    db.$setInsertResult([{ id: 'msg-3', conversationId: 'conv-3' }])
+
+    // The previous behaviour threw out of here (encryptMessageForStorage
+    // refuses an empty reader list): the webhook answered 500, the provider
+    // retried, and the replay guard answered the retry with an idempotent 200
+    // — the crisis message silently dropped. The contract is loud-but-stored.
+    const result = await service.handleIncoming({
+      channelType: 'sms',
+      externalId: 'SM-3',
+      senderIdentifier: '+15551110000',
+      senderIdentifierHash: 'hash3',
+      body: 'crisis inbound body',
+      timestamp: new Date().toISOString(),
+    }, undefined, 'hub-1')
+
+    expect(result.messageId).toBe('msg-3')
+    const msg = insertedValues.find(v => v.direction === 'inbound')
+    expect(msg).toBeDefined()
+    // No plaintext anywhere in the row, no envelope claiming a phantom reader.
+    expect(msg!.readerEnvelopes).toEqual([])
+    expect(msg!.encryptedContent).toBe('')
+    expect(JSON.stringify(msg)).not.toContain('crisis inbound body')
+  })
 })

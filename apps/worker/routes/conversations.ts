@@ -353,9 +353,24 @@ conversations.post('/:id/messages',
       }
       const readerPubkeys = messageReaders(adminDecryptionPubkey, authorRecipients)
 
-      const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
-      encryptedContent = encrypted.encryptedContent
-      readerEnvelopes = encrypted.readerEnvelopes
+      // An EMPTY reader list — no admin decryption key configured AND the
+      // author has no registered device — is a deployment-level failure, and
+      // the contract (see `messageReaders`) is loud-but-stored: the reply
+      // still goes to the contact and a record is still persisted. Throwing
+      // here instead would drop a crisis reply entirely — nothing sent,
+      // nothing stored, nothing queued. No plaintext is stored: the record
+      // carries no content until a reader exists.
+      if (readerPubkeys.length === 0) {
+        logger.error('no HPKE recipient for outbound message (no admin decryption key, author has no registered device) — sending and storing an unreadable record rather than dropping the reply', {
+          conversationId: id,
+        })
+        encryptedContent = ''
+        readerEnvelopes = []
+      } else {
+        const encrypted = encryptMessageForStorage(plaintextForSending, readerPubkeys)
+        encryptedContent = encrypted.encryptedContent
+        readerEnvelopes = encrypted.readerEnvelopes
+      }
     } else {
       encryptedContent = ''
     }

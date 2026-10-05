@@ -108,14 +108,14 @@ function setup() {
   return { services, addMessage }
 }
 
-async function createApp(services: Services, admin: ReturnType<typeof makeAdmin>) {
+async function createApp(services: Services, admin: ReturnType<typeof makeAdmin>, withDecryptionKey = true) {
   const { default: messaging } = await import('@worker/messaging/router')
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('services', services as unknown as AppEnv['Variables']['services'])
     c.env = {
       ADMIN_PUBKEY: admin.signingPubkey,
-      ADMIN_DECRYPTION_PUBKEY: admin.decryptionPubkey,
+      ...(withDecryptionKey ? { ADMIN_DECRYPTION_PUBKEY: admin.decryptionPubkey } : {}),
       HMAC_SECRET: 'b'.repeat(64),
     } as unknown as AppEnv['Bindings']
     await next()
@@ -168,5 +168,29 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
 
     const recipients = (addMessage.mock.calls[0][0].readerEnvelopes ?? []).map(e => e.pubkey)
     expect(recipients).not.toContain(admin.signingPubkey)
+  })
+
+  it('still stores the message and answers 200 when NO recipient exists anywhere', async () => {
+    // No ADMIN_DECRYPTION_PUBKEY in the env, and the conversation is
+    // unassigned, so `messageReaders` yields an empty list. The empty-reader
+    // contract is loud-but-stored: before it existed, the encryption step
+    // threw, the webhook 500'd, and the provider's retry was consumed by the
+    // replay guard as an idempotent 200 — the inbound crisis message silently
+    // dropped. Now the record is stored (contentless, zero envelopes) and the
+    // webhook answers 200.
+    const { services, addMessage } = setup()
+    const app = await createApp(services, makeAdmin(), /* withDecryptionKey */ false)
+
+    const res = await app.request('/api/messaging/sms/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: incoming.externalId }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(addMessage).toHaveBeenCalledTimes(1)
+    const stored = addMessage.mock.calls[0][0]
+    expect(stored.readerEnvelopes).toEqual([])
+    expect(stored.encryptedContent).toBe('')
   })
 })

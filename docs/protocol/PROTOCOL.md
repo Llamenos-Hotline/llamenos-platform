@@ -425,7 +425,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
 
   3. Encrypt content with AES-256-GCM:
      iv = random(12)
-     ciphertext_with_tag = AES-256-GCM.encrypt(note_key, iv, UTF-8(json_string))
+     ciphertext_with_tag = AES-256-GCM.encrypt(note_key, iv, UTF-8(json_string), aad = UTF-8("llamenos:note-key"))
      // ciphertext_with_tag: variable length + 16-byte GCM tag appended
      encrypted_content = hex(iv || ciphertext_with_tag)
 
@@ -434,7 +434,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
        recipientPk = hex_to_bytes(author_x25519_pubkey_hex),
        plaintext   = note_key,
        info        = UTF-8("llamenos:note-key"),
-       aad         = empty
+       aad         = UTF-8("llamenos:note-key:key-wrap")
      )
      author_envelope = {
        enc: hex(author_sealed[0..32]),   // 32-byte HPKE encapsulated key → 64 hex chars
@@ -448,7 +448,7 @@ encryptNoteV2(payload: NotePayload, author_x25519_pubkey_hex, admin_x25519_pubke
          recipientPk = hex_to_bytes(admin_x25519_pubkey_hex),
          plaintext   = note_key,
          info        = UTF-8("llamenos:note-key"),
-         aad         = empty
+         aad         = UTF-8("llamenos:note-key:key-wrap")
        )
        admin_envelopes.push({
          pubkey: admin_x25519_pubkey_hex,   // 64 hex chars
@@ -477,7 +477,7 @@ decryptNoteV2(encrypted_content_hex, envelope: KeyEnvelope, device_x25519_secret
        enc         = enc_bytes,
        ciphertext  = ct_bytes,
        info        = UTF-8("llamenos:note-key"),
-       aad         = empty
+       aad         = UTF-8("llamenos:note-key:key-wrap")
      )
      // note_key: 32 bytes
 
@@ -485,7 +485,7 @@ decryptNoteV2(encrypted_content_hex, envelope: KeyEnvelope, device_x25519_secret
      data = hex_to_bytes(encrypted_content_hex)
      iv   = data[0..12]
      ciphertext_with_tag = data[12..]
-     plaintext = AES-256-GCM.decrypt(note_key, iv, ciphertext_with_tag)
+     plaintext = AES-256-GCM.decrypt(note_key, iv, ciphertext_with_tag, aad = UTF-8("llamenos:note-key"))
 
   3. Parse JSON:
      json_string = UTF-8_decode(plaintext)

@@ -62,6 +62,14 @@ export async function getUserHpkeRecipients(
  * author cannot re-read is a bad outcome, but refusing to send a crisis reply —
  * which is what any client with no registered key would get, iOS included — is
  * a far worse one.
+ *
+ * When the admin recipient is absent too, the result is an EMPTY reader list.
+ * That is a deployment-level failure (no admin decryption key configured, no
+ * device registered anywhere), and the contract for it is loud-but-stored:
+ * the callers log an error an operator must see and persist the message
+ * anyway — never a substituted key, and never a silent drop.
+ * `encryptMessageForStorage` still refuses an empty list, so the callers
+ * branch before reaching it.
  */
 export function messageReaders(
   adminRecipient: HpkeRecipientPubkey | undefined,
