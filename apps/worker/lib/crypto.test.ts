@@ -111,10 +111,10 @@ describe('encryptMessageForStorage', () => {
     expect(env.ct).toMatch(/^[0-9a-f]+$/)
   })
 
-  it('handles empty reader list', () => {
-    const result = encryptMessageForStorage('no readers', [])
-    expect(result.readerEnvelopes).toHaveLength(0)
-    expect(result.encryptedContent.length).toBeGreaterThan(0)
+  it('refuses an empty reader list rather than store undecryptable ciphertext', () => {
+    // It used to return a record with zero envelopes — content nobody could ever
+    // read, written silently. Same end state as the #1021/#1283 Ed25519 seals.
+    expect(() => encryptMessageForStorage('no readers', [])).toThrow(/empty reader list/)
   })
 
   it('produces different ciphertext each call (random key + nonce)', () => {
@@ -125,7 +125,7 @@ describe('encryptMessageForStorage', () => {
   })
 
   it('encryptedContent is valid hex with reasonable length', () => {
-    const result = encryptMessageForStorage('x', [])
+    const result = encryptMessageForStorage('x', [validPubkeyHex])
     // nonce (12B) + ciphertext+tag (at least 17B) = at least 29 bytes = 58 hex chars
     expect(result.encryptedContent.length).toBeGreaterThanOrEqual(58)
   })
