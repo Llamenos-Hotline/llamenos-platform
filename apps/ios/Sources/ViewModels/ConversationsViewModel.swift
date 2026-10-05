@@ -254,27 +254,12 @@ final class ConversationsViewModel {
 
     // MARK: - Message Decryption
 
-    /// Decrypt a conversation message using the HPKE envelope for our encryption pubkey.
+    /// Decrypt a conversation message with whichever of its envelopes is ours.
     private func decryptConversationMessage(_ message: ConversationMessage) -> DecryptedMessage? {
-        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-        // Find our envelope
-        guard let ourEnvelope = message.recipientEnvelopes.first(where: { $0.pubkey == ourPubkey }) else {
-            return nil
-        }
-
         do {
-            // Reconstruct HPKE envelope from the protocol wire format
-            let hpkeEnvelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: ourEnvelope.enc,
-                ct: ourEnvelope.ct
-            )
-
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                envelope: hpkeEnvelope
+                readerEnvelopes: message.recipientEnvelopes
             )
 
             return DecryptedMessage(

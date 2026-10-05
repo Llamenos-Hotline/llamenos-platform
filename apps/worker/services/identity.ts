@@ -5,8 +5,9 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray, type SQL } from 'drizzle-orm'
+import { eq, and, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
@@ -37,6 +38,7 @@ import type { DemoIdentity } from '../lib/demo-identities'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
+import { resolveHubRoleIds, type Role } from '@shared/permissions'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 
 const log = createLogger('services.identity')
@@ -150,6 +152,35 @@ function scopeToHub(user: User, hubId: string | undefined): User {
   return { ...user, hubRoles: (user.hubRoles ?? []).filter(hr => hr.hubId === hubId) }
 }
 
+/**
+ * A user as seen from inside one hub (#1044). A hub's admins must not learn
+ * which OTHER hubs a person belongs to, nor their roles there:
+ * - `hubRoles` is trimmed to this hub's assignment;
+ * - `roles` is the set that carries authority in this hub — the hub
+ *   assignment, plus the global roles of a super-admin (the only global roles
+ *   that reach into a hub). Other global roles are not disclosed.
+ */
+function sanitizeUserForHub(vol: User, hubId: string, allRoles: Role[]): ReturnType<typeof sanitizeUser> {
+  const assignment = (vol.hubRoles ?? []).filter(hr => hr.hubId === hubId)
+  return {
+    ...sanitizeUser(vol),
+    roles: resolveHubRoleIds(vol.roles, assignment, allRoles, hubId),
+    hubRoles: assignment,
+  }
+}
+
+/**
+ * SQL predicate: the user holds a role assignment in `hubId`.
+ *
+ * Compares `hubId` as a text parameter. Binding a JSON string and casting it
+ * (`@> ${JSON.stringify(...)}::jsonb`) reaches Postgres double-encoded — a
+ * jsonb *string*, not an array — so the containment never matched and every
+ * hub's member list came back empty.
+ */
+function isHubMember(hubId: string) {
+  return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${users.hubRoles}) AS assignment WHERE assignment->>'hubId' = ${hubId})`
+}
+
 /** Map a DB invite row to InviteCode interface */
 function rowToInvite(row: typeof inviteCodes.$inferSelect): InviteCode {
   return {
@@ -217,6 +248,7 @@ function rowToDevice(row: typeof devices.$inferSelect): DeviceRecord {
     platform: row.platform as DeviceRecord['platform'],
     pushToken: row.pushToken ?? '',
     wakeKeyPublic: row.wakeKeyPublic ?? '',
+    x25519Pubkey: row.x25519Pubkey ?? null,
     registeredAt: row.registeredAt.toISOString(),
     lastSeenAt: row.lastSeenAt?.toISOString() ?? row.registeredAt.toISOString(),
   }
@@ -279,6 +311,21 @@ export class IdentityService {
       )
       .limit(1)
     return { hasAdmin: rows.length > 0 }
+  }
+
+  /**
+   * Build the HPKE recipient list for a record the SERVER seals: the admin's
+   * X25519 recipient key plus the device encryption keys of the given users.
+   *
+   * Never pass a `users.pubkey` / `c.get('pubkey')` / `conversations.assignedTo`
+   * value straight to `hpkeSeal` — those are Ed25519 auth keys and sealing to
+   * one silently produces an envelope nobody holds the secret for (#1021).
+   */
+  async buildReaderPubkeys(
+    adminDecryptionPubkey: string | undefined,
+    userPubkeys: string[],
+  ): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, userPubkeys)
   }
 
   /**
@@ -418,6 +465,17 @@ export class IdentityService {
   }
 
   /**
+   * List the members of one hub, as seen from inside that hub (#1044).
+   * Users without a role assignment in `hubId` are not returned.
+   */
+  async getHubUsers(hubId: string, allRoles: Role[]): Promise<{ users: ReturnType<typeof sanitizeUser>[] }> {
+    const rows = await this.db.select().from(users).where(isHubMember(hubId))
+    return {
+      users: rows.map(r => sanitizeUserForHub(rowToUser(r), hubId, allRoles)),
+    }
+  }
+
+  /**
    * Get a single volunteer by pubkey. With a hubId, 404 unless they are a
    * member of that hub, and only their role assignment in it.
    */
@@ -429,6 +487,21 @@ export class IdentityService {
       .limit(1)
     if (rows.length === 0) throw new ServiceError(404, 'Not found')
     return sanitizeUser(scopeToHub(rowToUser(rows[0]), hubId))
+  }
+
+  /**
+   * Get one member of a hub, as seen from inside that hub. A user who exists
+   * but is not a member of `hubId` is indistinguishable from one who does not
+   * exist (404) — the hub must not learn about other hubs' people (#1044).
+   */
+  async getHubUser(pubkey: string, hubId: string, allRoles: Role[]): Promise<ReturnType<typeof sanitizeUser>> {
+    const rows = await this.db
+      .select()
+      .from(users)
+      .where(and(eq(users.pubkey, pubkey), isHubMember(hubId)))
+      .limit(1)
+    if (rows.length === 0) throw new ServiceError(404, 'Not found')
+    return sanitizeUserForHub(rowToUser(rows[0]), hubId, allRoles)
   }
 
   /**
@@ -470,7 +543,6 @@ export class IdentityService {
       phone: data.phone,
       roles,
       ...(data.hubId && { hubRoles: [{ hubId: data.hubId, roleIds: roles }] }),
-      active: true,
       encryptedSecretKey: data.encryptedSecretKey,
       transcriptionEnabled: true,
       spokenLanguages: ['en'],
@@ -621,18 +693,25 @@ export class IdentityService {
   // =========================================================================
 
   /**
-   * List all unredeemed invites.
+   * List unredeemed invites. With `hubId`, only that hub's invites (#1044) —
+   * a hub's admins must not see the names and phone numbers another hub is
+   * inviting. Without it, every invite on the server (super-admin only).
    */
-  async getInvites(): Promise<{ invites: InviteCode[] }> {
+  async getInvites(hubId?: string): Promise<{ invites: InviteCode[] }> {
+    const unused = sql`${inviteCodes.usedAt} IS NULL`
     const rows = await this.db
       .select()
       .from(inviteCodes)
-      .where(sql`${inviteCodes.usedAt} IS NULL`)
+      .where(hubId ? and(unused, eq(inviteCodes.hubId, hubId)) : unused)
     return { invites: rows.map(rowToInvite) }
   }
 
   /**
    * Create a new invite code.
+   *
+   * `hubId` is the hub the invite admits the invitee to: redemption grants
+   * `roleIds` in that hub only (#1037). An invite without a hub can carry only
+   * global authority — the routes allow that for `role-super-admin` alone.
    */
   async createInvite(data: {
     name: string
@@ -658,8 +737,8 @@ export class IdentityService {
       // No `role-volunteer` fallback: an empty list means the inviter named no
       // role and the hub's template named no default, which grants none.
       roleIds: data.roleIds,
-      hubId: data.hubId,
       createdBy: data.createdBy,
+      hubId: data.hubId,
       createdAt: now,
       expiresAt,
     }).returning()
@@ -786,7 +865,6 @@ export class IdentityService {
         roles: this.enforceAdminRoles(data.pubkey, grantedRoleIds),
         // Hub membership — what makes the redeemer visible to the operator.
         ...(hubId && { hubRoles: [{ hubId, roleIds: grantedRoleIds }] }),
-        active: true,
         encryptedSecretKey: '',
         transcriptionEnabled: true,
         spokenLanguages: ['en'],
@@ -803,10 +881,15 @@ export class IdentityService {
   }
 
   /**
-   * Revoke (delete) an invite code.
+   * Revoke (delete) an invite code. With `hubId`, only an invite issued for
+   * that hub can be revoked; otherwise 404, exactly as if it did not exist.
    */
-  async revokeInvite(code: string): Promise<void> {
-    await this.db.delete(inviteCodes).where(eq(inviteCodes.code, code))
+  async revokeInvite(code: string, hubId?: string): Promise<void> {
+    const deleted = await this.db
+      .delete(inviteCodes)
+      .where(hubId ? and(eq(inviteCodes.code, code), eq(inviteCodes.hubId, hubId)) : eq(inviteCodes.code, code))
+      .returning({ code: inviteCodes.code })
+    if (deleted.length === 0) throw new ServiceError(404, 'Invite not found')
   }
 
   // =========================================================================
@@ -1240,6 +1323,14 @@ export class IdentityService {
       })
       .from(devices)
       .where(eq(devices.pubkey, pubkey))
+      // Deterministic order, oldest first. Without it Postgres returns rows in
+      // whatever order it likes, so callers that index into the list — "the
+      // device I just registered is the last one" — silently get a different
+      // device on some runs. That non-determinism made `PUK Rotation >
+      // Distribute envelopes for multiple devices` flake: it picked the same
+      // device twice and the multi-row upsert hit "ON CONFLICT DO UPDATE
+      // cannot affect row a second time", surfacing as a 500.
+      .orderBy(asc(devices.registeredAt), asc(devices.id))
   }
 
   async deleteDeviceById(pubkey: string, deviceId: string): Promise<boolean> {

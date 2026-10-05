@@ -14,6 +14,7 @@ import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ClearPushTokenRequest
+import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.hotline.model.OkResponse
 import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.model.RecoveryContributeRequest
@@ -349,6 +350,14 @@ class ApiService @Inject constructor(
      */
     suspend fun getHubKey(hubId: String): HubKeyEnvelopeResponse {
         return request("GET", "/api/hubs/$hubId/key")
+    }
+
+    /**
+     * Fetch all hubs the authenticated user is a member of.
+     * Used to pick an initial active hub after login and on session restore.
+     */
+    suspend fun getHubs(): HubsListResponse {
+        return request("GET", "/api/hubs")
     }
 
     // ---- Recovery Group API ----

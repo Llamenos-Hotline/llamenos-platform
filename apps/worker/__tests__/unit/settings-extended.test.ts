@@ -1200,7 +1200,10 @@ describe('SettingsService.createRole', () => {
 
   it('throws 409 when slug already exists', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([makeRole({ slug: 'existing' })])
+    // The slug's unique index swallowed the insert (ON CONFLICT DO NOTHING
+    // returned no row) — this is also what the loser of a concurrent
+    // same-slug create sees, so it must be a 409, never a 500.
+    db.$setInsertResult([])
 
     await expect(
       service.createRole({ name: 'New', slug: 'existing', permissions: ['read'], description: 'Test' }),
@@ -1209,7 +1212,7 @@ describe('SettingsService.createRole', () => {
 
   it('creates role with valid data', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([]) // slug check: not found
+    db.$setInsertResult([{ id: 'role-new' }]) // insert won: no slug conflict
 
     const result = await service.createRole({
       name: 'Observer',
