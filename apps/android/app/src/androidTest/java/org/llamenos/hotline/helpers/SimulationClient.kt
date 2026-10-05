@@ -283,6 +283,35 @@ object SimulationClient {
     )
 
     /**
+     * Authenticated `GET`, signed with the admin identity above.
+     *
+     * The simulation routes write; nothing here could read a stored row back.
+     * `EnvelopeAadInteropTest` needs to see the *server's own* envelope exactly
+     * as the API serves it — reading it from the database or re-deriving it
+     * locally would prove nothing about the wire.
+     */
+    fun authorizedGet(path: String): String {
+        val url = URL("$hubUrl$path")
+        val conn = url.openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = "GET"
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.setRequestProperty("Authorization", adminAuthHeader("GET", path))
+            conn.setRequestProperty("X-Test-Secret", testSecret)
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) {
+                throw IOException("GET $path -> HTTP $code: $text")
+            }
+            text
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
      * Create an isolated test hub through the route an operator uses.
      *
      * This posted to `/api/test-create-hub` with `X-Test-Secret`. `devGuard`

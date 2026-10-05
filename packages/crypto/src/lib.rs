@@ -51,6 +51,9 @@ pub mod padding;
 // === Encryption module (HPKE + AES-256-GCM) ===
 pub mod encryption;
 
+// === The one definition of an envelope AAD (mirrors packages/shared/envelope-aad.ts) ===
+pub mod envelope_aad;
+
 // === Audit key management (AES-256-GCM + HPKE wrapping) ===
 pub mod audit_key;
 
@@ -75,6 +78,9 @@ pub mod ffi_server;
 // Re-export core types
 pub use auth::AuthToken;
 pub use device_keys::{DeviceKeyState, EncryptedDeviceKeys};
+pub use envelope_aad::{
+    content_aad, content_aad_hex, key_wrap_aad, key_wrap_aad_hex, KEY_WRAP_AAD_SUFFIX,
+};
 pub use errors::CryptoError;
 pub use hpke_envelope::HpkeEnvelope;
 pub use labels::*;

@@ -2933,7 +2933,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "platformBans": {
     "scopePlatform": "Platform",
@@ -4541,6 +4543,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4662,5 +4666,17 @@
     "unavailableMessage": "ဝမ်းနည်းပါသည်၊ ယခု သင့်ဖုန်းကိုလက်ခံနိုင်သူ မရှိပါ။ ကျေးဇူးပြု၍ နောက်မှ ထပ်ကြိုးစားပါ။ ဂုဏ်ယူပါသည်။",
     "voicemailPrompt": "ယခု သင့်ဖုန်းကိုလက်ခံနိုင်သူ မရှိပါ။ ကျေးဇူးပြု၍ အသံမြည်ပြီးနောက် မက်ဆေ့ချ်ထားခဲ့ပါ။",
     "voicemailThanks": "သင့်မက်ဆေ့ချ်အတွက် ကျေးဇူးတင်ပါသည်။ ဂုဏ်ယူပါသည်။"
+  },
+  "enrol": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enrol",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }

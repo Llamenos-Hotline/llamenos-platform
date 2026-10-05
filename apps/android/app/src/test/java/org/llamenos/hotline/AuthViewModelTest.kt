@@ -1,5 +1,8 @@
 package org.llamenos.hotline
 
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -14,10 +17,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.llamenos.hotline.api.ApiException
+import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
+import org.llamenos.hotline.ui.auth.EnrolmentError
+import org.llamenos.hotline.ui.auth.EnrolmentState
+import org.llamenos.hotline.ui.auth.resetForLock
+import java.io.IOException
 
 /**
  * Unit tests for AuthViewModel state machine transitions (v3 device key model).
@@ -43,6 +52,7 @@ class AuthViewModelTest {
     private lateinit var cryptoService: CryptoService
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var biometricKeyStore: FakeBiometricKeyStore
+    private lateinit var inviteRepository: InviteRepository
 
     @Before
     fun setup() {
@@ -51,6 +61,7 @@ class AuthViewModelTest {
         cryptoService.computeDispatcher = testDispatcher
         keyValueStore = InMemoryKeyValueStore()
         biometricKeyStore = FakeBiometricKeyStore()
+        inviteRepository = mockk()
     }
 
     @After
@@ -59,7 +70,7 @@ class AuthViewModelTest {
     }
 
     private fun createViewModel(): AuthViewModel {
-        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore)
+        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore, inviteRepository)
     }
 
     /**
@@ -203,6 +214,28 @@ class AuthViewModelTest {
         assertFalse(state.isConfirmingPin)
         assertFalse(state.pinMismatch)
         assertNull(state.error)
+    }
+
+    @Test
+    fun `lock path clears authenticated state`() {
+        // JVM tests cannot reach isAuthenticated = true through the crypto
+        // paths (native lib hard-fails), so assert the lock transition at its
+        // pure seam: the mapping resetPinEntry applies to the UI state.
+        val locked = AuthUiState(
+            isAuthenticated = true,
+            pin = "12345678",
+            confirmPin = "1234",
+            isConfirmingPin = true,
+            pinMismatch = true,
+            error = "stale",
+        ).resetForLock()
+
+        assertFalse(locked.isAuthenticated)
+        assertEquals("", locked.pin)
+        assertEquals("", locked.confirmPin)
+        assertFalse(locked.isConfirmingPin)
+        assertFalse(locked.pinMismatch)
+        assertNull(locked.error)
     }
 
     @Test
@@ -397,5 +430,148 @@ class AuthViewModelTest {
         assertNull(decryptCipher)
         // The stale enrollment is wiped as part of detecting the invalidation.
         assertFalse(vm.hasBiometricPIN())
+    }
+
+    // ---- Invite-code enrolment (#1345) ----
+
+    private val inviteCode = "3f6f8f2c-9f3e-4a2b-b1c1-2d4e6f8091a2"
+
+    @Test
+    fun `updateInviteCode updates state and clears error`() {
+        val vm = createViewModel()
+        vm.updateInviteCode(inviteCode)
+
+        assertEquals(inviteCode, vm.uiState.value.inviteCode)
+        assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun `redeem success marks enrolment redeemed and authenticates`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns Result.success(Unit)
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.Redeemed)
+        assertTrue(vm.uiState.value.isAuthenticated)
+    }
+
+    @Test
+    fun `redeem invalid code surfaces INVALID_CODE and stays unauthenticated`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(400, "Invalid invite code"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.INVALID_CODE, (enrolment as EnrolmentState.Failed).error)
+        assertFalse(vm.uiState.value.isAuthenticated)
+    }
+
+    @Test
+    fun `redeem not-found invite surfaces NOT_FOUND`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(404, "Invite not found"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.NOT_FOUND, (enrolment as EnrolmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem expired invite surfaces EXPIRED`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(410, "Invite expired"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.EXPIRED, (enrolment as EnrolmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem rate limit surfaces RATE_LIMITED`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(429, "Too many requests"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.RATE_LIMITED, (enrolment as EnrolmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem hub rejection surfaces UNKNOWN`() = runTest {
+        // A code valid for another hub comes back as a generic failure the
+        // client cannot fix locally.
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(403, "Access denied"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.UNKNOWN, (enrolment as EnrolmentState.Failed).error)
+    }
+
+    @Test
+    fun `redeem network failure surfaces NETWORK`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(IOException("Connection refused"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        val enrolment = vm.uiState.value.enrolment
+        assertTrue(enrolment is EnrolmentState.Failed)
+        assertEquals(EnrolmentError.NETWORK, (enrolment as EnrolmentState.Failed).error)
+    }
+
+    @Test
+    fun `retryEnrolment retries the same code after a failure`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(400, "Invalid invite code")) andThen
+            Result.success(Unit)
+        val vm = createViewModel()
+        vm.updateInviteCode(inviteCode)
+        vm.redeemInvite(inviteCode)
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.Failed)
+
+        vm.retryEnrolment()
+
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.Redeemed)
+        assertTrue(vm.uiState.value.isAuthenticated)
+        coVerify(exactly = 2) { inviteRepository.redeemInvite(inviteCode) }
+    }
+
+    @Test
+    fun `skipEnrolment enters unauthenticated-on-server but unlocks the app`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(410, "Invite expired"))
+        val vm = createViewModel()
+        vm.redeemInvite(inviteCode)
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.Failed)
+
+        vm.skipEnrolment()
+
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.Skipped)
+        assertTrue(vm.uiState.value.isAuthenticated)
+    }
+
+    @Test
+    fun `initial enrolment state is NotApplicable`() {
+        val vm = createViewModel()
+
+        assertTrue(vm.uiState.value.enrolment is EnrolmentState.NotApplicable)
     }
 }
