@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import userRoutes from '@worker/routes/users'
+import { ServiceError } from '@worker/services/settings'
+import { DEFAULT_ROLES } from '@shared/permissions'
+
+const VOLUNTEER_PERMISSIONS = DEFAULT_ROLES.find(r => r.id === 'role-volunteer')!.permissions
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -13,6 +17,7 @@ function createTestApp(opts: {
   pubkey?: string
   serviceMock?: Record<string, unknown>
   auditLogSpy?: ReturnType<typeof vi.fn>
+  userHubRoles?: { hubId: string; roleIds: string[] }[]
 } = {}) {
   const {
     permissions = ['*'],
@@ -20,7 +25,11 @@ function createTestApp(opts: {
     pubkey = 'a'.repeat(64),
     serviceMock = {},
     auditLogSpy = vi.fn().mockResolvedValue(undefined),
+    userHubRoles = [],
   } = opts
+  // `permissions` is the request's resolved authority (what hubContext / auth
+  // would set); `role-test` carries the same set so role lookups agree.
+  const allRoles = [{ id: 'role-test', name: 'Test', slug: 'test', permissions, isDefault: false, isSystem: false, description: '' }]
 
   const mockAuditService = { log: auditLogSpy }
 
@@ -36,13 +45,14 @@ function createTestApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('services', services as unknown as AppEnv['Variables']['services'])
-    c.set('allRoles', [])
+    c.set('allRoles', allRoles as unknown as AppEnv['Variables']['allRoles'])
     c.set('requestId', 'test-req-1')
     c.set('user', {
       pubkey,
       name: 'Test User',
       phone: '+1555000000',
-      roles: permissions.includes('*') ? ['role-super-admin'] : ['role-volunteer'],
+      roles: permissions.includes('*') ? ['role-super-admin'] : ['role-test'],
+      hubRoles: userHubRoles,
       active: true,
       createdAt: new Date().toISOString(),
       encryptedSecretKey: '',
@@ -130,7 +140,7 @@ describe('users routes', () => {
         volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
       })
       const { app, auditLogSpy } = createTestApp({
-        permissions: ['users:create'],
+        permissions: ['users:create', ...VOLUNTEER_PERMISSIONS],
         serviceMock: { identity: { createUser: createUserSpy, getUsers: vi.fn(), getUser: vi.fn() } },
       })
 
@@ -152,7 +162,7 @@ describe('users routes', () => {
         volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-hub-admin'] },
       })
       const { app } = createTestApp({
-        permissions: ['users:create'],
+        permissions: ['*'],
         serviceMock: { identity: { createUser: createUserSpy, getUsers: vi.fn(), getUser: vi.fn() } },
       })
 
@@ -173,7 +183,7 @@ describe('users routes', () => {
         volunteer: { pubkey: 'b'.repeat(64), name: 'New User', active: true, createdAt: new Date().toISOString(), roles: ['role-volunteer'] },
       })
       const { app } = createTestApp({
-        permissions: ['users:create'],
+        permissions: ['users:create', ...VOLUNTEER_PERMISSIONS],
         serviceMock: { identity: { createUser: createUserSpy, getUsers: vi.fn(), getUser: vi.fn() } },
       })
 
@@ -258,7 +268,7 @@ describe('users routes', () => {
       })
       const revokeAllSessionsSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
-        permissions: ['users:update'],
+        permissions: ['*'],
         serviceMock: {
           identity: {
             updateUser: updateUserSpy,
@@ -359,7 +369,7 @@ describe('users routes', () => {
         permissions: ['users:read-cases'],
         hubId: 'hub-1',
         serviceMock: {
-          identity: { getUser: getUserSpy, getUsers: vi.fn() },
+          identity: { getUser: getUserSpy, getHubUser: getUserSpy, getUsers: vi.fn() },
           cases: { list: listSpy },
         },
       })
@@ -376,7 +386,7 @@ describe('users routes', () => {
       const { app } = createTestApp({
         permissions: ['users:read-cases'],
         serviceMock: {
-          identity: { getUser: getUserSpy, getUsers: vi.fn() },
+          identity: { getUser: getUserSpy, getHubUser: getUserSpy, getUsers: vi.fn() },
           cases: { list: vi.fn() },
         },
       })
@@ -410,7 +420,7 @@ describe('users routes', () => {
         permissions: ['users:read-metrics'],
         hubId: 'hub-1',
         serviceMock: {
-          identity: { getUser: getUserSpy, getUsers: vi.fn() },
+          identity: { getUser: getUserSpy, getHubUser: getUserSpy, getUsers: vi.fn() },
           cases: { list: listSpy },
         },
       })
@@ -435,7 +445,7 @@ describe('users routes', () => {
         permissions: ['users:read-metrics'],
         hubId: 'hub-1',
         serviceMock: {
-          identity: { getUser: getUserSpy, getUsers: vi.fn() },
+          identity: { getUser: getUserSpy, getHubUser: getUserSpy, getUsers: vi.fn() },
           cases: { list: listSpy },
         },
       })
@@ -451,7 +461,7 @@ describe('users routes', () => {
       const { app } = createTestApp({
         permissions: ['users:read-metrics'],
         serviceMock: {
-          identity: { getUser: getUserSpy, getUsers: vi.fn() },
+          identity: { getUser: getUserSpy, getHubUser: getUserSpy, getUsers: vi.fn() },
           cases: { list: vi.fn() },
         },
       })
@@ -464,6 +474,154 @@ describe('users routes', () => {
       const { app } = createTestApp({ permissions: ['users:read'] })
       const res = await app.request('/users/u1/metrics')
       expect(res.status).toBe(403)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Hub isolation — /api/hubs/:hubId/users (#1044, #1037)
+  // -------------------------------------------------------------------------
+
+  describe('hub-scoped (/hubs/:hubId/users)', () => {
+    const hubAdminPerms = ['users:*', ...VOLUNTEER_PERMISSIONS]
+
+    it('lists only the members of the hub in the path', async () => {
+      const getUsersSpy = vi.fn().mockResolvedValue({ users: [] })
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: { identity: { getUsers: getUsersSpy } },
+      })
+
+      const res = await app.request('/users')
+      expect(res.status).toBe(200)
+      expect(getUsersSpy).toHaveBeenCalledWith('hub-b')
+    })
+
+    it('returns 404 for a user who is not a member of the hub', async () => {
+      const getUserSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const app = new Hono<AppEnv>()
+      app.onError((err, c) => err instanceof ServiceError ? c.json({ error: err.message }, 404) : c.json({ error: 'x' }, 500))
+      app.route('/', createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: { identity: { getUser: getUserSpy } },
+      }).app)
+
+      const res = await app.request('/users/vera')
+      expect(res.status).toBe(404)
+      expect(getUserSpy).toHaveBeenCalledWith('vera', 'hub-b')
+    })
+
+    it('creates the user as a member of the hub, not with a global role', async () => {
+      const createUserSpy = vi.fn().mockResolvedValue({ volunteer: { pubkey: 'b'.repeat(64) } })
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: { identity: { createUser: createUserSpy } },
+      })
+
+      const res = await app.request('/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), name: 'New', phone: '+15551234567', roleIds: ['role-volunteer'] }),
+      })
+      expect(res.status).toBe(201)
+      expect(createUserSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-b', roleIds: ['role-volunteer'] }))
+    })
+
+    it('refuses to grant a role broader than the caller\'s own', async () => {
+      const createUserSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: { identity: { createUser: createUserSpy } },
+      })
+
+      const res = await app.request('/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), name: 'New', phone: '+15551234567', roleIds: ['role-super-admin'] }),
+      })
+      expect(res.status).toBe(403)
+      expect(createUserSpy).not.toHaveBeenCalled()
+    })
+
+    it('applies role edits like any other admin edit, scoped to the hub view', async () => {
+      // Main's model: `roles` on PATCH are the account's global roles; the
+      // hub in the path only scopes what is returned. (The branch this was
+      // re-cut from made them the hub assignment only — recorded as an open
+      // question on the PR.)
+      const member = { pubkey: 'u1', roles: ['role-volunteer'], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-volunteer'] }] }
+      const updateUserSpy = vi.fn().mockResolvedValue({ volunteer: member })
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: {
+          identity: {
+            getUser: vi.fn().mockResolvedValue(member),
+            updateUser: updateUserSpy,
+            revokeAllSessions: vi.fn(),
+          },
+        },
+      })
+
+      const res = await app.request('/users/u1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Renamed', roles: ['role-volunteer'] }),
+      })
+      expect(res.status).toBe(200)
+      expect(updateUserSpy).toHaveBeenCalledWith('u1', { name: 'Renamed', roles: ['role-volunteer'] }, true, 'hub-b')
+    })
+
+    it.each([
+      ['DELETE', undefined],
+      ['PATCH', JSON.stringify({ active: false })],
+    ])('refuses %s of an account that also belongs to another hub', async (method, body) => {
+      const deleteUserSpy = vi.fn()
+      const updateUserSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: hubAdminPerms,
+        hubId: 'hub-b',
+        serviceMock: {
+          identity: {
+            getUser: vi.fn().mockResolvedValue({ pubkey: 'u1' }),
+            getHubUser: vi.fn().mockResolvedValue({ pubkey: 'u1' }),
+            getUserInternal: vi.fn().mockResolvedValue({
+              pubkey: 'u1', roles: [],
+              hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }, { hubId: 'hub-b', roleIds: ['role-volunteer'] }],
+            }),
+            deleteUser: deleteUserSpy,
+            updateUser: updateUserSpy,
+            revokeAllSessions: vi.fn(),
+          },
+        },
+      })
+
+      const res = await app.request('/users/u1', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body } : {}),
+      })
+      expect(res.status).toBe(409)
+      expect(deleteUserSpy).not.toHaveBeenCalled()
+      expect(updateUserSpy).not.toHaveBeenCalled()
+    })
+
+    it('the hub in the path wins over a ?hubId= that differs from it', async () => {
+      const listSpy = vi.fn().mockResolvedValue({ records: [] })
+      const { app } = createTestApp({
+        permissions: ['users:read-cases'],
+        hubId: 'hub-b',
+        serviceMock: {
+          identity: { getUser: vi.fn().mockResolvedValue({ pubkey: 'u1' }) },
+          cases: { list: listSpy },
+        },
+      })
+
+      const res = await app.request('/users/u1/cases?hubId=hub-a')
+      expect(res.status).toBe(200)
+      expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-b' }))
     })
   })
 })
