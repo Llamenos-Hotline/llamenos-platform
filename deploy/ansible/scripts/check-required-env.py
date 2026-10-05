@@ -45,10 +45,46 @@ import sys
 from pathlib import Path
 
 # Unconditionally-required vars are extracted generically from any
-# `assertNonEmpty(env, 'X')` / `assertHex64(env, 'X')` call site in
-# config.ts -- including the one INSIDE assertDatabaseUrl(), which itself
-# calls `assertNonEmpty(env, 'DATABASE_URL')`. No hardcoded var names here.
-UNCONDITIONAL_RE = re.compile(r"assert(?:NonEmpty|Hex64)\(\s*env\s*,\s*'([A-Z_][A-Z0-9_]*)'\s*\)")
+# `assertNonEmpty(env, 'X')` / `assertHex64(env, 'X')` call site at the TOP
+# LEVEL of a function body in config.ts -- including the one INSIDE
+# assertDatabaseUrl(), which itself calls `assertNonEmpty(env, 'DATABASE_URL')`.
+# No hardcoded var names here.
+#
+# The two-space indent anchor matters. An identical call nested inside an
+# `if`/`else if` is NOT an unconditional requirement: config.ts asserts
+# ADMIN_DECRYPTION_PUBKEY only when ADMIN_PUBKEY is set (#1283). Matching it
+# anywhere in the file made this script demand that var in the
+# no-admin-configured render, where the template correctly emits nothing --
+# a false failure that says the templates are broken when they are right.
+UNCONDITIONAL_RE = re.compile(
+    r"^ {2}assert(?:NonEmpty|Hex64)\(\s*env\s*,\s*'([A-Z_][A-Z0-9_]*)'\s*\)",
+    re.MULTILINE,
+)
+
+# The same call nested deeper: required only in some configurations. Every
+# such var must appear in PAIRED_REQUIRED_VARS below, or extract_required_vars
+# refuses to run -- so a future conditional assert cannot silently escape
+# checking the way an unconditional one cannot silently escape it today.
+NESTED_ASSERT_RE = re.compile(
+    r"^ {4,}assert(?:NonEmpty|Hex64)\(\s*env\s*,\s*'([A-Z_][A-Z0-9_]*)'\s*\)",
+    re.MULTILINE,
+)
+
+# Conditionally-required vars, mapped to the var that switches the
+# requirement on: config.ts refuses to boot when the trigger is present and
+# the dependent is not. A render where the trigger is absent proves nothing
+# about the pair, so these are checked against the "everything enabled"
+# scenario (scripts/full-scenario.extra-vars.json), which sets the trigger --
+# and the check fails if that fixture ever stops setting it, rather than
+# passing vacuously.
+#
+#   ADMIN_DECRYPTION_PUBKEY <- ADMIN_PUBKEY: the admin's X25519 HPKE recipient
+#     key, a different key from the Ed25519 signing key ADMIN_PUBKEY. Sealing
+#     admin envelopes to the Ed25519 key produced ciphertext nobody could open
+#     (#1283), so the app now fails closed and the templates must emit both.
+PAIRED_REQUIRED_VARS = {
+    "ADMIN_DECRYPTION_PUBKEY": "ADMIN_PUBKEY",
+}
 
 # Conditionally-required vars (e.g. WEBHOOK_BASE_URL, only required when
 # ENVIRONMENT === 'production') are expressed as raw env['...'] lookups
@@ -107,18 +143,75 @@ def extract_required_vars(config_ts: Path) -> tuple[list[str], list[str]]:
             "Either config.ts changed shape (update UNCONDITIONAL_RE) or this "
             "script is pointed at the wrong file -- refusing to pass trivially."
         )
+
+    # A var config.ts asserts inside a conditional branch is still a hard
+    # startup requirement in the configurations that reach it. Demanding it
+    # unconditionally is wrong, and dropping it is worse -- so require that
+    # each one is declared in PAIRED_REQUIRED_VARS and checked there.
+    unknown_nested = sorted(set(NESTED_ASSERT_RE.findall(src)) - set(PAIRED_REQUIRED_VARS))
+    if unknown_nested:
+        raise SystemExit(
+            "[check-required-env] config.ts asserts "
+            f"{', '.join(unknown_nested)} inside a conditional branch, but "
+            "PAIRED_REQUIRED_VARS does not say what turns that requirement on. "
+            "Add an entry mapping each var to its trigger var (and make the "
+            "full-scenario fixture set the trigger) so the render is actually "
+            "checked -- refusing to skip it silently."
+        )
+
     return unconditional, conditional
 
 
-def rendered_keys(env_file: Path) -> set[str]:
-    keys: set[str] = set()
+def check_paired_vars(targets: dict[str, Path]) -> list[str]:
+    """Assert every PAIRED_REQUIRED_VARS pair renders together, not vacuously.
+
+    config.ts fails closed when a trigger var is set without its dependent, so
+    a template that emits one and not the other produces a container that
+    refuses to boot. Checked against the full-scenario render because only
+    that one sets the triggers; if it stops setting one, that is reported as a
+    failure rather than quietly passing on a branch nothing entered.
+    """
+    failures: list[str] = []
+    for label, path in targets.items():
+        if not path.is_file():
+            continue  # already reported as a missing render by the caller
+        # Present-but-empty is not present for these two: config.ts treats an
+        # empty ADMIN_DECRYPTION_PUBKEY exactly like a missing one and refuses
+        # to start, so a template that emits a bare `KEY=` has not satisfied
+        # the requirement -- it has only hidden the failure until boot.
+        keys = {k for k, v in rendered_env(path).items() if v}
+        for dependent, trigger in sorted(PAIRED_REQUIRED_VARS.items()):
+            if trigger not in keys:
+                failures.append(
+                    f"{label}: {trigger} is absent from this render, so the "
+                    f"{trigger} -> {dependent} requirement was never exercised. "
+                    "Set it in scripts/full-scenario.extra-vars.json -- a check "
+                    f"that cannot fail is not a check (rendered file: {path})"
+                )
+            elif dependent not in keys:
+                failures.append(
+                    f"{label}: {trigger} is rendered but {dependent} is missing or empty. "
+                    "apps/worker/lib/config.ts refuses to start in that state, "
+                    f"so this deploy path cannot boot (rendered file: {path})"
+                )
+    return failures
+
+
+def rendered_env(env_file: Path) -> dict[str, str]:
+    """Parse a rendered .env into {key: value}."""
+    env: dict[str, str] = {}
     for line in env_file.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         if "=" in line:
-            keys.add(line.split("=", 1)[0])
-    return keys
+            key, value = line.split("=", 1)
+            env[key] = value.strip().strip('"')
+    return env
+
+
+def rendered_keys(env_file: Path) -> set[str]:
+    return set(rendered_env(env_file))
 
 
 def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
@@ -292,6 +385,20 @@ def main() -> int:
                 f"[check-required-env] OK   {label}: all "
                 f"{len(OPTIONAL_VARS_WITH_CONSUMERS)} optional vars reachable"
             )
+
+    print(
+        "\n[check-required-env] Conditionally-required pairs "
+        "(trigger -> dependent), checked against the full scenario:"
+    )
+    for dependent, trigger in sorted(PAIRED_REQUIRED_VARS.items()):
+        print(f"  {trigger} -> {dependent}")
+    paired_failures = check_paired_vars(full_targets)
+    failures.extend(paired_failures)
+    if not paired_failures:
+        print(
+            f"[check-required-env] OK   both full-scenario renders carry all "
+            f"{len(PAIRED_REQUIRED_VARS)} conditionally-required pair(s)"
+        )
 
     if failures:
         print("\n[check-required-env] FAILED:", file=sys.stderr)

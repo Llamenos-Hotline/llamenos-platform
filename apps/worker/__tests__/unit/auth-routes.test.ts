@@ -350,6 +350,7 @@ describe('auth routes', () => {
     const ADMIN_X25519 = '27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177'
 
     it('returns ADMIN_DECRYPTION_PUBKEY as the admin HPKE recipient', async () => {
+
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
@@ -375,6 +376,7 @@ describe('auth routes', () => {
      * some other wrong key, so the Ed25519 key is named explicitly.
      */
     it('never substitutes the Ed25519 ADMIN_PUBKEY when no X25519 key is configured', async () => {
+
       const { app } = createApp()
 
       const res = await app.request('/auth/me', {}, {
@@ -407,6 +409,7 @@ describe('auth routes', () => {
         const body = await res.json()
         expect(body.adminDecryptionPubkey, `forwarded malformed key ${malformed}`).toBeUndefined()
       }
+
     })
   })
 

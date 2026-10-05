@@ -5,8 +5,9 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray, type SQL } from 'drizzle-orm'
+import { eq, and, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
+import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
@@ -217,6 +218,7 @@ function rowToDevice(row: typeof devices.$inferSelect): DeviceRecord {
     platform: row.platform as DeviceRecord['platform'],
     pushToken: row.pushToken ?? '',
     wakeKeyPublic: row.wakeKeyPublic ?? '',
+    x25519Pubkey: row.x25519Pubkey ?? null,
     registeredAt: row.registeredAt.toISOString(),
     lastSeenAt: row.lastSeenAt?.toISOString() ?? row.registeredAt.toISOString(),
   }
@@ -279,6 +281,21 @@ export class IdentityService {
       )
       .limit(1)
     return { hasAdmin: rows.length > 0 }
+  }
+
+  /**
+   * Build the HPKE recipient list for a record the SERVER seals: the admin's
+   * X25519 recipient key plus the device encryption keys of the given users.
+   *
+   * Never pass a `users.pubkey` / `c.get('pubkey')` / `conversations.assignedTo`
+   * value straight to `hpkeSeal` — those are Ed25519 auth keys and sealing to
+   * one silently produces an envelope nobody holds the secret for (#1021).
+   */
+  async buildReaderPubkeys(
+    adminDecryptionPubkey: string | undefined,
+    userPubkeys: string[],
+  ): Promise<string[]> {
+    return buildReaderPubkeys(this.db, adminDecryptionPubkey, userPubkeys)
   }
 
   /**
@@ -1240,6 +1257,14 @@ export class IdentityService {
       })
       .from(devices)
       .where(eq(devices.pubkey, pubkey))
+      // Deterministic order, oldest first. Without it Postgres returns rows in
+      // whatever order it likes, so callers that index into the list — "the
+      // device I just registered is the last one" — silently get a different
+      // device on some runs. That non-determinism made `PUK Rotation >
+      // Distribute envelopes for multiple devices` flake: it picked the same
+      // device twice and the multi-row upsert hit "ON CONFLICT DO UPDATE
+      // cannot affect row a second time", surfacing as a 500.
+      .orderBy(asc(devices.registeredAt), asc(devices.id))
   }
 
   async deleteDeviceById(pubkey: string, deviceId: string): Promise<boolean> {

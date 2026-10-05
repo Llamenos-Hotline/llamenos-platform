@@ -99,8 +99,9 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       metadata: null, messageCount: 1,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
     }
-    // handleIncoming's conversation lookup, then addMessage's getById.
-    db.$setSelectResults([[conv], [conv]])
+    // handleIncoming's conversation lookup, then buildReaderPubkeys' device-key
+    // resolution (the assignee has no device key on file), then addMessage's getById.
+    db.$setSelectResults([[conv], [], [conv]])
     db.$setInsertResult([{ id: 'msg-1', conversationId: 'conv-1' }])
 
     await service.handleIncoming({
