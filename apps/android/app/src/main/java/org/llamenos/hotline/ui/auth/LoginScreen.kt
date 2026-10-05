@@ -54,9 +54,12 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.ui.components.LoadingOverlay
 
 /**
- * Login screen with logo, hub URL input, and identity creation.
+ * Login screen with logo, hub URL input, invite code entry, and identity creation.
  *
  * Entry path: "Create New Identity" -> PINSetScreen (device keys generated with PIN).
+ * If an invite code (or pasted invite link) is entered, the identity is redeemed
+ * against the server right after key generation, enrolling the device as a hub
+ * member (#1345).
  * Linking from another device is not offered until the identity layer can carry
  * a device's keys across (#1300).
  *
@@ -170,6 +173,24 @@ fun LoginScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("hub-url-input"),
+                            )
+
+                            // Invite code field — bare code or full invite link (#1345)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = uiState.inviteCode,
+                                onValueChange = viewModel::updateInviteCode,
+                                label = { Text(stringResource(R.string.login_invite_code_label)) },
+                                placeholder = { Text(stringResource(R.string.login_invite_code_placeholder)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Uri,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("invite-code-input"),
                             )
 
                             // Error message

@@ -2494,6 +2494,8 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2554,7 +2556,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -4663,5 +4667,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enrol": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enrol",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

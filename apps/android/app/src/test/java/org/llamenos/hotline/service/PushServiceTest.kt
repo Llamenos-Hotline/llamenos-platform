@@ -8,7 +8,10 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.telephony.IncomingCallNotifier
+import org.llamenos.hotline.telephony.IncomingCallTracker
 import org.llamenos.hotline.telephony.LinphoneService
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -18,7 +21,14 @@ class PushServiceTest {
     private val context = mockk<Context>(relaxed = true)
     private val testDispatcher = UnconfinedTestDispatcher()
     private val scope = TestScope(testDispatcher)
-    private val linphoneService = LinphoneService(context, activeHubState, mockk(relaxed = true), scope)
+    private val linphoneService = LinphoneService(
+        context,
+        activeHubState,
+        mockk<CryptoService>(relaxed = true),
+        IncomingCallTracker(),
+        mockk<IncomingCallNotifier>(relaxed = true),
+        scope,
+    )
 
     @Test
     fun `shift reminder wake payload does NOT register call hub mapping`() = runTest(testDispatcher) {

@@ -328,6 +328,7 @@ class HubScopedViewModelReloadTest {
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
                 mockk(relaxed = true),
+                mockk<HubRepository>(relaxed = true),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "DashboardViewModel")

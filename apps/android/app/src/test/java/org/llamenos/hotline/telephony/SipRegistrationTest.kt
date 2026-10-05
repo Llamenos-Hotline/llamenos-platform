@@ -46,6 +46,7 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.hotline.ui.dashboard.DashboardViewModel
@@ -157,7 +158,14 @@ class SipRegistrationTest {
             it.ioDispatcher = UnconfinedTestDispatcher()
             it.client = OkHttpClient()
         }
-        linphoneService = LinphoneService(mockk<Context>(relaxed = true), activeHubState, cryptoService, appScope)
+        linphoneService = LinphoneService(
+            mockk<Context>(relaxed = true),
+            activeHubState,
+            cryptoService,
+            IncomingCallTracker(),
+            mockk<IncomingCallNotifier>(relaxed = true),
+            appScope,
+        )
         linphoneService.initialize()
         sipRegistrar = SipRegistrar(apiService, linphoneService)
         shiftClockRepository = ShiftClockRepository(apiService)
@@ -222,6 +230,7 @@ class SipRegistrationTest {
             mockk(relaxed = true),
             shiftClockRepository,
             sipRegistrar,
+            mockk<HubRepository>(relaxed = true),
         )
     }
 
@@ -379,6 +388,9 @@ class SipRegistrationTest {
         val call = mockk<Call>()
         every { call.callLog } returns callLog
         every { call.dir } returns Call.Dir.Incoming
+        // The ring path (main's inbound-calling feature) reads these on IncomingReceived.
+        every { call.remoteAddress } returns mockk<Address>(relaxed = true)
+        every { call.toAddress } returns mockk<Address>(relaxed = true)
         return call
     }
 

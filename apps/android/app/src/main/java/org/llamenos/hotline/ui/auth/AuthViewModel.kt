@@ -11,6 +11,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.llamenos.hotline.api.ApiException
+import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.BiometricKeyInvalidatedException
 import org.llamenos.hotline.crypto.BiometricKeyStore
 import org.llamenos.hotline.crypto.CryptoService
@@ -19,6 +21,8 @@ import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.PinLockoutState
+import org.llamenos.hotline.model.InviteCodeParser
+import java.io.IOException
 import javax.inject.Inject
 
 /**
@@ -44,6 +48,10 @@ data class AuthUiState(
 
     // Login screen
     val hubUrl: String = "",
+    val inviteCode: String = "",
+
+    // Invite-code enrolment (#1345)
+    val enrolment: EnrolmentState = EnrolmentState.NotApplicable,
 
     // PIN
     val pin: String = "",
@@ -60,6 +68,44 @@ data class AuthUiState(
     // Auth state
     val hasStoredKeys: Boolean = false,
     val isAuthenticated: Boolean = false,
+)
+
+/** Classified redemption failure, mapped to a localized message by the UI. */
+enum class EnrolmentError {
+    INVALID_CODE,
+    NOT_FOUND,
+    EXPIRED,
+    RATE_LIMITED,
+    NETWORK,
+    UNKNOWN,
+}
+
+/**
+ * Invite-code enrolment progress (#1345).
+ *
+ * [NotApplicable] when no invite code was entered — the identity is created
+ * locally and used as before. [Redeemed]/[Skipped] both end authenticated.
+ */
+sealed interface EnrolmentState {
+    data object NotApplicable : EnrolmentState
+    data object Redeeming : EnrolmentState
+    data object Redeemed : EnrolmentState
+    data class Failed(val error: EnrolmentError) : EnrolmentState
+    data object Skipped : EnrolmentState
+}
+
+/**
+ * Auth state after the user locks the app: PIN entry cleared and the
+ * authenticated flag reset, so the PIN unlock screen does not treat the
+ * just-locked session as already authenticated.
+ */
+internal fun AuthUiState.resetForLock(): AuthUiState = copy(
+    pin = "",
+    confirmPin = "",
+    isConfirmingPin = false,
+    pinMismatch = false,
+    error = null,
+    isAuthenticated = false,
 )
 
 /**
@@ -82,6 +128,7 @@ class AuthViewModel @Inject constructor(
     private val cryptoService: CryptoService,
     private val keystoreService: KeyValueStore,
     private val biometricKeyStore: BiometricKeyStore,
+    private val inviteRepository: InviteRepository,
 ) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -110,6 +157,14 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
+     * Update the invite code field. Accepts a bare code or a full invite link;
+     * normalized at redemption time via [InviteCodeParser].
+     */
+    fun updateInviteCode(code: String) {
+        _uiState.update { it.copy(inviteCode = code, error = null) }
+    }
+
+    /**
      * Validate and save hub URL, then navigate to PIN set.
      * Device keys are generated atomically with PIN encryption in [onPinSetComplete].
      */
@@ -123,6 +178,75 @@ class AuthViewModel @Inject constructor(
 
         // Navigate to PIN set — keys will be generated when PIN is confirmed
         _uiState.update { it.copy(isLoading = false) }
+    }
+
+    /**
+     * Decide what happens right after local device keys are generated:
+     * redeem the invite code if one was entered, else authenticate directly.
+     */
+    private fun onIdentityCreated() {
+        val code = _uiState.value.inviteCode
+        if (InviteCodeParser.extract(code) == null) {
+            _uiState.update { it.copy(isAuthenticated = true) }
+            return
+        }
+        redeemInvite(code)
+    }
+
+    /**
+     * Redeem the entered invite code against the server, registering this
+     * identity as a hub member. Called automatically after identity creation
+     * when an invite code is present; [retryEnrolment] re-enters here after a
+     * failure. Only resolves [AuthUiState.isAuthenticated] on success or when
+     * the user skips ([skipEnrolment]).
+     */
+    fun redeemInvite(code: String) {
+        _uiState.update { it.copy(enrolment = EnrolmentState.Redeeming) }
+        viewModelScope.launch {
+            inviteRepository.redeemInvite(code)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            enrolment = EnrolmentState.Redeemed,
+                            isAuthenticated = true,
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(enrolment = EnrolmentState.Failed(classifyRedeemFailure(e)))
+                    }
+                }
+        }
+    }
+
+    /** Retry a failed redemption with the same invite code. */
+    fun retryEnrolment() {
+        val code = _uiState.value.inviteCode
+        if (InviteCodeParser.extract(code) != null) redeemInvite(code)
+    }
+
+    /**
+     * Give up on enrolling for now and enter the app with the local identity.
+     * The server still doesn't know this pubkey, so signed requests will 401
+     * until an enrolment succeeds — surfaced by the existing auth-error flow.
+     */
+    fun skipEnrolment() {
+        _uiState.update {
+            it.copy(enrolment = EnrolmentState.Skipped, isAuthenticated = true)
+        }
+    }
+
+    private fun classifyRedeemFailure(e: Throwable): EnrolmentError = when (e) {
+        is ApiException -> when (e.code) {
+            400 -> EnrolmentError.INVALID_CODE
+            404 -> EnrolmentError.NOT_FOUND
+            410 -> EnrolmentError.EXPIRED
+            429 -> EnrolmentError.RATE_LIMITED
+            else -> EnrolmentError.UNKNOWN
+        }
+        is IOException -> EnrolmentError.NETWORK
+        else -> EnrolmentError.UNKNOWN
     }
 
     /**
@@ -213,12 +337,16 @@ class AuthViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        isAuthenticated = true,
                         hasStoredKeys = true,
                         pin = "",
                         confirmPin = "",
                     )
                 }
+
+                // Keys exist locally now. If the volunteer entered an invite
+                // code, enrol before declaring authentication — the identity
+                // is only useful once the server knows it (#1345).
+                onIdentityCreated()
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -333,18 +461,15 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
-     * Reset PIN entry state (when navigating back from confirm to initial entry).
+     * Reset PIN entry state and clear the authenticated flag.
+     *
+     * Called on lock (Navigation's `onLock`): the user is back at the PIN
+     * unlock screen, so `isAuthenticated` must be false — otherwise
+     * PINUnlockScreen's `LaunchedEffect(uiState.isAuthenticated)` would
+     * fire immediately and bounce back to Main while locked.
      */
     fun resetPinEntry() {
-        _uiState.update {
-            it.copy(
-                pin = "",
-                confirmPin = "",
-                isConfirmingPin = false,
-                pinMismatch = false,
-                error = null,
-            )
-        }
+        _uiState.update { it.resetForLock() }
     }
 
     /**

@@ -21,6 +21,7 @@ import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.BanRequest
@@ -67,6 +68,7 @@ class DashboardViewModel @Inject constructor(
     private val analyticsRepository: AnalyticsRepository,
     private val shiftClockRepository: ShiftClockRepository,
     private val sipRegistrar: SipRegistrar,
+    private val hubRepository: HubRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -76,8 +78,13 @@ class DashboardViewModel @Inject constructor(
         val signingPubkey = cryptoService.signingPubkeyHex ?: ""
         _uiState.value = DashboardUiState(signingPubkey = signingPubkey)
 
-        // Fetch auth info (including server event key) before connecting WebSocket
+        // Select an initial active hub if none is persisted (first hub in the list).
+        // Runs before fetchServerEventKey so the event key is chosen for the hub that
+        // will actually be active. This is the single call site that covers both the
+        // post-login path and the session-restore (PIN unlock) path — both navigate
+        // here. No-op when a hub is already selected (see HubRepository.ensureInitialHub).
         viewModelScope.launch {
+            hubRepository.ensureInitialHub()
             fetchServerEventKey()
             webSocketService.connect()
         }

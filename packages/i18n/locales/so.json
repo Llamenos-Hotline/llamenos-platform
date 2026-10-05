@@ -3564,7 +3564,9 @@
     "createIdentity": "Create New Identity",
     "hubUrlPlaceholder": "https://hub.example.org",
     "importKey": "Import Existing Key",
-    "linkDevice": "Link a Device"
+    "linkDevice": "Link a Device",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "badge": {
     "onCall": "Wicitaan ku jiraa",
@@ -4540,6 +4542,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",
@@ -4661,5 +4665,17 @@
     "unavailableMessage": "Waan ka xunnahay, hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan dib u isku day habeenkii dambe. Nabad gelyo.",
     "voicemailPrompt": "Hadda ma jiro cid wicitaankaaga qaadan kara. Fadlan ka dib fariin dhig dhawaaqa kadib.",
     "voicemailThanks": "Waad ku mahadsan tahay fariintaada. Nabad gelyo."
+  },
+  "enrol": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enrol",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enrol later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
   }
 }
