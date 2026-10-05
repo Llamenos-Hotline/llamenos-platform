@@ -94,14 +94,14 @@ const recoveryListSessionsResponseSchema = z.array(z.object({
 }))
 
 const recoveryCompleteSchema = z.object({
-  /** Next sigchain seqNo for the recovering user's chain. */
-  sigchainSeqNo: z.number().int().nonnegative(),
+  /** Next sigchain seqNo for the recovering user's chain. 1 if the chain is empty (crate verifier: first link has seq=1). */
+  sigchainSeqNo: z.number().int().positive(),
   /** Must include { sessionId, contributingHolderPubkeys }. Server independently verifies both. */
   sigchainPayload: z.record(z.string(), z.unknown()),
   /** Ed25519 signature over `hash`, made with the NEW device's own key (self-authorizing). Hex. */
   signature: z.string().regex(/^[0-9a-f]{128}$/i, 'Must be 64-byte Ed25519 signature in hex'),
-  /** SHA-256 hash of the previous sigchain link (hex), or empty string if this is seq 0. */
-  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex or empty string'),
+  /** SHA-256 hash of the previous sigchain link (hex). null if this is the genesis link ('' accepted as a legacy alias). */
+  prevHash: z.string().regex(/^([0-9a-f]{64}|)$/i, 'Must be SHA-256 hex, empty string, or null').nullable(),
   /** SHA-256 hash of this link's canonical form (hex). Server recomputes and verifies. */
   hash: z.string().regex(/^[0-9a-f]{64}$/i, 'Must be SHA-256 hex'),
   /** Device ID the new device wants to register itself under. */
@@ -119,7 +119,7 @@ const recoveryCompleteResponseSchema = z.object({
     linkType: z.string(),
     payload: z.unknown(),
     signature: z.string(),
-    prevHash: z.string(),
+    prevHash: z.string().nullable(),
     hash: z.string(),
     signerDeviceId: z.string(),
     signerPubkey: z.string(),

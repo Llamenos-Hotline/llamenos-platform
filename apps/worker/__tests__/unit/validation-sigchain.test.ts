@@ -33,11 +33,11 @@ describe('sigchain route validation', () => {
   // -----------------------------------------------------------------------
   describe('POST /sigchain', () => {
     const VALID_LINK = {
-      seqNo: 0,
+      seqNo: 1,
       linkType: 'genesis',
       payload: { ed25519Pubkey: VALID_PUBKEY },
       signature: VALID_SIGNATURE,
-      prevHash: '',
+      prevHash: null,
       hash: VALID_HASH,
       signerDeviceId: 'dev-1',
       signerPubkey: VALID_PUBKEY,
@@ -62,6 +62,15 @@ describe('sigchain route validation', () => {
       const res = await sendJSON(app, SIGCHAIN_PATH, {
         ...VALID_LINK,
         seqNo: -1,
+      })
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects seqNo 0 (pre-#1029 genesis shape; crate verifier requires seq=1)', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, SIGCHAIN_PATH, {
+        ...VALID_LINK,
+        seqNo: 0,
       })
       expect(res.status).toBe(400)
     })
@@ -118,13 +127,22 @@ describe('sigchain route validation', () => {
       expect(res.status).toBe(400)
     })
 
-    it('rejects prevHash with invalid format (not 64-hex or empty)', async () => {
+    it('rejects prevHash with invalid format (not 64-hex, empty, or null)', async () => {
       const app = createApp()
       const res = await sendJSON(app, SIGCHAIN_PATH, {
         ...VALID_LINK,
         prevHash: 'invalid',
       })
       expect(res.status).toBe(400)
+    })
+
+    it('accepts legacy genesis prevHash empty string as an alias for null', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, SIGCHAIN_PATH, {
+        ...VALID_LINK,
+        prevHash: '',
+      })
+      expect(res.status).not.toBe(400)
     })
 
     it('accepts valid genesis link', async () => {
@@ -138,7 +156,7 @@ describe('sigchain route validation', () => {
       const app = createApp()
       const res = await sendJSON(app, SIGCHAIN_PATH, {
         ...VALID_LINK,
-        seqNo: 1,
+        seqNo: 2,
         linkType: 'device_add',
         prevHash: VALID_HASH,
       })
