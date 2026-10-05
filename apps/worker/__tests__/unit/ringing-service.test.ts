@@ -330,7 +330,7 @@ describe('startParallelRinging', () => {
     })
 
     it('clocked in but NOT scheduled — does not ring', async () => {
-      // An admin never put them on the schedule. Clocking in cannot enrol you.
+      // An admin never put them on the schedule. Clocking in cannot enroll you.
       const services = makeServices({
         onShiftPubkeys: [],
         clockedInPubkeys: ['pk-clocked'],

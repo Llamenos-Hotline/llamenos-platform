@@ -44,14 +44,14 @@ import org.llamenos.hotline.ui.components.SecureWindowEffect
  * Localised message for a failed invite redemption.
  */
 @Composable
-private fun enrolmentErrorMessage(error: EnrolmentError): String = stringResource(
+private fun enrollmentErrorMessage(error: EnrollmentError): String = stringResource(
     when (error) {
-        EnrolmentError.INVALID_CODE -> R.string.enrol_error_invalid_code
-        EnrolmentError.NOT_FOUND -> R.string.enrol_error_not_found
-        EnrolmentError.EXPIRED -> R.string.enrol_error_expired
-        EnrolmentError.RATE_LIMITED -> R.string.enrol_error_rate_limited
-        EnrolmentError.NETWORK -> R.string.enrol_error_network
-        EnrolmentError.UNKNOWN -> R.string.enrol_error_unknown
+        EnrollmentError.INVALID_CODE -> R.string.enroll_error_invalid_code
+        EnrollmentError.NOT_FOUND -> R.string.enroll_error_not_found
+        EnrollmentError.EXPIRED -> R.string.enroll_error_expired
+        EnrollmentError.RATE_LIMITED -> R.string.enroll_error_rate_limited
+        EnrollmentError.NETWORK -> R.string.enroll_error_network
+        EnrollmentError.UNKNOWN -> R.string.enroll_error_unknown
     },
 )
 
@@ -188,55 +188,55 @@ fun PINSetScreen(
 
                 Spacer(Modifier.height(32.dp))
 
-                // Invite-code enrolment status (#1345). Shown after key generation
+                // Invite-code enrollment status (#1345). Shown after key generation
                 // while the server registers this identity against the invite code.
-                when (val enrolment = uiState.enrolment) {
-                    is EnrolmentState.Redeeming -> {
+                when (val enrollment = uiState.enrollment) {
+                    is EnrollmentState.Redeeming -> {
                         CircularProgressIndicator(
                             modifier = Modifier
                                 .size(28.dp)
-                                .testTag("enrol-redeeming"),
+                                .testTag("enroll-redeeming"),
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = stringResource(R.string.enrol_redeeming),
+                            text = stringResource(R.string.enroll_redeeming),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.testTag("enrol-redeeming-label"),
+                            modifier = Modifier.testTag("enroll-redeeming-label"),
                         )
                     }
 
-                    is EnrolmentState.Failed -> {
+                    is EnrollmentState.Failed -> {
                         Text(
-                            text = stringResource(R.string.enrol_failed_title),
+                            text = stringResource(R.string.enroll_failed_title),
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center,
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = enrolmentErrorMessage(enrolment.error),
+                            text = enrollmentErrorMessage(enrollment.error),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.testTag("enrol-error"),
+                            modifier = Modifier.testTag("enroll-error"),
                         )
                         Spacer(Modifier.height(12.dp))
                         OutlinedButton(
-                            onClick = viewModel::retryEnrolment,
+                            onClick = viewModel::retryEnrollment,
                             shape = MaterialTheme.shapes.small,
                             modifier = Modifier
-                                .testTag("enrol-retry"),
+                                .testTag("enroll-retry"),
                         ) {
-                            Text(stringResource(R.string.enrol_retry))
+                            Text(stringResource(R.string.enroll_retry))
                         }
                         TextButton(
-                            onClick = viewModel::skipEnrolment,
+                            onClick = viewModel::skipEnrollment,
                             modifier = Modifier
-                                .testTag("enrol-skip"),
+                                .testTag("enroll-skip"),
                         ) {
-                            Text(stringResource(R.string.enrol_continue_without))
+                            Text(stringResource(R.string.enroll_continue_without))
                         }
                     }
 
