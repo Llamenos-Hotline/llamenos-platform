@@ -173,7 +173,7 @@ config.get('/verify',
 /** Let's Encrypt ISRG Root X1 — RSA 4096 intermediate CA SPKI SHA-256. */
 const ISRG_ROOT_X1_HASH = 'C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M='
 /** Let's Encrypt ISRG Root X2 — ECDSA P-384 backup root SPKI SHA-256. */
-const ISRG_ROOT_X2_HASH = 'diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA='
+const ISRG_ROOT_X2_HASH = 'diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI='
 
 /**
  * GET /api/config/pins — Ed25519-signed certificate pin list.

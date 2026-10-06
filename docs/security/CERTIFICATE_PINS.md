@@ -40,7 +40,7 @@ renewal never breaks the app. Two independent CA roots for backup (RFC 7469 §2.
 | Domain | Type | Hash (base64 SHA-256 SPKI) | Expires |
 |--------|------|---------------------------|---------|
 | *.llamenos-hotline.org | ISRG Root X1 (RSA 4096) | `C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=` | 2035-06-04 |
-| *.llamenos-hotline.org | ISRG Root X2 (ECDSA P-384) | `diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA=` | 2040-09-17 |
+| *.llamenos-hotline.org | ISRG Root X2 (ECDSA P-384) | `diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=` | 2040-09-17 |
 
 These hashes are identical in both enforcement layers:
 - `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`

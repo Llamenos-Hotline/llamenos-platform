@@ -349,7 +349,7 @@ describe('config route', () => {
       expect(body.pins[0].algorithm).toBe('sha256')
       expect(body.pins[0].hash).toBe('C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=')
       expect(body.pins[0].label).toContain('ISRG Root X1')
-      expect(body.pins[1].hash).toBe('diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA=')
+      expect(body.pins[1].hash).toBe('diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=')
       expect(body.pins[1].label).toContain('ISRG Root X2')
 
       // Should have timestamps for rotation

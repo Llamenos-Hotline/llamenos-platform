@@ -61,7 +61,7 @@
             <!-- ISRG Root X1 — RSA 4096 -->
             <pin digest="SHA-256">C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</pin>
             <!-- ISRG Root X2 — ECDSA P-384 backup root -->
-            <pin digest="SHA-256">diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA=</pin>
+            <pin digest="SHA-256">diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=</pin>
         </pin-set>
     </domain-config>
 </network-security-config>

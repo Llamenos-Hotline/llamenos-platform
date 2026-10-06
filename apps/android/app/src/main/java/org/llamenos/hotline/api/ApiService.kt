@@ -98,7 +98,7 @@ class ApiService @Inject constructor(
          * Let's Encrypt ISRG Root X2 — ECDSA P-384 backup root.
          * Minimum 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).
          */
-        const val ISRG_ROOT_X2_HASH = "sha256/diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA="
+        const val ISRG_ROOT_X2_HASH = "sha256/diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
 
         /** Default pin hashes applied to whichever hub host the user configures. */
         val DEFAULT_PIN_HASHES = listOf(ISRG_ROOT_X1_HASH, ISRG_ROOT_X2_HASH)
