@@ -243,7 +243,9 @@ export class ConversationsService {
     if (input.status !== undefined) updates.status = input.status
     if (input.assignedTo !== undefined) updates.assignedTo = input.assignedTo
     if (input.metadata) {
-      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${input.metadata}::jsonb`
+      // Encoded by the column, never JSON.stringify'd — see the comment on
+      // SettingsService.updateHubSettings for both halves of why.
+      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${conversations.metadata.mapToDriverValue(input.metadata)}::jsonb`
     }
 
     const [row] = await this.db

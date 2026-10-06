@@ -58,8 +58,12 @@ else
   reporter_record_suite "unit" 0 1 0
 fi
 
-# Step 4: Worker integration tests (if available)
-if reporter_run_step "worker integration tests" bun run test:worker:integration; then
+# Step 4: Worker integration tests.
+# The wrapper, not `bun run test:worker:integration`: it runs the same vitest
+# config and then asserts the suite actually ran (every file collected, test
+# count above a floor). The bare npm script stays un-floored on purpose, as the
+# escape hatch for working on a single file — see the script's header (#1167).
+if reporter_run_step "worker integration tests" bun scripts/test-worker-integration.ts; then
   reporter_record_suite "integration" 1 0 0
 else
   overall_result="fail"

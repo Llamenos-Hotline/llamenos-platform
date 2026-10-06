@@ -2744,8 +2744,8 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
 
   const ALL_GATED_JOBS = [
     'ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit',
-    'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests', 'migration-drift',
-    'ansible-validate', 'audit',
+    'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'crypto-tests',
+    'migration-drift', 'ansible-validate', 'audit',
   ]
 
   it.each([
@@ -2764,7 +2764,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     [
       'a packages/protocol/-only change',
       ['packages/protocol/schemas/foo.ts'],
-      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests'],
+      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'crypto-tests'],
       // `audit` stays scoped to dependency manifests even on a shared-dep
       // change that runs everything else — this PR touched neither
       // package.json nor bun.lock and must not be blocked by a pre-existing
@@ -2787,7 +2787,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // above, for the pair that pins both directions.
       'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
@@ -2804,7 +2804,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // row fail, so the narrowing cannot be over-applied either.
       'a packages/test-specs/ change INSIDE the mobile corpus',
       ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-integration', 'backend-unit', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
     [
@@ -2853,6 +2853,12 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],
     ['e2e', "needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')"],
     ['backend-unit', "needs.changes.outputs.backend == 'true' || needs.changes.outputs.orchestrator == 'true'"],
+    // Deliberately NOT revalidate-gated, unlike backend-bdd and e2e: one
+    // postgres service container on a hosted runner, contending for nothing
+    // scarce, covering server boot and client-visible response shapes. Adding
+    // `revalidate` here moves that signal out of the PR and into the serial
+    // merge queue — fail this test rather than let that happen quietly (#1167).
+    ['backend-integration', "needs.changes.outputs.backend == 'true'"],
     ['ansible-validate', "needs.changes.outputs.ansible == 'true' || needs.changes.outputs.backend == 'true'"],
     ['audit', "needs.changes.outputs.audit == 'true'"],
   ])('"%s" carries exactly the expected job-level if: — removing it must fail this test', (job, expected) => {
@@ -3214,15 +3220,58 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
   // loads a vitest file.
   it('every vitest config a ci.yml job runs, and each of its setupFiles, runs that job when changed alone — and no iOS/Android/crypto job', () => {
     const yaml = ciYaml()
+    const pkgScripts: Record<string, string> =
+      JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).scripts ?? {}
+
+    // A job need not spell `--config` out on the command line.
+    // `backend-integration` runs `bun scripts/test-worker-integration.ts`, which
+    // passes the config as separate argv entries so it can assert afterwards that
+    // the suite actually ran (#1167). So a job's configs are resolved from three
+    // places: the literal flag, any scripts/ file the job EXECUTES, and any
+    // `bun run <script>` resolved through package.json (which may itself name a
+    // scripts/ file). Without this the rail goes blind precisely when a job stops
+    // naming the flag inline.
+    const configsNamedIn = (text: string): string[] =>
+      [...stripComments(text).matchAll(/(vitest\.[a-z0-9-]+\.config\.ts)/g)].map((m) => m[1] as string)
+
+    const configsInScriptsNamedBy = (text: string): string[] => {
+      const out: string[] = []
+      for (const m of text.matchAll(/(scripts\/[A-Za-z0-9._/-]+\.(?:ts|sh))/g)) {
+        const file = join(process.cwd(), m[1] as string)
+        if (existsSync(file)) out.push(...configsNamedIn(readFileSync(file, 'utf8')))
+      }
+      return out
+    }
+
+    // Comment lines are stripped before matching, in the workflow AND in any
+    // script it runs. A comment that merely DESCRIBES the command
+    // ("# Runs `vitest run --config vitest.x.config.ts`") otherwise satisfies
+    // this rail on its own: replacing the real step with `run: echo skipped`
+    // left the pin green, which is the same class of false-green the rail
+    // exists to prevent.
+    const stripComments = (text: string): string =>
+      text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+
     const bound: Array<[string, string]> = []
     for (const job of ALL_GATED_JOBS) {
-      for (const m of jobBlock(yaml, job).matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) bound.push([job, m[1] as string])
+      const block = stripComments(jobBlock(yaml, job))
+      const seen = new Set<string>()
+      for (const m of block.matchAll(/--config\s+(vitest\.[a-z0-9-]+\.config\.ts)/g)) seen.add(m[1] as string)
+      for (const c of configsInScriptsNamedBy(block)) seen.add(c)
+      for (const m of block.matchAll(/bun run ([A-Za-z0-9:_-]+)/g)) {
+        const cmd = pkgScripts[m[1] as string]
+        if (!cmd) continue
+        for (const c of configsNamedIn(cmd)) seen.add(c)
+        for (const c of configsInScriptsNamedBy(cmd)) seen.add(c)
+      }
+      for (const c of seen) bound.push([job, c])
     }
     // Pinned so a renamed job or a moved step cannot make the loop vacuous.
     expect(bound).toEqual(expect.arrayContaining([
       ['backend-unit', 'vitest.unit.config.ts'],
       ['backend-unit', 'vitest.orchestrator.config.ts'],
       ['desktop-unit', 'vitest.desktop.config.ts'],
+      ['backend-integration', 'vitest.integration.config.ts'],
     ]))
     for (const [job, config] of bound) {
       const setupList = readFileSync(join(process.cwd(), config), 'utf8').match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''

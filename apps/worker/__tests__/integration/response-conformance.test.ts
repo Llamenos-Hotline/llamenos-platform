@@ -54,6 +54,7 @@ vi.mock('../../lib/auth', async (importOriginal) => {
 })
 
 import { describe, it, expect, vi } from 'vitest'
+import { z } from 'zod'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import { assertConformsToSchema } from '../helpers/response-conformance'
@@ -105,6 +106,14 @@ const DEFAULT_ENV: Record<string, string> = {
 // Env bindings are passed via app.request(path, init, env) as 3rd argument.
 // ---------------------------------------------------------------------------
 
+/**
+ * The hub every case is scoped to unless it overrides `hubId`. Named rather
+ * than inlined because fixtures have to agree with it: a service mock that
+ * grants a user authority in some OTHER hub makes them a non-member here, and
+ * hub-scoped routes answer as if they did not exist.
+ */
+const DEFAULT_HUB_ID = 'hub-test-1'
+
 function buildApp(
   mountPath: string,
   routes: Hono<AppEnv>,
@@ -117,18 +126,38 @@ function buildApp(
 ): { app: Hono<AppEnv>; env: Record<string, string> } {
   const {
     permissions = ['*'],
-    hubId = 'hub-test-1',
+    hubId = DEFAULT_HUB_ID,
     services = {},
     extraEnv = {},
   } = opts
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
-  // Auth middleware calls services.settings.getRoles() to resolve permissions.
-  // Return a super-admin role with wildcard permission so all routes pass permission checks.
+  // Methods that SHARED middleware calls on every route, regardless of which
+  // domain a case is exercising. A case supplies only the domain methods its
+  // own route needs; these are merged underneath it (see the `services` set
+  // below) so adding a cross-cutting middleware call does not silently turn
+  // every unrelated case into a 500.
+  //
+  // - getRoles: the auth middleware resolves permissions from role IDs. A
+  //   super-admin role with wildcard permission so routes pass permission checks.
+  // - checkRateLimit: lib/helpers.ts `checkRateLimit(services.settings, ...)`,
+  //   called by routes/auth.ts before login and by routes/invites.ts before
+  //   validate/redeem. `{ limited: false }` = never rate-limited under test.
+  // - getWebAuthnSettings: middleware/auth.ts reads it on every authenticated
+  //   request to decide passkey enforcement. Both flags false = not enforced.
+  //
+  // The last two were absent, and that is why POST /auth/login and
+  // GET /invites returned 500 before their schema was ever checked — two
+  // routes that grew a middleware call after this harness was written, caught
+  // by nothing because this file has never run in CI (#1167).
   const mockSettingsBase = {
     getRoles: vi.fn().mockResolvedValue({
       roles: [{ id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'], hubPermissions: [] }],
     }),
+    checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
+  }
+  const mockIdentityBase = {
+    getWebAuthnSettings: vi.fn().mockResolvedValue({ requireForAdmins: false, requireForUsers: false }),
   }
 
   const app = new Hono<AppEnv>()
@@ -159,10 +188,17 @@ function buildApp(
       callPreference: 'phone' as const,
       specializations: [],
     })
+    // Merge per-service rather than per-services-object: a case that supplies
+    // its own `settings` or `identity` mock must still get the shared
+    // middleware methods above, not lose them. (The previous spread put
+    // `...services` over `settings: mockSettingsBase` wholesale, so any case
+    // with its own settings mock silently lost getRoles.)
+    const provided = services as Record<string, Record<string, unknown> | undefined>
     c.set('services', {
       audit: mockAudit,
-      settings: mockSettingsBase,
       ...services,
+      settings: { ...mockSettingsBase, ...(provided.settings ?? {}) },
+      identity: { ...mockIdentityBase, ...(provided.identity ?? {}) },
     } as unknown as AppEnv['Variables']['services'])
 
     await next()
@@ -371,7 +407,21 @@ describe('Calls Routes — response conformance', () => {
         },
         identity: {
           getUsers: vi.fn().mockResolvedValue({
-            users: [{ pubkey: MOCK_PUBKEY, active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] }],
+            // `hubRoles` carries the hub assignment, and it is load-bearing:
+            // the ring resolver drops anyone whose authority in the hub is
+            // empty, and a non-super-admin GLOBAL role grants nothing inside a
+            // hub (#1037, @shared/permissions#resolveHubRoleIds). A user with
+            // `roles: ['role-volunteer']` and no assignment in DEFAULT_HUB_ID is
+            // correctly unringable, so presence would answer `users: []` and
+            // conform to the schema while proving nothing. This fixture is a
+            // real member of the hub the request is scoped to.
+            users: [{
+              pubkey: MOCK_PUBKEY,
+              active: true,
+              onBreak: false,
+              roles: [],
+              hubRoles: [{ hubId: DEFAULT_HUB_ID, roleIds: ['role-volunteer'] }],
+            }],
           }),
         },
       },
@@ -459,7 +509,30 @@ describe('Notes Routes — response conformance', () => {
     expect(typeof result.parsed.limit).toBe('number')
   })
 
-  it('POST /notes — conforms to noteResponseSchema (flat, no wrapper)', async () => {
+  // The note object inside POST /notes' 201 body. The envelope is `{ note }`,
+  // which is the shape the server has sent since 3f02c3291 (2026-05-04) and the
+  // only shape any client has ever read: src/client/lib/api/notes.ts types
+  // createNote/updateNote as `{ note: EncryptedNote }`.
+  //
+  // This case originally asserted the BARE note ("flat, no wrapper"), because
+  // the commit that introduced it (971c2e13e, #122) also changed the handler to
+  // `c.json(note, 201)` to match the bare `noteResponseSchema` its
+  // `describeRoute` declares. Two days later 3f02c3291 put the wrapper back —
+  // the desktop client was reading `res.note.id` and got `undefined` — and left
+  // the declaration alone. Nothing noticed for five months because this file has
+  // never run anywhere (#1167): no workflow invoked it, and it could not even
+  // load by hand.
+  //
+  // The wrapper is the settled contract, not the regression: PR #1386 adds
+  // `noteDetailResponseSchema` for exactly this `{ note }` body and lists
+  // "routes/notes.ts: POST/PATCH describeRoute should point at
+  // noteDetailResponseSchema" as outstanding work. So the ROUTE'S DECLARATION is
+  // the remaining defect, tracked there — not the handler, and not this test's
+  // validation of the note itself. When that schema lands, replace this inline
+  // envelope with it.
+  const notePostResponseSchema = z.object({ note: noteResponseSchema })
+
+  it('POST /notes — note body conforms to noteResponseSchema inside the { note } envelope', async () => {
     const mockRecords = {
       createNote: vi.fn().mockResolvedValue(mockNote),
     }
@@ -471,7 +544,7 @@ describe('Notes Routes — response conformance', () => {
       services: { records: mockRecords, cases: mockCasesService },
     })
 
-    const result = await assertConformsToSchema(app, 'POST', '/notes', noteResponseSchema, {
+    const result = await assertConformsToSchema(app, 'POST', '/notes', notePostResponseSchema, {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
@@ -479,9 +552,8 @@ describe('Notes Routes — response conformance', () => {
       expectedStatus: 201,
       env,
     })
-    // Response must be a flat note, not wrapped in { note: ... }
-    expect(result.parsed.encryptedContent).toBe('encrypted-data-base64')
-    expect(result.parsed.authorPubkey).toBe(MOCK_PUBKEY)
+    expect(result.parsed.note.encryptedContent).toBe('encrypted-data-base64')
+    expect(result.parsed.note.authorPubkey).toBe(MOCK_PUBKEY)
   })
 })
 

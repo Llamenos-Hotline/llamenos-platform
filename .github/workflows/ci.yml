@@ -758,6 +758,109 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # ─── Backend Integration Tests (real PostgreSQL) ───────────
+  backend-integration:
+    needs: changes
+    # NOT gated on `revalidate` (merge-queue-only), unlike e2e/backend-bdd/
+    # ios-e2e. That gate exists for suites that are expensive or contend for
+    # something scarce; this one is neither, and it is the cheapest place in
+    # CI to catch a whole class of defect.
+    #
+    #  - Cost profile is `backend-unit`'s, not `e2e`'s: one ubuntu-latest
+    #    runner, one postgres service container, no Docker Compose build, no
+    #    Playwright browsers, no macOS runner. The `revalidate` rationale
+    #    above explicitly exempts suites that "are cheap [and] contend for
+    #    nothing scarce" for exactly this reason.
+    #  - Queue-only means a break takes its whole merge group down and forces
+    #    a rebuild (see the ALLGREEN trade stated on `revalidate`). These
+    #    tests cover server boot on a fresh database and the response shapes
+    #    clients decode — the two things most likely to be broken by an
+    #    ordinary backend change, and the worst things to discover from
+    #    inside a five-entry group.
+    #  - It is path-scoped on `backend`, so a PR that cannot affect the
+    #    backend never spins a database.
+    #
+    # If this job's wall time ever becomes the constraint, move it behind
+    # `revalidate` then — not pre-emptively.
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured 2026-10-03 on a 4-core dev box: 119s of vitest, with the
+    # slowest single test (a full migration reconcile) at 65s. Budget covers
+    # a cold rust-cache (~3.5 min, per crypto-tests) on top of that.
+    timeout-minutes: 25
+    env:
+      # packages/crypto/rust-toolchain.toml pins eleven extra targets this job
+      # never builds — same override as crypto-tests, same `stable` compiler.
+      RUSTUP_TOOLCHAIN: stable
+      DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+    services:
+      postgres:
+        # Same pin deploy/docker/docker-compose.dev.yml uses, so the suite runs
+        # against the server version a developer runs it against locally.
+        image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af
+        env:
+          POSTGRES_USER: llamenos
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: llamenos
+        ports:
+          - 5432:5432
+        # Steps do not start until this health check passes, so the suite needs
+        # no wait-for-postgres step of its own.
+        options: >-
+          --health-cmd "pg_isready -U llamenos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      # After the toolchain step: rust-cache keys on the installed rustc.
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
+
+      # startup-init.test.ts boots src/server/index.ts as a real Bun
+      # subprocess. Vitest's `@llamenos/crypto/ffi` -> mock alias does not
+      # reach a subprocess, so that process loads the genuine native library
+      # through bun:ffi and the .so must exist. Same step as ios-e2e.yml's
+      # "Build server crypto library".
+      - name: Build server crypto library
+        run: packages/crypto/scripts/build-server.sh
+
+      # The wrapper runs vitest and then asserts the suite actually ran: every
+      # *.test.ts on disk was collected, and the executed-test count cleared its
+      # floor. `passWithNoTests` used to make this suite green on an empty glob;
+      # see the script's header and #1167.
+      - name: Run backend integration tests
+        run: bun scripts/test-worker-integration.ts
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-integration-results
+          path: test-results/
+          retention-days: 7
+
   # ─── Ansible Validation ───────────────────────────────────
   ansible-validate:
     needs: changes
@@ -1875,7 +1978,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-integration, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1899,6 +2002,7 @@ jobs:
           check_job "crypto-tests" "${{ needs.crypto-tests.result }}"
           check_job "e2e" "${{ needs.e2e.result }}"
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
+          check_job "backend-integration" "${{ needs.backend-integration.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
