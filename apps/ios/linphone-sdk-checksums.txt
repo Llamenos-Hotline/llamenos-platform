@@ -1,0 +1,42 @@
+# SHA-256 of each binary xcframework zip in the pinned Linphone SDK.
+#
+# WHY THIS FILE EXISTS. The pin in project.yml / Package.swift is an upstream git revision
+# (dc3c6e3601a2aceeee74d0420353f20d911eb802, tag 5.5.23-novideo). SwiftPM verifies every
+# download and every cache hit against the `checksum:` values in THAT COMMIT's manifest and
+# refuses a mismatch — verified by flipping one hex digit, which it rejected even with the
+# artifact already cached. But those values live only in a repository we do not control, and
+# apps/ios/Package.resolved records just the revision. So we held no independent copy: an
+# upstream force-push or repo deletion would cost us both the build and the ability to tell
+# that anything had changed. This is that copy, taken at review time.
+#
+# It is a RECORD, not yet a gate: nothing in CI compares against it. Wiring that up means a
+# script under scripts/ plus a CI step, which is outside this change's paths — tracked as a
+# follow-up on the PR that added this file.
+#
+# To regenerate after a deliberate pin change, from the resolved checkout:
+#   python3 -c 'import re,sys; s=open(sys.argv[1]).read(); \
+#     [print(f"{c}  {n}") for n,_,c in sorted(re.findall( \
+#     r"name:\s*\"([^\"]+)\",\s*url:\s*\"([^\"]+)\",\s*checksum:\s*\"([0-9a-f]{64})\"", s))]' \
+#     <resolved>/linphone-sdk-swift-ios/Package.swift
+#
+# Pinned revision: dc3c6e3601a2aceeee74d0420353f20d911eb802  (tag 5.5.23-novideo)
+# Artifacts served from: https://download.linphone.org/releases/ios//spm/novideo/linphone-sdk-swift-ios-5.5.23/XCFrameworks/
+# Recorded: 2026-10-06
+
+a17b4bbc3eca2a3ef781baa0e0499651d3f10b46c6960800e9aecf05b8b26ed1  bctoolbox
+d42abaa5241b014d6e57aa4930379fe87886594828348575fdd4cf70419acc81  bctoolbox-ios
+86eb673fc3c75cfb006b8bb9d854d9cf0fd80800268ccd97f2442168051085d3  bctoolbox-tester
+9817e84aeb7461b4fc163f036b83976fa387fda82b9f1afd644fadfaee99f885  belcard
+24c928c24b48c2049c7266a5f0e70d2b7df2ef4e7f314cfaaf52e4e1adabd614  belle-sip
+6b7d6642fd77c3c8ee6f88581d2b154dda77e200eed9ed0db71bbc5b8b6c8fcd  belr
+d492c66ffcf8723f07f02a01b508b0fdbacac4dd1daf29cbb68153a6b6f4741f  lime
+8c9d2e190598a1374beb98878871a3cf4dec71f6984a50fa110103bc8636ef90  linphone
+70d3b1e99da66fa187aa9fff192430c45feff128c6641f639ba63e50b3b95699  linphonetester
+68f81025a98f1c83509cbcd087335adc7f343dec197f23b0426792f63dfa4453  mbedcrypto
+a0735077418f0fc0b3854be3d794681b2b406631b21099b941e75715c54d4b19  mbedtls
+3314990653c387b19771852efe25d8efb12a433bfc5155f046625ba9358915bd  mbedx509
+d7807a6edb793f19f84735d71f8c1ebf61cc53b1365a07c47268ada071880aad  mediastreamer2
+d97dc58ca5420e787dc09d89f19bc76803a39d39f501ba771d6df7ad2d736d89  msamr
+cd05e0a07ff2d0e33cfda9b3b2d70bbc4a5a9919360d39de47519c7164850435  mscodec2
+75268467e267e03745b9e0ec63bf05312839734ae0634477d3baf35db30f11c8  msopenh264
+5e157a6f369b9741e7a0962644f655d03536421d24f28a15dda1a4ad13a5b8cb  ortp

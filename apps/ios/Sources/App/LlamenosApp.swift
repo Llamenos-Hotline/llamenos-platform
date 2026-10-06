@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UserNotifications
 
@@ -82,10 +83,20 @@ struct LlamenosApp: App {
                 // Inject appState and router into the delegate so it can forward push tokens and deep link
                 appDelegate.appState = appState
                 appDelegate.router = router
-                // Initialize Linphone SIP core for VoIP call handling
+                // Initialize Linphone SIP core for VoIP call handling.
+                // Now that the SDK is linked this can genuinely fail (the Core starts for
+                // real); before linking it was a no-op that could not. A failure leaves the
+                // app with no SIP stack, so it must not be silent — but it is not actionable
+                // by the volunteer either (nothing in-app depends on it until #1203 lands),
+                // so it logs rather than surfacing.
                 do {
                     try appState.linphoneService.initialize(hubContext: hubContext)
-                } catch {}
+                } catch {
+                    // .private: this string comes from the SDK wrapper's own error
+                    // formatting, so its content is not ours to promise anything about.
+                    Logger(subsystem: "org.llamenos.hotline", category: "Linphone")
+                        .error("Linphone Core failed to start: \(error.localizedDescription, privacy: .private)")
+                }
             }
             .onOpenURL { url in
                 handleDeepLink(url)
