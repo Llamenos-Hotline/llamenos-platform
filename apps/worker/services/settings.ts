@@ -2337,13 +2337,22 @@ export class SettingsService {
   ): Promise<Record<string, unknown>[]> {
     // Atomic — see updateHubSettings (#1144). Raw value, not
     // JSON.stringify'd — see the comment in updateHubSettings for why.
+    //
+    // `usage` is wrapped in an object rather than bound on its own. Bun SQL
+    // serializes a JS *object* into a jsonb parameter correctly, but expands a
+    // JS *array* into a positional record list: `${usage}::jsonb` compiled to
+    // `($1, $2)::jsonb`, which Postgres rejects with "cannot cast type record
+    // to jsonb" for any usage with more than one entry — and silently stored a
+    // single-entry usage as a bare object instead of a one-element array.
+    // Merging `{ usage }` with `||` sets exactly the same key, with no array
+    // ever reaching a parameter position.
     const [row] = await this.db
       .insert(hubSettingsTable)
       .values({ hubId, settings: { usage } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('usage', ${usage}::jsonb)`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${{ usage }}::jsonb`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
