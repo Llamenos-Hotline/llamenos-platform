@@ -34,7 +34,22 @@ export interface RingRequest {
   callerNumber: string
   /** `pubkey` carries the opaque call token, never a real pubkey */
   volunteers: Array<{ pubkey: string; phone: string }>
+  /**
+   * In-app volunteers: each is a SIP endpoint registered on THIS PBX, rung by
+   * an INVITE to its AOR rather than a call out through the trunk. One more
+   * parallel leg per entry, in the same leg registry as the phone legs.
+   */
+  appTargets?: Array<{ callToken: string; sipAor: string }>
 }
+
+/**
+ * The caller ID an in-app leg presents. The app already knows which call is
+ * ringing (its push payload carries the call id and the caller's last four
+ * digits), so the INVITE does not need to carry the caller's number — and the
+ * app's own UI deliberately shows only the last four. A name with no number
+ * keeps that contract instead of widening it.
+ */
+const IN_APP_CALLER_ID = 'Llamenos'
 
 /**
  * CommandHandler — the call-flow state machine between the PBX and the Worker.
@@ -326,26 +341,72 @@ export class CommandHandler {
 
     const channelIds: string[] = []
     for (const volunteer of request.volunteers) {
-      try {
-        const channel = await this.client.originate({
-          endpoint: ringEndpoint(this.config.pbxType, volunteer.phone),
-          callerId: request.callerNumber,
-          timeout: RING_TIMEOUT_SECONDS,
-          appArgs: `dialed,${request.parentCallSid},${volunteer.pubkey}`,
-        })
-        this.legs.set(channel.id, {
-          parentCallSid: request.parentCallSid,
-          callToken: volunteer.pubkey,
-          answered: false,
-        })
-        parent.ringingChannels.push(channel.id)
-        channelIds.push(channel.id)
-      } catch (err) {
-        logger.error('[handler]', 'Failed to ring volunteer', err)
+      const id = await this.originateRingLeg(parent, request.parentCallSid, volunteer.pubkey, {
+        endpoint: () => ringEndpoint(this.config.pbxType, volunteer.phone),
+        callerId: request.callerNumber,
+        what: 'volunteer phone',
+      })
+      if (id) channelIds.push(id)
+    }
+
+    // In-app legs: an INVITE to the volunteer's registered AOR on this PBX.
+    // Rung alongside the phone legs, not instead of them — a volunteer with
+    // both answers on whichever is to hand, and the first pickup cancels the
+    // rest through the same registry.
+    const appTargets = request.appTargets ?? []
+    let appChannels = 0
+    for (const target of appTargets) {
+      const id = await this.originateRingLeg(parent, request.parentCallSid, target.callToken, {
+        endpoint: () => appRingEndpoint(this.config.pbxType, target.sipAor),
+        callerId: IN_APP_CALLER_ID,
+        what: 'in-app volunteer endpoint',
+      })
+      if (id) {
+        channelIds.push(id)
+        appChannels += 1
       }
     }
-    logger.info('[handler]', `Ringing ${channelIds.length}/${request.volunteers.length} volunteer phone(s)`)
+
+    logger.info(
+      '[handler]',
+      `Ringing ${channelIds.length - appChannels}/${request.volunteers.length} volunteer phone(s)` +
+        ` and ${appChannels}/${appTargets.length} in-app endpoint(s)`
+    )
     return channelIds
+  }
+
+  /**
+   * Originate one parallel ring leg and record it against the caller. Returns
+   * the leg's channel id, or null when the PBX refused it — a refusal is one
+   * leg lost, never the whole ring: the other legs still carry the call.
+   */
+  private async originateRingLeg(
+    parent: ActiveCall,
+    parentCallSid: string,
+    callToken: string,
+    leg: { endpoint: () => string; callerId: string; what: string }
+  ): Promise<string | null> {
+    // Resolved inside the try: a PBX type that cannot originate at all
+    // (kamailio) is one more reason this leg does not happen, not a reason the
+    // whole ring fails.
+    let endpoint = leg.what
+    try {
+      endpoint = leg.endpoint()
+      const channel = await this.client.originate({
+        endpoint,
+        callerId: leg.callerId,
+        timeout: RING_TIMEOUT_SECONDS,
+        appArgs: `dialed,${parentCallSid},${callToken}`,
+      })
+      this.legs.set(channel.id, { parentCallSid, callToken, answered: false })
+      parent.ringingChannels.push(channel.id)
+      return channel.id
+    } catch (err) {
+      // Unreachable endpoint, TLS failure, a PBX that will not originate: the
+      // leg is gone and the caller must not depend on it silently.
+      logger.error('[handler]', `Failed to ring ${leg.what} (${endpoint})`, err)
+      return null
+    }
   }
 
   /** Stop ringing volunteer legs (the worker cancels them when someone answers elsewhere) */
@@ -757,6 +818,22 @@ export function ringEndpoint(pbxType: BridgeConfig['pbxType'], phone: string): s
       return `PJSIP/${phone}@trunk`
     case 'freeswitch':
       return `sofia/internal/${phone}@trunk`
+    case 'kamailio':
+      throw new Error('Kamailio is a SIP proxy — call origination is not supported')
+  }
+}
+
+/**
+ * The endpoint that rings a volunteer's own registered app, as opposed to
+ * their phone: the AOR on this PBX, with no trunk — the INVITE goes to the
+ * contact the client registered, not out to a carrier.
+ */
+export function appRingEndpoint(pbxType: BridgeConfig['pbxType'], sipAor: string): string {
+  switch (pbxType) {
+    case 'asterisk':
+      return `PJSIP/${sipAor}`
+    case 'freeswitch':
+      return `sofia/internal/${sipAor}`
     case 'kamailio':
       throw new Error('Kamailio is a SIP proxy — call origination is not supported')
   }

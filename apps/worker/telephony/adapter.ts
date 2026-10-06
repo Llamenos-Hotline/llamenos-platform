@@ -223,6 +223,19 @@ export interface RingVolunteersParams {
    * Each volunteer gets a unique opaque single-use token that is resolved to their pubkey server-side.
    */
   volunteers: Array<{ phone: string; callToken: string }>
+  /**
+   * Volunteers whose in-app SIP endpoint is registered and reachable on the
+   * PBX we run: one more parallel leg each, dialled as an INVITE to their AOR
+   * instead of an outbound call to a phone number. Same first-pickup-wins
+   * registry and the same `cancelRinging`, so whichever leg answers cancels
+   * the rest — including a volunteer's own other leg.
+   *
+   * Only the self-hosted registrar can produce these (see
+   * `listReachableVolunteerEndpoints`): reachability is read from our own
+   * PBX, and no vendor has a per-volunteer AOR to dial. Adapters for vendor
+   * providers therefore never receive a non-empty list.
+   */
+  appTargets?: Array<{ sipAor: string; callToken: string }>
   callbackUrl: string
   /**
    * Hub ID — no longer embedded in callback URLs as ?hub= (CRIT-W1).

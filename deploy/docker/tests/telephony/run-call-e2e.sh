@@ -43,10 +43,21 @@ export ADMIN_PUBKEY="$(bun -e "import { seedHexToPubkey, ADMIN_SEED } from './te
 # ADMIN_PUBKEY, and required whenever it is set (#1283).
 export ADMIN_DECRYPTION_PUBKEY="$(bun -e "import { deriveAdminKeys } from './scripts/bootstrap-admin'; import { ADMIN_SEED } from './tests/api-helpers'; import { hexToBytes } from '@noble/hashes/utils.js'; console.log(deriveAdminKeys(hexToBytes(ADMIN_SEED)).decryptionPubkey)")"
 export TEST_HUB_URL="http://127.0.0.1:$PORT"
+# Published PBX/bridge ports. Default to the ports this suite has always used;
+# override them (with docker-compose.ports.yml, included below) to run beside
+# the shared dev telephony stack, which otherwise holds 5060/8088/3200.
+export E2E_PBX_SIP_PORT="${E2E_PBX_SIP_PORT:-5060}"
+export E2E_PBX_TLS_PORT="${E2E_PBX_TLS_PORT:-5061}"
+export E2E_PBX_ARI_PORT="${E2E_PBX_ARI_PORT:-8088}"
+export E2E_BRIDGE_PORT="${E2E_BRIDGE_PORT:-3200}"
+export E2E_PBX_PORT="$E2E_PBX_SIP_PORT"
+export E2E_ARI_REST_URL="http://127.0.0.1:$E2E_PBX_ARI_PORT/ari"
+export E2E_BRIDGE_URL="http://127.0.0.1:$E2E_BRIDGE_PORT"
 
 COMPOSE=(docker compose -p "$PROJECT"
   -f deploy/docker/docker-compose.dev.yml
   -f deploy/docker/tests/telephony/docker-compose.carrier.yml
+  -f deploy/docker/tests/telephony/docker-compose.ports.yml
   --profile telephony)
 
 cleanup() {
