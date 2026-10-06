@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UIKit
 
 // MARK: - ShiftsViewModel
@@ -6,9 +7,10 @@ import UIKit
 /// View model for the Shifts tab. Manages shift schedule display, clock in/out toggle,
 /// and shift signup. Groups shifts by day for the weekly calendar view.
 ///
-/// SIP integration: when the volunteer clocks in, `onShiftStarted` fetches a short-lived
-/// SIP token from the hub and registers a Linphone account. On clock out, `onShiftEnded`
-/// unregisters the account so the volunteer stops receiving VoIP calls.
+/// SIP integration: when the volunteer clocks in, `registerSipAccountsForMemberHubs` fetches
+/// SIP credentials from `/api/telephony/sip-token` and registers them for EVERY hub the
+/// volunteer belongs to — not only the active one (multi-hub routing axiom). On clock out,
+/// every registration is dropped. Failures are surfaced in `voipWarning`, never swallowed.
 @Observable
 final class ShiftsViewModel {
     private let apiService: APIService
@@ -48,6 +50,11 @@ final class ShiftsViewModel {
     /// Success message after an action.
     var successMessage: String?
 
+    /// Set when in-app calling is not working after clock-in — SDK missing, credentials
+    /// refused or undecodable, registration failed — so the volunteer knows calls will not
+    /// ring this device. nil when every member hub was registered.
+    var voipWarning: String?
+
     /// Whether the clock out confirmation dialog is shown.
     var showClockOutConfirmation: Bool = false
 
@@ -64,6 +71,7 @@ final class ShiftsViewModel {
     // MARK: - Private State
 
     private var timerTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "org.llamenos.hotline", category: "SIP")
 
     // MARK: - Initialization
 
@@ -81,16 +89,77 @@ final class ShiftsViewModel {
 
     // MARK: - SIP Account Lifecycle
 
-    /// Register a SIP account with Linphone for the given hub. Called after clock-in succeeds.
-    func onShiftStarted(hubId: String, sipParams: SipTokenResponse) async {
+    /// Register SIP accounts for every member hub. Called after clock-in succeeds.
+    ///
+    /// Calls for any member hub must be able to ring this device regardless of which hub
+    /// is active, so this enumerates the volunteer's hubs (`GET /api/hubs`) and registers
+    /// each one. `/api/telephony/sip-token` is not hub-scoped, so it is fetched once.
+    func registerSipAccountsForMemberHubs() async {
+        voipWarning = nil
+
+        let sipParams: SipTokenResponse
         do {
-            try linphoneService.registerHubAccount(hubId: hubId, sipParams: sipParams)
-        } catch {}
+            sipParams = try await apiService.getSipToken()
+        } catch APIError.requestFailed(let statusCode, let body) where statusCode == 400 || statusCode == 404 {
+            // The server refuses SIP credentials: the volunteer's call preference is
+            // "phone" (the server default when unset), or no SIP-capable provider is
+            // configured. Not a client failure, but calls will not ring this device —
+            // say so rather than leaving the volunteer to assume they will.
+            logger.notice("SIP credentials refused (HTTP \(statusCode)): \(body, privacy: .public)")
+            voipWarning = NSLocalizedString(
+                "shifts_voip_not_enabled",
+                comment: "In-app calling is not turned on for this account"
+            )
+            return
+        } catch {
+            logger.error("SIP credential fetch failed: \(error.localizedDescription, privacy: .public)")
+            voipWarning = Self.voipSetupFailedMessage
+            return
+        }
+
+        let hubIds: [String]
+        do {
+            let response: HubsListResponse = try await apiService.request(method: "GET", path: "/api/hubs")
+            hubIds = response.hubs.filter { $0.status == .active }.map(\.id)
+        } catch {
+            logger.error("Member hub enumeration failed: \(error.localizedDescription, privacy: .public)")
+            voipWarning = Self.voipSetupFailedMessage
+            return
+        }
+
+        var failedHubCount = 0
+        for hubId in hubIds {
+            do {
+                try linphoneService.registerHubAccount(hubId: hubId, sipParams: sipParams)
+            } catch LinphoneError.sdkNotLinked {
+                logger.error("SIP registration impossible: Linphone SDK is not linked into this build")
+                voipWarning = NSLocalizedString(
+                    "shifts_voip_unavailable_in_build",
+                    comment: "In-app calling is not included in this build"
+                )
+                return
+            } catch {
+                failedHubCount += 1
+                logger.error("SIP registration failed for hub \(hubId, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if failedHubCount > 0 {
+            voipWarning = Self.voipSetupFailedMessage
+        }
     }
 
-    /// Unregister the SIP account for the given hub. Called after clock-out succeeds.
-    func onShiftEnded(hubId: String) {
-        linphoneService.unregisterHubAccount(hubId: hubId)
+    /// Drop every SIP registration. Called after clock-out succeeds — clock-out ends the
+    /// shift for all hubs, so no member hub may keep ringing this device.
+    func unregisterAllSipAccounts() {
+        linphoneService.unregisterAllHubAccounts()
+        voipWarning = nil
+    }
+
+    private static var voipSetupFailedMessage: String {
+        NSLocalizedString(
+            "shifts_voip_setup_failed",
+            comment: "In-app calling could not be set up; calls will not ring this device"
+        )
     }
 
     // MARK: - Data Loading
@@ -135,11 +204,8 @@ final class ShiftsViewModel {
             shiftStartedAt = Date()
             startTimer()
 
-            // Register a SIP account so the volunteer receives VoIP calls for this hub.
-            if let hubId = hubContext.activeHubId,
-               let sipParams = try? await apiService.getSipToken(hubId: hubId) {
-                await onShiftStarted(hubId: hubId, sipParams: sipParams)
-            }
+            // Register SIP accounts so VoIP calls from every member hub can ring this device.
+            await registerSipAccountsForMemberHubs()
 
             let generator = UIImpactFeedbackGenerator(style: .medium)
             generator.impactOccurred()
@@ -169,10 +235,8 @@ final class ShiftsViewModel {
             shiftStartedAt = nil
             stopTimer()
 
-            // Unregister the SIP account so the volunteer stops receiving VoIP calls.
-            if let hubId = hubContext.activeHubId {
-                onShiftEnded(hubId: hubId)
-            }
+            // Drop every SIP registration so no hub keeps ringing this device off shift.
+            unregisterAllSipAccounts()
 
             let generator = UIImpactFeedbackGenerator(style: .light)
             generator.impactOccurred()

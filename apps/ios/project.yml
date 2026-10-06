@@ -52,10 +52,14 @@ targets:
         # iOS 13+ requires apps with `voip` mode to register PKPushRegistry and
         # immediately invoke CXProvider.reportNewIncomingCall on every PushKit push;
         # non-compliant apps are terminated and have PushKit delivery blocked by iOS.
-        # The Llamenos PushKit/CallKit integration is gated on the Linphone SDK
-        # (apps/ios/Frameworks/linphone-sdk.xcframework) being linked AND verified
-        # end-to-end on a real device. Until then, incoming-call notifications use
-        # the standard APNs path (remote-notification + UNUserNotification).
+        # The Llamenos PushKit/CallKit integration is gated on the Linphone SDK being
+        # linked AND verified end-to-end on a real device. It is NOT linked today: this
+        # target has no Linphone dependency, so `canImport(linphonesw)` is false and
+        # LinphoneService throws `sdkNotLinked` (surfaced after clock-in). Linking needs
+        # every xcframework from the SDK release plus a `linphonesw` module built from
+        # its LinphoneWrapper.swift — see scripts/download-linphone-ios.sh and #1188.
+        # Until then, incoming-call notifications use the standard APNs path
+        # (remote-notification + UNUserNotification).
         # Re-add `voip` when PushKit is registered and CallKit reporting is wired.
         UIBackgroundModes:
           - remote-notification

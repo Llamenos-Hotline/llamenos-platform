@@ -1,5 +1,8 @@
+import os
 import SwiftUI
 import UserNotifications
+
+private let sipLogger = Logger(subsystem: "org.llamenos.hotline", category: "SIP")
 
 /// The main entry point for the Llamenos iOS app. Manages the app lifecycle,
 /// injects the root `AppState` into the environment, handles background
@@ -82,10 +85,17 @@ struct LlamenosApp: App {
                 // Inject appState and router into the delegate so it can forward push tokens and deep link
                 appDelegate.appState = appState
                 appDelegate.router = router
-                // Initialize Linphone SIP core for VoIP call handling
+                // Initialize Linphone SIP core for VoIP call handling. Answering a call may
+                // switch the active hub only while the app is unlocked (multi-hub axiom).
+                let lockState = appState
                 do {
-                    try appState.linphoneService.initialize(hubContext: hubContext)
-                } catch {}
+                    try appState.linphoneService.initialize(
+                        hubContext: hubContext,
+                        isAppUnlocked: { [weak lockState] in lockState?.authStatus == .unlocked }
+                    )
+                } catch {
+                    sipLogger.error("Linphone Core failed to start: \(error.localizedDescription, privacy: .public)")
+                }
             }
             .onOpenURL { url in
                 handleDeepLink(url)

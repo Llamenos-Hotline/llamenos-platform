@@ -89,7 +89,9 @@ All push dispatch call sites in `push-dispatch.ts` and `voip-push.ts` already op
 
 ### 3. No New Endpoints
 
-Device token registration is already per-user (not per-hub) — correct. One device registration covers all hubs. `GET /hubs/{hubId}/telephony/sip-token` already exists and is hub-scoped. No new server endpoints required.
+Device token registration is already per-user (not per-hub) — correct. One device registration covers all hubs. No new server endpoints required.
+
+> **Correction (2026-09-27, #1188):** this spec originally stated that `GET /hubs/{hubId}/telephony/sip-token` exists and is hub-scoped. **It does not.** The real route is `GET /api/telephony/sip-token` (`apps/worker/app.ts`, mounted on the authenticated router), and it is **not hub-scoped**: it returns the same credentials whichever hub is active. The iOS client called the non-existent hub-scoped path and swallowed the 404. Clients fetch credentials once and register them for every member hub; hubs sharing credentials share one SIP registration.
 
 ---
 
@@ -248,6 +250,9 @@ func handleVoipPush(payload: [String: Any]) {
 
 // CoreDelegate
 func onCallStateChanged(core: Core, call: Call, state: Call.State, message: String) {
+    // CORRECTION (#1188): switching hubs on IncomingReceived (the RING) violates the
+    // multi-hub routing axiom. Ringing must be hub-agnostic; the switch belongs on the
+    // app-unlocked ANSWER path (Connected on an incoming call). See LinphoneService.swift.
     if state == .IncomingReceived {
         if let callId = call.callLog?.callId,
            let hubId = pendingCallHubIds[callId] {
@@ -478,6 +483,7 @@ class LinphoneService @Inject constructor(
             ) {
                 val callId = call.callLog?.callId ?: return
                 when (state) {
+                    // CORRECTION (#1188): do not switch hubs on the ring — see iOS note above.
                     Call.State.IncomingReceived -> {
                         pendingCallHubIds.remove(callId)?.let { hubId ->
                             scope.launch { activeHubState.setActiveHub(hubId) }
@@ -496,7 +502,7 @@ class LinphoneService @Inject constructor(
 
 ### Provider SIP Config Mapping
 
-`GET /hubs/{hubId}/telephony/sip-token` returns provider-specific SIP params. The mobile client maps these to Linphone account configuration:
+`GET /api/telephony/sip-token` (not hub-scoped — see the correction above) returns provider-specific SIP params. The mobile client maps these to Linphone account configuration:
 
 | Provider | domain | transport | encryption |
 |---|---|---|---|
@@ -527,7 +533,7 @@ Linphone SDK is AGPLv3. Llamenos is AGPLv3-compatible. Source for the native int
 
 ## Security Notes
 
-- SIP credentials are hub-specific, fetched fresh via `GET /hubs/{hubId}/telephony/sip-token`, never persisted to disk
+- SIP credentials are fetched fresh via `GET /api/telephony/sip-token` (not hub-specific — corrected 2026-09-27, #1188) and never persisted to disk
 - VoIP push payloads carry only `callId`, `caller` (obfuscated), and `hubId` — no PII
 - Media encryption: SRTP mandatory for all providers, ZRTP where supported
 - Linphone handles PushKit before the SwiftUI layer starts — satisfies Apple's iOS 13+ VoIP push mandate (report to CallKit immediately in push handler)
