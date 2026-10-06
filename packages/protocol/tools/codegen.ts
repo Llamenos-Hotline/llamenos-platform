@@ -800,10 +800,40 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   // Note: CaseInteraction and EvidenceListResponse are NOT renamed — the iOS app
   // uses the generated types directly (custom duplicates removed from CaseRecord.swift).
 
+  output = applySipTypeRenames(output)
+
   // Clean up consecutive blank lines
   output = output.replace(/\n{3,}/g, '\n\n')
 
   return output
+}
+
+/**
+ * Rename the generated SIP credential sub-types.
+ *
+ * quicktype derives a name for an anonymous sub-object from the property that holds
+ * it, so `sipTokenResponseSchema`'s nested objects come out as `SIP`, `IceServer`,
+ * `Transport` and `MediaEncryption`. Every one of those collides with a Linphone SDK
+ * type of the same name in exactly the files that consume them — Android already has
+ * `import org.linphone.core.MediaEncryption` in `telephony/LinphoneService.kt`, and on
+ * iOS `linphonesw` exports `MediaEncryption` and `Transport` into the same module
+ * namespace. Prefix them so a client can import both without qualification.
+ *
+ * Applied to Swift and Kotlin alike; the word boundaries leave `SIPTokenResponse`,
+ * `SIPTrunks` and the lowercase property names untouched.
+ */
+const SIP_TYPE_RENAMES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bSIP\b/g, 'SIPCredentials'],
+  [/\bIceServer\b/g, 'SIPIceServer'],
+  [/\bTransport\b/g, 'SIPTransport'],
+  [/\bMediaEncryption\b/g, 'SIPMediaEncryption'],
+]
+
+function applySipTypeRenames(output: string): string {
+  return SIP_TYPE_RENAMES.reduce<string>(
+    (acc, [pattern, replacement]) => acc.replace(pattern, replacement),
+    output,
+  )
 }
 
 /**
@@ -964,7 +994,7 @@ function postProcessKotlin(
 
   // Reorder data class constructor params: fields without defaults before fields with defaults.
   // Kotlin requires non-default params to precede default params in constructors.
-  return reorderKotlinConstructorParams(result.join('\n'))
+  return applySipTypeRenames(reorderKotlinConstructorParams(result.join('\n')))
 }
 
 /**
