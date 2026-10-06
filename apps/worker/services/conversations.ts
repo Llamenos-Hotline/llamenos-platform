@@ -733,7 +733,16 @@ export class ConversationsService {
     envelope: FileKeyEnvelope,
     encryptedMetadata: { pubkey: string; encryptedContent: string; enc: string; ct: string },
   ): Promise<FileRow> {
-    // Use JSONB append to add envelope and metadata atomically
+    // Use JSONB append to add envelope and metadata atomically.
+    //
+    // The JSON payloads go through `(...)::text::jsonb`, not `...::jsonb`.
+    // Binding a JS *string* straight to a jsonb parameter position reaches
+    // Postgres double-encoded — a jsonb *string scalar* — so the append wrote
+    // a quoted string into the array instead of an object. The `elem->>'pubkey'`
+    // dedupe guard right above could then never see it (a string element has no
+    // keys), so grants duplicated, and the granted user could not find their own
+    // envelope. Casting the parameter to text first makes Postgres parse it.
+    // See the same warning in identity.ts and erasure.ts.
     const [row] = await this.db
       .update(files)
       .set({
@@ -743,7 +752,7 @@ export class ConversationsService {
               SELECT 1 FROM jsonb_array_elements(${files.recipientEnvelopes}) elem
               WHERE elem->>'pubkey' = ${envelope.pubkey}
             )
-            THEN ${files.recipientEnvelopes} || ${JSON.stringify(envelope)}::jsonb
+            THEN ${files.recipientEnvelopes} || (${JSON.stringify(envelope)})::text::jsonb
             ELSE ${files.recipientEnvelopes}
           END
         )`,
@@ -753,7 +762,7 @@ export class ConversationsService {
               SELECT 1 FROM jsonb_array_elements(${files.encryptedMetadata}) elem
               WHERE elem->>'pubkey' = ${encryptedMetadata.pubkey}
             )
-            THEN ${files.encryptedMetadata} || ${JSON.stringify(encryptedMetadata)}::jsonb
+            THEN ${files.encryptedMetadata} || (${JSON.stringify(encryptedMetadata)})::text::jsonb
             ELSE ${files.encryptedMetadata}
           END
         )`,
