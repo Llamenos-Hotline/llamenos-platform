@@ -45,6 +45,13 @@ services:
     depends_on:
       asterisk:
         condition: service_healthy
+    # The one guard the deleted templates/compose/asterisk.j2 carried that is
+    # worth keeping: a plain Bun HTTP process needs no setuid, and
+    # deploy/docker/docker-compose.production.yml sets the same on this
+    # service. NOT set on `asterisk` above — that image's command does its own
+    # privilege drop to asterisk:asterisk.
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s

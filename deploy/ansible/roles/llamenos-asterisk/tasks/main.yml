@@ -25,18 +25,40 @@
 
 # compose/asterisk.j2 bind-mounts ./asterisk-config:/etc/asterisk:ro — without
 # this, Docker silently creates an empty directory and Asterisk starts with no
-# ARI listener, no PJSIP trunk, and no config at all (issue #1119). These are
-# static files, not templates — the ARI password is NOT in here (it comes
-# from the ari_credentials config, templated separately in compose/asterisk.j2
-# from the same ari_password var the sip-bridge env uses).
+# ARI listener, no PJSIP trunk, and no config at all (issue #1119).
+#
+# World-readable (0755/0644), unlike the rest of this role's 0750/0640 files,
+# and that is deliberate on both counts:
+#
+#   - Asterisk does not run as deploy_user. The image's command drops it to
+#     asterisk:asterisk (-U/-G — see deploy/docker/asterisk-entrypoint.sh), so
+#     a 0750 directory of 0640 files owned by deploy_user is unreadable from
+#     inside the container. Asterisk would start against a config it cannot
+#     open, which is the same no-ARI-listener, no-trunk failure #1119 is about
+#     — just arriving by permissions instead of by absence.
+#   - Nothing secret is in here to protect. These are the static .conf files
+#     as committed (0644 in git); the ARI password is NOT among them. It comes
+#     from the ari_credentials config, templated separately in
+#     compose/asterisk.j2 from the same ari_password var the sip-bridge env
+#     uses, and ari.conf only `#include`s the path it lands at.
+- name: Create asterisk config directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}/services/asterisk/asterisk-config"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+
 - name: Place static Asterisk config (ari.conf, pjsip.conf, extensions.conf, ...)
   ansible.builtin.copy:
     src: "{{ role_path }}/../../../docker/asterisk-config/"
     dest: "{{ app_dir }}/services/asterisk/asterisk-config/"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
-    directory_mode: "0750"
+    mode: "0644"
+    # Applies to any subdirectory the copy creates — deploy/docker/asterisk-config
+    # is flat today but grows include dirs (pjsip.d/, extensions.d/).
+    directory_mode: "0755"
   notify: Restart asterisk service
 
 - name: Template asterisk compose file

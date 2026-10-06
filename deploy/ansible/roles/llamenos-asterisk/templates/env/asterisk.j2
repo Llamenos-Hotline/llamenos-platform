@@ -10,6 +10,14 @@ BRIDGE_SECRET={{ bridge_secret }}
 PBX_TYPE={{ pbx_type | default('asterisk') }}
 ARI_URL=ws://asterisk:8088/ari/events
 ARI_REST_URL=http://asterisk:8088/ari
-WORKER_WEBHOOK_URL=http://app:3000
+# roles/service-discovery computes llamenos_app_host for exactly this kind of
+# cross-service reference: the Docker-network name `app` on a single-host
+# deploy, and the app host's address when the inventory puts llamenos_app on a
+# different machine. playbooks/deploy.yml runs that role with tags: [always],
+# so the fact is set before this renders. A literal `app` would resolve against
+# this host's own Docker DNS even when the app is not on this host; the
+# now-deleted templates/env/asterisk.j2 read the fact, so it is kept rather
+# than lost with that file.
+WORKER_WEBHOOK_URL=http://{{ llamenos_app_host | default('app') | trim }}:3000
 BRIDGE_HOST=0.0.0.0
 BRIDGE_PORT=3000
