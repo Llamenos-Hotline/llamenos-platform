@@ -24,6 +24,14 @@
 {
     email {{ acme_email }}
     acme_ca https://acme-v02.api.letsencrypt.org/directory
+{% if observability_enabled | default(false) | bool %}
+    # Enables Caddy's internal Prometheus metrics collection. By itself this
+    # only exposes /metrics via the admin API (loopback-bound inside this
+    # container, unreachable from Prometheus's container) -- the `metrics`
+    # handler in the dedicated site block below is what actually serves it
+    # somewhere another container can reach (#1148).
+    metrics
+{% endif %}
 {% if not (llamenos_disk_encrypted | default(false) | bool) %}
     # This host's disk is NOT encrypted (llamenos_disk_encrypted: false). No
     # site below enables an access log; this filter covers the lines Caddy
@@ -142,5 +150,18 @@
         Referrer-Policy "no-referrer"
         -Server
     }
+}
+{% endif %}
+
+{% if observability_enabled | default(false) | bool %}
+# Prometheus metrics, unauthenticated, on a plain-HTTP listener that is NOT
+# bound to any public vhost and has no published port in compose/caddy.j2 --
+# only reachable by containers on the shared llamenos-observability Docker
+# network, i.e. just the prometheus container (scraped as caddy:9091, see
+# roles/llamenos-prometheus/templates/prometheus.yml.j2). Deliberately not the
+# admin API (:2019): that endpoint can rewrite this entire config and must stay
+# loopback-only inside this container.
+:9091 {
+    metrics /metrics
 }
 {% endif %}

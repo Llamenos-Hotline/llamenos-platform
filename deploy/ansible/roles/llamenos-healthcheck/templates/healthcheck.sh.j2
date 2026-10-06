@@ -1,41 +1,92 @@
-#!/bin/bash
+#!/bin/sh
 # Healthcheck script — managed by Ansible
 # Do not edit manually; changes will be overwritten on next deploy.
+#
+# Lightweight alternative to the full Prometheus/Grafana/Loki stack
+# (healthcheck_only: true). Polls the configured endpoints forever and sends
+# an ntfy notification on every healthy<->failing transition.
+#
+# Runs as `/bin/sh /healthcheck.sh` inside curlimages/curl (templates/compose/
+# healthcheck.j2), which is Alpine/busybox -- there is no bash, no arrays, and
+# no /dev/tcp redirection. Previously this script used all three (#!/bin/bash,
+# arrays, "${hostport%/*}"/"${hostport#*/}" splitting on a string that has no
+# "/"), so under the real /bin/sh it failed before the first health check ever
+# ran, every TCP check was unreachable by construction even when it DID run
+# under bash, the single pass-then-exit script crash-looped under `restart:
+# unless-stopped`, and no notification code existed despite the role's own
+# header claiming ntfy delivery (#1148). This version is POSIX sh throughout
+# (verified against the actual busybox ash in curlimages/curl:8.12.1 --
+# "nc -z" IS present there) and loops internally so the container is a
+# long-running poller, not a one-shot.
 
-set -euo pipefail
+set -eu
 
-ENDPOINTS=(
-  "app:http://app:3000/api/health"
-  "postgres:tcp://postgres:5432"
-)
+INTERVAL="{{ healthcheck_interval | default(30) }}"
+NTFY_URL="{{ healthcheck_ntfy_url | default('') }}"
+NTFY_TOPIC="{{ healthcheck_ntfy_topic | default('') }}"
+NTFY_TOKEN="{{ healthcheck_ntfy_token | default('') }}"
 
-FAILED=0
-
-for endpoint in "${ENDPOINTS[@]}"; do
-  name="${endpoint%%:*}"
-  url="${endpoint#*:}"
-  
-  if [[ "${url}" == tcp://* ]]; then
-    hostport="${url#tcp://}"
-    if timeout 5 bash -c ">/dev/tcp/${hostport%/*}/${hostport#*/}" 2>/dev/null; then
-      echo "OK: ${name}"
-    else
-      echo "FAIL: ${name}"
-      FAILED=1
-    fi
-  else
-    if curl -sf "${url}" >/dev/null 2>&1; then
-      echo "OK: ${name}"
-    else
-      echo "FAIL: ${name}"
-      FAILED=1
-    fi
+notify() {
+  title="$1"
+  message="$2"
+  # Empty by default (#1148: the old default was a guessable public ntfy.sh
+  # topic). No receiver configured -> log only, never broadcast anywhere.
+  if [ -z "${NTFY_URL}" ] || [ -z "${NTFY_TOPIC}" ]; then
+    return 0
   fi
+  if [ -n "${NTFY_TOKEN}" ]; then
+    curl -sf --max-time 10 \
+      -H "Title: ${title}" \
+      -H "Authorization: Bearer ${NTFY_TOKEN}" \
+      -d "${message}" \
+      "${NTFY_URL}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
+  else
+    curl -sf --max-time 10 \
+      -H "Title: ${title}" \
+      -d "${message}" \
+      "${NTFY_URL}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
+  fi
+}
+
+# POSIX sh has no arrays, so each endpoint gets a numbered state variable
+# (STATE_1, STATE_2, ...) set by name at template-render time below -- not a
+# runtime-dynamic lookup, just repeated literal shell code.
+check_one() {
+  url="$1"
+  case "${url}" in
+    tcp://*)
+      hostport="${url#tcp://}"
+      host="${hostport%:*}"
+      port="${hostport#*:}"
+      nc -z -w5 "${host}" "${port}" 2>/dev/null
+      ;;
+    *)
+      curl -sf --max-time 5 "${url}" >/dev/null 2>&1
+      ;;
+  esac
+}
+
+{% for ep in healthcheck_endpoints %}
+STATE_{{ loop.index }}="ok"
+{% endfor %}
+
+echo "Healthcheck poller started (interval: ${INTERVAL}s)"
+
+while true; do
+{% for ep in healthcheck_endpoints %}
+  if check_one "{{ ep.url }}"; then
+    echo "OK: {{ ep.name }}"
+    if [ "${STATE_{{ loop.index }}}" = "fail" ]; then
+      notify "[RECOVERED] {{ ep.name }}" "{{ ep.name }} ({{ ep.url }}) is healthy again."
+    fi
+    STATE_{{ loop.index }}="ok"
+  else
+    echo "FAIL: {{ ep.name }}"
+    if [ "${STATE_{{ loop.index }}}" != "fail" ]; then
+      notify "[ALERT] {{ ep.name }} healthcheck failed" "{{ ep.name }} ({{ ep.url }}) is unreachable."
+    fi
+    STATE_{{ loop.index }}="fail"
+  fi
+{% endfor %}
+  sleep "${INTERVAL}"
 done
-
-if [ "${FAILED}" -ne 0 ]; then
-  echo "Health check failed"
-  exit 1
-fi
-
-echo "All health checks passed"

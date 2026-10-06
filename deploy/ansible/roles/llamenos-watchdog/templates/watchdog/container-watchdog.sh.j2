@@ -1,26 +1,91 @@
 #!/bin/bash
 # Container watchdog script — managed by Ansible
 # Do not edit manually; changes will be overwritten on next deploy.
+#
+# Runs every 5 minutes via the llamenos-watchdog systemd timer. Docker's own
+# `restart: unless-stopped` policy already recovers a container that EXITS, so
+# this script's job is the gap Docker never fills on its own: a container that
+# is still running but whose HEALTHCHECK reports "unhealthy". Previously this
+# script only echoed that fact to the journal -- no restart, no notification
+# (#1148) -- which is worse than having no watchdog at all, because it reads as
+# coverage in a deploy report while doing nothing.
+#
+# State persists across runs in {{ app_dir }}/logs/watchdog-state:
+#   <container>.fails              consecutive "unhealthy" checks seen so far
+#   <container>.restarts.<today>   restarts already spent today (filename
+#                                   carries the date, so the daily budget
+#                                   resets itself at midnight with no cron job)
 
-set -euo pipefail
+set -uo pipefail
+# Deliberately not "set -e": one container's `docker inspect`/`restart` failing
+# must not abort the loop before the rest of the fleet has been checked.
 
 MAX_FAILURES="{{ llamenos_watchdog_max_failures | default(3) }}"
 MAX_RESTARTS="{{ llamenos_watchdog_max_restarts | default(5) }}"
-APP_DIR="{{ app_dir }}"
+STATE_DIR="{{ app_dir }}/logs/watchdog-state"
+ALERT_WEBHOOK="{{ llamenos_alert_webhook | default('') }}"
+TODAY="$(date -u +%Y%m%d)"
+
+mkdir -p "${STATE_DIR}"
+
+send_alert() {
+  local subject="$1"
+  local body="$2"
+  echo "ALERT: ${subject}: ${body}"
+  if [ -n "${ALERT_WEBHOOK}" ]; then
+    curl -sf --max-time 10 \
+      -H "Content-Type: application/json" \
+      -X POST \
+      -d "{\"hostname\":\"$(hostname)\",\"title\":\"${subject}\",\"message\":\"${body}\"}" \
+      "${ALERT_WEBHOOK}" >/dev/null 2>&1 || true
+  fi
+}
 
 echo "=== Container Watchdog ==="
 echo "Started: $(date -Iseconds)"
 
-# Check all llamenos containers
 for container in $(docker ps --filter "name=llamenos" --format "{{ '{{' }}.Names{{ '}}' }}" 2>/dev/null); do
     HEALTH=$(docker inspect --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' "${container}" 2>/dev/null || echo "none")
     RESTART_COUNT=$(docker inspect --format='{{ '{{' }}.RestartCount{{ '}}' }}' "${container}" 2>/dev/null || echo "0")
-    
-    echo "Container: ${container} | Health: ${HEALTH} | Restarts: ${RESTART_COUNT}"
-    
-    if [ "${RESTART_COUNT}" -ge "${MAX_RESTARTS}" ]; then
-        echo "ALERT: ${container} has restarted ${RESTART_COUNT} times!"
+
+    echo "Container: ${container} | Health: ${HEALTH} | Docker restarts: ${RESTART_COUNT}"
+
+    FAIL_FILE="${STATE_DIR}/${container}.fails"
+    BUDGET_FILE="${STATE_DIR}/${container}.restarts.${TODAY}"
+
+    if [ "${HEALTH}" = "unhealthy" ]; then
+        FAILS=$(( $(cat "${FAIL_FILE}" 2>/dev/null || echo 0) + 1 ))
+        echo "${FAILS}" > "${FAIL_FILE}"
+
+        if [ "${FAILS}" -ge "${MAX_FAILURES}" ]; then
+            BUDGET=$(cat "${BUDGET_FILE}" 2>/dev/null || echo 0)
+            if [ "${BUDGET}" -lt "${MAX_RESTARTS}" ]; then
+                NEXT_BUDGET=$(( BUDGET + 1 ))
+                echo "RESTARTING ${container} (unhealthy ${FAILS}x in a row; restart ${NEXT_BUDGET}/${MAX_RESTARTS} today)"
+                if docker restart "${container}" >/dev/null 2>&1; then
+                    echo "${NEXT_BUDGET}" > "${BUDGET_FILE}"
+                    send_alert "Container restarted: ${container}" \
+                      "${container} was unhealthy ${FAILS} checks in a row and has been restarted (restart ${NEXT_BUDGET}/${MAX_RESTARTS} today)."
+                else
+                    send_alert "Container restart FAILED: ${container}" \
+                      "${container} is unhealthy and 'docker restart' itself failed. Manual intervention required."
+                fi
+                echo 0 > "${FAIL_FILE}"
+            else
+                send_alert "Container restart budget exhausted: ${container}" \
+                  "${container} is unhealthy but has already been restarted ${BUDGET} times today (budget: ${MAX_RESTARTS}). NOT restarting again -- investigate manually."
+            fi
+        fi
+    else
+        if [ -f "${FAIL_FILE}" ] && [ "$(cat "${FAIL_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
+            echo "RECOVERED: ${container}"
+        fi
+        echo 0 > "${FAIL_FILE}"
     fi
 done
+
+# Prune state files for containers that no longer exist (renamed/removed
+# services), so a stale restart budget or failure count doesn't linger forever.
+find "${STATE_DIR}" -maxdepth 1 -type f -mtime +2 -delete 2>/dev/null || true
 
 echo "Completed: $(date -Iseconds)"

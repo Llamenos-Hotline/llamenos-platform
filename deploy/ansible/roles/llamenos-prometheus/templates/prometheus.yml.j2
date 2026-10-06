@@ -26,12 +26,23 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   # ── Llamenos application ──────────────────────────────
+  # /api/metrics is the admin-only JSON dashboard route (auth + metrics:read
+  # permission) -- a scraper can never hold that session. The Prometheus text
+  # exposition lives at /api/metrics/prometheus, authenticated by bearer token
+  # instead (apps/worker/routes/metrics.ts). Scraping the wrong path/without the
+  # token makes up{job="llamenos-app"} permanently 0 and AppDown fire forever
+  # (#1148) -- metrics_scrape_token is asserted non-empty by playbooks/preflight.yml
+  # whenever this job is active.
+{% if llamenos_app_enabled | default(true) %}
   - job_name: llamenos-app
-    metrics_path: /api/metrics
+    metrics_path: /api/metrics/prometheus
+    authorization:
+      credentials: "{{ metrics_scrape_token }}"
     static_configs:
       - targets: ["app:3000"]
         labels:
           service: app
+{% endif %}
 
   # ── Node exporter (host metrics) ─────────────────────
 {% if node_exporter_enabled | default(true) %}
@@ -42,19 +53,28 @@ scrape_configs:
           service: node
 {% endif %}
 
-  # ── Caddy reverse proxy ──────────────────────────────
+  # ── Caddy reverse proxy ───────────────────────────────
+  # Caddy's admin API (port 2019) binds to loopback INSIDE its own container by
+  # default and is never reachable from here -- this job was permanently down
+  # from any host (#1148). roles/llamenos-caddy instead enables the dedicated
+  # `metrics` HTTP handler on a plain, unauthenticated internal-only listener
+  # (no public port mapping) that this job scrapes directly.
+{% if llamenos_caddy_enabled | default(true) %}
   - job_name: caddy
     static_configs:
-      - targets: ["caddy:2019"]
+      - targets: ["caddy:9091"]
         labels:
           service: caddy
+{% endif %}
 
   # ── PostgreSQL ───────────────────────────────────────
+{% if postgres_exporter_enabled | default(true) and llamenos_postgres_enabled | default(true) %}
   - job_name: postgres
     static_configs:
       - targets: ["postgres-exporter:9187"]
         labels:
           service: postgres
+{% endif %}
 
 {% if loki_enabled | default(true) %}
   # ── Loki ─────────────────────────────────────────────
