@@ -143,6 +143,22 @@ class LiveSipRegistrationTest {
             core.mediaEncryption,
         )
 
+        // The issued ICE servers reached the account. Asserted here, not only from the SDP the
+        // PBX logs, so that dropping `params.natPolicy` fails on the device too — reverting that
+        // one line otherwise leaves every client-side assertion passing while the offer carries
+        // no candidates at all.
+        val natPolicy = checkNotNull(onMainGet { core.accountList.firstOrNull()?.params?.natPolicy }) {
+            "the account has no NAT policy — the issued iceServers were dropped"
+        }
+        assertTrue("ICE must be enabled", onMainGet { natPolicy.isIceEnabled })
+        assertTrue("STUN must be enabled", onMainGet { natPolicy.isStunEnabled })
+        assertTrue("TURN must be enabled when a relay was issued", onMainGet { natPolicy.isTurnEnabled })
+        assertEquals(
+            "the TURN credential's username must be the one liblinphone looks the password up by",
+            sip.iceServers.first { it.isTurnRelay }.username,
+            onMainGet { natPolicy.stunServerUsername },
+        )
+
         // ── 2 + 3. Media negotiates, runs encrypted, and ICE is used ──────────────────
         val target = args.getString("echoTarget")
         if (target.isNullOrBlank()) {
