@@ -4546,6 +4546,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Gelitaanka makarafoonka waa lagama maarmaan si aad uga jawaabto wicitaannada abka.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",

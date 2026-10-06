@@ -103,11 +103,16 @@ services:
       - KAMAILIO_DEBUG=2
 
   coturn:
+    # Keeps the base file's relay port range and --no-cli; adds --verbose.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
       --use-auth-secret
       --static-auth-secret=${TURN_SECRET:-ci-turn-secret}
+      --listening-port=${TURN_PORT:-3478}
+      --min-port=${TURN_RELAY_MIN_PORT:-49160}
+      --max-port=${TURN_RELAY_MAX_PORT:-49200}
       --no-tls
       --no-dtls
+      --no-cli
       --verbose

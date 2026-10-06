@@ -18,6 +18,17 @@ services:
       - ./kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
       - ./dispatcher.list:/etc/kamailio/dispatcher.list:ro
       - ./tls.cfg:/etc/kamailio/tls.cfg:ro
+{% if kamailio_tls_enabled | default(true) | bool %}
+      # The TLS material tls.cfg names. WITHOUT this mount the certificate is
+      # generated on the host and the container cannot see it, so the TLS
+      # listener never binds — which is what happened before this line existed.
+      #
+      # Read-only: Kamailio only ever reads it, and when the source is an
+      # externally-managed (e.g. Let's Encrypt) directory it is not ours to
+      # write to. A renewal in that directory is picked up by the
+      # llamenos-sip-tls-reload timer, not by a restart.
+      - {{ kamailio_tls_cert_source_dir | default(kamailio_tls_dir) }}:{{ kamailio_tls_container_dir }}:ro
+{% endif %}
     networks:
       - llamenos-internal
     healthcheck:

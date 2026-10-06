@@ -2498,6 +2498,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "L'accès au microphone est nécessaire pour répondre aux appels dans l'application.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",

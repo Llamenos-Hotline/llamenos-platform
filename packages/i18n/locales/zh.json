@@ -2498,6 +2498,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "在应用内接听来电需要麦克风权限。",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",

@@ -154,6 +154,12 @@ const env: Record<string, unknown> = {
   SIP_REGISTRAR_SECRET: process.env.SIP_REGISTRAR_SECRET || undefined,
   TURN_HOST: process.env.TURN_HOST || undefined,
   TURN_SECRET: process.env.TURN_SECRET || undefined,
+  // The SIP edge's public TLS trust anchor, handed to clients by /sip-token so
+  // they can verify a self-hosted PBX certificate. Read lazily per issuance
+  // (registrar.ts caches on mtime), so the edge may write it after the app
+  // starts — which it does on a first boot.
+  SIP_TLS_CA_FILE: process.env.SIP_TLS_CA_FILE || undefined,
+  SIP_TLS_CA_PEM: process.env.SIP_TLS_CA_PEM || undefined,
   CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
   // --- Push delivery ---

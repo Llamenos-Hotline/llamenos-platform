@@ -100,28 +100,150 @@
     mode: "0600"
   notify: Restart kamailio service
 
+# A volunteer's client verifies the HOSTNAME as well as the chain (RFC 6125),
+# so a certificate with no subjectAltName is rejected by every modern TLS
+# stack however trusted its issuer — which is why kamailio_tls_sans must list
+# every name or address a client may dial for the SIP domain. A bare IPv4
+# literal belongs in an IP: SAN; a DNS: SAN holding an address matches nothing.
+# IPv6 is classified by the colon a hostname cannot contain, IPv4 by consisting
+# only of digits and dots; everything else is a DNS name. (Review raised that
+# the first version only recognised dotted-quad IPv4.)
+- name: Build the subjectAltName list for the SIP edge certificate
+  ansible.builtin.set_fact:
+    kamailio_tls_san_list: >-
+      {{ kamailio_tls_sans
+         | map('regex_replace', '^([0-9A-Fa-f:]*:[0-9A-Fa-f:.]*)$', 'IP:\1')
+         | map('regex_replace', '^([0-9][0-9.]*)$', 'IP:\1')
+         | map('regex_replace', '^(?!IP:)(.+)$', 'DNS:\1')
+         | join(',') }}
+  when: kamailio_tls_enabled | default(true) | bool
+
+# Skipped entirely when a certificate is already there — `creates:` covers both
+# a previous run and an operator-installed certificate. Also skipped when the
+# certificate comes from elsewhere (kamailio_tls_cert_source_dir), because that
+# directory is mounted read-only and is not ours to write into.
 - name: Generate self-signed TLS certificate (if no cert exists)
   ansible.builtin.command: >
     openssl req -x509 -nodes -days 365
     -subj "/CN={{ kamailio_sip_domain }}"
-    -keyout "{{ app_dir }}/services/kamailio/tls/kamailio.key"
-    -out "{{ app_dir }}/services/kamailio/tls/kamailio.crt"
+    -addext "subjectAltName={{ kamailio_tls_san_list }}"
+    -keyout "{{ kamailio_tls_dir }}/kamailio.key"
+    -out "{{ kamailio_tls_dir }}/kamailio.crt"
     -newkey rsa:2048
   args:
-    creates: "{{ app_dir }}/services/kamailio/tls/kamailio.crt"
+    creates: "{{ kamailio_tls_dir }}/kamailio.crt"
   become_user: "{{ deploy_user }}"
-  when: kamailio_tls_enabled | default(true) | bool
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_cert_source_dir is not defined
 
+# The PUBLIC trust anchor clients verify the SIP TLS chain against.
+#
+# Kamailio is the SIP edge, so this is the certificate a volunteer's client
+# sees. Since it is self-signed by default, nothing in the device trust store
+# can vouch for it — and verification is never switched off on a leg carrying
+# a crisis call. The app therefore publishes this anchor inside the
+# authenticated /api/telephony/sip-token response, over its own pinned HTTPS
+# channel, and the client verifies against exactly this and nothing else.
+#
+# Copied (certificate only — never the key) to a path the app container can
+# read. With a real certificate in place, point kamailio_tls_anchor_source at
+# its ISSUING ROOT instead: pinning a leaf breaks at every renewal.
+#
+# NOTE: this Ansible path does not yet render the registrar's own worker env
+# (SIP_REGISTRAR_SECRET / TURN_HOST / TURN_SECRET / SIP_TLS_CA_FILE) — the
+# per-volunteer registrar was wired for the compose deployment only. Until it
+# is, an operator on this path must add SIP_TLS_CA_FILE (pointing at the
+# mounted copy of the file below) to the app's environment by hand.
+- name: Publish the SIP edge TLS trust anchor for the app
+  ansible.builtin.copy:
+    src: "{{ kamailio_tls_anchor_source | default(kamailio_tls_dir ~ '/kamailio.crt') }}"
+    dest: "{{ kamailio_tls_dir }}/sip-edge-anchor.pem"
+    remote_src: true
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    # A publicly-trusted certificate needs no anchor: the client's own CA set
+    # verifies it (ISRG Root X1/X2 are both in liblinphone's bundle). Set
+    # kamailio_tls_publish_anchor false there, and leave SIP_TLS_CA_FILE empty
+    # in the app's environment, so nothing is pinned to a leaf that will be
+    # renewed.
+    - kamailio_tls_publish_anchor | default(true) | bool
+
+# Only material this role generated. An externally-managed certificate
+# (kamailio_tls_cert_source_dir) is mounted read-only and owned by whatever
+# produced it — chmod-ing it would either fail or weaken it.
 - name: Set TLS certificate permissions
   ansible.builtin.file:
-    path: "{{ app_dir }}/services/kamailio/tls/{{ item }}"
+    path: "{{ kamailio_tls_dir }}/{{ item }}"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
     mode: "0600"
   loop:
     - kamailio.crt
     - kamailio.key
-  when: kamailio_tls_enabled | default(true) | bool
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_cert_source_dir is not defined
+
+# ─── ACME renewal reload ────────────────────────────────────────────
+#
+# Kamailio reads its certificate once, at module init. A renewed certificate on
+# disk is therefore invisible to the running daemon, and an ACME certificate is
+# renewed roughly every 60 days — so a deployment that serves Let's Encrypt
+# material and stops at "point the paths at it" works for two months and then
+# fails every TLS handshake, with a perfectly valid file on disk and nothing in
+# any log that looks like the cause. Clients verify the chain (verification is
+# never switched off), so they fail CLOSED: no volunteer receives a call.
+#
+# This is strictly worse than the self-signed default, which lasts ten years.
+# Hence the watcher: it hashes the certificate, and on a change issues
+# `kamcmd tls.reload` (and an Asterisk res_pjsip reload where that service is
+# present). Both are in-process and drop no established call.
+- name: Install the SIP TLS reload script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../docker/sip-tls-reload.sh"
+    dest: "{{ app_dir }}/services/kamailio/sip-tls-reload.sh"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Install the SIP TLS reload systemd service
+  ansible.builtin.template:
+    src: systemd/sip-tls-reload.service.j2
+    dest: /etc/systemd/system/llamenos-sip-tls-reload.service
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Install the SIP TLS reload systemd timer
+  ansible.builtin.template:
+    src: systemd/sip-tls-reload.timer.j2
+    dest: /etc/systemd/system/llamenos-sip-tls-reload.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
+
+- name: Enable and start the SIP TLS reload timer
+  ansible.builtin.systemd:
+    name: llamenos-sip-tls-reload.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_reload_enabled | default(true) | bool
 
 - name: Pull Kamailio image
   community.docker.docker_compose_v2:

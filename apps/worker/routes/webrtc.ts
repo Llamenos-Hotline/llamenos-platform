@@ -8,8 +8,10 @@ import {
   deriveVolunteerSipSecret,
   mintTurnCredentials,
   provisionVolunteerEndpoint,
+  readSipTlsTrustAnchor,
   sipCredentialEpoch,
   volunteerSipUsername,
+  type SipTlsAnchorEnv,
   type TurnCredentials,
 } from '../telephony/registrar'
 import { webrtcTokenResponseSchema, sipTokenResponseSchema, telephonyStatusResponseSchema } from '@protocol/schemas/webrtc'
@@ -253,7 +255,7 @@ type RegistrarEnv = {
   SIP_REGISTRAR_SECRET?: string
   TURN_HOST?: string
   TURN_SECRET?: string
-}
+} & SipTlsAnchorEnv
 
 /**
  * Time-limited TURN credentials for this volunteer, or undefined when no
@@ -284,7 +286,12 @@ async function issueVolunteerSipParams(
   const masterSecret = env.SIP_REGISTRAR_SECRET || env.HMAC_SECRET
   const secret = deriveVolunteerSipSecret(masterSecret, username, epoch)
   await provisionVolunteerEndpoint(config, username, secret)
-  return buildVolunteerSipParams(config, username, secret, turn)
+  // Registration is over TLS (registrar.ts), so the client needs something to
+  // verify the edge's certificate against. Publishing the anchor here — inside
+  // an authenticated response on a pinned channel — is what lets a
+  // self-hoster's self-signed PBX certificate be verified rather than trusted
+  // blindly.
+  return buildVolunteerSipParams(config, username, secret, turn, readSipTlsTrustAnchor(env))
 }
 
 export default webrtc

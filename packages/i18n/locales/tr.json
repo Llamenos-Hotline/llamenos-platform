@@ -4546,6 +4546,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Uygulamada çağrı yanıtlamak için mikrofon erişimi gerekir.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",

@@ -2498,6 +2498,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Kailangan ng access sa mikropono para sumagot ng tawag sa app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
