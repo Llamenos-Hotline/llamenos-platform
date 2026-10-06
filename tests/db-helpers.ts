@@ -12,6 +12,7 @@
  * tests/db-helpers-identity-rail.spec.ts.
  */
 import postgres from 'postgres'
+import { assertSameDatabase } from './db-identity'
 
 /**
  * Resolve the test database URL.
@@ -56,110 +57,23 @@ function rawSql(): postgres.Sql {
   return client
 }
 
-interface DbIdentity {
-  database: string
-  instanceId: string
-}
-
-/**
- * The server's dev-only identity endpoint. Gated by ENVIRONMENT=development +
- * DEV_ROUTES_ENABLED=true (router-level `/test-*` guard in apps/worker/app.ts)
- * + an X-Test-Secret header, exactly like the other /test-* routes.
- */
-const IDENTITY_PATH = '/api/test-db-identity'
-
-function serverBaseUrl(): string {
-  return (process.env.TEST_HUB_URL || 'http://localhost:3000').replace(/\/+$/, '')
-}
-
-function testSecret(): string {
-  return process.env.DEV_RESET_SECRET || process.env.E2E_TEST_SECRET || 'test-reset-secret'
-}
-
-function formatIdentity(id: DbIdentity, extra: Record<string, unknown> = {}): string {
-  const parts = [`database=${id.database}`, `instance=${id.instanceId}`]
-  for (const [k, v] of Object.entries(extra)) {
-    if (v !== null && v !== undefined) parts.push(`${k}=${v}`)
-  }
-  return parts.join(' ')
-}
-
 let identityCheck: Promise<void> | null = null
 
 /**
  * Verify — once, on first query — that TestDB and the server under test are
  * looking at the same PostgreSQL database.
  *
- * Identity is `current_database()` + the postmaster start time. That pair is
- * stable regardless of the network path taken to reach the instance, so a
- * server inside Docker (postgres:5432) and a test runner on the host
- * (localhost:5432) correctly compare equal when they share a database, and
- * correctly compare unequal when they do not.
+ * The comparison itself lives in `tests/db-identity.ts`, shared with
+ * `scripts/check-db-identity.ts` so the runner can make the SAME assertion as
+ * its own pipeline step before a single scenario runs. One implementation, two
+ * callers: a second copy is how the invariant drifts.
  *
  * An unreachable server is a HARD failure, not a skip: a check that quietly
  * passes when its dependency is down is exactly the false signal this replaces.
  */
 function assertSharedDatabase(): Promise<void> {
-  if (!identityCheck) identityCheck = runIdentityCheck()
+  identityCheck ??= assertSameDatabase(rawSql()).then(() => undefined)
   return identityCheck
-}
-
-async function runIdentityCheck(): Promise<void> {
-  const endpoint = `${serverBaseUrl()}${IDENTITY_PATH}`
-
-  let res: Response
-  try {
-    res = await fetch(endpoint, { headers: { 'X-Test-Secret': testSecret() } })
-  } catch (err) {
-    throw new Error(
-      `[db-helpers] Could not reach the server's database-identity endpoint at ${endpoint}.\n` +
-        'TestDB cannot prove it is querying the same database as the server, so its\n' +
-        'assertions would be meaningless. Start the server under test (bun run dev:server)\n' +
-        'or set TEST_HUB_URL to its base URL.\n' +
-        `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      `[db-helpers] ${endpoint} returned ${res.status}.\n` +
-        'That endpoint is dev-only: it requires ENVIRONMENT=development,\n' +
-        'DEV_ROUTES_ENABLED=true and a matching X-Test-Secret (DEV_RESET_SECRET /\n' +
-        'E2E_TEST_SECRET). Without it TestDB cannot verify it is querying the same\n' +
-        'database as the server.',
-    )
-  }
-
-  const server = (await res.json()) as DbIdentity & {
-    serverAddr: string | null
-    serverPort: number | null
-    resolvedHost: string | null
-    resolvedPort: number | null
-  }
-
-  const rows = await rawSql()`
-    SELECT current_database() AS database,
-           extract(epoch from pg_postmaster_start_time())::text AS instance_id
-  `
-  const row = rows[0] as { database: string; instance_id: string }
-  const local: DbIdentity = { database: row.database, instanceId: row.instance_id }
-
-  if (local.database !== server.database || local.instanceId !== server.instanceId) {
-    throw new Error(
-      '[db-helpers] DATABASE MISMATCH — TestDB and the server under test are using\n' +
-        'DIFFERENT databases. Any direct-DB assertion from here would pass or fail for\n' +
-        'reasons unrelated to the code under test.\n' +
-        `  TestDB  (DATABASE_URL):   ${formatIdentity(local)}\n` +
-        `  Server  (${endpoint}): ${formatIdentity(server, {
-          serverAddr: server.serverAddr,
-          serverPort: server.serverPort,
-          resolvedHost: server.resolvedHost,
-          resolvedPort: server.resolvedPort,
-        })}\n` +
-        'Point DATABASE_URL at the same database the server writes to, or restart the\n' +
-        "server against TestDB's database.",
-    )
-  }
 }
 
 /** The verified connection. Every query path goes through here. */

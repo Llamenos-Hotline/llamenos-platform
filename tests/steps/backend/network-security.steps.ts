@@ -6,6 +6,7 @@
  * security headers, SSRF protection, HMAC hashing, config exposure, and more.
  */
 import { expect } from '@playwright/test'
+import { devSurfaceSecret } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import {
@@ -27,7 +28,7 @@ import { LABEL_DEVICE_AUTH } from '@shared/crypto-labels'
 import * as crypto from 'crypto'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
-const _TEST_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const _TEST_SECRET = devSurfaceSecret()
 // Deliberately NOT the canonical builder: this file signs a message that omits
 // the method and path segments, to assert the server rejects an unbound token.
 // `@shared/auth-message` cannot express a malformed shape, by design.

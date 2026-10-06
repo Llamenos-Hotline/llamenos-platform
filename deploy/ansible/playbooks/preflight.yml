@@ -411,6 +411,13 @@
       ansible.builtin.import_tasks: tasks/guard-demo-mode.yml
       tags: always
 
+    # The /api/test-* surface specifically, keyed on app_environment alone and
+    # with no reference to demo mode — so it survives the removal of demo mode
+    # and the guard above. See tasks/guard-dev-routes.yml for the four layers.
+    - name: Include shared /api/test-* production safety guard
+      ansible.builtin.import_tasks: tasks/guard-dev-routes.yml
+      tags: always
+
     # Hosts without full-disk encryption may run only the push relay.
     # import_tasks: this is the control that keeps PostgreSQL and every secret off
     # an unencrypted host; a dynamic include would skip it under `--tags`.

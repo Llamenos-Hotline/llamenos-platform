@@ -30,11 +30,42 @@ export VERBOSE JSON_OUTPUT REPORTER_TIMEOUT
 
 cd "$PROJECT_ROOT"
 
+HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
+
 # TestDB (tests/db-helpers.ts) asserts persisted state straight from Postgres, so
-# it must query the database the server writes to. Resolve it exactly as
-# scripts/dev-bun.sh did for the server; an explicit DATABASE_URL (CI) wins.
+# it must query the database the server writes to.
+#
+# Two modes, told apart by whether the caller POINTED the suite at a server:
+#
+#   TEST_HUB_URL unset  — the suite assumes this machine's dev server on :3000,
+#                         so it may also resolve this worktree's database the
+#                         same way scripts/dev-bun.sh resolved it for the server.
+#                         Both sides then agree by construction.
+#
+#   TEST_HUB_URL set    — somebody aimed the suite somewhere deliberately, and
+#                         nothing here knows what database that server writes to.
+#                         DATABASE_URL must be given too (--require-explicit),
+#                         because the alternative is resolving a LOCAL database
+#                         and asserting against this machine's data while the
+#                         server wrote to the target's — a green run that proved
+#                         nothing. Against a deployment that is the DEFAULT
+#                         outcome, not an accident: its PostgreSQL publishes no
+#                         port, so there is nothing local that could be right.
+#
+# Derived from TEST_HUB_URL alone, with no "is this remote?" heuristic and no
+# separate flag. A heuristic on the hostname gets the common deployed case
+# WRONG: an SSH forward puts the deployment on 127.0.0.1, which looks local and
+# is not. A flag can disagree with the URL, and then the run is in neither mode
+# honestly. "Was the suite pointed at something" has no such failure.
 source "$SCRIPT_DIR/lib/worktree-db.sh"
-worktree_db_export
+if [[ -n "${TEST_HUB_URL:-}" ]]; then
+  echo "[backend-bdd] target: ${HUB_URL} (explicit — DATABASE_URL must name ITS database)"
+  if ! worktree_db_export --require-explicit; then
+    exit 1
+  fi
+else
+  worktree_db_export
+fi
 
 reporter_init "backend-bdd"
 
@@ -49,7 +80,60 @@ if [[ "$NO_CODEGEN" != "true" ]]; then
   fi
 fi
 
-# Step 2: Generate BDD test files from features + step definitions.
+# Step 2: Check the backend can actually SERVE, not merely that it is alive.
+#
+# This gated on /api/health/live, a LIVENESS probe: it reports that the process
+# is up and says nothing about its dependencies. A dev server whose database had
+# been dropped from under it (a per-worktree test DB removed by teardown, the
+# process left running) answered that probe 200 OK indefinitely — so this gate
+# went green and the run died two steps later at `api-bootstrap` with "cannot
+# run BDD tests without admin account", blaming the admin account when the real
+# fault was `database "tel_594161" does not exist`.
+#
+# /api/health/ready is the READINESS probe and does query PostgreSQL. On that
+# same server it correctly returned 503:
+#   {"status":"degraded","checks":{"postgres":{"status":"failing",...}}}
+# Gating on it turns a misleading later failure into an accurate immediate one,
+# and the body is printed so the cause is in the output rather than in a log
+# nobody reads.
+if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/ready" >/dev/null 2>&1; then
+  echo "Backend at ${HUB_URL} is not READY (liveness can still pass — readiness queries PostgreSQL):"
+  curl -s --max-time 10 "${HUB_URL}/api/health/ready" 2>/dev/null | head -c 500
+  echo
+  echo "Start it with:"
+  echo "  docker compose -f deploy/docker/docker-compose.dev.yml up -d && bun run dev:server"
+  overall_result="fail"
+  reporter_record_suite "health-check" 0 1 0
+  reporter_summary "$overall_result"
+  exit 1
+fi
+reporter_record_suite "health-check" 1 0 0
+
+# Step 3: Prove the runner's DATABASE_URL and the server share ONE database.
+#
+# The suite asserts persisted state straight from PostgreSQL (tests/db-helpers.ts),
+# which only means anything if both sides look at the same instance. That was
+# checked lazily, on whichever scenario happened to touch TestDB first — so a run
+# whose scenarios did not touch it never checked at all, and a run that did failed
+# deep inside an unrelated scenario. Against a deployed target the mismatch is the
+# DEFAULT (its PostgreSQL publishes no host port), which is the worst version of
+# the same bug: a green suite that proved nothing about the deployment.
+#
+# Checked BEFORE bddgen — which takes minutes — and before any data is written, so
+# the run either fails in seconds naming both databases or is known to be measuring
+# the right one. Never skipped, never downgraded to a warning.
+if ! reporter_run_step "db-identity" bun scripts/check-db-identity.ts; then
+  echo "The test runner and ${HUB_URL} are not using the same database (or the"
+  echo "server's /api/test-db-identity endpoint is unreachable). Direct-database"
+  echo "assertions would be meaningless, so the run stops here."
+  overall_result="fail"
+  reporter_record_suite "db-identity" 0 1 0
+  reporter_summary "$overall_result"
+  exit 1
+fi
+reporter_record_suite "db-identity" 1 0 0
+
+# Step 4: Generate BDD test files from features + step definitions.
 # playwright-bdd v8 requires explicit bddgen before test execution, and every BDD
 # project runs with missingSteps: "fail-on-gen" (#1153): a scenario selected by a
 # project's tag filter with a step that has no definition fails generation here,
@@ -73,39 +157,20 @@ if ! reporter_run_step "bddgen" bash -c 'bunx bddgen export > /dev/null && bunx 
 fi
 reporter_record_suite "bddgen" 1 0 0
 
-# Step 3: Check the backend can actually SERVE, not merely that it is alive.
-#
-# This gated on /api/health/live, a LIVENESS probe: it reports that the process
-# is up and says nothing about its dependencies. A dev server whose database had
-# been dropped from under it (a per-worktree test DB removed by teardown, the
-# process left running) answered that probe 200 OK indefinitely — so this gate
-# went green and the run died two steps later at `api-bootstrap` with "cannot
-# run BDD tests without admin account", blaming the admin account when the real
-# fault was `database "tel_594161" does not exist`.
-#
-# /api/health/ready is the READINESS probe and does query PostgreSQL. On that
-# same server it correctly returned 503:
-#   {"status":"degraded","checks":{"postgres":{"status":"failing",...}}}
-# Gating on it turns a misleading later failure into an accurate immediate one,
-# and the body is printed so the cause is in the output rather than in a log
-# nobody reads.
-HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
-if ! reporter_run_step "health-check" curl -sf "${HUB_URL}/api/health/ready" >/dev/null 2>&1; then
-  echo "Backend at ${HUB_URL} is not READY (liveness can still pass — readiness queries PostgreSQL):"
-  curl -s --max-time 10 "${HUB_URL}/api/health/ready" 2>/dev/null | head -c 500
-  echo
-  echo "Start it with:"
-  echo "  docker compose -f deploy/docker/docker-compose.dev.yml up -d && bun run dev:server"
-  overall_result="fail"
-  reporter_record_suite "health-check" 0 1 0
-  reporter_summary "$overall_result"
-  exit 1
-fi
-reporter_record_suite "health-check" 1 0 0
-
-# Step 4: API-level bootstrap — reset DB and create admin account without requiring
+# Step 5: API-level bootstrap — reset DB and create admin account without requiring
 # the frontend UI. The bootstrap Playwright project needs the desktop frontend running
 # at PLAYWRIGHT_BASE_URL; for backend-only test runs we bypass it via the dev API.
+#
+# ADMIN_SEED and ADMIN_PUBKEY are a PAIR and only the shell half reads the
+# environment: tests/global-setup.ts, tests/helpers.ts and tests/crypto-helpers.ts
+# hardcode the same seed, so overriding $ADMIN_SEED here would make this step
+# promote one identity while every scenario authenticated as another. Treat the
+# default as fixed until that seed is threaded through the TypeScript harness
+# too. A DEPLOYED target must therefore be provisioned with THIS pair's
+# ADMIN_PUBKEY / ADMIN_DECRYPTION_PUBKEY — see
+# docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md, which explains the 401 you get
+# otherwise (POST /api/test-reset re-seeds the admin from the server's own
+# ADMIN_PUBKEY, deleting the one this step just promoted).
 ADMIN_SEED="${ADMIN_SEED:-f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7}"
 E2E_SECRET="${E2E_TEST_SECRET:-${DEV_RESET_SECRET:-test-reset-secret}}"
 ADMIN_PUBKEY="79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
@@ -128,7 +193,7 @@ else
   exit 1
 fi
 
-# Step 5: Run backend BDD tests via Playwright
+# Step 6: Run backend BDD tests via Playwright
 # Uses --no-deps to skip the bootstrap Playwright project (we bootstrapped via API above).
 # Backend BDD tests use per-scenario hub isolation (workerHub fixture).
 # Worker count is controlled by playwright.config.ts (CI=4, local=3).
@@ -141,7 +206,7 @@ else
   reporter_record_suite "backend-bdd" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
 fi
 
-# Step 6: Run @global-setting scenarios in their own serial project (#676).
+# Step 7: Run @global-setting scenarios in their own serial project (#676).
 # These mutate a server-wide system setting (e.g. requireForAdmins) — tagged
 # @global-setting and excluded from backend-bdd above, they must never run
 # fullyParallel alongside it. workers:1 in playwright.config.ts forces this
@@ -156,7 +221,7 @@ else
   reporter_record_suite "backend-bdd-global-setting" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
 fi
 
-# Step 7: Run @demo-mode scenarios (#723) — opt-in. They need a server started with
+# Step 8: Run @demo-mode scenarios (#723) — opt-in. They need a server started with
 # DEMO_MODE=true + DEMO_MODE_CONFIRM=DESTROY_ALL_DATA (the MockTelephonyAdapter refuses to be
 # constructed otherwise), so they are excluded from the default project and only run when the
 # caller says the server is in demo mode. They fail loudly if that claim is wrong.
@@ -171,7 +236,7 @@ if [[ "${BDD_DEMO_MODE:-false}" == "true" ]]; then
   fi
 fi
 
-# Step 8: Run @signed-webhooks scenarios (#1036) — opt-in. They need a server started with the
+# Step 9: Run @signed-webhooks scenarios (#1036) — opt-in. They need a server started with the
 # env-var Twilio provider (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER) and the
 # same values exported to this process so the test can sign webhooks like Twilio does. They fail
 # loudly (never skip) if that environment is missing.

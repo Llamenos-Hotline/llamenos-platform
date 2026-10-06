@@ -12,6 +12,7 @@
  */
 
 import { test } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
@@ -245,7 +246,7 @@ test.describe('App Screenshots', () => {
     await loginAsAdmin(page)
 
     // Simulate incoming SMS messages to populate conversations
-    const secret = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+    const secret = devSurfaceSecret()
     for (const msg of [
       { senderNumber: uniqueCallerNumber(), body: 'Hi, I need some support right now' },
       { senderNumber: uniqueCallerNumber(), body: 'Is there anyone available to talk?' },

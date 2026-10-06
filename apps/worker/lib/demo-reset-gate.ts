@@ -7,7 +7,7 @@
  * accounts only exist on a development server (lib/demo-identities.ts), and
  * both demo flags must be set.
  */
-import { devSurfacesEnabled, type DevSurfacesEnv } from './dev-surfaces'
+import { demoSurfacesEnabled, type DevSurfacesEnv } from './dev-surfaces'
 
 export interface DemoResetGateEnv extends DevSurfacesEnv {
   DEMO_MODE?: string
@@ -25,7 +25,7 @@ export function demoResetRefusal(env: DemoResetGateEnv): string | null {
   if ((env.ENVIRONMENT ?? '').trim().toLowerCase() === 'production') {
     return 'Demo reset is never available in a production environment'
   }
-  if (!devSurfacesEnabled(env)) {
+  if (!demoSurfacesEnabled(env)) {
     return 'Demo reset is only available on a development server (ENVIRONMENT=development and DEV_ROUTES_ENABLED=true)'
   }
   if (env.DEMO_MODE !== 'true') {

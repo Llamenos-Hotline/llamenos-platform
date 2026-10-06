@@ -225,13 +225,64 @@ demo_mode_confirm: ""
 # clause from the banner text. Only takes effect when demo_mode is true.
 demo_reset_cron: ""
 
-# ─── Developer/Test Routes ────────────────────────────────────────
-# NEVER set dev_routes_enabled: true or a non-empty dev_reset_secret when
-# app_environment is "production" — same guard as demo_mode applies.
-# Currently only takes effect when app_environment is "development"
-# (widening that to staging/demo instances is tracked separately — #723).
+# ─── Developer/Test Routes (the end-to-end suite's staging knobs) ─
+# These two open the `/api/test-*` HTTP surface, which can WIPE THE DATABASE
+# and mint identities without authenticating. They exist for exactly one
+# purpose: letting the end-to-end suite bootstrap and reset a THROWAWAY
+# staging target (#723 — before this the suite got 404s and could only ever
+# run against a developer's localhost). Never enable them on a host that
+# holds real caller, volunteer or note data; a reset is not recoverable.
+#
+# Rules, all three enforced rather than advisory:
+#   - app_environment MUST be "staging" (or "development" for a local box).
+#     "production" is refused, and so is any unrecognised value — the app uses
+#     an allowlist of environments, not a denylist, so a typo never serves
+#     /api/test-*. The deployment PROFILE is not the axis: both the hosted and
+#     the self-hosted shape run the same per-service roles, so only
+#     app_environment says whether this instance is production.
+#   - dev_reset_secret MUST be at least 32 characters outside "development"
+#     (MIN_DEPLOYED_SECRET_LENGTH in apps/worker/lib/dev-surfaces.ts). The
+#     worker refuses to serve the routes with a shorter one, so a weak value
+#     fails closed rather than exposing a guessable backdoor. Generate with:
+#       openssl rand -hex 32
+#     Treat it like any other secret in this file: vault it, never commit it.
+#   - dev_routes_enabled MUST be true as well. The environment alone does not
+#     open the surface — a staging host mis-set without this flag stays shut.
+#
+# Four independent layers refuse the production combination, so a mistake in
+# one place cannot carry a backdoor onto a production host:
+#   1. playbooks/tasks/guard-dev-routes.yml hard-fails the play before any file
+#      is written to the target (imported by preflight.yml, which both the
+#      hosted and the self-hosted deploy path run).
+#   2. templates/env/_worker-required-env.j2 omits both vars from the rendered
+#      .env when app_environment is "production" (see the comment on them).
+#   3. apps/worker/lib/config.ts throws at process startup if ENVIRONMENT is
+#      production and either var (or E2E_TEST_SECRET) is set.
+#   4. apps/worker/lib/dev-surfaces.ts answers 404 at the router and at every
+#      handler, with production checked before any flag is read.
+# deploy/ansible/scripts/check-required-env.py renders layer 2 in both
+# directions on every CI run, so the staging half cannot silently rot either.
 dev_routes_enabled: false
 dev_reset_secret: ""
+# Two further consequences of dev_routes_enabled on a non-production host,
+# both deliberate and both needed for the suite to mean anything:
+#   - PostgreSQL is published on 127.0.0.1 ONLY, and attached to an extra
+#     non-internal bridge. The suite asserts persisted state straight from the
+#     database and reaches it over `ssh -L`; nothing off the host can connect
+#     either way. The bridge is there because Docker silently installs no DNAT
+#     rule for a container attached only to an internal-only network — it is
+#     redundant while llamenos-internal remains a plain bridge, and keeps the
+#     publish working if that is ever hardened.
+#   - The target's admin_pubkey / admin_decryption_pubkey must be the test
+#     harness's own admin key pair, because POST /api/test-reset re-seeds the
+#     admin from them. A staging E2E target therefore does not keep an admin
+#     identity of its own.
+# See docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md for the full runbook.
+#
+# Example for a throwaway staging target only — adjust app_environment above:
+#   app_environment: staging
+#   dev_routes_enabled: true
+#   dev_reset_secret: "<64 hex chars from: openssl rand -hex 32>"
 
 # ─── Cross-Host Networking ──────────────────────────────────────
 # Enable TLS between services on different hosts (recommended for multi-host)

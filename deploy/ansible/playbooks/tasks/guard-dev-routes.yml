@@ -1,0 +1,87 @@
+---
+# The `/api/test-*` surface must never be configured on a production instance.
+#
+# Those routes reset the database, delete the admin and promote arbitrary
+# pubkeys. They exist for one purpose: letting the end-to-end suite bootstrap
+# and reset a non-production TEST instance (#723). See
+# docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
+#
+# Keyed on `app_environment` and `dev_routes_enabled` ONLY — not on demo mode
+# and not on `deployment_profile`. Both shapes a real deployment takes (the
+# hosted one via deploy/scripts/deploy-official.sh and the self-hosted one via
+# deploy/scripts/deploy-self-hosted.sh) run `setup.yml` -> `playbooks/deploy.yml`
+# -> the same per-service roles, and `deployment_profile` only toggles optional
+# features. So the axis that matters is "is this instance production", which is
+# what `app_environment` says, plus an explicit opt-in.
+#
+# Deliberately its OWN task file rather than a clause inside
+# tasks/guard-demo-mode.yml, where this assertion used to live alongside the
+# demo_mode checks: demo mode is being removed, and this control must outlive
+# it. Nothing here references demo_mode, so deleting that file takes nothing
+# from this one.
+#
+# This is the FIRST of four independent layers, and the only one that acts
+# before a single file reaches the target host:
+#   1. this guard — the play fails outright;
+#   2. deploy/ansible/templates/env/_worker-required-env.j2 — the vars are not
+#      rendered into the .env, and the compose templates publish no database
+#      port (checked both ways by scripts/check-required-env.py);
+#   3. apps/worker/lib/config.ts — the process refuses to START;
+#   4. apps/worker/lib/dev-surfaces.ts — the router and every handler 404.
+#
+# Requires app_environment, dev_routes_enabled and dev_reset_secret to be in
+# scope (via vars_files or include_vars).
+
+- name: Assert the /api/test-* surface is never configured in production
+  ansible.builtin.assert:
+    that:
+      - not ((app_environment | default('production')) == 'production' and (dev_routes_enabled | default(false) | bool))
+      - not ((app_environment | default('production')) == 'production' and ((dev_reset_secret | default('')) | length > 0))
+    fail_msg: |
+      REFUSING TO DEPLOY: dev_routes_enabled and dev_reset_secret open the
+      destructive /api/test-* surface and must never be set when
+      app_environment is 'production'. This is a hard stop before any file is
+      rendered to the target host; three further layers enforce the same rule
+      (the .env template, apps/worker/lib/config.ts at process startup, and
+      apps/worker/lib/dev-surfaces.ts at every request).
+
+      Current values:
+        app_environment:      {{ app_environment | default('production') }}
+        dev_routes_enabled:   {{ dev_routes_enabled | default(false) }}
+        dev_reset_secret set: {{ ((dev_reset_secret | default('')) | length > 0) }}
+
+      To fix:
+        - A real deployment: unset dev_routes_enabled and dev_reset_secret.
+        - A throwaway instance the end-to-end suite resets: set
+          app_environment to 'staging'. See
+          docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
+    success_msg: "/api/test-* surface guard passed (app_environment={{ app_environment | default('production') }})"
+  tags: always
+
+# A reachable instance that opts in must carry a real secret. The worker
+# refuses to serve the routes with a shorter one
+# (MIN_DEPLOYED_SECRET_LENGTH in apps/worker/lib/dev-surfaces.ts) and refuses
+# to boot at all, so catching it here turns a container crash loop into a
+# render-time error the operator can act on.
+- name: Assert dev_reset_secret is long enough when the dev routes are enabled
+  ansible.builtin.assert:
+    that:
+      - (dev_reset_secret | default('')) | length >= 32
+    fail_msg: |
+      REQUIRED: dev_reset_secret must be at least 32 characters when
+      dev_routes_enabled is true on a deployed instance.
+
+      The /api/test-* surface is reachable on a deployed host, so it may not be
+      served without a strong shared secret — that length minimum is the
+      control that actually bounds guessing it. apps/worker/lib/config.ts
+      refuses to start the server otherwise.
+
+      Current length: {{ (dev_reset_secret | default('')) | length }}
+
+      To fix:
+        dev_reset_secret: "{{ '<64 hex chars from: openssl rand -hex 32>' }}"
+    success_msg: "dev_reset_secret: [set, {{ (dev_reset_secret | default('')) | length }} chars]"
+  when:
+    - dev_routes_enabled | default(false) | bool
+    - (app_environment | default('production')) != 'development'
+  tags: always

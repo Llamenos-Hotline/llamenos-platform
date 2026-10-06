@@ -13,6 +13,7 @@
  */
 
 import { type APIRequestContext } from '@playwright/test'
+import { devSurfaceSecret, devSurfaceHeaders } from './dev-surface-secret'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -71,6 +72,10 @@ function authHeaders(seedHex: string, method: string, path: string): Record<stri
   return {
     'Authorization': `Bearer ${JSON.stringify(token)}`,
     'Content-Type': 'application/json',
+    // Marks this as the harness's own request so the API rate limiter exempts
+    // it on a deployed target — see ./dev-surface-secret.ts for why every
+    // request needs it and why only the secret-holder is exempt.
+    ...devSurfaceHeaders(),
   }
 }
 
@@ -90,7 +95,7 @@ async function safeJson(res: import('@playwright/test').APIResponse): Promise<un
 // Dev routes (/api/test-*) require X-Test-Secret header instead of Bearer auth.
 // These are gated by ENVIRONMENT=development + DEV_ROUTES_ENABLED=true + secret.
 
-const DEV_TEST_SECRET = process.env.DEV_RESET_SECRET || process.env.E2E_TEST_SECRET || 'test-reset-secret'
+const DEV_TEST_SECRET = devSurfaceSecret()
 
 function devHeaders(): Record<string, string> {
   return { 'Content-Type': 'application/json', 'X-Test-Secret': DEV_TEST_SECRET }

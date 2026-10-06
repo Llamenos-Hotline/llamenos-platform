@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 import { ADMIN_SEED, enterPin, resetTestState, TEST_PIN, Timeouts, completeProfileSetup } from './helpers'
 import { TestIds } from './test-ids'
 
-const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const TEST_RESET_SECRET = devSurfaceSecret()
 const resetHeaders = { 'X-Test-Secret': TEST_RESET_SECRET }
 const STORAGE_DIR = 'tests/storage'
 

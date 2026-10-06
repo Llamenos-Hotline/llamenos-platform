@@ -1,4 +1,5 @@
 import { type Page, type APIRequestContext, expect } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 import { TestIds } from './test-ids'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
@@ -531,7 +532,7 @@ export async function fillCallId(page: Page, callId: string): Promise<void> {
   await callIdInput.fill(callId)
 }
 
-const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+const TEST_RESET_SECRET = devSurfaceSecret()
 
 export async function resetTestState(request: APIRequestContext) {
   const res = await request.post('/api/test-reset', {

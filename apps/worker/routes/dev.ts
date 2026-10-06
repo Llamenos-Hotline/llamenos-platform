@@ -15,6 +15,7 @@ import { demoIdentities } from '../lib/demo-identities'
 import { getDb } from '../db'
 import { sql as rawSql } from 'drizzle-orm'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
+import { devSurfacesEnabled, devSurfaceSecretPresented, demoSurfacesEnabled, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -30,15 +31,51 @@ function decodePubkey(input: string): string {
 const dev = new Hono<AppEnv>()
 
 /**
- * Secondary gate: if DEV_RESET_SECRET is set, require X-Test-Secret header.
- * Protects against accidental ENVIRONMENT=development in production.
+ * Per-request half of the dev-surface guard: does this CALLER present the
+ * shared secret? (`lib/dev-surfaces.ts` decides whether this SERVER may serve
+ * `/api/test-*` at all.) Both halves answer 404 — never 401/403 — so a probe
+ * cannot tell a gated route from an absent one.
  */
-function checkResetSecret(c: { env: { DEV_RESET_SECRET?: string; E2E_TEST_SECRET?: string }; req: { header(name: string): string | undefined } }): boolean {
-  const secret = c.env.DEV_RESET_SECRET || c.env.E2E_TEST_SECRET
-  if (!secret) return false // No secret configured — deny by default
-  // Accept X-Test-Secret header only — Bearer tokens are not sufficient for destructive dev endpoints
-  if (c.req.header('X-Test-Secret') === secret) return true
-  return false
+function checkResetSecret(c: { env: DevSurfacesEnv; req: { header(name: string): string | undefined } }): boolean {
+  return devSurfaceSecretPresented(c.env, c.req.header('X-Test-Secret'))
+}
+
+/**
+ * The guard every `/api/test-*` handler runs: this server may serve the dev
+ * surface, AND this caller presented the shared secret. Returns the 404 to
+ * send, or `null` to proceed.
+ *
+ * One helper rather than an inlined `ENVIRONMENT !== 'development'` per route:
+ * there were 18 copies of that condition, and the one in `/test-reset-records`
+ * had already drifted (a `staging` arm that `devGuard` made unreachable, plus a
+ * 403 that disclosed the route's existence). A single predicate cannot drift.
+ */
+function devRouteDenied(c: {
+  env: DevSurfacesEnv
+  req: { header(name: string): string | undefined }
+  json(obj: unknown, status: 404): Response
+}): Response | null {
+  if (!devSurfacesEnabled(c.env)) return c.json({ error: 'Not Found' }, 404)
+  if (!checkResetSecret(c)) return c.json({ error: 'Not Found' }, 404)
+  return null
+}
+
+/**
+ * The guard for the three `/test-*` routes that hand out or register the demo
+ * cast's identities. Those seeds are only mintable on a development server
+ * (`demoSurfacesEnabled`, lib/dev-surfaces.ts), which the staging allowlist
+ * deliberately does not widen — so on a staging E2E target these must answer a
+ * clean 404 rather than let `demoIdentities()` throw into a 500.
+ */
+function demoRouteDenied(c: {
+  env: DevSurfacesEnv
+  req: { header(name: string): string | undefined }
+  json(obj: unknown, status: 404): Response
+}): Response | null {
+  const denied = devRouteDenied(c)
+  if (denied) return denied
+  if (!demoSurfacesEnabled(c.env)) return c.json({ error: 'Not Found' }, 404)
+  return null
 }
 
 // Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
@@ -49,13 +86,13 @@ function checkResetSecret(c: { env: { DEV_RESET_SECRET?: string; E2E_TEST_SECRET
 dev.get('/test-devguard-canary', (c) => c.json({ ok: true }))
 
 dev.post('/test-reset', async (c) => {
-  // Full reset: development only — too destructive for staging
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  // Full reset. Available wherever the dev surface is (development, or a
+  // staging target that opted in — see lib/dev-surfaces.ts). Deliberately not
+  // held back from staging while /test-reset-no-admin below is allowed there:
+  // that one is strictly MORE destructive (it also removes the admin), so a
+  // split would be incoherent rather than cautious.
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const services = c.get('services')
   const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
   const adminPubkey = c.env.ADMIN_PUBKEY
@@ -74,7 +111,11 @@ dev.post('/test-reset', async (c) => {
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
   if (adminPubkey) {
     await services.identity.ensureInit(adminPubkey)
-    if (c.env.DEMO_MODE === 'true') {
+    // `demoSurfacesEnabled`, not `DEMO_MODE === 'true'`: the demo cast's signing
+    // seeds are only mintable on a development server (lib/dev-surfaces.ts), and
+    // a staging E2E target can legitimately run DEMO_MODE=true. Keying off the
+    // flag made `demoIdentities` throw there and turned this reset into a 500.
+    if (c.env.DEMO_MODE === 'true' && demoSurfacesEnabled(c.env)) {
       await services.identity.ensureDemoAccounts(demoIdentities(c.env))
     }
   }
@@ -103,13 +144,10 @@ dev.post('/test-reset', async (c) => {
 // Reset to a truly fresh state — no admin, no ADMIN_PUBKEY effect
 // Used for testing in-browser admin bootstrap
 dev.post('/test-reset-no-admin', async (c) => {
-  // Full reset without admin: development only
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  // Full reset without an admin — the first call the end-to-end suite's
+  // api-bootstrap step makes, including against a deployed staging target.
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const services = c.get('services')
   const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
   // Reset all services
@@ -136,24 +174,16 @@ dev.post('/test-reset-no-admin', async (c) => {
 // Preserves identity (admin account) and settings (setup state)
 // Used by live telephony E2E tests against staging
 dev.post('/test-reset-records', async (c) => {
-  // The `staging` arm this used to carry was unreachable. `devGuard`
-  // (app.ts `api.use('/test-*', devGuard)`) runs first and requires
-  // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, so a staging host
-  // never reached this handler — verified by probe: with all three vars set,
-  // both this route and /api/test-devguard-canary answered 404. The compose
-  // file does not pass E2E_TEST_SECRET to the app either, so the secret could
-  // not have arrived even if the guard had allowed it.
-  //
-  // It is removed rather than fixed: it advertised a supported staging mode
-  // that cannot exist, and the live suite it existed for no longer needs a
-  // reset (#1423). Do not re-add it — loosening devGuard is the one thing
-  // lib/dev-surfaces.ts exists to prevent.
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Forbidden' }, 403)
-  }
+  // History: this route once carried its own `staging` arm, which `devGuard`
+  // made unreachable — the guard ran first and demanded
+  // ENVIRONMENT=development, so the arm was dead code advertising a mode that
+  // did not exist, and it was removed (#1423). The fix was never "special-case
+  // one handler": it is the root predicate in lib/dev-surfaces.ts, which now
+  // admits a staging target that opted in on all three factors. This handler
+  // asks that one predicate like every other, and no longer answers 403 on a
+  // bad secret — 403 disclosed that the route exists.
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const services = c.get('services')
   const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
   await services.records.reset()
@@ -170,12 +200,8 @@ dev.post('/test-reset-records', async (c) => {
 // Used by BDD fixtures that need an approved brand to test campaign submission.
 
 dev.post('/test-a2p-approve-brand', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { registrationId?: string }
   if (!body.registrationId) {
     return c.json({ error: 'registrationId is required' }, 400)
@@ -193,12 +219,8 @@ dev.post('/test-a2p-approve-brand', async (c) => {
 // simulating WebAuthn crypto end to end.
 
 dev.post('/test-add-webauthn-credential', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
@@ -233,12 +255,8 @@ dev.post('/test-add-webauthn-credential', async (c) => {
 // a fresh Ed25519 signature" (e.g. requireFreshAuth / ELEVATED_AUTH_REQUIRED)
 // have no other route to a genuine, server-validated session token.
 dev.post('/test-create-session', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
@@ -256,12 +274,8 @@ dev.post('/test-create-session', async (c) => {
 // start from `verified` and exercise real contribution/completion routes.
 
 dev.post('/test-recovery-seed-session', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as {
     hubId?: string
     userPubkey?: string
@@ -289,12 +303,8 @@ dev.post('/test-recovery-seed-session', async (c) => {
 // Accepts optional ?prefix= query param to clear only matching keys (safer for parallel tests).
 
 dev.delete('/test-rate-limits', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const prefix = c.req.query('prefix')
   const services = c.get('services')
   await services.settings.clearRateLimits(prefix || undefined)
@@ -307,12 +317,8 @@ dev.delete('/test-rate-limits', async (c) => {
 // error handler returns a generic 500 without leaking stack traces.
 
 dev.get('/test-trigger-error', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   // Intentionally throw to exercise the global error handler
   throw new Error('Intentional test error for error disclosure verification')
 })
@@ -321,12 +327,8 @@ dev.get('/test-trigger-error', async (c) => {
 // Promotes a test identity to admin role so mobile E2E tests can access all features.
 
 dev.post('/test-promote-admin', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string }
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
@@ -351,12 +353,8 @@ dev.post('/test-promote-admin', async (c) => {
 // without being promoted to super-admin (which would show ALL hubs).
 
 dev.post('/test-add-hub-member', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string; hubId?: string; roleIds?: string[] }
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
@@ -402,12 +400,8 @@ dev.post('/test-add-hub-member', async (c) => {
 // Active call simulation requires on-shift volunteers for call routing.
 
 dev.post('/test-create-shift', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
   const body = await c.req.json().catch(() => ({})) as { pubkey?: string; hubId?: string }
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
@@ -531,12 +525,8 @@ function entityTypeTemplate(name: 'arrest_case' | 'protest_event') {
 }
 
 dev.post('/test-seed', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development') {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  if (!checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = devRouteDenied(c)
+  if (denied) return denied
 
   const rawBody = await c.req.json().catch(() => ({}))
   const parsed = seedSpecSchema.safeParse(rawBody)
@@ -771,9 +761,8 @@ dev.post('/test-seed', async (c) => {
 // if they are missing; DELETE removes the demo hub and accounts again.
 
 dev.post('/test-seed-demo', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development' || !checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = demoRouteDenied(c)
+  if (denied) return denied
   const services = c.get('services')
   await services.identity.ensureDemoAccounts(demoIdentities(c.env))
   const summary = await seedDemoDataset(services, c.env)
@@ -783,17 +772,15 @@ dev.post('/test-seed-demo', async (c) => {
 // The demo accounts' signing keys are generated per server process and never
 // committed, so a test signs in as one by asking the process that holds them.
 dev.get('/test-demo-identities', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development' || !checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = demoRouteDenied(c)
+  if (denied) return denied
   const identities = demoIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
   return c.json({ identities })
 })
 
 dev.delete('/test-seed-demo', async (c) => {
-  if (c.env.ENVIRONMENT !== 'development' || !checkResetSecret(c)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
+  const denied = demoRouteDenied(c)
+  if (denied) return denied
   const services = c.get('services')
   await services.settings.purgeHub(DEMO_HUB.id)
   for (const account of demoIdentities(c.env)) {
@@ -846,10 +833,10 @@ interface SimulateDeliveryStatusBody {
  * Returns an error Response if denied, or null if allowed.
  */
 function simulationGuard(c: {
-  env: { ENVIRONMENT: string; DEV_RESET_SECRET?: string; E2E_TEST_SECRET?: string }
+  env: DevSurfacesEnv
   req: { header(name: string): string | undefined }
 }): Response | null {
-  if (c.env.ENVIRONMENT !== 'development') {
+  if (!devSurfacesEnabled(c.env)) {
     return Response.json({ error: 'Not Found' }, { status: 404 })
   }
   if (!checkResetSecret(c)) {

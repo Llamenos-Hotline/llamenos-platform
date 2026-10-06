@@ -18,6 +18,13 @@
 #     DEMO_RESET_CRON actually reach a rendered .env and aren't dead
 #     plumbing (the "also fix" #2 finding in review round 2).
 #
+# It also renders the two COMPOSE templates. The PostgreSQL service publishes
+# its port on 127.0.0.1 only when `dev_routes_enabled` is set on a
+# non-production environment (the end-to-end suite has to reach the deployed
+# database over an SSH forward), and must publish nothing otherwise. That is the
+# same "opposite outcomes from the same inputs" shape as the dev-route env vars,
+# so check-required-env.py asserts both directions here too.
+#
 # Usage:
 #   cd deploy/ansible
 #   ansible-playbook playbooks/check-env-templates.yml \
@@ -43,4 +50,16 @@
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../roles/llamenos-app/templates/env/app.j2"
         dest: "/tmp/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
+        mode: "0600"
+
+    - name: Render per-service postgres role compose template (roles/llamenos-postgres/templates/compose/postgres.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos-postgres/templates/compose/postgres.j2"
+        dest: "/tmp/llamenos-check-compose-postgres{{ env_check_suffix | default('') }}.yml"
+        mode: "0600"
+
+    - name: Render monolithic role compose template (roles/llamenos/templates/docker-compose.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos/templates/docker-compose.j2"
+        dest: "/tmp/llamenos-check-compose-monolithic{{ env_check_suffix | default('') }}.yml"
         mode: "0600"
