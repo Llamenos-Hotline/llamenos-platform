@@ -191,7 +191,7 @@ describe('POST /setup/complete', () => {
     expect(mockSettings.createHub).not.toHaveBeenCalled()
   })
 
-  it('still completes even if hub creation fails (non-fatal)', async () => {
+  it('fails the request when default-hub creation fails, and never marks setup complete', async () => {
     const { app, mockSettings } = makeApp()
     mockSettings.getHubs.mockResolvedValue({ hubs: [] })
     mockSettings.createHub.mockRejectedValue(new Error('DB error'))
@@ -202,10 +202,23 @@ describe('POST /setup/complete', () => {
       body: JSON.stringify({}),
     })
 
-    expect(res.status).toBe(200)
-    expect(mockSettings.updateSetupState).toHaveBeenCalledWith(
-      expect.objectContaining({ setupCompleted: true }),
-    )
+    expect(res.status).toBe(500)
+    expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
+  })
+
+  it('fails the request when assigning the creator admin role on the default hub fails', async () => {
+    const { app, mockSettings, mockIdentity } = makeApp()
+    mockSettings.getHubs.mockResolvedValue({ hubs: [] })
+    mockIdentity.setHubRole.mockRejectedValue(new Error('DB error'))
+
+    const res = await app.request('/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(500)
+    expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
   })
 
   it('uses Hotline as default name when HOTLINE_NAME not set', async () => {
