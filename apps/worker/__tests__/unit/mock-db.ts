@@ -167,6 +167,13 @@ export function createMockDb(tables: string[] = []) {
     })),
 
     execute: vi.fn(() => Promise.resolve(_executeResult)),
+
+    // The mock has no real transactional isolation — unit tests exercise
+    // business logic against canned select/insert/update results, not
+    // actual atomicity, which is covered separately by the
+    // integration-level concurrency tests. Running the callback against
+    // the same mock `db` is sufficient for that purpose.
+    transaction: vi.fn((cb: (tx: any) => Promise<unknown>) => cb(db)),
   }
 
   return { db, store, reset }

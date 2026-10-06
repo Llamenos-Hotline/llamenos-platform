@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "bans_platform_phone_hash_idx" ON "bans" USING btree ("phone_hash") WHERE hub_id IS NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "shift_join_requests_pending_unique_idx" ON "shift_join_requests" USING btree ("shift_id","user_pubkey","type") WHERE status = 'pending';
