@@ -12,6 +12,7 @@ import {
 } from '../../orchestrator/src/verify.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
+import { ISRG_ROOT_X1, throwawayPrivateKeyPem } from './pem-fixtures.js'
 
 describe('changedFilesFrom', () => {
   it('splits git diff --name-only output', () => {
@@ -1123,5 +1124,127 @@ describe('workspaceAliases (#1525)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-ws-empty-'))
     cleanup.push(dir)
     expect(await workspaceAliases(dir, '/export')).toEqual([])
+  })
+})
+
+/**
+ * The WIRING for the `*.pem` carve-out (#1610), exercised in the CI shape it
+ * actually runs in: git is the TRUSTED BASE CHECKOUT, parked on the base
+ * commit, and the commit under judgement exists only as an OBJECT in it —
+ * never checked out, so the `.pem` is not on disk at all and the only way to
+ * its bytes is `git show <head>:<path>`.
+ *
+ * `fragments.test.ts` proves the predicate and `scope.test.ts` proves the
+ * gate; this proves the bytes reach them. Every case but one injects the
+ * defect the gate exists to catch.
+ */
+describe('verifyMechanical reads certificate content from the head object (#1610)', () => {
+  const createdRepos: string[] = []
+
+  afterEach(() => {
+    while (createdRepos.length > 0) {
+      const dir = createdRepos.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  const PEM = 'apps/android/app/src/test/resources/certs/isrg-root-x1.pem'
+
+  const unrestricted: Lane = {
+    id: 'test', mode: 'live', cap: 1, engine: 'claude',
+    requireLabel: 'agent-dispatchable', vetoLabels: [],
+    scope: { owned: [], notOwned: [] },
+  }
+
+  /** A repo whose HEAD adds `PEM` with `content`, left parked on the base so
+   *  nothing of the judged commit is on disk. Returns what `rangeFor`
+   *  (ci.ts) passes: the base checkout, the base sha, the head sha. */
+  function repoAddingPem(content: string, baseContent?: string): { dir: string; base: string; head: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-verify-pem-'))
+    createdRepos.push(dir)
+    execSync('git init -q -b main', { cwd: dir })
+    execSync('git config user.email test@example.com', { cwd: dir })
+    execSync('git config user.name "Test"', { cwd: dir })
+    writeFileSync(join(dir, 'README.md'), 'base\n')
+    if (baseContent !== undefined) {
+      mkdirSync(dirname(join(dir, PEM)), { recursive: true })
+      writeFileSync(join(dir, PEM), baseContent)
+    }
+    execFileSync('git', ['add', '-A'], { cwd: dir })
+    execSync('git commit -q -m base', { cwd: dir })
+    const base = execSync('git rev-parse HEAD', { cwd: dir }).toString().trim()
+
+    if (content.length === 0 && baseContent !== undefined) {
+      execFileSync('git', ['rm', '-q', PEM], { cwd: dir })
+    } else {
+      mkdirSync(dirname(join(dir, PEM)), { recursive: true })
+      writeFileSync(join(dir, PEM), content)
+      execFileSync('git', ['add', '-A'], { cwd: dir })
+    }
+    execSync('git commit -q -m head', { cwd: dir })
+    const head = execSync('git rev-parse HEAD', { cwd: dir }).toString().trim()
+
+    // Park on the base: this is the CI arrangement, and it is what makes the
+    // `git show` read load-bearing rather than incidental.
+    execFileSync('git', ['checkout', '-q', '--detach', base], { cwd: dir })
+    expect(existsSync(join(dir, PEM))).toBe(baseContent !== undefined)
+    return { dir, base, head }
+  }
+
+  const verify = (r: { dir: string; base: string; head: string }) => verifyMechanical({
+    worktree: r.dir, base: r.base, branch: r.head, lane: unrestricted, skipTests: true,
+  })
+
+  it('permits a real public root CA certificate that exists only in the head object', async () => {
+    const report = await verify(repoAddingPem(ISRG_ROOT_X1))
+    expect(report.reasons).toEqual([])
+    expect(report.passed).toBe(true)
+    expect(report.changedFiles).toEqual([PEM])
+  })
+
+  it('still refuses a genuine private key at the same path', async () => {
+    const report = await verify(repoAddingPem(throwawayPrivateKeyPem()))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain(`touched never-write paths: ${PEM}`)
+  })
+
+  it('still refuses a certificate with a private key appended', async () => {
+    const report = await verify(repoAddingPem(`${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}`))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('still refuses a truncated certificate', async () => {
+    const report = await verify(repoAddingPem(ISRG_ROOT_X1.replace('-----END CERTIFICATE-----\n', '')))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('refuses a DELETED .pem — git show cannot read it, and "could not look" is not "is safe"', async () => {
+    // Documented consequence of failing closed, asserted rather than assumed:
+    // removing a vendored certificate still needs a human. Adding or updating
+    // one — the case #1610 is about — does not.
+    const report = await verify(repoAddingPem('', ISRG_ROOT_X1))
+    expect(report.changedFiles).toEqual([PEM])
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('still refuses a .env in the same diff whose content is a certificate', async () => {
+    // The lookup is scoped to CERTIFICATE_ONLY_PATTERNS; nothing else sees it.
+    const r = repoAddingPem(ISRG_ROOT_X1)
+    execFileSync('git', ['checkout', '-q', r.head], { cwd: r.dir })
+    writeFileSync(join(r.dir, '.env'), ISRG_ROOT_X1)
+    execFileSync('git', ['add', '-A'], { cwd: r.dir })
+    execSync('git commit -q -m "add a .env"', { cwd: r.dir })
+    const head = execSync('git rev-parse HEAD', { cwd: r.dir }).toString().trim()
+    execFileSync('git', ['checkout', '-q', '--detach', r.base], { cwd: r.dir })
+
+    const report = await verifyMechanical({
+      worktree: r.dir, base: r.base, branch: head, lane: unrestricted, skipTests: true,
+    })
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths: .env')
+    expect(report.reasons.join(' ')).not.toContain(PEM)
   })
 })

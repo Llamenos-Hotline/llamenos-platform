@@ -2,6 +2,9 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
 import { trackedFiles } from './codeowners.js'
+import { readFileSync } from 'node:fs'
+import { NEVER_WRITE_PATHS } from '../../orchestrator/src/config.js'
+import { ISRG_ROOT_X1, ISRG_ROOT_X2, throwawayPrivateKeyPem } from './pem-fixtures.js'
 
 const IOS: LaneScope = { owned: ['apps/ios/', '.github/workflows/ios*.yml'], notOwned: [] }
 const NEVER = ['.env', 'deploy/', '.github/workflows/']
@@ -1177,5 +1180,115 @@ describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467
     for (const [name, scope] of [['infra', infra], ['backend', backend], ['shared', shared]] as const) {
       expect(checkScope(self, scope, []).strayed, `${name} must not own the scope fragments`).toEqual(self)
     }
+  })
+})
+
+/**
+ * #1610 — the `*.pem` carve-out, exercised through the real gate rather than
+ * through `matchesSecretPath` alone (`fragments.test.ts` covers the predicate
+ * itself). These run `checkScope`/`checkScopeAcross` against the REAL
+ * `NEVER_WRITE_PATHS`, so a narrowing of the constant, a mis-threaded
+ * `contentOf`, or a carve-out that escaped `*.pem` all fail here.
+ *
+ * Verification is by BREAKING it (`feedback_audit_gates_by_breaking`): the
+ * permitted case is one test, and everything else injects the defect the gate
+ * claims to catch.
+ */
+describe('public certificates at *.pem paths (#1610)', () => {
+  const UNRESTRICTED: LaneScope = { owned: [], notOwned: [] }
+  const NEVER_ALL = [...NEVER_WRITE_PATHS]
+
+  // The two fixtures #1608 could not land. Real paths, real bytes.
+  const X1_PATH = 'apps/android/app/src/test/resources/certs/isrg-root-x1.pem'
+  const X2_PATH = 'apps/android/app/src/test/resources/certs/isrg-root-x2.pem'
+
+  const lookup = (contents: Record<string, string>) => (f: string) => contents[f]
+
+  it('the bug: both #1608 fixtures are forbidden with no content lookup, and permitted with one', () => {
+    const files = [X1_PATH, X2_PATH]
+    // Before: the gate sees only paths, so a public root CA is a secret.
+    expect(checkScope(files, UNRESTRICTED, NEVER_ALL).forbidden).toEqual(files)
+    // After: the same gate, handed the same files' real bytes.
+    const r = checkScope(files, UNRESTRICTED, NEVER_ALL, lookup({
+      [X1_PATH]: ISRG_ROOT_X1,
+      [X2_PATH]: ISRG_ROOT_X2,
+    }))
+    expect(r.forbidden).toEqual([])
+    expect(r.strayed).toEqual([])
+  })
+
+  it('a private key at the SAME path is still forbidden', () => {
+    // The name is identical; only the content differs. This is what makes
+    // the carve-out a content rule and not a path rule.
+    const r = checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: throwawayPrivateKeyPem() }))
+    expect(r.forbidden).toEqual([X1_PATH])
+  })
+
+  it('a certificate with a private key appended at that path is still forbidden', () => {
+    const mixed = `${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}`
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: mixed })).forbidden)
+      .toEqual([X1_PATH])
+  })
+
+  it.each([
+    ['truncated', ISRG_ROOT_X1.replace('-----END CERTIFICATE-----\n', '')],
+    ['empty', ''],
+    ['not PEM', 'hello\n'],
+    ['mismatched labels', ISRG_ROOT_X1.replace('-----END CERTIFICATE-----', '-----END PUBLIC KEY-----')],
+  ])('a %s .pem is still forbidden', (_name, content) => {
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({ [X1_PATH]: content })).forbidden)
+      .toEqual([X1_PATH])
+  })
+
+  it('a .pem absent from the lookup is still forbidden — "could not read" is never "is safe"', () => {
+    // What `verifyMechanical` produces for a file deleted in the diff, or one
+    // whose object could not be read.
+    expect(checkScope([X1_PATH], UNRESTRICTED, NEVER_ALL, lookup({})).forbidden).toEqual([X1_PATH])
+  })
+
+  it('the exemption does not leak to another secret pattern whose content looks like a certificate', () => {
+    const impostors = ['deploy/docker/.env', 'deploy/tls/server.key', 'apps/android/release.jks', '.npmrc']
+    const contents = Object.fromEntries(impostors.map((f) => [f, ISRG_ROOT_X1]))
+    expect(checkScope(impostors, UNRESTRICTED, NEVER_ALL, lookup(contents)).forbidden).toEqual(impostors)
+  })
+
+  it('a certificate is still OWNED by the lane that owns its directory, so it is writable rather than strayed', () => {
+    // The template ruling, restated for certificates: ownership is a path
+    // question, and the carve-out must not make a permitted file strayed.
+    const android: LaneScope = { owned: ['apps/android/'], notOwned: [] }
+    const r = checkScope([X1_PATH], android, NEVER_ALL, lookup({ [X1_PATH]: ISRG_ROOT_X1 }))
+    expect(r).toEqual({ forbidden: [], strayed: [] })
+    // …and a lane that does NOT own it gets `strayed`, not `forbidden`.
+    const ios: LaneScope = { owned: ['apps/ios/'], notOwned: [] }
+    expect(checkScope([X1_PATH], ios, NEVER_ALL, lookup({ [X1_PATH]: ISRG_ROOT_X1 })).strayed).toEqual([X1_PATH])
+  })
+
+  it('checkScopeAcross threads the lookup too — a grant neither needs nor bypasses it', () => {
+    const backendLane: LaneScope = { owned: ['apps/worker/'], notOwned: [] }
+    const androidLane: LaneScope = { owned: ['apps/android/'], notOwned: [] }
+    // Forbidden with no lookup, on the lane that owns the path.
+    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL).forbidden).toEqual([X1_PATH])
+    // Permitted with one.
+    expect(checkScopeAcross([X1_PATH], androidLane, [], NEVER_ALL, [], lookup({ [X1_PATH]: ISRG_ROOT_X1 })))
+      .toEqual({ forbidden: [], strayed: [] })
+    // A private key is forbidden even when the lane owns the directory and a
+    // grant is in force — never-write still beats everything.
+    expect(checkScopeAcross(
+      [X1_PATH], backendLane, [androidLane], NEVER_ALL, [],
+      lookup({ [X1_PATH]: throwawayPrivateKeyPem() }),
+    ).forbidden).toEqual([X1_PATH])
+  })
+
+  it('every .pem tracked in this repo today is a public certificate, and all of them become writable', () => {
+    // The three vendored bundler root CAs the issue names. Read from the real
+    // tree, so this breaks the moment a tracked `.pem` stops being public —
+    // which is exactly when the carve-out would need re-examining.
+    const pems = trackedFiles().filter((f) => f.endsWith('.pem'))
+    expect(pems.length, 'no tracked .pem files — this assertion would pass vacuously').toBeGreaterThan(0)
+    const contents = Object.fromEntries(pems.map((f) => [f, readFileSync(f, 'utf8')]))
+    expect(checkScope(pems, UNRESTRICTED, NEVER_ALL, lookup(contents)).forbidden).toEqual([])
+    // And without the lookup every one of them is still refused — the state
+    // this issue reports.
+    expect(checkScope(pems, UNRESTRICTED, NEVER_ALL).forbidden).toEqual(pems)
   })
 })

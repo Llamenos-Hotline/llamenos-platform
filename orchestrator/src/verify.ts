@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeAcross } from './scope.js'
+import { CERTIFICATE_ONLY_PATTERNS, matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
 import { scrubSecrets } from './github-app.js'
@@ -752,6 +753,42 @@ export function judgeTargetRun(
 }
 
 /**
+ * The bytes behind the `*.pem` carve-out, read the only way this gate is
+ * allowed to read them.
+ *
+ * `git show <head>:<path>` in `worktree`, which is the TRUSTED BASE
+ * CHECKOUT: `fleet-verify.yml` fetches the head sha as an OBJECT into it
+ * (`git fetch --no-tags origin "$HEAD_SHA"`) and never checks it out, and
+ * `rangeFor` (ci.ts) passes that sha as `branch`. So the content is
+ * available here without the commit under judgement being checked out,
+ * installed, or executed — the same property that already lets this function
+ * compute the diff. Nothing from the head reaches a module path, and the
+ * bytes are only ever pattern-matched, never run.
+ *
+ * Reads ONLY files that a `CERTIFICATE_ONLY_PATTERNS` entry matches, so a
+ * normal diff spawns no git process at all and a certificate-bearing one
+ * spawns a handful. Everything else keeps the pre-#1610 path-only decision.
+ *
+ * Every failure is an absent entry, which `matchesSecretPath` reads as
+ * `undefined` and treats as a secret: a file DELETED in the diff (git show
+ * exits non-zero), an unreadable object, a submodule or symlink entry. "I
+ * could not read it" is never "it is safe".
+ */
+async function readCertificateCandidates(
+  worktree: string,
+  rev: string,
+  changedFiles: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  for (const f of changedFiles) {
+    if (!CERTIFICATE_ONLY_PATTERNS.some((p) => matchesPath(f, p))) continue
+    const content = await runGit(worktree, ['show', `${rev}:${f}`])
+    if (content !== undefined) out.set(f, content)
+  }
+  return out
+}
+
+/**
  * Order is the design, not a style choice:
  *
  * 1. Scope — any forbidden or strayed file is an immediate fail, naming the
@@ -821,12 +858,14 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // Dropped here too so the failure message never credits a grant that had no
   // effect.
   const granted = (input.grantedLanes ?? []).filter((g) => g.scope.owned.length > 0)
+  const certificateCandidates = await readCertificateCandidates(worktree, branch, changedFiles)
   const { forbidden, strayed } = checkScopeAcross(
     changedFiles,
     lane.scope,
     granted.map((g) => g.scope),
     [...NEVER_WRITE_PATHS],
     [...GRANT_EXCLUDED_PATHS],
+    (f) => certificateCandidates.get(f),
   )
   if (forbidden.length > 0) {
     reasons.push(`touched never-write paths: ${forbidden.join(', ')}`)
