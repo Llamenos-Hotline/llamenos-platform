@@ -41,9 +41,15 @@ export const REGISTRATION_MAX_EXPIRY_SECONDS = 600
 // Identity + secrets
 // ---------------------------------------------------------------------------
 
+/**
+ * Every volunteer endpoint's username starts with this, so the PBX's endpoint
+ * list can be filtered to volunteer registrations without a bookkeeping store.
+ */
+export const VOLUNTEER_USERNAME_PREFIX = 'vol_'
+
 /** The SIP username every volunteer registers as: derived from their pubkey, unique per volunteer. */
 export function volunteerSipUsername(pubkey: string): string {
-  return `vol_${pubkey.slice(0, 16)}`
+  return `${VOLUNTEER_USERNAME_PREFIX}${pubkey.slice(0, 16)}`
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -288,6 +294,67 @@ export async function removeVolunteerEndpoint(
   for (const type of [...VOLUNTEER_OBJECT_TYPES].reverse() as VolunteerObjectType[]) {
     await ari.remove(type, username)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reachability (who can actually be sent an INVITE, right now)
+// ---------------------------------------------------------------------------
+
+/**
+ * ARI's view of one PJSIP endpoint. `state` is the device state Asterisk
+ * derives from the endpoint's AOR contacts: `online` only while at least one
+ * contact is present AND answering the qualify.
+ */
+interface AriEndpointState {
+  technology?: string
+  resource?: string
+  state?: 'online' | 'offline' | 'unknown'
+}
+
+/**
+ * The volunteer SIP usernames the PBX holds a **reachable** registration for
+ * right now — the set the ringing path may send an INVITE to.
+ *
+ * Registration state lives at the PBX, not in our database, and this asks the
+ * PBX rather than recording a registration event of our own. That choice is
+ * the point: a registration event we wrote would still read "registered"
+ * after the app was force-stopped, the device lost its network, or the PBX
+ * restarted, and a stale yes means the call rings nobody — exactly the
+ * failure in-app ringing exists to prevent. Asterisk's endpoint state cannot
+ * say that: the AOR is provisioned with `qualify_frequency: 60`, so a contact
+ * that stops answering OPTIONS drops to `offline` within a qualify cycle, and
+ * a PBX restart loses the in-memory contacts (#1207) and reports `offline`
+ * until the client re-registers.
+ *
+ * Only `online` counts. An endpoint whose state Asterisk cannot vouch for is
+ * treated as unreachable, because the consequences are asymmetric: a false
+ * "unreachable" still rings the volunteer's phone, while a false "reachable"
+ * silently swallows a crisis call.
+ *
+ * One request serves the whole roster, so the cost does not grow with it.
+ */
+export async function listReachableVolunteerEndpoints(
+  config: TelephonyProviderConfig,
+): Promise<Set<string>> {
+  const ari = requireAri(config)
+  const res = await safeFetch(`${ari.ariUrl}/ari/endpoints/PJSIP`, {
+    headers: { Authorization: `Basic ${btoa(`${ari.ariUsername}:${ari.ariPassword}`)}` },
+    ssrfGuard: false,
+  })
+  if (!res.ok) {
+    await res.body?.cancel()
+    throw new Error(`Asterisk refused to report endpoint state: ${res.status}`)
+  }
+  const endpoints = (await res.json()) as AriEndpointState[]
+  const reachable = new Set<string>()
+  for (const endpoint of endpoints) {
+    const resource = endpoint.resource
+    if (typeof resource !== 'string') continue
+    if (!resource.startsWith(VOLUNTEER_USERNAME_PREFIX)) continue
+    if (endpoint.state !== 'online') continue
+    reachable.add(resource)
+  }
+  return reachable
 }
 
 // ---------------------------------------------------------------------------

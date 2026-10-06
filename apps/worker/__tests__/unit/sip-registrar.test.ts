@@ -24,6 +24,7 @@ import {
   removeVolunteerEndpoint,
   revokeSipIdentityIfRoleless,
   revokeVolunteerSipIdentity,
+  listReachableVolunteerEndpoints,
   SIP_REVOCATION_EVENT,
   TURN_CREDENTIAL_TTL_SECONDS,
   VOLUNTEER_DIALPLAN_CONTEXT,
@@ -685,5 +686,75 @@ describe('revokeSipIdentityIfRoleless', () => {
       null,
       { pubkey: PUBKEY_A, username },
     )
+  })
+})
+
+// --- Reachability: who can be sent an INVITE right now (#1188) -------------
+
+/**
+ * The ringing path asks the PBX, not a record of its own, because a record we
+ * wrote would still say "registered" after the app was force-stopped — and a
+ * stale yes means the call rings nobody.
+ */
+describe('listReachableVolunteerEndpoints', () => {
+  let endpointsBody: unknown
+  let endpointsStatus: number
+  let requested: Array<{ url: string; authorization: string | null }>
+
+  beforeEach(() => {
+    endpointsStatus = 200
+    requested = []
+    vi.stubGlobal('fetch', async (input: string | URL, init: RequestInit = {}) => {
+      requested.push({
+        url: String(input),
+        authorization: new Headers(init.headers).get('authorization'),
+      })
+      return new Response(JSON.stringify(endpointsBody), { status: endpointsStatus })
+    })
+  })
+
+  it('asks the PBX for its PJSIP endpoints, authenticated, in one request', async () => {
+    endpointsBody = []
+    await listReachableVolunteerEndpoints(asteriskConfig())
+    expect(requested).toEqual([
+      {
+        url: 'http://asterisk:8088/ari/endpoints/PJSIP',
+        authorization: `Basic ${btoa('llamenos:ari-pass')}`,
+      },
+    ])
+  })
+
+  it('returns only volunteer endpoints that are online', async () => {
+    endpointsBody = [
+      { technology: 'PJSIP', resource: 'vol_aaaaaaaaaaaaaaaa', state: 'online' },
+      // Registered once, now unreachable: the qualify stopped being answered.
+      { technology: 'PJSIP', resource: 'vol_bbbbbbbbbbbbbbbb', state: 'offline' },
+      // Provisioned, never registered.
+      { technology: 'PJSIP', resource: 'vol_cccccccccccccccc', state: 'unknown' },
+      // No state at all — the PBX cannot vouch for it, so neither do we.
+      { technology: 'PJSIP', resource: 'vol_dddddddddddddddd' },
+      // The SIP trunk is online too, and is not a volunteer.
+      { technology: 'PJSIP', resource: 'trunk', state: 'online' },
+    ]
+    expect(await listReachableVolunteerEndpoints(asteriskConfig())).toEqual(
+      new Set(['vol_aaaaaaaaaaaaaaaa']),
+    )
+  })
+
+  it('throws when the PBX refuses, rather than reporting nobody as reachable', async () => {
+    // The ringing path turns this into "no in-app legs, logged and counted".
+    // Returning an empty set here instead would make a broken PBX
+    // indistinguishable from an empty roster.
+    endpointsBody = { message: 'nope' }
+    endpointsStatus = 503
+    await expect(listReachableVolunteerEndpoints(asteriskConfig())).rejects.toThrow('503')
+  })
+
+  it('refuses a provider that has no registrar to ask', async () => {
+    endpointsBody = []
+    await expect(
+      listReachableVolunteerEndpoints({ type: 'twilio', phoneNumber: '+1' } as TelephonyProviderConfig),
+    ).rejects.toThrow('No SIP registrar')
+    expect(requested).toEqual([])
   })
 })

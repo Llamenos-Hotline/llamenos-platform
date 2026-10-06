@@ -23,14 +23,14 @@ function md5(input: string): string {
   return createHash('md5').update(input).digest('hex')
 }
 
-interface DigestChallenge {
+export interface DigestChallenge {
   realm: string
   nonce: string
   qop?: string
   opaque?: string
 }
 
-function parseDigestChallenge(header: string): DigestChallenge {
+export function parseDigestChallenge(header: string): DigestChallenge {
   const params: Record<string, string> = {}
   // realm="asterisk", nonce="…", qop="auth", opaque="…"
   for (const match of header.matchAll(/(\w+)="?([^",]+)"?/g)) {
@@ -40,7 +40,7 @@ function parseDigestChallenge(header: string): DigestChallenge {
   return { realm: params.realm, nonce: params.nonce, qop: params.qop, opaque: params.opaque }
 }
 
-function digestAuthorization(
+export function digestAuthorization(
   challenge: DigestChallenge,
   credentials: { username: string; password: string },
   method: string,

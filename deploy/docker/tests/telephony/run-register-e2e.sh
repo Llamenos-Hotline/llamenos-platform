@@ -30,6 +30,16 @@ export E2E_APP_CONTAINER="$PROJECT-app-1"
 export E2E_WORKER_ARI_URL=http://asterisk:8088
 export E2E_WORKER_BRIDGE_URL=http://sip-bridge:3000
 export TEST_HUB_URL="http://127.0.0.1:$PORT"
+# Published PBX/bridge ports. Default to the ports this suite has always used;
+# override them (with docker-compose.ports.yml, included below) to run beside
+# the shared dev telephony stack, which otherwise holds 5060/8088/3200.
+export E2E_PBX_SIP_PORT="${E2E_PBX_SIP_PORT:-5060}"
+export E2E_PBX_TLS_PORT="${E2E_PBX_TLS_PORT:-5061}"
+export E2E_PBX_ARI_PORT="${E2E_PBX_ARI_PORT:-8088}"
+export E2E_BRIDGE_PORT="${E2E_BRIDGE_PORT:-3200}"
+export E2E_PBX_PORT="$E2E_PBX_SIP_PORT"
+export E2E_ARI_REST_URL="http://127.0.0.1:$E2E_PBX_ARI_PORT/ari"
+export E2E_BRIDGE_URL="http://127.0.0.1:$E2E_BRIDGE_PORT"
 # The registrar machinery under test: an explicit master secret (the compose
 # fallback to HMAC_SECRET is exercised by the unit suite), and a TURN secret
 # so the e2e can verify the minted RFC 8489 credentials against it.
@@ -50,6 +60,7 @@ export ADMIN_DECRYPTION_PUBKEY="$(bun -e "import { deriveAdminKeys } from './scr
 COMPOSE=(docker compose -p "$PROJECT"
   -f deploy/docker/docker-compose.dev.yml
   -f deploy/docker/tests/telephony/docker-compose.carrier.yml
+  -f deploy/docker/tests/telephony/docker-compose.ports.yml
   --profile telephony)
 
 cleanup() {

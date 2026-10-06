@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   getTelephonyFromService,
   getHubTelephonyFromService,
+  resolveHubTelephonyConfig,
   getMessagingAdapterFromService,
 } from '@worker/lib/service-factories'
 import type { TelephonyProviderConfig, MessagingConfig, MessagingChannelType } from '@shared/types'
@@ -182,6 +183,54 @@ describe('service-factories', () => {
         token: 'global_token',
         phone: '+2222',
       })
+    })
+
+    /**
+     * `resolveHubTelephonyConfig` is what `services/ringing.ts` asks whether
+     * this hub's calls go through the PBX we run — only then does a volunteer
+     * have an in-app endpoint to be sent an INVITE. It must name the SAME
+     * provider the adapter placing the call was built from. It did not once:
+     * ringing read `getHubTelephonyProvider` directly, which is null for a hub
+     * with no per-hub row, so it concluded "not our PBX" while the call went
+     * out through the instance-wide Asterisk and the volunteer's registered app
+     * was never dialled.
+     */
+    it.each([
+      ['a hub-specific provider', 'signalwire', null],
+      ['the instance-wide provider', null, 'twilio'],
+    ] as const)('agrees with the adapter on %s', async (_label, hubType, globalType) => {
+      const asConfig = (type: string | null): TelephonyProviderConfig | null =>
+        type ? ({ type, phoneNumber: '+1111', accountSid: 'AC', authToken: 't', signalwireSpace: 's' } as TelephonyProviderConfig) : null
+      const settingsService = {
+        getHubTelephonyProvider: vi.fn().mockResolvedValue(asConfig(hubType)),
+        getTelephonyProvider: vi.fn().mockResolvedValue(asConfig(globalType)),
+      }
+      const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
+
+      const config = await resolveHubTelephonyConfig(env, settingsService, 'hub-1')
+      const adapter = await getHubTelephonyFromService(env, settingsService, 'hub-1')
+
+      expect(config?.type).toBe(hubType ?? globalType)
+      expect((adapter as unknown as { type: string }).type).toBe(config?.type)
+    })
+
+    it('resolves nothing when neither the hub nor the instance has a provider', async () => {
+      const settingsService = {
+        getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
+        getTelephonyProvider: vi.fn().mockRejectedValue(new Error('db down')),
+      }
+      const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
+      expect(await resolveHubTelephonyConfig(env, settingsService, 'hub-1')).toBeNull()
+    })
+
+    it('reads only the instance-wide provider for a call that resolved to no hub', async () => {
+      const settingsService = {
+        getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
+        getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'asterisk', phoneNumber: '+1' } as TelephonyProviderConfig),
+      }
+      const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
+      expect((await resolveHubTelephonyConfig(env, settingsService, ''))?.type).toBe('asterisk')
+      expect(settingsService.getHubTelephonyProvider).not.toHaveBeenCalled()
     })
 
     it('falls back to env vars when both hub and global fail', async () => {
