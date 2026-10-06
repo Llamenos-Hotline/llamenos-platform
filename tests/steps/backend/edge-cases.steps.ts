@@ -290,12 +290,12 @@ Then('the response should include CORS headers', async ({ world }) => {
 
 When('{int} invite validation requests are sent rapidly', async ({ request, world }, count: number) => {
   // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits invite validation by hashed IP (CF-Connecting-IP header).
+  // The server rate-limits invite validation by hashed IP (X-Forwarded-For header).
   const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
   getEdgeState(world).rateLimit429Count = 0
   for (let i = 0; i < count; i++) {
     const res = await request.get(`${BASE_URL}/api/invites/validate/fake-code-${i}`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
     })
     if (res.status() === 429) {
       getEdgeState(world).rateLimit429Count++

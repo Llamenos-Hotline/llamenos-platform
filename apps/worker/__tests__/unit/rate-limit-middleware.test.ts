@@ -4,7 +4,7 @@
  * Focus: the `strict`/`webhook` tier identifier used as the rate-limit key
  * must come from the trusted-proxy-aware getClientIp() (apps/worker/lib/client-ip.ts),
  * not a raw, always-trusted client header. Before this fix an unauthenticated
- * caller could vary CF-Connecting-IP/X-Forwarded-For freely to both write an
+ * caller could vary X-Forwarded-For (and, until #1606, CF-Connecting-IP) freely to both write an
  * unbounded number of api_rate_limits rows and dodge the limit entirely
  * (issue #1127).
  */
@@ -34,11 +34,11 @@ describe('rate-limit middleware — client IP trust', () => {
     checkApiRateLimit = vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 })
   })
 
-  it('ignores a client-supplied CF-Connecting-IP when TRUST_PROXY_HEADERS is unset, so varying the header cannot change the rate-limit bucket', async () => {
+  it('ignores a client-supplied forwarded-for header when TRUST_PROXY_HEADERS is unset, so varying the header cannot change the rate-limit bucket', async () => {
     const { app, env } = makeApp(checkApiRateLimit)
 
-    await app.request('/test', { headers: { 'CF-Connecting-IP': '1.1.1.1' } }, env as never)
-    await app.request('/test', { headers: { 'CF-Connecting-IP': '2.2.2.2' } }, env as never)
+    await app.request('/test', { headers: { 'X-Forwarded-For': '1.1.1.1' } }, env as never)
+    await app.request('/test', { headers: { 'X-Forwarded-For': '2.2.2.2' } }, env as never)
 
     expect(checkApiRateLimit).toHaveBeenCalledTimes(2)
     const key1 = checkApiRateLimit.mock.calls[0][0] as string
@@ -51,16 +51,41 @@ describe('rate-limit middleware — client IP trust', () => {
     expect(key1).toBe(key2)
   })
 
-  it('honors CF-Connecting-IP once TRUST_PROXY_HEADERS=true confirms a trusted reverse proxy sets it', async () => {
+  it('honors X-Forwarded-For once TRUST_PROXY_HEADERS=true confirms a trusted reverse proxy sets it', async () => {
     const originalEnv = process.env.TRUST_PROXY_HEADERS
     process.env.TRUST_PROXY_HEADERS = 'true'
     try {
       const { app, env } = makeApp(checkApiRateLimit)
 
-      await app.request('/test', { headers: { 'CF-Connecting-IP': '9.9.9.9' } }, env as never)
+      await app.request('/test', { headers: { 'X-Forwarded-For': '9.9.9.9' } }, env as never)
 
       const key = checkApiRateLimit.mock.calls[0][0] as string
       expect(key).toContain('9.9.9.9')
+    } finally {
+      process.env.TRUST_PROXY_HEADERS = originalEnv
+    }
+  })
+
+  // #1606: replaces an assertion that CF-Connecting-IP IS honored under
+  // TRUST_PROXY_HEADERS=true. Caddy now strips the header (it is never set by
+  // a trusted hop in this architecture), but the app must not depend on that:
+  // a caller reaching the app by any other route must still not be able to
+  // pick its own bucket.
+  it('still refuses CF-Connecting-IP under TRUST_PROXY_HEADERS=true, so a caller cannot move itself to a fresh bucket', async () => {
+    const originalEnv = process.env.TRUST_PROXY_HEADERS
+    process.env.TRUST_PROXY_HEADERS = 'true'
+    try {
+      const { app, env } = makeApp(checkApiRateLimit)
+
+      await app.request('/test', { headers: { 'X-Forwarded-For': '9.9.9.9', 'CF-Connecting-IP': '1.1.1.1' } }, env as never)
+      await app.request('/test', { headers: { 'X-Forwarded-For': '9.9.9.9', 'CF-Connecting-IP': '2.2.2.2' } }, env as never)
+
+      const key1 = checkApiRateLimit.mock.calls[0][0] as string
+      const key2 = checkApiRateLimit.mock.calls[1][0] as string
+      expect(key1).toBe(key2)
+      expect(key1).toContain('9.9.9.9')
+      expect(key1).not.toContain('1.1.1.1')
+      expect(key2).not.toContain('2.2.2.2')
     } finally {
       process.env.TRUST_PROXY_HEADERS = originalEnv
     }

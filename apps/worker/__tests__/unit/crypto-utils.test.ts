@@ -105,12 +105,32 @@ describe('getClientIp', () => {
     expect(ip).toMatch(/^fingerprint:/)
   })
 
-  it('trusts CF-Connecting-IP only when TRUST_PROXY_HEADERS=true', () => {
+  it('trusts X-Forwarded-For only when TRUST_PROXY_HEADERS=true', () => {
     process.env.TRUST_PROXY_HEADERS = 'true'
     const req = new Request('http://localhost/', {
-      headers: { 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { 'X-Forwarded-For': '1.2.3.4' },
     })
     expect(getClientIp(req)).toBe('1.2.3.4')
+  })
+
+  // #1606: this assertion is the INVERSE of the one it replaced. CF-Connecting-IP
+  // used to be preferred over X-Forwarded-For once proxy headers were trusted.
+  // Nothing in this architecture is ever behind Cloudflare (the Android client
+  // pins ISRG Root X1/X2, so TLS terminates on the origin), which makes the
+  // header purely client-supplied here — a free choice of rate-limit bucket.
+  it('never honors CF-Connecting-IP, even when TRUST_PROXY_HEADERS=true', () => {
+    process.env.TRUST_PROXY_HEADERS = 'true'
+    const spoofed = new Request('http://localhost/', {
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'User-Agent': 'test-agent' },
+    })
+    expect(getClientIp(spoofed)).not.toBe('1.2.3.4')
+    expect(getClientIp(spoofed)).toMatch(/^fingerprint:/)
+
+    // And it cannot override the address the trusted proxy actually set.
+    const alongsideXff = new Request('http://localhost/', {
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Forwarded-For': '203.0.113.7' },
+    })
+    expect(getClientIp(alongsideXff)).toBe('203.0.113.7')
   })
 
   it('takes the right-most X-Forwarded-For entry when trusted (nearest hop, not client-controlled left-most)', () => {

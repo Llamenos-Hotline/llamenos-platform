@@ -44,7 +44,7 @@ const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 Before(async ({ world }) => {
   // Assign a unique client address per scenario so validation and redemption
   // calls each use an isolated rate limit bucket instead of the shared one for
-  // 127.0.0.1 (which fills up across scenarios when CF-Connecting-IP is absent
+  // 127.0.0.1 (which fills up across scenarios when X-Forwarded-For is absent
   // and answers 429 to scenarios that are not about rate limiting).
   setState<InviteTestState>(world, STATE_KEY, {
     rateLimitResponses: [],
@@ -97,7 +97,7 @@ When('the invite code is validated', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -106,7 +106,7 @@ When('the invite code is validated', async ({ request, world }) => {
 When('a random UUID is validated as an invite', async ({ request, world }) => {
   const s = getS(world)
   const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -141,14 +141,14 @@ When('the admin revokes the invite', async ({ request, world }) => {
 
 When('a client floods invite validation {int} times', async ({ request, world }, count: number) => {
   // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits invite validation by hashed IP (CF-Connecting-IP header).
+  // The server rate-limits invite validation by hashed IP (X-Forwarded-For header).
   const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
   const s = getS(world)
   const shared = getSharedState(world)
   shared.floodResponses = []
   for (let i = 0; i < count; i++) {
     const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
     })
     s.rateLimitResponses.push(res.status())
     shared.floodResponses.push(res.status())
@@ -224,7 +224,7 @@ Then('the invite code is no longer valid', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
   })
   const data = await res.json().catch(() => null)
   expect(data?.valid).toBe(false)

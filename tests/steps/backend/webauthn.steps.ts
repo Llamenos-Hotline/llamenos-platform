@@ -86,14 +86,14 @@ When('the client submits a fabricated login assertion', async ({ request, world 
 
 When('a client floods WebAuthn login options {int} times', async ({ request, world }, count: number) => {
   // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits WebAuthn by hashed IP (CF-Connecting-IP header).
+  // The server rate-limits WebAuthn by hashed IP (X-Forwarded-For header).
   const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
   const s = getS(world)
   const shared = getSharedState(world)
   shared.floodResponses = []
   for (let i = 0; i < count; i++) {
     const res = await request.post(`${BASE_URL}/api/webauthn/login/options`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
       data: {},
     })
     s.rateLimitResponses.push(res.status())

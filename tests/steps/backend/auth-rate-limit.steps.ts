@@ -74,7 +74,7 @@ When('a client sends {int} login requests from the same IP within 1 minute', asy
   for (let i = 0; i < count; i++) {
     const body = buildLoginBody(kp.pubkey, kp.seedHex)
     const res = await request.post(`${BASE_URL}/api/auth/login`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
       data: body,
     })
     const resBody = await res.json().catch(() => null)
@@ -96,7 +96,7 @@ When('a client sends {int} login requests from IP {string}', async ({ request, w
   for (let i = 0; i < count; i++) {
     const body = buildLoginBody(kp.pubkey, kp.seedHex)
     const res = await request.post(`${BASE_URL}/api/auth/login`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
       data: body,
     })
     const resBody = await res.json().catch(() => null)
@@ -115,7 +115,7 @@ When('a client sends {int} login requests with the same pubkey from different IP
     const body = buildLoginBody(kp.pubkey, kp.seedHex)
     const uniqueIp = randomFakeIp()
     const res = await request.post(`${BASE_URL}/api/auth/login`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': uniqueIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': uniqueIp },
       data: body,
     })
     const resBody = await res.json().catch(() => null)
@@ -140,7 +140,7 @@ When('a client sends {int} bootstrap requests from the same IP within 1 minute',
     const kp = generateTestKeypair()
     const body = buildBootstrapBody(kp.pubkey, kp.seedHex)
     const res = await request.post(`${BASE_URL}/api/auth/bootstrap`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
       data: body,
     })
     const resBody = await res.json().catch(() => null)
@@ -163,7 +163,7 @@ When('a client sends {int} WebAuthn login option requests from the same IP', asy
 
   for (let i = 0; i < count; i++) {
     const res = await request.post(`${BASE_URL}/api/webauthn/login/options`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
       data: {},
     })
     const resBody = await res.json().catch(() => null)
@@ -184,7 +184,7 @@ When('a client sends {int} WebAuthn verify requests from the same IP', async ({ 
 
   for (let i = 0; i < count; i++) {
     const res = await request.post(`${BASE_URL}/api/webauthn/login/verify`, {
-      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': fakeIp },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
       data: { challengeId: crypto.randomUUID(), assertion: {} },
     })
     const resBody = await res.json().catch(() => null)

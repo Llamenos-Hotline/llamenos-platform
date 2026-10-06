@@ -97,7 +97,7 @@ describe('audit() metadata', () => {
 
     const rawUa = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
     const req = new Request('https://example.com/', {
-      headers: { 'User-Agent': rawUa, 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { 'User-Agent': rawUa, 'X-Forwarded-For': '1.2.3.4' },
     })
 
     await audit(svc, 'login', 'system', {}, { request: req, hmacSecret: TEST_HMAC_SECRET }, null)
@@ -176,11 +176,21 @@ describe('audit() metadata', () => {
   it('still stores hashed IP alongside the hashed UA', async () => {
     const { svc, rows } = makeAuditService()
     const req = new Request('https://example.com/', {
-      headers: { 'CF-Connecting-IP': '203.0.113.5', 'User-Agent': 'test/1.0' },
+      headers: { 'X-Forwarded-For': '203.0.113.5', 'User-Agent': 'test/1.0' },
     })
-    await audit(svc, 'login', 'system', {}, { request: req, hmacSecret: TEST_HMAC_SECRET }, null)
+    // getClientIp only honors forwarded-for headers behind a declared trusted
+    // proxy (#1606); without this the audit entry records no address at all,
+    // and `toBeDefined()` would pass on a null.
+    const originalTrust = process.env.TRUST_PROXY_HEADERS
+    process.env.TRUST_PROXY_HEADERS = 'true'
+    try {
+      await audit(svc, 'login', 'system', {}, { request: req, hmacSecret: TEST_HMAC_SECRET }, null)
+    } finally {
+      if (originalTrust === undefined) delete process.env.TRUST_PROXY_HEADERS
+      else process.env.TRUST_PROXY_HEADERS = originalTrust
+    }
     const details = rows[0].details as Record<string, unknown>
-    expect(details.ip).toBeDefined()
+    expect(typeof details.ip).toBe('string')
     expect(details.ip).not.toBe('203.0.113.5')
     expect(details.ua).toBeDefined()
   })

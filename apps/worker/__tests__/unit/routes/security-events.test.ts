@@ -67,7 +67,7 @@ describe('POST /security-events (unauthenticated client submission)', () => {
   })
 
   it('accepts a pin mismatch event without any auth and stores it with no user, device or IP', async () => {
-    const res = await post(app, { events: [validEvent()] }, { 'CF-Connecting-IP': '203.0.113.9' })
+    const res = await post(app, { events: [validEvent()] }, { 'X-Forwarded-For': '203.0.113.9' })
     expect(res.status).toBe(202)
     expect(await res.json()).toEqual({ accepted: 1 })
 
@@ -130,7 +130,7 @@ describe('POST /security-events (unauthenticated client submission)', () => {
     })
 
     it('keys the rate limit on a hash of the IP, never the raw IP', async () => {
-      await post(app, { events: [validEvent()] }, { 'CF-Connecting-IP': '203.0.113.9' })
+      await post(app, { events: [validEvent()] }, { 'X-Forwarded-For': '203.0.113.9' })
       const [{ key, maxPerMinute }] = services.settings.checkRateLimit.mock.calls[0]
       expect(key).toMatch(/^security-events-submit:[0-9a-f]+$/)
       expect(key).not.toContain('203.0.113.9')
