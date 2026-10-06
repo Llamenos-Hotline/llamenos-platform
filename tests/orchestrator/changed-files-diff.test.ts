@@ -140,12 +140,16 @@ function lintedFiles(r: Repo, event: EventName): string[] {
   return (outputs['files'] ?? '').split('\n').filter(Boolean).sort()
 }
 
+// ci.yml's `changes` job is the only "Detect changes" step left in the repo.
+// ios-e2e.yml had one of its own; it was removed so the iOS matrix starts from
+// ci.yml's filter and the e2e build instead of recomputing its own
+// (#1420/#1428). desktop-e2e.yml had one too; it went with the workflow when
+// its chromium tier became ci.yml's `desktop-e2e` job. guards.test.ts pins
+// that single-caller property directly ("exactly one workflow executes the
+// shared classification script"), so a second one reappearing fails there and
+// is added here.
 const DETECT_STEPS = [
   { file: 'ci.yml', job: 'changes' },
-  { file: 'desktop-e2e.yml', job: 'changes' },
-  // ios-e2e.yml had a `changes` job of its own; it was removed on main so the
-  // iOS matrix starts from ci.yml's filter and the e2e build instead of
-  // recomputing its own (#1420/#1428). Nothing to assert there any more.
 ] as const
 
 let repo: Repo
@@ -180,7 +184,10 @@ describe.each(DETECT_STEPS)('$file $job "Detect changes" (#1396)', ({ file, job 
   })
 })
 
-describe.each(DETECT_STEPS.filter((d) => d.file !== 'desktop-e2e.yml'))(
+// Previously filtered to exclude desktop-e2e.yml, whose `changes` job had no
+// merge_group branch in its base/head resolution. That workflow is gone, so
+// every remaining "Detect changes" step is held to all three events.
+describe.each(DETECT_STEPS)(
   '$file $job "Detect changes" on merge_group (#1396)',
   ({ file, job }) => {
     it('merge_group: exactly the queued change\'s platforms switch on', () => {

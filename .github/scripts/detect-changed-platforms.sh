@@ -5,7 +5,8 @@
 # This is the SINGLE source of truth for the platform path map. Before this
 # script existed, the same map was maintained independently in three places
 # that had already drifted from each other: ci.yml's `changes` job (an
-# `android` regex only), desktop-e2e.yml's `on.pull_request.paths:` list, and
+# `android` regex only), the since-removed desktop-e2e.yml's
+# `on.pull_request.paths:` list, and
 # ios-e2e.yml's own `ios_related` regex. Extending or fixing platform scope
 # happens HERE, once — every workflow that needs it calls this script instead
 # of re-deriving its own copy (see #664).
@@ -64,6 +65,12 @@ IOS_RE='^apps/ios/'
 # tier: still a real iOS gate, 2 runners instead of 4.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
+# No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
+# exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in
+# SHARED_DEPS_RE, so editing the file that defines the job already sets this
+# flag. The under-trigger that term was written for (#910 merged a change to
+# the E2E (Linux) Rust cache without ever running E2E (Linux)) is now
+# structurally impossible — there is no second file to edit.
 DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.ts$)'
 # Carved out of DESKTOP_RE's blanket `tests/` prefix: directories under tests/
 # that are NOT desktop e2e. Without this, `ci.yml`'s `e2e` job
@@ -127,13 +134,21 @@ AUDIT_RE='^(package\.json$|bun\.lock)'
 # tests run inside the backend-unit job (see that job's own comment in
 # ci.yml) — its own source and tests must gate that job too, independent of
 # the `backend` flag.
-ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$)'
+#
+# .claude/agents/ is orchestrator INPUT, not documentation: loadLanes() and
+# loadLaneScopes() parse fragments/*.md into lane briefs and the scope gate,
+# and tests/orchestrator/{scope,fragments,shared-fragment}.test.ts read the
+# real files — including the rail that fails when an assembled
+# <lane>-supervisor.md is stale against its fragment. Its `.md` files match
+# DOCS_ONLY_EXEMPT_RE, so before this an agents-only PR (#981) set no flag and
+# skipped backend-unit, the one job that checks them.
+ORCHESTRATOR_RE='^(orchestrator/|tests/orchestrator/|vitest\.orchestrator\.(config|setup)\.ts$|\.claude/agents/)'
 # The cross-platform BDD feature corpus (packages/test-specs/features/**)
 # and the one composite action every backend-bootstrapping job shares
 # (.github/actions/bootstrap-backend). Both are read directly by ci.yml's
-# `e2e` (desktop bdd + backend-bdd Playwright projects) and `backend-bdd`
-# jobs, and by desktop-e2e.yml's own `test` job (also bootstraps via the same
-# action). None of the platform-specific regexes above would catch either
+# `e2e` (desktop bdd + backend-bdd Playwright projects), `desktop-e2e`
+# (bootstrap + chromium projects) and `backend-bdd` jobs — all three
+# bootstrap via the same action. None of the platform-specific regexes above would catch either
 # path on its own, so a change here sets `desktop` and `backend` directly
 # rather than relying on one of them to coincidentally already be true.
 E2E_INFRA_RE='^(packages/test-specs/|\.github/actions/)'
@@ -154,9 +169,9 @@ E2E_INFRA_RE='^(packages/test-specs/|\.github/actions/)'
 # queue, which is strictly serial and the scarcest resource we have.
 # `.github/actions/` stays in, because android-e2e does bootstrap through it.
 E2E_INFRA_ANDROID_RE='^(packages/test-specs/features/platform/mobile/|\.github/actions/)'
-# playwright.config.ts is read directly by ci.yml's `e2e` job and by
-# desktop-e2e.yml's `test` job (both invoke `bunx playwright test` against
-# it) — not by android/ios, which don't use Playwright at all.
+# playwright.config.ts is read directly by ci.yml's `e2e` and `desktop-e2e`
+# jobs (both invoke `bunx playwright test` against it) — not by android/ios,
+# which don't use Playwright at all.
 PLAYWRIGHT_CONFIG_RE='^playwright\.config\.ts$'
 DOCS_ONLY_EXEMPT_RE='\.md$|^site/'
 

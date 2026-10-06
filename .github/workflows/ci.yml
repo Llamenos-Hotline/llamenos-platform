@@ -120,9 +120,16 @@ jobs:
       # where they actually pass (three tests failed on contended GitHub
       # runners today and pass on the Mac).
       #
-      # Authors are not left blind: desktop-e2e.yml's `E2E (Linux)` still runs
-      # on `pull_request` (it is deliberately NOT gated here), unit suites still
-      # run everywhere, and `lint`/`build`/`typecheck` are untouched.
+      # `E2E (Linux)` used to be the one exception, left running on
+      # `pull_request` so authors were not blind. It was an exception by
+      # accident, not by design: it lived in its own workflow
+      # (`desktop-e2e.yml`) gated on `desktop` alone, and simply never got
+      # this term when the rest of the e2e tier did. Two gates in two files
+      # drift silently. That workflow is now this file's `desktop-e2e` job
+      # under this same gate — one workflow, one gate — so no e2e tier runs
+      # on `pull_request` any more, which is what the operator expects of a
+      # PR. Unit suites still run everywhere, and `lint`/`build`/`typecheck`
+      # are untouched.
       #
       # Unit suites (backend-unit, desktop-unit, crypto-tests) and
       # migration-drift are deliberately NOT gated on this: they are cheap, they
@@ -616,6 +623,197 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-results-shard-${{ matrix.shard }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  # ─── Desktop E2E (Playwright chromium, non-BDD specs) ──────
+  #
+  # Moved here verbatim from the standalone `desktop-e2e.yml` workflow, which
+  # this replaces (#664 tracked "folding it into ci.yml's ci-status aggregate"
+  # separately; this is that fold). Two workflows ran desktop E2E under two
+  # different gates: this tier gated on `desktop` alone and so ran on every
+  # desktop-touching PR, while `e2e` above gained the `revalidate` term and
+  # became queue-only. The drift was invisible because the two gates lived in
+  # two files. One workflow, one gate: this job carries the SAME `if:` as
+  # `e2e` above, and guards.test.ts pins the two to be character-identical.
+  #
+  # It is a distinct tier, not a duplicate of `e2e`: `e2e` runs the
+  # `bootstrap` + `bdd` Playwright projects sharded ×4 against a full sidecar
+  # stack, this runs the `bootstrap` + `chromium` projects (the non-BDD specs
+  # — crypto interop, WASM, the Tauri lockfile rail) in one job. Neither
+  # covers the other's specs.
+  #
+  # The matrix is preserved from desktop-e2e.yml, including `os_label`, so the
+  # check keeps reporting as `E2E (Linux)`. It has one entry today: Windows
+  # was removed earlier because Docker Compose is not reliably available on
+  # Windows GHA runners, and the backend here is Compose. The matrix shape
+  # stays so re-adding an OS is an added row, not a rewritten job.
+  #
+  # It consumes `build`'s `app-build` artifact instead of building its own.
+  # desktop-e2e.yml had a second `build` job that ran codegen, i18n codegen,
+  # typecheck and `PLAYWRIGHT_TEST=true bun run build` and uploaded the same
+  # `app-build` name from the same `dist/` path — a strict subset of what
+  # `build` above already does and uploads. That duplicate job is gone; the
+  # artifact contract is unchanged.
+  desktop-e2e:
+    needs: [changes, build]
+    # Character-identical to `e2e` above, and pinned so by guards.test.ts:
+    # both drive the same app against a backend built from the PR
+    # (`bootstrap-backend` runs `up --build`), so both are relevant if either
+    # side changed (#664), and both are heavy enough to belong behind
+    # `revalidate` (#1426).
+    if: needs.changes.outputs.revalidate == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.backend == 'true')
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            os_label: Linux
+
+    runs-on: ${{ matrix.platform }}
+    name: E2E (${{ matrix.os_label }})
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-build
+          path: dist
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Playwright deps (cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+
+      # ── Start backend services ──────────────────────────────────
+      - name: Bootstrap backend
+        uses: ./.github/actions/bootstrap-backend
+        with:
+          admin_pubkey: ${{ env.TEST_ADMIN_PUBKEY }}
+          admin_decryption_pubkey: ${{ env.TEST_ADMIN_DECRYPTION_PUBKEY }}
+
+      # ── WASM build (required for crypto-interop-wasm.spec.ts) ──
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      # Keyed on BOTH lockfiles (not just packages/crypto's) so a change to
+      # either invalidates the cache. This cache backs both the crypto interop
+      # step below AND tests/tauri-lockfile-consistency.spec.ts's
+      # `cargo metadata --locked --manifest-path apps/desktop/Cargo.toml` call
+      # — see the "Warm cargo cache for apps/desktop" step for why that
+      # matters (#927: a cold `~/.cargo/registry`/`~/.cargo/git` made that
+      # check's resolve slow enough to look like a hang). rust-cache is the
+      # sole owner of `~/.cargo/registry`, `~/.cargo/git` and each listed
+      # workspace's `target` dir — a second hand-rolled `actions/cache` step
+      # targeting the same paths raced this one's save/restore lifecycle and
+      # produced a cache that matched neither key (#901).
+      - name: Rust cache
+        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            packages/crypto
+            apps/desktop
+
+      - name: Generate interop test vectors
+        run: cargo test --manifest-path packages/crypto/Cargo.toml --test interop
+
+      # tests/tauri-lockfile-consistency.spec.ts (run later via Playwright)
+      # calls `cargo metadata --locked --manifest-path apps/desktop/Cargo.toml`
+      # to verify apps/desktop/Cargo.lock is consistent. A cold registry index
+      # plus a fresh clone of the `hpke-rs` git patch dependency made that call
+      # slow enough on a cache-miss runner to look indistinguishable from a
+      # hang (#927). Warm both here so the check's own cargo call is normally
+      # a cache hit. `--locked` means this can only read the committed
+      # lockfile, never rewrite it; `|| true` makes this step best-effort so a
+      # genuine drift or network failure here doesn't short-circuit the actual
+      # rail test's more precise classification (timeout vs environment vs
+      # real drift) downstream.
+      - name: Warm cargo cache for apps/desktop
+        run: cargo fetch --locked --manifest-path apps/desktop/Cargo.toml || true
+
+      # ── Generate BDD test files from Gherkin features ───────────
+      - name: Generate BDD test files
+        # export warms the transform cache single-threaded first — see the build job
+        run: bunx bddgen export > /dev/null && bunx bddgen
+
+      # ── Start preview server and run Playwright ─────────────────
+      - name: Start Vite preview server
+        run: |
+          bunx vite preview --port 8788 --strictPort &
+          PREVIEW_PID=$!
+          echo "preview_pid=$PREVIEW_PID" >> "$GITHUB_ENV"
+          for _i in $(seq 1 30); do
+            if bun -e "try{await fetch('http://localhost:8788');process.exit(0)}catch{process.exit(1)}" 2>/dev/null; then
+              echo "Preview server ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run desktop E2E tests
+        # The BDD projects run in the `e2e` job above. This tier only runs the
+        # chromium (non-BDD spec) tests, to avoid duplication.
+        run: bunx playwright test --project=bootstrap --project=chromium
+        env:
+          CI: "true"
+          PLAYWRIGHT_TEST: "true"
+          PLAYWRIGHT_BASE_URL: "http://localhost:8788"
+          E2E_TEST_SECRET: "test-reset-secret"
+          DEV_RESET_SECRET: "test-reset-secret"
+          TEST_HUB_URL: "http://localhost:3000"
+
+      - name: Stop Vite preview server
+        if: always()
+        run: kill "$preview_pid" 2>/dev/null || true
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: |
+          docker compose --env-file .env \
+            -f deploy/docker/docker-compose.yml \
+            -f deploy/docker/docker-compose.test.yml \
+            down -v || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-e2e-results
           path: |
             playwright-report/
             test-results/
@@ -1940,7 +2138,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, desktop-e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -1963,6 +2161,7 @@ jobs:
           check_job "lint" "${{ needs.lint.result }}"
           check_job "crypto-tests" "${{ needs.crypto-tests.result }}"
           check_job "e2e" "${{ needs.e2e.result }}"
+          check_job "desktop-e2e" "${{ needs.desktop-e2e.result }}"
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"

@@ -2,7 +2,7 @@
 # `deploy/docker/Dockerfile`'s `app` target.
 #
 # Why this exists (#902): `.github/actions/bootstrap-backend/action.yml` runs
-# `docker compose up -d --build --wait app` on every `ci.yml` / `desktop-e2e.yml`
+# `docker compose up -d --build --wait app` on every `ci.yml`
 # / `ios-e2e.yml` run. Those all use `ubuntu-latest` — a fresh, ephemeral
 # runner with an empty local BuildKit cache every time — so ~1m17s of that
 # job was a full `deps` (bun install) + `rust-builder` (cargo build --release
@@ -26,12 +26,12 @@
 # already publishes real images to (`ghcr.io/${{ github.repository }}`),
 # which is already public — see that job's "Log in to GHCR" comment — so
 # `bootstrap-backend`'s `docker compose --build` can pull this cache
-# anonymously with no login step added to ci.yml/desktop-e2e.yml/ios-e2e.yml.
+# anonymously with no login step added to ci.yml/ios-e2e.yml.
 # Cache import is a soft dependency: if the pull fails or the tag doesn't
 # exist yet, BuildKit silently falls back to a full build rather than
 # failing the job.
 #
-# Deliberately NOT wired into ci.yml/desktop-e2e.yml/ios-e2e.yml as a
+# Deliberately NOT wired into ci.yml/ios-e2e.yml as a
 # `cache_to` (export): those jobs run against PR head content (including
 # forks), and giving every PR run `packages: write` to push cache blobs is a
 # supply-chain hole this workflow avoids by only ever running against `main`.
