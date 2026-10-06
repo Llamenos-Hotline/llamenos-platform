@@ -9,4 +9,4 @@
 logout
 shifts role-hub-admin
 auth
-enrolmentRejectsUnknownInvite
+enrollmentRejectsUnknownInvite
