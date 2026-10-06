@@ -7,31 +7,8 @@
  * - Contact view (admin-only, unified timeline)
  * - Custom field context filtering (call-notes, conversation-notes, reports)
  */
-import { test, expect, type Page } from '@playwright/test'
-import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts } from './helpers'
-
-/**
- * Fill the call-id field in the new note form.
- * The call-id field is an Input when there are no recent calls,
- * or a Select when there are recent calls (with a manual entry option).
- */
-async function fillCallId(page: Page, callId: string) {
-  // Check if the plain input (no recent calls) is visible
-  const directInput = page.getByTestId(TestIds.NOTE_CALL_ID)
-  const isDirectInput = await directInput.isVisible({ timeout: 2000 }).catch(() => false)
-
-  if (isDirectInput) {
-    await directInput.fill(callId)
-  } else {
-    // Select the "Enter manually" option, then fill the manual input
-    const selectTrigger = page.getByTestId('call-id-select')
-    await selectTrigger.click()
-    await page.getByText(/enter.*manually/i).click()
-    // After selecting manual, a text input with data-testid="note-call-id" appears
-    await expect(directInput).toBeVisible({ timeout: 3000 })
-    await directInput.fill(callId)
-  }
-}
+import { test, expect } from '@playwright/test'
+import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
 
 test.describe('Records Architecture', () => {
   test.describe.configure({ mode: 'serial' })

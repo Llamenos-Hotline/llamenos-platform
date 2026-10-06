@@ -12,7 +12,7 @@ import {
   generateContentKey,
   wrapKeyForRecipient,
   unwrapKey,
-  x25519PubkeyFromSeed,
+  hpkeRecipientForSeed,
 } from '../../crypto-helpers'
 import {
   apiGet,
@@ -173,7 +173,7 @@ async function enrollRecoveryGroup(
  * is outside apps/worker's ownership). `wrapKeyForRecipient`/`unwrapKey` are
  * unaffected — they go through `hpkeSuite.importKey('raw', ...)`, a different
  * code path — so deriving the raw 32-byte X25519 secret ourselves (the same
- * way `x25519PubkeyFromSeed` already does for device keys) and feeding it
+ * way `hpkeRecipientForSeed` already does for device keys) and feeding it
  * through the existing wrap/unwrap helpers gives a fully real HPKE round trip.
  */
 function generateX25519Keypair(): { skHex: string; pubkeyHex: string } {
@@ -1059,7 +1059,7 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // exactly like a real device: Ed25519 for signing (sigchain), X25519 for
   // HPKE receipt (share contributions + the PUK seed envelope).
   const { seedHex: newDeviceSeedHex, pubkey: newDeviceEdPubkey } = generateTestKeypair()
-  const newDeviceX25519Pubkey = x25519PubkeyFromSeed(newDeviceSeedHex)
+  const newDeviceX25519Pubkey = hpkeRecipientForSeed(newDeviceSeedHex).pubkeyHex
 
   const { status: sessionStatus, data: sessionData } = await devPost<{ sessionId: string }>(request, '/test-recovery-seed-session', {
     hubId: s.hubId!,

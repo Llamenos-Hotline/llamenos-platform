@@ -40,7 +40,8 @@ Feature: CMS Triage Queue
     When I navigate to the "Triage" page
     And I click the first triage report card
     Then the triage case creation panel should be visible
-    When I fill in the triage case title
+    When I select a triage case type
+    And I fill in the triage case title
     And I click the triage create case button
     Then a toast "Case created" should appear
     And the linked cases section should show at least one case

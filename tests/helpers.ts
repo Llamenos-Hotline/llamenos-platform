@@ -504,27 +504,31 @@ export function uniquePhone(): string {
 
 /**
  * Fill in the call ID field in the new note form.
- * Handles both modes: Input (when no recent calls) and Select (when recent calls exist).
- * In Select mode, selects the "Enter manually" option then fills the manual input.
+ *
+ * The form renders exactly one of two mutually exclusive controls (see
+ * `src/client/components/notes/new-note-form.tsx`): a plain Input when the hub
+ * has no recent calls, or a Select listing them when it does. In Select mode the
+ * manual-entry option must be chosen first, which then reveals the same
+ * `note-call-id` input.
+ *
+ * The option is located by `call-id-manual-option`, never by its label: the
+ * label is the translated `notes.enterManually` ("Enter call ID manually"), and
+ * the previous `getByRole('option', { name: /enter manually/i })` never matched
+ * it. That made the Select branch dead code — it timed out the moment a hub
+ * acquired a recent call, which is why "Note detail displays decrypted content"
+ * failed with a bare `locator.click` timeout.
  */
 export async function fillCallId(page: Page, callId: string): Promise<void> {
   const callIdInput = page.getByTestId('note-call-id')
   const callIdSelect = page.getByTestId('call-id-select')
-  const isInput = await callIdInput.isVisible({ timeout: 3000 }).catch(() => false)
-  if (isInput) {
-    await callIdInput.fill(callId)
-    return
-  }
-  // Select mode: choose "Enter manually" then fill
-  const isSelect = await callIdSelect.isVisible({ timeout: 2000 }).catch(() => false)
-  if (isSelect) {
+  // Wait for whichever of the two branches rendered; after that it is settled.
+  await expect(callIdInput.or(callIdSelect)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  if (await callIdSelect.count() > 0) {
     await callIdSelect.click()
-    await page.getByRole('option', { name: /enter manually/i }).click()
-    await callIdInput.fill(callId)
-    return
+    await page.getByTestId('call-id-manual-option').click()
   }
-  // Last resort: try the input by id
-  await page.locator('#call-id').fill(callId)
+  await expect(callIdInput).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await callIdInput.fill(callId)
 }
 
 const TEST_RESET_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'

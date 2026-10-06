@@ -18,17 +18,24 @@ import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import {
+  ADMIN_SIGNING_SEED,
   generateContentKey,
   encryptContent,
   wrapKeyForRecipient,
-  x25519PubkeyFromSeed,
+  hpkeRecipientForSeed,
   encryptMessageForDesktop,
   type DesktopReaderEnvelope,
 } from './crypto-helpers'
 
-// Admin Ed25519 seed (32 bytes hex) — deterministic test credential.
-// The corresponding pubkey is derived at runtime via ed25519PubkeyFromSeed.
-export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
+/**
+ * Admin Ed25519 signing seed (32 bytes hex) — deterministic test credential.
+ * The corresponding pubkey is derived at runtime via ed25519PubkeyFromSeed.
+ *
+ * Defined in `./crypto-helpers` and re-exported here: the admin's HPKE
+ * recipient key is derived from it (`adminHpkeRecipient`), and that module has
+ * to recognise the seed to refuse it where an X25519 secret belongs.
+ */
+export const ADMIN_SEED = ADMIN_SIGNING_SEED
 
 /** @deprecated Use ADMIN_SEED instead */
 export const ADMIN_NSEC = ADMIN_SEED
@@ -550,15 +557,15 @@ export async function createUserViaApi(
  * Register a device carrying this identity's X25519 encryption key.
  *
  * Uses the real `POST /devices/register` route — no test-only backdoor. The
- * X25519 key is `x25519PubkeyFromSeed(seedHex)`, matching the convention every
- * backend BDD helper uses to unwrap envelopes (`unwrapKey` treats the seed as
- * the X25519 secret scalar).
+ * X25519 key comes from `hpkeRecipientForSeed`, the one place that knows how an
+ * identity is addressed, so the key registered here is the key tests unwrap
+ * with.
  */
 export async function registerDeviceKeyViaApi(
   request: APIRequestContext,
   seedHex: string,
 ): Promise<string> {
-  const x25519Pubkey = x25519PubkeyFromSeed(seedHex)
+  const x25519Pubkey = hpkeRecipientForSeed(seedHex).pubkeyHex
   const { status, data } = await apiPost(
     request,
     '/devices/register',
@@ -1546,9 +1553,9 @@ async function realEnvelope(
   seedHex = ADMIN_SEED,
   label = LABEL_NOTE_KEY,
 ): Promise<{ pubkey: string; ct: string; enc: string }> {
-  const x25519Pubkey = x25519PubkeyFromSeed(seedHex)
-  const envelope = await wrapKeyForRecipient(contentKey, x25519Pubkey, seedHex, label)
-  return { pubkey: x25519Pubkey, ...envelope }
+  const recipient = hpkeRecipientForSeed(seedHex)
+  const envelope = await wrapKeyForRecipient(contentKey, recipient.pubkeyHex, recipient.skHex, label)
+  return { pubkey: recipient.pubkeyHex, ...envelope }
 }
 
 /**

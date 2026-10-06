@@ -74,10 +74,18 @@ function roleIdFromName(roleName: string): string {
 
 Given('test users exist for all default roles', async ({ request, world }) => {
   const roles = ['super-admin', 'hub-admin', 'reviewer', 'volunteer', 'reporter']
+  // Create each role user as a MEMBER of the scenario's hub. Since #1540 made hub
+  // membership the sole authority boundary inside a hub, a global-only role grants
+  // nothing on a `/hubs/:hubId/*` route — `hubContext` 403s before
+  // `requirePermission` ever runs. Passing `hubId` writes the roles to both the
+  // global and the hub-scoped set (apps/worker/services/identity.ts), so the
+  // unscoped expectations in this matrix are unchanged.
+  const hubId = getScenarioState(world).hubId
   for (const role of roles) {
     const vol = await createVolunteerViaApi(request, {
       name: `PM ${role} ${Date.now()}`,
       roleIds: [roleIdFromName(role)],
+      hubId,
     })
     getPermMatrixState(world).roleUsers[role] = { deviceKey: vol.deviceKey, pubkey: vol.pubkey, name: vol.name }
   }

@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -65,6 +66,13 @@ fun ShiftsScreen(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // The schedule is only loaded when the active hub changes, and every tab's
+    // ViewModel is created up front in MainScreen — so without this the list a
+    // volunteer sees is whatever existed when the hub was first selected, and a
+    // shift an admin adds while the app is open never appears. Reload whenever
+    // the tab is entered (this composable leaves composition when another tab is).
+    LaunchedEffect(Unit) { viewModel.refresh() }
 
     // Drop confirmation dialog
     uiState.showDropConfirmation?.let { shiftId ->
