@@ -35,9 +35,19 @@ settings:
 # .xcodeproj, so a tag pin would not be reproducible across fresh checkouts.
 # That commit's Package.swift carries a SHA-256 `checksum:` for every binary
 # xcframework zip, and SwiftPM refuses to use a download that does not match it.
-# `-novideo`: this is a voice-only hotline, so the video codecs are unused attack
-# surface; the Swift API is byte-identical to the full variant.
-# Keep in sync with Package.swift.
+# `-novideo`: this is a voice-only hotline. It shrinks mediastreamer2 (35.2 MB -> 10.9 MB
+# compressed) and the Swift API is byte-identical to the full variant. It does NOT give a
+# voice-only app: upstream's single `linphonexcframeworks` target depends on all 17 binary
+# targets, so the built .app embeds every one of them. Measured in the simulator build:
+# msopenh264 (H.264), msamr and mscodec2 are present, and so are linphonetester.framework
+# and bctoolbox-tester.framework — upstream's own test harness, loaded in-process with the
+# app's entitlements — plus ~9 MB of .mkv/.wav tester fixtures inside linphone.framework.
+# Stripping them needs a post-embed build phase plus a CI assertion, and is a follow-up
+# rather than part of linking; this comment exists so nobody reads `-novideo` as having
+# already done it.
+# Keep in sync with Package.swift. apps/ios/linphone-sdk-checksums.txt holds our own copy
+# of that commit's 17 artifact SHA-256s, so an upstream force-push is detectable; read that
+# file's header for what it does and does not yet enforce.
 packages:
   linphonesw:
     url: https://github.com/BelledonneCommunications/linphone-sdk-swift-ios

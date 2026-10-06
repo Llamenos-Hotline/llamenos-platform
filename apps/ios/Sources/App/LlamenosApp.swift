@@ -92,8 +92,10 @@ struct LlamenosApp: App {
                 do {
                     try appState.linphoneService.initialize(hubContext: hubContext)
                 } catch {
+                    // .private: this string comes from the SDK wrapper's own error
+                    // formatting, so its content is not ours to promise anything about.
                     Logger(subsystem: "org.llamenos.hotline", category: "Linphone")
-                        .error("Linphone Core failed to start: \(error.localizedDescription, privacy: .public)")
+                        .error("Linphone Core failed to start: \(error.localizedDescription, privacy: .private)")
                 }
             }
             .onOpenURL { url in
