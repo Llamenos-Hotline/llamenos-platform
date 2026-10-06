@@ -127,11 +127,13 @@ struct LinphoneServiceCoreTests {
                 "liblinphone wrote to its compiled-in Application Support/linphone directory")
     }
 
-    @Test func startedCorePinsSdkLogLevelToError() throws {
-        // belle-sip writes whole SIP messages at Message and below.
+    @Test func startedCoreDoesNotLogSipMessages() throws {
+        // belle-sip prints whole SIP messages — headers, AOR, Contact, and once calls flow
+        // the caller's number — at Message and below. Asserted against liblinphone's own
+        // log-level mask getter, not against the value we assigned.
         let config = try startedCore()
-        #expect(config.sdkLogLevelIsErrorOnly,
-                "SDK log level raw value is \(String(describing: config.sdkLogLevel))")
+        #expect(config.sdkLogExcludesSipMessages,
+                "SDK log level mask is \(config.sdkLogLevelMask)")
     }
 
     @Test func startedCoreHasNoAccounts() throws {

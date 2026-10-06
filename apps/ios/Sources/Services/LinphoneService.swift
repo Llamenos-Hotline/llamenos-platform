@@ -80,6 +80,12 @@ final class LinphoneService: LinphoneServiceProtocol {
     /// Directory liblinphone is pointed at for every file it keeps. Chosen rather than
     /// inherited: see `prepareStateDirectory()`.
     private static let stateDirectoryName = "llamenos-sip"
+
+    /// The only SDK log levels we allow through. Everything at Message and below is
+    /// excluded because that is where belle-sip prints whole SIP messages.
+    private static let quietLogMask: LogLevel = [.Error, .Fatal]
+    /// Levels that must never be enabled.
+    private static let forbiddenLogMask: LogLevel = [.Debug, .Trace, .Message, .Warning]
     #endif
 
     // MARK: - Initialization
@@ -107,9 +113,14 @@ final class LinphoneService: LinphoneServiceProtocol {
         factory.configDir = stateDirectory.path
 
         // belle-sip writes whole SIP messages — AOR, Contact, and once calls flow the
-        // caller's number — at Message and below. Pin the level instead of inheriting
+        // caller's number — at Message and below. Pin the mask instead of inheriting
         // whatever the SDK's default is this release.
-        LoggingService.Instance.logLevel = .Error
+        //
+        // The mask, not `logLevel`: `logLevel` is a willSet-only stored property on the
+        // Swift wrapper, so it does not read back from liblinphone (measured — a test
+        // asserting it came back false). `logLevelMask` has a real C getter, so what the
+        // test checks is the library's actual state rather than our own assignment.
+        LoggingService.Instance.logLevelMask = UInt(Self.quietLogMask.rawValue)
 
         // No config path: nothing is persisted to a linphonerc. (A relative path resolves
         // against the process working directory, which is not writable on iOS.) This does
@@ -346,12 +357,13 @@ final class LinphoneService: LinphoneServiceProtocol {
         /// Ports the Core actually bound; a value <= 0 means that transport bound nothing.
         let boundPorts: [String: Int]
         let accountCount: Int
-        /// `LogLevel.rawValue` the SDK's logging service was pinned to — carried for the
-        /// failure message only.
-        let sdkLogLevel: Int?
-        /// Whether that level is exactly `LogLevel.Error`. Computed here because the test
-        /// target deliberately does not import `linphonesw`, so it cannot name the case.
-        let sdkLogLevelIsErrorOnly: Bool
+        /// The SDK's log-level mask as liblinphone reports it — carried for the failure
+        /// message only.
+        let sdkLogLevelMask: UInt
+        /// Whether that mask excludes every level at which belle-sip prints SIP messages.
+        /// Computed here because the test target deliberately does not import `linphonesw`,
+        /// so it cannot name the cases.
+        let sdkLogExcludesSipMessages: Bool
         /// Absolute path liblinphone was pointed at for its own files.
         let stateDirectoryPath: String?
         /// Whether that directory is excluded from iCloud/iTunes backup.
@@ -384,8 +396,9 @@ final class LinphoneService: LinphoneServiceProtocol {
             transportsUsedPresent: core.transportsUsed != nil,
             boundPorts: ports(core.transportsUsed),
             accountCount: core.accountList.count,
-            sdkLogLevel: LoggingService.Instance.logLevel?.rawValue,
-            sdkLogLevelIsErrorOnly: LoggingService.Instance.logLevel == .Error,
+            sdkLogLevelMask: LoggingService.Instance.logLevelMask,
+            sdkLogExcludesSipMessages:
+                LoggingService.Instance.logLevelMask & UInt(Self.forbiddenLogMask.rawValue) == 0,
             stateDirectoryPath: stateDirectory?.path,
             stateDirectoryExcludedFromBackup: excluded,
             sdkDefaultDirectoryExists: sdkDefault.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
