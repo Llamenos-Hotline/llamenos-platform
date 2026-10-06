@@ -193,6 +193,7 @@ export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDe
     erasureService: services.erasure,
     identityService: services.identity,
     hubShred: services.hubShred,
+    callsService: services.calls,
   }
 }
 

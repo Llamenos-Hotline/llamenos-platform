@@ -276,20 +276,39 @@ describe('TwilioAdapter', () => {
       expect(body.get('MachineDetection')).toBe('Enable')
     })
 
-    it('handles API failures gracefully', async () => {
+    // #1136: when EVERY dial attempt fails this must reject (not resolve to `[]`) so
+    // the caller (services/ringing.ts) can retry and the circuit breaker can see the
+    // failure — a total provider outage must never look like a successful ring.
+    it('rejects when every dial attempt fails (total outage, #1136)', async () => {
       fetchMock.mockResolvedValue({
         ok: false,
         status: 400,
       } as Response)
 
-      const sids = await adapter.ringVolunteers({
+      await expect(adapter.ringVolunteers({
         callSid: 'CA-parent',
         callerNumber: '+15551111111',
         volunteers: [{ phone: '+15552222222', callToken: 'token-abc' }],
         callbackUrl: 'https://example.com',
+      })).rejects.toThrow('All 1 dial attempt(s) failed')
+    })
+
+    it('returns whatever succeeded on a partial failure — not every leg failing (#1136)', async () => {
+      fetchMock
+        .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ sid: 'CA-vol-ok' }) } as Response)
+
+      const sids = await adapter.ringVolunteers({
+        callSid: 'CA-parent',
+        callerNumber: '+15551111111',
+        volunteers: [
+          { phone: '+15552222222', callToken: 'token-a' },
+          { phone: '+15553333333', callToken: 'token-b' },
+        ],
+        callbackUrl: 'https://example.com',
       })
 
-      expect(sids).toHaveLength(0)
+      expect(sids).toEqual(['CA-vol-ok'])
     })
 
     it('uses MachineDetection for volunteer calls', async () => {

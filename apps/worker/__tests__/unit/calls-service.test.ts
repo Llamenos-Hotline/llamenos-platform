@@ -415,6 +415,83 @@ describe('CallsService', () => {
     })
   })
 
+  // #1136: getActiveCalls(hubId) only reaps the hub it is called with — a hub nobody
+  // has an open dashboard for would otherwise accumulate stale rows forever.
+  // reapStaleCalls() scans every hub and is driven by a scheduled worker instead.
+  describe('reapStaleCalls — instance-wide reap (#1136)', () => {
+    it('archives stale rows across every hub in one pass, leaving fresh ones alone', async () => {
+      const staleRingTime = new Date(Date.now() - 4 * 60 * 1000) // 4 min ago
+      const staleProgressTime = new Date(Date.now() - 3 * 60 * 60 * 1000) // 3 hours ago
+      const freshTime = new Date(Date.now() - 60 * 1000) // 1 min ago
+
+      const selectResults = [
+        {
+          callId: 'stale-ring-hubA', hubId: 'hub-A', status: 'ringing', startedAt: staleRingTime,
+          answeredBy: null, callerLast4: '1111', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+        {
+          callId: 'stale-progress-hubB', hubId: 'hub-B', status: 'in-progress', startedAt: staleProgressTime,
+          answeredBy: 'pk1', callerLast4: '2222', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+        {
+          callId: 'fresh-hubC', hubId: 'hub-C', status: 'ringing', startedAt: freshTime,
+          answeredBy: null, callerLast4: '3333', endedAt: null, duration: null,
+          hasTranscription: false, hasVoicemail: false, hasRecording: false, recordingSid: null,
+        },
+      ]
+
+      const txInsert = vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) }),
+      })
+      const txDelete = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) })
+
+      const db = {
+        // No .where() in reapStaleCalls — it queries every hub, not one.
+        select: vi.fn().mockReturnValue({ from: vi.fn().mockResolvedValue(selectResults) }),
+        transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => fn({ insert: txInsert, delete: txDelete })),
+      }
+
+      const svc = new CallsService(db as never)
+      const reaped = await svc.reapStaleCalls()
+
+      // Both stale rows (hub-A ringing, hub-B in-progress) reaped; hub-C's fresh row untouched.
+      expect(reaped).toBe(2)
+      expect(db.transaction).toHaveBeenCalled()
+      expect(txInsert).toHaveBeenCalledTimes(2)
+    })
+
+    it('does nothing when no calls are stale, across any hub', async () => {
+      const freshTime = new Date(Date.now() - 60 * 1000)
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockResolvedValue([
+            { callId: 'fresh', hubId: 'hub-1', status: 'ringing', startedAt: freshTime },
+          ]),
+        }),
+        transaction: vi.fn(),
+      }
+
+      const svc = new CallsService(db as never)
+      const reaped = await svc.reapStaleCalls()
+
+      expect(reaped).toBe(0)
+      expect(db.transaction).not.toHaveBeenCalled()
+    })
+
+    it('returns 0 and never opens a transaction when there are no active calls at all', async () => {
+      const db = {
+        select: vi.fn().mockReturnValue({ from: vi.fn().mockResolvedValue([]) }),
+        transaction: vi.fn(),
+      }
+
+      const svc = new CallsService(db as never)
+      expect(await svc.reapStaleCalls()).toBe(0)
+      expect(db.transaction).not.toHaveBeenCalled()
+    })
+  })
+
   // `getPresence` moved to services/presence.ts (getHubPresence). It was gated
   // on an OPTIONAL `ShiftsService` that `createServices` never passed, so these
   // tests — which supplied a stub — were green while every deployment answered

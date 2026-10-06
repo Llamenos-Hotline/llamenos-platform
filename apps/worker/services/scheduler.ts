@@ -34,11 +34,16 @@ import {
   startAuditChainVerifyWorker,
   stopAuditChainVerifyWorker,
 } from '../lib/audit-chain-verify-worker'
+import {
+  startStaleCallReaperWorker,
+  stopStaleCallReaperWorker,
+} from '../lib/stale-call-reaper-worker'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
 import type { HubShredService } from './hub-shred'
+import type { CallsService } from './calls'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
@@ -61,6 +66,7 @@ export type TaskSchedulerServiceDeps = {
   erasureService: ErasureService
   identityService: IdentityService
   hubShred: HubShredService
+  callsService: CallsService
 }
 
 export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
@@ -117,6 +123,12 @@ export class TaskScheduler {
       erasureService: deps.erasureService,
     })
 
+    // Stuck-call reaper: archives stale `active_calls` rows for EVERY hub on a
+    // fixed schedule. Previously this only happened lazily, as a side effect of
+    // `CallsService.getActiveCalls(hubId)` — so a hub with no open dashboard
+    // leaked `active_calls`/`call_tokens` rows indefinitely (#1136).
+    startStaleCallReaperWorker(deps.callsService)
+
     logger.info('Started')
   }
 
@@ -133,6 +145,7 @@ export class TaskScheduler {
     stopAuditChainVerifyWorker()
     stopErasureExpiryWorker()
     stopReEncryptionWorker()
+    stopStaleCallReaperWorker()
 
     logger.info('Stopped')
   }
