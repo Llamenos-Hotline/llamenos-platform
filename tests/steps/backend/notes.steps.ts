@@ -13,7 +13,7 @@ import {
   ADMIN_SEED,
 } from '../../api-helpers'
 import {
-  x25519PubkeyFromSeed,
+  hpkeRecipientForSeed,
   wrapKeyForRecipient,
   generateContentKey,
   encryptContent,
@@ -132,9 +132,9 @@ When('a note is created', async ({request, world}) => {
 
   const adminEnvelopes = await Promise.all(
     getNoteTestState(world).adminKeypairs.map(async kp => {
-      const x25519Pub = x25519PubkeyFromSeed(kp.seedHex)
-      const env = await wrapKeyForRecipient(contentKey, x25519Pub, kp.seedHex, LABEL_NOTE_KEY)
-      return { pubkey: x25519Pub, ...env }
+      const recipient = hpkeRecipientForSeed(kp.seedHex)
+      const env = await wrapKeyForRecipient(contentKey, recipient.pubkeyHex, recipient.skHex, LABEL_NOTE_KEY)
+      return { pubkey: recipient.pubkeyHex, ...env }
     }),
   )
 

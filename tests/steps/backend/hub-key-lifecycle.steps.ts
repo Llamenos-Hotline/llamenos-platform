@@ -12,7 +12,7 @@ import {
   apiPost,
   createVolunteerViaApi,
 } from '../../api-helpers'
-import { generateContentKey, wrapKeyForRecipient, x25519PubkeyFromSeed } from '../../crypto-helpers'
+import { generateContentKey, wrapKeyForRecipient, hpkeRecipientForSeed } from '../../crypto-helpers'
 import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -64,8 +64,8 @@ Before({ tags: '@crypto' }, async ({ world }) => {
 async function generateRealEnvelopeEntry(pubkey: string, memberSeedHex: string): Promise<EnvelopeEntry> {
   // Use real HPKE to wrap a random hub key for this member
   const hubKey = generateContentKey()
-  const x25519Pub = x25519PubkeyFromSeed(memberSeedHex)
-  const envelope = await wrapKeyForRecipient(hubKey, x25519Pub, memberSeedHex, LABEL_HUB_KEY_WRAP)
+  const member = hpkeRecipientForSeed(memberSeedHex)
+  const envelope = await wrapKeyForRecipient(hubKey, member.pubkeyHex, member.skHex, LABEL_HUB_KEY_WRAP)
   return { pubkey, ct: envelope.ct, enc: envelope.enc }
 }
 
