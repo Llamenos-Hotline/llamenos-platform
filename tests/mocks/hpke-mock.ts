@@ -20,6 +20,15 @@
  * labelId is still checked against the expected label before any key material
  * is touched, so the mock enforces what the Rust implementation enforces.
  *
+ * The REAL RFC 9180 path (apps/desktop/src/crypto.rs → packages/crypto) is
+ * covered separately, against the actual Tauri binary, by
+ * tests/desktop/specs/crypto.wdio.ts (run via `bun run test:desktop:wdio`,
+ * driven by tauri-driver/WebKitWebDriver — see tests/desktop/wdio.conf.ts).
+ * That suite is not yet wired into any CI workflow (#1126) — only run it
+ * locally until that lands. Nothing a Playwright test asserts against this
+ * mock constitutes evidence about the real HPKE implementation; it only
+ * proves the mocked webview build is internally consistent.
+ *
  * Pure module: no `window`, no Tauri imports, safe to load from Node.
  */
 import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
