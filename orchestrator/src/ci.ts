@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind } from './review.js'
+import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
   diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
@@ -540,6 +540,16 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    unchanged is not the fix.
  *  - `unreadable`: no reviewer rejected the diff, but at least one produced
  *    no verdict that could be read (or never ran).
+ *  - `budget-exhausted`: a reviewer spent its whole turn budget without
+ *    reaching a verdict, and nothing could be salvaged from it either.
+ *  - `partial-fail` / `partial-pass`: a reviewer ran out of turns, and the
+ *    salvage call recovered what it HAD concluded (review.ts's
+ *    `PartialReview`). `partial-fail` is a real finding on a real part of
+ *    the diff and fails the check as a rejection would. `partial-pass` is
+ *    "nothing wrong in the part I read" — published, and still red: it is
+ *    not the claim a PASS makes, and reporting it as success would be the
+ *    fail-open shape of #1584/#1587/#1588. Neither is ever cached: both
+ *    carry `verdict: 'UNREADABLE'`, which the cache already excludes.
  *  - `cache-pass` / `cache-fail`: a prior substantive verdict for this exact
  *    diff and review set, restated.
  *  - `scope`: the mechanical pre-check (lane scope, never-write paths)
@@ -548,7 +558,8 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    `export-unsafe`: refused before any reviewer ran, for the reason named.
  */
 export const REVIEW_CI_RESULTS = [
-  'pass', 'fail', 'unreadable', 'budget-exhausted', 'cache-pass', 'cache-fail',
+  'pass', 'fail', 'unreadable', 'budget-exhausted', 'partial-fail', 'partial-pass',
+  'cache-pass', 'cache-fail',
   'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
 ] as const
 export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
@@ -583,9 +594,20 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  *
  *  - `PASS:` — the check concluded success.
  *  - `REJECTED:` — a reviewer read this diff and rejected it. Fix the code.
+ *    `REJECTED:partial` is the same instruction on narrower evidence: the
+ *    reviewer ran out of turns, and the finding it had already made stands.
  *  - `NO-VERDICT:` — the check is red because the gate fails closed, and
  *    NOTHING judged the diff. Act on the named cause; do not edit the code
  *    on review grounds, and do not read it as a rejection.
+ *
+ * `NO-VERDICT:partial-pass` deliberately does NOT get a `PASS:` name, even
+ * though a reviewer did look at part of the diff and found nothing. A
+ * `PASS:` token means "the check concluded success" to every reader and
+ * every grep, and this check is red; #1564 is the live incident where an
+ * outcome that formed no verdict was given a green `PASS:` name and read as
+ * a pass. The class whose contract actually fits is `NO-VERDICT:` — act on
+ * the named cause, do not read it as a rejection — with the detail line
+ * saying what WAS reviewed and what was not.
  *
  * No token is a prefix or a substring of another (pinned in
  * tests/orchestrator/review-outcome-titles.test.ts), so a grep for one never
@@ -595,10 +617,11 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  */
 export const REVIEW_OUTCOME_TOKENS = [
   'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:low-tier', 'PASS:unclassified',
-  'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried',
+  'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
-  'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:did-not-run',
+  'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:partial-pass',
+  'NO-VERDICT:did-not-run',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable',
   'NO-VERDICT:unknown-lane', 'NO-VERDICT:review-disabled', 'NO-VERDICT:export-unsafe',
@@ -760,6 +783,22 @@ export interface ReviewCiDeps extends CiDeps {
    * `secondOpinion`'s own strip then finds nothing left to do.
    */
   stripExport(dir: string): Promise<void>
+  /**
+   * Exports the DIFF RANGE'S BASE as a second read-only tree, from the base
+   * checkout (`ctx.repoDir`, trusted git history) at `ctx.baseSha`. The
+   * reviewer gets it as context and never as the thing under judgement —
+   * review.ts's `reviewFilesSection` explains why that second tree is a
+   * TURN-BUDGET fix: a symbol this diff removes is absent from the head tree
+   * by definition, so "what used to reference it" is unanswerable from the
+   * head alone and a reviewer asking it greps until its budget ends (#1485).
+   *
+   * OPTIONAL, and the one dependency here that is deliberately allowed to
+   * fail soft. If it is unwired or throws, the review runs exactly as it did
+   * before this existed: one tree, one grant, a prompt that names only the
+   * head. Missing CONTEXT is a worse review; missing a security control
+   * (`stripExport`) is an unsafe one. Only the second may stop the gate.
+   */
+  exportBase?(repoDir: string, sha: string): Promise<{ dir: string; cleanup(): Promise<void> }>
   /** Runs ONE resolved profile, read-only, against the same export. */
   profileReview(profile: ReviewerProfile, diff: string, changedFiles: readonly string[]): Promise<SecondOpinionResult>
   /**
@@ -1126,15 +1165,49 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     }
   }
 
+  // The BASE tree, for context the head tree cannot carry (see
+  // `exportBase`). `git archive | tar -x` from the base checkout, so it is
+  // as `.git`-less and as non-executing as the head export; stripped by the
+  // same `stripExport` for the same reason, because a commit already on the
+  // base branch is trusted HISTORY, not trusted CONTENT. Best-effort
+  // throughout: any failure logs and reviews without it.
+  let baseExport: { dir: string; cleanup(): Promise<void> } | undefined
+  if (deps.exportBase !== undefined) {
+    try {
+      baseExport = await deps.exportBase(deps.ctx.repoDir, deps.ctx.baseSha)
+      await deps.stripExport(baseExport.dir)
+    } catch (e) {
+      deps.log(
+        `could not export the base tree at ${deps.ctx.baseSha} (reviewing with the head tree ` +
+        `alone, as before): ${e instanceof Error ? e.message : String(e)}`,
+      )
+      if (baseExport !== undefined) {
+        // A strip that failed leaves a tree no reviewer may read. Drop it
+        // rather than hand it over unstripped.
+        await baseExport.cleanup().catch(() => {})
+        baseExport = undefined
+      }
+    }
+  }
+
   // The batch. `snapshotDir`, never `worktree`: the export already exists,
   // so this job runs no git and creates nothing. Zero execution of the
   // judged commit's code anywhere in this job — which is what lets it hold
   // the key, and what every reviewer in this batch inherits.
   const names = [GENERAL_REVIEWER, ...profiles.map((p) => p.agent)]
   const settled = await Promise.allSettled([
-    deps.secondOpinion({ authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir, diff, report }),
+    deps.secondOpinion({
+      authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir,
+      baseDir: baseExport?.dir, diff, report,
+    }),
     ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles)),
   ])
+  // Every reviewer has finished (`allSettled` never rejects), so the base
+  // tree has no readers left. Removed here rather than in a `finally`
+  // wrapping the rest of this function: nothing below it reads the export,
+  // and a leaked 76MB directory per review would accumulate on a long-lived
+  // self-hosted runner.
+  if (baseExport !== undefined) await baseExport.cleanup().catch(() => {})
 
   const results = settled.map((s, i) => {
     const name = names[i] as string
@@ -1144,7 +1217,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     const who = name === GENERAL_REVIEWER ? 'review' : name
     if (s.status === 'rejected') {
       const detail = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined as EngineFailureKind | undefined }
+      return { name, verdict: 'UNREADABLE' as const, headline: `${who} unavailable: ${detail}`, text: detail, failureKind: undefined as EngineFailureKind | undefined, partial: undefined as PartialReview | undefined }
     }
     const r = s.value
     // UNREADABLE and FAIL both fail, but they are different facts and the
@@ -1158,13 +1231,22 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     // `review unavailable: {"name":"UnknownError",...}` for what was,
     // underneath, a bad model id — the wrong diagnostic sent whoever read
     // it looking for an outage that was never happening.
+    //
+    // A PARTIAL review (review.ts's `PartialReview`) is still UNREADABLE as
+    // far as the gate is concerned, but "ran out of turns" undersells it: a
+    // reviewer that ran out AFTER finding something has told us a fact about
+    // the code, and the headline says which part of the diff that fact
+    // covers. The verdict itself is in the text's final line, which
+    // `verdictSummary` picks up — stamped `VERDICT (partial):`, never
+    // `VERDICT:`.
     const unreadablePrefix = r.failureKind === 'engine-misconfigured' ? `${who} misconfigured`
+      : r.partial !== undefined ? `${who} ran out of turns \u2014 PARTIAL ${r.partial.verdict}, not a full review`
       : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
       : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
       : verdictSummary(r.text)
-    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind }
+    return { name, verdict: r.verdict, headline, text: r.text, failureKind: r.failureKind, partial: r.partial }
   })
 
   const ok = results.every((r) => r.verdict === 'PASS')
@@ -1186,9 +1268,22 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // remedy is NOT "re-request" (that re-runs the same diff under the same
   // budget), so collapsing it into `unreadable` hands the reader advice that
   // cannot work.
+  //
+  // The two PARTIAL outcomes sit between a substantive FAIL and a bare
+  // exhaustion, in that order, for the same "report the most actionable true
+  // thing" reason the rest of this ladder follows. A full FAIL outranks a
+  // partial one (it rests on the whole diff); a partial FAIL outranks a
+  // partial PASS (a found problem outranks a narrow absence of one); and
+  // both outrank `budget-exhausted`, which is the case where even the
+  // salvage call came back with nothing. None of them is ever `ok`: `ok` is
+  // computed above from `verdict === 'PASS'`, and a partial review's verdict
+  // is UNREADABLE by construction (`toSecondOpinion`), so there is no path
+  // from here to a green check — which is the point.
   const result: ReviewCiResult = ok
     ? 'pass'
     : results.some((r) => r.verdict === 'FAIL') ? 'fail'
+    : results.some((r) => r.partial?.verdict === 'FAIL') ? 'partial-fail'
+    : results.some((r) => r.partial?.verdict === 'PASS') ? 'partial-pass'
     : results.some((r) => r.failureKind === 'budget-exhausted') ? 'budget-exhausted'
     : 'unreadable'
   const verdict: ReviewCiVerdict = { ok, summary, result }

@@ -188,6 +188,16 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // under the same budget and exhausts again.
   ['(6b) budget exhausted — the engine ran a full session and reached no verdict',
     reviewed('budget-exhausted', 'failure'), 'NO-VERDICT:budget-exhausted'],
+  // #1485's own shape, once a salvage call recovers what the exhausted
+  // session had concluded (review.ts's `salvagePartialVerdict`). Two
+  // outcomes, two names, and NEITHER of them green: a partial rejection
+  // reads as a rejection, and a partial pass is honestly NOT a pass — it
+  // gets a `NO-VERDICT:` name precisely so no reader and no grep can take it
+  // for one (#1564).
+  ['(6c) a partial review that REJECTED what it managed to read',
+    reviewed('partial-fail', 'failure'), 'REJECTED:partial'],
+  ['(6d) a partial review that found nothing wrong in the part it read',
+    reviewed('partial-pass', 'failure'), 'NO-VERDICT:partial-pass'],
   ['(7) scope — touched files outside the lane\'s scope (#1235)', reviewed('scope', 'failure'), 'NO-VERDICT:scope'],
   ['review-set-unresolved, decided by the gate',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'review-set-unresolved' }, 'NO-VERDICT:review-set-unresolved'],
@@ -472,6 +482,37 @@ describe('rail: runReviewCi names the result of every return path', () => {
     ['the reviewer used its whole turn budget',
       { secondOpinion: async () => ({ verdict: 'UNREADABLE' as const, text: 'Error: Reached max turns (10)', failureKind: 'budget-exhausted' as const }) },
       'budget-exhausted', false],
+    // A salvaged PARTIAL review: still UNREADABLE (the gate's fail-closed
+    // shape is untouched), but now carrying what the exhausted session had
+    // concluded. `ok` is false for BOTH — a partial pass must never be a
+    // green check, which is the whole point of giving it its own result.
+    ['a reviewer ran out of turns after rejecting what it had read',
+      { secondOpinion: async () => ({
+        verdict: 'UNREADABLE' as const,
+        text: 'VERDICT (partial): FAIL — the toggle is still referenced',
+        failureKind: 'budget-exhausted' as const,
+        partial: { verdict: 'FAIL' as const, notReviewed: '- deploy/ansible/', text: 'VERDICT: FAIL — the toggle is still referenced' },
+      }) },
+      'partial-fail', false],
+    ['a reviewer ran out of turns having found nothing wrong in the part it read',
+      { secondOpinion: async () => ({
+        verdict: 'UNREADABLE' as const,
+        text: 'VERDICT (partial): PASS',
+        failureKind: 'budget-exhausted' as const,
+        partial: { verdict: 'PASS' as const, notReviewed: '- everything else', text: 'VERDICT: PASS' },
+      }) },
+      'partial-pass', false],
+    // A FULL rejection still outranks a partial one: it rests on the whole
+    // diff, so "fix the code" is the stronger, truer instruction.
+    ['a full rejection outranks a partial verdict beside it',
+      { ...withProfile,
+        secondOpinion: verdict('FAIL'),
+        profileReview: async () => ({
+          verdict: 'UNREADABLE' as const, text: 'VERDICT (partial): PASS',
+          failureKind: 'budget-exhausted' as const,
+          partial: { verdict: 'PASS' as const, notReviewed: '', text: 'VERDICT: PASS' },
+        }) },
+      'fail', false],
     ['a reviewer threw', { secondOpinion: async () => { throw new Error('engine exploded') } }, 'unreadable', false],
     ['a cached PASS', { cacheFor: cacheOf({ verdict: 'PASS', text: 'cached pass' }) }, 'cache-pass', true],
     ['a cached FAIL', { cacheFor: cacheOf({ verdict: 'FAIL', text: 'cached fail' }) }, 'cache-fail', false],

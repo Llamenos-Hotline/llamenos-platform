@@ -16,6 +16,7 @@ import { dispatch as dispatchWorker, type EffortLevel } from './engines.js'
 import { verifyMechanical } from './verify.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
+  exportReviewSnapshot,
   HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
@@ -1687,6 +1688,10 @@ const HANDLERS: Record<string, CommandHandler> = {
     resolveProfile: (name) => resolveReviewerLabel(name, join(REPO_ROOT, AGENT_REGISTRY_DIR)),
     publishReport: (entries) => writeReviewReport(ctx, entries),
     stripExport: async (dir) => { await stripReviewerControlFiles(dir) },
+    // The BASE tree, from the trusted base checkout — `git archive | tar -x`,
+    // the same export machinery the operator-box path uses for the head. See
+    // `ReviewCiDeps.exportBase` for why a failure here only costs context.
+    exportBase: (repoDir, sha) => exportReviewSnapshot(repoDir, sha),
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.
     profileReview: async (profile, diff, changedFiles) => toSecondOpinion(await invokeVerifierEngine({

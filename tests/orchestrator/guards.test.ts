@@ -1827,8 +1827,14 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
  * runner, on the operator's own Max subscription — the provider-quota
  * pressure that justified a 2-3-turn budget is gone, and a session that can
  * actually use its tools reviews better than one starved for turns. The
- * budget widened accordingly: 10 turns / 10-minute wall clock by default,
- * 20 turns / 20-minute wall clock for a high-impact diff. Pinned to the
+ * budget widened accordingly, and widened AGAIN at #1485 (an operator
+ * decision, a straight doubling): 20 turns / 10-minute wall clock by
+ * default, 40 turns / 20-minute wall clock for a high-impact diff. The case
+ * behind the second raise is why the turn count moved and the wall clock did
+ * not — #1485 exhausted 10 turns on TEN files (+137/-63) while a
+ * 50-file/+3933 PR reached a verdict the same day, so what spends the budget
+ * is exploration, not size, and 20/40 turns inside 10/20 minutes still
+ * allows ~30s per turn. Pinned to the
  * actual exported numbers, not a description of them: a PR that quietly
  * raises or lowers these must fail THIS test, not just read wrong in a
  * comment. `fleet-review.yml`'s own `timeout-minutes` must stay above
@@ -1836,9 +1842,9 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
  * rail above.
  */
 describe('rail: the reviewer gets a full session\'s budget, not a thin API call\'s', () => {
-  it('caps turns at the full-session budget (10 default / 20 high-impact)', () => {
-    expect(DEFAULT_MAX_TURNS).toBe(10)
-    expect(HIGH_IMPACT_MAX_TURNS).toBe(20)
+  it('caps turns at the full-session budget (20 default / 40 high-impact)', () => {
+    expect(DEFAULT_MAX_TURNS).toBe(20)
+    expect(HIGH_IMPACT_MAX_TURNS).toBe(40)
     // High impact always gets AT LEAST as much room as the default —
     // pinned as an inequality too, so a mutation that flips the two values
     // relative to each other still fails even if it kept both numbers
