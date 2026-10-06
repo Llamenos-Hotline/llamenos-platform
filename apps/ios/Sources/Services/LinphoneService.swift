@@ -217,7 +217,14 @@ final class LinphoneService: LinphoneServiceProtocol {
     /// SDK is ever unlinked.
     struct CoreConfigurationSnapshot: Equatable {
         let pushNotificationEnabled: Bool
-        let srtpMandatory: Bool
+        /// True when the Core refuses a call that cannot negotiate encrypted media.
+        /// Deliberately not "is it SRTP-SDES": which suite the PBX and the clients
+        /// agree on (SRTP-SDES vs DTLS-SRTP) is #1173's cross-client decision, and the
+        /// Android transport work owns it. What must hold either way is that plaintext
+        /// RTP is never acceptable, so that is what this records.
+        let mediaEncryptionMandatory: Bool
+        /// True when the Core would accept unencrypted media.
+        let mediaEncryptionIsNone: Bool
         let enabledAudioCodecs: Set<String>
         /// Configured SIP ports per transport: 0 = disabled, -1 = random, -2 = do not bind.
         let configuredPorts: [String: Int]
@@ -234,7 +241,8 @@ final class LinphoneService: LinphoneServiceProtocol {
         }
         return CoreConfigurationSnapshot(
             pushNotificationEnabled: core.pushNotificationEnabled,
-            srtpMandatory: core.mediaEncryption == .SRTP && core.isMediaEncryptionMandatory,
+            mediaEncryptionMandatory: core.isMediaEncryptionMandatory,
+            mediaEncryptionIsNone: core.mediaEncryption == .None,
             enabledAudioCodecs: Set(core.audioPayloadTypes.filter { $0.enabled() }.map(\.mimeType)),
             configuredPorts: ports(core.transports),
             boundPorts: ports(core.transportsUsed),

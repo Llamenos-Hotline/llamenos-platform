@@ -87,8 +87,13 @@ struct LinphoneServiceCoreTests {
         #expect(try startedCore().accountCount == 0)
     }
 
-    @Test func startedCoreMandatesSrtp() throws {
-        #expect(try startedCore().srtpMandatory)
+    @Test func startedCoreRefusesUnencryptedMedia() throws {
+        // Which suite is negotiated (SRTP-SDES vs DTLS-SRTP) is #1173's cross-client
+        // decision and is being settled in the Android transport work; this asserts only
+        // the invariant that survives either answer — the Core never accepts plain RTP.
+        let config = try startedCore()
+        #expect(config.mediaEncryptionMandatory)
+        #expect(config.mediaEncryptionIsNone == false)
     }
 
     @Test func startedCoreOffersOnlyOpusAndPcmu() throws {
