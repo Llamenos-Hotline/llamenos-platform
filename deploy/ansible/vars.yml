@@ -94,7 +94,7 @@ llamenos_postgres_image: "postgres:17-alpine"
 llamenos_caddy_image: "caddy:2.9-alpine"
 llamenos_rustfs_image: "rustfs/rustfs:latest"
 llamenos_whisper_image: "fedirz/faster-whisper-server:0.4.0-cpu" # 0.4.1 was never published (see #722)
-llamenos_asterisk_image: "andrius/asterisk:20"
+llamenos_asterisk_image: "andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015" # 22.x — matches deploy/docker/docker-compose.yml
 llamenos_signal_image: "bbernhard/signal-cli-rest-api:0.92"
 llamenos_ntfy_image: "binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294"
 

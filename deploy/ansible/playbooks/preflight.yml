@@ -418,20 +418,22 @@
       ansible.builtin.import_tasks: tasks/guard-disk-tier.yml
       tags: always
 
-    - name: Assert bridge_secret is set when SIP bridge or Asterisk is enabled
+    - name: Assert bridge_secret is set when Asterisk is enabled
       ansible.builtin.assert:
         that:
           - bridge_secret is defined
           - bridge_secret | length > 0
         fail_msg: |
-          REQUIRED: 'bridge_secret' must be set when SIP bridge or Asterisk PBX is enabled.
+          REQUIRED: 'bridge_secret' must be set when Asterisk PBX is enabled.
+          roles/llamenos-asterisk deploys the sip-bridge sidecar alongside
+          Asterisk itself — there is no separate toggle for it.
 
           Current value: {{ bridge_secret | default('NOT SET') }}
 
           To generate:
             openssl rand -hex 32
         success_msg: "bridge_secret: [set, {{ bridge_secret | length }} chars]"
-      when: (llamenos_asterisk_enabled | default(false) | bool) or (llamenos_sip_bridge_enabled | default(false) | bool)
+      when: llamenos_asterisk_enabled | default(false) | bool
 
     - name: Assert ntfy_domain is set when ntfy is enabled
       ansible.builtin.assert:
@@ -479,10 +481,10 @@
         msg: "Note: ntfy push relay not enabled (Android push notifications via UnifiedPush disabled)"
       when: not (llamenos_ntfy_enabled | default(false) | bool)
 
-    - name: Warn if bridge_secret is not set but SIP bridge/Asterisk is disabled
+    - name: Warn if bridge_secret is not set but Asterisk is disabled
       ansible.builtin.debug:
-        msg: "Note: bridge_secret not set (SIP bridge and Asterisk are disabled, so this is OK)"
-      when: not (llamenos_asterisk_enabled | default(false) | bool) and not (llamenos_sip_bridge_enabled | default(false) | bool) and (bridge_secret is not
+        msg: "Note: bridge_secret not set (Asterisk and its sip-bridge sidecar are disabled, so this is OK)"
+      when: not (llamenos_asterisk_enabled | default(false) | bool) and (bridge_secret is not
         defined or bridge_secret | length == 0)
 
     - name: Assert ssh_port is a valid port and differs from the FDE unlock port
@@ -634,7 +636,7 @@
           Storage Secret Key: [set, {{ storage_secret_key | length }} chars]
           HMAC Secret: [set, {{ hmac_secret | length }} chars]
           Signal Messaging: {{ 'ENABLED' if llamenos_signal_enabled | default(false) | bool else 'DISABLED' }}
-          SIP Bridge: {{ 'ENABLED' if llamenos_sip_bridge_enabled | default(false) | bool else 'DISABLED' }}
+          Self-Hosted Telephony (Asterisk + SIP Bridge): {{ 'ENABLED' if llamenos_asterisk_enabled | default(false) | bool else 'DISABLED' }}
           Backup Encryption: {{ 'ENABLED' if backup_age_public_key | default('') | length > 0 else 'DISABLED (set backup_age_public_key to enable)' }}
           iOS Push (APNs): {{ 'ENABLED' if (apns_key_p8 | default('') | length > 0 and apns_key_id | default('') | length > 0 and apns_team_id | default('') | length > 0) else 'DISABLED' }}
           Android Push (ntfy): {{ 'ENABLED' if llamenos_ntfy_enabled | default(false) | bool else 'DISABLED' }}
