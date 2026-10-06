@@ -482,3 +482,61 @@ describe('GET /events/:id/reports', () => {
     expect(res.status).toBe(403)
   })
 })
+
+// ---------------------------------------------------------------------------
+// GET /events (bare list) — deprecation 301 redirect
+//
+// The deprecation middleware matches on c.req.path.endsWith('/events'), which
+// only exercises in production when the router is mounted at a path ending
+// in 'events' (e.g. '/api/events', matching apps/worker/app.ts). The other
+// describe blocks above mount via `app.route('/', eventsRouter)` and request
+// '/', so they never hit this path — mount at '/events' here instead to
+// actually cover the real routing shape.
+// ---------------------------------------------------------------------------
+
+describe('GET /events (bare list) — deprecation redirect', () => {
+  function makeMountedApp(permissions: string[] = ['events:read']) {
+    const mockCases = {
+      listEvents: vi.fn().mockResolvedValue({ events: [], total: 0 }),
+      getEvent: vi.fn().mockResolvedValue({ id: 'ev-1' }),
+    }
+    const app = new Hono<AppEnv>()
+    app.use('*', async (c, next) => {
+      c.set('pubkey', 'a'.repeat(64))
+      c.set('permissions', permissions)
+      c.set('hubId', 'hub-1')
+      c.set('services', {
+        audit: { log: vi.fn().mockResolvedValue(undefined) },
+        cases: mockCases,
+        settings: { getEntityTypeById: vi.fn().mockRejectedValue(new Error('not found')) },
+      } as unknown as AppEnv['Variables']['services'])
+      c.set('requestId', 'test-req')
+      c.env = {} as unknown as AppEnv['Bindings']
+      await next()
+    })
+    app.route('/events', eventsRouter)
+    return { app, mockCases }
+  }
+
+  it('redirects GET /events to the records successor with a 301, without ever calling the service', async () => {
+    const { app, mockCases } = makeMountedApp()
+    const res = await app.request('/events', { redirect: 'manual' })
+
+    expect(res.status).toBe(301)
+    expect(res.headers.get('Location')).toContain('/api/records')
+    expect(res.headers.get('Deprecation')).toBeTruthy()
+    expect(mockCases.listEvents).not.toHaveBeenCalled()
+  })
+
+  it('redirects even with no permissions at all — the redirect itself discloses no data', async () => {
+    const { app } = makeMountedApp([])
+    const res = await app.request('/events', { redirect: 'manual' })
+    expect(res.status).toBe(301)
+  })
+
+  it('does not redirect GET /events/:id — single-event reads keep working during the deprecation window', async () => {
+    const { app } = makeMountedApp()
+    const res = await app.request('/events/ev-1', { redirect: 'manual' })
+    expect(res.status).toBe(200)
+  })
+})
