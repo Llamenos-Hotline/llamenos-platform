@@ -24,6 +24,18 @@
 # fails CI if any of them stop appearing in a render of either role's output.
 PLATFORM=bun
 PORT=3000
+# Both deployment profiles put Caddy in front of this container, and the app
+# port is published on 127.0.0.1 only — Caddy is the sole ingress. Caddy SETS
+# X-Forwarded-For to the real remote address and deletes every other
+# forwarded-for header (roles/llamenos-caddy/templates/caddy.j2), so the
+# right-most X-Forwarded-For entry the app reads is authentic.
+#
+# Without this the app bucketed every caller in the world on Caddy's container
+# address: one rate-limit bucket for the entire internet, five logins a minute
+# total, and a one-client denial of service against the hotline (#1606). Do not
+# set it on any host where the app port is reachable without passing through
+# Caddy.
+TRUST_PROXY_HEADERS=true
 DATABASE_URL=postgresql://llamenos:{{ pg_password }}@postgres:5432/llamenos
 PG_POOL_SIZE={{ pg_pool_size | default(10) }}
 {% if (admin_pubkey | default('')) | length > 0 %}

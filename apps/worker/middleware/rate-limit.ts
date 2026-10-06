@@ -47,9 +47,12 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
     }
 
     // Determine key: IP-based for strict/webhook, pubkey-based for write/read.
-    // getClientIp() only honors CF-Connecting-IP/X-Forwarded-For/X-Real-IP
-    // when TRUST_PROXY_HEADERS=true (operator confirms a reverse proxy sets
-    // them); otherwise it falls back to the Bun socket address. Trusting a
+    // getClientIp() only honors X-Forwarded-For/X-Real-IP when
+    // TRUST_PROXY_HEADERS=true (operator confirms a reverse proxy sets
+    // them, and strips the ones it does not set); otherwise it falls back
+    // to the Bun socket address. It never honors CF-Connecting-IP — no CDN
+    // sits in front of this architecture, so that header is always
+    // client-supplied here (#1606). Trusting a
     // raw client-supplied header unconditionally — the previous
     // behavior — let an unauthenticated caller vary that header to both
     // write unbounded api_rate_limits rows AND dodge the limit it's

@@ -462,11 +462,17 @@ export function generateTestKeypair(): { seedHex: string; pubkey: string } {
 /**
  * A distinct simulated client address, for endpoints rate limited per client.
  *
- * The dev and CI servers run with `TRUST_PROXY_HEADERS=true` precisely so the
- * suite can present itself as many clients rather than one. Without a
- * `CF-Connecting-IP` every request in every Playwright worker falls into the
- * single bucket for 127.0.0.1, so the suite's own parallelism — not the
- * behaviour under test — decides who gets a 429.
+ * The dev and CI servers run with `TRUST_PROXY_HEADERS=true` and have nothing
+ * in front of them, so the suite can present itself as many clients rather
+ * than one. Without an `X-Forwarded-For` every request in every Playwright
+ * worker falls into the single bucket for 127.0.0.1, so the suite's own
+ * parallelism — not the behaviour under test — decides who gets a 429.
+ *
+ * This only works against a directly-reachable server. A deployed instance
+ * sits behind Caddy, which overwrites X-Forwarded-For with the real remote
+ * address and strips every other forwarded-for header (#1606) — deliberately,
+ * so that no caller can choose its own bucket. Against such a target the whole
+ * suite IS one client, and the limits are real.
  */
 export function simulatedClientIp(): string {
   const octet = () => 1 + Math.floor(Math.random() * 254)
@@ -500,7 +506,7 @@ export async function redeemInviteViaApi<T = unknown>(
     ed25519.sign(buildAuthMessage(pubkey, timestamp, 'POST', path), hexToBytes(seedHex)),
   )
   const res = await request.post(path, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': clientIp },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': clientIp },
     data: { code, pubkey, timestamp, token },
   })
   return { status: res.status(), data: (await safeJson(res)) as T }

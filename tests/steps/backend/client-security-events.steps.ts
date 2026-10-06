@@ -46,7 +46,7 @@ async function submit(
 ): Promise<{ status: number; data: unknown }> {
   // Deliberately no Authorization header — the endpoint is unauthenticated.
   const res = await request.post(`${BASE_URL}/api/security-events`, {
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
     data: body,
   })
   const data = await res.json().catch(() => null)

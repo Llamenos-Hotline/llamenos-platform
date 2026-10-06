@@ -404,14 +404,23 @@ describe('audit() helper', () => {
     )
   })
 
-  it('hashes IP from CF-Connecting-IP header when ctx provided', async () => {
+  it('hashes IP from the forwarded-for header when ctx provided', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) } as any
     const pubkey = 'a'.repeat(64)
     const request = new Request('https://example.com', {
-      headers: { 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { 'X-Forwarded-For': '1.2.3.4' },
     })
 
-    await audit(auditService, 'login', pubkey, {}, { request, hmacSecret: TEST_HMAC_SECRET }, null)
+    // The address only reaches the audit log through getClientIp, which honors
+    // forwarded-for headers only behind a declared trusted proxy (#1606).
+    const originalTrust = process.env.TRUST_PROXY_HEADERS
+    process.env.TRUST_PROXY_HEADERS = 'true'
+    try {
+      await audit(auditService, 'login', pubkey, {}, { request, hmacSecret: TEST_HMAC_SECRET }, null)
+    } finally {
+      if (originalTrust === undefined) delete process.env.TRUST_PROXY_HEADERS
+      else process.env.TRUST_PROXY_HEADERS = originalTrust
+    }
 
     const callDetails = auditService.log.mock.calls[0][2]
     // IP should be hashed (not raw)

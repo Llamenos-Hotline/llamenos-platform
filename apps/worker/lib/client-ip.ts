@@ -11,29 +11,52 @@
  * (apps/worker/__tests__/integration/rate-limit-concurrency.test.ts, which
  * runs through vitest rather than `bun run`) does not transitively fail to
  * resolve `bun:ffi` just because it imports the rate-limit middleware.
+ *
+ * This is the SINGLE place that decides who the client is. Rate limiting,
+ * audit-log IP hashing and the webhook IP allowlists all go through it, so
+ * that there is exactly one answer to "what address is this request from?"
+ * and exactly one set of rules about which headers may influence it.
  */
 
 /**
  * Extract the client IP from request headers with multi-source fallback.
  *
  * B-M7: Never returns a constant like 'unknown' — self-hosted instances
- * without CF-Connecting-IP still get per-client rate limit buckets via
- * X-Forwarded-For, X-Real-IP, or the Bun socket address.
+ * still get per-client rate limit buckets via X-Forwarded-For, X-Real-IP,
+ * or the Bun socket address.
  *
  * Forwarded-for headers are fully client-controlled unless a trusted proxy
  * sets/overwrites them, so they're only honored when TRUST_PROXY_HEADERS=true
  * (operator confirms a reverse proxy sits in front and strips/sets these
- * headers itself). Otherwise a spoofed header would let an attacker pick
+ * headers itself — deploy/ansible/roles/llamenos-caddy/templates/caddy.j2
+ * does exactly that). Otherwise a spoofed header would let an attacker pick
  * their own rate-limit bucket. When trusted, we take the right-most
  * X-Forwarded-For entry — the value appended by the nearest (trusted) hop —
  * not the left-most, which the client fully controls.
+ *
+ * `CF-Connecting-IP` is deliberately NOT consulted, even when proxy headers
+ * are trusted (issue #1606). It used to be preferred over X-Forwarded-For as
+ * "most reliable when behind Cloudflare" — but nothing in this architecture
+ * is ever behind Cloudflare, or any other CDN. TLS terminates on the origin
+ * host with a Let's Encrypt certificate, because the Android client pins
+ * ISRG Root X1/X2 and hard-fails on any other chain (see CLAUDE.md and the
+ * four places under deploy/ that say so). So the header is never set by a
+ * trusted hop here; it only ever arrives because a client chose to send it,
+ * and honoring it would let any caller select its own rate-limit bucket and
+ * its own webhook-allowlist verdict. It is not gated behind a second
+ * opt-in variable either: that would be configuration for a topology this
+ * project forbids, and a second way to get this wrong.
  */
+/**
+ * Prefix of the synthetic value getClientIp() returns when no network address
+ * is available at all. Callers that want "the client's address, if we know
+ * one" (the audit log) test for it; callers that only need a stable bucket key
+ * (rate limiting) do not care.
+ */
+export const CLIENT_FINGERPRINT_PREFIX = 'fingerprint:'
+
 export function getClientIp(req: Request): string {
   if (process.env.TRUST_PROXY_HEADERS === 'true') {
-    // Cloudflare — most reliable when behind CF
-    const cfIp = req.headers.get('CF-Connecting-IP')
-    if (cfIp) return cfIp
-
     // Reverse proxy (nginx, Caddy, etc.) — right-most entry is the one added
     // by the trusted hop closest to us.
     const xff = req.headers.get('X-Forwarded-For')
@@ -60,5 +83,5 @@ export function getClientIp(req: Request): string {
   // unique client at least gets its own bucket (TLS fingerprint, UA, etc.)
   const ua = req.headers.get('User-Agent') || ''
   const accept = req.headers.get('Accept-Language') || ''
-  return `fingerprint:${ua}:${accept}`
+  return `${CLIENT_FINGERPRINT_PREFIX}${ua}:${accept}`
 }
