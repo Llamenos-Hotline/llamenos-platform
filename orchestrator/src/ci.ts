@@ -594,9 +594,10 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  * the vocabulary needs a new entry, not that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:unreviewed', 'PASS:low-tier', 'PASS:unclassified',
+  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:low-tier', 'PASS:unclassified',
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried',
-  'NO-VERDICT:not-requested', 'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
+  'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed',
+  'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
   'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:did-not-run',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
   'NO-VERDICT:engine-unavailable',
@@ -1288,8 +1289,11 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    on its own account: `carried` restates the verdict this PR last EARNED
  *    (`lastEarnedVerdict`), naming the head it was earned on — a PASS
  *    concludes green, a FAIL red; `unreviewed` is a PR no review has ever
- *    been earned on, concluded green with a title saying exactly that.
- *    `carry-unreadable` is the one red a push can produce by itself: the
+ *    been earned on, and is RED (#1564): nothing has judged this diff, and a
+ *    required context satisfied by a run that formed no verdict is a false
+ *    green. It clears as soon as a verdict exists — the next push over the
+ *    same diff hits `cache-hit`, and over a changed one `carried`.
+ *    `carry-unreadable` is the same direction for a different cause: the
  *    history could not be read, and "could not look" must never become
  *    "there was nothing to find" — that would carry a PR's FAIL into a green.
  *  - `not-requested` — no cached PASS, Tier 2 (a real review is needed), and
@@ -1311,9 +1315,9 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  * Every branch above answers the first question on a push without answering
  * the second: `cache-hit` republishes the verdict this exact diff already
  * earned, `low-tier` and `bot-authored` conclude green on their own terms,
- * and everything else carries the PR's last earned verdict forward (or says
- * none was ever earned). `run-engine` is unreachable on a push by
- * construction.
+ * and everything else carries the PR's last earned verdict forward — or,
+ * where none was ever earned, says so and fails closed (#1564).
+ * `run-engine` is unreachable on a push by construction.
  *
  * `runReviewCi` itself resolves the same set and opens with the identical
  * cache lookup — so a direct call to it from anywhere else stays correct on
@@ -1378,6 +1382,68 @@ export interface ReviewGateDeps {
    *  this function needs no `gh` and no filesystem of its own. */
   reviewSet(changedFiles: readonly string[]): Promise<ReviewSetDecision>
   log(msg: string): void
+}
+
+/**
+ * What each gate outcome means about whether ANYTHING judged the diff —
+ * and, through `reviewGateFailsClosed`, what the gate's exit code must be.
+ *
+ *  - `judged` — a verdict about a diff exists. `cache-hit` is a verdict for
+ *    THIS exact diff; `carried` is one this PR earned for an earlier head
+ *    (#1394's deliberate republish, so a rebase never leaves the head with
+ *    no `fleet/review` at all); `run-engine` is a verdict being formed right
+ *    now, by the later steps, whose own exit code decides the job.
+ *  - `no-review-needed` — a deliberate, stated decision that this diff needs
+ *    no model review: no reviewable content (`low-tier`), or an automated
+ *    dependency bump (`bot-authored`). Green, with its reason printed into
+ *    the check's own output.
+ *  - `no-verdict` — NOTHING judged this diff, and nothing decided it did not
+ *    need judging. These MUST be red.
+ *
+ * #1564 is why this table exists and why the exit code is derived from it
+ * rather than written out branch by branch. `unreviewed` — a push to a PR no
+ * review has ever been earned on — used to exit 0 and be named
+ * `PASS:unreviewed`: a required context satisfied by a run that made no
+ * model call and formed no verdict. On #1549 that SUCCESS is what the PR's
+ * `statusCheckRollup` resolved `fleet/review` to (the dispatched run that
+ * really reviewed the diff, and REJECTED it, is not PR-associated and so
+ * never enters the rollup), and `mergeStateStatus` read CLEAN on a PR
+ * carrying two HIGH crypto findings.
+ *
+ * So the fix is not a branch: a gate outcome under which no reviewer formed
+ * a verdict is red BECAUSE of its standing here, whatever its branch prints.
+ * A new outcome added to `ReviewGateOutcome` does not compile until it is
+ * classified, and `tests/orchestrator/review-no-verdict-is-red.test.ts`
+ * drives the shipped naming script over every `no-verdict` member to prove
+ * none of them can be named with a `PASS:` token.
+ *
+ * This is #1495's invariant applied to the gate itself: a success signal
+ * must be distinguishable from an absent one.
+ */
+export type ReviewGateStanding = 'judged' | 'no-review-needed' | 'no-verdict'
+
+export const REVIEW_GATE_STANDING: Record<ReviewGateOutcome['kind'], ReviewGateStanding> = {
+  'cache-hit': 'judged',
+  'carried': 'judged',
+  'run-engine': 'judged',
+  'low-tier': 'no-review-needed',
+  'bot-authored': 'no-review-needed',
+  'review-set-unresolved': 'no-verdict',
+  'unreviewed': 'no-verdict',
+  'carry-unreadable': 'no-verdict',
+  'not-requested': 'no-verdict',
+}
+
+/**
+ * Whether this gate outcome must make the `review-gate` step FAIL — true for
+ * every `no-verdict` outcome, and the single place that question is answered.
+ *
+ * `judged` is not the same as "green": a carried or cached FAIL is judged and
+ * red, and `run-engine` defers to the review steps. Those reds are decided by
+ * the verdict; this one is decided by its absence.
+ */
+export function reviewGateFailsClosed(kind: ReviewGateOutcome['kind']): boolean {
+  return REVIEW_GATE_STANDING[kind] === 'no-verdict'
 }
 
 export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGateOutcome> {
@@ -1466,10 +1532,11 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // that adding `synchronize` to `fleet-review.yml` (#1284) can never become
   // the every-push model call that trigger was originally banned for.
   //
-  // Nor does a push turn the check red on its own account. A push is not a
-  // review request, and `not-requested` — "nobody asked" — is not a defect
-  // in the PR. The verdict this PR last earned stands until somebody
-  // requests another; a PR nobody has asked about is green and says so.
+  // A push is not a review request, and `not-requested` — "nobody asked" —
+  // is not a defect in the PR: the verdict this PR last earned stands until
+  // somebody requests another. But "no verdict was EVER earned" is not a
+  // verdict either, and must not read as one (#1564): it is red, and the
+  // check says why and whom to ask.
   if (deps.republishOnly) {
     const last: LastVerdictLookup = deps.lastVerdict === undefined
       ? { kind: 'unreadable', reason: 'no lookup for the last earned verdict was wired into this gate' }
@@ -1481,7 +1548,8 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
       return { kind: 'carried', cacheKey, earned: last.earned }
     }
     if (last.kind === 'none') {
-      deps.log(`${moved} — no review has been earned on this PR, and a push never starts one`)
+      deps.log(`${moved} — no review has ever been earned on this PR, and a push never starts one; ` +
+        'failing closed rather than concluding a green nothing judged')
       return { kind: 'unreviewed', cacheKey }
     }
     deps.log(`${moved} — could not read the verdict this PR last earned: ${last.reason}`)

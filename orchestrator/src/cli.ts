@@ -24,7 +24,7 @@ import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from '.
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
-  reviewNotRequestedAdvice,
+  reviewNotRequestedAdvice, reviewGateFailsClosed,
   ciContextFromEnv, ciDiff, ciChangedFiles,
   REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
@@ -1276,15 +1276,23 @@ async function runCiGate(job: string, run: (ctx: CiContext) => Promise<CiVerdict
  * engine, now that the job carries no job-level `if:` at all (#848's
  * fail-open bug — a job instantiated on an event and then skipped by `if:`
  * satisfies branch protection exactly like a green check). Its exit code is
- * what enforces the fail-closed branches of `decideReviewGate`:
- * `review-set-unresolved`, `not-requested`, `carry-unreadable` and a cached or carried FAIL exit 1, which stops every
- * subsequent step (the smoke test, the real review) from ever running —
- * GitHub Actions does not run later steps after one fails unless they opt
- * in with `if: always()`/`if: failure()`, and none of the review steps do.
- * `cache-hit`, `carried` PASS, `unreviewed`, `low-tier` and `run-engine` all exit 0; the `outcome` step
- * output is what the workflow's own `if:` on each later step reads, and
- * `profiles`/`clear_labels` are what it carries into `review-ci` and into
- * the label-clearing job.
+ * what enforces the fail-closed branches of `decideReviewGate`. Every
+ * outcome `REVIEW_GATE_STANDING` (ci.ts) classifies `no-verdict` —
+ * `review-set-unresolved`, `not-requested`, `unreviewed` (#1564),
+ * `carry-unreadable` — exits 1, as does a cached or carried FAIL, which
+ * stops every subsequent step (the smoke test, the real review) from ever
+ * running: GitHub Actions does not run later steps after one fails unless
+ * they opt in with `if: always()`/`if: failure()`, and none of the review
+ * steps do. `cache-hit`, `carried` PASS, `low-tier`, `bot-authored` and
+ * `run-engine` exit 0; the `outcome` step output is what the workflow's own
+ * `if:` on each later step reads, and `profiles`/`clear_labels` are what it
+ * carries into `review-ci` and into the label-clearing job.
+ *
+ * The non-zero exits for a missing verdict are DERIVED, in one place at the
+ * bottom of this function, from `reviewGateFailsClosed`. A branch that
+ * explains the outcome but forgets to return 1 is therefore still red: that
+ * is precisely how `unreviewed` concluded a `PASS:` on a required context
+ * for as long as it did (#1564).
  */
 async function runReviewGate(): Promise<number> {
   const ctx = ciContextFromEnv(process.env, REPO_ROOT)
@@ -1401,13 +1409,21 @@ async function runReviewGate(): Promise<number> {
     }
     process.stdout.write(`${REVIEW_JOB}: ${outcome.earned.text}\n${REVIEW_JOB}: ${again}\n`)
   }
+  // #1564: nothing has EVER reviewed this PR, so this check has nothing to
+  // report — and a required context with nothing to report must be red, not
+  // green. It was green, and on #1549 that green was what the PR's
+  // `statusCheckRollup` resolved `fleet/review` to while the dispatched run
+  // that really read the diff rejected it. The remedy is stated here,
+  // because this red is not a finding about the code.
   if (outcome.kind === 'unreviewed') {
     const [ask] = reviewTriggerLogins(event)
-    process.stdout.write(
-      `${REVIEW_JOB}: no review has been requested on this PR, and a push never starts one — nothing was ` +
-      `reviewed, and nothing is blocking\n` +
-      `${REVIEW_JOB}: if this change needs a review, request one from \`${ask}\`\n`,
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — no review has ever been earned on this PR, and a push never starts one, so ` +
+      `NOTHING has judged this diff\n` +
+      `${REVIEW_JOB}: this is not a rejection of the code: request a review from \`${ask}\` and this check ` +
+      `goes green on the verdict it earns\n`,
     )
+    return 1
   }
   if (outcome.kind === 'carry-unreadable') {
     process.stderr.write(
@@ -1460,6 +1476,19 @@ async function runReviewGate(): Promise<number> {
     )
   }
   ciLog(`${REVIEW_JOB}: gate outcome = ${outcome.kind}`)
+  // The structural half of the guarantee, and the last word: an outcome
+  // under which nothing judged the diff is red whatever the branches above
+  // printed or returned (`REVIEW_GATE_STANDING`, ci.ts). Each no-verdict
+  // branch above still returns 1 itself, with the detail only it knows; this
+  // is the net under them, so a NEW no-verdict outcome cannot reach a green
+  // by being added to the gate and nowhere else.
+  if (reviewGateFailsClosed(outcome.kind)) {
+    process.stderr.write(
+      `${REVIEW_JOB}: FAILED — "${outcome.kind}" means nothing judged this diff; a required check with no ` +
+      'verdict to report fails closed\n',
+    )
+    return 1
+  }
   return 0
 }
 
