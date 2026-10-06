@@ -137,6 +137,8 @@ interface PhoneInputProps {
   required?: boolean
   className?: string
   defaultCountry?: Country
+  /** `data-testid` for the underlying text input. */
+  testId?: string
 }
 
 export function PhoneInput({
@@ -147,6 +149,7 @@ export function PhoneInput({
   required,
   className,
   defaultCountry = 'US',
+  testId,
 }: PhoneInputProps) {
   const { t } = useTranslation()
   const [touched, setTouched] = useState(false)
@@ -172,6 +175,7 @@ export function PhoneInput({
         inputComponent={InputComponent}
         smartCaret={false}
         id={id}
+        data-testid={testId}
         required={required}
         placeholder={placeholder}
       />

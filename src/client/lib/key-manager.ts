@@ -116,15 +116,26 @@ export async function unlock(pin: string): Promise<string | null> {
  * Lock the key manager — zeros device key in Rust CryptoState.
  */
 export function lock() {
+  // Fire-and-forget: the webview-side state flips synchronously either way.
+  lockAndWait().catch(() => {})
+}
+
+/**
+ * `lock()`, resolving only once Rust CryptoState has actually zeroed its keys —
+ * and rejecting if it could not. For callers that must not continue while a
+ * device key might still be live (leaving a server: a webview reload does not
+ * end the Rust process, so an unconfirmed lock would survive it).
+ */
+export async function lockAndWait(): Promise<void> {
   unlocked = false
   // Don't clear publicKey — it's not secret and useful for display
   if (idleTimer) {
     clearTimeout(idleTimer)
     idleTimer = null
   }
-  // Lock Rust CryptoState (fire-and-forget)
-  lockCrypto().catch(() => {})
+  const zeroed = lockCrypto()
   lockCallbacks.forEach(cb => cb())
+  await zeroed
 }
 
 /**

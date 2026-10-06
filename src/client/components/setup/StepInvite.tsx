@@ -45,9 +45,10 @@ export function StepInvite({ headingRef }: Props = {}) {
     }
   }
 
-  function copyInviteLink(code: string) {
-    const url = `${window.location.origin}/onboarding?code=${code}`
-    navigator.clipboard.writeText(url)
+  // The bare code only — it is pasted straight into a Signal message, and the
+  // volunteer pastes it into the app's "I have an invite code" screen.
+  function copyInviteCode(code: string) {
+    navigator.clipboard.writeText(code)
     setCopiedCode(code)
     toast(t('setup.inviteCopied'), 'success')
     setTimeout(() => setCopiedCode(null), 2000)
@@ -134,7 +135,9 @@ export function StepInvite({ headingRef }: Props = {}) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => copyInviteLink(invite.code)}
+                  data-testid="copy-invite-code-btn"
+                  aria-label={t('a11y.copyToClipboard')}
+                  onClick={() => copyInviteCode(invite.code)}
                 >
                   {copiedCode === invite.code ? (
                     <Check className="h-3.5 w-3.5 text-green-500" />

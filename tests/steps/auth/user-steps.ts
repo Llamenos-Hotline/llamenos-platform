@@ -18,7 +18,7 @@ import {
 } from '../../helpers'
 import { Navigation } from '../../pages/index'
 import { ensureAuthenticated } from '../common/ui-helpers'
-import { updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
+import { apiDelete, apiGet, updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
 
 // --- Volunteer lifecycle ---
 
@@ -87,25 +87,24 @@ When('they tap the break button', async ({ page }) => {
 })
 
 // --- Invite onboarding ---
+// Redemption itself (the volunteer's side) is driven end to end in
+// tests/steps/auth/onboarding-steps.ts.
 
 When('I create an invite for a new volunteer', async ({ page }) => {
-  // Wait for the Volunteers page to fully load before trying to click buttons
-  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-
-  // Click the "Invite Volunteer" button (not "Add Volunteer" which generates device key directly)
-  const inviteBtn = page.getByTestId(TestIds.INVITE_BTN)
-  await expect(inviteBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await inviteBtn.click()
+  await page.getByTestId(TestIds.INVITE_BTN).click()
   const name = `InviteVol ${Date.now()}`
-  await page.getByLabel('Name').fill(name)
+  await page.getByTestId('invite-name-input').fill(name)
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  await page.getByLabel('Phone Number').fill(phone)
-  await page.getByLabel('Phone Number').blur()
+  await page.getByTestId('invite-phone-input').fill(phone)
+  // Blur so the phone field validates — the submit button stays disabled until it does.
+  await page.getByTestId('invite-phone-input').blur()
   // The invite form submits with 'create-invite-btn', not 'form-save-btn'.
   const createInviteBtn = page.getByTestId('create-invite-btn')
   await expect(createInviteBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
   await createInviteBtn.click()
-  // Wait for the invite link card to appear
+  // Wait for the invite card to appear. It now shows the bare invite code (#1128),
+  // not an onboarding URL, so assert on the card rather than on its contents here.
+  await expect(page.getByTestId('invite-link-code')).toBeVisible({ timeout: Timeouts.API })
   await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
   // Persist the vol name in localStorage so it survives page.reload()
   await page.evaluate((n) => {
@@ -114,8 +113,30 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   }, name)
 })
 
+When('I copy the new invite code', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.getByTestId('copy-invite-code-btn').click()
+})
+
+Then('the clipboard should hold only the invite code', async ({ page, backendRequest }) => {
+  const volName = (await page.evaluate(() => localStorage.getItem('__test_invite_vol_name'))) as string
+  const { data } = await apiGet<{ invites: Array<{ code: string; name: string }> }>(backendRequest, '/invites')
+  const invite = data.invites.find(i => i.name === volName)
+  expect(invite, `no pending invite named ${volName}`).toBeTruthy()
+  // The bare code — no URL, no prose — because it is pasted straight into a
+  // Signal message, and the volunteer pastes it straight into the app.
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: Timeouts.ELEMENT })
+    .toBe(invite!.code)
+  await expect(page.getByTestId('invite-link-code')).toHaveText(invite!.code)
+})
+
+// The three steps below drive the invite-LINK flow. Desktop no longer has one —
+// its invite card shows a bare code the volunteer pastes (#1128), covered by
+// platform/desktop/auth/invite-redemption.feature — so the scenario that uses
+// them in core/auth-login.feature is tagged @ios @android only. They are kept so
+// that re-tagging it @desktop fails loudly rather than reporting a missing step.
 Then('an invite link should be generated', async ({ page }) => {
-  // The invite card shows the full onboarding URL (users.tsx: `${origin}/onboarding?code=…`).
+  // The invite card shows the full onboarding URL (`${origin}/onboarding?code=…`).
   await expect(page.getByTestId('invite-link-code')).toHaveText(/\/onboarding\?code=\S+/, { timeout: Timeouts.ELEMENT })
 })
 
@@ -162,7 +183,6 @@ When('I revoke the invite', async ({ page, request }) => {
   // background 401s cause component remounts that re-fetch the invite list,
   // and the click→DELETE pipeline has intermittent failures. Use the API
   // directly to ensure the invite is actually deleted.
-  const { apiGet, apiDelete } = await import('../../api-helpers')
   const volName = (await page.evaluate(() =>
     (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'),
   )) as string
