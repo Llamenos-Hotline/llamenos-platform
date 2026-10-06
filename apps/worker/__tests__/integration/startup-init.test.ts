@@ -28,6 +28,16 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const ADMIN_PUBKEY = 'c'.repeat(64)
+/**
+ * The admin's X25519 HPKE recipient key. `validateConfig` (apps/worker/lib/
+ * config.ts) refuses to start a server that has ADMIN_PUBKEY without it, and
+ * refuses one where the two are equal — an Ed25519 signing key is not an HPKE
+ * recipient, and envelopes sealed to it are undecryptable forever. So any boot
+ * that configures an admin must configure both, exactly as a real deployment
+ * does. Nothing here decrypts anything, so the value only has to be distinct
+ * and well-formed.
+ */
+const ADMIN_DECRYPTION_PUBKEY = 'd'.repeat(64)
 const BOOT_TIMEOUT_MS = 60_000
 
 const createdDatabases: string[] = []
@@ -107,7 +117,10 @@ async function bootServer(
     STORAGE_ACCESS_KEY: 'boot-test',
     STORAGE_SECRET_KEY: 'boot-test',
   }
-  if (adminPubkey) env.ADMIN_PUBKEY = adminPubkey
+  if (adminPubkey) {
+    env.ADMIN_PUBKEY = adminPubkey
+    env.ADMIN_DECRYPTION_PUBKEY = ADMIN_DECRYPTION_PUBKEY
+  }
   Object.assign(env, opts.extraEnv)
   if (process.env.LLAMENOS_CRYPTO_LIB) env.LLAMENOS_CRYPTO_LIB = process.env.LLAMENOS_CRYPTO_LIB
 

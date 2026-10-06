@@ -31,13 +31,23 @@ const INTEGRATION_DIR = join(REPO_ROOT, 'apps/worker/__tests__/integration')
 const REPORT = join(REPO_ROOT, 'test-results/worker-integration.json')
 
 /**
- * Lower bound on executed tests. Nine files contribute 73 on 2026-10-03; the
- * floor sits below that so adding or removing a case is not a chore, but far
- * enough above zero that a file dropping out of the run is caught. Raise it
+ * The database the suite runs against. Must match the fallback every test file
+ * uses for `process.env.DATABASE_URL`, because that is the database they will
+ * connect to if this process does not set one either.
+ */
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+
+/**
+ * Lower bound on executed tests. Twenty-two files contribute 170 on
+ * 2026-10-06; the floor sits below that so adding or removing a case is not a
+ * chore, but close enough that a FILE dropping out of the run is caught — the
+ * two largest contribute 23 and 17, and losing either breaches it. Raise it
  * when the suite grows substantially; never lower it to accommodate a file
  * that stopped running.
  */
-const MIN_TESTS = 60
+const MIN_TESTS = 150
 
 /** Recursively collect *.test.ts paths, relative to `dir`. */
 function testFilesUnder(dir: string): string[] {
@@ -53,6 +63,45 @@ if (onDisk.length === 0) {
 }
 
 mkdirSync(dirname(REPORT), { recursive: true })
+
+/**
+ * Apply every migration to the database at DATABASE_URL before collection.
+ *
+ * Most files in this suite create a database of their own and migrate it, but
+ * not all of them: `ring-requires-clock-in.test.ts` connects straight to
+ * DATABASE_URL and scopes its rows instead ("nothing global is truncated"), and
+ * every file that does `CREATE DATABASE` connects to this one first to issue
+ * it. So the suite's precondition is a database that exists AND has the schema,
+ * and nothing was establishing the second half: against the empty `llamenos`
+ * database a CI service container hands over, the first query answered
+ * `relation "system_settings" does not exist` and took the whole file down
+ * (#1167). A developer never saw it because their DATABASE_URL points at a
+ * database the dev server has already migrated.
+ *
+ * `run-migrations.ts` holds an advisory lock and keeps a ledger, so this is
+ * idempotent and safe to run against an already-migrated development database:
+ * it applies nothing and exits 0. A failure here is fatal — a suite that runs
+ * against a half-built schema reports defects that are not there.
+ *
+ * `--no-env-file` and an explicit `env`: the repo's `.env` must not be able to
+ * redirect this at a different database from the one the tests will use. Same
+ * invocation the test files make.
+ */
+const migrate = spawnSync('bun', ['--no-env-file', 'scripts/run-migrations.ts'], {
+  cwd: REPO_ROOT,
+  env: { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL },
+  stdio: 'inherit',
+  timeout: 300_000,
+})
+if (migrate.status !== 0) {
+  console.error(
+    `\nFATAL: could not migrate the suite's database. The integration tier needs the schema ` +
+    'present at DATABASE_URL — both for the files that query it directly and for the ones ' +
+    'that connect to it to CREATE DATABASE. Running the suite against an unmigrated database ' +
+    'produces "relation ... does not exist" failures that look like product defects.',
+  )
+  process.exit(1)
+}
 
 const run = spawnSync(
   'bunx',

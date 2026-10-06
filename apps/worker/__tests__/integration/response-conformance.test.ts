@@ -106,6 +106,14 @@ const DEFAULT_ENV: Record<string, string> = {
 // Env bindings are passed via app.request(path, init, env) as 3rd argument.
 // ---------------------------------------------------------------------------
 
+/**
+ * The hub every case is scoped to unless it overrides `hubId`. Named rather
+ * than inlined because fixtures have to agree with it: a service mock that
+ * grants a user authority in some OTHER hub makes them a non-member here, and
+ * hub-scoped routes answer as if they did not exist.
+ */
+const DEFAULT_HUB_ID = 'hub-test-1'
+
 function buildApp(
   mountPath: string,
   routes: Hono<AppEnv>,
@@ -118,7 +126,7 @@ function buildApp(
 ): { app: Hono<AppEnv>; env: Record<string, string> } {
   const {
     permissions = ['*'],
-    hubId = 'hub-test-1',
+    hubId = DEFAULT_HUB_ID,
     services = {},
     extraEnv = {},
   } = opts
@@ -399,7 +407,21 @@ describe('Calls Routes — response conformance', () => {
         },
         identity: {
           getUsers: vi.fn().mockResolvedValue({
-            users: [{ pubkey: MOCK_PUBKEY, active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] }],
+            // `hubRoles` carries the hub assignment, and it is load-bearing:
+            // the ring resolver drops anyone whose authority in the hub is
+            // empty, and a non-super-admin GLOBAL role grants nothing inside a
+            // hub (#1037, @shared/permissions#resolveHubRoleIds). A user with
+            // `roles: ['role-volunteer']` and no assignment in DEFAULT_HUB_ID is
+            // correctly unringable, so presence would answer `users: []` and
+            // conform to the schema while proving nothing. This fixture is a
+            // real member of the hub the request is scoped to.
+            users: [{
+              pubkey: MOCK_PUBKEY,
+              active: true,
+              onBreak: false,
+              roles: [],
+              hubRoles: [{ hubId: DEFAULT_HUB_ID, roleIds: ['role-volunteer'] }],
+            }],
           }),
         },
       },

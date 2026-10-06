@@ -2271,23 +2271,36 @@ export class SettingsService {
     // concurrent writers touching disjoint (or even the same) keys are
     // serialised by the row lock instead of clobbering each other.
     //
-    // Pass `sanitized` as a raw object, not JSON.stringify'd: Bun's native
-    // SQL driver (what production and `bun run dev:server` use) already
-    // JSON.stringifies a JS value bound to a jsonb-typed parameter
-    // position. Pre-stringifying it here double-encodes — Postgres then
-    // sees a quoted JSON *string scalar* instead of an object, and `||`
-    // between an object and a scalar boxes both into a 2-element array
-    // instead of merging keys (confirmed live via #1144's own BDD
-    // coverage: "Shift and fallback group are independent" silently lost
-    // the fallback group). Mirrors the existing `metadata` merge in
-    // conversations.ts#update.
+    // The right-hand operand goes through the COLUMN's own driver encoder
+    // (`mapToDriverValue`), not into the statement as a bare JS value.
+    //
+    // Never JSON.stringify it here. Bun's native SQL driver (what production
+    // and `bun run dev:server` use) already serialises a JS value bound to a
+    // jsonb parameter position, so pre-stringifying double-encodes — Postgres
+    // then sees a quoted JSON *string scalar* instead of an object, and `||`
+    // between an object and a scalar boxes both into a 2-element array instead
+    // of merging keys (confirmed live via #1144's own BDD coverage: "Shift and
+    // fallback group are independent" silently lost the fallback group).
+    //
+    // `bun-jsonb`'s customType has no `toDriver`, so `mapToDriverValue` is the
+    // identity on Bun and the value still reaches the driver raw — production
+    // behaviour is unchanged. It matters for every OTHER driver: a plain value
+    // embedded in a `sql` template is bound with no encoder at all, and
+    // drizzle's postgres-js session installs a transparent serialiser for
+    // jsonb (OID 3802), so an object reaches postgres.js's byte encoder and
+    // throws `ERR_INVALID_ARG_TYPE`. That is why this statement — reachable
+    // from `setFallbackGroup` and `updateIvrLanguages`, both core routing
+    // config — could not be exercised at all by the postgres-js integration
+    // tier (#1167). Routing it through the column means the one declaration of
+    // how this column is serialised is honoured on both drivers.
+    // Mirrors the existing `metadata` merge in conversations.ts#update.
     const [row] = await this.db
       .insert(hubSettingsTable)
       .values({ hubId, settings: sanitized })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sanitized}::jsonb`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${hubSettingsTable.settings.mapToDriverValue(sanitized)}::jsonb`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
@@ -2315,15 +2328,15 @@ export class SettingsService {
   ): Promise<Record<string, unknown>> {
     // Atomic — see updateHubSettings (#1144). Only the `quotas` key is
     // touched, so a concurrent updateHubSettings/updateHubUsage call on a
-    // different key cannot be clobbered by this one. Raw object, not
-    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    // different key cannot be clobbered by this one. Encoded by the column,
+    // never JSON.stringify'd — see the comment in updateHubSettings for why.
     const [row] = await this.db
       .insert(hubSettingsTable)
       .values({ hubId, settings: { quotas } })
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('quotas', ${quotas}::jsonb)`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('quotas', ${hubSettingsTable.settings.mapToDriverValue(quotas)}::jsonb)`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
@@ -2335,7 +2348,7 @@ export class SettingsService {
     hubId: string,
     usage: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
-    // Atomic — see updateHubSettings (#1144). Raw value, not
+    // Atomic — see updateHubSettings (#1144). Encoded by the column, never
     // JSON.stringify'd — see the comment in updateHubSettings for why.
     const [row] = await this.db
       .insert(hubSettingsTable)
@@ -2343,7 +2356,7 @@ export class SettingsService {
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('usage', ${usage}::jsonb)`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || jsonb_build_object('usage', ${hubSettingsTable.settings.mapToDriverValue(usage)}::jsonb)`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
