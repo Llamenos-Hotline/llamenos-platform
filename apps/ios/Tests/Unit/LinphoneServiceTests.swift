@@ -121,7 +121,7 @@ struct LinphoneServiceCoreTests {
         // default location is inside the iCloud/iTunes backup, so once calls flow the call
         // log would carry caller SIP URIs off the device in cleartext SQLite.
         let path = try #require(config.stateDirectoryPath)
-        #expect(path.hasSuffix("/llamenos-sip"), path)
+        #expect(path.hasSuffix("/llamenos-sip"), "state directory is \(path)")
         #expect(config.stateDirectoryExcludedFromBackup, "state directory is in the backup")
         #expect(config.sdkDefaultDirectoryExists == false,
                 "liblinphone wrote to its compiled-in Application Support/linphone directory")

@@ -186,14 +186,18 @@ final class LinphoneService: LinphoneServiceProtocol {
         #endif
     }
 
-    #if canImport(linphonesw)
-    /// Stop and release the Core. Safe to call when none is running.
+    /// Stop and release the Core. Safe to call when none is running, and present in a
+    /// build without the SDK so that callers — including the tests whose whole job is to
+    /// FAIL when the SDK is missing — still compile and reach their assertion.
     func shutdown() {
+        #if canImport(linphonesw)
         core?.stop()
         core = nil
         hubAccounts.removeAll()
+        #endif
     }
 
+    #if canImport(linphonesw)
     /// Create the directory liblinphone keeps its state in, excluded from backup and
     /// protected at rest, and return it.
     ///
@@ -344,7 +348,7 @@ final class LinphoneService: LinphoneServiceProtocol {
         let accountCount: Int
         /// `LogLevel.rawValue` the SDK's logging service was pinned to — carried for the
         /// failure message only.
-        let sdkLogLevel: UInt?
+        let sdkLogLevel: Int?
         /// Whether that level is exactly `LogLevel.Error`. Computed here because the test
         /// target deliberately does not import `linphonesw`, so it cannot name the case.
         let sdkLogLevelIsErrorOnly: Bool
