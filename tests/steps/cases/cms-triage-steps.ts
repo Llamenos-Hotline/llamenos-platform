@@ -8,16 +8,13 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
-import { Timeouts, loginAsAdmin } from '../../helpers'
+import { Timeouts, useScenarioHub } from '../../helpers'
 import {
   ADMIN_NSEC,
   createCmsReportTypeViaApi,
-  createHubViaApi,
   createReportViaApi,
-  enableCaseManagementViaApi,
   listEntityTypesViaApi,
   createCaseFromReportViaApi,
-  verifyHubMembership,
 } from '../../api-helpers'
 
 // State is now in casesWorld fixture (casesWorld.triageReportTypeId, casesWorld.triageReportId)
@@ -45,27 +42,10 @@ Given('a triage-eligible report exists', async ({ backendRequest: request, cases
 })
 
 Given('a hub whose triage queue is empty', async ({ page, backendRequest: request }) => {
-  // The worker hub is shared by every scenario this Playwright worker runs and
-  // accumulates triage-eligible reports, so whether it is empty depends on which
-  // scenarios the shard happens to put before this one. A scenario that asserts
-  // the empty-queue placeholder has to own the hub it looks at: create one here,
-  // enable case management in it, and make it the page's active hub.
-  const hubId = await createHubViaApi(
-    request,
-    `triage-empty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  )
-  await verifyHubMembership(request, hubId)
-  await enableCaseManagementViaApi(request, true, ADMIN_NSEC, hubId)
-  // Added after common/before-hooks.ts set the worker hub, so this wins on the
-  // next full page load — which loginAsAdmin() performs.
-  await page.addInitScript((id) => {
-    (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
-  }, hubId)
-  await loginAsAdmin(page)
-  await expect.poll(
-    () => page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null),
-    { timeout: Timeouts.AUTH },
-  ).toBe(hubId)
+  // The worker hub accumulates triage-eligible reports from every scenario this
+  // Playwright worker runs, so "the queue is empty" is only assertable in a hub
+  // this scenario owns. Nothing is seeded into it — that is the point.
+  await useScenarioHub(page, request, 'triage-empty')
 })
 
 Given('a triage-eligible report with a linked case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {

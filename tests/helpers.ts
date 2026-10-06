@@ -592,3 +592,40 @@ export async function flagSeedFailed(page: Page): Promise<void> {
 export async function readSeedFailedFlag(page: Page): Promise<boolean> {
   return page.evaluate(() => (window as unknown as SeedFlagWindow).__test_seed_failed === true).catch(() => false)
 }
+
+/**
+ * Create a hub this scenario owns and make it the page's active hub.
+ *
+ * The `workerHub` fixture is worker-scoped: every scenario a Playwright worker
+ * runs shares one hub, and none of them clean up after themselves. A scenario
+ * that asserts an *absence* — an empty triage queue, an empty record list —
+ * therefore cannot assert it in that hub: whether it holds anything depends on
+ * which scenarios the shard happened to put in front of this one, so the same
+ * commit passes or fails as shard composition moves. Such a scenario has to own
+ * the hub it looks at.
+ *
+ * Case management is enabled in the new hub because every caller is a CMS page.
+ * The returned id is the hub to seed through the API for the rest of the
+ * scenario — `workerHub` is no longer what the page is looking at.
+ */
+export async function useScenarioHub(
+  page: Page,
+  request: APIRequestContext,
+  namePrefix: string,
+): Promise<string> {
+  const { createHubViaApi, verifyHubMembership, enableCaseManagementViaApi } = await import('./api-helpers')
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const hubId = await createHubViaApi(request, `${namePrefix}-${suffix}`)
+  await verifyHubMembership(request, hubId)
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, hubId)
+  // Registered after common/before-hooks.ts set the worker hub, so this one wins
+  // on the next full page load — which loginAsAdmin() performs.
+  await page.addInitScript((id) => {
+    (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
+  }, hubId)
+  await loginAsAdmin(page)
+  await expect
+    .poll(() => page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null), { timeout: Timeouts.AUTH })
+    .toBe(hubId)
+  return hubId
+}
