@@ -2,15 +2,31 @@
 # Rolling Update Playbook with Automatic Rollback
 #
 # Performs a health-check-gated rolling update:
-# 1. Snapshot current image versions and config (for rollback)
+# 1. Snapshot current per-service compose/env files and image versions (for rollback)
 # 2. Run pre-update backup
-# 3. Pull new images
-# 4. Update infrastructure services first (postgres, rustfs, caddy)
-# 5. Health-check infrastructure
-# 6. Blue-green update the app service (start new, verify, stop old)
-# 7. Health-check the full stack
-# 8. Record successful deployment to version history
-# 9. Automatic rollback on ANY failure (via rescue block)
+# 3. Pull new images and recreate each target service in dependency order,
+#    health-gating as each one restarts
+# 4. Health-check the full stack
+# 5. Record successful deployment to version history
+# 6. Automatic rollback on ANY failure (via rescue block)
+#
+# Production hosts render one docker-compose.yml per service under
+# {{ app_dir }}/services/<service>/ (roles/llamenos-app, roles/llamenos-postgres,
+# etc. — see playbooks/deploy.yml). This playbook pulls fresh images for the
+# ALREADY-RENDERED per-service compose files and recreates the containers that
+# changed; it does not re-template them — that is playbooks/deploy.yml's job
+# (run it first if you changed vars.yml). See issue #1121.
+#
+# There is no blue-green app swap: roles/llamenos-app binds the app port
+# statically (127.0.0.1:3000:3000 — roles/llamenos-app/templates/compose/app.j2),
+# so `--scale app=2` cannot work, and even if it could, the health check below
+# would be asserting the OLD container's health (it still owns the port) while
+# believing it checked the new one. A plain recreate (`docker compose up -d`
+# after a fresh image pull) replaces the single app container directly, so the
+# health check that follows unambiguously addresses the new instance — and it
+# avoids running two instances of the app's migration-on-boot
+# (deploy/docker/docker-entrypoint.sh) concurrently against the same database,
+# which issue #1118 flags as unsafe.
 #
 # Usage:
 #   ansible-playbook playbooks/update.yml --ask-vault-pass
@@ -30,16 +46,35 @@
     # Number of health check retries (each retry waits health_check_delay seconds)
     health_check_retries: 30
     health_check_delay: 5
-    # Infrastructure services updated before app
-    infra_services:
-      - postgres
-      - rustfs
-      - caddy
 
   tasks:
     - name: Skip hosts without disk encryption (this play keeps data at rest)
       ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
       tags: always
+
+    - name: Discover installed per-service compose stacks
+      ansible.builtin.import_tasks: tasks/discover-services.yml
+      tags: always
+
+    - name: Determine target services for this update
+      # `select('in', ...)` (not `intersect`, which goes through a Python set
+      # and loses order) so the dependency order llamenos_installed_services
+      # is already in — postgres/rustfs before app, app before caddy — is
+      # preserved when the caller restricts to a subset via update_services.
+      ansible.builtin.set_fact:
+        _update_target_services: >-
+          {{ llamenos_installed_services
+             if update_services == 'all'
+             else (llamenos_installed_services | select('in', update_services | split(',')) | list) }}
+      tags: [update]
+
+    - name: Fail if no requested services are installed
+      ansible.builtin.fail:
+        msg: >
+          update_services={{ update_services }} matched none of the installed
+          services ({{ llamenos_installed_services | join(', ') }}).
+      when: _update_target_services | length == 0
+      tags: [update]
 
     # ── Phase 1: Snapshot & Backup (runs outside rescue) ───────────
     - name: Track current versions (pre-update snapshot)
@@ -56,24 +91,30 @@
         msg: "Pre-update versions: {{ current_versions | to_nice_json }}"
       tags: [update]
 
-    - name: Save pre-update docker-compose.yml for rollback
-      ansible.builtin.copy:
-        src: "{{ app_dir }}/docker-compose.yml"
-        dest: "{{ app_dir }}/.rollback-docker-compose.yml"
-        remote_src: true
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_group }}"
-        mode: "0640"
+    - name: Clear previous rollback snapshot
+      ansible.builtin.file:
+        path: "{{ app_dir }}/.rollback/services"
+        state: absent
       tags: [update]
 
-    - name: Save pre-update .env for rollback
-      ansible.builtin.copy:
-        src: "{{ app_dir }}/.env"
-        dest: "{{ app_dir }}/.rollback-env"
-        remote_src: true
+    - name: Create rollback snapshot directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}/.rollback/services"
+        state: directory
         owner: "{{ deploy_user }}"
         group: "{{ deploy_group }}"
-        mode: "0600"
+        mode: "0750"
+      tags: [update]
+
+    - name: Save pre-update per-service compose/env files for rollback
+      # Snapshot every installed service (not just the ones targeted this
+      # run), so a later `just rollback` can restore the whole host even if
+      # this update only touched a subset via update_services.
+      ansible.builtin.command:
+        cmd: >
+          cp -a {{ app_dir }}/services/{{ item }} {{ app_dir }}/.rollback/services/{{ item }}
+      loop: "{{ llamenos_installed_services }}"
+      changed_when: true
       tags: [update]
 
     - name: Run pre-update backup
@@ -84,101 +125,47 @@
       when: not (update_skip_backup | bool)
       tags: [update, backup]
 
-    # ── Phases 2-6: Update with automatic rollback on failure ──────
+    # ── Phase 2-4: Update with automatic rollback on failure ───────
     - name: "Perform rolling update (rollback on failure)"
       tags: [update]
       block:
-        # ── Phase 2: Pull New Images ───────────────────────────────
-        # Sourced from the `llamenos` role's own templates (not a second,
-        # hand-maintained copy) so a rolling update produces byte-identical
-        # output to a fresh deploy-demo.yml run. This is the monolithic
-        # single-host layout (one docker-compose.yml / .env at app_dir
-        # root, services postgres/rustfs/caddy/app) — the same layout this
-        # playbook operates on below. See issue #798.
-        - name: Re-template docker-compose.yml with current vars
-          ansible.builtin.template:
-            src: "../roles/llamenos/templates/docker-compose.j2"
-            dest: "{{ app_dir }}/docker-compose.yml"
-            owner: "{{ deploy_user }}"
-            group: "{{ deploy_group }}"
-            mode: "0640"
-
-        - name: Re-template .env with current vars
-          ansible.builtin.template:
-            src: "../roles/llamenos/templates/env.j2"
-            dest: "{{ app_dir }}/.env"
-            owner: "{{ deploy_user }}"
-            group: "{{ deploy_group }}"
-            mode: "0600"
-
-        - name: Pull all new images
+        # ── Pull + recreate each target service, in dependency order ──
+        # One service at a time: pull its image, recreate if it changed,
+        # and gate on that service's own health signal before moving on.
+        - name: "Pull and recreate: {{ item }}"
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ app_dir }}/services/{{ item }}"
             pull: always
-            state: present
-            recreate: never
-
-        # ── Phase 3: Update Infrastructure Services ────────────────
-        - name: Determine infrastructure services to update
-          ansible.builtin.set_fact:
-            _infra_to_update: >-
-              {{ infra_services
-                 if update_services == 'all'
-                 else (update_services | split(',') | intersect(infra_services)) }}
-
-        - name: Recreate infrastructure services one by one
-          community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
-            services: ["{{ item }}"]
             state: present
             recreate: always
             wait: true
             wait_timeout: 120
-          loop: "{{ _infra_to_update }}"
-          when: _infra_to_update | length > 0
+          loop: "{{ _update_target_services }}"
 
-        - name: Wait for PostgreSQL health after infra update
+        - name: Wait for PostgreSQL health after update
           ansible.builtin.command: >
-            docker compose -f {{ app_dir }}/docker-compose.yml
+            docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml
             exec -T postgres pg_isready -U llamenos -d llamenos
           register: pg_health
           retries: 15
           delay: 3
           until: pg_health.rc == 0
           changed_when: false
-          when: "'postgres' in _infra_to_update"
+          when: "'postgres' in _update_target_services"
 
-        # ── Phase 4: Blue-Green App Update ─────────────────────────
-        - name: Scale app to 2 instances (blue + green)
-          ansible.builtin.shell: |
-            cd {{ app_dir }}
-            docker compose up -d --scale app=2 --no-recreate app
-          changed_when: true
-          when: update_services == 'all' or 'app' in (update_services | split(','))
-
-        - name: Wait for new app instance health check
+        - name: Wait for application health check after update
           ansible.builtin.uri:
             url: "http://localhost:3000/api/health"
             method: GET
             status_code: 200
             return_content: true
-          register: new_app_health
+          register: app_health_after_update
           retries: "{{ health_check_retries }}"
           delay: "{{ health_check_delay }}"
-          until: new_app_health.status == 200
-          when: update_services == 'all' or 'app' in (update_services | split(','))
+          until: app_health_after_update.status == 200
+          when: "'app' in _update_target_services"
 
-        - name: Recreate app service with new image (replace old instances)
-          community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
-            services: ["app"]
-            state: present
-            recreate: always
-            wait: true
-            wait_timeout: 120
-          when: update_services == 'all' or 'app' in (update_services | split(','))
-
-        # ── Phase 5: Final Health Verification ─────────────────────
+        # ── Final Health Verification ──────────────────────────────
         - name: Wait for application health check (final)
           ansible.builtin.uri:
             url: "http://localhost:3000/api/health"
@@ -190,10 +177,10 @@
           delay: "{{ health_check_delay }}"
           until: final_health.status == 200
 
-        - name: Verify all services are running
+        - name: Verify all installed services are running
           ansible.builtin.shell: |
-            cd {{ app_dir }}
-            unhealthy=$(docker compose ps --format json | \
+            set -euo pipefail
+            unhealthy=$(docker compose -f "{{ app_dir }}/services/{{ item }}/docker-compose.yml" ps --format json | \
               python3 -c "
             import sys, json
             lines = sys.stdin.read().strip().split('\n')
@@ -206,15 +193,15 @@
                     print(svc.get('Service', 'unknown'))
             " 2>/dev/null || true)
             if [ -n "$unhealthy" ]; then
-              echo "UNHEALTHY: $unhealthy"
+              echo "UNHEALTHY in {{ item }}: $unhealthy"
               exit 1
             fi
-            echo "All services healthy"
+            echo "{{ item }}: healthy"
+          loop: "{{ llamenos_installed_services }}"
           register: all_services_check
           changed_when: false
-          failed_when: all_services_check.rc != 0
 
-        # ── Phase 6: Record Success ────────────────────────────────
+        # ── Record Success ─────────────────────────────────────────
         - name: Record new version to history
           ansible.builtin.include_role:
             name: llamenos-version-tracker
@@ -232,6 +219,7 @@
             msg: |
               Rolling update completed successfully.
 
+              Services updated: {{ _update_target_services | join(', ') }}
               Application: https://{{ domain }}
               Health check: {{ final_health.json | default('OK') }}
 
@@ -244,38 +232,44 @@
           ansible.builtin.debug:
             msg: |
               UPDATE FAILED. Initiating automatic rollback.
-              Restoring previous docker-compose.yml and .env, then restarting all services.
+              Restoring previous per-service compose/env files, then restarting.
 
-        - name: "ROLLBACK: Restore previous docker-compose.yml"
-          ansible.builtin.copy:
-            src: "{{ app_dir }}/.rollback-docker-compose.yml"
-            dest: "{{ app_dir }}/docker-compose.yml"
-            remote_src: true
-            owner: "{{ deploy_user }}"
-            group: "{{ deploy_group }}"
-            mode: "0640"
-
-        - name: "ROLLBACK: Restore previous .env"
-          ansible.builtin.copy:
-            src: "{{ app_dir }}/.rollback-env"
-            dest: "{{ app_dir }}/.env"
-            remote_src: true
-            owner: "{{ deploy_user }}"
-            group: "{{ deploy_group }}"
-            mode: "0600"
+        - name: "ROLLBACK: Restore previous per-service compose/env files"
+          ansible.builtin.command:
+            cmd: >
+              cp -a {{ app_dir }}/.rollback/services/{{ item }}/. {{ app_dir }}/services/{{ item }}/
+          loop: "{{ llamenos_installed_services }}"
+          changed_when: true
 
         - name: "ROLLBACK: Stop all services"
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ app_dir }}/services/{{ item }}"
             state: stopped
+          loop: "{{ llamenos_installed_services | reverse | list }}"
 
         - name: "ROLLBACK: Start services with previous configuration"
+          # No pull here — the restored compose file references the image
+          # that was already running before the update, which must still be
+          # cached locally.
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ app_dir }}/services/{{ item }}"
+            pull: never
             state: present
             recreate: always
             wait: true
             wait_timeout: 180
+          loop: "{{ llamenos_installed_services }}"
+
+        - name: "ROLLBACK: Verify PostgreSQL health after rollback"
+          ansible.builtin.command: >
+            docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml
+            exec -T postgres pg_isready -U llamenos -d llamenos
+          register: pg_rollback_health
+          retries: 15
+          delay: 3
+          until: pg_rollback_health.rc == 0
+          changed_when: false
+          when: "'postgres' in llamenos_installed_services"
 
         - name: "ROLLBACK: Verify health after rollback"
           ansible.builtin.uri:
@@ -302,7 +296,7 @@
               The previous version is running at https://{{ domain }}.
 
               Investigate:
-                ssh {{ deploy_user }}@{{ ansible_host }} 'cd {{ app_dir }} && docker compose logs --tail=100 app'
+                ssh {{ deploy_user }}@{{ ansible_host }} 'cd {{ app_dir }}/services/app && docker compose logs --tail=100 app'
 
               Version history:
                 just version-history

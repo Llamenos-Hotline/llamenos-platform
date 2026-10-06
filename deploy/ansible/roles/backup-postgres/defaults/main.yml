@@ -26,8 +26,10 @@ backup_age_public_key: "" # age recipient key for encryption
 # Remote storage via rclone
 backup_rclone_remote: "" # e.g., "s3:llamenos-backups/postgres"
 
-# Docker compose file path
-backup_compose_file: "{{ app_dir }}/docker-compose.yml"
+# Docker compose file path — the postgres service's own compose project
+# (production layout: one compose file per service under
+# {{ app_dir }}/services/<service>/ — see roles/llamenos-postgres). See #1121.
+backup_compose_file: "{{ app_dir }}/services/postgres/docker-compose.yml"
 
 # Database credentials
 backup_postgres_user: llamenos

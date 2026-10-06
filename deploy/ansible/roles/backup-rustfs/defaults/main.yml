@@ -24,5 +24,7 @@ backup_age_public_key: ""
 # Remote storage via rclone
 backup_rclone_remote: ""
 
-# Docker compose file path
-backup_compose_file: "{{ app_dir }}/docker-compose.yml"
+# Docker compose file path — the rustfs service's own compose project
+# (production layout: one compose file per service under
+# {{ app_dir }}/services/<service>/ — see roles/llamenos-rustfs). See #1121.
+backup_compose_file: "{{ app_dir }}/services/rustfs/docker-compose.yml"

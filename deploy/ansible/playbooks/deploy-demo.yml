@@ -9,6 +9,20 @@
 # demo_mode: true (plus demo_mode_confirm: "DESTROY_ALL_DATA") rather than
 # standing up a separate third deployment target.
 #
+# LAYOUT NOTICE (issue #1121): this playbook deploys the legacy `llamenos`
+# role, which renders ONE monolithic {{ app_dir }}/docker-compose.yml, unlike
+# every production host (playbooks/deploy.yml), which renders one compose
+# file per service under {{ app_dir }}/services/<service>/. This is a
+# deliberate, currently-unresolved gap: demo/staging therefore exercises a
+# different deployment topology than production, and none of the day-2
+# operations playbooks (backup/restore/update/rollback/security-update) run
+# against it — they assert the per-service layout and refuse to run
+# otherwise (playbooks/tasks/discover-services.yml). Do not point
+# update.yml/restore.yml/rollback.yml/security-update.yml at a demo host;
+# they will fail their own precondition. Migrating demo to the per-service
+# roles (so it tests what production actually runs) is tracked as follow-up
+# work, not done here.
+#
 # Usage:
 #   ansible-playbook playbooks/deploy-demo.yml --ask-vault-pass
 #   ansible-playbook playbooks/deploy-demo.yml --ask-vault-pass -e demo_vars_file=../demo_vars.yml

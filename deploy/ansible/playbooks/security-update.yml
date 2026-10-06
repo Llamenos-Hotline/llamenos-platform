@@ -19,6 +19,10 @@
     - ../vars.yml
 
   tasks:
+    - name: Discover installed per-service compose stacks
+      ansible.builtin.import_tasks: tasks/discover-services.yml
+      tags: always
+
     # ─── Pre-Update Scan ─────────────────────────────────────────
     # `apply` is what tags the role's own tasks; `tags:` alone tags only the
     # include, so `--tags security-update` would run the include and skip the role.
@@ -42,15 +46,17 @@
     # ─── Record Pre-Update State ─────────────────────────────────
     - name: Record current image digests for rollback
       ansible.builtin.shell: |
-        cd {{ app_dir }}
-        docker compose images --format json 2>/dev/null || echo "[]"
+        docker compose -f "{{ app_dir }}/services/{{ item }}/docker-compose.yml" images --format json 2>/dev/null || echo "[]"
+      loop: "{{ llamenos_installed_services }}"
       register: pre_update_images
       changed_when: false
       tags: [security-update]
 
     - name: Save rollback state
       ansible.builtin.copy:
-        content: "{{ pre_update_images.stdout }}"
+        content: >-
+          {{ dict(llamenos_installed_services
+             | zip(pre_update_images.results | map(attribute='stdout'))) | to_nice_json }}
         dest: "{{ app_dir }}/.rollback-images.json"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_group }}"
@@ -76,18 +82,20 @@
     # ─── Pull Latest Container Images ────────────────────────────
     - name: Pull latest container images
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ app_dir }}/services/{{ item }}"
         pull: always
         state: present
         recreate: never
+      loop: "{{ llamenos_installed_services }}"
       register: pull_result
       tags: [security-update, container-update]
 
     - name: Restart services with updated images
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ app_dir }}/services/{{ item }}"
         state: restarted
         recreate: always
+      loop: "{{ llamenos_installed_services }}"
       register: restart_result
       tags: [security-update, container-update]
 
@@ -116,14 +124,19 @@
 
         - name: Stop failed deployment
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ app_dir }}/services/{{ item }}"
             state: stopped
+          loop: "{{ llamenos_installed_services | reverse | list }}"
 
         - name: Start services with previous configuration
+          # No pull — fall back to the image digest already cached locally,
+          # not whatever "Pull latest container images" just fetched.
           community.docker.docker_compose_v2:
-            project_src: "{{ app_dir }}"
+            project_src: "{{ app_dir }}/services/{{ item }}"
+            pull: never
             state: present
             recreate: always
+          loop: "{{ llamenos_installed_services }}"
 
         - name: Verify rollback health
           ansible.builtin.uri:
@@ -139,7 +152,7 @@
           ansible.builtin.fail:
             msg: >
               Security update failed and has been rolled back. The previous version is running.
-              Check logs: docker compose -f {{ app_dir }}/docker-compose.yml logs app
+              Check logs: docker compose -f {{ app_dir }}/services/app/docker-compose.yml logs app
 
     # ─── Post-Update Scan ────────────────────────────────────────
     - name: Run post-update security scan

@@ -2,7 +2,9 @@
 # Manual Rollback Playbook
 #
 # Rolls back to the previous known-good deployment state.
-# Restores saved docker-compose.yml and .env, then restarts all services.
+# Restores the per-service compose/env snapshot taken by the last
+# playbooks/update.yml run (under {{ app_dir }}/.rollback/services/), then
+# restarts all installed services.
 #
 # Usage:
 #   ansible-playbook playbooks/rollback.yml --ask-vault-pass
@@ -21,24 +23,26 @@
       ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
       tags: always
 
+    - name: Discover installed per-service compose stacks
+      ansible.builtin.import_tasks: tasks/discover-services.yml
+      tags: always
+
     # ── Pre-flight Checks ──────────────────────────────────────────
-    - name: Check rollback files exist
+    - name: Check rollback snapshot exists for each installed service
       ansible.builtin.stat:
-        path: "{{ item }}"
-      loop:
-        - "{{ app_dir }}/.rollback-docker-compose.yml"
-        - "{{ app_dir }}/.rollback-env"
+        path: "{{ app_dir }}/.rollback/services/{{ item }}/docker-compose.yml"
+      loop: "{{ llamenos_installed_services }}"
       register: rollback_files
 
     - name: Fail if no rollback state available
       ansible.builtin.fail:
         msg: |
-          No rollback state found. Expected files:
-            {{ app_dir }}/.rollback-docker-compose.yml
-            {{ app_dir }}/.rollback-env
+          No rollback snapshot found for: {{ rollback_files.results
+            | selectattr('stat.exists', 'false') | map(attribute='item') | join(', ') }}
+          Expected under: {{ app_dir }}/.rollback/services/<service>/
 
-          These are created during each update. If this is a fresh deployment,
-          there is nothing to roll back to.
+          This snapshot is created by every playbooks/update.yml run. If this
+          is a fresh deployment, there is nothing to roll back to.
       when: rollback_files.results | selectattr('stat.exists', 'false') | list | length > 0
 
     # ── Snapshot Current State ─────────────────────────────────────
@@ -65,48 +69,40 @@
       tags: [rollback, backup]
 
     # ── Perform Rollback ───────────────────────────────────────────
-    - name: Restore previous docker-compose.yml
-      ansible.builtin.copy:
-        src: "{{ app_dir }}/.rollback-docker-compose.yml"
-        dest: "{{ app_dir }}/docker-compose.yml"
-        remote_src: true
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_group }}"
-        mode: "0640"
-
-    - name: Restore previous .env
-      ansible.builtin.copy:
-        src: "{{ app_dir }}/.rollback-env"
-        dest: "{{ app_dir }}/.env"
-        remote_src: true
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_group }}"
-        mode: "0600"
+    - name: Restore previous per-service compose/env files
+      ansible.builtin.command:
+        cmd: >
+          cp -a {{ app_dir }}/.rollback/services/{{ item }}/. {{ app_dir }}/services/{{ item }}/
+      loop: "{{ llamenos_installed_services }}"
+      changed_when: true
 
     - name: Stop all services
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ app_dir }}/services/{{ item }}"
         state: stopped
+      loop: "{{ llamenos_installed_services | reverse | list }}"
 
-    - name: Pull images referenced in restored compose file
+    - name: Pull images referenced in restored compose files
       community.docker.docker_compose_v2:
-        project_src: "{{ app_dir }}"
+        project_src: "{{ app_dir }}/services/{{ item }}"
         pull: policy
         state: present
         recreate: always
         wait: true
         wait_timeout: 180
+      loop: "{{ llamenos_installed_services }}"
 
     # ── Health Verification ────────────────────────────────────────
     - name: Wait for PostgreSQL after rollback
       ansible.builtin.command: >
-        docker compose -f {{ app_dir }}/docker-compose.yml
+        docker compose -f {{ app_dir }}/services/postgres/docker-compose.yml
         exec -T postgres pg_isready -U llamenos -d llamenos
       register: pg_health
       retries: 15
       delay: 3
       until: pg_health.rc == 0
       changed_when: false
+      when: "'postgres' in llamenos_installed_services"
 
     - name: Wait for application health check
       ansible.builtin.uri:
@@ -119,10 +115,10 @@
       delay: 5
       until: rollback_health.status == 200
 
-    - name: Verify all services are running
+    - name: Verify all installed services are running
       ansible.builtin.shell: |
-        cd {{ app_dir }}
-        unhealthy=$(docker compose ps --format json | \
+        set -euo pipefail
+        unhealthy=$(docker compose -f "{{ app_dir }}/services/{{ item }}/docker-compose.yml" ps --format json | \
           python3 -c "
         import sys, json
         lines = sys.stdin.read().strip().split('\n')
@@ -135,13 +131,13 @@
                 print(svc.get('Service', 'unknown'))
         " 2>/dev/null || true)
         if [ -n "$unhealthy" ]; then
-          echo "UNHEALTHY: $unhealthy"
+          echo "UNHEALTHY in {{ item }}: $unhealthy"
           exit 1
         fi
-        echo "All services healthy"
+        echo "{{ item }}: healthy"
+      loop: "{{ llamenos_installed_services }}"
       register: all_services_check
       changed_when: false
-      failed_when: all_services_check.rc != 0
 
     # ── Record Rollback ────────────────────────────────────────────
     - name: Record rollback to version history

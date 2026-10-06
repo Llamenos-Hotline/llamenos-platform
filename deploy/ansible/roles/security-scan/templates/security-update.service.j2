@@ -15,10 +15,14 @@ ExecStart=/bin/bash -c '\
     --only-upgrade \
     $(apt list --upgradable 2>/dev/null | grep -i security | cut -d/ -f1 | tail -n +2) 2>/dev/null || true; \
   \
-  # Pull latest container images and recreate if changed \
-  cd {{ app_dir }} && \
-  docker compose pull --quiet 2>/dev/null && \
-  docker compose up -d --remove-orphans 2>/dev/null && \
+  # Pull latest container images and recreate if changed, one compose \
+  # project per service under {{ app_dir }}/services/<service>/ \
+  # (production has no monolithic docker-compose.yml — see issue #1121) \
+  for f in {{ app_dir }}/services/*/docker-compose.yml; do \
+    [ -f "$f" ] || continue; \
+    docker compose -f "$f" pull --quiet 2>/dev/null; \
+    docker compose -f "$f" up -d --remove-orphans 2>/dev/null; \
+  done && \
   \
   # Wait for health check \
   sleep 10 && \

@@ -36,7 +36,10 @@ TLS_PORT="{{ llamenos_alerting_tls_port | default(443) }}"
 CERT_EXPIRY_DAYS="{{ llamenos_alert_cert_expiry_days | default(7) }}"
 PG_CONTAINER="{{ llamenos_alerting_pg_container | default('llamenos-postgres-1') }}"
 PG_MAX_SIZE_GB="{{ llamenos_alerting_pg_max_size_gb | default(50) }}"
-COMPOSE_FILE="{{ app_dir }}/docker-compose.yml"
+# Production renders one docker-compose.yml per service under
+# {{ app_dir }}/services/<service>/ — there is no single monolithic compose
+# file to point at (see issue #1121).
+SERVICES_DIR="{{ app_dir }}/services"
 REMINDER_SECONDS=86400  # 24 hours
 
 NOW="$(date +%s)"
@@ -354,10 +357,15 @@ check_docker_containers() {
     return
   fi
 
-  # Check containers defined in the compose file
-  if [ -f "${COMPOSE_FILE}" ]; then
+  # Check containers defined in each service's own compose file
+  # ({{ app_dir }}/services/<service>/docker-compose.yml). Each service is
+  # an independent compose project, so this loops rather than passing
+  # multiple -f flags to a single invocation.
+  local compose_file
+  for compose_file in "${SERVICES_DIR}"/*/docker-compose.yml; do
+    [ -f "${compose_file}" ] || continue
     local containers
-    containers="$(docker compose -f "${COMPOSE_FILE}" ps --format json 2>/dev/null)" || true
+    containers="$(docker compose -f "${compose_file}" ps --format json 2>/dev/null)" || true
 
     if [ -n "${containers}" ]; then
       while IFS= read -r container_json; do
@@ -375,7 +383,7 @@ check_docker_containers() {
         fi
       done <<< "${containers}"
     fi
-  fi
+  done
 
   if [ "${ok}" = "true" ]; then
     detail="All containers running"
