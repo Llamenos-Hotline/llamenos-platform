@@ -36,8 +36,64 @@ kamailio_dispatcher_ping_interval: 30
 
 # TLS configuration
 kamailio_tls_enabled: true
-kamailio_tls_cert_path: "{{ app_dir }}/certs/kamailio.crt"
-kamailio_tls_key_path: "{{ app_dir }}/certs/kamailio.key"
+
+# HOST directory holding the TLS material, bind-mounted read-only into the
+# container at kamailio_tls_container_dir. The self-signed certificate is
+# generated here when nothing is present.
+kamailio_tls_dir: "{{ app_dir }}/services/kamailio/tls"
+kamailio_tls_container_dir: /etc/kamailio/tls
+
+# CONTAINER paths written into tls.cfg. Separate cert and key, because a real
+# certificate is two files: Let's Encrypt via Caddy gives `<domain>.crt` +
+# `<domain>.key`, certbot `fullchain.pem` + `privkey.pem`. The defaults name
+# the self-signed pair generated below, so a deployment that overrides neither
+# behaves as before.
+kamailio_tls_cert_file: "{{ kamailio_tls_container_dir }}/kamailio.crt"
+kamailio_tls_key_file: "{{ kamailio_tls_container_dir }}/kamailio.key"
+
+# Let's Encrypt (ENCOURAGED for production).
+#
+# Caddy already holds an ISRG-chained certificate for `domain` in its own
+# `caddy-data` volume. Set this to the HOST directory holding the certificate
+# and key you want the SIP edge to serve — typically a directory an export job
+# or Caddy itself writes to — and it is mounted READ-ONLY at
+# kamailio_tls_container_dir in place of kamailio_tls_dir. Then point
+# kamailio_tls_cert_file / kamailio_tls_key_file at the files inside it, and
+# leave the published anchor empty (see kamailio_tls_publish_anchor) so clients
+# verify against the public roots — ISRG Root X1 and X2 are both in
+# liblinphone's bundled CA set, so no anchor is needed for an LE chain.
+#
+# A renewal does NOT reach a running daemon on its own: see
+# kamailio_tls_reload_enabled.
+# kamailio_tls_cert_source_dir: /var/lib/llamenos/sip-tls
+
+# Publish the SIP edge's certificate as a trust anchor for clients. Required
+# for the self-signed default — nothing in the device trust store can vouch for
+# it. Set false for a publicly-trusted (e.g. Let's Encrypt) certificate: the
+# client then verifies against its own CA set and no anchor is published.
+kamailio_tls_publish_anchor: true
+
+# Watch the certificate and reload Kamailio when it changes. MUST stay on for
+# any ACME certificate: Kamailio reads the certificate once at module init, so
+# a renewal is invisible to it and the edge serves an expired certificate about
+# 60 days after deploy — clients then fail closed and no call is answered.
+kamailio_tls_reload_enabled: true
+# How often to check. The check is a hash comparison and reloads nothing when
+# unchanged, so this is cheap.
+kamailio_tls_reload_on_calendar: "hourly"
+
+# Every hostname or IP a volunteer's client may dial for the SIP domain. These
+# become subjectAltName entries on the generated certificate: a client verifies
+# the hostname as well as the chain, so a name missing here fails the handshake
+# no matter how the chain is anchored. Bare IPv4 literals become IP: SANs.
+kamailio_tls_sans:
+  - "{{ kamailio_sip_domain }}"
+
+# Path on the host to the ISSUING ROOT of a real certificate, when one is
+# installed. Publishing the root rather than the leaf keeps registered clients
+# working across renewals. Unset = the self-signed certificate is its own
+# anchor, which is correct for that case.
+# kamailio_tls_anchor_source: /etc/ssl/certs/my-ca.pem
 
 # Rate limiting
 kamailio_rate_limit_enabled: true

@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +31,7 @@ import org.llamenos.hotline.LlamenosApp
 import org.llamenos.hotline.MainActivity
 import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.di.CryptoEntryPoint
+import org.llamenos.hotline.helpers.TestPermissions
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -80,6 +82,19 @@ class M1CapabilityProbe {
 
     /** Survives `am instrument` process boundaries (the restart phase skips `pm clear`). */
     private val stateFile = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "m1-probe-state")
+
+    /**
+     * The runtime permissions the app asks for mid-flow, granted before the app starts.
+     *
+     * Clocking in asks for `RECORD_AUDIO` ([org.llamenos.hotline.telephony.rememberMicrophoneRequest]),
+     * and the system dialog is an overlay the Compose harness can neither see nor dismiss — the
+     * clock-in callback would never fire and the shifts flow would stall. The gate runs
+     * `pm clear` before every flow, so this grant has to happen in-process, here.
+     */
+    @Before
+    fun grantPermissions() {
+        TestPermissions.grant()
+    }
 
     @After
     fun tearDown() {

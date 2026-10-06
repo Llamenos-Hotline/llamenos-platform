@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import org.llamenos.hotline.telephony.LinphoneService
+import org.llamenos.hotline.telephony.rememberMicrophoneRequest
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.flow.filterIsInstance
@@ -542,6 +543,14 @@ fun LlamenosNavigation(
         val ringing = ringingCall
         val isUnlockedWhileRinging = remember(ringing) { cryptoService.isUnlocked }
 
+        // RECORD_AUDIO is a dangerous permission: the manifest entry grants nothing on its own.
+        // Clocking in asks for it up front (ShiftsScreen), and this is the backstop — a grant
+        // revoked since, or a device that clocked in before that existed. Answering without it
+        // would connect a call the volunteer cannot be heard on, so the refusal is shown and the
+        // call left ringing instead.
+        val requestMicrophone = rememberMicrophoneRequest()
+        var microphoneDenied by remember(ringing?.callId) { mutableStateOf(false) }
+
         Box(modifier = Modifier.weight(1f)) {
             NavigationTree(
                 navController = navController,
@@ -562,8 +571,14 @@ fun LlamenosNavigation(
                 IncomingCallScreen(
                     info = ringing,
                     isUnlocked = isUnlockedWhileRinging,
-                    onAccept = { linphoneService.acceptIncomingCall() },
+                    onAccept = {
+                        requestMicrophone { granted ->
+                            microphoneDenied = !granted
+                            if (granted) linphoneService.acceptIncomingCall()
+                        }
+                    },
                     onDecline = { linphoneService.declineIncomingCall() },
+                    microphoneDenied = microphoneDenied,
                 )
             }
         }

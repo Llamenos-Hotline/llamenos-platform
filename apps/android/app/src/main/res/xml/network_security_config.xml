@@ -13,6 +13,18 @@
        configured hub hostname, covering operator-customised deployments at runtime.
 
     Both layers enforce hard-fail — no cleartext fallback, no soft-fail mode.
+
+    SCOPE: this file and the OkHttp pinner govern HTTPS to the app. The SIP/TLS
+    leg that in-app calling registers over is NOT covered here — liblinphone has
+    its own TLS stack and is not subject to Android's network security config.
+    That leg is anchored separately and more narrowly: the server publishes the
+    SIP edge's certificate in the authenticated /api/telephony/sip-token
+    response, which arrives over the pinned channel below, and the client makes
+    it the only root CA for SIP (LinphoneService.applyTlsTrustAnchor), with
+    certificate AND hostname verification on. A self-hoster therefore needs no
+    publicly-trusted certificate for their PBX and adds nothing to the pin set
+    here. See docs/deployment/first-deploy.md § "The SIP leg does not need a
+    public certificate".
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">

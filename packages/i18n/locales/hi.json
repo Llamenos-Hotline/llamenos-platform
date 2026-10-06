@@ -2498,6 +2498,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "ऐप में कॉल का उत्तर देने के लिए माइक्रोफ़ोन की अनुमति आवश्यक है।",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",

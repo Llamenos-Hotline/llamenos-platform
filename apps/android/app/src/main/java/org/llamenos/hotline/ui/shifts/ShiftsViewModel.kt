@@ -118,11 +118,21 @@ class ShiftsViewModel @Inject constructor(
 
     /**
      * Clock in to the active hub's shift roster.
+     *
+     * [microphoneGranted] is the outcome of the runtime `RECORD_AUDIO` request the screen makes
+     * first (see [org.llamenos.hotline.telephony.rememberMicrophoneRequest]). A refusal does not
+     * stop the clock-in — the volunteer still receives calls on their phone — but it does mean
+     * this device cannot answer in the app, which is said plainly rather than discovered when a
+     * call connects with no microphone.
      */
-    fun clockIn() {
+    fun clockIn(microphoneGranted: Boolean = true) {
         clockAction("Failed to clock in") { hubId ->
             shiftClockRepository.clockIn(hubId)
-            reportCallSetup(sipRegistrar.registerMemberHubs())
+            if (microphoneGranted) {
+                reportCallSetup(sipRegistrar.registerMemberHubs())
+            } else {
+                _uiState.update { it.copy(callSetupErrorRes = R.string.incoming_call_microphone_required) }
+            }
         }
     }
 
@@ -157,8 +167,17 @@ class ShiftsViewModel @Inject constructor(
 
     /**
      * Retry registering this device for in-app calls after a failed attempt.
+     *
+     * Gated on the microphone the same way clocking in is: registering a device that cannot
+     * capture audio puts it into parallel ringing only to answer into silence, so the retry is
+     * refused and the reason restated instead. Leaving it unregistered also means the call rings
+     * a volunteer who CAN answer it.
      */
-    fun retryCallSetup() {
+    fun retryCallSetup(microphoneGranted: Boolean = true) {
+        if (!microphoneGranted) {
+            _uiState.update { it.copy(callSetupErrorRes = R.string.incoming_call_microphone_required) }
+            return
+        }
         viewModelScope.launch {
             reportCallSetup(sipRegistrar.registerMemberHubs())
         }
