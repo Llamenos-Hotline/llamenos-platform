@@ -1007,8 +1007,31 @@ jobs:
             ~/.android/adb*
           key: avd-34-default-x86_64-${{ runner.os }}
 
+      # The AVD snapshot is a *speed* optimisation: pre-booting the AVD here
+      # populates the cache above and — more importantly — leaves the SDK
+      # packages installed, so the test step's own `sdkmanager --install` is a
+      # no-op instead of a fresh download.
+      #
+      # Creating it is unreliable, and never for emulator reasons. Measured
+      # across merge-queue runs 37464036761 and 37467885061, one shard in four
+      # died inside the action's "Install Android SDK" stage with
+      # `Error on ZipFile unknown archive` — a truncated/corrupt package
+      # download from dl.google.com (the Android Emulator package in one run,
+      # the x86_64 system image in the other). Those shards never reached
+      # `Starting emulator.` at all; the `adb emu kill` error that follows is a
+      # consequence of no emulator existing, not the cause. Shards that got
+      # past the download booted in 24-31s against a 600s budget, so this is
+      # not a boot timeout, a KVM problem, or disk pressure.
+      #
+      # So: retry the download (each attempt re-fetches), and if it still will
+      # not come down, carry on WITHOUT a snapshot. Losing the snapshot must
+      # cost time, not coverage — it must never skip the test steps below.
+      # The test steps themselves stay fatal: a real Cucumber failure must
+      # still fail this job, and therefore `ci-status`.
       - name: Create AVD snapshot (cache miss only)
+        id: avd-create
         if: steps.avd-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
         with:
           api-level: 34
@@ -1018,6 +1041,48 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           emulator-boot-timeout: 600
           script: echo "AVD snapshot created and cached."
+
+      # Retries get a shorter boot budget than the first attempt. The snapshot
+      # is optional and measured boots take 24-31s, so 300s is ample; this caps
+      # the worst case (600 + 300 + 300 = 20 min of attempts) well inside the
+      # 45 min job timeout, leaving room for the test run itself.
+      - name: Create AVD snapshot (retry 1)
+        id: avd-create-retry1
+        if: steps.avd-create.outcome == 'failure'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-boot-timeout: 300
+          script: echo "AVD snapshot created and cached."
+
+      - name: Create AVD snapshot (retry 2)
+        id: avd-create-retry2
+        if: steps.avd-create-retry1.outcome == 'failure'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-boot-timeout: 300
+          script: echo "AVD snapshot created and cached."
+
+      # The tests run either way — the test step creates the AVD itself. But a
+      # failed attempt can leave a half-created or half-booted AVD behind, and
+      # the test step uses `force-avd-creation: false`, so it would adopt that
+      # wreckage instead of building a clean one. Clear it first.
+      - name: Discard partial AVD and continue without a snapshot
+        if: steps.avd-create-retry2.outcome == 'failure'
+        run: |
+          rm -rf ~/.android/avd
+          echo "::warning title=AVD snapshot unavailable::Pre-booting the AVD failed on all 3 attempts (see the steps above; the usual cause is a corrupt SDK package download from dl.google.com). Any partial AVD has been discarded and the test step will build a clean one, so this run is slower but no less thorough. The tests below are unaffected and still gate this job."
 
       - name: Collect @android feature files for this shard
         id: shard-features
