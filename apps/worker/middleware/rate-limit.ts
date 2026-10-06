@@ -12,6 +12,7 @@ import { createLogger } from '../lib/logger'
 // @llamenos/crypto/ffi (bun:ffi) at module load, which a non-Bun test
 // harness importing this middleware cannot resolve (issue #1127).
 import { getClientIp } from '../lib/client-ip'
+import { devSurfaceRequestAuthorized } from '../lib/dev-surfaces'
 
 const log = createLogger('rate-limit')
 
@@ -43,6 +44,31 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
     // make many rapid API calls for setup that would hit strict limits.
     // Production rate limiting is unaffected.
     if (c.env?.ENVIRONMENT === 'development') {
+      return next()
+    }
+
+    // The end-to-end suite can now be pointed at a DEPLOYED non-production
+    // target (docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md). There it is not on
+    // `development`, so until this bypass existed its own per-scenario setup
+    // was rate-limited: `POST /api/hubs` from the `workerHub` fixture answered
+    // 429, the fixture threw, and every step in the scenario then reported
+    // `Cannot destructure property 'admin'`. Measured against a staging VM,
+    // that single cause accounted for essentially every failure.
+    //
+    // The bypass is keyed on the REQUEST presenting the `/api/test-*` shared
+    // secret — not on the environment, and not on dev surfaces merely being
+    // switched on. The distinction is the whole point: a staging host is
+    // reachable from the internet, so an anonymous caller there must still be
+    // throttled exactly as on production. Only the holder of
+    // `DEV_RESET_SECRET` — i.e. the harness — is exempt, and that holder can
+    // already wipe the database through `/api/test-reset`, so exempting it from
+    // a throttle grants nothing it did not have.
+    //
+    // `devSurfaceRequestAuthorized` also re-checks the environment allowlist
+    // and `DEV_ROUTES_ENABLED`, so `ENVIRONMENT=production` cannot reach this
+    // even if a secret were somehow configured there (and lib/config.ts
+    // refuses to start such a process in the first place).
+    if (devSurfaceRequestAuthorized(c.env ?? {}, c.req.header('X-Test-Secret'))) {
       return next()
     }
 

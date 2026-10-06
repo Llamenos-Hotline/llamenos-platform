@@ -38,6 +38,14 @@
  * the surface is not discoverable by probing. `routes/dev.ts` holds that half,
  * and `app.ts` rate-limits the secret-less requests.
  *
+ * That same header is the test harness's identity for one thing beyond this
+ * surface: `middleware/rate-limit.ts` exempts a request presenting it from the
+ * API rate limiter (`devSurfaceRequestAuthorized` below), because the suite's
+ * own per-scenario setup is ordinary API traffic and 30 writes/min per pubkey
+ * makes it unrunnable. The exemption is per-REQUEST and never per-host: an
+ * anonymous caller on the same reachable staging box is limited exactly as on
+ * production.
+ *
  * All inputs are process environment fixed when the server starts. Nothing
  * stored in the database and nothing in a request can satisfy it. It is not a
  * build-time exclusion — CI tests the shipped image with exactly this
@@ -177,6 +185,40 @@ export function devSurfaceSecretPresented(env: DevSurfacesEnv, presented: string
 /** True when this server may serve `/api/test-*` at all. */
 export function devSurfacesEnabled(env: DevSurfacesEnv): boolean {
   return devSurfacesRefusal(env) === null
+}
+
+/**
+ * True when a request is the test harness's own: it presents the dev surface's
+ * shared secret, AND this server is one that may serve the dev surface at all.
+ *
+ * This is the conjunction of the two halves above, named once so that callers
+ * outside `/api/test-*` cannot accidentally take only one of them. Both are
+ * load-bearing:
+ *
+ *   - without `devSurfacesEnabled`, a `production` host that somehow had a
+ *     `DEV_RESET_SECRET` would honour it;
+ *   - without `devSurfaceSecretPresented`, every unauthenticated caller on a
+ *     reachable staging host would be treated as the harness.
+ *
+ * `middleware/rate-limit.ts` uses it to let the suite's own fixtures through
+ * the API rate limiter. That is the whole reason it is exported: the suite
+ * makes hundreds of writes per run and 30/min per pubkey makes it unrunnable,
+ * while an anonymous request to the same deployed host must still be limited.
+ * The authority granted is "not rate limited", which is why it is keyed on the
+ * same credential as the destructive `/api/test-*` surface rather than on
+ * anything weaker — a caller who holds this secret can already wipe the
+ * database, so letting them skip a throttle adds nothing.
+ *
+ * Note what it is NOT keyed on: the ENVIRONMENT alone, and `devSurfacesEnabled`
+ * alone. "Dev surfaces are switched on here" is a property of the HOST;
+ * "this is the harness" is a property of the REQUEST, and only the second one
+ * may relax a per-caller control.
+ */
+export function devSurfaceRequestAuthorized(
+  env: DevSurfacesEnv,
+  presented: string | undefined,
+): boolean {
+  return devSurfacesEnabled(env) && devSurfaceSecretPresented(env, presented)
 }
 
 /**

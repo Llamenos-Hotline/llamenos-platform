@@ -13,7 +13,7 @@
  */
 
 import { type APIRequestContext } from '@playwright/test'
-import { devSurfaceSecret } from './dev-surface-secret'
+import { devSurfaceSecret, devSurfaceHeaders } from './dev-surface-secret'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
@@ -72,6 +72,10 @@ function authHeaders(seedHex: string, method: string, path: string): Record<stri
   return {
     'Authorization': `Bearer ${JSON.stringify(token)}`,
     'Content-Type': 'application/json',
+    // Marks this as the harness's own request so the API rate limiter exempts
+    // it on a deployed target — see ./dev-surface-secret.ts for why every
+    // request needs it and why only the secret-holder is exempt.
+    ...devSurfaceHeaders(),
   }
 }
 

@@ -73,7 +73,7 @@ import { Scalar } from '@scalar/hono-api-reference'
 import { openAPIConfig } from './openapi/config'
 import { ServiceError } from './services/settings'
 import { createLogger } from './lib/logger'
-import { devSurfacesEnabled, devSurfaceSecretPresented } from './lib/dev-surfaces'
+import { devSurfacesEnabled } from './lib/dev-surfaces'
 
 const logger = createLogger('app')
 
@@ -142,6 +142,18 @@ api.use('/test-*', devGuard)
 // of /test-* calls per run, so a cap on those would make the suite unrunnable —
 // which is how a security control becomes a reason to turn the control off.
 //
+// Plain `rateLimit('webhook')` is enough to say both of those things, because
+// the exemption for a secret-carrying request now lives INSIDE the middleware
+// (middleware/rate-limit.ts, via devSurfaceRequestAuthorized) — the suite's
+// ordinary API calls need it too, not just its /test-* calls. This used to be a
+// wrapper here that short-circuited on the secret before delegating; that line
+// would now be an exact duplicate of the middleware's own check, so the wrapper
+// is gone rather than kept as a second copy that can drift. The behaviour it
+// specified is pinned by tests, not by its existence:
+// `__tests__/unit/dev-surface-rate-limit-bypass.test.ts` asserts that a
+// secret-less and a wrong-secret /test-* request are still counted, and that a
+// correct-secret one is not.
+//
 // `webhook` (300/min per IP) rather than `strict` (5/min) for the probes: the
 // suite itself asserts the refusal path, calling /test-reset with no secret and
 // with a wrong one (packages/test-specs/features/security/*.feature), and a
@@ -151,11 +163,7 @@ api.use('/test-*', devGuard)
 // no weaker in any practical sense; the length minimum, enforced both at
 // startup (lib/config.ts) and at the gate (lib/dev-surfaces.ts), is the control
 // that actually bounds guessing.
-const devProbeRateLimit = createMiddleware<AppEnv>(async (c, next) => {
-  if (devSurfaceSecretPresented(c.env, c.req.header('X-Test-Secret'))) return next()
-  return rateLimit('webhook')(c, next)
-})
-api.use('/test-*', devProbeRateLimit)
+api.use('/test-*', rateLimit('webhook'))
 
 // --- Rate limiting (H03) — applied per-tier before route handlers ---
 // Strict tier: auth/provisioning endpoints (by IP, 5 req/min)

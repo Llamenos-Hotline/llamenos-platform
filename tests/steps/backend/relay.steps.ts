@@ -26,8 +26,20 @@ import {
   createVolunteerViaApi,
 } from '../../api-helpers'
 
-const RELAY_URL = process.env.TEST_RELAY_URL || 'ws://localhost:3000/ws'
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
+
+/**
+ * The relay is served by the SAME process as the API, at `/ws` — so its URL is
+ * `TEST_HUB_URL` with the scheme swapped, and defaulting it to a hardcoded
+ * `ws://localhost:3000/ws` is wrong for every run that points the suite
+ * somewhere. Against a deployed target reached over an SSH forward on another
+ * port, all 11 @relay scenarios failed on a connection to a relay that was not
+ * the server under test, while every other scenario in the same run passed.
+ * `TEST_RELAY_URL` still wins, for the case where the relay really is
+ * elsewhere.
+ */
+const RELAY_URL = process.env.TEST_RELAY_URL
+  || `${BASE_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/ws`
 
 const RELAY_KEY = 'relay'
 

@@ -198,9 +198,11 @@ Within the surface itself: every route requires the secret in an
 `X-Test-Secret` header, compared in constant time; failures answer `404`
 rather than `401`/`403`, so a probe cannot tell a gated route from an absent
 one; and `/test-*` requests that do **not** carry the secret are rate-limited
-at the strict tier, so the secret cannot be guessed. Requests that *do* carry
-it are not throttled — the suite makes hundreds of them, and a control the
-suite has to be turned off to run is not a control.
+at the webhook tier (300/min per IP), so the secret cannot be guessed — against
+a secret of at least 32 characters, that is the length minimum doing the work,
+not the bucket size. Requests that *do* carry it are not throttled — the suite
+makes hundreds of them, and a control the suite has to be turned off to run is
+not a control.
 
 ### Why a shared secret and not admin authentication
 
@@ -222,23 +224,104 @@ product entirely, and that predicate exists so the removal is the only thing
 that ever changes those surfaces — widening them to a test instance on the way
 out would be strictly worse than leaving them alone.
 
-## Known blocker: rate limiting throttles the suite's own fixtures
+## Rate limiting, and why the suite is exempt
 
-Getting past `api-bootstrap` is not yet the same as a green run. `rateLimit()`
-(`apps/worker/middleware/rate-limit.ts`) skips **only** when
-`ENVIRONMENT=development`, so on `staging` the suite's own per-scenario setup is
-rate-limited: `POST /api/hubs` from the `workerHub` fixture answers `429`, the
-fixture fails, and every step in that scenario then reports
-`Cannot destructure property 'admin' of 'getS(...)'`. Measured against a
-deployed instance: that single cause accounts for essentially every failure,
-on both the per-service and the monolithic topology.
+The suite's own per-scenario setup is itself API traffic, and on a deployed
+target the server is not on `ENVIRONMENT=development`, so until this was
+handled the real per-caller limits applied to it: `POST /api/hubs` from the
+`workerHub` fixture is on the `write` tier at 30/min per pubkey, and three
+parallel Playwright workers share one admin identity. It answered `429`, the
+fixture threw, and every step in that scenario then reported `Cannot
+destructure property 'admin' of 'getS(...)'`. Measured against a deployed
+instance, that single cause accounted for essentially every failure, on both
+topologies.
 
-It is deliberately **not** fixed here, because the obvious fix — extending the
-bypass to any instance where `devSurfacesEnabled()` holds — relaxes rate
-limiting on a reachable host, and that is a security decision worth taking on
-its own rather than as a side effect of making the harness reach the box. If
-taken, note that `app.ts`'s probe cap on secret-less `/test-*` requests calls
-`rateLimit()` itself and would need an explicit opt-out so it keeps working.
+`apps/worker/middleware/rate-limit.ts` therefore exempts a request that
+**presents the `/api/test-*` shared secret** in `X-Test-Secret`, via
+`lib/dev-surfaces.ts#devSurfaceRequestAuthorized` — the same three factors as
+the dev surface itself (environment allowlist, `DEV_ROUTES_ENABLED`, and a
+secret of at least 32 characters), plus a constant-time comparison of the
+presented value.
+
+The axis is deliberately the **request**, not the host:
+
+- **Not the environment.** Extending the old `ENVIRONMENT === 'development'`
+  skip to cover `staging` would un-rate-limit a host that is reachable from the
+  internet for every caller on it.
+- **Not `devSurfacesEnabled()` alone.** That is a property of the host — "dev
+  surfaces are switched on here" — and it is true for every anonymous request
+  that arrives. Only "this is the harness" may relax a per-caller control.
+- **The secret grants nothing new.** A caller who holds `DEV_RESET_SECRET` can
+  already wipe the database through `POST /api/test-reset`. Letting them also
+  skip a throttle adds no authority.
+- **`production` cannot reach it.** The predicate refuses `production` first and
+  unconditionally, and `lib/config.ts` refuses to start a production process
+  that has the variables set at all.
+
+An anonymous request to the same staging host is still limited exactly as on
+production — that is the property that makes this safe, and
+`apps/worker/__tests__/unit/dev-surface-rate-limit-bypass.test.ts` asserts it
+from all three directions (harness exempt; no-secret, wrong-secret,
+short-secret, flag-off and `Bearer`-only callers limited; `production` limited
+even with the right secret).
+
+Because that exemption is per-request, the harness has to **send** the header.
+It is attached where the harness builds its own requests —
+`tests/api-helpers.ts#authHeaders` (which is every `apiGet`/`apiPost`/… call,
+so most of the suite), `tests/steps/fixtures.ts`' two request contexts (where
+the `workerHub` fixture lives), and `tests/global-setup.ts`' raw `fetch`es.
+`tests/dev-surface-secret.ts` is the one place that resolves it.
+
+It is deliberately **not** a project-wide `extraHTTPHeaders` in
+`playwright.config.ts`, which would have covered the ~70 raw `request.post(…)`
+calls in step definitions in one line. Some of those scenarios exist precisely
+to prove the credential is *required* — "Dev test-reset rejects requests
+without X-Test-Secret header" — and a project-wide default hands it to them
+too. Measured on the deployed target: that scenario got `200` instead of `404`,
+meaning `POST /api/test-reset` actually ran and wiped the database halfway
+through the suite, taking five unrelated scenarios in other workers down with
+it (`Failed to delete hub: 401`). Forgetting to opt *in* costs a visible `429`;
+forgetting to opt *out* costs a destroyed database and a security assertion
+that passes while asserting nothing. So the default is an ordinary caller.
+
+Two limiters are *not* affected, on purpose:
+
+- the per-endpoint brute-force counters inside `routes/auth.ts`
+  (`/auth/login`, `/auth/bootstrap`) and the WebAuthn equivalents, which use
+  `lib/helpers.ts#checkRateLimit` and are always enforced. The scenarios in
+  `packages/test-specs/features/security/auth-rate-limiting.feature` assert
+  those, and they still do. (They were, in fact, *un*runnable against a staging
+  target before this change: the `strict`-tier middleware 429'd first with the
+  wrong body, so the assertion on `"Too many login attempts"` could not pass.)
+- the ban/spam controls on inbound calls, which are not API rate limits at all.
+
+### What this does *not* fix: per-IP buckets on an Ansible-deployed host
+
+`TRUST_PROXY_HEADERS=true` is set by `scripts/dev-bun.sh` and by
+`deploy/docker/docker-compose.production.yml`, and by **nothing in
+`deploy/ansible/`** — which is the path both surviving deployment profiles take.
+So on an Ansible-deployed instance `lib/client-ip.ts` ignores the
+`X-Forwarded-For` Caddy sets and falls back to the socket address, which is
+Caddy's container address for *every* caller.
+
+Two consequences. For the suite: the step definitions give each scenario its
+own `CF-Connecting-IP` so that parallel scenarios get their own buckets, and on
+a deployed target that header is ignored, so all three workers share one
+5/min bucket on each per-endpoint limiter inside the route handlers (invites,
+WebAuthn, recovery-group, auth, security-events). Those limiters are *not*
+affected by the exemption above, by design, and they account for 22 of the
+remaining failures. Verified directly: three requests with three different
+`CF-Connecting-IP` values all answered `429` from one shared bucket.
+
+For production, the same omission means the per-IP controls behind Caddy are
+in fact a single global bucket — five logins a minute for the whole internet.
+It is not fixed here because the fix is not a one-liner: `getClientIp()`
+returns a client-supplied `CF-Connecting-IP` verbatim when proxy headers are
+trusted, and this deployment has no Cloudflare in front (TLS terminates on the
+origin host), so simply setting the variable would let any caller choose their
+own bucket. Caddy must strip the forwarded-for headers it does not set — or
+`getClientIp()` must stop honouring `CF-Connecting-IP` outside a Cloudflare
+deployment — before the variable is turned on.
 
 ## Related
 

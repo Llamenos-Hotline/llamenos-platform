@@ -21,6 +21,23 @@ const desktopStepDirs = [
 // linked issue; `bun run test-specs:validate` rejects the tag without one.
 const MISSING_STEPS = "fail-on-gen";
 
+// Shared by every backend BDD project: they all talk to the backend server
+// directly rather than to the Vite preview.
+//
+// Deliberately NOT `extraHTTPHeaders: devSurfaceHeaders()`. Putting the
+// `/api/test-*` shared secret on every request from these projects does make
+// the suite exempt from the API rate limiter on a deployed target (see
+// tests/dev-surface-secret.ts) — and it also hands the secret to the scenarios
+// whose whole point is that the secret is REQUIRED. Measured: "Dev test-reset
+// rejects requests without X-Test-Secret header" got 200 instead of 404 and
+// actually wiped the database mid-run, failing five unrelated scenarios in
+// other workers with `Failed to delete hub: 401`. A credential the harness
+// cannot withhold is a credential the suite can no longer test, so the default
+// here is an ordinary caller and the exemption is opt-in at the call site.
+const BACKEND_PROJECT_USE = {
+  baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
+};
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -97,9 +114,7 @@ export default defineConfig({
         tags: "@backend and not @wip and not @fixme and not @global-setting and not @demo-mode and not @signed-webhooks",
         missingSteps: MISSING_STEPS,
       }),
-      use: {
-        baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
-      },
+      use: BACKEND_PROJECT_USE,
       fullyParallel: true,
   workers: process.env.CI ? 4 : 3,
       // Wait for bootstrap tests to finish before starting.
@@ -128,9 +143,7 @@ export default defineConfig({
         tags: "@backend and @global-setting and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
       }),
-      use: {
-        baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
-      },
+      use: BACKEND_PROJECT_USE,
       fullyParallel: false,
       workers: 1,
       dependencies: ["bootstrap"],
@@ -149,9 +162,7 @@ export default defineConfig({
         tags: "@backend and @demo-mode and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
       }),
-      use: {
-        baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
-      },
+      use: BACKEND_PROJECT_USE,
       fullyParallel: false,
       workers: 1,
       dependencies: ["bootstrap"],
@@ -171,9 +182,7 @@ export default defineConfig({
         tags: "@backend and @signed-webhooks and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
       }),
-      use: {
-        baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
-      },
+      use: BACKEND_PROJECT_USE,
       fullyParallel: false,
       workers: 1,
       dependencies: ["bootstrap"],

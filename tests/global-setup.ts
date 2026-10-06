@@ -2,7 +2,7 @@ import type { FullConfig } from '@playwright/test'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
-import { devSurfaceSecret } from './dev-surface-secret'
+import { devSurfaceSecret, devSurfaceHeaders } from './dev-surface-secret'
 const BACKEND_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
 function loadDevVarsSecret(): string | undefined {
@@ -68,7 +68,10 @@ async function bootstrapAdmin(baseUrl: string): Promise<void> {
   const body = makeBootstrapToken(ADMIN_SEED, 'POST', path)
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // /api/auth/* is the `strict` tier (5/min per IP). Harmless locally, but on
+    // a deployed target this and every scenario's login share one IP — hence the
+    // harness header here too (tests/dev-surface-secret.ts).
+    headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() },
     body: JSON.stringify(body),
   })
   // 200 = just created, 403 = already exists (both are fine)
@@ -82,7 +85,7 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
   const adminPubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(ADMIN_SEED)))
   const token = makeBootstrapToken(ADMIN_SEED, 'GET', '/api/auth/me')
   const res = await fetch(`${baseUrl}/api/auth/me`, {
-    headers: { Authorization: `Bearer ${JSON.stringify(token)}` },
+    headers: { Authorization: `Bearer ${JSON.stringify(token)}`, ...devSurfaceHeaders() },
   })
   if (!res.ok) {
     const text = await res.text()
@@ -188,6 +191,7 @@ async function completeFirstRunSetup(baseUrl: string): Promise<void> {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${JSON.stringify(token)}`,
+      ...devSurfaceHeaders(),
     },
     // demoMode stays false: the suites exercise the real product, and demo
     // mode seeds a fictional dataset they do not expect.
