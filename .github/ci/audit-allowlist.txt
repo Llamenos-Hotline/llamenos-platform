@@ -9,92 +9,104 @@
 # Do NOT add an entry without a justification, and do NOT bump the date on
 # review without re-verifying the reasoning still holds.
 #
+# Each entry must state: the advisory, the dependency path, why no fix is
+# adoptable, why it is not exploitable in this codebase's usage, and a
+# tracking issue. "Upgrading is inconvenient" is not a reason. An entry with
+# no stated reason is indistinguishable from suppressing a real finding.
+#
+# ⚠️ An advisory's range can be EXTENDED after publication, which silently
+# re-vulnerablises an `overrides` floor that was set to the then-fixed
+# version (#1581: `seroval: ">=1.6.0"` against a later `<= 1.6.0` range was
+# pinning the vulnerable version). Verify target versions against the
+# upstream advisory's `first_patched_version`, never against a changelog or
+# a recommendation (#632) — and never bump past an advisory's range when the
+# new version does not actually contain the fix (see http-cache-semantics
+# below for a live example of exactly that trap).
+#
 # Review cadence: re-audit and prune stale entries whenever a listed
 # package is intentionally upgraded, and at least quarterly otherwise.
-# Follow-up tracking issue: https://github.com/rhonda-rodododo/llamenos-platform/issues/649
+# Follow-up tracking issue: https://github.com/Llamenos-Hotline/llamenos-platform/issues/649
 #
 # Format: GHSA-id  # added YYYY-MM-DD by <who> — package — reachability — reasoning
 
-# --- h3 / smol-toml / js-yaml / svgo: astro (marketing site build, site/) ---
-# All four are pulled in transitively by Astro, used only to build the static
-# marketing site (`site/`) deployed to Cloudflare Pages. None of these code
-# paths (Astro dev server, SSE, TOML config parsing, SVG optimization) ship
-# in the final static HTML/CSS/JS output or run against untrusted input at
-# request time in the deployed site.
-GHSA-22cc-p3c6-wpvm  # added 2026-09-11 by rhonda-rodododo — h3 (astro, site/ build tool) — build-time only, not present in static output
-GHSA-7w5x-hrqm-74c2  # added 2026-09-11 by rhonda-rodododo — smol-toml (astro, site/ build tool) — parses only repo-controlled TOML at build time
-GHSA-52cp-r559-cp3m  # added 2026-09-11 by rhonda-rodododo — js-yaml (astro, site/ build tool) — parses only repo-controlled YAML at build time
-GHSA-5p4m-2wfm-xmqj  # added 2026-09-11 by rhonda-rodododo — js-yaml (astro, site/ build tool) — same as above
-GHSA-2883-xcg3-v3hh  # added 2026-09-11 by rhonda-rodododo — js-yaml (astro, site/ build tool) — same as above
-GHSA-2p49-hgcm-8545  # added 2026-09-11 by rhonda-rodododo — svgo (astro, site/ build tool) — optimizes repo-controlled SVG assets at build time only
-GHSA-w27v-7q3p-w38r  # added 2026-09-11 by rhonda-rodododo — svgo (astro, site/ build tool) — same as above
+# --- vite: nested copies under vitest and astro (dev-server-only) ---
+# The DIRECT devDependency is on `^8.0.16` and is out of range for all three.
+# These findings are nested copies — vitest > vite@7.3.x and astro > vite@8.0.x.
+# No fix is adoptable: bun/npm `overrides` are flat, and the npm EOVERRIDE rail
+# in tests/manifest-npm-coherence.test.ts requires an override on a direct
+# dependency's name to be byte-identical to the direct range — which would force
+# vitest's and astro's own vite ranges onto 8.x. Fixing them means bumping
+# vitest and astro themselves.
+# Reachability: all three are exploitable only against a running `vite dev`
+# server (fs.deny bypass via queries / Windows alternate paths, dev-server
+# websocket arbitrary file read). CI builds via `vite build`; production serves
+# the prebuilt bundle from the Tauri shell. The nested copies belong to the test
+# runner and the marketing-site build, neither of which starts a dev server.
+GHSA-v2wj-q39q-566r  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — vite (nested under vitest/astro) — dev-server-only fs.deny bypass, not exercised by build/preview; flat overrides cannot reach a nested copy of a direct dep — tracked in #1583
+GHSA-p9ff-h696-f583  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — vite — same path and reasoning (dev-server websocket file read) — tracked in #1583
+GHSA-fx2h-pf6j-xcff  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — vite — same path and reasoning (Windows alternate paths; Linux/macOS dev + CI unaffected) — tracked in #1583
 
-# --- vite: direct devDependency, dev server only ---
-# All four advisories are exploitable only against a running `vite dev`
-# server (fs.deny bypass, dev-server websocket arbitrary file read). CI and
-# production never run the Vite dev server — CI builds via `vite build` and
-# serves the static output with `vite preview`; production serves the
-# prebuilt bundle from the Tauri shell / static hosting. Still tracked for
-# upgrade since local `bun run dev` does run the dev server.
-GHSA-v2wj-q39q-566r  # added 2026-09-11 by rhonda-rodododo — vite (direct dep) — dev-server-only bypass, not exercised by build/preview
-GHSA-p9ff-h696-f583  # added 2026-09-11 by rhonda-rodododo — vite (direct dep) — dev-server-only websocket file read
-GHSA-fx2h-pf6j-xcff  # added 2026-09-11 by rhonda-rodododo — vite (direct dep) — dev-server-only, Windows-path specific (Linux/macOS dev + CI unaffected)
+# --- nanoid: the 5.x line under @scalar/types (OpenAPI docs UI) ---
+# Two major lines coexist. The 3.x copy is on 3.3.20 (fixed). The live finding
+# is @scalar/types > nanoid@5.1.6, which needs 5.1.16. No fix is adoptable: a
+# flat override cannot express a per-major floor — `>=5.1.16` would drag
+# postcss's `^3.3.12` onto ESM-only nanoid 5, and a 3.x floor would break
+# @scalar. @scalar/types@0.23.0 (latest) still declares `^5.1.6`.
+# Reachability: @scalar/hono-api-reference mounts the OpenAPI reference UI in
+# apps/worker; nanoid there generates internal, non-security-sensitive UI ids and
+# is never called with an attacker-controlled, negative or zero size argument,
+# which both advisories require.
+GHSA-28wg-ghj8-5hjv  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — nanoid 5.x (@scalar/hono-api-reference prod dep, docs UI ids) — no attacker-controlled size argument; flat overrides cannot express a per-major floor — tracked in #1583
+GHSA-xwg4-73v4-xw9w  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — nanoid 5.x — same path and reasoning — tracked in #1583
 
-# --- form-data: openai (prod dep) / twilio (devDep, unused SDK path) ---
-GHSA-hmw2-7cc7-3qxx  # added 2026-09-11 by rhonda-rodododo — form-data (via openai, prod dep; also via twilio devDep) — field/filenames we send to the OpenAI SDK are server-generated, not attacker-controlled; twilio path is devDependency-only and its SDK is not imported anywhere in apps/worker (adapters use raw fetch, see apps/worker/telephony/twilio.ts)
+# --- extract-zip: webdriverio browser-download path — NO UPSTREAM FIX ---
+# Both advisories cover `<= 2.0.1` with no patched version, and npm `latest` IS
+# 2.0.1 — the newest release is the vulnerable one, so no floor can be written.
+# Reachability: webdriverio's browser/driver download unzip path (Android E2E
+# tooling). The symlink traversal needs an attacker-supplied archive; the only
+# archives extracted here are browser binaries fetched over HTTPS from Chrome
+# for Testing. Dev/test tooling, never in a request path.
+GHSA-jmr9-qjv8-65gv  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — extract-zip (webdriverio devDependency) — no upstream fix exists (npm latest 2.0.1 is itself in range); archives are HTTPS browser binaries, not untrusted input — tracked in #1583
+GHSA-7pqw-9j4j-h8q3  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — extract-zip — same path and reasoning — tracked in #1583
 
-# --- axios: twilio (devDependency, SDK not imported at runtime) ---
-GHSA-gcfj-64vw-6mp9  # added 2026-09-11 by rhonda-rodododo — axios (via twilio, devDependency) — twilio npm SDK is not imported by apps/worker (adapter uses safeFetch directly); no production reachability
+# --- deepmerge-ts: webdriverio config merging — fix is a major outside its range ---
+# The fix is 8.0.0, a major. Every consumer (@wdio/config, @wdio/runner,
+# @wdio/utils, webdriver — all 9.27.0) declares `^7.0.3`, so forcing it would put
+# an untested deepmerge-ts under WebdriverIO's core config merging. That is a
+# deliberate decision on the test harness, not a free bump.
+# Reachability: stack exhaustion when merging recursive object graphs. The only
+# objects merged are WebdriverIO capability/config objects authored in this repo.
+GHSA-ggr8-5vv4-36mx  # added 2026-09-11, re-justified 2026-10-06 by rhonda-rodododo — deepmerge-ts (webdriverio devDependency config merging) — fix is a major outside every wdio consumer's ^7.0.3 range; merges only repo-authored config objects — tracked in #1583
 
-# --- protobufjs: onnxruntime-web, used by client-side Whisper transcription ---
-GHSA-wcpc-wj8m-hjx6  # added 2026-09-11 by rhonda-rodododo — protobufjs (via @huggingface/transformers > onnxruntime-web, prod dep) — parses only the bundled, repo-controlled ONNX model files shipped with the app, never user-supplied protobuf input
+# --- http-cache-semantics: astro (marketing site build, site/) — NO UPSTREAM FIX ---
+# GHSA-ch52-4w7c-c8xp covers `http-cache-semantics` through 4.2.0 and the
+# GitHub advisory records no patched version. 4.3.0 IS PUBLISHED AND IS NOT A
+# FIX: diffing the 4.2.0 and 4.3.0 tarballs, index.js changes only a `Vary: *`
+# matching bug, adds a status() accessor and touches JSDoc — the max-stale /
+# security-zeroed logic the advisory cites (index.js L425-441, L603-623) is
+# byte-identical. Because the advisory range is `<= 4.2.0`, bumping to 4.3.0
+# would silence `bun audit` without fixing anything. DO NOT bump this to
+# silence the audit; wait for a real fix.
+# Reachability: one consumer, one call site — astro's build-time remote-asset
+# cache (astro/dist/assets/build/remote.js). The flaw needs a shared multi-user
+# cache serving requests; this is a single-tenant cache on the build machine,
+# over URLs committed to this repo. The deployed static site on Cloudflare Pages
+# ships no copy of this package and evaluates no max-stale at request time.
+GHSA-ch52-4w7c-c8xp  # added 2026-10-06 by rhonda-rodododo — http-cache-semantics (astro, site/ build tool) — no upstream fix exists (4.3.0 is NOT a fix, verified by source diff); build-time single-tenant cache, unreachable from any request — tracked in #1579
 
-# --- sharp: astro (site build) / huggingface transformers (optional native binding, unused) ---
-GHSA-f88m-g3jw-g9cj  # added 2026-09-11 by rhonda-rodododo — sharp (astro site/ build tool; optional native binding under @huggingface/transformers, not used — project uses onnxruntime-web/WASM per docs) — build-time image processing on repo-controlled assets only
-GHSA-rgj7-g3m4-5g8c  # added 2026-09-11 by rhonda-rodododo — sharp — same as above
-
-# --- nanoid: vite/shadcn build tooling + @scalar/hono-api-reference (prod dep, docs UI) ---
-# @scalar/hono-api-reference mounts the OpenAPI reference UI in apps/worker;
-# nanoid there generates internal, non-security-sensitive IDs for the docs
-# UI (never called with attacker-controlled/negative/zero size arguments).
-GHSA-28wg-ghj8-5hjv  # added 2026-09-11 by rhonda-rodododo — nanoid (vite/shadcn build tooling; also @scalar/hono-api-reference prod dep, non-security-sensitive UI ids) — no attacker-controlled size argument
-GHSA-2v37-7h3g-55p8  # added 2026-09-11 by rhonda-rodododo — nanoid — same as above
-GHSA-xwg4-73v4-xw9w  # added 2026-09-11 by rhonda-rodododo — nanoid — same as above
-
-# --- postcss: vite/shadcn build tooling ---
-GHSA-r28c-9q8g-f849  # added 2026-09-11 by rhonda-rodododo — postcss (via vite/shadcn build tooling) — source-map path traversal only affects local build-time source map loading of repo-controlled CSS
-
-# --- fast-uri: eslint/shadcn (dev tooling, ajv JSON-schema validation for lint/CLI configs) ---
-GHSA-5jgf-p345-68v8  # added 2026-09-11 by rhonda-rodododo — fast-uri (via eslint/shadcn devDependencies, ajv) — dev-tooling only, not in request path
-GHSA-f65p-4m7j-42xc  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
-GHSA-fph4-wmhf-6fwf  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
-GHSA-jqff-g426-hqxp  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
-
-# --- browserslist: shadcn CLI / @tanstack/router-plugin (babel build-time transform) ---
-GHSA-c83g-rgw3-j3cx  # added 2026-09-11 by rhonda-rodododo — browserslist (shadcn devDependency CLI; @tanstack/router-plugin babel build-time transform) — build-time only, no untrusted input
-GHSA-73wf-gq98-2v4g  # added 2026-09-11 by rhonda-rodododo — browserslist — same as above
-
-# --- ip-address: shadcn MCP SDK / webdriverio proxy tooling (dev tooling) ---
-GHSA-mwp4-54f8-5fhr  # added 2026-09-11 by rhonda-rodododo — ip-address (shadcn CLI's bundled MCP SDK; webdriverio proxy-agent chain) — dev/test tooling only, not in request path
-
-# --- undici: wrangler/webdriverio/vitest/astro dev+test tooling ---
-GHSA-4cwx-7wf7-3272  # added 2026-09-11 by rhonda-rodododo — undici (wrangler, webdriverio, vitest jsdom, astro — all dev/test/build tooling) — no production runtime chain (worker uses Bun's built-in fetch, not undici, directly)
-GHSA-vmh5-mc38-953g  # added 2026-09-11 by rhonda-rodododo — undici — same as above
-GHSA-vxpw-j846-p89q  # added 2026-09-11 by rhonda-rodododo — undici — same as above
-GHSA-hm92-r4w5-c3mj  # added 2026-09-11 by rhonda-rodododo — undici — same as above
-
-# --- brace-expansion: eslint/typescript-eslint/webdriverio/shadcn (dev tooling glob matching) ---
-GHSA-mh99-v99m-4gvg  # added 2026-09-11 by rhonda-rodododo — brace-expansion (eslint, typescript-eslint, webdriverio, shadcn devDependencies) — dev/test tooling only
-GHSA-rgw5-rvv9-x895  # added 2026-09-11 by rhonda-rodododo — brace-expansion — same as above
-GHSA-3jxr-9vmj-r5cp  # added 2026-09-11 by rhonda-rodododo — brace-expansion — same as above
-
-# --- basic-ftp / extract-zip / adm-zip / deepmerge-ts: webdriverio (Android E2E tooling, dev-only) ---
-GHSA-rpmf-866q-6p89  # added 2026-09-11 by rhonda-rodododo — basic-ftp (webdriverio devDependency, browser-download FTP path) — dev/test tooling only, not in request path
-GHSA-6v7q-wjvx-w8wg  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
-GHSA-chqc-8p9q-pq6q  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
-GHSA-rp42-5vxx-qpwr  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
-GHSA-jmr9-qjv8-65gv  # added 2026-09-11 by rhonda-rodododo — extract-zip (webdriverio devDependency, browser-download unzip path) — dev/test tooling only
-GHSA-7pqw-9j4j-h8q3  # added 2026-09-11 by rhonda-rodododo — extract-zip — same as above
-GHSA-xcpc-8h2w-3j85  # added 2026-09-11 by rhonda-rodododo — adm-zip (via @huggingface/transformers > onnxruntime-node, optional native binding not used — project uses onnxruntime-web/WASM) — not reachable at runtime
-GHSA-7q85-xj36-vmfc  # added 2026-09-19 by rhonda-rodododo (discovered while landing #705, unrelated to hono) — adm-zip (same path as GHSA-xcpc-8h2w-3j85 above) — advisory published 2026-09-18, after this file's 2026-09-11 baseline; same non-reachability: optional onnxruntime-node native binding not used, project uses onnxruntime-web/WASM. Fix requires adm-zip 0.6.1, one minor above onnxruntime-node's declared ^0.5.16 range — tracked under #649, not upgraded here to keep this PR scoped to hono/CORS
-GHSA-ggr8-5vv4-36mx  # added 2026-09-11 by rhonda-rodododo — deepmerge-ts (webdriverio devDependency config merging) — dev/test tooling only
+# --- braces: chokidar / micromatch dev+build tooling — NO UPSTREAM FIX ---
+# GHSA-vfj7-8cjw-p6xm covers `braces` <= 3.0.3 with no patched version, and
+# npm `latest` IS 3.0.3 — the newest release is the vulnerable one, so no
+# overrides floor can be written. Routing around it is also unavailable:
+# chokidar@4 dropped braces/micromatch, but @tanstack/router-plugin (a direct
+# dependency) declares chokidar@^3 and chokidar 4 removed glob support, so the
+# major would break Vite route-file watching; and micromatch itself has no fix,
+# so the shadcn / playwright-bdd / jest-message-util paths persist regardless.
+# Reachability: every path is build-, dev- or test-time glob expansion over
+# patterns written in this repository (Vite/TanStack route watching, Mocha and
+# WebdriverIO spec discovery, shadcn CLI matching, playwright-bdd feature
+# discovery, Jest message formatting). The DoS needs an attacker-supplied
+# deeply-nested brace pattern; no consumer here is handed a pattern from a
+# request or any untrusted source, and braces is absent from the worker's
+# production closure and from every shipped client bundle.
+GHSA-vfj7-8cjw-p6xm  # added 2026-10-06 by rhonda-rodododo — braces (chokidar via @tanstack/router-plugin/wdio/mocha; micromatch via shadcn/playwright-bdd/jest-message-util; astro) — no upstream fix exists (npm latest 3.0.3 is itself in range); build/dev/test-time glob patterns from this repo only — tracked in #1580
