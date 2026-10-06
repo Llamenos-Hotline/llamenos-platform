@@ -15,13 +15,19 @@
     - ""
     - data
 
+# 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
+# compose bind-mounts this config into the loki container, which runs as uid
+# 10001 (grafana/loki sets USER 10001), so a 0640 file owned by the deploy
+# user was unreadable to it. The config holds no credential (auth_enabled is
+# false and storage is a local volume); one that did would keep 0600 and be
+# made readable by owner instead.
 - name: Template Loki config
   ansible.builtin.template:
     src: loki-config.yml.j2
     dest: "{{ app_dir }}/observability/loki/loki-config.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart loki
 
 - name: Template Loki docker-compose.yml
