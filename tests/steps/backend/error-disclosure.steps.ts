@@ -6,6 +6,7 @@
  * generic body. Unhandled server errors return generic 500.
  */
 import { expect } from '@playwright/test'
+import { devSurfaceSecret } from '../../dev-surface-secret'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import {
@@ -92,7 +93,7 @@ When('a request triggers an unhandled server error', async ({ request, world }) 
   const res = await request.get(`${BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
-      'X-Test-Secret': process.env.DEV_RESET_SECRET || 'test-reset-secret',
+      'X-Test-Secret': devSurfaceSecret(),
     },
   })
   const rawBody = await res.text()

@@ -10,8 +10,11 @@
  */
 
 import type { APIRequestContext } from '@playwright/test'
+import { devSurfaceSecret } from './dev-surface-secret'
 
-const TEST_SECRET = process.env.DEV_RESET_SECRET || 'test-reset-secret'
+// Resolved in ONE place for the whole harness — see tests/dev-surface-secret.ts
+// for the 404s a second resolution caused.
+const TEST_SECRET = devSurfaceSecret()
 /**
  * Backend base URL for simulation endpoints.
  * These must hit the backend directly (not the Vite frontend).

@@ -110,9 +110,50 @@ DEMO_MODE_CONFIRM={{ demo_mode_confirm }}
 DEMO_RESET_CRON={{ demo_reset_cron }}
 {% endif %}
 {% endif %}
+{# ── Developer/test routes (/api/test-*) — THIRD of three independent layers ──
+   DEV_ROUTES_ENABLED and DEV_RESET_SECRET open the destructive `/api/test-*`
+   surface (reset the database, mint identities). They are ONLY ever wanted on
+   a throwaway staging target that the end-to-end suite resets, never on a host
+   serving real callers or volunteers.
+
+   The `app_environment != 'production'` condition below is DELIBERATE, not an
+   oversight: on a production host these two vars are silently omitted from the
+   rendered .env even if an operator set `dev_routes_enabled: true` in vars.yml.
+   The omission is safe to make quietly because it can only ever happen in a
+   configuration two other layers already refuse outright — this layer exists so
+   that a bypass of either of them still cannot write the backdoor to disk.
+
+   The three layers, in the order a deploy hits them:
+     1. RUN TIME, before any file is written —
+        deploy/ansible/playbooks/tasks/guard-dev-routes.yml hard-fails the play
+        when app_environment == 'production' and dev_routes_enabled or
+        dev_reset_secret is set. Imported by preflight.yml, which both the
+        hosted and the self-hosted deploy path run via setup.yml. Keyed on
+        app_environment alone, with no reference to demo mode, so it survives
+        demo mode's removal.
+     2. RENDER TIME (here) — the var never reaches the .env on disk, so even a
+        path that skipped the preflight guard (an ad-hoc role invocation, a
+        future playbook that forgets the import) cannot template a backdoor onto
+        a production host.
+     3. PROCESS START — apps/worker/lib/config.ts throws when
+        ENVIRONMENT=production and any of DEV_ROUTES_ENABLED / DEV_RESET_SECRET /
+        E2E_TEST_SECRET is set, and apps/worker/lib/dev-surfaces.ts refuses to
+        serve /api/test-* outside the ['development', 'staging'] allowlist (and,
+        outside development, without a >= 32-char secret).
+
+   `staging` (and any other non-production value the var set allows) still emits
+   both vars normally — that is the whole point of #723: the E2E suite cannot
+   bootstrap a deployed target that answers 404 on /api/test-*.
+
+   deploy/ansible/scripts/check-required-env.py renders this template at
+   app_environment=staging AND app_environment=production with identical
+   dev_routes_enabled/dev_reset_secret inputs and asserts the opposite outcomes,
+   so neither half of this conditional can rot unnoticed. #}
+{% if (app_environment | default('production')) != 'production' %}
 {% if dev_routes_enabled | default(false) | bool %}
 DEV_ROUTES_ENABLED=true
 {% endif %}
 {% if (dev_reset_secret | default('')) | length > 0 %}
 DEV_RESET_SECRET={{ dev_reset_secret }}
+{% endif %}
 {% endif %}

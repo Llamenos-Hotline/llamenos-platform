@@ -1,3 +1,5 @@
+{% set pg_e2e_publish = (dev_routes_enabled | default(false) | bool) and (app_environment | default('production')) != 'production' %}
+{% set pg_e2e_network = 'e2e-db' %}
 name: llamenos
 
 services:
@@ -48,6 +50,49 @@ services:
       - POSTGRES_PASSWORD={{ pg_password }}
     networks:
       - internal
+{#
+  The end-to-end suite asserts persisted state straight from PostgreSQL
+  (tests/db-helpers.ts), so against a DEPLOYED target it has to be able to
+  reach this database — and by default nothing can: no port is published, which
+  is correct for every host that serves real callers.
+
+  Publishing it on 127.0.0.1 ONLY, and only on an E2E target, is the narrowest
+  thing that makes the suite possible. Loopback means nothing off the host can
+  connect even with the password; the operator carries it to the test runner
+  over SSH (`ssh -L`), which is already the administrative channel for this box.
+  See docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
+
+  Tied to `dev_routes_enabled` deliberately rather than given a switch of its
+  own: that flag already means "this is the throwaway target the suite resets",
+  and a second independent knob would let the database be exposed on a host
+  where the suite cannot run anyway. The `app_environment != 'production'` arm
+  is the same belt-and-braces as templates/env/_worker-required-env.j2 —
+  playbooks/tasks/guard-dev-routes.yml already refuses that combination outright.
+
+  NOTE: this monolithic role is deprecated and its only consumer is
+  playbooks/deploy-demo.yml, which is being removed with demo mode. Both shapes
+  a real deployment takes run playbooks/deploy.yml -> the per-service roles, so
+  roles/llamenos-postgres/templates/compose/postgres.j2 is the copy that
+  matters. This one is kept in step only so the two do not diverge while both
+  exist (scripts/check-required-env.py renders and checks both).
+
+  The extra network is NOT optional and NOT cosmetic HERE: this role's
+  `internal` network really is `internal: true` (see the bottom of this file).
+  Docker cannot publish a host port for a container attached only to such a
+  network: it accepts the `ports:` entry, records the binding in the container,
+  installs NO DNAT rule, and nothing ever listens. Measured on a real deploy —
+  `docker inspect` reported `127.0.0.1:5432`, `iptables -t nat -S` had no rule
+  for it, and the port was closed. A `ports:` entry alone would therefore be a
+  silent no-op that LOOKS configured, which is the exact false-green this whole
+  change exists to prevent. `{{ pg_e2e_network }}` is an ordinary bridge with no
+  published service of its own; the loopback host binding is still the only way
+  in from outside the host.
+#}
+{% if pg_e2e_publish %}
+      - {{ pg_e2e_network }}
+    ports:
+      - "127.0.0.1:{{ pg_e2e_loopback_port | default(5432) }}:5432"
+{% endif %}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U llamenos -d llamenos"]
       interval: 10s
@@ -125,3 +170,7 @@ networks:
   internal:
     driver: bridge
     internal: true
+{% if pg_e2e_publish %}
+  {{ pg_e2e_network }}:
+    driver: bridge
+{% endif %}

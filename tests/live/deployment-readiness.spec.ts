@@ -81,11 +81,18 @@ test.describe('deployment readiness', () => {
 
   test('development-only routes are absent', async ({ request }) => {
     // The single sharpest "is this a deployment or a dev box" question. These
-    // exist and are destructive on a development server; `devGuard` requires
-    // ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, and a deployment
-    // must satisfy neither. A 200 or a 400 here means dev surfaces are exposed
-    // to the internet — 400 would mean the route matched and only the body was
-    // rejected.
+    // exist and are destructive on a development server, and a deployment that
+    // serves real callers must satisfy none of the factors in
+    // apps/worker/lib/dev-surfaces.ts. A 200 or a 400 here means dev surfaces
+    // are exposed to the internet — 400 would mean the route matched and only
+    // the body was rejected.
+    //
+    // NOTE: this suite is for a PRODUCTION deployment. A staging target
+    // deliberately provisioned as the end-to-end suite's reset target
+    // (app_environment: staging + dev_routes_enabled + a >= 32-char
+    // dev_reset_secret — docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md) WILL fail
+    // this test, correctly: it is a dev-surfaced host and not a hotline. Point
+    // this suite at the deployment that takes calls, not at the test target.
     for (const path of ['/api/test-create-hub', '/api/test-reset', '/api/test-add-hub-member']) {
       const res = await request.post(path, {
         headers: { 'Content-Type': 'application/json' },

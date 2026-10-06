@@ -73,7 +73,7 @@ import { Scalar } from '@scalar/hono-api-reference'
 import { openAPIConfig } from './openapi/config'
 import { ServiceError } from './services/settings'
 import { createLogger } from './lib/logger'
-import { devSurfacesEnabled } from './lib/dev-surfaces'
+import { devSurfacesEnabled, devSurfaceSecretPresented } from './lib/dev-surfaces'
 
 const logger = createLogger('app')
 
@@ -126,7 +126,9 @@ api.use('*', async (c, next) => {
 
 api.use('*', apiVersion)
 
-// Dev route guard — only available when ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true (H04)
+// Dev route guard — see lib/dev-surfaces.ts for the three factors that must all
+// hold (environment allowlist, DEV_ROUTES_ENABLED, and a strong shared secret
+// on anything but a developer's own machine). H04.
 const devGuard = createMiddleware<AppEnv>(async (c, next) => {
   if (!devSurfacesEnabled(c.env)) {
     return c.json({ error: 'Not Found' }, 404)
@@ -134,6 +136,26 @@ const devGuard = createMiddleware<AppEnv>(async (c, next) => {
   return next()
 })
 api.use('/test-*', devGuard)
+// The dev surface can now be reached on a staging target, so the shared secret
+// is guessable in principle. Throttle the GUESSING, not the harness: a caller
+// that already presents the right secret is the test runner and makes hundreds
+// of /test-* calls per run, so a cap on those would make the suite unrunnable —
+// which is how a security control becomes a reason to turn the control off.
+//
+// `webhook` (300/min per IP) rather than `strict` (5/min) for the probes: the
+// suite itself asserts the refusal path, calling /test-reset with no secret and
+// with a wrong one (packages/test-specs/features/security/*.feature), and a
+// 5/min bucket turns those deliberate 404s into 429s on exactly the deployed
+// target this change exists to enable. 300/min against a secret of at least
+// MIN_DEPLOYED_SECRET_LENGTH characters — `openssl rand -hex 32`, 128 bits — is
+// no weaker in any practical sense; the length minimum, enforced both at
+// startup (lib/config.ts) and at the gate (lib/dev-surfaces.ts), is the control
+// that actually bounds guessing.
+const devProbeRateLimit = createMiddleware<AppEnv>(async (c, next) => {
+  if (devSurfaceSecretPresented(c.env, c.req.header('X-Test-Secret'))) return next()
+  return rateLimit('webhook')(c, next)
+})
+api.use('/test-*', devProbeRateLimit)
 
 // --- Rate limiting (H03) — applied per-tier before route handlers ---
 // Strict tier: auth/provisioning endpoints (by IP, 5 req/min)
