@@ -13,7 +13,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
-import { Timeouts, navigateAfterLogin } from '../../helpers'
+import { Timeouts, navigateAfterLogin, useScenarioHub } from '../../helpers'
 import {
   ADMIN_NSEC,
   listEntityTypesViaApi,
@@ -106,11 +106,15 @@ Then('the new event button should be visible', async ({ page }) => {
   await expect(btn.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('no events have been created', async ({ backendRequest: request, casesWorld, workerHub }) => {
-  await ensureEventEntityType(request, casesWorld, workerHub)
-  const records = await listRecordsViaApi(request, { entityTypeId: casesWorld.eventEntityTypeId!, hubId: workerHub })
-  // Accept current state — we just need the empty state to be possible
-  void records
+Given('no events have been created', async ({ page, backendRequest: request, casesWorld }) => {
+  // This step used to list the worker hub's event records and accept whatever it
+  // found, which made the empty-state assertion downstream a statement about the
+  // shard rather than about the app: the worker hub is shared by every scenario
+  // the worker runs, two of which (in this file) create events. Own the hub
+  // instead, and seed it with an event type and no records.
+  const hubId = await useScenarioHub(page, request, 'events-empty')
+  casesWorld.eventEntityTypeId = ''
+  await ensureEventEntityType(request, casesWorld, hubId)
 })
 
 Given('events exist', async ({ backendRequest: request, casesWorld, workerHub }) => {

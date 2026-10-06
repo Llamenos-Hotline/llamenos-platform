@@ -8,7 +8,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
-import { Timeouts } from '../../helpers'
+import { Timeouts, useScenarioHub } from '../../helpers'
 import {
   ADMIN_NSEC,
   createCmsReportTypeViaApi,
@@ -39,6 +39,13 @@ Given('a triage-eligible report exists', async ({ backendRequest: request, cases
     hubId: workerHub,
   })
   casesWorld.triageReportId = report.id
+})
+
+Given('a hub whose triage queue is empty', async ({ page, backendRequest: request }) => {
+  // The worker hub accumulates triage-eligible reports from every scenario this
+  // Playwright worker runs, so "the queue is empty" is only assertable in a hub
+  // this scenario owns. Nothing is seeded into it — that is the point.
+  await useScenarioHub(page, request, 'triage-empty')
 })
 
 Given('a triage-eligible report with a linked case exists', async ({ backendRequest: request, casesWorld, workerHub }) => {
