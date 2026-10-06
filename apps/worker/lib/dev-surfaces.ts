@@ -223,9 +223,13 @@ export function devSurfaceRequestAuthorized(
 
 /**
  * The DEMO surfaces — minting the fictional demo cast's signing seeds
- * (`lib/demo-identities.ts`) and the admin-authenticated demo reset
- * (`lib/demo-reset-gate.ts`) — keep their own predicate, still pinned to a
- * developer's own machine.
+ * (`lib/demo-identities.ts`), handing them to the login picker
+ * (`routes/config.ts` `GET /api/config/demo/credentials`, unauthenticated), the
+ * `/test-*` routes that register or reveal them (`routes/dev.ts`
+ * `demoRouteDenied`), the admin-authenticated demo reset
+ * (`lib/demo-reset-gate.ts`), and the `demoMode` the public `/api/config`
+ * reports off a STORED database flag (`routes/config.ts` `effectiveDemoMode`) —
+ * keep their own predicate, still pinned to a developer's own machine.
  *
  * Demo mode is being removed from the product altogether (the deployment
  * shapes are the hosted one and the self-hosted one; there is no demo

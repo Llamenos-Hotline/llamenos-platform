@@ -9,18 +9,41 @@ import { publicErrors } from '../openapi/helpers'
 import { ed25519Sign } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
 import { demoIdentities } from '../lib/demo-identities'
-import { devSurfacesEnabled } from '../lib/dev-surfaces'
+import { demoSurfacesEnabled } from '../lib/dev-surfaces'
 
 const config = new Hono<AppEnv>()
 
 /**
- * Whether the deployment presents itself as a demo/test environment. DEMO_MODE
- * is deployment configuration. The `demoMode` flag the setup wizard stores in the
- * database only counts on a development server — everywhere else no database
- * row can put a deployment into demo mode.
+ * Whether the deployment presents itself as a demo/test environment.
+ *
+ * The two arms carry deliberately different authority, and the asymmetry is the
+ * point:
+ *
+ *   - `DEMO_MODE` is deployment configuration an operator set on purpose, and
+ *     what it drives on the client is a WARNING — the demo banner
+ *     (`src/client/routes/__root.tsx`) telling a viewer that nothing here is
+ *     real. Suppressing a warning on a deployed host would be the less safe
+ *     choice, so this arm is not narrowed: a staging end-to-end target may
+ *     legitimately run `DEMO_MODE=true` (see `routes/dev.ts`) and still reports
+ *     `demoMode: true`. That is exactly what it did before the staging
+ *     allowlist existed.
+ *   - the `demoMode` flag the setup wizard stores in the DATABASE only counts
+ *     on a development server. A row no operator reviewed must never change how
+ *     a reachable host describes itself on a PUBLIC, unauthenticated endpoint.
+ *
+ * `demoSurfacesEnabled`, NOT `devSurfacesEnabled`: the staging allowlist widened
+ * the latter so an opted-in staging host may serve `/api/test-*`, and keying the
+ * stored-flag arm on it would have let a database row flip public `/api/config`
+ * there by side effect. The demo predicate stays pinned to a development server
+ * (lib/dev-surfaces.ts).
+ *
+ * The capability — the demo cast's signing seeds, below — is gated on
+ * `demoSurfacesEnabled` ALONE, with no `DEMO_MODE` arm. So an opted-in staging
+ * host running `DEMO_MODE=true` advertises demo mode and still refuses the
+ * seeds. Warn widely; hand out key material narrowly.
  */
 function effectiveDemoMode(env: AppEnv['Bindings'], storedDemoMode: boolean): boolean {
-  return env.DEMO_MODE === 'true' || (devSurfacesEnabled(env) && storedDemoMode)
+  return env.DEMO_MODE === 'true' || (demoSurfacesEnabled(env) && storedDemoMode)
 }
 
 config.get('/',
@@ -230,9 +253,17 @@ config.get('/pins',
  * generated per server process (lib/demo-identities.ts) and never appear in any
  * client bundle or image. Everywhere else this is a 404 decided before the
  * database is read, so no stored setup state can open it.
+ *
+ * Unauthenticated, and it dispenses Ed25519 signing seeds — so the gate is
+ * `demoSurfacesEnabled` (a development server), the same split `routes/dev.ts`
+ * `demoRouteDenied` makes, and NOT `devSurfacesEnabled`, which the staging
+ * allowlist widened for `/api/test-*`. On an opted-in staging host this answers
+ * the indistinguishable 404 up front rather than reaching `demoIdentities()` and
+ * letting `DemoIdentitiesUnavailableError` become a 500: non-disclosure must
+ * rest on the guard, never on an exception a layer below it.
  */
 config.get('/demo/credentials', async (c) => {
-  if (!devSurfacesEnabled(c.env)) {
+  if (!demoSurfacesEnabled(c.env)) {
     return c.json({ error: 'Not Found' }, 404)
   }
   let storedDemoMode = false
