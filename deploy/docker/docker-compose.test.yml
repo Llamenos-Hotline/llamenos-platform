@@ -60,6 +60,12 @@ services:
       - DEV_ROUTES_ENABLED=true
       - DEV_RESET_SECRET=${DEV_RESET_SECRET:-test-reset-secret}
       - TOKEN_MAX_AGE_MS=${TOKEN_MAX_AGE_MS:-3600000}
+      # Unset by default — the MockTelephonyAdapter refuses construction unless both
+      # are present (apps/worker/telephony/mock.ts), so the regular backend-bdd server
+      # stays a no-op here. The backend-bdd-opt-in CI job's .env sets both to run the
+      # @demo-mode BDD project (#1210).
+      - DEMO_MODE=${DEMO_MODE:-}
+      - DEMO_MODE_CONFIRM=${DEMO_MODE_CONFIRM:-}
       # CI has no real reverse proxy in front of the app, but the BDD suite
       # simulates one (CF-Connecting-IP) to test per-client rate-limit
       # buckets — same trust posture as docker-compose.production.yml.
