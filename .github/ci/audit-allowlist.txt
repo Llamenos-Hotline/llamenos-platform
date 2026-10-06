@@ -43,8 +43,6 @@ GHSA-fx2h-pf6j-xcff  # added 2026-09-11 by rhonda-rodododo — vite (direct dep)
 # --- form-data: openai (prod dep) / twilio (devDep, unused SDK path) ---
 GHSA-hmw2-7cc7-3qxx  # added 2026-09-11 by rhonda-rodododo — form-data (via openai, prod dep; also via twilio devDep) — field/filenames we send to the OpenAI SDK are server-generated, not attacker-controlled; twilio path is devDependency-only and its SDK is not imported anywhere in apps/worker (adapters use raw fetch, see apps/worker/telephony/twilio.ts)
 
-# --- axios: twilio (devDependency, SDK not imported at runtime) ---
-GHSA-gcfj-64vw-6mp9  # added 2026-09-11 by rhonda-rodododo — axios (via twilio, devDependency) — twilio npm SDK is not imported by apps/worker (adapter uses safeFetch directly); no production reachability
 
 # --- protobufjs: onnxruntime-web, used by client-side Whisper transcription ---
 GHSA-wcpc-wj8m-hjx6  # added 2026-09-11 by rhonda-rodododo — protobufjs (via @huggingface/transformers > onnxruntime-web, prod dep) — parses only the bundled, repo-controlled ONNX model files shipped with the app, never user-supplied protobuf input
@@ -64,11 +62,6 @@ GHSA-xwg4-73v4-xw9w  # added 2026-09-11 by rhonda-rodododo — nanoid — same a
 # --- postcss: vite/shadcn build tooling ---
 GHSA-r28c-9q8g-f849  # added 2026-09-11 by rhonda-rodododo — postcss (via vite/shadcn build tooling) — source-map path traversal only affects local build-time source map loading of repo-controlled CSS
 
-# --- fast-uri: eslint/shadcn (dev tooling, ajv JSON-schema validation for lint/CLI configs) ---
-GHSA-5jgf-p345-68v8  # added 2026-09-11 by rhonda-rodododo — fast-uri (via eslint/shadcn devDependencies, ajv) — dev-tooling only, not in request path
-GHSA-f65p-4m7j-42xc  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
-GHSA-fph4-wmhf-6fwf  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
-GHSA-jqff-g426-hqxp  # added 2026-09-11 by rhonda-rodododo — fast-uri — same as above
 
 # --- browserslist: shadcn CLI / @tanstack/router-plugin (babel build-time transform) ---
 GHSA-c83g-rgw3-j3cx  # added 2026-09-11 by rhonda-rodododo — browserslist (shadcn devDependency CLI; @tanstack/router-plugin babel build-time transform) — build-time only, no untrusted input
@@ -77,24 +70,43 @@ GHSA-73wf-gq98-2v4g  # added 2026-09-11 by rhonda-rodododo — browserslist — 
 # --- ip-address: shadcn MCP SDK / webdriverio proxy tooling (dev tooling) ---
 GHSA-mwp4-54f8-5fhr  # added 2026-09-11 by rhonda-rodododo — ip-address (shadcn CLI's bundled MCP SDK; webdriverio proxy-agent chain) — dev/test tooling only, not in request path
 
-# --- undici: wrangler/webdriverio/vitest/astro dev+test tooling ---
-GHSA-4cwx-7wf7-3272  # added 2026-09-11 by rhonda-rodododo — undici (wrangler, webdriverio, vitest jsdom, astro — all dev/test/build tooling) — no production runtime chain (worker uses Bun's built-in fetch, not undici, directly)
-GHSA-vmh5-mc38-953g  # added 2026-09-11 by rhonda-rodododo — undici — same as above
-GHSA-vxpw-j846-p89q  # added 2026-09-11 by rhonda-rodododo — undici — same as above
-GHSA-hm92-r4w5-c3mj  # added 2026-09-11 by rhonda-rodododo — undici — same as above
 
-# --- brace-expansion: eslint/typescript-eslint/webdriverio/shadcn (dev tooling glob matching) ---
-GHSA-mh99-v99m-4gvg  # added 2026-09-11 by rhonda-rodododo — brace-expansion (eslint, typescript-eslint, webdriverio, shadcn devDependencies) — dev/test tooling only
-GHSA-rgw5-rvv9-x895  # added 2026-09-11 by rhonda-rodododo — brace-expansion — same as above
-GHSA-3jxr-9vmj-r5cp  # added 2026-09-11 by rhonda-rodododo — brace-expansion — same as above
 
-# --- basic-ftp / extract-zip / adm-zip / deepmerge-ts: webdriverio (Android E2E tooling, dev-only) ---
-GHSA-rpmf-866q-6p89  # added 2026-09-11 by rhonda-rodododo — basic-ftp (webdriverio devDependency, browser-download FTP path) — dev/test tooling only, not in request path
-GHSA-6v7q-wjvx-w8wg  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
-GHSA-chqc-8p9q-pq6q  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
-GHSA-rp42-5vxx-qpwr  # added 2026-09-11 by rhonda-rodododo — basic-ftp — same as above
+# --- extract-zip / deepmerge-ts: webdriverio (Android E2E tooling, dev-only) ---
 GHSA-jmr9-qjv8-65gv  # added 2026-09-11 by rhonda-rodododo — extract-zip (webdriverio devDependency, browser-download unzip path) — dev/test tooling only
 GHSA-7pqw-9j4j-h8q3  # added 2026-09-11 by rhonda-rodododo — extract-zip — same as above
-GHSA-xcpc-8h2w-3j85  # added 2026-09-11 by rhonda-rodododo — adm-zip (via @huggingface/transformers > onnxruntime-node, optional native binding not used — project uses onnxruntime-web/WASM) — not reachable at runtime
-GHSA-7q85-xj36-vmfc  # added 2026-09-19 by rhonda-rodododo (discovered while landing #705, unrelated to hono) — adm-zip (same path as GHSA-xcpc-8h2w-3j85 above) — advisory published 2026-09-18, after this file's 2026-09-11 baseline; same non-reachability: optional onnxruntime-node native binding not used, project uses onnxruntime-web/WASM. Fix requires adm-zip 0.6.1, one minor above onnxruntime-node's declared ^0.5.16 range — tracked under #649, not upgraded here to keep this PR scoped to hono/CORS
 GHSA-ggr8-5vv4-36mx  # added 2026-09-11 by rhonda-rodododo — deepmerge-ts (webdriverio devDependency config merging) — dev/test tooling only
+
+# --- http-cache-semantics: astro (marketing site build, site/) — NO UPSTREAM FIX ---
+# GHSA-ch52-4w7c-c8xp covers `http-cache-semantics` through 4.2.0 and the
+# GitHub advisory records no patched version. 4.3.0 IS PUBLISHED AND IS NOT A
+# FIX: diffing the 4.2.0 and 4.3.0 tarballs, index.js changes only a `Vary: *`
+# matching bug, adds a status() accessor and touches JSDoc — the max-stale /
+# security-zeroed logic the advisory cites (index.js L425-441, L603-623) is
+# byte-identical. Because the advisory range is `<= 4.2.0`, bumping to 4.3.0
+# would silence `bun audit` without fixing anything. DO NOT bump this to
+# silence the audit; wait for a real fix.
+# Reachability: one consumer, one call site — astro@7.3.2's build-time
+# remote-asset cache (astro/dist/assets/build/remote.js). The flaw needs a
+# shared multi-user cache serving requests; this is a single-tenant cache on
+# the build machine, over URLs committed to this repo. The deployed static
+# site on Cloudflare Pages ships no copy of this package and evaluates no
+# max-stale at request time.
+GHSA-ch52-4w7c-c8xp  # added 2026-10-06 by rhonda-rodododo — http-cache-semantics (astro, site/ build tool) — no upstream fix exists (4.3.0 is NOT a fix, verified by source diff); build-time single-tenant cache, unreachable from any request — tracked in #1579
+
+# --- braces: chokidar / micromatch dev+build tooling — NO UPSTREAM FIX ---
+# GHSA-vfj7-8cjw-p6xm covers `braces` <= 3.0.3 with no patched version, and
+# npm `latest` IS 3.0.3 — the newest release is the vulnerable one, so no
+# overrides floor can be written. Routing around it is also unavailable:
+# chokidar@4 dropped braces/micromatch, but @tanstack/router-plugin (a direct
+# dependency) declares chokidar@^3 and chokidar 4 removed glob support, so the
+# major would break Vite route-file watching; and micromatch itself has no fix,
+# so the shadcn / playwright-bdd / jest-message-util paths persist regardless.
+# Reachability: every path is build-, dev- or test-time glob expansion over
+# patterns written in this repository (Vite/TanStack route watching, Mocha and
+# WebdriverIO spec discovery, shadcn CLI matching, playwright-bdd feature
+# discovery, Jest message formatting). The DoS needs an attacker-supplied
+# deeply-nested brace pattern; no consumer here is handed a pattern from a
+# request or any untrusted source, and braces is absent from the worker's
+# production closure and from every shipped client bundle.
+GHSA-vfj7-8cjw-p6xm  # added 2026-10-06 by rhonda-rodododo — braces (chokidar via @tanstack/router-plugin/wdio/mocha; micromatch via shadcn/playwright-bdd/jest-message-util; astro) — no upstream fix exists (npm latest 3.0.3 is itself in range); build/dev/test-time glob patterns from this repo only — tracked in #1580
