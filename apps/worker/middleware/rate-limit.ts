@@ -8,6 +8,10 @@
 import type { MiddlewareHandler } from 'hono'
 import type { AppEnv } from '../types'
 import { createLogger } from '../lib/logger'
+// Import from client-ip directly, not lib/crypto — crypto.ts pulls in
+// @llamenos/crypto/ffi (bun:ffi) at module load, which a non-Bun test
+// harness importing this middleware cannot resolve (issue #1127).
+import { getClientIp } from '../lib/client-ip'
 
 const log = createLogger('rate-limit')
 
@@ -18,12 +22,6 @@ export const RATE_LIMIT_TIERS: Record<Exclude<RateLimitTier, 'unlimited'>, { max
   write:   { maxRequests: 30,  windowMs: 60_000 },
   read:    { maxRequests: 120, windowMs: 60_000 },
   webhook: { maxRequests: 300, windowMs: 60_000 },
-}
-
-function extractIp(c: { req: { header(name: string): string | undefined } }): string {
-  return c.req.header('CF-Connecting-IP')
-    || c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
-    || 'unknown'
 }
 
 /**
@@ -48,10 +46,17 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
       return next()
     }
 
-    // Determine key: IP-based for strict/webhook, pubkey-based for write/read
+    // Determine key: IP-based for strict/webhook, pubkey-based for write/read.
+    // getClientIp() only honors CF-Connecting-IP/X-Forwarded-For/X-Real-IP
+    // when TRUST_PROXY_HEADERS=true (operator confirms a reverse proxy sets
+    // them); otherwise it falls back to the Bun socket address. Trusting a
+    // raw client-supplied header unconditionally — the previous
+    // behavior — let an unauthenticated caller vary that header to both
+    // write unbounded api_rate_limits rows AND dodge the limit it's
+    // supposed to be subject to (issue #1127).
     let identifier: string | undefined
     if (tier === 'strict' || tier === 'webhook') {
-      identifier = extractIp(c)
+      identifier = getClientIp(c.req.raw)
     } else {
       identifier = c.get('pubkey')
       if (!identifier) {

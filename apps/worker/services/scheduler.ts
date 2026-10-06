@@ -34,6 +34,15 @@ import {
   startAuditChainVerifyWorker,
   stopAuditChainVerifyWorker,
 } from '../lib/audit-chain-verify-worker'
+import {
+  startPeriodicCleanupWorker,
+  stopPeriodicCleanupWorker,
+} from '../lib/periodic-cleanup-worker'
+import {
+  startSignalQueueDrainWorker,
+  stopSignalQueueDrainWorker,
+  createSignalQueueDrainOpts,
+} from '../lib/signal-queue-drain-worker'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
@@ -42,6 +51,27 @@ import type { HubShredService } from './hub-shred'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
+
+/**
+ * Every background worker the scheduler is responsible for starting.
+ * `start()` asserts it started all of these before returning — see the
+ * assertion at the bottom of `start()`. Add a new worker here FIRST, then
+ * wire it in `start()`/`stop()`: the assertion will fail loudly instead of
+ * silently never starting it, which is exactly how the retention, erasure,
+ * identity-cleanup and Signal-drain workers went unnoticed (issue #1127).
+ */
+export const SCHEDULER_WORKER_NAMES = [
+  'blast-delivery',
+  'scheduled-blast-poller',
+  'retention-purge',
+  'audit-chain-verify',
+  'erasure-expiry',
+  're-encryption',
+  'periodic-cleanup',
+  'signal-queue-drain',
+] as const
+
+export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
 
 /**
  * The service-registry half of the scheduler's dependencies.
@@ -72,8 +102,19 @@ export interface TaskSchedulerDeps extends TaskSchedulerServiceDeps {
 
 export class TaskScheduler {
   private started = false
+  private startedWorkers: SchedulerWorkerName[] = []
 
   constructor(protected db: Database) {}
+
+  /**
+   * Names of workers started by the most recent `start()` call. Empty
+   * before the first `start()` or after `stop()`. Exists so a test (and,
+   * at boot, a human reading logs) can assert every worker the scheduler
+   * knows about actually started — see SCHEDULER_WORKER_NAMES.
+   */
+  getStartedWorkers(): readonly SchedulerWorkerName[] {
+    return this.startedWorkers
+  }
 
   /**
    * Start all background task workers.
@@ -82,6 +123,8 @@ export class TaskScheduler {
   start(deps: TaskSchedulerDeps): void {
     if (this.started) return
     this.started = true
+
+    const started: SchedulerWorkerName[] = []
 
     // No `if (deps.x)` gates: every dependency is required, so a worker that
     // is listed here always runs. A missing one cannot reach this method.
@@ -93,31 +136,68 @@ export class TaskScheduler {
       onProgress: deps.onBlastProgress,
       onStatusChange: deps.onBlastStatusChange,
     })
+    started.push('blast-delivery')
 
     startScheduledBlastPoller(deps.blastsService)
+    started.push('scheduled-blast-poller')
 
     startRetentionPurgeWorker({
       retentionService: deps.retentionService,
       auditService: deps.auditService,
       settingsService: deps.settingsService,
     })
+    started.push('retention-purge')
 
     startAuditChainVerifyWorker({
       auditService: deps.auditService,
       identityService: deps.identityService,
     })
+    started.push('audit-chain-verify')
 
     startErasureExpiryWorker({
       erasureService: deps.erasureService,
       auditService: deps.auditService,
       hubShred: deps.hubShred,
     })
+    started.push('erasure-expiry')
 
     startReEncryptionWorker({
       erasureService: deps.erasureService,
     })
+    started.push('re-encryption')
 
-    logger.info('Started')
+    // Periodic cleanup: IdentityService.cleanup() (sessions, WebAuthn
+    // challenges, provision rooms, invite codes, auth nonces) and
+    // SettingsService.runCleanup() (rate limits, CAPTCHA challenges) plus
+    // the API rate-limit fixed-window purge. See issue #1127 — auth_nonces
+    // gained one row per authenticated request with nothing ever deleting
+    // expired ones until this worker existed.
+    startPeriodicCleanupWorker({
+      identityService: deps.identityService,
+      settingsService: deps.settingsService,
+    })
+    started.push('periodic-cleanup')
+
+    // Signal retry queue drain: claims pending signal_message_queue rows
+    // and attempts delivery, letting markFailed's own backoff/dead-letter
+    // logic run. See issue #1127 — claimBatch() had no caller at all.
+    startSignalQueueDrainWorker(
+      createSignalQueueDrainOpts(this.db, () => deps.resolveAdapter('signal')),
+    )
+    started.push('signal-queue-drain')
+
+    this.startedWorkers = started
+
+    const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
+    if (missing.length > 0) {
+      // Should be unreachable — every name above is pushed unconditionally.
+      // Guards against a future edit that reintroduces a conditional start
+      // without updating this list, which is the exact failure class this
+      // scheduler shipped with for retention/erasure/cleanup/signal-drain.
+      throw new Error(`TaskScheduler.start() did not start: ${missing.join(', ')}`)
+    }
+
+    logger.info('Started', { workers: this.startedWorkers })
   }
 
   /**
@@ -126,6 +206,7 @@ export class TaskScheduler {
   stop(): void {
     if (!this.started) return
     this.started = false
+    this.startedWorkers = []
 
     stopBlastWorker()
     stopScheduledBlastPoller()
@@ -133,6 +214,8 @@ export class TaskScheduler {
     stopAuditChainVerifyWorker()
     stopErasureExpiryWorker()
     stopReEncryptionWorker()
+    stopPeriodicCleanupWorker()
+    stopSignalQueueDrainWorker()
 
     logger.info('Stopped')
   }

@@ -3443,24 +3443,30 @@ export class SettingsService {
               (row.cleanupMetrics as CleanupMetrics) ?? emptyCleanupMetrics()
             const now = Date.now()
 
-            // Clean up expired rate limit entries
+            // Clean up expired rate limit entries. Done entirely in SQL —
+            // `select().from(rateLimits)` with no limit used to pull every
+            // distinct rate-limit key in the table into Node memory on
+            // every cleanup tick, unbounded in the number of distinct
+            // clients ever seen (issue #1127). The CTE below trims stale
+            // timestamps and deletes now-empty rows in one round trip,
+            // returning only the keys it deleted.
             const rateLimitTTL = resolveTTL('rateLimit', overrides)
-            const allRateLimits = await this.db.select().from(rateLimits)
-            for (const rl of allRateLimits) {
-              const timestamps = rl.timestamps as number[]
-              const recent = timestamps.filter((t) => now - t < rateLimitTTL)
-              if (recent.length === 0) {
-                await this.db
-                  .delete(rateLimits)
-                  .where(eq(rateLimits.key, rl.key))
-                metrics.rateLimitEntriesDeleted++
-              } else {
-                await this.db
-                  .update(rateLimits)
-                  .set({ timestamps: recent })
-                  .where(eq(rateLimits.key, rl.key))
-              }
-            }
+            const cutoffMs = now - rateLimitTTL
+            const deletedRateLimits = await this.db.execute<{ key: string }>(sql`
+              WITH trimmed AS (
+                UPDATE rate_limits
+                SET timestamps = COALESCE((
+                  SELECT jsonb_agg(elem.v)
+                  FROM jsonb_array_elements(rate_limits.timestamps) AS elem(v)
+                  WHERE (elem.v)::numeric > ${cutoffMs}
+                ), '[]'::jsonb)
+                RETURNING key, timestamps
+              )
+              DELETE FROM rate_limits
+              WHERE key IN (SELECT key FROM trimmed WHERE timestamps = '[]'::jsonb)
+              RETURNING key
+            `)
+            metrics.rateLimitEntriesDeleted += deletedRateLimits.length
 
             // Clean up expired CAPTCHA challenges
             const captchaTTL = resolveTTL('captchaChallenge', overrides)
