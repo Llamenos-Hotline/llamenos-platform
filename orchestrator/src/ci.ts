@@ -611,12 +611,21 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  *
  * No token is a prefix or a substring of another (pinned in
  * tests/orchestrator/review-outcome-titles.test.ts), so a grep for one never
- * matches a different outcome. The two `unclassified` tokens are the
- * catch-alls for facts the naming step does not recognise; seeing one means
- * the vocabulary needs a new entry, not that anything was judged.
+ * matches a different outcome.
+ *
+ * There is exactly ONE `unclassified` token and it is a `NO-VERDICT:` one
+ * (#1588). There used to be a `PASS:unclassified` as well, reached from a
+ * `*) token="PASS:unclassified"` default in the naming step — so any outcome
+ * nobody had named concluded a GREEN required context. `bot-authored` had no
+ * case at all, and all four open Dependabot PRs were green that way with no
+ * model call ever made. The default for a gate has to point the other way:
+ * an outcome the naming step cannot name is `NO-VERDICT:unclassified` and
+ * fails the check, so a new gate branch fails closed until somebody
+ * deliberately classifies it. Seeing it means the vocabulary needs a new
+ * entry, never that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:low-tier', 'PASS:unclassified',
+  'PASS:reviewed', 'PASS:cached', 'PASS:carried', 'PASS:low-tier', 'PASS:bot-authored',
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',

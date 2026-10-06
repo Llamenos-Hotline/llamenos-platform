@@ -161,10 +161,23 @@ const smokeFailed = (engineFailure: string): Facts => ({
 })
 
 /**
- * Every outcome, as the facts the job really leaves behind, and the ONE
- * token it must be named with. The numbered entries are #1230's own list;
- * the rest are the gate's other outcomes and every other way a run ends.
+ * Every outcome, as the facts the job really leaves behind, the ONE token it
+ * must be named with, and the exit code the naming step itself must take.
+ * The numbered entries are #1230's own list; the rest are the gate's other
+ * outcomes and every other way a run ends.
+ *
+ * The step's own exit code is DERIVED from those two facts rather than given
+ * a column of its own, because it is an invariant and not a per-case choice:
+ * the step exits non-zero exactly when the job arrived GREEN and the token
+ * is not a `PASS:` one — a green run by a path nothing here can name, which
+ * #1588 made fail closed. Every other outcome exits 0, the conclusion having
+ * already been decided by the steps above it. The rail for that whole class,
+ * and the proof it can fail, is
+ * tests/orchestrator/review-unnamed-outcome-fails-closed.test.ts.
  */
+const expectedExit = (facts: Facts, token: ReviewOutcomeToken): number =>
+  facts.JOB_STATUS === 'success' && !token.startsWith('PASS:') ? 1 : 0
+
 const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // #1230 (1) and (2): a reviewer rejected the diff. (2) is the same state
   // — what was wrong there was the NAME ("review-did-not-run", from the
@@ -229,14 +242,17 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['the gate succeeded but wrote no outcome (gate-outcome-missing)', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success' }, 'NO-VERDICT:gate-error'],
   ['the base predates the review gate', { JOB_STATUS: 'failure', BASE_GATE_OUTCOME: 'failure', GATE_CONCLUSION: 'skipped' }, 'NO-VERDICT:base-predates-gate'],
   ['the job failed before the gate ran (e.g. the PR lookup)', { JOB_STATUS: 'failure', BASE_GATE_OUTCOME: '', GATE_CONCLUSION: '' }, 'NO-VERDICT:setup-failed'],
-  ['a passing run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'PASS:unclassified'],
+  // #1588: a green job on an outcome this step has no name for. It used to
+  // be named `PASS:unclassified` and stay green; now the step fails it.
+  ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
+  ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
   ['a verdict of PASS, then a later step failed the job', reviewed('pass', 'failure'), 'NO-VERDICT:unclassified'],
 ]
 
 describe('rail: every fleet/review outcome is named on its own check (#1230)', () => {
   it.each(OUTCOMES)('%s → %s', (_label, facts, token) => {
     const named = name(facts)
-    expect(named.status, named.stdout).toBe(0)
+    expect(named.status, named.stdout).toBe(expectedExit(facts, token))
     expect(named.title, `no "${ANNOTATION_TITLE}" annotation was emitted:\n${named.stdout}`).not.toBeNull()
     expect(reviewOutcomeToken(named.title)).toBe(token)
     expect(named.title).toMatch(new RegExp(`^${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — \\S`))
@@ -325,7 +341,38 @@ describe('rail: every fleet/review outcome is named on its own check (#1230)', (
 
   it('writes nothing a verdict depends on — the review job stays read-only', () => {
     const script = step('fleet-review', NAMING_STEP).run
-    for (const forbidden of [/\bgh\s/, /\bcurl\b/, /GITHUB_OUTPUT/, /\bexit\s+[1-9]/]) expect(script).not.toMatch(forbidden)
+    for (const forbidden of [/\bgh\s/, /\bcurl\b/, /GITHUB_OUTPUT/]) expect(script).not.toMatch(forbidden)
+  })
+
+  /**
+   * #1588 CHANGED THIS STEP'S ONE POWER, deliberately. It used to be banned
+   * from exiting non-zero at all, on the reasoning that a step which only
+   * prints must not touch the verdict. The hole that reasoning left: the
+   * success branch's `*) token="PASS:unclassified"` default handed a GREEN
+   * required context to every outcome nobody had named — `bot-authored`
+   * among them, which is how four Dependabot PRs were green with no model
+   * call ever made.
+   *
+   * So the ban is now directional rather than absolute: the step may only
+   * ADD red, and only for an outcome it cannot name. Exactly one `exit`, it
+   * is `exit 1`, it is guarded by `$unnamed`, and `$unnamed` is set in no
+   * branch that produced a token — every named outcome in OUTCOMES above
+   * asserts `status === 0`, which is what proves the guard cannot misfire.
+   */
+  it('can only ADD red, and only for an outcome it cannot name (#1588)', () => {
+    const script = step('fleet-review', NAMING_STEP).run
+    const exits = [...script.matchAll(/^\s*exit\s+(\d+)\s*$/gm)].map((m) => m[1])
+    expect(exits, 'the naming step must have exactly one exit, and it must be a failure').toEqual(['1'])
+    expect(script, 'the exit must be guarded by the unnamed-outcome flag').toMatch(
+      /if \[ -n "\$unnamed" \]; then\n(?:.*\n)*?\s*exit 1\n\s*fi/,
+    )
+    // And it is the LAST thing the step does, so the annotation and the
+    // summary are written before the step fails.
+    const annotation = script.lastIndexOf('title=fleet/review outcome::')
+    const summary = script.lastIndexOf('GITHUB_STEP_SUMMARY')
+    const exit = script.lastIndexOf('exit 1')
+    expect(exit).toBeGreaterThan(annotation)
+    expect(exit).toBeGreaterThan(summary)
   })
 })
 
