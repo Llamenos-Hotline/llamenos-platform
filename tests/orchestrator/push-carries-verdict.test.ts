@@ -291,12 +291,22 @@ describe('review-gate by injection — a push never starts a review, and is neve
     onlyReads(g.ghCalls)
   })
 
-  it('a push with no review requested and none ever earned: green, saying nothing was reviewed', () => {
+  // #1564. This used to exit 0 — a green `fleet/review` on a PR nothing had
+  // ever reviewed. On #1549 that SUCCESS was what the PR's statusCheckRollup
+  // resolved the required context to, while the dispatched run that did read
+  // the diff REJECTED it, so the PR read CLEAN carrying two HIGH findings.
+  // A push still never starts a review; it just no longer publishes a pass
+  // for a verdict that does not exist.
+  it('a push with no review requested and none ever earned: RED, because nothing judged the diff', () => {
     const g = reviewGate({ action: 'synchronize', routes: [runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])] })
-    expect(g.status, g.out).toBe(0)
+    expect(g.status, g.out).toBe(1)
     expect(g.outputs['outcome']).toBe('unreviewed')
     expect(g.outputs['earned_sha']).toBe('')
-    expect(g.out).toContain('nothing was reviewed')
+    expect(g.out).toContain('NOTHING has judged this diff')
+    // The red is an absence, not a finding: the check says so and says what
+    // clears it, so nobody reads it as a rejection and edits the code.
+    expect(g.out).toContain('not a rejection of the code')
+    expect(g.out).toContain('request a review from')
     onlyReads(g.ghCalls)
   })
 

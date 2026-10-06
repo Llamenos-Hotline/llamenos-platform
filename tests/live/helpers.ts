@@ -301,11 +301,18 @@ export function present<T>(value: T | null | undefined, what: string): T {
 /**
  * The Ed25519 identity pubkey a signing seed authenticates as.
  *
- * The operator's own identity is the only one this suite can use as a RINGING
- * subject: a volunteer who joined by redeeming an invite has no hub role
- * (`IdentityService.redeemInvite` never calls `setHubRole`, TODO #1037), so
- * `resolveRingableVolunteers`'s `hasHubAccess` filter removes them and every
- * ring case would read "does not ring" for the wrong reason.
+ * The operator's own identity is the default RINGING subject for this suite,
+ * because it holds a hub role unconditionally (`POST /hubs` makes its creator
+ * hub-admin) and so can never drop out of the ring set for a reason that has
+ * nothing to do with shifts or clock-ins.
+ *
+ * An invited volunteer CAN be a ring subject, but only deliberately:
+ * `IdentityService.redeemInvite` writes `hubRoles` from the invite's
+ * `roleIds`, and an invite that named none grants none (#1446) — such a member
+ * is refused by `hubContext` with 403 before any call logic runs, and
+ * `resolveRingableVolunteers`'s `hasHubAccess` filter removes them from the
+ * ring set. So an invite used to make a ring subject must name a role
+ * explicitly, as the first-pickup-wins test in call-handling.spec.ts does.
  */
 export function adminPubkeyFromSeed(seedHex: string): string {
   return bytesToHex(ed25519.getPublicKey(hexToBytes(seedHex)))
@@ -587,4 +594,226 @@ export async function openNote(
   const contentKey = await unwrapKey(b64urlToHex(envelope.ct), envelope.enc, recipientSkHex, LABEL_NOTE_KEY)
   const data = hexToBytes(encryptedContent)
   return new TextDecoder().decode(gcm(contentKey, data.slice(0, 12)).decrypt(data.slice(12)))
+}
+
+// ── Driving an inbound call the way the deployment's own PBX does ───
+//
+// R1's middle clause — "that volunteer ... receives a call, answers it" — had
+// no live evidence at all, and could not have any: the only answer test was a
+// negative probe (401/404 for a call that does not exist), because the suite
+// had no way to make a call exist. Twilio's half places a real call but never
+// answers it, and the one block that does answer runs only under
+// `DEMO_MODE=true`, which is not what a deployment ships.
+//
+// What follows closes that by driving the webhook chain a PBX drives, signed
+// with the credential that deployment's PBX signs it with. Be precise about
+// what that is and is not:
+//
+//   IS real — hub resolution from the dialled number, the ban check, the IVR
+//   language menu, the per-caller spam window, `startParallelRinging` and so
+//   the call record, `resolveRingableVolunteers` (shift ∩ clock-in), the relay
+//   `call:ring`, the answer route with its first-pickup-wins guard and
+//   `cancelLosingLegs`, and `endCall` into history. Every webhook is checked
+//   by the real `validateWebhook` — real HMAC, real ±60s window, real
+//   body-hash replay protection.
+//
+//   IS NOT real — SIP signalling and RTP. No phone is dialled and no channel
+//   exists on the PBX. This stands IN FOR the PBX; it does not pretend to be
+//   a telephone.
+//
+// A genuine SIP call, carrier included, is covered by a different harness that
+// cannot run from here: `deploy/docker/tests/telephony/run-call-e2e.sh` puts a
+// second Asterisk playing the phone network on one Docker network with the
+// app. It needs the app INSIDE that network (Asterisk fetches prompts from the
+// origin it reaches, and ufw drops container→host on a default box), and it
+// seeds through `/api/test-*`. Neither is available against a deployment, so
+// real SIP stays there and this stays here.
+
+/** The provider a deployment answers calls with, as the operator configured it. */
+export interface LiveTelephonyProvider {
+  type?: string
+  phoneNumber?: string
+  /** `asterisk` — the HMAC-SHA256 secret the ARI bridge signs webhooks with. */
+  bridgeSecret?: string
+  /** `freeswitch` — the same, under the name that adapter stores it as. */
+  freeswitchBridgeSecret?: string
+  /** `twilio`/`signalwire` — the HMAC-SHA1 key those sign webhooks with. */
+  authToken?: string
+}
+
+/**
+ * The telephony provider this deployment is configured with.
+ *
+ * `GET /api/settings/telephony-provider` serves the DECRYPTED credential set
+ * to a caller holding `settings:manage-telephony`, which is how the operator's
+ * own settings screen populates its form. That is the only way a suite can
+ * sign a webhook the deployment will accept, and it needs no new secret in
+ * `.env.live`: the admin seed this suite already holds is strictly more
+ * powerful than the provider credential it reads with it.
+ *
+ * The hub row is asked for first and the global row second, matching the
+ * resolution order `getHubTelephonyFromService` uses for a real call. A hub
+ * with no row of its own answers `null` and falls through to global, exactly
+ * as call handling does.
+ */
+export async function readTelephonyProvider(
+  request: APIRequestContext,
+  adminSeed: string,
+  hubId: string,
+): Promise<LiveTelephonyProvider | null> {
+  for (const path of [`/hubs/${hubId}/settings/telephony-provider`, '/settings/telephony-provider']) {
+    const { status, data } = await apiGet<LiveTelephonyProvider | null>(request, path, adminSeed)
+    if (status === 200 && data && data.type) return data
+  }
+  return null
+}
+
+/** The signing key and wire format a provider's webhooks use, or null. */
+function webhookSigning(provider: LiveTelephonyProvider):
+  | { family: 'bridge' | 'twilio'; secret: string }
+  | null {
+  switch (provider.type) {
+    case 'asterisk':
+      return provider.bridgeSecret ? { family: 'bridge', secret: provider.bridgeSecret } : null
+    case 'freeswitch':
+      return provider.freeswitchBridgeSecret
+        ? { family: 'bridge', secret: provider.freeswitchBridgeSecret }
+        : null
+    case 'twilio':
+    case 'signalwire':
+      return provider.authToken ? { family: 'twilio', secret: provider.authToken } : null
+    default:
+      return null
+  }
+}
+
+/**
+ * Why this deployment's inbound call path cannot be driven, or null when it
+ * can.
+ *
+ * Every reason here is an absent CREDENTIAL or an absent provider — never
+ * absent data. "No call record exists" is not among them: that is the thing
+ * these tests create, and skipping on it is exactly how the answer path went
+ * unverified for months.
+ */
+export function inboundDriveRefusal(provider: LiveTelephonyProvider | null): string | null {
+  if (!provider) {
+    return 'this deployment has no telephony provider configured, so there is no inbound '
+      + 'call path to drive and no credential to sign one with — complete the provider step '
+      + 'of the setup wizard (deployment-readiness.spec.ts reports this too)'
+  }
+  if (!webhookSigning(provider)) {
+    return `this deployment's telephony provider is "${provider.type}", whose webhook `
+      + 'signature this suite cannot produce. Supported: asterisk and freeswitch (HMAC-SHA256 '
+      + 'bridge signature) and twilio/signalwire (HMAC-SHA1 request signature). The provider '
+      + 'row also has to carry the signing credential; a row configured through the OAuth flow '
+      + 'may not.'
+  }
+  return null
+}
+
+const b64 = (bytes: ArrayBuffer) => Buffer.from(bytes).toString('base64')
+
+async function hmac(algorithm: 'SHA-1' | 'SHA-256', secret: string, payload: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: algorithm }, false, ['sign'],
+  )
+  return b64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload)))
+}
+
+/**
+ * The absolute URLs a signature might have been computed over, best first.
+ *
+ * Both adapters sign the request URL, and neither can be told what it is from
+ * outside:
+ *
+ *  - the bridge adapter signs RAW `request.url` — the URL the app process
+ *    sees. Behind a TLS-terminating proxy that is `http://`, not `https://`,
+ *    even though the caller used `https://` (the Host header is preserved, the
+ *    scheme is not).
+ *  - the Twilio adapter signs `WEBHOOK_BASE_URL.origin + pathname + search`,
+ *    falling back to `request.url` when that variable is unset — and
+ *    `WEBHOOK_BASE_URL` is server-side config this suite cannot read.
+ *
+ * So both renderings are tried. This is NOT a retry that papers over a bad
+ * signature: a 403 from every candidate is returned as a 403 and fails the
+ * test, naming this as the cause.
+ */
+function signableUrls(baseURL: string, path: string): string[] {
+  const base = new URL(baseURL)
+  const https = `${base.origin}${path}`
+  const http = `http://${base.host}${path}`
+  return https === http ? [https] : [https, http]
+}
+
+/**
+ * POST one telephony webhook, signed as this deployment's provider signs it.
+ *
+ * `fields` is given in the bridge's JSON vocabulary and translated for the
+ * Twilio family, so a caller writes the call once. The body shapes mirror what
+ * each provider actually sends — the bridge's `call-status` body carries
+ * `channelId`, as `sip-bridge/src/command-handler` does, and that is
+ * load-bearing: webhook replay protection hashes the BODY ALONE
+ * (services/webhook-replay.ts, 300s window), so two calls completing inside
+ * five minutes with byte-identical bodies would see the second silently
+ * swallowed as a replay and never reach history.
+ */
+export async function postProviderWebhook(
+  request: APIRequestContext,
+  provider: LiveTelephonyProvider,
+  baseURL: string,
+  path: string,
+  fields: { callSid: string; callerNumber?: string; calledNumber?: string; digits?: string; status?: string },
+): Promise<{ status: number; body: string }> {
+  const signing = webhookSigning(provider)
+  if (!signing) throw new Error('postProviderWebhook called for a provider that cannot be signed')
+
+  let last: { status: number; body: string } = { status: 0, body: '' }
+  for (const url of signableUrls(baseURL, path)) {
+    const headers: Record<string, string> = {}
+    let body: string
+
+    if (signing.family === 'bridge') {
+      const payload: Record<string, string> = { channelId: fields.callSid }
+      if (fields.callerNumber) payload.callerNumber = fields.callerNumber
+      if (fields.calledNumber) payload.calledNumber = fields.calledNumber
+      if (fields.digits !== undefined) payload.digits = fields.digits
+      if (fields.status) { payload.event = 'call-status'; payload.status = fields.status }
+      body = JSON.stringify(payload)
+      const timestamp = String(Date.now())
+      headers['Content-Type'] = 'application/json'
+      headers['X-Bridge-Timestamp'] = timestamp
+      headers['X-Bridge-Signature'] = await hmac('SHA-256', signing.secret, `${timestamp}.${url}.${body}`)
+    } else {
+      const form = new URLSearchParams()
+      form.set('CallSid', fields.callSid)
+      if (fields.callerNumber) form.set('From', fields.callerNumber)
+      if (fields.calledNumber) form.set('To', fields.calledNumber)
+      if (fields.digits !== undefined) form.set('Digits', fields.digits)
+      if (fields.status) form.set('CallStatus', fields.status)
+      body = form.toString()
+      // url + each key and value concatenated, sorted by key (twilio.ts).
+      const sorted = [...form.entries()].sort(([a], [b]) => a.localeCompare(b))
+      const data = url + sorted.map(([k, v]) => k + v).join('')
+      headers['Content-Type'] = 'application/x-www-form-urlencoded'
+      headers['X-Twilio-Signature'] = await hmac('SHA-1', signing.secret, data)
+    }
+
+    const res = await request.post(url, { headers, data: body, failOnStatusCode: false })
+    last = { status: res.status(), body: await res.text() }
+    if (last.status !== 403) return last
+  }
+  return last
+}
+
+/** A caller number no other test or previous run shares. */
+export function liveCallerNumber(): string {
+  // The hub's per-caller window is 3 calls a minute, keyed on the HASHED
+  // number (DEFAULT_SPAM_SETTINGS), so every driven call needs its own.
+  return `+1555${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`
+}
+
+/** A call id this suite's rows can be recognised by in an operator's history. */
+export function liveCallSid(): string {
+  return `r1-live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }

@@ -200,7 +200,12 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // red on its own account — the PR's last earned verdict stands.
   ['a push carries the PASS the PR last earned', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'PASS:carried'],
   ['a push carries the FAIL the PR last earned', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'REJECTED:carried'],
-  ['a push to a PR no review was ever earned on', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'unreviewed' }, 'PASS:unreviewed'],
+  // #1564: a push to a PR nothing has ever reviewed is RED. It used to
+  // conclude `PASS:unreviewed` — a required context satisfied by a run that
+  // made no model call and formed no verdict. The enumeration rail that keeps
+  // every no-verdict outcome out of the PASS class is in
+  // tests/orchestrator/review-no-verdict-is-red.test.ts.
+  ['a push to a PR no review was ever earned on', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'unreviewed' }, 'NO-VERDICT:unreviewed'],
   ['a push whose PR history could not be read', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carry-unreadable' }, 'NO-VERDICT:carry-unreadable'],
   ['low-tier — no reviewable content', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'low-tier' }, 'PASS:low-tier'],
   ['the engine hit a usage limit', smokeFailed('engine-quota'), 'NO-VERDICT:engine-quota'],
