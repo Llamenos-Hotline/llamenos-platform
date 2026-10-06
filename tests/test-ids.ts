@@ -88,6 +88,7 @@ export const TestIds = {
   // ============ Notes ============
   NOTE_LIST: 'note-list',
   NOTE_CARD: 'note-card',
+  NOTE_AUTHOR: 'note-author',
   NOTE_NEW_BTN: 'note-new-btn',
   NOTE_EDIT_BTN: 'note-edit-btn',
   NOTE_EDIT_INPUT: 'note-edit-input',

@@ -18,7 +18,7 @@ import {
 } from '../../helpers'
 import { Navigation } from '../../pages/index'
 import { ensureAuthenticated } from '../common/ui-helpers'
-import { updateUserViaApi, seedHexToPubkey } from '../../api-helpers'
+import { updateUserViaApi, seedHexToPubkey, addHubMemberViaApi, getUserViaApi } from '../../api-helpers'
 
 // --- Volunteer lifecycle ---
 
@@ -244,7 +244,44 @@ When('the volunteer logs in and navigates to {string}', async ({ page }, path: s
 
 // "a volunteer with the {string} role exists" is defined in roles-extended-steps.ts (API-based)
 
-Given('a reporter has been invited and onboarded', async ({ page, backendRequest }) => {
+/**
+ * Make a freshly created user a reporter *of the worker hub*.
+ *
+ * Inside a hub the caller's authority is exactly their role assignment in that
+ * hub; a global role other than super-admin grants nothing there (#1044, landed
+ * in #1540 — `hubContext` replaces `permissions` with the hub-resolved set).
+ * `PATCH /users/:pubkey` writes the *global* roles, so granting `role-reporter`
+ * that way left the account with `hubRoles: []`-worth of reporter authority and
+ * `POST /api/hubs/:hubId/reports` answered 403. The hub assignment is the one
+ * that counts, and `POST /hubs/:hubId/members` is how it is written — the same
+ * correction roles-extended-steps.ts already carries for volunteers.
+ *
+ * `role-volunteer` is kept alongside `role-reporter` because the reporter still
+ * has to resolve its own hub: `GET /api/hubs` lists only hubs where the caller
+ * holds `hubs:read`, which `role-reporter` does not carry, and without a hub the
+ * client cannot address any hub-scoped route at all. Reporter-only authority is
+ * asserted separately by "Reporter cannot access admin pages" — neither role
+ * grants `users:read`.
+ */
+async function grantReporterRole(
+  request: import('@playwright/test').APIRequestContext,
+  deviceKey: string,
+  hubId: string,
+): Promise<void> {
+  const pubkey = seedHexToPubkey(deviceKey)
+  await updateUserViaApi(request, pubkey, { roles: ['role-reporter'] })
+  await addHubMemberViaApi(request, hubId, pubkey, ['role-volunteer', 'role-reporter'])
+  // addHubMemberViaApi only warns on a non-2xx, so read the grant back: without it
+  // a failed membership write would surface much later as an unexplained 403.
+  const user = await getUserViaApi(request, pubkey)
+  const hubRoles = (user.hubRoles ?? []) as Array<{ hubId: string; roleIds: string[] }>
+  expect(
+    hubRoles.find(hr => hr.hubId === hubId)?.roleIds ?? [],
+    `reporter ${pubkey.slice(0, 8)} must hold role-reporter in hub ${hubId}`,
+  ).toContain('role-reporter')
+}
+
+Given('a reporter has been invited and onboarded', async ({ page, backendRequest, workerHub }) => {
   // Create a user via the volunteer creation flow, then assign the reporter role via API
   await Navigation.goToVolunteers(page)
   const name = `Reporter ${Date.now()}`
@@ -254,12 +291,10 @@ Given('a reporter has been invited and onboarded', async ({ page, backendRequest
     (window as unknown as Record<string, unknown>).__test_reporter_nsec = n
   }, deviceKey)
   await dismissDeviceKeyCard(page)
-  // Assign role-reporter so the user has reports:create permission
-  const pubkey = seedHexToPubkey(deviceKey)
-  await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+  await grantReporterRole(backendRequest, deviceKey, workerHub)
 })
 
-Given('a reporter is logged in', async ({ page, backendRequest }) => {
+Given('a reporter is logged in', async ({ page, backendRequest, workerHub }) => {
   // Check if a reporter key was set by a previous step (e.g., "a reporter has been invited and onboarded")
   let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
   if (!key) {
@@ -270,14 +305,12 @@ Given('a reporter is logged in', async ({ page, backendRequest }) => {
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await createUserAndGetDeviceKey(page, name, phone)
     await dismissDeviceKeyCard(page)
-    // Assign role-reporter so the user has reports:create permission
-    const pubkey = seedHexToPubkey(key)
-    await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+    await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)
 })
 
-When('the reporter logs in', async ({ page, backendRequest }) => {
+When('the reporter logs in', async ({ page, backendRequest, workerHub }) => {
   let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
   if (!key) {
     // Reporter wasn't set up yet — create one (loginAsAdmin first to access volunteers)
@@ -287,9 +320,7 @@ When('the reporter logs in', async ({ page, backendRequest }) => {
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await createUserAndGetDeviceKey(page, name, phone)
     await dismissDeviceKeyCard(page)
-    // Assign role-reporter so the user has reports:create permission
-    const pubkey = seedHexToPubkey(key)
-    await updateUserViaApi(backendRequest, pubkey, { roles: ['role-reporter'] })
+    await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)
 })
@@ -308,6 +339,11 @@ When('they create a new report', async ({ page }) => {
   const submitBtn = page.getByTestId(TestIds.REPORT_SUBMIT_BTN)
   await expect(submitBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
   await submitBtn.click()
+  // The form closes only on a 201 — every refusal (a 403 from the hub, a missing
+  // required field) leaves the sheet open behind an error toast. Asserting that
+  // here names the act that failed, instead of surfacing two steps later as an
+  // unexplained "element(s) not found" in the report list.
+  await expect(page.getByTestId(TestIds.REPORT_TITLE_INPUT)).toBeHidden({ timeout: Timeouts.API })
 })
 
 Then('the report should be saved successfully', async ({ page }) => {

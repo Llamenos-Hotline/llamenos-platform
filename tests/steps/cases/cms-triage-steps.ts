@@ -76,6 +76,28 @@ When('I click the {string} status tab', async ({ page }, tabLabel: string) => {
   await page.getByTestId(`triage-status-tab-${key}`).click()
 })
 
+When('I select a triage case type', async ({ page }) => {
+  // The panel renders exactly one of two mutually exclusive controls, the same way
+  // CreateRecordDialog does: a type select when the hub holds several entity types,
+  // or a single-type badge (auto-selected) when it holds exactly one. The title
+  // field, the schema fields and both action buttons render only once a type is
+  // selected — so with several types the panel is inert until a human picks one,
+  // which is what this step is. The hub's entity types accumulate across scenarios
+  // (see the "{string} template has been applied" step), so no specific type name
+  // is guaranteed to exist; this scenario does not care which type it converts to,
+  // only that conversion works, so it takes the first option offered.
+  const select = page.getByTestId('triage-entity-type-select')
+  const title = page.getByTestId('triage-case-title-input')
+  await expect(select.or(title)).toBeVisible({ timeout: Timeouts.ELEMENT })
+  if (await select.count() > 0) {
+    await select.click()
+    const option = page.locator('[data-testid^="triage-entity-type-option-"]').first()
+    await expect(option).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await option.click()
+  }
+  await expect(title).toBeVisible({ timeout: Timeouts.ELEMENT })
+})
+
 When('I fill in the triage case title', async ({ page }) => {
   const input = page.getByTestId('triage-case-title-input')
   await expect(input).toBeVisible({ timeout: Timeouts.ELEMENT })

@@ -433,7 +433,7 @@ function NotesPage() {
                           <p className="text-xs text-muted-foreground">
                             {new Date(note.createdAt).toLocaleString()}
                             {note.authorPubkey && !note.authorPubkey.startsWith('system:') && (
-                              <span className="ml-1.5 font-mono opacity-60" title={note.authorPubkey}>
+                              <span data-testid="note-author" className="ml-1.5 font-mono opacity-60" title={note.authorPubkey}>
                                 {nameMap.get(note.authorPubkey) || note.authorPubkey.slice(0, 8)}
                               </span>
                             )}
