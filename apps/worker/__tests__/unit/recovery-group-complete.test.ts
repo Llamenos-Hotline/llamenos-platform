@@ -126,6 +126,14 @@ function buildLink(seqNo: number, prevHash: string, payload: unknown) {
   return { hash, signature: 'aa'.repeat(64) }
 }
 
+/**
+ * completeRecovery never resolves hub membership (it is the unauthenticated,
+ * session-scoped path — see the service doc comment), so the role source is
+ * only here to satisfy the constructor. `contributeShare`'s membership
+ * resolution is covered in recovery-group-contribute-membership.test.ts.
+ */
+const noRoles = { getRoles: async () => ({ roles: [] }) }
+
 beforeEach(() => {
   mockEd25519Verify.mockReset().mockReturnValue(true)
   mockHexToBytes.mockReset().mockImplementation((hex: string) =>
@@ -156,7 +164,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
       transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
     }
 
-    const svc = new RecoveryGroupService(db as never)
+    const svc = new RecoveryGroupService(db as never, noRoles)
     await svc.completeRecovery({
       sessionId: SESSION_ID,
       sigchainSeqNo: 1,
@@ -193,7 +201,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
       transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
     }
 
-    const svc = new RecoveryGroupService(db as never)
+    const svc = new RecoveryGroupService(db as never, noRoles)
     const result = await svc.completeRecovery({
       sessionId: SESSION_ID,
       sigchainSeqNo: 1,
@@ -225,7 +233,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
       transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
     }
 
-    const svc = new RecoveryGroupService(db as never)
+    const svc = new RecoveryGroupService(db as never, noRoles)
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
@@ -270,7 +278,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
       transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
     }
 
-    const svc = new RecoveryGroupService(db as never)
+    const svc = new RecoveryGroupService(db as never, noRoles)
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,
@@ -295,7 +303,7 @@ describe('RecoveryGroupService.completeRecovery', () => {
       transaction: vi.fn(),
     }
 
-    const svc = new RecoveryGroupService(db as never)
+    const svc = new RecoveryGroupService(db as never, noRoles)
     await expect(
       svc.completeRecovery({
         sessionId: SESSION_ID,

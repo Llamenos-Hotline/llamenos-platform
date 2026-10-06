@@ -151,7 +151,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     activeShifts: new ActiveShiftsService(db),
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
-    recoveryGroup: new RecoveryGroupService(db, audit),
+    recoveryGroup: new RecoveryGroupService(db, settings, audit),
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
