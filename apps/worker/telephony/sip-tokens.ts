@@ -13,6 +13,19 @@ export interface SipConnectionParams {
     password: string
     iceServers: Array<{ url: string; username?: string; credential?: string }>
     mediaEncryption: 'srtp' | 'zrtp' | 'dtls-srtp' | 'none'
+    /**
+     * PEM trust anchor for the SIP edge's TLS certificate, when the
+     * deployment serves one that the device trust store cannot verify (a
+     * self-hoster's self-signed PBX certificate). Certificates only — see
+     * `readSipTlsTrustAnchor`.
+     *
+     * The client verifies the SIP chain against THIS and nothing else.
+     * Absent means "verify against the device trust store"; it never means
+     * "do not verify". Delivered here because this response already travels
+     * over the app's certificate-pinned HTTPS channel, so PBX trust derives
+     * from the API pin rather than from a public CA or a first-use prompt.
+     */
+    tlsTrustAnchorPem?: string
   }
 }
 

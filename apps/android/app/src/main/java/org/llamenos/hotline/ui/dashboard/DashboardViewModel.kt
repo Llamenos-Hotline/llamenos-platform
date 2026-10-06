@@ -230,11 +230,20 @@ class DashboardViewModel @Inject constructor(
 
     /**
      * Quick clock in to the active hub from the dashboard.
+     *
+     * [microphoneGranted] is the outcome of the runtime `RECORD_AUDIO` request the screen makes
+     * first. Refused, the clock-in still succeeds (phone calls keep reaching the volunteer) but
+     * this device is deliberately NOT registered for in-app calls: ringing a device that cannot
+     * capture audio only takes the call away from a volunteer who could have answered it.
      */
-    fun clockIn() {
+    fun clockIn(microphoneGranted: Boolean = true) {
         clockAction(R.string.dashboard_error_clock_in) { hubId ->
             shiftClockRepository.clockIn(hubId)
-            reportCallSetup(sipRegistrar.registerMemberHubs())
+            if (microphoneGranted) {
+                reportCallSetup(sipRegistrar.registerMemberHubs())
+            } else {
+                _uiState.update { it.copy(errorRes = R.string.incoming_call_microphone_required) }
+            }
         }
     }
 

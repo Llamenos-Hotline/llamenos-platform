@@ -11,7 +11,7 @@
 #
 # Optional profiles:
 #   --profile signal      - Signal CLI + notifier sidecar
-#   --profile telephony   - Asterisk PBX + SIP bridge
+#   --profile telephony   - Asterisk PBX + SIP bridge + CoTURN (STUN/TURN)
 #   --profile push        - ntfy (UnifiedPush relay for Android push notifications)
 #
 # Stop:
@@ -134,15 +134,28 @@ services:
     ports:
       - "5060:5060/udp"   # SIP
       - "5060:5060/tcp"   # SIP TCP
+      - "5061:5061/tcp"   # SIP TLS — the transport /sip-token hands clients
       - "8088:8088"       # ARI HTTP
     # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
     # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
     user: root
     entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
+    environment:
+      # Names the self-signed SIP edge certificate must cover. Asterisk is the
+      # edge in the dev stack (no Kamailio), so a client checking the hostname
+      # needs the address it dials in here: 10.0.2.2 is the Android emulator's
+      # alias for the host, 127.0.0.1/localhost are added unconditionally.
+      - SIP_TLS_SANS=${SIP_TLS_SANS:-10.0.2.2}
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
       - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - ./sip-tls-cert.sh:/usr/local/share/llamenos/sip-tls-cert.sh:ro
       - asterisk-db:/var/lib/asterisk/astdb   # the provisioned SIP trunk
+      # A stable keypair across restarts: the trust anchor clients pinned at
+      # their last /sip-token fetch must keep verifying after a PBX restart.
+      - asterisk-keys:/var/lib/asterisk/keys
+      # The PUBLIC trust anchor the app publishes to clients (SIP_TLS_CA_FILE).
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its environment itself.
     configs:
@@ -154,6 +167,45 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # CoTURN — STUN + TURN relay for the ICE servers /api/telephony/sip-token
+  # mints time-limited credentials against. Without it a volunteer behind a
+  # symmetric NAT gathers no usable candidate and the media leg never connects,
+  # however well signalling went.
+  #
+  # Host networking, not published ports: a TURN server has to advertise an
+  # address the client can actually reach for its RELAY candidate, and inside a
+  # bridge network it would advertise its 172.x container address. Host mode is
+  # also coturn's own recommended deployment, and unlike published ports it
+  # stays subject to the host firewall.
+  coturn:
+    image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3  # pinned 2026-05-18
+    profiles: ["telephony"]
+    network_mode: host
+    command: >
+      --realm=${TURN_REALM:-localhost}
+      --fingerprint
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET:-changeme}
+      --listening-port=${TURN_PORT:-3478}
+      --min-port=${TURN_RELAY_MIN_PORT:-49160}
+      --max-port=${TURN_RELAY_MAX_PORT:-49200}
+      --no-tls
+      --no-dtls
+      --no-cli
+    healthcheck:
+      # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
+      # --use-auth-secret mode (only TURN allocation needs the credential). So
+      # unlike a process probe this proves the listener actually answers — and
+      # unlike the `pgrep` it replaces, it can pass at all: the pinned image
+      # ships no pgrep, so that healthcheck failed every time and marked a
+      # perfectly working coturn unhealthy. A dead listener never replies, so
+      # the probe hangs and the timeout below is what fails it.
+      test: ["CMD-SHELL", "turnutils_stunclient -p ${TURN_PORT:-3478} 127.0.0.1 2>&1 | grep -q 'reflexive addr'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # SIP bridge — translates ARI events to Llamenos webhook format.
   sip-bridge:
@@ -219,6 +271,8 @@ configs:
 
 volumes:
   asterisk-db:
+  asterisk-keys:
+  sip-tls-anchor:
   pgdata:
   rustfsdata:
   signal-data:

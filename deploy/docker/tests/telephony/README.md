@@ -91,6 +91,59 @@ deploy/docker/tests/telephony/run-register-e2e.sh                       # needs 
 deploy/docker/tests/telephony/run-register-e2e.sh --keep                # leave the stack up
 ```
 
+## The Android transport and media layer (#1188)
+
+`run-android-sip-e2e.sh` drives the **production `LinphoneService` on an
+emulator** against this same PBX, over **TLS**, and reads the evidence off
+Asterisk's own log. It exists because all three defects it covers are invisible
+to a unit test: each is decided where liblinphone meets Asterisk, and each
+produced a client that believed it was configured correctly.
+
+| Defect | What was wrong | Evidence it is fixed |
+|---|---|---|
+| TLS trust | The client set no root CA, the PBX certificate is self-signed → `tlsv1 alert unknown ca`. | A `200 OK` for a `REGISTER` on Asterisk's TLS transport, with `verifyServerCertificates`/`verifyServerCn` still on. |
+| SRTP vs DTLS | The client mandated `SRTP`; the endpoint is provisioned `media_encryption: dtls`. Nothing could negotiate. | Asterisk's SDP answer (`UDP/TLS/RTP/SAVPF`, `a=fingerprint`) and `StreamsRunning` with `currentParams.mediaEncryption == DTLS`. |
+| ICE dropped | `iceServers` was deserialised and discarded — no STUN, no TURN, no `natPolicy`. | `a=candidate` lines of types beyond `host` in the offer Asterisk logs. |
+
+It also grants the app the runtime `RECORD_AUDIO` permission it now asks a
+volunteer for at clock-in — without which a perfectly negotiated call has no
+microphone.
+
+How the pieces fit:
+
+* The emulator reaches the host, and only the host, at `10.0.2.2`. So that is
+  the configured `sipDomain`, the `TURN_HOST`, **and** a mandatory
+  `subjectAltName` on the PBX certificate — a client verifies the hostname as
+  well as the chain.
+* The trust anchor is not installed out of band. `/api/telephony/sip-token`
+  publishes the SIP edge's certificate (public half only) in its response, and
+  that response arrives over the app's own certificate-pinned HTTPS channel.
+  The client makes it the *only* root CA for SIP.
+* CoTURN runs on **host networking**, because a TURN server on a bridge network
+  advertises its container address in the relay candidate — allocation succeeds
+  and the candidate is useless, which is exactly the case a symmetric-NAT
+  volunteer depends on.
+* `extensions.d/e2e-volunteer-echo.conf` is bind-mounted over `/etc/asterisk/extensions.d/`
+  and adds one answer-and-echo target to the volunteer dialplan context. The
+  PBX answering is the only way to read the AGREED encryption and a nominated
+  ICE pair off the PBX rather than off the client, and the echo returns the
+  volunteer's own audio so RTP is proven in both directions. Nothing ships in
+  `extensions.d/`; a deployment's dialplan is unchanged.
+
+**The INVITE is placed by the test**, through a `coreForTesting()` seam. The
+product has no outbound-calling feature, and the inbound INVITE path — the
+server dialling a registered volunteer — does not exist yet (#1188). So this
+proves the whole layer *beneath* that keystone, on the volunteer↔PBX leg, and
+claims nothing about a caller reaching a volunteer.
+
+```sh
+deploy/docker/tests/telephony/run-android-sip-e2e.sh                 # boots everything, incl. an emulator
+deploy/docker/tests/telephony/run-android-sip-e2e.sh --no-emulator   # use the device already on adb
+deploy/docker/tests/telephony/run-android-sip-e2e.sh --keep          # leave the stack and emulator up
+```
+
+Logs and the issued credential land in `.android-sip-evidence/` (gitignored).
+
 ```sh
 deploy/docker/tests/telephony/run-call-e2e.sh                         # needs only Docker and bun
 deploy/docker/tests/telephony/run-call-e2e.sh --keep -g 'hears the prompt'   # one scenario; leave the stack up

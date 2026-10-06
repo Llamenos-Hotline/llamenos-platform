@@ -39,7 +39,12 @@ import org.llamenos.hotline.telephony.RingingCallInfo
  * [isUnlocked] mirrors the notification's PII posture: while the app is locked the caller
  * identity stays generic ("Someone is calling the hotline"), matching the push path.
  *
- * Test tags: `incoming-caller-label`, `incoming-accept`, `incoming-decline`.
+ * [microphoneDenied] says the `RECORD_AUDIO` grant was refused, so answering would produce a
+ * call the caller can be heard on and the volunteer cannot be heard on. Saying so beats letting
+ * them answer into silence.
+ *
+ * Test tags: `incoming-caller-label`, `incoming-accept`, `incoming-decline`,
+ * `incoming-microphone-denied`.
  */
 @Composable
 fun IncomingCallScreen(
@@ -48,6 +53,7 @@ fun IncomingCallScreen(
     onAccept: () -> Unit,
     onDecline: () -> Unit,
     modifier: Modifier = Modifier,
+    microphoneDenied: Boolean = false,
 ) {
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -75,6 +81,18 @@ fun IncomingCallScreen(
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center,
             )
+            if (microphoneDenied) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = stringResource(R.string.incoming_call_microphone_required),
+                    modifier = Modifier
+                        .testTag("incoming-microphone-denied")
+                        .padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(modifier = Modifier.height(64.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),

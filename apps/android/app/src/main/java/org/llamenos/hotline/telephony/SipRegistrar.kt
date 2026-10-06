@@ -2,8 +2,14 @@ package org.llamenos.hotline.telephony
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.di.ApplicationScope
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,7 +27,11 @@ import javax.inject.Singleton
 class SipRegistrar @Inject constructor(
     private val apiService: ApiService,
     private val linphoneService: LinphoneService,
+    @ApplicationScope private val scope: CoroutineScope,
 ) {
+
+    /** Pending re-fetch of the SIP token before its TURN credentials expire. */
+    private var credentialRefresh: Job? = null
 
     sealed interface Result {
         /** Every hub in [hubIds] is bound to a SIP registration. */
@@ -52,6 +62,7 @@ class SipRegistrar @Inject constructor(
             val hubIds = apiService.getHubs().hubs.map { it.id }.toSet()
             hubIds.forEach { hubId -> linphoneService.registerHubAccount(hubId, params.sip) }
             linphoneService.retainHubAccounts(hubIds)
+            scheduleCredentialRefresh(params.sip)
             Result.Registered(hubIds)
         } catch (e: CancellationException) {
             throw e
@@ -63,7 +74,45 @@ class SipRegistrar @Inject constructor(
 
     /** Unregister every SIP account. */
     fun unregisterAll() {
+        credentialRefresh?.cancel()
+        credentialRefresh = null
         linphoneService.unregisterAll()
+    }
+
+    /**
+     * Re-fetch the SIP token before the issued TURN credentials expire.
+     *
+     * They are time-limited by design (CoTURN's long-term-credential scheme — a seized
+     * credential dies at its expiry), and the registration itself outlives them: a volunteer
+     * clocked in for a whole shift would otherwise reach the point where the relay candidate can
+     * no longer be allocated, and a symmetric-NAT volunteer silently stops being reachable in
+     * the app. Re-fetching renews the TURN credential, the SIP secret and the trust anchor
+     * together, and re-provisions the PBX endpoint idempotently.
+     *
+     * Runs on the main thread because it drives [LinphoneService]; [ApiService] moves its own
+     * network work off it.
+     */
+    private fun scheduleCredentialRefresh(sip: SipAccountParams) {
+        credentialRefresh?.cancel()
+        credentialRefresh = null
+        val expiresAt = sip.turnCredentialExpiresAt ?: return
+        val remainingMs = expiresAt * 1000 - System.currentTimeMillis()
+        // Renew with a margin, and never spin: a credential already at or past its expiry gets
+        // one attempt after the floor rather than an immediate retry loop.
+        val delayMs = (remainingMs * 4 / 5).coerceAtLeast(MIN_REFRESH_DELAY_MS)
+        credentialRefresh = scope.launch(Dispatchers.Main) {
+            delay(delayMs)
+            // Forget this job before re-registering: registerMemberHubs schedules the NEXT
+            // refresh, and cancelling the job it is itself running inside would abort the
+            // re-registration halfway.
+            credentialRefresh = null
+            if (linphoneService.registeredHubIds().isEmpty()) return@launch
+            when (val result = registerMemberHubs()) {
+                is Result.Registered -> Log.i(TAG, "SIP credentials renewed before TURN expiry")
+                is Result.NotAvailable -> Log.i(TAG, "SIP credentials not renewed: ${result.reason}")
+                is Result.Failed -> Log.w(TAG, "SIP credential renewal failed", result.cause)
+            }
+        }
     }
 
     /**
@@ -83,5 +132,8 @@ class SipRegistrar @Inject constructor(
 
     private companion object {
         const val TAG = "SipRegistrar"
+
+        /** Floor on the renewal delay, so an already-expired credential cannot spin. */
+        const val MIN_REFRESH_DELAY_MS = 60_000L
     }
 }

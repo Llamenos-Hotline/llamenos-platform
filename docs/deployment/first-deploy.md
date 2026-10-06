@@ -50,6 +50,65 @@ A third, policy constraint: provider jurisdiction must pass the strict test in
 [`iso-install.md` → Choosing a provider](iso-install.md#choosing-a-provider)
 (zero US operations).
 
+### The SIP leg does not need a public certificate — and is not pinned to one
+
+(b) applies to **HTTPS to the app**. In-app calling adds a second TLS leg: the
+volunteer's client registers over **SIP/TLS** against the SIP edge
+(`kamailio` in the telephony profile, port 5061). You do **not** need a
+publicly-trusted certificate for it, and you do not add it to the pin set.
+
+Instead, the certificate's **public half is published to clients in the
+authenticated `/api/telephony/sip-token` response** — which already travelled
+over the pinned HTTPS channel above. The client installs it as the *only* root
+CA for SIP, with certificate and hostname verification both on. Trust in the
+PBX therefore derives from the API pin; there is no trust-on-first-use step,
+and the public CA store is never consulted for SIP.
+
+The two requirements do not pull against each other, because they govern
+different legs with different trust roots:
+
+| Leg | Verified against | Who may terminate TLS |
+|---|---|---|
+| HTTPS → app | ISRG Root X1/X2, pinned in the app | Your box only — a proxy breaks it |
+| SIP/TLS → edge | The anchor the API published | Your box only — raw SIP/TLS cannot be CDN-proxied |
+
+**What you have to do, as a self-hoster:**
+
+1. Set `SIP_TLS_SANS` to every hostname or IP a volunteer's client will dial
+   for the SIP domain (defaults to `DOMAIN`). A client checks the hostname as
+   well as the chain, so a name missing here fails the handshake no matter how
+   the chain is anchored.
+2. Nothing else, for the default case. The Kamailio entrypoint generates a
+   self-signed certificate covering those names and exports its public half to
+   the shared `sip-tls-anchor` volume; the app serves it from
+   `SIP_TLS_CA_FILE`, which `docker-compose.yml` already points at that file.
+3. Open the TURN ports in your firewall: UDP `TURN_PORT` (3478) **and** the
+   relay range `TURN_RELAY_MIN_PORT`–`TURN_RELAY_MAX_PORT` (49160–49200). A
+   volunteer behind a symmetric NAT is reachable on a TURN **relay** candidate
+   and on nothing else. CoTURN runs on host networking so it advertises an
+   address clients can reach — which also means these ports are subject to your
+   host firewall rather than bypassing it the way published Docker ports do.
+   Behind 1:1 NAT (a cloud VM whose public address the host cannot see on an
+   interface), also set `TURN_EXTERNAL_IP=public/private`.
+4. Open the **RTP range** too: UDP 10000–10199 (`RTP_MIN_PORT`/`RTP_MAX_PORT`).
+   Signalling reaches the PBX through Kamailio, but **media does not** —
+   Kamailio is a signalling proxy with no media relay, so RTP runs directly
+   between the volunteer and the Asterisk container. `SIP_EXTERNAL_ADDRESS`
+   (defaults to `DOMAIN`) is what makes Asterisk advertise an address a
+   volunteer can route to; without it the call sets up and no audio arrives,
+   with nothing in any log that looks like a failure.
+5. *If* you install a real certificate for the SIP edge at
+   `deploy/docker/kamailio/cert.pem`, point `KAMAILIO_TLS_ANCHOR_SOURCE` at its
+   **issuing root**, not the leaf — pinning a leaf breaks at every renewal.
+   Or set `SIP_TLS_CA_FILE=` (empty) to publish no anchor, which makes clients
+   verify against the device trust store. That is correct *only* for a
+   publicly-trusted certificate.
+
+Rotating the SIP certificate needs no client action: the keypair lives on a
+volume so it is stable across restarts, and a client picks up a new anchor at
+its next `/api/telephony/sip-token` fetch (clock-in, or the TURN-credential
+renewal before expiry).
+
 | Host | Custom ISO + console | Status |
 |---|---|---|
 | **1984 Hosting** (Iceland) | Yes — ISO attached by **support ticket** (URL + SHA-256), noVNC console. FDE install verified 2026-04-19. | **Platform host** (`llamenos-platform1`, `llamenos_disk_encrypted: true`). Also hosts authoritative DNS. |

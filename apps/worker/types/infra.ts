@@ -106,6 +106,14 @@ export interface Env {
   // no relay is wired and clients get STUN-only ICE servers.
   TURN_HOST?: string            // Public host of the CoTURN server (also serves STUN on :3478)
   TURN_SECRET?: string          // The coturn --static-auth-secret (never the SIP secret)
+  // The SIP edge's PUBLIC TLS trust anchor, published to clients in
+  // /sip-token so they can VERIFY a self-hosted PBX certificate no public CA
+  // vouches for — it reaches them over this app's own pinned HTTPS channel.
+  // Unset = clients verify against the device trust store (correct only when
+  // the edge serves a publicly-trusted certificate). Never key material:
+  // readSipTlsTrustAnchor publishes certificate blocks only.
+  SIP_TLS_CA_FILE?: string      // Path written by the SIP edge's entrypoint (sip-tls-cert.sh)
+  SIP_TLS_CA_PEM?: string       // The same anchor inline; takes precedence over the file
 
   // GlitchTip/Sentry DSN for client-side crash reporting (Epic 293)
   GLITCHTIP_DSN?: string

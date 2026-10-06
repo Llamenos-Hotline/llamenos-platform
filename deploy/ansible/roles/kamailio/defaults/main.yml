@@ -39,6 +39,19 @@ kamailio_tls_enabled: true
 kamailio_tls_cert_path: "{{ app_dir }}/certs/kamailio.crt"
 kamailio_tls_key_path: "{{ app_dir }}/certs/kamailio.key"
 
+# Every hostname or IP a volunteer's client may dial for the SIP domain. These
+# become subjectAltName entries on the generated certificate: a client verifies
+# the hostname as well as the chain, so a name missing here fails the handshake
+# no matter how the chain is anchored. Bare IPv4 literals become IP: SANs.
+kamailio_tls_sans:
+  - "{{ kamailio_sip_domain }}"
+
+# Path on the host to the ISSUING ROOT of a real certificate, when one is
+# installed. Publishing the root rather than the leaf keeps registered clients
+# working across renewals. Unset = the self-signed certificate is its own
+# anchor, which is correct for that case.
+# kamailio_tls_anchor_source: /etc/ssl/certs/my-ca.pem
+
 # Rate limiting
 kamailio_rate_limit_enabled: true
 kamailio_rate_limit_reqs_per_sec: 100

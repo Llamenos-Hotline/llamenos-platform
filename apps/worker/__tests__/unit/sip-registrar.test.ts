@@ -7,6 +7,9 @@
  * provisioning, individual revocation, time-limited TURN credentials — while
  * every vendor path keeps refusing the hub's shared trunk credential.
  */
+import { mkdtempSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
@@ -23,6 +26,7 @@ import {
   provisionVolunteerEndpoint,
   removeVolunteerEndpoint,
   revokeVolunteerSipIdentity,
+  readSipTlsTrustAnchor,
   TURN_CREDENTIAL_TTL_SECONDS,
   VOLUNTEER_DIALPLAN_CONTEXT,
 } from '@worker/telephony/registrar'
@@ -153,6 +157,107 @@ describe('buildVolunteerSipParams', () => {
   })
 })
 
+/**
+ * The SIP edge's TLS trust anchor.
+ *
+ * Registration is over TLS (`transport: 'tls'`), and a self-hoster has no publicly-trusted
+ * certificate for their PBX — which is why Android's registration failed with
+ * `tlsv1 alert unknown ca` (#1188). Turning verification off was never an option on a leg that
+ * carries a crisis call, so the anchor is published HERE: inside an authenticated response that
+ * already travelled over the app's certificate-pinned HTTPS channel. PBX trust then derives
+ * from the API pin, with no trust-on-first-use step.
+ */
+describe('SIP TLS trust anchor', () => {
+  const CERT_A = ['-----BEGIN CERTIFICATE-----', 'QUFB', '-----END CERTIFICATE-----'].join('\n')
+  const CERT_B = ['-----BEGIN CERTIFICATE-----', 'QkJC', '-----END CERTIFICATE-----'].join('\n')
+  const KEY = ['-----BEGIN PRIVATE KEY-----', 'c2VjcmV0', '-----END PRIVATE KEY-----'].join('\n')
+
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sip-anchor-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const write = (name: string, content: string) => {
+    const path = join(dir, name)
+    writeFileSync(path, content)
+    return path
+  }
+
+  it('reads the anchor from the file the SIP edge wrote', () => {
+    const path = write('anchor.pem', `${CERT_A}\n`)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBe(`${CERT_A}\n`)
+  })
+
+  it('prefers an inline anchor over the file', () => {
+    const path = write('anchor.pem', `${CERT_A}\n`)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path, SIP_TLS_CA_PEM: `${CERT_B}\n` })).toBe(
+      `${CERT_B}\n`,
+    )
+  })
+
+  it('keeps a full chain, so a renewed leaf under the same root keeps verifying', () => {
+    const path = write('chain.pem', `${CERT_A}\n${CERT_B}\n`)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBe(`${CERT_A}\n${CERT_B}\n`)
+  })
+
+  it('publishes certificates only when pointed at a keypair', () => {
+    // Asterisk's own cert_file IS a combined certificate+key PEM. Pointing the app at it is an
+    // operator error that must not become a key disclosure, so the extraction is safe by
+    // construction rather than by rejection.
+    const path = write('keypair.pem', `${KEY}\n${CERT_A}\n`)
+    const anchor = readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })
+    expect(anchor).toBe(`${CERT_A}\n`)
+    expect(anchor).not.toContain('PRIVATE KEY')
+  })
+
+  it('publishes nothing for a file holding no certificate', () => {
+    const path = write('empty.pem', 'not a pem\n')
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBeUndefined()
+  })
+
+  it('publishes nothing when no anchor is configured — the device trust store applies', () => {
+    expect(readSipTlsTrustAnchor({})).toBeUndefined()
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: '' })).toBeUndefined()
+  })
+
+  it('publishes nothing when the edge has not written the file yet', () => {
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: join(dir, 'absent.pem') })).toBeUndefined()
+  })
+
+  it('refuses an implausibly large file rather than shipping it to clients', () => {
+    const path = write('huge.pem', `${CERT_A}\n${'#'.repeat(64 * 1024)}`)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBeUndefined()
+  })
+
+  it('picks up a regenerated certificate without an app restart', () => {
+    const path = write('anchor.pem', `${CERT_A}\n`)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBe(`${CERT_A}\n`)
+    writeFileSync(path, `${CERT_B}\n`)
+    // Same size, so only the mtime distinguishes them — bump it explicitly rather than relying
+    // on filesystem timestamp granularity.
+    const later = new Date(Date.now() + 5_000)
+    utimesSync(path, later, later)
+    expect(readSipTlsTrustAnchor({ SIP_TLS_CA_FILE: path })).toBe(`${CERT_B}\n`)
+  })
+
+  it('rides along in the issued params when published, and is absent when not', () => {
+    const withAnchor = buildVolunteerSipParams(
+      asteriskConfig(),
+      'vol_x',
+      'secret',
+      undefined,
+      `${CERT_A}\n`,
+    )
+    expect(withAnchor.sip.tlsTrustAnchorPem).toBe(`${CERT_A}\n`)
+    const without = buildVolunteerSipParams(asteriskConfig(), 'vol_x', 'secret')
+    expect('tlsTrustAnchorPem' in without.sip).toBe(false)
+  })
+})
+
 // --- ARI provisioning against a recorded fetch -----------------------------
 
 interface AriCall {
@@ -220,6 +325,17 @@ describe('provisionVolunteerEndpoint', () => {
       aors: username,
       auth: username,
       media_encryption: 'dtls',
+      // Without this Asterisk discards the candidates the client gathered from
+      // the issued ICE servers, which is half the #1188 ICE defect.
+      ice_support: 'yes',
+      rtp_symmetric: 'yes',
+      // And without these, media_encryption:dtls is inert — Asterisk answers
+      // with an empty a=fingerprint and every handshake fails.
+      dtls_auto_generate_cert: 'yes',
+      dtls_verify: 'fingerprint',
+      // passive: the volunteer's client initiates the handshake, outbound
+      // through its own NAT. See the comment at the call site.
+      dtls_setup: 'passive',
     })
   })
 
@@ -451,6 +567,33 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
     const body = (await res.json()) as { sip: { password: string } }
     const username = volunteerSipUsername(PUBKEY_A)
     expect(body.sip.password).toBe(deriveVolunteerSipSecret('hmac-secret', username))
+  })
+
+  it('hands the client the SIP edge trust anchor so the TLS chain can be verified', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sip-anchor-route-'))
+    try {
+      const pem = `${['-----BEGIN CERTIFICATE-----', 'Um91dGU=', '-----END CERTIFICATE-----'].join('\n')}\n`
+      const path = join(dir, 'edge.pem')
+      writeFileSync(path, pem)
+      const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+      const app = await createSipTokenApp({ services: { settings }, env: { SIP_TLS_CA_FILE: path } })
+      const res = await app.request('/sip-token')
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { sip: { transport: string; tlsTrustAnchorPem?: string } }
+      // Registration is over TLS and this is the only thing the client will verify it against.
+      expect(body.sip.transport).toBe('tls')
+      expect(body.sip.tlsTrustAnchorPem).toBe(pem)
+      expect(body.sip.tlsTrustAnchorPem).not.toContain('PRIVATE KEY')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('omits the anchor when the deployment publishes none', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({ services: { settings }, env: { SIP_TLS_CA_FILE: '' } })
+    const body = (await (await app.request('/sip-token')).json()) as { sip: Record<string, unknown> }
+    expect('tlsTrustAnchorPem' in body.sip).toBe(false)
   })
 
   it('sip-status reports available for asterisk, still false for vendors', async () => {

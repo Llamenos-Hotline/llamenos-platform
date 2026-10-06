@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from 'node:fs'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { sha1 } from '@noble/hashes/legacy.js'
@@ -102,6 +103,109 @@ export function mintTurnCredentials(
 }
 
 // ---------------------------------------------------------------------------
+// TLS trust anchor for the SIP edge
+// ---------------------------------------------------------------------------
+
+/** Env slice naming the SIP edge's public TLS trust anchor. */
+export interface SipTlsAnchorEnv {
+  /** The anchor inline, PEM. Takes precedence over the file. */
+  SIP_TLS_CA_PEM?: string
+  /** Path to the anchor, written by the SIP edge's entrypoint. */
+  SIP_TLS_CA_FILE?: string
+}
+
+/** Refuse anything absurd: a trust anchor is a certificate or two, not a store. */
+const MAX_ANCHOR_BYTES = 64 * 1024
+
+const CERTIFICATE_BLOCK = /-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]*?-----END CERTIFICATE-----/g
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/
+
+let anchorCache: { key: string; pem: string | undefined } | undefined
+
+/**
+ * Keep only the certificate blocks of a PEM.
+ *
+ * Safe by construction rather than by checking: whatever the operator pointed
+ * us at — a bare certificate, a chain, or (by mistake) a combined
+ * certificate+key file like the one Asterisk reads — only certificates can
+ * leave this function, so private key material cannot reach a client even
+ * through a misconfiguration.
+ */
+function certificatesOnly(pem: string, source: string): string | undefined {
+  if (PRIVATE_KEY_BLOCK.test(pem)) {
+    logger.error(
+      'SIP TLS trust anchor holds private key material — publishing its certificates only. ' +
+        'Point this at the certificate/chain, never at the keypair.',
+      { source },
+    )
+  }
+  const blocks = pem.match(CERTIFICATE_BLOCK)
+  if (!blocks?.length) {
+    logger.error('SIP TLS trust anchor contains no certificate — clients will fall back to the device trust store', {
+      source,
+    })
+    return undefined
+  }
+  return `${blocks.join('\n')}\n`
+}
+
+/**
+ * The SIP edge's public TLS trust anchor, or undefined when the deployment
+ * publishes none.
+ *
+ * This is what lets a self-hoster run SIP over TLS with a self-signed PBX
+ * certificate and still have clients VERIFY it: the anchor rides to the client
+ * inside the authenticated `/api/telephony/sip-token` response, over the app's
+ * own certificate-pinned HTTPS channel. Trust in the SIP leg therefore derives
+ * from the API pin — there is no trust-on-first-use step and no reliance on
+ * the device's public CA store for SIP.
+ *
+ * Undefined means "use the device trust store", which is correct only when the
+ * SIP edge serves a publicly-trusted certificate. It never means "skip
+ * verification"; clients keep certificate verification on either way.
+ *
+ * Re-read when the file changes (size or mtime), so regenerating the PBX
+ * certificate does not need an app restart.
+ */
+export function readSipTlsTrustAnchor(env: SipTlsAnchorEnv): string | undefined {
+  const inline = env.SIP_TLS_CA_PEM?.trim()
+  if (inline) {
+    const key = `inline:${inline.length}`
+    if (anchorCache?.key !== key) {
+      anchorCache = { key, pem: certificatesOnly(inline, 'SIP_TLS_CA_PEM') }
+    }
+    return anchorCache.pem
+  }
+
+  const path = env.SIP_TLS_CA_FILE?.trim()
+  if (!path) return undefined
+
+  let key: string
+  try {
+    const stat = statSync(path)
+    if (stat.size > MAX_ANCHOR_BYTES) {
+      logger.error('SIP TLS trust anchor is implausibly large — ignoring it', { path, size: stat.size })
+      return undefined
+    }
+    key = `file:${path}:${stat.mtimeMs}:${stat.size}`
+  } catch {
+    // The edge has not written it yet (first boot ordering), or the path is
+    // wrong. Either way: no anchor rather than a stale one.
+    logger.warn('SIP TLS trust anchor is not readable — clients will fall back to the device trust store', { path })
+    return undefined
+  }
+  if (anchorCache?.key !== key) {
+    try {
+      anchorCache = { key, pem: certificatesOnly(readFileSync(path, 'utf8'), path) }
+    } catch (err) {
+      logger.error('SIP TLS trust anchor could not be read', { path, err })
+      return undefined
+    }
+  }
+  return anchorCache.pem
+}
+
+// ---------------------------------------------------------------------------
 // SIP connection parameters issued to the client
 // ---------------------------------------------------------------------------
 
@@ -115,6 +219,7 @@ export function buildVolunteerSipParams(
   username: string,
   secret: string,
   turn?: { host: string; credentials: TurnCredentials },
+  tlsTrustAnchorPem?: string,
 ): SipConnectionParams {
   if (config.type !== 'asterisk') {
     throw new Error(`Per-volunteer SIP params are only issuable for provider: asterisk, not ${config.type}`)
@@ -151,6 +256,10 @@ export function buildVolunteerSipParams(
       password: secret,
       iceServers,
       mediaEncryption: 'dtls-srtp',
+      // The anchor the client verifies the TLS chain against, when the SIP
+      // edge does not serve a publicly-trusted certificate. Absent = verify
+      // against the device trust store. Never "do not verify".
+      ...(tlsTrustAnchorPem ? { tlsTrustAnchorPem } : {}),
     },
   }
 }
@@ -252,8 +361,59 @@ export async function provisionVolunteerEndpoint(
     rtp_symmetric: 'yes',
     force_rport: 'yes',
     rewrite_contact: 'yes',
+    // The other half of wiring ICE. The client gathers host, server-reflexive
+    // and TURN relay candidates from the `iceServers` above; without ICE on
+    // the endpoint Asterisk DISCARDS them and falls back to rtp_symmetric
+    // alone — which works for many NATs and not for the one this is for. With
+    // it, connectivity checks nominate a pair that demonstrably carries
+    // packets, and a volunteer behind a symmetric NAT is served by the relay
+    // candidate (CoTURN forwards both halves, so no inbound mapping is needed).
+    ice_support: 'yes',
     dtmf_mode: 'rfc4733',
+    // DTLS-SRTP (RFC 5764), and the client applies what this says rather than
+    // hardcoding an algorithm — the pair that could not negotiate in #1188 was
+    // a client mandating SDES-SRTP against this.
+    //
+    // Chosen over SDES-SRTP because SDES carries the media key in the SDP,
+    // which the server reads and could log; a DTLS handshake derives it
+    // between the endpoints, so the key never appears in signalling.
+    //
+    // It does NOT make the leg end-to-end: Asterisk terminates DTLS-SRTP, so
+    // it holds the media key for this hop and can read the audio. Closing that
+    // is SFrame's job (packages/crypto implements the key schedule, and this
+    // endpoint's dialplan context is VOLUNTEER_DIALPLAN_CONTEXT —
+    // `volunteers-sframe`). SFrame encrypts the RTP PAYLOAD underneath
+    // whatever transport protection is in use, so this choice preserves that
+    // path rather than foreclosing it — and DTLS-SRTP is the better hop-by-hop
+    // layer to put underneath it. The constraint SFrame will add is that the
+    // PBX must not transcode an SFrame stream, which means agreeing one
+    // pass-through codec on both legs rather than the `ulaw,alaw,opus` set
+    // above.
     media_encryption: 'dtls',
+    // Without these, `media_encryption: dtls` is inert: Asterisk has no
+    // certificate to offer, puts an EMPTY `a=fingerprint:SHA-256` in its SDP
+    // answer, and every DTLS handshake the client attempts fails with
+    // `tls alert bad certificate`. The call then reaches a running state with
+    // no media at all — observed on a live PBX, which is why the e2e asserts
+    // the handshake and not just the SDP.
+    //
+    // Auto-generated rather than pointed at the TLS keypair, deliberately:
+    // DTLS-SRTP authenticates the peer by the fingerprint carried in the SDP,
+    // which arrived over the TLS-protected signalling channel — the
+    // certificate itself needs no CA and no identity, so a per-endpoint
+    // ephemeral one is both sufficient and one less file for an operator to
+    // place. `dtls_verify: fingerprint` is the matching check on the client's.
+    dtls_auto_generate_cert: 'yes',
+    dtls_verify: 'fingerprint',
+    // `passive`, so the VOLUNTEER's client initiates the DTLS handshake.
+    //
+    // The active side initiates (RFC 5763 §5), and here the offerer is the
+    // volunteer — the side behind the NAT. A handshake that starts there goes
+    // outbound and opens the mapping on its way; one the PBX starts has to
+    // arrive at a mapping that does not exist yet. `actpass` made Asterisk
+    // answer `active` and no media moved at all on a live run; `passive`
+    // started it.
+    dtls_setup: 'passive',
   })
 }
 
