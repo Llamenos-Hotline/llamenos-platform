@@ -66,6 +66,7 @@ Feature: CMS Triage Queue
 
   @triage
   Scenario: Empty triage queue shows placeholder
+    Given a hub whose triage queue is empty
     When I navigate to the "Triage" page
     Then the triage queue should show the no reports message
 

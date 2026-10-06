@@ -47,7 +47,14 @@ function TriagePage() {
   const [cmsEnabled, setCmsEnabled] = useState<boolean | null>(null)
 
   // UI state
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The open report is held as its own state rather than looked up in `reports`
+  // on every render. Acting on a report changes its conversionStatus, so the
+  // next queue refresh legitimately drops it from the filtered page the admin is
+  // looking at — and a derived lookup turned that into the whole detail pane
+  // (report content, case panel, linked cases) disappearing mid-task. Only an
+  // explicit selection change clears it.
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null)
+  const selectedId = selectedReport?.id ?? null
   const [statusTab, setStatusTab] = useState<ConversionStatus | 'all'>('pending')
   const [page, setPage] = useState(1)
   const [linkedCasesRefreshKey, setLinkedCasesRefreshKey] = useState(0)
@@ -58,7 +65,6 @@ function TriagePage() {
     [reportTypes],
   )
 
-  const selectedReport = reports.find(r => r.id === selectedId)
   const selectedReportType = selectedReport?.metadata.reportTypeId
     ? reportTypeMap.get(selectedReport.metadata.reportTypeId)
     : undefined
@@ -92,6 +98,10 @@ function TriagePage() {
       .then(({ conversations, total: t }) => {
         setReports(conversations)
         setTotal(t)
+        // Refresh the open report from the new page when it is still listed;
+        // keep the copy we have when it is not (it just left this status tab).
+        setSelectedReport(prev =>
+          prev ? conversations.find(r => r.id === prev.id) ?? prev : prev)
       })
       .catch(() => toast(t('triage.loadError', { defaultValue: 'Failed to load triage queue' }), 'error'))
       .finally(() => setLoading(false))
@@ -105,6 +115,10 @@ function TriagePage() {
     return () => clearInterval(interval)
   }, [fetchReports])
 
+  const handleSelectReport = useCallback((reportId: string) => {
+    setSelectedReport(reports.find(r => r.id === reportId) ?? null)
+  }, [reports])
+
   const handleStatusChange = useCallback(async (reportId: string, newStatus: ConversionStatus) => {
     try {
       await updateReportConversionStatus(reportId, newStatus)
@@ -113,17 +127,24 @@ function TriagePage() {
           ? { ...r, metadata: { ...r.metadata, conversionStatus: newStatus } }
           : r),
       )
+      setSelectedReport(prev => prev?.id === reportId
+        ? { ...prev, metadata: { ...prev.metadata, conversionStatus: newStatus } }
+        : prev)
       toast(t('triage.statusUpdated', { defaultValue: 'Status updated' }))
     } catch {
       toast(t('triage.statusUpdateError', { defaultValue: 'Failed to update status' }), 'error')
     }
   }, [toast, t])
 
-  const handleCaseCreated = useCallback((_recordId: string) => {
-    // Bump linked cases refresh and update conversion status
+  const handleCaseCreated = useCallback(async (_recordId: string) => {
+    // Bump linked cases refresh and update conversion status. The status write
+    // is awaited before the queue is refetched: fired in parallel, whichever
+    // request the server happened to serve first decided whether the refreshed
+    // queue still listed the report, so the left-hand list showed a stale
+    // status about half the time.
     setLinkedCasesRefreshKey(k => k + 1)
     if (selectedId) {
-      handleStatusChange(selectedId, 'in_progress')
+      await handleStatusChange(selectedId, 'in_progress')
     }
     fetchReports()
   }, [selectedId, handleStatusChange, fetchReports])
@@ -205,7 +226,7 @@ function TriagePage() {
             key={tab.key}
             type="button"
             data-testid={`triage-status-tab-${tab.key}`}
-            onClick={() => { setStatusTab(tab.key); setPage(1); setSelectedId(null) }}
+            onClick={() => { setStatusTab(tab.key); setPage(1); setSelectedReport(null) }}
             className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
               statusTab === tab.key
                 ? 'bg-primary text-primary-foreground font-medium'
@@ -247,7 +268,7 @@ function TriagePage() {
                     report={report}
                     reportType={report.metadata.reportTypeId ? reportTypeMap.get(report.metadata.reportTypeId) : undefined}
                     isSelected={selectedId === report.id}
-                    onSelect={setSelectedId}
+                    onSelect={handleSelectReport}
                   />
                 ))}
               </div>
