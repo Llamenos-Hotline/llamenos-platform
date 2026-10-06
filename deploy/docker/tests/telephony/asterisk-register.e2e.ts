@@ -17,7 +17,7 @@
  *
  * Run with run-register-e2e.sh (it starts the app and the PBX stack).
  */
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto'
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import {
   addHubMemberViaApi,
@@ -68,7 +68,7 @@ async function ariConfigObject(type: string, id: string): Promise<Response> {
 async function createHub(request: APIRequestContext, name: string): Promise<string> {
   const hub = await apiPost<{ hub: { id: string } }>(request, '/hubs', {
     name: `${name} ${Date.now().toString(36)}`,
-    phoneNumber: `+1555019${Math.floor(Math.random() * 9000 + 1000)}`,
+    phoneNumber: `+1555019${randomInt(1000, 10000)}`,
   })
   expect(hub.status, JSON.stringify(hub.data)).toBe(201)
   return hub.data.hub.id
