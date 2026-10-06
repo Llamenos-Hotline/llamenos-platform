@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES,
-  TEMPLATED_SECRET_PATTERNS, loadLaneScopes,
+  TEMPLATED_SECRET_PATTERNS, CERTIFICATE_ONLY_PATTERNS, isPublicCertificateFile, loadLaneScopes,
 } from '../../orchestrator/src/fragments.js'
+import { ISRG_ROOT_X1, ISRG_ROOT_X2, throwawayPrivateKeyPem, throwawayPublicKeyPem } from './pem-fixtures.js'
 
 // Verbatim excerpt of .claude/agents/fragments/ios-supervisor.md
 const IOS = `
@@ -319,6 +320,184 @@ describe('matchesSecretPath — the never-write matcher (#1253)', () => {
     // fail the same gate as `strayed` instead of `forbidden`.
     expect(matchesPath('deploy/docker/.env.example', '.env')).toBe(true)
     expect(matchesPath('deploy/docker/.env.example', 'deploy/')).toBe(true)
+  })
+})
+
+/**
+ * #1610. Every case here injects the defect the carve-out could introduce,
+ * rather than confirming the carve-out works on the happy path — per
+ * `feedback_audit_gates_by_breaking`, a gate is verified only by breaking it.
+ * The load-bearing assertions are the FORBIDDEN ones; the permitted cases are
+ * the bug report.
+ */
+describe('isPublicCertificateFile / the *.pem carve-out (#1610)', () => {
+  const CERT_PATH = 'apps/android/app/src/test/resources/certs/isrg-root-x1.pem'
+  const content = (c: string | undefined) => (_f: string) => c
+
+  describe('still forbidden — the cases the gate exists for', () => {
+    it('refuses a genuine PEM private key at a .pem path', () => {
+      const key = throwawayPrivateKeyPem()
+      expect(isPublicCertificateFile(key)).toBe(false)
+      // The name says "cert"; only the content says otherwise. This is the
+      // reason the carve-out is not a path rule.
+      expect(matchesSecretPath('deploy/tls/server-cert.pem', '*.pem', content(key))).toBe(true)
+    })
+
+    it('refuses a real certificate with a private key APPENDED — the fail-open shape', () => {
+      // The whole reason the predicate is "EVERY block is public" and not
+      // "SOME block is a certificate".
+      const mixed = `${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}`
+      expect(isPublicCertificateFile(mixed)).toBe(false)
+      expect(matchesSecretPath(CERT_PATH, '*.pem', content(mixed))).toBe(true)
+    })
+
+    it('refuses a private key PREPENDED to a real certificate, too', () => {
+      expect(isPublicCertificateFile(`${throwawayPrivateKeyPem()}\n${ISRG_ROOT_X1}`)).toBe(false)
+    })
+
+    it('refuses a private key buried between two real certificates', () => {
+      const buried = `${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}\n${ISRG_ROOT_X2}`
+      expect(isPublicCertificateFile(buried)).toBe(false)
+    })
+
+    it('refuses a truncated certificate — a block that never closes', () => {
+      const truncated = ISRG_ROOT_X1.replace('-----END CERTIFICATE-----\n', '')
+      expect(truncated).toContain('BEGIN CERTIFICATE')
+      expect(truncated).not.toContain('END CERTIFICATE')
+      expect(isPublicCertificateFile(truncated)).toBe(false)
+    })
+
+    it('refuses a valid certificate followed by a second, unterminated block', () => {
+      // "One good block plus noise" must not read as "all blocks good".
+      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\n-----BEGIN CERTIFICATE-----\nMIIB`)).toBe(false)
+    })
+
+    it('refuses mismatched BEGIN/END labels', () => {
+      expect(isPublicCertificateFile(
+        ISRG_ROOT_X1.replace('-----END CERTIFICATE-----', '-----END PUBLIC KEY-----'),
+      )).toBe(false)
+    })
+
+    it('refuses an END with no BEGIN', () => {
+      expect(isPublicCertificateFile('-----END CERTIFICATE-----\n')).toBe(false)
+    })
+
+    it('refuses an empty block — BEGIN immediately followed by END', () => {
+      expect(isPublicCertificateFile('-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n')).toBe(false)
+    })
+
+    it('refuses a nested BEGIN inside an open block', () => {
+      expect(isPublicCertificateFile(ISRG_ROOT_X1.replace(
+        '-----END CERTIFICATE-----',
+        '-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----',
+      ))).toBe(false)
+    })
+
+    it.each<[string, string | undefined]>([
+      ['undefined — the file could not be read at all', undefined],
+      ['empty', ''],
+      ['whitespace only', '\n \n\t\n'],
+      ['not PEM at all', 'just some text\n'],
+      ['a lowercase boundary', '-----begin certificate-----\nMIIB\n-----end certificate-----\n'],
+      ['an indented boundary', '  -----BEGIN CERTIFICATE-----\nMIIB\n  -----END CERTIFICATE-----\n'],
+      ['a NUL byte in the body', '-----BEGIN CERTIFICATE-----\nMI\u0000IB\n-----END CERTIFICATE-----\n'],
+      ['a DER blob read as text (U+FFFD)', '-----BEGIN CERTIFICATE-----\nMI\ufffdIB\n-----END CERTIFICATE-----\n'],
+      ['raw binary with no boundaries at all', '\u0000\u0001\u0002MIIB\u00ff'],
+      ['a non-base64 body line', '-----BEGIN CERTIFICATE-----\nnot base64!!\n-----END CERTIFICATE-----\n'],
+      ['a blank line inside a block', '-----BEGIN CERTIFICATE-----\nMIIB\n\nMIIB\n-----END CERTIFICATE-----\n'],
+      ['an RFC 1421 in-block header', '-----BEGIN CERTIFICATE-----\nProc-Type: 4,ENCRYPTED\nMIIB\n-----END CERTIFICATE-----\n'],
+    ])('refuses %s', (_name, c) => {
+      expect(isPublicCertificateFile(c)).toBe(false)
+    })
+
+    it('refuses `openssl x509 -text` output, where a key could hide in the preamble', () => {
+      expect(isPublicCertificateFile(`Certificate:\n    Issuer: CN=ISRG Root X1\n${ISRG_ROOT_X1}`)).toBe(false)
+    })
+
+    it('refuses trailing text after an otherwise valid certificate', () => {
+      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\nand then something else\n`)).toBe(false)
+    })
+
+    it.each(['RSA PRIVATE KEY', 'EC PRIVATE KEY', 'ENCRYPTED PRIVATE KEY', 'DSA PRIVATE KEY'])(
+      'refuses a %s block even with a certificate-shaped body',
+      (label) => {
+        expect(isPublicCertificateFile(`-----BEGIN ${label}-----\nMIIB\n-----END ${label}-----\n`)).toBe(false)
+      },
+    )
+
+    it.each(['CERTIFICATE REQUEST', 'DH PARAMETERS', 'X509 CRL', 'OPENSSH PRIVATE KEY'])(
+      'refuses the unanalysed label %s — the allowlist is not a denylist',
+      (label) => {
+        expect(isPublicCertificateFile(`-----BEGIN ${label}-----\nMIIB\n-----END ${label}-----\n`)).toBe(false)
+      },
+    )
+  })
+
+  describe('permitted — and only this', () => {
+    it('permits a real public root CA certificate', () => {
+      expect(isPublicCertificateFile(ISRG_ROOT_X1)).toBe(true)
+      expect(isPublicCertificateFile(ISRG_ROOT_X2)).toBe(true)
+      expect(matchesSecretPath(CERT_PATH, '*.pem', content(ISRG_ROOT_X1))).toBe(false)
+    })
+
+    it('permits a multi-certificate bundle, and a CRLF one', () => {
+      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\n${ISRG_ROOT_X2}\n`)).toBe(true)
+      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\n`.replaceAll('\n', '\r\n'))).toBe(true)
+    })
+
+    it('permits a bare PUBLIC KEY block', () => {
+      expect(isPublicCertificateFile(throwawayPublicKeyPem())).toBe(true)
+    })
+  })
+
+  describe('the carve-out does not leak', () => {
+    it('is inert without a content lookup — the fail-closed default', () => {
+      // Every pre-#1610 caller passes no `contentOf`, and must keep the old
+      // answer: a `.pem` is a secret.
+      expect(matchesSecretPath(CERT_PATH, '*.pem')).toBe(true)
+      expect(matchesSecretPath('deploy/secrets/prod.pem', '*.pem')).toBe(true)
+    })
+
+    it('exempts *.pem and nothing else, even for byte-identical certificate content', () => {
+      expect(CERTIFICATE_ONLY_PATTERNS).toEqual(['*.pem'])
+      const notCarvedOut: Array<[string, string]> = [
+        ['deploy/tls/server.key', '*.key'],
+        ['apps/ios/fastlane/AuthKey_ABC.p8', '*.p8'],
+        ['deploy/tls/bundle.p12', '*.p12'],
+        ['deploy/tls/bundle.pfx', '*.pfx'],
+        ['apps/android/release.jks', '*.jks'],
+        ['apps/android/release.keystore', '*.keystore'],
+        ['apps/ios/profile.mobileprovision', '*.mobileprovision'],
+        ['home/authorized_keys', 'authorized_keys'],
+        ['scripts/id_rsa', 'id_rsa'],
+        ['scripts/id_ed25519', 'id_ed25519'],
+        ['.npmrc', '.npmrc'],
+        ['.pgpass', '.pgpass'],
+        ['apps/android/keystore.properties', 'keystore.properties'],
+      ]
+      for (const [file, pattern] of notCarvedOut) {
+        expect(
+          matchesSecretPath(file, pattern, content(ISRG_ROOT_X1)),
+          `${file} must still be refused by ${pattern} whatever its content says`,
+        ).toBe(true)
+      }
+    })
+
+    it('still refuses a .env whose content happens to be a certificate', () => {
+      expect(matchesSecretPath('deploy/docker/.env', '.env', content(ISRG_ROOT_X1))).toBe(true)
+      expect(matchesSecretPath('apps/worker/.dev.vars', '.dev.vars', content(ISRG_ROOT_X1))).toBe(true)
+    })
+
+    it('keeps the TEMPLATE carve-out working and independent of content', () => {
+      expect(matchesSecretPath('deploy/docker/.env.example', '.env', content(throwawayPrivateKeyPem()))).toBe(false)
+      expect(matchesSecretPath('deploy/docker/.env', '.env', content('PLACEHOLDER=1\n'))).toBe(true)
+    })
+
+    it('leaves `matchesPath` itself untouched, so lane OWNERSHIP of a certificate is unchanged', () => {
+      // Same ruling as the template carve-out: ownership is a path question.
+      expect(matchesPath(CERT_PATH, '*.pem')).toBe(true)
+      expect(matchesPath(CERT_PATH, 'apps/android/')).toBe(true)
+    })
   })
 })
 
