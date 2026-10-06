@@ -83,6 +83,15 @@ targets:
             CFBundleURLSchemes:
               - llamenos
         ITSAppUsesNonExemptEncryption: true
+        # `xcodegen generate` REWRITES Sources/App/Info.plist from this block, dropping any
+        # key it does not declare. NSAppTransportSecurity was committed only in the plist, so
+        # every build that regenerates the project (CI's ensure_xcodeproj on a fresh checkout,
+        # and mobile-release.yml:513) silently shipped without ATS pinned off. Declared here
+        # so it survives. Known remaining drift: CFBundleShortVersionString is reset to 1.0 by
+        # the same mechanism — knope owns it in Info.plist (knope.toml:14), so fixing it needs
+        # a knope.toml change and is reported rather than done here.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
         NSMicrophoneUsageDescription: Llamenos uses the microphone for VoIP calls and voice-to-text input when filling out report fields.
         NSSpeechRecognitionUsageDescription: Llamenos uses speech recognition to transcribe voice input into report fields.
         NSLocationWhenInUseUsageDescription: Llamenos uses your location to autofill location fields in reports, with your permission.
