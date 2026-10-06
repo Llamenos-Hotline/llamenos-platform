@@ -183,7 +183,7 @@ describe('rail: an outcome with no verdict is never green (#1564, #1495)', () =>
     // and watch the false green come back. This is the #1564 shape exactly:
     // a notice-level `PASS:` on a run that made no model call.
     it('catches a no-verdict outcome given a green name, the #1564 regression exactly', () => {
-      let reverted = namingScript()
+      const reverted = namingScript()
         .replace(
           /^([ \t]*)carried\) token="PASS:carried" ;;$/m,
           '$1carried) token="PASS:carried" ;;\n$1unreviewed) token="PASS:unreviewed" ;;',
