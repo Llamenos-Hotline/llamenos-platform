@@ -24,7 +24,7 @@ Feature: Admin Sidebar Navigation
     Given I am logged in as an admin
     And I navigate to admin settings with sidebar
     When I tap the sidebar toggle button
-    Then I should see "Platform" scope header
+    Then I should see "VERIFY B Forced Failure" scope header
 
   @android @regression
   Scenario: Tapping a sidebar item navigates to that section
