@@ -16,7 +16,10 @@ import { encryptStorageCredential } from '../lib/crypto'
 import { hubContext } from '../middleware/hub'
 import { checkRoleGrant } from '../lib/hub-scope'
 import type { StorageManager } from '../lib/storage-manager'
-import { revokeVolunteerSipIdentity } from '../telephony/registrar'
+import { revokeSipIdentityIfRoleless } from '../telephony/registrar'
+import { createLogger } from '../lib/logger'
+
+const logger = createLogger('routes.hubs')
 
 const routes = new Hono<AppEnv>()
 
@@ -288,21 +291,9 @@ routes.delete('/:hubId/members/:pubkey',
       await services.identity.removeHubRole({ pubkey: targetPubkey, hubId })
       // Role loss: when the volunteer holds no hub role anywhere left, their
       // per-volunteer SIP identity on our own PBX must die with it (a no-op
-      // for vendor providers). Over-revoking is self-healing — the next
-      // /sip-token re-provisions; under-revoking is a live credential for
-      // someone who may no longer be a volunteer at all.
-      let stillHasARole = false
-      try {
-        const remaining = await services.identity.getUserInternal(targetPubkey)
-        stillHasARole = (remaining?.hubRoles ?? []).some((hr) => hr.roleIds.length > 0)
-      } catch {
-        // The remaining roles are unreadable: revoke anyway — the safe
-        // direction. A member wrongly stripped of SIP re-provisions on their
-        // next /sip-token; a credential left live does not come back.
-      }
-      if (!stillHasARole) {
-        await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
-      }
+      // for vendor providers) — and /sip-token refuses to re-provision it,
+      // under the same predicate (#1540).
+      await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
     } catch {
@@ -342,7 +333,24 @@ routes.delete('/:hubId',
         await storageManager.destroyHub(hubId, creds?.userName)
       }
 
+      // Deleting a hub strips its role from every member (and deletes those
+      // who belonged to no other hub), so it is a member-removal path like
+      // any other: read the roster BEFORE the hub is gone, and revoke the SIP
+      // identity of everyone the deletion leaves with no hub role.
+      // Best-effort throughout — telephony cleanup must never be what stops a
+      // hub from being deleted.
+      let members: string[] = []
+      try {
+        members = (await services.identity.getUsers(hubId)).users.map(u => u.pubkey)
+      } catch (err) {
+        logger.error('Hub deletion: member roster unreadable — SIP endpoints may linger', { hubId, err })
+      }
+
       await services.settings.deleteHub(hubId)
+
+      for (const member of members) {
+        await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, member, c.get('allRoles'))
+      }
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError) {

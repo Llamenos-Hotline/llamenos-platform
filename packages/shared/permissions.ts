@@ -541,6 +541,33 @@ export function resolveAllRoleIds(
 }
 
 /**
+ * True when the user still holds authority in SOME hub.
+ *
+ * This is {@link resolveHubPermissions} — the admission rule `hubContext` and
+ * ringing's hub filter both use — applied across every hub the user is
+ * assigned to, plus a super-admin, who holds every hub. It is deliberately
+ * built from that one primitive rather than reading `hubRoles` directly, so
+ * "is this person still a member anywhere" can never drift from "may this
+ * person act in this hub".
+ *
+ * Account-wide capabilities that are not scoped to one hub but still require
+ * membership somewhere resolve their authority here — the per-volunteer SIP
+ * credential above all (`/api/telephony/sip-token`): one endpoint rings for
+ * every member hub, so it must stop being issuable, and be torn down at the
+ * PBX, the moment the last membership is gone (#1540).
+ */
+export function hasAnyHubAccess(
+  globalRoles: string[],
+  hubRoles: { hubId: string; roleIds: string[] }[],
+  allRoleDefs: Role[],
+): boolean {
+  if (isSuperAdmin(globalRoles, allRoleDefs)) return true
+  return hubRoles.some(hr =>
+    resolveHubPermissions(globalRoles, hubRoles, allRoleDefs, hr.hubId).length > 0,
+  )
+}
+
+/**
  * Get all hub IDs a user has access to (any role assignment).
  * Super-admin has access to all hubs (returns null = all).
  */

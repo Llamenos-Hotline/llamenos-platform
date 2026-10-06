@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { sha1 } from '@noble/hashes/legacy.js'
 import { utf8ToBytes } from '@noble/hashes/utils.js'
 import type { TelephonyProviderConfig } from '@shared/types'
+import { hasAnyHubAccess, type Role } from '@shared/permissions'
 import { HMAC_SIP_VOLUNTEER_SECRET } from '@shared/crypto-labels'
 import { SipConnectionParams } from './sip-tokens'
 import { safeFetch } from '../lib/safe-fetch'
@@ -52,8 +53,14 @@ function base64url(bytes: Uint8Array): string {
 }
 
 /**
- * The per-volunteer endpoint secret: HMAC-SHA256 of the volunteer's pubkey
- * under a registrar-only server secret, domain-separated
+ * The security-event type whose count is a volunteer's SIP credential epoch
+ * (see `deriveVolunteerSipSecret` and `sipCredentialEpoch`).
+ */
+export const SIP_REVOCATION_EVENT = 'sipIdentityRevoked'
+
+/**
+ * The per-volunteer endpoint secret: HMAC-SHA256 of the volunteer's SIP
+ * username under a registrar-only server secret, domain-separated
  * (HMAC_SIP_VOLUNTEER_SECRET) so it can never be confused with another HMAC
  * in the system.
  *
@@ -63,9 +70,19 @@ function base64url(bytes: Uint8Array): string {
  * Revocation is the ARI delete of the volunteer's PJSIP objects — the secret
  * string staying derivable is harmless once nothing on the PBX accepts it.
  * Rotating SIP_REGISTRAR_SECRET rotates every volunteer at once.
+ *
+ * `epoch` is how many times this volunteer's identity has already been
+ * revoked. It keeps determinism *between* revocations while making
+ * re-admission issue a credential the volunteer has never held: a secret that
+ * leaked while they were out of the hub is not resurrected by letting them
+ * back in. Epoch 0 — a volunteer who has never been revoked — is the bare
+ * `label:username` message, so the first-issuance derivation is unchanged.
  */
-export function deriveVolunteerSipSecret(masterSecret: string, pubkey: string): string {
-  return base64url(hmac(sha256, utf8ToBytes(masterSecret), utf8ToBytes(`${HMAC_SIP_VOLUNTEER_SECRET}:${pubkey}`)))
+export function deriveVolunteerSipSecret(masterSecret: string, username: string, epoch = 0): string {
+  const message = epoch > 0
+    ? `${HMAC_SIP_VOLUNTEER_SECRET}:${username}:${epoch}`
+    : `${HMAC_SIP_VOLUNTEER_SECRET}:${username}`
+  return base64url(hmac(sha256, utf8ToBytes(masterSecret), utf8ToBytes(message)))
 }
 
 // ---------------------------------------------------------------------------
@@ -277,10 +294,40 @@ export async function removeVolunteerEndpoint(
 // Route-facing orchestration
 // ---------------------------------------------------------------------------
 
-/** The slice of the service registry the revocation hooks need. */
-interface RegistrarServices {
+/** The slice of the service registry the registrar hooks need. */
+export interface RegistrarServices {
   settings: {
     getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+  }
+  identity?: {
+    getUserInternal(pubkey: string): Promise<{ roles: string[]; hubRoles?: { hubId: string; roleIds: string[] }[] } | null>
+    emitSecurityEvent(
+      userPubkey: string | null,
+      eventType: string,
+      deviceId: string | null,
+      metadata?: Record<string, unknown>,
+    ): Promise<void>
+    countSecurityEvents(pubkey: string, eventType: string): Promise<number>
+  }
+}
+
+/**
+ * This volunteer's credential epoch: the number of times their SIP identity
+ * has been revoked. Read from the append-only security-event log, so no
+ * column has to carry it and the history is auditable. A registry without the
+ * identity service (unit fixtures, the provider-switch cleanup) reads 0 —
+ * the pre-revocation derivation.
+ */
+export async function sipCredentialEpoch(services: RegistrarServices, pubkey: string): Promise<number> {
+  if (!services.identity) return 0
+  try {
+    return await services.identity.countSecurityEvents(pubkey, SIP_REVOCATION_EVENT)
+  } catch (err) {
+    // Reading the epoch must not deny a legitimate volunteer their
+    // credential; the worst case is re-issuing the credential they already
+    // hold, which is the pre-#1540 behaviour.
+    logger.error('SIP epoch unreadable — issuing at epoch 0', { pubkey, err })
+    return 0
   }
 }
 
@@ -306,12 +353,71 @@ export async function revokeVolunteerSipIdentity(
     return
   }
   if (config?.type !== 'asterisk') return
+  const username = volunteerSipUsername(pubkey)
+  // Advance the epoch FIRST, and whether or not the PBX cooperates: a delete
+  // that failed leaves the old secret live on the PBX, and the bumped epoch is
+  // what makes the next issuance overwrite it with a credential the holder of
+  // the old one does not have.
+  await recordSipRevocation(services, pubkey, username)
   try {
-    await removeVolunteerEndpoint(config, volunteerSipUsername(pubkey))
-    logger.info('SIP identity revoked', { username: volunteerSipUsername(pubkey) })
+    await removeVolunteerEndpoint(config, username)
+    logger.info('SIP identity revoked', { username })
   } catch (err) {
     logger.error('SIP revocation: PBX refused to remove the volunteer endpoint', { pubkey, err })
   }
+}
+
+/**
+ * Append the revocation to the security-event log — the volunteer's credential
+ * epoch (see `sipCredentialEpoch`) and an admin-visible record of the
+ * teardown.
+ *
+ * `userPubkey` is deliberately null and the pubkey lives in the metadata:
+ * account deletion revokes as the user row goes away, where the FK would
+ * either refuse the insert or null the column out from under the count.
+ */
+async function recordSipRevocation(
+  services: RegistrarServices,
+  pubkey: string,
+  username: string,
+): Promise<void> {
+  if (!services.identity) return
+  try {
+    await services.identity.emitSecurityEvent(null, SIP_REVOCATION_EVENT, null, { pubkey, username })
+  } catch (err) {
+    logger.error('SIP revocation: could not record the revocation event', { pubkey, err })
+  }
+}
+
+/**
+ * Revoke this volunteer's SIP identity if the role change that just happened
+ * left them with no hub role anywhere — the single rule every member-removal
+ * and role-stripping path calls, so none of them carries its own copy.
+ *
+ * The predicate is `hasAnyHubAccess`, the same one `/sip-token` issues under
+ * (via callerHasAnyHubAccess), so "may no longer be issued" and "must be torn
+ * down" are one decision. A user row that is already gone counts as holding
+ * nothing, and unreadable roles fail SAFE — revoke: a member wrongly stripped
+ * of SIP re-provisions on their next /sip-token; a credential left live at the
+ * PBX does not come back on its own.
+ */
+export async function revokeSipIdentityIfRoleless(
+  services: RegistrarServices,
+  hmacSecret: string,
+  pubkey: string,
+  allRoles: Role[],
+): Promise<void> {
+  let stillHasAccess = false
+  try {
+    const remaining = await services.identity?.getUserInternal(pubkey)
+    stillHasAccess = remaining
+      ? hasAnyHubAccess(remaining.roles ?? [], remaining.hubRoles ?? [], allRoles)
+      : false
+  } catch (err) {
+    logger.warn('SIP revocation: remaining roles unreadable — revoking', { pubkey, err })
+  }
+  if (stillHasAccess) return
+  await revokeVolunteerSipIdentity(services, hmacSecret, pubkey)
 }
 
 /**

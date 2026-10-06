@@ -22,16 +22,27 @@ import {
   buildVolunteerSipParams,
   provisionVolunteerEndpoint,
   removeVolunteerEndpoint,
+  revokeSipIdentityIfRoleless,
   revokeVolunteerSipIdentity,
+  SIP_REVOCATION_EVENT,
   TURN_CREDENTIAL_TTL_SECONDS,
   VOLUNTEER_DIALPLAN_CONTEXT,
 } from '@worker/telephony/registrar'
 import { sipCredentialsMayBeIssued } from '@worker/telephony/sip-tokens'
 import webrtc from '@worker/routes/webrtc'
+import { DEFAULT_ROLES, type Role } from '@shared/permissions'
 
 const MASTER = 'registrar-master-secret'
 const PUBKEY_A = 'a'.repeat(64)
 const PUBKEY_B = 'b'.repeat(64)
+const HUB = 'hub-1'
+
+/** The real role catalogue: the route resolves authority through it. */
+const ALL_ROLES: Role[] = DEFAULT_ROLES.map(r => ({
+  ...r,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+})) as Role[]
 
 function asteriskConfig(overrides?: Partial<TelephonyProviderConfig>): TelephonyProviderConfig {
   return {
@@ -322,6 +333,10 @@ function createSipTokenApp(opts: {
   services: Record<string, unknown>
   env?: Partial<AppEnv['Bindings']>
   callPreference?: string
+  /** The volunteer's hub assignments. Default: a volunteer role in HUB. */
+  hubRoles?: { hubId: string; roleIds: string[] }[]
+  /** The volunteer's global roles. Default: role-volunteer (grants nothing in a hub). */
+  roles?: string[]
 }) {
   const pubkey = PUBKEY_A
   const app = new Hono<AppEnv>()
@@ -329,13 +344,14 @@ function createSipTokenApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', ['*'])
     c.set('services', opts.services as unknown as AppEnv['Variables']['services'])
-    c.set('allRoles', [])
+    c.set('allRoles', ALL_ROLES)
     c.set('requestId', 'test-req-1')
     c.set('user', {
       pubkey,
       name: 'Test Volunteer',
       phone: '+1555000000',
-      roles: ['role-volunteer'],
+      roles: opts.roles ?? ['role-volunteer'],
+      hubRoles: opts.hubRoles ?? [{ hubId: HUB, roleIds: ['role-volunteer'] }],
       active: true,
       createdAt: new Date().toISOString(),
       encryptedSecretKey: '',
@@ -461,5 +477,213 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
     const res = await app.request('/sip-status')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ available: true, provider: 'asterisk' })
+  })
+})
+
+// --- revocation is not bypassable by asking again (#1540) -------------------
+
+describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
+  it('refuses a removed volunteer — their revoked endpoint cannot be re-provisioned', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    // Exactly the state `DELETE /hubs/:hubId/members/:pubkey` leaves behind:
+    // the account and its device key are intact, every hub assignment is gone.
+    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    const res = await app.request('/sip-token')
+    expect(res.status).toBe(403)
+    expect(await res.text()).toContain('No hub membership')
+    // and nothing was provisioned on the PBX
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses an assignment that grants no permission in its hub', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({
+      services: { settings },
+      hubRoles: [{ hubId: HUB, roleIds: [] }],
+    })
+    expect((await app.request('/sip-token')).status).toBe(403)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('a global non-super-admin role is not hub membership', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({
+      services: { settings },
+      roles: ['role-admin'],
+      hubRoles: [],
+    })
+    expect((await app.request('/sip-token')).status).toBe(403)
+  })
+
+  it('a super-admin holds every hub, so issuance is unaffected', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({
+      services: { settings },
+      roles: ['role-super-admin'],
+      hubRoles: [],
+    })
+    expect((await app.request('/sip-token')).status).toBe(200)
+  })
+
+  it('a still-valid member keeps issuing and re-issuing normally', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({ services: { settings } })
+    const first = await app.request('/sip-token')
+    expect(first.status).toBe(200)
+    const second = await app.request('/sip-token')
+    expect(second.status).toBe(200)
+    expect(((await second.json()) as { sip: { password: string } }).sip.password).toBe(
+      ((await first.json()) as { sip: { password: string } }).sip.password,
+    )
+  })
+
+  it('a volunteer removed from ONE of two hubs keeps their credential', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({
+      services: { settings },
+      hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }],
+    })
+    expect((await app.request('/sip-token')).status).toBe(200)
+  })
+
+  it('webrtc-token refuses a removed volunteer too', async () => {
+    const settings = {
+      getTelephonyProvider: vi.fn().mockResolvedValue({
+        type: 'twilio',
+        phoneNumber: '+15551234567',
+        accountSid: 'AC',
+        authToken: 'tok',
+        webrtcEnabled: true,
+        twimlAppSid: 'AP',
+        apiKey: 'SK',
+        apiSecret: 'sec',
+      }),
+    }
+    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    expect((await app.request('/webrtc-token')).status).toBe(403)
+  })
+
+  it('sip-status agrees: unavailable for a volunteer with no hub role', async () => {
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    expect(await (await app.request('/sip-status')).json()).toEqual({
+      available: false,
+      provider: 'asterisk',
+    })
+  })
+})
+
+// --- re-admission does not resurrect the old credential ---------------------
+
+describe('credential epoch', () => {
+  it('a revoked-then-re-added volunteer is issued a credential they never held', async () => {
+    const username = volunteerSipUsername(PUBKEY_A)
+    const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
+    const events: { eventType: string; metadata?: Record<string, unknown> }[] = []
+    const identity = {
+      getUserInternal: vi.fn().mockResolvedValue({ pubkey: PUBKEY_A, roles: ['role-volunteer'], hubRoles: [] }),
+      emitSecurityEvent: vi.fn(async (_p: string | null, eventType: string, _d: string | null, metadata?: Record<string, unknown>) => {
+        events.push({ eventType, metadata })
+      }),
+      countSecurityEvents: vi.fn(async (pubkey: string, eventType: string) =>
+        events.filter(e => e.eventType === eventType && e.metadata?.pubkey === pubkey).length,
+      ),
+    }
+    const services = { settings, identity }
+
+    // Issue while a member.
+    const member = await createSipTokenApp({ services })
+    const before = ((await (await member.request('/sip-token')).json()) as { sip: { password: string } }).sip.password
+
+    // Removed from their last hub: the hook revokes, and the revocation is
+    // recorded as the credential epoch.
+    await revokeSipIdentityIfRoleless(services, 'hmac', PUBKEY_A, ALL_ROLES)
+    expect(events.map(e => e.eventType)).toEqual([SIP_REVOCATION_EVENT])
+    expect(calls.map(c => `${c.method} ${c.object}`)).toEqual([
+      `PUT auth/${username}`,
+      `PUT aor/${username}`,
+      `PUT endpoint/${username}`,
+      `DELETE endpoint/${username}`,
+      `DELETE aor/${username}`,
+      `DELETE auth/${username}`,
+    ])
+
+    // Re-admitted: a fresh credential, not the one that may have leaked.
+    const readmitted = await createSipTokenApp({ services })
+    const after = ((await (await readmitted.request('/sip-token')).json()) as { sip: { password: string } }).sip.password
+    expect(after).not.toBe(before)
+    expect(after).toBe(deriveVolunteerSipSecret(MASTER, username, 1))
+    expect(before).toBe(deriveVolunteerSipSecret(MASTER, username, 0))
+    // and the PBX now holds the NEW secret for that username
+    const lastAuthPut = calls.filter(c => c.method === 'PUT' && c.object === `auth/${username}`).at(-1)
+    expect(lastAuthPut?.fields?.password).toBe(after)
+  })
+
+  it('epoch 0 is the bare label:username derivation — unchanged for a volunteer never revoked', () => {
+    const username = volunteerSipUsername(PUBKEY_B)
+    expect(deriveVolunteerSipSecret(MASTER, username, 0)).toBe(deriveVolunteerSipSecret(MASTER, username))
+    expect(deriveVolunteerSipSecret(MASTER, username, 1)).not.toBe(deriveVolunteerSipSecret(MASTER, username))
+    expect(deriveVolunteerSipSecret(MASTER, username, 2)).not.toBe(deriveVolunteerSipSecret(MASTER, username, 1))
+  })
+})
+
+// --- the role-loss hook every removal path shares ---------------------------
+
+describe('revokeSipIdentityIfRoleless', () => {
+  const config = asteriskConfig()
+  const username = volunteerSipUsername(PUBKEY_A)
+
+  function servicesWith(remaining: unknown) {
+    return {
+      settings: { getTelephonyProvider: vi.fn().mockResolvedValue(config) },
+      identity: {
+        getUserInternal: vi.fn().mockResolvedValue(remaining),
+        emitSecurityEvent: vi.fn().mockResolvedValue(undefined),
+        countSecurityEvents: vi.fn().mockResolvedValue(0),
+      },
+    }
+  }
+
+  it('revokes when no hub role remains', async () => {
+    await revokeSipIdentityIfRoleless(servicesWith({ roles: ['role-volunteer'], hubRoles: [] }), 'hmac', PUBKEY_A, ALL_ROLES)
+    expect(calls.map(c => `${c.method} ${c.object}`)).toEqual([
+      `DELETE endpoint/${username}`,
+      `DELETE aor/${username}`,
+      `DELETE auth/${username}`,
+    ])
+  })
+
+  it('leaves a volunteer who still belongs to another hub alone', async () => {
+    await revokeSipIdentityIfRoleless(
+      servicesWith({ roles: ['role-volunteer'], hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }] }),
+      'hmac',
+      PUBKEY_A,
+      ALL_ROLES,
+    )
+    expect(calls).toHaveLength(0)
+  })
+
+  it('revokes when the user row is already gone', async () => {
+    await revokeSipIdentityIfRoleless(servicesWith(null), 'hmac', PUBKEY_A, ALL_ROLES)
+    expect(calls.map(c => c.method)).toEqual(['DELETE', 'DELETE', 'DELETE'])
+  })
+
+  it('fails safe — unreadable remaining roles revoke', async () => {
+    const services = servicesWith(null)
+    services.identity.getUserInternal = vi.fn().mockRejectedValue(new Error('db down'))
+    await revokeSipIdentityIfRoleless(services, 'hmac', PUBKEY_A, ALL_ROLES)
+    expect(calls.map(c => c.method)).toEqual(['DELETE', 'DELETE', 'DELETE'])
+  })
+
+  it('advances the epoch even when the PBX refuses the delete', async () => {
+    const services = servicesWith({ roles: [], hubRoles: [] })
+    statusFor[`DELETE endpoint/${username}`] = 500
+    await revokeSipIdentityIfRoleless(services, 'hmac', PUBKEY_A, ALL_ROLES)
+    expect(services.identity.emitSecurityEvent).toHaveBeenCalledWith(
+      null,
+      SIP_REVOCATION_EVENT,
+      null,
+      { pubkey: PUBKEY_A, username },
+    )
   })
 })

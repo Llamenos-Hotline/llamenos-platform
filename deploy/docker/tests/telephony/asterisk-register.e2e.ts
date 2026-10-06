@@ -20,6 +20,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import {
+  addHubMemberViaApi,
   apiDelete,
   apiGet,
   apiPost,
@@ -63,6 +64,16 @@ async function ariConfigObject(type: string, id: string): Promise<Response> {
   return fetch(url, { headers: { Authorization: `Basic ${btoa(`${ARI_USERNAME}:${ARI_PASSWORD}`)}` } })
 }
 
+/** A hub to be a member of: the credential's authority is a remaining hub role. */
+async function createHub(request: APIRequestContext, name: string): Promise<string> {
+  const hub = await apiPost<{ hub: { id: string } }>(request, '/hubs', {
+    name: `${name} ${Date.now().toString(36)}`,
+    phoneNumber: `+1555019${Math.floor(Math.random() * 9000 + 1000)}`,
+  })
+  expect(hub.status, JSON.stringify(hub.data)).toBe(201)
+  return hub.data.hub.id
+}
+
 async function configureAsteriskProvider(request: APIRequestContext): Promise<void> {
   const res = await apiPost(request, '/provider-setup/configure', {
     provider: 'asterisk',
@@ -84,8 +95,12 @@ async function configureAsteriskProvider(request: APIRequestContext): Promise<vo
 test('a volunteer SIP identity registers against the PBX, and deletion revokes it', async ({ request }) => {
   await configureAsteriskProvider(request)
 
+  // Hub membership is what authorises the credential (#1540), so the
+  // volunteer is a member of a hub — as every volunteer who can take a call is.
+  const hubId = await createHub(request, 'Registrar E2E')
   const volunteer = await createUserViaApi(request, { name: 'Registrar E2E Volunteer' })
   await updateUserViaApi(request, volunteer.pubkey, { callPreference: 'both' })
+  await addHubMemberViaApi(request, hubId, volunteer.pubkey)
 
   // The gate agrees before any client asks: SIP is available for asterisk.
   const status = await apiGet<{ available: boolean; provider: string }>(
@@ -193,3 +208,85 @@ function timingSafeEqualString(a: string, b: string): boolean {
   const bb = Buffer.from(b)
   return ab.length === bb.length && timingSafeEqual(ab, bb)
 }
+
+/**
+ * The gap #1573's review found in this route, closed and proven at the PBX.
+ *
+ * Revoking a removed volunteer's SIP identity is worth nothing if they can
+ * re-provision it by asking for a token again, and the only thing that stopped
+ * harm was a `hasHubAccess` filter in ringing.ts — a different module, on a
+ * different code path, that nothing required to stay there. So this asserts
+ * BOTH halves at the live PBX: the endpoint is gone from Asterisk the moment
+ * membership ends, and `/sip-token` refuses to put it back.
+ *
+ * The "still a member" volunteer in the same hub is the control: a fix that
+ * locks out legitimate volunteers is worse than the hole.
+ */
+test('removal tears the endpoint down at the PBX, and /sip-token will not re-provision it', async ({ request }) => {
+  await configureAsteriskProvider(request)
+  const hubId = await createHub(request, 'Registrar Revocation E2E')
+
+  const removed = await createUserViaApi(request, { name: 'Removed Volunteer' })
+  const kept = await createUserViaApi(request, { name: 'Kept Volunteer' })
+  for (const v of [removed, kept]) {
+    await updateUserViaApi(request, v.pubkey, { callPreference: 'both' })
+    await addHubMemberViaApi(request, hubId, v.pubkey)
+  }
+
+  const removedUsername = `vol_${removed.pubkey.slice(0, 16)}`
+  const keptUsername = `vol_${kept.pubkey.slice(0, 16)}`
+  const register = (username: string, password: string) =>
+    registerOverTcp({ host: PBX_HOST, port: PBX_PORT, domain: REGISTRAR_DOMAIN, username, password })
+
+  // Both members are issued a credential and both REGISTER against the PBX.
+  const issued = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', removed.seedHex)
+  expect(issued.status, JSON.stringify(issued.data)).toBe(200)
+  expect(issued.data.sip.username).toBe(removedUsername)
+  expect((await register(removedUsername, issued.data.sip.password)).status).toBe(200)
+
+  const keptIssued = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', kept.seedHex)
+  expect(keptIssued.status, JSON.stringify(keptIssued.data)).toBe(200)
+  expect((await register(keptUsername, keptIssued.data.sip.password)).status).toBe(200)
+
+  // --- the one administrative act: removal from the hub --------------------
+  const removal = await apiDelete(request, `/hubs/${hubId}/members/${removed.pubkey}`)
+  expect(removal.status, JSON.stringify(removal.data)).toBe(200)
+
+  // 1. The endpoint is gone AT THE PBX — Asterisk's own view, not ours.
+  for (const type of ['auth', 'aor', 'endpoint']) {
+    const res = await ariConfigObject(type, removedUsername)
+    expect(res.status, `ARI ${type}/${removedUsername} after removal`).toBe(404)
+  }
+  // A registration that outlives revocation is the actual risk: it does not.
+  expect((await register(removedUsername, issued.data.sip.password)).status).toBe(401)
+
+  // 2. And it cannot be put back: the issuing route refuses a caller holding
+  //    no hub role, so revocation is not bypassable by asking again.
+  const reissue = await apiGet<{ error?: string }>(request, '/telephony/sip-token', removed.seedHex)
+  expect(reissue.status, JSON.stringify(reissue.data)).toBe(403)
+  const status = await apiGet<{ available: boolean }>(request, '/telephony/sip-status', removed.seedHex)
+  expect(status.data.available).toBe(false)
+  for (const type of ['auth', 'aor', 'endpoint']) {
+    const res = await ariConfigObject(type, removedUsername)
+    expect(res.status, `ARI ${type}/${removedUsername} after refused re-issuance`).toBe(404)
+  }
+
+  // 3. The control: the member who is still a member is untouched —
+  //    issuance, re-issuance and registration all work exactly as before.
+  const keptReissue = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', kept.seedHex)
+  expect(keptReissue.status, JSON.stringify(keptReissue.data)).toBe(200)
+  expect(keptReissue.data.sip.password).toBe(keptIssued.data.sip.password)
+  expect((await register(keptUsername, keptReissue.data.sip.password)).status).toBe(200)
+  for (const type of ['auth', 'aor', 'endpoint']) {
+    expect((await ariConfigObject(type, keptUsername)).status).toBe(200)
+  }
+
+  // 4. Re-admission issues a credential the volunteer has never held: a secret
+  //    that leaked while they were out of the hub is not resurrected.
+  await addHubMemberViaApi(request, hubId, removed.pubkey)
+  const readmitted = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', removed.seedHex)
+  expect(readmitted.status, JSON.stringify(readmitted.data)).toBe(200)
+  expect(readmitted.data.sip.password).not.toBe(issued.data.sip.password)
+  expect((await register(removedUsername, readmitted.data.sip.password)).status).toBe(200)
+  expect((await register(removedUsername, issued.data.sip.password)).status).toBe(401)
+})

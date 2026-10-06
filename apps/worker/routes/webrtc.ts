@@ -8,10 +8,12 @@ import {
   deriveVolunteerSipSecret,
   mintTurnCredentials,
   provisionVolunteerEndpoint,
+  sipCredentialEpoch,
   volunteerSipUsername,
   type TurnCredentials,
 } from '../telephony/registrar'
 import { webrtcTokenResponseSchema, sipTokenResponseSchema, telephonyStatusResponseSchema } from '@protocol/schemas/webrtc'
+import { callerHasAnyHubAccess } from '../lib/hub-scope'
 import { authErrors } from '../openapi/helpers'
 import { createLogger } from '../lib/logger'
 
@@ -51,6 +53,13 @@ webrtc.get('/webrtc-token',
     const callPref = user.callPreference ?? 'phone'
     if (callPref === 'phone') {
       return c.json({ error: 'Call preference is set to phone only. Enable browser calling in settings.' }, 400)
+    }
+
+    // Same authority as /sip-token: a live calling credential belongs only to
+    // someone who still holds a role in some hub (#1540).
+    if (!callerHasAnyHubAccess(c)) {
+      logger.warn('WebRTC token refused: no remaining hub role', { pubkey: pubkey.slice(0, 16) })
+      return c.json({ error: 'No hub membership — browser calling is not available for this account.' }, 403)
     }
 
     // Get provider config
@@ -107,6 +116,19 @@ webrtc.get('/sip-token',
       return c.json({ error: 'Call preference is set to phone only. Enable VoIP in settings.' }, 400)
     }
 
+    // Hub membership is what authorises the credential (#1540). Without this,
+    // revocation is bypassable by asking again: a volunteer removed from their
+    // last hub has their endpoint torn down at the PBX and then simply
+    // re-provisions it here. The authority is resolved by
+    // callerHasAnyHubAccess — hubContext's own admission rule, applied over
+    // every hub the volunteer is assigned to — NOT by a second rule written
+    // here, so this and ringing's hub filter cannot drift apart. That filter
+    // stays where it is: it is the next layer, not the only one.
+    if (!callerHasAnyHubAccess(c)) {
+      logger.warn('SIP token refused: no remaining hub role', { pubkey: pubkey.slice(0, 16) })
+      return c.json({ error: 'No hub membership — in-app SIP audio is not available for this account.' }, 403)
+    }
+
     // Get provider config
     const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     if (!config) {
@@ -140,8 +162,12 @@ webrtc.get('/sip-token',
       if (config.type === 'asterisk') {
         const username = volunteerSipUsername(pubkey)
         const turn = turnCredentialsFor(c.env, username)
+        // Re-admission must not hand back a credential that may have leaked
+        // while the volunteer was out of the hub: the epoch counts their
+        // revocations, and the secret is derived under it.
+        const epoch = await sipCredentialEpoch(services, pubkey)
         try {
-          const sipParams = await issueVolunteerSipParams(c.env, config, username, turn)
+          const sipParams = await issueVolunteerSipParams(c.env, config, username, turn, epoch)
           return c.json(sipParams)
         } catch (err) {
           // The registrar is ours: a PBX that will not provision means the
@@ -184,10 +210,11 @@ webrtc.get('/sip-status',
     const services = c.get('services')
     const config = await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
     // Must agree with /sip-token, which refuses while the credential would be
-    // shared (#1203). Reporting available:true here and then refusing there
-    // would make clients retry a door that is deliberately shut.
+    // shared (#1203) and refuses a caller holding no hub role (#1540).
+    // Reporting available:true here and then refusing there would make clients
+    // retry a door that is deliberately shut.
     return c.json({
-      available: isSipConfigured(config) && sipCredentialsMayBeIssued(config),
+      available: isSipConfigured(config) && sipCredentialsMayBeIssued(config) && callerHasAnyHubAccess(c),
       provider: config?.type ?? null,
     })
   })
@@ -252,9 +279,10 @@ async function issueVolunteerSipParams(
   config: Parameters<typeof buildVolunteerSipParams>[0],
   username: string,
   turn: { host: string; credentials: TurnCredentials } | undefined,
+  epoch: number,
 ) {
   const masterSecret = env.SIP_REGISTRAR_SECRET || env.HMAC_SECRET
-  const secret = deriveVolunteerSipSecret(masterSecret, username)
+  const secret = deriveVolunteerSipSecret(masterSecret, username, epoch)
   await provisionVolunteerEndpoint(config, username, secret)
   return buildVolunteerSipParams(config, username, secret, turn)
 }

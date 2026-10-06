@@ -5,7 +5,7 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
+import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { buildReaderPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
@@ -1853,6 +1853,35 @@ export class IdentityService {
   // =========================================================================
   // Security Events (EP02)
   // =========================================================================
+
+  /**
+   * How many events of one type were ever recorded about this pubkey.
+   *
+   * security_events is append-only, which makes a count of one event type a
+   * monotonic counter that needs no column of its own. The SIP registrar uses
+   * `sipIdentityRevoked` this way, as the epoch its per-volunteer secret is
+   * derived under, so a re-admitted volunteer is issued a credential they
+   * never held before.
+   *
+   * Matched on `metadata->>'pubkey'` as well as `user_pubkey`, because the
+   * revocations that matter most happen as the user row is deleted — the FK
+   * sets `user_pubkey` to NULL — and the count must survive that.
+   */
+  async countSecurityEvents(pubkey: string, eventType: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(securityEvents)
+      .where(
+        and(
+          eq(securityEvents.eventType, eventType),
+          or(
+            eq(securityEvents.userPubkey, pubkey),
+            sql`${securityEvents.metadata}->>'pubkey' = ${pubkey}`,
+          ),
+        ),
+      )
+    return Number(row?.count ?? 0)
+  }
 
   async listSecurityEvents(pubkey: string, limit: number, offset: number) {
     const [countResult] = await this.db
