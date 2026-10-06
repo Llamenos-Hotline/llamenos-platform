@@ -117,6 +117,7 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   // missing here.
   'scripts/check-bddgen-warmup.sh',
   'scripts/check-codeql-languages.ts',
+  'scripts/check-db-identity.ts',
   'scripts/check-ecies-active.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',
