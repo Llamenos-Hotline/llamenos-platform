@@ -216,6 +216,14 @@ async function runNonAuthorReview(
     model: REVIEW_AND_MERGE_MODEL,
     exportDir,
     prompt,
+    // So an exhausted budget here salvages a partial verdict too, rather
+    // than this operator command being the one reviewer path that still
+    // loses everything its session concluded (review.ts's
+    // `salvagePartialVerdict` needs the changed-file list to ask "which of
+    // these did you not reach"). This command exports only the PR head, so
+    // it passes no `baseDir` and gets the single-tree prompt.
+    pr,
+    changedFiles: report.changedFiles,
     maxTurns: highImpact ? HIGH_IMPACT_MAX_TURNS : DEFAULT_MAX_TURNS,
     timeoutMs: highImpact ? HIGH_IMPACT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
   })

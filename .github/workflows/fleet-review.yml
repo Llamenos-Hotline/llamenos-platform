@@ -1879,6 +1879,13 @@ jobs:
                   cache-fail) token="REJECTED:cached" ;;
                   unreadable) token="NO-VERDICT:unreadable" ;;
                   budget-exhausted) token="NO-VERDICT:budget-exhausted" ;;
+                  # A reviewer that ran out of turns AFTER concluding
+                  # something. `partial-fail` is a rejection on narrower
+                  # evidence; `partial-pass` is NOT a pass and gets no
+                  # `PASS:` name (#1564's lesson), only an honest
+                  # NO-VERDICT one that says what was and was not read.
+                  partial-fail) token="REJECTED:partial" ;;
+                  partial-pass) token="NO-VERDICT:partial-pass" ;;
                   scope) token="NO-VERDICT:scope" ;;
                   review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
                   unknown-lane) token="NO-VERDICT:unknown-lane" ;;
@@ -1922,7 +1929,9 @@ jobs:
             # Deliberately NOT "re-request": that re-runs the same diff under the same
             # budget and exhausts again — a loop costing a full session per attempt
             # that can never clear. These remedies are ones that actually work.
-            NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict; split the PR, or raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts — re-requesting will exhaust again" ;;
+            NO-VERDICT:budget-exhausted) detail="a reviewer used its whole turn budget without reaching a verdict, and nothing could be salvaged from the session either; raise DEFAULT_MAX_TURNS/HIGH_IMPACT_MAX_TURNS in orchestrator/src/review.ts, or cut what the reviewer has to explore to answer the diff — re-requesting will exhaust again, and splitting the PR usually will not help (#1485 exhausted on 10 files / +137-63)" ;;
+            REJECTED:partial) detail="a reviewer rejected what it had read and then ran out of turns; fix what it names, then request a review — the rest of the diff was never read" ;;
+            NO-VERDICT:partial-pass) detail="a reviewer ran out of turns having found nothing wrong in the part it did read; its comment lists what it never reviewed — read that, then request a review of the whole diff" ;;
             NO-VERDICT:did-not-run) detail="the gate chose to review but no review result was produced" ;;
             NO-VERDICT:engine-quota) detail="the review engine hit a usage limit before reviewing anything" ;;
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
@@ -1947,9 +1956,17 @@ jobs:
               level="error"
               meaning="A reviewer read an earlier head of this PR and rejected it, and nobody has requested a review since. A push never starts a review: fix the code, then request a review to have the new head judged."
               ;;
+            REJECTED:partial)
+              level="error"
+              meaning="A reviewer rejected part of this diff and then ran out of turns, so the rest was never read. The finding stands and is on the PR as a comment: fix it. Then request a review again — unlike a full rejection, this one leaves most of the diff unjudged, so a fix is not the last word on it."
+              ;;
             REJECTED:*)
               level="error"
               meaning="A reviewer read this diff and rejected it. Its findings are on the PR as a comment naming the head it judged. Change the code: re-requesting a review of an unchanged diff restates the same verdict."
+              ;;
+            NO-VERDICT:partial-pass)
+              level="error"
+              meaning="A reviewer read part of this diff, found nothing wrong in that part, and ran out of turns before reading the rest. That is not a pass and the check is red for exactly that reason: the comment on the PR lists what was never reviewed. Nothing here says the code is wrong — it says most of it is unjudged."
               ;;
             *)
               level="error"
