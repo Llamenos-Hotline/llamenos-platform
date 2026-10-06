@@ -1005,7 +1005,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-34-default-x86_64-${{ runner.os }}
+          key: avd-34-default-x86_64-${{ runner.os }}-VERIFYA-forced-miss
 
       # The AVD snapshot is a *speed* optimisation: pre-booting the AVD here
       # populates the cache above and — more importantly — leaves the SDK
@@ -1034,7 +1034,7 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
         with:
-          api-level: 34
+          api-level: 99
           target: default
           arch: x86_64
           force-avd-creation: false
@@ -1052,7 +1052,7 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
         with:
-          api-level: 34
+          api-level: 99
           target: default
           arch: x86_64
           force-avd-creation: false
@@ -1066,7 +1066,7 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
         with:
-          api-level: 34
+          api-level: 99
           target: default
           arch: x86_64
           force-avd-creation: false
