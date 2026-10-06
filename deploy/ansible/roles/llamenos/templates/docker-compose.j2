@@ -16,6 +16,17 @@ services:
     # here for the app service.
     env_file:
       - .env
+    # Loopback-only publish, matching roles/llamenos-app's compose. The host
+    # has to be able to reach the app directly for two reasons: the "Wait for
+    # application health check" task in this role probes
+    # http://localhost:3000/api/health from the host, and SSH tunnelling is
+    # the intended way an operator reaches the app (Caddy fronts it publicly).
+    # Without this the app was only on the internal Docker network, so that
+    # probe failed on every demo deploy while the container itself was
+    # healthy (issue #1602, finding 1). NOT 0.0.0.0 — the port must not be
+    # reachable from off the host; Caddy is the only public entrypoint.
+    ports:
+      - "127.0.0.1:3000:3000"
     networks:
       - web
       - internal

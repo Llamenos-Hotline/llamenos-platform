@@ -41,13 +41,25 @@
     mode: "0640"
   notify: Restart llamenos stack
 
+# 0644, not 0640, and deliberately so — matching roles/llamenos-caddy.
+# compose bind-mounts this file read-only into the caddy container, which
+# reads it as its own uid. With `docker_userns_remap: true` (the default in
+# vars.example.yml, applied by roles/docker) container root is remapped to host
+# uid 100000, which is neither this file's owner nor a member of
+# the deploy group — so 0640 made Caddy crash-loop on
+# "reading config from file: open /etc/caddy/Caddyfile: permission denied"
+# (issue #1602, finding 2). The Caddyfile holds only the public vhost names
+# and the ACME contact address, both of which are published in DNS and in
+# the certificates Caddy serves; it carries no credential, so world-readable
+# is correct rather than a loosening. Do not add a secret to caddy.j2 — put
+# it in .env (0600) and reference it, or this mode has to change with it.
 - name: Template Caddyfile
   ansible.builtin.template:
     src: caddy.j2
     dest: "{{ app_dir }}/Caddyfile"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart llamenos stack
 
 # ── ntfy/UnifiedPush push relay (issue #959) ─────────────────────────────
@@ -106,10 +118,24 @@
     mode: "0600"
   notify: Restart llamenos stack
 
+# Pull policy: honour llamenos_app_image_pull_policy, exactly as
+# roles/llamenos-app does. `missing` (the default) pulls only images that are
+# absent locally, so an app image put on the host with
+# `docker save | ssh ... docker load` — the documented install path, see
+# docs/deployment/first-deploy.md, and the only one that works while the GHCR
+# package is private — is used as-is instead of being re-pulled from a
+# registry that will refuse it. This task used to hardcode `pull: always`,
+# which made that documented path work on the production playbook and fail
+# here (issue #1602, finding 3). Set llamenos_app_image_pull_policy: always
+# to force a registry refresh on every run.
+# Unlike the per-service path, one compose project holds every service here,
+# so the policy necessarily applies to all of them. That is safe: the
+# supporting images are digest-pinned in vars.example.yml, and `missing`
+# still pulls anything absent on a fresh host.
 - name: Pull Docker images
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}"
-    pull: always
+    pull: "{{ llamenos_app_image_pull_policy | default('missing') }}"
     state: present
     recreate: never
   register: compose_pull

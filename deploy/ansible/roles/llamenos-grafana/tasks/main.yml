@@ -19,13 +19,20 @@
     - provisioning/dashboards
     - dashboards
 
+# 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
+# compose bind-mounts the provisioning and dashboard trees into the grafana
+# container, which runs as uid 472 (grafana/grafana-oss sets USER 472), so
+# 0640 files owned by the deploy user were unreadable to it. None of these
+# files holds a credential — the admin password reaches Grafana through the
+# environment, not through provisioning — and one that did would keep 0600 and
+# be made readable by owner instead.
 - name: Template Grafana datasource provisioning
   ansible.builtin.template:
     src: datasources.yml.j2
     dest: "{{ app_dir }}/observability/grafana/provisioning/datasources/llamenos.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart grafana
 
 - name: Template Grafana dashboard provisioning
@@ -34,7 +41,7 @@
     dest: "{{ app_dir }}/observability/grafana/provisioning/dashboards/llamenos.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart grafana
 
 - name: Copy pre-built dashboards
@@ -43,7 +50,7 @@
     dest: "{{ app_dir }}/observability/grafana/dashboards/{{ item | replace('.j2', '') }}"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   loop:
     - overview.json
     - host-metrics.json
