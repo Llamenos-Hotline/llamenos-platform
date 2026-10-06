@@ -150,10 +150,13 @@ describe('rail: an outcome with no verdict is never green (#1564, #1495)', () =>
   // naming script's `JOB_STATUS = success` case statement, so a gate that
   // exited 0 got a `PASS:` name of its own. If the gate ever exits 0 on a
   // no-verdict outcome again, the naming step must have no green name to give
-  // it — the run is then visibly unclassified rather than a plausible pass.
-  it.each(standings('no-verdict'))('%s has no PASS name of its own in the naming script', (kind) => {
+  // it — and since #1588 it does better than that: it has no name at all, so
+  // it refuses, and the run is RED rather than a plausible pass.
+  it.each(standings('no-verdict'))('%s cannot be green even if the gate exits 0', (kind) => {
     const named = name({ JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: kind })
-    expect(reviewOutcomeToken(named.title)).toBe('PASS:unclassified')
+    expect(reviewOutcomeToken(named.title)).toBe('NO-VERDICT:unclassified')
+    expect(named.level, named.stdout).toBe('error')
+    expect(named.status, `${kind} on a green job must fail the naming step:\n${named.stdout}`).not.toBe(0)
   })
 
   it('declares no PASS token for any no-verdict outcome anywhere in the vocabulary', () => {
@@ -216,10 +219,11 @@ describe('rail: an outcome with no verdict is never green (#1564, #1495)', () =>
       // partial revert of the YAML alone leaves tooling unable to read it as
       // a pass — `reviewOutcomeToken` returns UNKNOWN, never a verdict.
       expect(reviewOutcomeToken(m?.[2])).toBeUndefined()
-      // The shipped script, over the same facts, has no green name to give it.
-      expect(reviewOutcomeToken(name({
-        JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'unreviewed',
-      }).title)).toBe('PASS:unclassified')
+      // The shipped script, over the same facts, has no green name to give it
+      // and refuses outright (#1588).
+      const shipped = name({ JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'unreviewed' })
+      expect(reviewOutcomeToken(shipped.title)).toBe('NO-VERDICT:unclassified')
+      expect(shipped.status, shipped.stdout).not.toBe(0)
     })
   })
 })

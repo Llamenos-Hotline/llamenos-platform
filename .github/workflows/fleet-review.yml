@@ -203,6 +203,15 @@
 #                             lists X — that re-request emits no event, so
 #                             the old fixed advice sent every reader into the
 #                             one loop that cannot terminate (#1471).
+#   `bot-authored`          → SUCCESS, no model call. An automated dependency
+#                             PR (`REVIEW_SKIP_AUTHORS`, ci.ts) with no
+#                             reviewer profile on it: the review was not
+#                             merely expensive on these, it was unreachable
+#                             (Dependabot force-pushes, GitHub emits no new
+#                             `review_requested`, the context stays absent
+#                             forever). Named `PASS:bot-authored` — it used
+#                             to have no case in the naming step at all and
+#                             went green as `PASS:unclassified` (#1588).
 #   `run-engine`            → the real review, then the label clear. Reached
 #                             from a `review_requested`, or from a
 #                             `workflow_dispatch` — both run the same review
@@ -214,7 +223,10 @@
 # end — is then NAMED on the check by the job's last step, "Name this run's
 # outcome" (#1230): `PASS:…`, `REJECTED:…` (a reviewer rejected the diff) or
 # `NO-VERDICT:…` (red because the gate fails closed; nothing judged the diff).
-# The conclusion never changes: every non-PASS outcome is still `failure`.
+# Every non-PASS outcome is `failure`, and the naming step has exactly one
+# power over the conclusion: an outcome it cannot name is red, never a pass
+# (#1588 — the `*) PASS:unclassified` default it replaced is what made four
+# Dependabot PRs green with no model call ever made).
 #
 # Workflow-file honesty: on a `pull_request` event the workflow definition is
 # read from the PR's OWN head, so a PR can edit this file and have the edited
@@ -1798,9 +1810,13 @@ jobs:
       # check run's `output.title`: that takes `checks: write`, which this job
       # must never hold (see its `permissions:` block).
       #
-      # It cannot change the verdict. It runs last, reads what the steps above
-      # already decided, and changes none of it: a step that only prints
-      # cannot turn a red job green, and a crash in it could only add red.
+      # It cannot turn a red job green. It runs last and reads what the steps
+      # above already decided; nothing here can withdraw a red. It CAN add
+      # one, and does, in exactly one case (#1588): an outcome it has no name
+      # for. A green required context whose own run cannot say what judged
+      # the diff is the fail-open shape this whole taxonomy exists to make
+      # visible, so the step refuses it — see the `unnamed` exit at the very
+      # end of the script.
       # The merge-queue arm is not named here: it republishes the PR head's
       # own verdict, and that run is the one carrying the name.
       - name: Name this run's outcome
@@ -1829,19 +1845,51 @@ jobs:
             result="$(cat "$RESULT_FILE")"
           fi
 
+          # AN OUTCOME NOBODY NAMED IS A REFUSAL, NEVER A PASS (#1588).
+          # This branch used to end `*) token="PASS:unclassified"`, so any
+          # outcome this list did not recognise concluded a green
+          # `fleet/review` with a `PASS:` name. That was not hypothetical:
+          # `bot-authored` had no case at all, and all four open Dependabot
+          # PRs were green as `PASS:unclassified` with no model call ever
+          # made. The default for a GATE must point the other way — an
+          # unrecognised outcome is `NO-VERDICT:unclassified`, and
+          # `unnamed` below makes this step EXIT 1, so the check goes red.
+          # A gate outcome added later therefore fails closed until
+          # somebody deliberately classifies it here, which is the only
+          # version of this that does not depend on remembering.
+          #
+          # This step still cannot turn a red job green — it only ever ADDS
+          # red, which is exactly what failing closed needs. Every green
+          # outcome below is named EXPLICITLY, so no legitimate pass is
+          # affected: `low-tier`, `cache-hit`, `carried`, `bot-authored`,
+          # and a `run-engine` that recorded `pass`/`cache-pass`.
+          unnamed=""
           if [ "$JOB_STATUS" = "success" ]; then
             case "$OUTCOME" in
               low-tier) token="PASS:low-tier" ;;
               cache-hit) token="PASS:cached" ;;
               carried) token="PASS:carried" ;;
+              # An automated dependency PR, concluded green with no model
+              # call — `REVIEW_SKIP_AUTHORS`/`bot-authored` in ci.ts, whose
+              # `REVIEW_GATE_STANDING` is `no-review-needed`, the same class
+              # as `low-tier`. A deliberate, stated decision that this diff
+              # needs no review, so it gets a `PASS:` name of its own rather
+              # than the catch-all it used to land on.
+              bot-authored) token="PASS:bot-authored" ;;
               run-engine)
                 case "$result" in
                   pass) token="PASS:reviewed" ;;
                   cache-pass) token="PASS:cached" ;;
-                  *) token="PASS:unclassified" ;;
+                  *)
+                    token="NO-VERDICT:unclassified"
+                    unnamed="the gate chose to review and the review step recorded result [${result:-none}], which has no passing name"
+                    ;;
                 esac
                 ;;
-              *) token="PASS:unclassified" ;;
+              *)
+                token="NO-VERDICT:unclassified"
+                unnamed="the gate concluded success with outcome [${OUTCOME:-none}], which this step has no name for"
+                ;;
             esac
           elif [ "$GATE_CONCLUSION" != "success" ] && [ "$GATE_CONCLUSION" != "failure" ]; then
             # The gate never ran: the job failed before reaching it.
@@ -1916,7 +1964,7 @@ jobs:
             PASS:cached) detail="this exact diff and review set already passed; not reviewed again" ;;
             PASS:carried) detail="a push; the PASS this PR last earned stands — request a review to review this head" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
-            PASS:unclassified) detail="passed by a path this step has no name for; read the log" ;;
+            PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
             REJECTED:reviewed) detail="a reviewer read this diff and rejected it; fix the code" ;;
             REJECTED:cached) detail="this exact diff was already rejected; push a fix" ;;
             REJECTED:carried) detail="a push; the FAIL this PR last earned stands — fix it and request a review" ;;
@@ -1943,7 +1991,7 @@ jobs:
             NO-VERDICT:gate-error) detail="the review gate itself failed before deciding anything" ;;
             NO-VERDICT:base-predates-gate) detail="the PR's base predates the review gate; update the branch and re-request" ;;
             NO-VERDICT:setup-failed) detail="the job failed before the review gate ran" ;;
-            NO-VERDICT:unclassified) detail="failed by a path this step has no name for; read the log" ;;
+            NO-VERDICT:unclassified) detail="no name for this outcome, so nothing here can claim the diff was judged; read the log" ;;
           esac
           title="$token — $detail"
 
@@ -1985,6 +2033,18 @@ jobs:
               echo "Head judged: \`${HEAD_SHA:-unknown}\`. Tooling: match the token before the first space against \`REVIEW_OUTCOME_TOKENS\` (orchestrator/src/ci.ts)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # The fail-closed half of the inverted default above (#1588). The
+          # job reached this step GREEN on an outcome nothing here can name,
+          # so nothing in this run claims the diff was judged — and the only
+          # honest conclusion is red. Last statement in the step, after the
+          # annotation and the summary are both written, so the reason is
+          # always readable on the check and in the run page even though the
+          # step itself fails.
+          if [ -n "$unnamed" ]; then
+            echo "::error::fleet/review FAILED: unclassified-green — $unnamed. An outcome this step cannot name fails CLOSED: it may not conclude a green required context. Name it in this step (and in REVIEW_OUTCOME_TOKENS, orchestrator/src/ci.ts) once somebody has decided what it should conclude."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Publishing the reviews, then clearing the worklist (#1158).
