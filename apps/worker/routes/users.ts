@@ -11,6 +11,7 @@ import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
 import { callerIsSuperAdmin, checkRoleGrant } from '../lib/hub-scope'
 import type { Context } from 'hono'
+import { revokeSipIdentityIfRoleless, revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 // Mounted twice: unscoped at /api/users and hub-scoped at /api/hubs/:hubId/users.
 // Under a hub, every read and write is confined to that hub's members.
@@ -188,6 +189,16 @@ users.patch('/:targetPubkey',
     if (body.active === false || body.roles) {
       await services.identity.revokeAllSessions(targetPubkey)
     }
+    // Sessions are not the only live credential an account holds: a SIP
+    // endpoint on our own PBX authenticates against the PBX, not against us,
+    // so revoking sessions leaves it registering happily. A deactivated
+    // account holds nothing at all; a role change is a role-loss path like
+    // hub-member removal and goes through the same predicate (#1540).
+    if (body.active === false) {
+      await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
+    } else if (body.roles) {
+      await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
+    }
 
     return c.json(result.volunteer)
   },
@@ -228,6 +239,9 @@ users.delete('/:targetPubkey',
     // (orphaned sessions will expire naturally via TTL)
     await services.identity.revokeAllSessions(targetPubkey).catch(() => {})
     await services.identity.deleteUser(targetPubkey)
+    // Best-effort: strip any per-volunteer SIP identity provisioned on our own
+    // PBX (a no-op for vendor providers — nothing was ever issued there).
+    await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetPubkey)
     await audit(services.audit, 'userRemoved', pubkey, { target: targetPubkey }, undefined, hubId ?? null)
     return c.json({ ok: true })
   },

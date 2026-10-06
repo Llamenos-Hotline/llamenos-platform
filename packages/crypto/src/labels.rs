@@ -195,6 +195,15 @@ pub const LABEL_DEVICE_AUTH: &str = "llamenos:device-auth:v1";
 /// token can never downgrade it — both fail signature verification.
 pub const LABEL_DEVICE_AUTH_NO_NONCE: &str = "llamenos:device-auth-no-nonce:v1";
 
+// --- Per-volunteer SIP registrar (#1556) ---
+
+/// Domain separation for the per-volunteer SIP registrar secret the worker
+/// derives from the telephony master secret
+/// (`base64url(HMAC-SHA256(master, "<label>:<pubkey>"))`). Each volunteer
+/// endpoint on the self-hosted Asterisk gets its own credential, so a leak of
+/// one endpoint's secret reveals nothing about any other volunteer's.
+pub const HMAC_SIP_VOLUNTEER_SECRET: &str = "llamenos:sip-volunteer-secret:v1";
+
 // --- NEW: Items Key / Note Epoch ---
 
 /// Items key export from MLS epoch secret
@@ -398,6 +407,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Index 80: EP02 Device Identity
 // Indices 92-94: Firehose Agent (EP-Firehose)
 // Index 96: IVR media URL signing
+// Index 98: Per-volunteer SIP registrar (#1556)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -532,6 +542,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     HMAC_IVR_MEDIA_URL, // 96
     // 97: nonce-less device auth message shape (#1389)
     LABEL_DEVICE_AUTH_NO_NONCE, // 97
+    // 98: per-volunteer SIP registrar (#1556)
+    HMAC_SIP_VOLUNTEER_SECRET, // 98
 ];
 
 /// Look up a label string by its numeric ID.
@@ -709,6 +721,10 @@ mod tests {
         );
         assert_eq!(LABEL_FIREHOSE_REPORT_WRAP, "llamenos:firehose:report-wrap");
         assert_eq!(HMAC_IVR_MEDIA_URL, "llamenos:ivr-media-url:v1");
+        assert_eq!(
+            HMAC_SIP_VOLUNTEER_SECRET,
+            "llamenos:sip-volunteer-secret:v1"
+        );
     }
 
     /// Verify registry index stability.
@@ -768,6 +784,7 @@ mod tests {
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
         assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
+        assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).

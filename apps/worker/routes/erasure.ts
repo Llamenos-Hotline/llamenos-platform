@@ -18,6 +18,7 @@ import { platformSettingsSchema } from '@protocol/schemas/platform-settings'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { getConnectionManager } from '../lib/ws-manager'
+import { revokeVolunteerSipIdentity } from '../telephony/registrar'
 
 const erasure = new Hono<AppEnv>()
 
@@ -394,6 +395,11 @@ erasure.post(
       body.justification,
       services.audit,
     )
+
+    // Erasure deactivates the account and wipes its devices, but a SIP
+    // endpoint on our own PBX authenticates against the PBX, not against us:
+    // it would keep registering. Tear it down with the rest (#1540).
+    await revokeVolunteerSipIdentity(services, c.env.HMAC_SECRET, targetUserId)
 
     const wsManager = getConnectionManager()
     if (wsManager) {

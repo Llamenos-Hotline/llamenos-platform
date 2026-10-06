@@ -8,7 +8,7 @@
  */
 import type { Context } from 'hono'
 import type { AppEnv } from '../types'
-import { findRole, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
+import { findRole, hasAnyHubAccess, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
 
 export type TargetHub =
   | { ok: true; hubId: string | undefined }
@@ -93,4 +93,21 @@ export function callerIsSuperAdmin(c: Context<AppEnv>): boolean {
 export function callerHasHubAccess(c: Context<AppEnv>, hubId: string): boolean {
   const user = c.get('user')
   return resolveHubPermissions(user.roles, user.hubRoles ?? [], c.get('allRoles'), hubId).length > 0
+}
+
+/**
+ * True when the caller still holds a role in at least one hub — the same
+ * admission rule as hubContext and {@link callerHasHubAccess}, asked across
+ * every hub they are assigned to (see `hasAnyHubAccess`).
+ *
+ * For the account-wide capabilities that are not addressed to one hub but
+ * still require membership somewhere: `/api/telephony/sip-token` issues ONE
+ * per-volunteer SIP endpoint that rings for every member hub, so the hub it
+ * "issues against" is every hub the volunteer belongs to — and a volunteer who
+ * belongs to none must not be able to re-provision the endpoint their removal
+ * tore down (#1540).
+ */
+export function callerHasAnyHubAccess(c: Context<AppEnv>): boolean {
+  const user = c.get('user')
+  return hasAnyHubAccess(user.roles, user.hubRoles ?? [], c.get('allRoles'))
 }

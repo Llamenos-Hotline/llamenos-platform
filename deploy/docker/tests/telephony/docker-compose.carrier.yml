@@ -49,6 +49,13 @@ services:
       - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-rustfsadmin}
       - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-rustfsadmin}
       - STORAGE_BUCKET=llamenos-files
+      # Per-volunteer SIP registrar under test (run-register-e2e.sh sets these):
+      # the master secret the worker derives per-volunteer endpoint secrets
+      # from, and the CoTURN static-auth pair /sip-token mints TURN credentials
+      # against. Unset/empty = HMAC_SECRET fallback / STUN-only ICE servers.
+      - "SIP_REGISTRAR_SECRET=${SIP_REGISTRAR_SECRET:-}"
+      - TURN_HOST=${TURN_HOST:-}
+      - TURN_SECRET=${TURN_SECRET:-}
     ports:
       - "127.0.0.1:${E2E_WORKER_PORT:-3931}:3000"
     depends_on:

@@ -7,6 +7,7 @@ import {
   getPermissionsByDomain,
   hasHubPermission,
   resolveHubPermissions,
+  hasAnyHubAccess,
   getUserHubIds,
   isSuperAdmin,
   canClaimChannel,
@@ -293,6 +294,38 @@ describe('resolveHubPermissions', () => {
   it('super-admin gets the wildcard in every hub without an assignment', () => {
     const perms = resolveHubPermissions(['role-super-admin'], [], allRoles, 'hub-123')
     expect(perms).toContain('*')
+  })
+})
+
+describe('hasAnyHubAccess', () => {
+  it('is true for a user holding a role in any one hub', () => {
+    expect(hasAnyHubAccess(['role-volunteer'], [{ hubId: 'hub-123', roleIds: ['role-volunteer'] }], allRoles)).toBe(true)
+  })
+
+  it('is false once every hub assignment is gone — the removed-volunteer state', () => {
+    expect(hasAnyHubAccess(['role-volunteer'], [], allRoles)).toBe(false)
+  })
+
+  it('is false for an assignment that grants nothing', () => {
+    expect(hasAnyHubAccess(['role-volunteer'], [{ hubId: 'hub-123', roleIds: [] }], allRoles)).toBe(false)
+  })
+
+  it('a global role that is not super-admin is not hub membership (#1037)', () => {
+    expect(hasAnyHubAccess(['role-hub-admin'], [], allRoles)).toBe(false)
+  })
+
+  it('a super-admin holds every hub without an assignment', () => {
+    expect(hasAnyHubAccess(['role-super-admin'], [], allRoles)).toBe(true)
+  })
+
+  it('agrees with resolveHubPermissions, hub by hub — one rule, not two', () => {
+    const hubRoles = [
+      { hubId: 'hub-a', roleIds: [] },
+      { hubId: 'hub-b', roleIds: ['role-reviewer'] },
+    ]
+    expect(resolveHubPermissions(['role-volunteer'], hubRoles, allRoles, 'hub-a')).toEqual([])
+    expect(resolveHubPermissions(['role-volunteer'], hubRoles, allRoles, 'hub-b').length).toBeGreaterThan(0)
+    expect(hasAnyHubAccess(['role-volunteer'], hubRoles, allRoles)).toBe(true)
   })
 })
 
