@@ -7,6 +7,26 @@
 # - Restricts allowed users
 # - Hardens SSH crypto settings
 
+# Ubuntu 24.04 ships ssh.socket enabled; Debian 12 has no ssh.socket at all and
+# Ubuntu 22.04 ships it disabled. Which of the two it is decides where the
+# listening port comes from, so establish it before changing anything.
+- name: Detect whether sshd is socket-activated on this host
+  ansible.builtin.command: systemctl is-enabled ssh.socket
+  register: _ssh_socket_is_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Record whether sshd is socket-activated
+  ansible.builtin.set_fact:
+    _ssh_socket_activated: "{{ _ssh_socket_is_enabled.stdout | trim == 'enabled' }}"
+
+- name: Report how sshd obtains its listening socket
+  ansible.builtin.debug:
+    msg: >-
+      sshd is {{ 'SOCKET-ACTIVATED (ssh.socket owns the port; an ssh.socket
+      drop-in will be written)' if (_ssh_socket_activated | bool) else
+      'started directly (ssh.service binds the port from sshd_config)' }}
+
 - name: Configure SSH server
   ansible.builtin.copy:
     dest: /etc/ssh/sshd_config.d/99-llamenos-hardening.conf
@@ -66,6 +86,38 @@
       TCPKeepAlive no
       Compression no
       UseDNS no
+  notify: Restart sshd
+
+# On a socket-activated host the sshd_config `Port` above does not move the
+# listener by itself (see handlers/main.yml). Pin the socket explicitly rather
+# than relying on sshd-socket-generator re-running: the empty `ListenStream=`
+# clears the vendor unit's 0.0.0.0:22 / [::]:22 pair before ours is added, and
+# a drop-in under /etc/systemd/system wins over the generator's under /run.
+- name: Create the ssh.socket drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ssh.socket.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: _ssh_socket_activated | bool
+
+- name: Point ssh.socket at the hardened port (socket-activated hosts)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ssh.socket.d/10-llamenos-port.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Llamenos SSH hardening — managed by Ansible
+      # Do not edit manually; changes will be overwritten on next deploy.
+      #
+      # ssh.socket, not ssh.service, owns the listening port on Ubuntu 24.04.
+      # The bare ListenStream= resets the vendor unit's port 22 entries.
+      [Socket]
+      ListenStream=
+      ListenStream={{ ssh_port }}
+  when: _ssh_socket_activated | bool
   notify: Restart sshd
 
 - name: Validate SSH configuration

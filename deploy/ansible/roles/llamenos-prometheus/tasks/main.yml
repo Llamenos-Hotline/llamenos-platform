@@ -12,7 +12,11 @@
     state: directory
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0750"
+    # 0755, not 0750: rules/ is bind-mounted into the prometheus container,
+    # which runs as `nobody` (uid 65534). A directory it can neither own nor
+    # reach by group is untraversable whatever the files inside are set to —
+    # the same reasoning as the 0644 on prometheus.yml below.
+    mode: "0755"
   loop:
     - ""
     - data

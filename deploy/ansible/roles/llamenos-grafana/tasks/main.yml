@@ -11,12 +11,26 @@
     state: directory
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0750"
+    # 0755, not 0750: provisioning/ and dashboards/ are bind-mounted into the
+    # grafana container, which runs as uid 472, and a directory the container
+    # user can neither own nor reach by group is untraversable however
+    # world-readable the files inside it are. Same reasoning as the 0644 on the
+    # files themselves, one level up. data/ holds grafana's own state and is a
+    # named volume's mountpoint, not a bind, but is kept uniform here.
+    mode: "0755"
   loop:
     - ""
     - data
     - provisioning/datasources
     - provisioning/dashboards
+    # Mounting provisioning/ shadows the image's own directory, which ships
+    # empty plugins/ and alerting/ subdirectories. Without them Grafana logs
+    # "Failed to read plugin provisioning files from directory" and "can't
+    # read alerting provisioning files from directory" at level=error on every
+    # start — non-fatal, but an error line that is always there is an error
+    # line nobody reads.
+    - provisioning/plugins
+    - provisioning/alerting
     - dashboards
 
 # 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
@@ -44,10 +58,22 @@
     mode: "0644"
   notify: Restart grafana
 
+# These are static Grafana dashboard JSON, now under files/ and copied
+# verbatim. They previously lived in templates/grafana/ as `*.json.j2` while
+# this loop named them `*.json`, so every item failed with "Could not find or
+# access '../../../templates/grafana/overview.json'", the play aborted here,
+# and Grafana never started (issue #1602, finding 13).
+#
+# They must NOT go through `template:`. Each one carries Grafana's own legend
+# placeholders (job, mode, device, method, name, service, state, status, each
+# written in Grafana's own double-brace legend syntax), which Jinja reads as
+# undefined Ansible variables -> "'job' is undefined". Renaming alone swaps one
+# hard failure for another; the `.j2` suffix was the thing that was wrong,
+# because nothing in these files is an Ansible template.
 - name: Copy pre-built dashboards
-  ansible.builtin.template:
-    src: "../../../templates/grafana/{{ item }}"
-    dest: "{{ app_dir }}/observability/grafana/dashboards/{{ item | replace('.j2', '') }}"
+  ansible.builtin.copy:
+    src: "../../../files/grafana/{{ item }}"
+    dest: "{{ app_dir }}/observability/grafana/dashboards/{{ item }}"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
     mode: "0644"

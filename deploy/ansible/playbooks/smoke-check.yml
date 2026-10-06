@@ -235,16 +235,24 @@
 
     # ─── Object storage ──────────────────────────────────────────────────────
 
+    # Probed from INSIDE the container, as the PostgreSQL check above is, and
+    # for the same reason: roles/llamenos-rustfs/templates/compose/rustfs.j2
+    # publishes no ports (the app reaches it over the llamenos-internal Docker
+    # network), so the host has nothing listening on 9000 and the old
+    # `http://localhost:9000/` probe could never pass. `ignore_errors` hid that
+    # until the summary gate started evaluating (issue #1602, finding 5).
+    # curl exits 22 on the 403 RustFS returns for an unauthenticated root
+    # request — which still proves the service answered, so it counts as
+    # reachable, exactly as the container's own healthcheck treats it.
     - name: Check RustFS is reachable (S3-compatible object storage)
-      ansible.builtin.uri:
-        url: "http://localhost:9000/"
-        method: GET
-        # RustFS returns 403 on unauthenticated root — still proves reachability
-        status_code: [200, 403]
-        return_content: false
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f "{{ app_dir }}/services/rustfs/docker-compose.yml" exec -T rustfs \
+          curl -sf -o /dev/null http://localhost:9000/ || test $? -eq 22
+      args:
+        executable: /bin/bash
+      changed_when: false
       register: rustfs_check
-      retries: 3
-      delay: 5
       ignore_errors: true
       when:
         - llamenos_rustfs_enabled | default(true) | bool
@@ -253,7 +261,7 @@
 
     - name: Record RustFS result
       ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'RustFS object storage reachable (port 9000)', 'status': 'PASS' if rustfs_check is succeeded else 'FAIL' if
+        smoke_results: "{{ smoke_results + [{'check': 'RustFS object storage reachable (in-container, port 9000)', 'status': 'PASS' if rustfs_check is succeeded else 'FAIL' if
           rustfs_check is failed else 'SKIP'}] }}"
       when:
         - llamenos_rustfs_enabled | default(true) | bool
@@ -509,6 +517,14 @@
 
     # ─── Summary ─────────────────────────────────────────────────────────────
 
+    # `match`, not `startswith`: the 2nd argument of selectattr is a Jinja TEST
+    # name and neither Jinja nor Ansible defines `startswith`. It raised "No
+    # test named 'startswith'" on this debug task, which aborted the play
+    # before "Fail if any smoke check failed" below was ever reached — so the
+    # deploy's pass/fail gate could not fire in either direction, on any host,
+    # while CI stayed green (issue #1602, finding 4). `match` is anchored at
+    # the start of the string, which is what the FAIL/"FAIL: <detail>" status
+    # values need. scripts/check-jinja-tests.py now fails CI on a regression.
     - name: Print pass/fail summary
       ansible.builtin.debug:
         msg: |
@@ -524,15 +540,15 @@
           ===========================================
           Total: {{ smoke_results | length }} checks
           Passed: {{ smoke_results | selectattr('status', 'equalto', 'PASS') | list | length }}
-          Failed: {{ smoke_results | selectattr('status', 'startswith', 'FAIL') | list | length }}
+          Failed: {{ smoke_results | selectattr('status', 'match', 'FAIL') | list | length }}
           Skipped: {{ smoke_results | selectattr('status', 'equalto', 'SKIP') | list | length }}
           ===========================================
-          Result: {{ 'PASSED' if (smoke_results | selectattr('status', 'startswith', 'FAIL') | list | length) == 0 else 'FAILED' }}
+          Result: {{ 'PASSED' if (smoke_results | selectattr('status', 'match', 'FAIL') | list | length) == 0 else 'FAILED' }}
           ===========================================
       tags: always
 
     - name: Fail if any smoke check failed
       ansible.builtin.fail:
-        msg: "Smoke check FAILED: {{ smoke_results | selectattr('status', 'startswith', 'FAIL') | list | length }} check(s) failed."
-      when: (smoke_results | selectattr('status', 'startswith', 'FAIL') | list | length) > 0
+        msg: "Smoke check FAILED: {{ smoke_results | selectattr('status', 'match', 'FAIL') | list | length }} check(s) failed."
+      when: (smoke_results | selectattr('status', 'match', 'FAIL') | list | length) > 0
       tags: always
