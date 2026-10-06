@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { requirePermission } from '../middleware/permission-guard'
+import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { permissionGranted } from '@shared/permissions'
 import { createShiftBodySchema, updateShiftBodySchema, fallbackGroupSchema, shiftResponseSchema, myStatusResponseSchema, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import { okResponseSchema } from '@protocol/schemas/common'
@@ -494,6 +494,48 @@ shifts.put('/fallback',
   },
 )
 
+// --- Schedule ---
+
+// A volunteer needs to see when their shifts are: the clients already offer the
+// view (src/client/lib/api/shifts.ts listShifts, and Android's ShiftModels
+// "Shifts list response from GET /api/hubs/{hubId}/shifts"), but the list was
+// served by the entity-router factory, which gates it on `shifts:read`.
+// `role-volunteer` holds only `shifts:read-own`, so the screen 403'd — #1342.
+//
+// `shifts:read` still sees the full roster. `shifts:read-own` sees the same
+// schedule — so a volunteer can find a shift to ask to join — with each shift's
+// roster narrowed to the caller, so no volunteer learns who else is on shift.
+// That distinction is the point: the fix must not turn a schedule view into a
+// directory of who works when.
+//
+// Registered BEFORE `shifts.route('/', shiftCrudRouter)` so Hono matches it
+// first, and the factory's own list is turned off with `disableList` rather
+// than left to shadow.
+shifts.get('/',
+  describeRoute({
+    tags: ['Shifts'],
+    summary: 'List shifts (roster narrowed to the caller without shifts:read)',
+    responses: {
+      200: { description: 'List of shifts', content: { 'application/json': { schema: resolver(shiftListResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requireAnyPermission('shifts:read', 'shifts:read-own'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = c.get('hubId') ?? ''
+    const result = await services.shifts.list(hubId)
+    if (holds(c, 'shifts:read')) return c.json(result)
+    const pubkey = c.get('pubkey')
+    return c.json({
+      shifts: result.shifts.map(shift => ({
+        ...shift,
+        userPubkeys: shift.userPubkeys.filter(pk => pk === pubkey),
+      })),
+    })
+  },
+)
+
 // --- CRUD via entity-router factory ---
 
 const shiftCrudRouter = createEntityRouter({
@@ -506,6 +548,7 @@ const shiftCrudRouter = createEntityRouter({
   updateBodySchema: updateShiftBodySchema,
   deleteResponseSchema: okResponseSchema,
   hubScoped: true,
+  disableList: true,
   disableGet: true,
   auditEvents: {
     created: 'shiftCreated',

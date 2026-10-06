@@ -196,12 +196,37 @@ describe('shifts routes', () => {
 
       const res = await app.request('/shifts')
       expect(res.status).toBe(200)
-      const json = await res.json()
+      const json = await res.json() as { shifts: Array<{ userPubkeys: string[] }> }
       expect(json.shifts).toHaveLength(1)
+      // The other half of the #1342 decision: `shifts:read` is "view all
+      // shifts, including who is on each roster", so the roster must come
+      // back whole — the narrowing below must not leak into this path.
+      expect(json.shifts[0].userPubkeys).toEqual(['b'.repeat(64)])
       expect(listSpy).toHaveBeenCalledWith('hub-1')
     })
 
-    it('requires shifts:read permission', async () => {
+    it('narrows each roster to the caller for shifts:read-own', async () => {
+      const self = 'a'.repeat(64)
+      const other = 'b'.repeat(64)
+      const listSpy = vi.fn().mockResolvedValue({
+        shifts: [
+          { id: 's1', encryptedName: 'Morning', startTime: '09:00', endTime: '12:00', days: [1], userPubkeys: [other, self], ringGroupId: null, createdAt: new Date().toISOString() },
+          { id: 's2', encryptedName: 'Evening', startTime: '18:00', endTime: '22:00', days: [1], userPubkeys: [other], ringGroupId: null, createdAt: new Date().toISOString() },
+        ],
+      })
+      const { app } = createTestApp({
+        permissions: ['shifts:read-own'],
+        hubId: 'hub-1',
+        serviceMock: { shifts: { list: listSpy } },
+      })
+
+      const res = await app.request('/shifts')
+      expect(res.status).toBe(200)
+      const json = await res.json() as { shifts: Array<{ id: string; userPubkeys: string[] }> }
+      expect(json.shifts.map(s => [s.id, s.userPubkeys])).toEqual([['s1', [self]], ['s2', []]])
+    })
+
+    it('requires shifts:read or shifts:read-own — an unrelated permission is refused', async () => {
       const { app } = createTestApp({ permissions: ['other:read'] })
       const res = await app.request('/shifts')
       expect(res.status).toBe(403)

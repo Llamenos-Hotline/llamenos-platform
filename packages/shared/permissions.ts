@@ -72,8 +72,13 @@ export const PERMISSION_CATALOG = {
   'users:manage-devices': 'View and manage user devices (admin device oversight, SAS verification)',
 
   // Shifts
-  'shifts:read-own': 'Check own shift status',
-  'shifts:read': 'View all shifts',
+  // Describes what the route actually grants. Until #1342 this read "Check
+  // own shift status" and guarded nothing at all — GET /shifts/my-status is
+  // open to any hub member — so the volunteer role advertised a capability
+  // the server never implemented. It now gates GET /shifts, which returns
+  // the schedule with every roster narrowed to the caller.
+  'shifts:read-own': 'View the shift schedule, seeing only own roster entries',
+  'shifts:read': 'View all shifts, including who is on each roster',
   'shifts:create': 'Create shifts',
   'shifts:update': 'Modify shifts',
   'shifts:delete': 'Delete shifts',
