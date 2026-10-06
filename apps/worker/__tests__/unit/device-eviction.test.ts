@@ -80,6 +80,54 @@ describe('decideDeviceRegistration', () => {
       expect(decision.evictDeviceId).toBeUndefined()
     }
   })
+
+  // Clients with no push distributor (the Tauri desktop, #1548) are matched by
+  // their Ed25519 signing key alone — the only stable handle they have.
+  describe('registrations with no push token', () => {
+    it('matching Ed25519 identity key -> update_existing', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, ed25519Pubkey: 'ed-key-1' },
+        makeDevice('d2', new Date()),
+      ]
+      const decision = decideDeviceRegistration(devices, { ed25519Pubkey: 'ed-key-1' }, 5)
+      expect(decision).toEqual({ action: 'update_existing', deviceId: 'd1' })
+    })
+
+    it('a different identity key never matches another tokenless device -> insert', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, ed25519Pubkey: 'ed-key-1' },
+      ]
+      const decision = decideDeviceRegistration(devices, { ed25519Pubkey: 'ed-key-2' }, 5)
+      expect(decision.action).toBe('insert')
+      if (decision.action === 'insert') {
+        expect(decision.evictDeviceId).toBeUndefined()
+      }
+    })
+
+    it('no identity key and no push token -> insert, evicting LRU at capacity', () => {
+      const devices = Array.from({ length: 5 }, (_, i) =>
+        makeDevice(`d${i}`, new Date(`2026-0${i + 1}-01T00:00:00Z`)),
+      )
+      const decision = decideDeviceRegistration(devices, {})
+      expect(decision.action).toBe('insert')
+      if (decision.action === 'insert') {
+        expect(decision.evictDeviceId).toBe('d0')
+      }
+    })
+
+    it('identity-key match takes precedence over push-token match', () => {
+      const devices: DeviceForEviction[] = [
+        { id: 'd1', lastSeenAt: new Date(), pushToken: null, ed25519Pubkey: 'ed-key-1' },
+        makeDevice('d2', new Date(), 'fresh-token'),
+      ]
+      const decision = decideDeviceRegistration(
+        devices,
+        { ed25519Pubkey: 'ed-key-1', pushToken: 'fresh-token' },
+        5,
+      )
+      expect(decision).toEqual({ action: 'update_existing', deviceId: 'd1' })
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

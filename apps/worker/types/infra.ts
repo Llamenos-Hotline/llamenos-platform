@@ -145,7 +145,8 @@ export interface Env {
 // ---------------------------------------------------------------------------
 
 export interface DeviceRecord {
-  platform: 'ios' | 'android'
+  platform: 'ios' | 'android' | 'desktop'
+  /** Empty string for desktop devices, which register without a push token (#1548) */
   pushToken: string
   wakeKeyPublic: string      // X25519 pubkey (hex) for wake-tier HPKE
   /**

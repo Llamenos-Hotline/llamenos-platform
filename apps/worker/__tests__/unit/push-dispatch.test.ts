@@ -188,3 +188,92 @@ describe('createPushDispatcherFromService', () => {
     expect(log.every(l => l.wakePayload.hubId === 'hub-multi')).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Mixed device sets — desktop registrations without push tokens (#1548)
+// ---------------------------------------------------------------------------
+
+describe('ServicePushDispatcher with desktop devices in the device list', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const wake: WakePayload = { hubId: 'hub-1', type: 'message' }
+
+  function mixedDeviceIdentity() {
+    const identity = {
+      getDevices: vi.fn().mockResolvedValue({
+        devices: [
+          {
+            platform: 'android',
+            pushToken: 'https://ntfy.example.com/up-android',
+            wakeKeyPublic: 'wake-android',
+            registeredAt: '2026-01-01T00:00:00Z',
+            lastSeenAt: '2026-01-01T00:00:00Z',
+          },
+          {
+            // Desktop device: registered without a push token or wake key.
+            platform: 'desktop',
+            pushToken: '',
+            wakeKeyPublic: '',
+            registeredAt: '2026-01-02T00:00:00Z',
+            lastSeenAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+      }),
+      cleanupDevices: vi.fn().mockResolvedValue(undefined),
+    }
+    return { identity: identity as never, cleanupDevices: identity.cleanupDevices }
+  }
+
+  it('skips tokenless desktop devices without error and never marks them stale', async () => {
+    const { identity, cleanupDevices } = mixedDeviceIdentity()
+    const shifts = { getCurrentVolunteers: vi.fn().mockResolvedValue([]) } as never
+    const dispatcher = createPushDispatcherFromService(
+      { ENVIRONMENT: 'production', NTFY_URL: 'http://ntfy:80' } as Env,
+      identity,
+      shifts,
+    )
+
+    await expect(
+      dispatcher.sendToVolunteer('user-pk', wake, {} as FullPushPayload),
+    ).resolves.toBeUndefined()
+
+    const { NtfyClient } = await import('@worker/lib/ntfy-client')
+    expect(NtfyClient.prototype.send).toHaveBeenCalledTimes(1)
+    // The desktop device must not end up in the stale-token cleanup sweep.
+    expect(cleanupDevices).not.toHaveBeenCalled()
+  })
+
+  it('treats a desktop-only device list as nothing to push (no cleanup, no throw)', async () => {
+    const cleanupDevices = vi.fn().mockResolvedValue(undefined)
+    const identity = {
+      getDevices: vi.fn().mockResolvedValue({
+        devices: [
+          {
+            platform: 'desktop',
+            pushToken: '',
+            wakeKeyPublic: '',
+            registeredAt: '2026-01-02T00:00:00Z',
+            lastSeenAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+      }),
+      cleanupDevices,
+    } as never
+    const shifts = { getCurrentVolunteers: vi.fn().mockResolvedValue([]) } as never
+    const dispatcher = createPushDispatcherFromService(
+      { ENVIRONMENT: 'production', NTFY_URL: 'http://ntfy:80' } as Env,
+      identity,
+      shifts,
+    )
+
+    await expect(
+      dispatcher.sendToVolunteer('user-pk', wake, {} as FullPushPayload),
+    ).resolves.toBeUndefined()
+
+    const { NtfyClient } = await import('@worker/lib/ntfy-client')
+    expect(NtfyClient.prototype.send).not.toHaveBeenCalled()
+    expect(cleanupDevices).not.toHaveBeenCalled()
+  })
+})
