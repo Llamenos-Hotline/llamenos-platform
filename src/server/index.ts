@@ -10,7 +10,7 @@ import { Hono } from 'hono'
 import { createDatabase, closeDb, getDb, schema } from '../../apps/worker/db'
 import { eq, count } from 'drizzle-orm'
 import { cleanupExpiredNonces } from '../../apps/worker/services/webhook-replay'
-import { createServices, type Services } from '../../apps/worker/services'
+import { createServices, schedulerServiceDeps, type Services } from '../../apps/worker/services'
 import { warnOnUnroutableHubs } from '../../apps/worker/services/routing-readiness'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
@@ -212,11 +212,14 @@ const outboxCleanupTimer = setInterval(() => {
 console.log('[llamenos] Event outbox initialized (drain: 30s, cleanup: 5m)')
 
 // --- Start scheduled task poller with blast delivery worker ---
+// `schedulerServiceDeps` supplies every service the six background workers
+// need, with a type that is required in every field — so an omission here is a
+// compile error, not a worker that never runs. It was three workers, silently:
+// retention purge and erasure expiry (#1127) and, with `hubShred` missing, the
+// hub crypto-shred executor, which left every hub marked for shred fully
+// readable past its deadline while the request reported as scheduled (#1566).
 services.scheduler.start({
-  blastsService: services.blasts,
-  settingsService: services.settings,
-  auditService: services.audit,
-  identityService: services.identity,
+  ...schedulerServiceDeps(services),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
       return await getMessagingAdapterFromService(channel, services.settings, hmacSecret)

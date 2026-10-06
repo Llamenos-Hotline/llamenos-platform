@@ -16,7 +16,7 @@ import { ConversationsService } from './conversations'
 import { BlastsService } from './blasts'
 import { ContactsService } from './contacts'
 import { CasesService } from './cases'
-import { TaskScheduler } from './scheduler'
+import { TaskScheduler, type TaskSchedulerServiceDeps } from './scheduler'
 import { CryptoKeysService } from './crypto-keys'
 import { FirehoseService } from './firehose'
 import { FirehoseAgentService } from './firehose-agent'
@@ -171,6 +171,29 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   }
 
   return services
+}
+
+/**
+ * The scheduler's service dependencies, derived from the registry production
+ * builds. This is the ONE place the background workers are given their
+ * services, so a test can hand `TaskScheduler.start()` exactly what
+ * `src/server/index.ts` hands it (see
+ * apps/worker/__tests__/integration/hub-shred-wiring.test.ts) instead of a
+ * hand-assembled object that can agree with nothing.
+ *
+ * The return type is required in every field, so dropping a service here is a
+ * compile error rather than a worker that silently stops running (#1566).
+ */
+export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDeps {
+  return {
+    blastsService: services.blasts,
+    settingsService: services.settings,
+    retentionService: services.retention,
+    auditService: services.audit,
+    erasureService: services.erasure,
+    identityService: services.identity,
+    hubShred: services.hubShred,
+  }
 }
 
 // Re-export service classes for direct import
