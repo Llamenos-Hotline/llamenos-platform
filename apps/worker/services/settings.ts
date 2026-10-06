@@ -3190,7 +3190,14 @@ export class SettingsService {
   // CMS Report Type Definitions (Epic 343)
   // =========================================================================
 
-  async getCmsReportTypes(hubId?: string): Promise<{
+  /**
+   * Report type definitions for one hub, or — when `hubId` is `undefined` —
+   * every hub's. The parameter is required rather than optional on purpose:
+   * omitting it silently widened the triage queue's conversion filter to every
+   * hub's configuration (#1591), so each caller has to state its scope and the
+   * type checker catches any that does not.
+   */
+  async getCmsReportTypes(hubId: string | undefined): Promise<{
     reportTypes: ReportTypeDefinition[]
   }> {
     const rows = hubId !== undefined
