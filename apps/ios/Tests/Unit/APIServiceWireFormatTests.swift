@@ -290,6 +290,9 @@ final class APIServiceWireFormatTests: XCTestCase {
             // That is why it is here with `optionalKeys: []`: the refine, not the field
             // modifier, decides whether a dropped key 400s.
             //
+            // A second defect this endpoint carries, unrelated to the key casing and
+            // not fixed by it, is #1716: the schema does not declare `deviceId` at all.
+            //
             // It failed in silence anyway, because
             // `LlamenosApp.didRegisterForRemoteNotificationsWithDeviceToken` swallows the
             // throw as "non-fatal" — so iOS has never had a row in `devices`, and no

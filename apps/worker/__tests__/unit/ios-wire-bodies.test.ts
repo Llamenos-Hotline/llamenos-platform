@@ -222,9 +222,10 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     // identifier the device believes identifies it, and nothing on the client observes
     // that, because the route answers 204.
     //
-    // Separate from #1633: fixing the key casing does NOT fix this. Filed rather than
-    // changed here — whether the contract should carry `deviceId` or the client should
-    // stop sending it is a protocol decision, and packages/protocol is shared-owned.
+    // Separate from #1633: fixing the key casing does NOT fix this. Filed as #1716
+    // rather than changed here — whether the contract should carry `deviceId` or the
+    // client should stop sending it is a protocol decision, and packages/protocol is
+    // shared-owned.
     const { wire } = fixture.bodies.registerDevice
     expect(wire).toHaveProperty('deviceId')
 
