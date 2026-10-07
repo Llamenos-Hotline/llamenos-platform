@@ -825,6 +825,7 @@
     "loading": "ማስታወሻዎችን በመጫን ላይ...",
     "newConversationNote": "አዲስ የውይይት ማስታወሻ",
     "newNote": "አዲስ ማስታወሻ",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "ገና ማስታወሻዎች የሉም",
     "noReplies": "ገና ምላሾች የሉም",
     "noSearchResults": "ከፍለጋዎ ጋር የሚዛመድ ማስታወሻ የለም",

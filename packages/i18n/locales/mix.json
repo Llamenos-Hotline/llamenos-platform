@@ -825,6 +825,7 @@
     "loading": "Kúni̱ kaa nota...",
     "newConversationNote": "Nota Saa̱ de Conversación",
     "newNote": "Nota Saa̱",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Ta̱ꞌán nota",
     "noReplies": "Ta̱ꞌán respuesta",
     "noSearchResults": "Ñá íyo nota va̱ꞌa ji nánuku miíún",

@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { listNotes, createNote, updateNote, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
+import { adminHpkeRecipient } from '@/lib/admin-recipient'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
@@ -161,7 +162,13 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      const adminPub = adminDecryptionPubkey || authorPub
+      // Without an admin recipient this note would be wrapped to the author
+      // twice and readable by no admin at all (#1468). Refuse, don't substitute.
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
       const res = await updateNote(noteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => prev.map(n =>
@@ -182,7 +189,12 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      const adminPub = adminDecryptionPubkey || authorPub
+      // See handleSaveEdit: no admin recipient means no admin reader (#1468).
+      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
+      if (!adminPub) {
+        toast(t('notes.noAdminRecipient'), 'error')
+        return
+      }
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
       const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])

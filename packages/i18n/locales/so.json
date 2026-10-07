@@ -825,6 +825,7 @@
     "loading": "Waa la soo rarayaa qoraallada...",
     "newConversationNote": "Qoraal Cusub oo Wadahadal",
     "newNote": "Qoraal Cusub",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Qoraal ma jiro wali",
     "noReplies": "Jawaabo ma jiraan wali",
     "noSearchResults": "Qoraal raadintaada u dhigma ma jiro",

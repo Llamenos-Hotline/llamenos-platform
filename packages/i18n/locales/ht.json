@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "Nouvo Nòt Konvèsasyon",
     "newNote": "Nouvo Nòt",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Pa gen nòt ankò",
     "noReplies": "No replies yet",
     "noSearchResults": "Pa gen nòt ki koresponn ak rechèch ou a",

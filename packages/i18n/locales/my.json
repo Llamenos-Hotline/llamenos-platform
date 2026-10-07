@@ -825,6 +825,7 @@
     "loading": "မှတ်စုများ ဖွင့်နေသည်...",
     "newConversationNote": "စကားပြောမှု မှတ်စုအသစ်",
     "newNote": "မှတ်စုအသစ်",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "မှတ်စု မရှိသေးပါ",
     "noReplies": "ဖြေကြားချက် မရှိသေးပါ",
     "noSearchResults": "ရှာဖွေမှုနှင့် ကိုက်ညီသော မှတ်စု မရှိပါ",

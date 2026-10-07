@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "Bagong Tala ng Pag-uusap",
     "newNote": "Bagong Tala",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Wala pang mga tala",
     "noReplies": "No replies yet",
     "noSearchResults": "Walang tala na tumugma sa iyong paghahanap",

@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "Nova Nota de Conversa",
     "newNote": "Nova Nota",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Nenhuma nota ainda",
     "noReplies": "No replies yet",
     "noSearchResults": "Nenhuma nota corresponde à sua pesquisa",
