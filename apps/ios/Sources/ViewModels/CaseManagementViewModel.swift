@@ -397,15 +397,24 @@ final class CaseManagementViewModel {
     }
 
     /// Add a comment interaction to a record.
-    func addComment(recordId: String, text: String) async {
+    ///
+    /// - Parameters:
+    ///   - recordId: The record the comment belongs to.
+    ///   - text: Comment plaintext. Never leaves the device unencrypted.
+    ///   - adminPubkeys: X25519 admin decryption pubkeys that must also be able
+    ///     to read the comment. The server stores `contentEnvelopes` verbatim
+    ///     (`CasesService.createInteraction`) and never adds readers of its own,
+    ///     so every reader has to be wrapped for here or admin accountability
+    ///     access is lost — see `docs/security/CRYPTO_ARCHITECTURE.md`.
+    func addComment(recordId: String, text: String, adminPubkeys: [String]) async {
         isActionInProgress = true
         defer { isActionInProgress = false }
 
         do {
-            // Encrypt the comment content
+            // Encrypt the comment content for the author and every admin reader.
             let encrypted = try cryptoService.encryptMessage(
                 plaintext: text,
-                readerPubkeys: [] // Server adds admin pubkeys
+                readerPubkeys: adminPubkeys
             )
 
             let envelopes = encrypted.envelopes.map { env in
@@ -426,9 +435,13 @@ final class CaseManagementViewModel {
                 sourceID: nil
             )
 
+            // `wireBody:` and not `body:` — `createInteractionBodySchema` requires
+            // camelCase `interactionType`/`interactionTypeHash`, and the default
+            // encoder's `.convertToSnakeCase` would rewrite them (and
+            // `contentEnvelopes`) into keys the route validator rejects.
             let _: CaseInteraction = try await apiService.request(
                 method: "POST", path: apiService.hp("/api/records/\(recordId)/interactions"),
-                body: body
+                wireBody: body
             )
 
             // Reload timeline

@@ -237,13 +237,21 @@ final class EventsViewModel {
     // MARK: - Create Event
 
     /// Create a new event. Returns true on success.
+    ///
+    /// - Parameter adminPubkeys: X25519 admin decryption pubkeys that must also
+    ///   be able to read the event details. The event route stores
+    ///   `detailEnvelopes` verbatim (`CasesService.createEvent`) and never adds
+    ///   readers of its own, so every reader has to be wrapped for here or
+    ///   admin accountability access is lost — see
+    ///   `docs/security/CRYPTO_ARCHITECTURE.md`.
     func createEvent(
         entityTypeId: String,
         title: String,
         description: String?,
         startDate: Date,
         endDate: Date?,
-        location: String?
+        location: String?,
+        adminPubkeys: [String]
     ) async -> Bool {
         isSaving = true
         defer { isSaving = false }
@@ -264,13 +272,13 @@ final class EventsViewModel {
             return false
         }
 
-        // Encrypt the details
+        // Encrypt the details for the author and every admin reader.
         let encryptedContent: String
         let envelopes: [SharedAdminEnvelope]
         do {
             let result = try cryptoService.encryptMessage(
                 plaintext: detailsString,
-                readerPubkeys: [] // Server adds admin pubkeys
+                readerPubkeys: adminPubkeys
             )
             encryptedContent = result.encryptedContent
             envelopes = result.envelopes.map { env in
@@ -307,8 +315,12 @@ final class EventsViewModel {
         )
 
         do {
+            // `wireBody:` and not `body:` — `createEventBodySchema` requires
+            // camelCase keys (`entityTypeId`, `detailEnvelopes`, `encryptedDetails`),
+            // which the default encoder's `.convertToSnakeCase` would rewrite into
+            // keys the route validator rejects.
             let _: ProtocolEvent = try await apiService.request(
-                method: "POST", path: apiService.hp("/api/events"), body: body
+                method: "POST", path: apiService.hp("/api/events"), wireBody: body
             )
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             await loadEvents()
