@@ -104,10 +104,18 @@ export TEST_HUB_URL='https://<staging-host>'
 export E2E_TEST_SECRET='<the host's dev_reset_secret>'
 export DATABASE_URL='postgresql://llamenos:<pg_password>@127.0.0.1:15432/llamenos'
 
+# Only needed when TEST_HUB_URL is NOT the deployment's own origin — i.e. any
+# port-forwarded run. The CORS scenarios assert the deployment's real policy, so
+# they need an origin that host's allowlist actually contains. Default is
+# `new URL(TEST_HUB_URL).origin`, which for a forward is `http://127.0.0.1:…`
+# and is correctly REFUSED — a 403 on the preflight scenario means this is unset.
+export TEST_CORS_ORIGIN='https://<the deployment's app origin>'
+
 bun run test:backend:bdd
 ```
 
-All three are required. Setting `TEST_HUB_URL` without `DATABASE_URL` is
+The first three are required; `TEST_CORS_ORIGIN` is required only for a
+port-forwarded run. Setting `TEST_HUB_URL` without `DATABASE_URL` is
 refused before anything runs — see
 [The guard](#the-guard-and-why-it-matters-more-here-than-locally).
 
