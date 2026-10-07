@@ -47,6 +47,7 @@ const MODULES: Record<string, Record<string, unknown>> = {
 }
 
 const FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-request-bodies.json')
+const RESPONSE_FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-response-bodies.json')
 
 interface WireCase {
   id: string
@@ -65,7 +66,26 @@ interface Fixture {
   bodies: Record<string, { wire: Record<string, unknown>; legacySnakeCase: Record<string, unknown> }>
 }
 
+interface ResponseCase {
+  id: string
+  endpoint: string
+  module: string
+  schema: string
+  swiftType: string
+  swiftFile: string
+  /** Keys the Swift model declares non-optional — a missing one is `keyNotFound`. */
+  requiredSwiftKeys: string[]
+  /** Keys the model used to require/read that the server never sends. */
+  absentFromServer: string[]
+}
+
+interface ResponseFixture {
+  cases: ResponseCase[]
+  responses: Record<string, Record<string, unknown>>
+}
+
 const fixture: Fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))
+const responseFixture: ResponseFixture = JSON.parse(readFileSync(RESPONSE_FIXTURE, 'utf8'))
 
 function schemaFor(c: WireCase): ZodType {
   const mod = MODULES[c.module]
@@ -254,5 +274,135 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
       }
     }
     expect(snakeKeys).toEqual([])
+  })
+})
+
+describe('#1633 iOS response models against the real response schemas', () => {
+  // The request fixture only ever proved what iOS *sends*. Renaming a request key to
+  // match its schema says nothing about the response model on the same endpoint, and
+  // that is precisely where this PR first regressed: `POST /api/conversations/:id/messages`
+  // got its request key fixed while `ConversationMessage` still required
+  // `recipientEnvelopes`. Worse than before, because the mismatch only became
+  // *reachable* once the send stopped 400ing.
+
+  function schemaFor(c: ResponseCase): ZodType {
+    const mod = MODULES[c.module]
+    expect(mod, `fixture names an unmapped module: ${c.module}`).toBeDefined()
+    const schema = mod[c.schema]
+    expect(schema, `${c.module} does not export ${c.schema}`).toBeDefined()
+    return schema as ZodType
+  }
+
+  function shapeKeys(schema: ZodType): string[] {
+    const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape
+    expect(shape, 'expected a z.object schema with an inspectable shape').toBeDefined()
+    return Object.keys(shape as Record<string, unknown>)
+  }
+
+  it('the response fixture covers every case it declares', () => {
+    expect(responseFixture.cases.length).toBeGreaterThan(0)
+    expect(Object.keys(responseFixture.responses).sort())
+      .toEqual(responseFixture.cases.map(c => c.id).sort())
+  })
+
+  /// Keys whose value is JSON `null`. The server sends these for every nullable
+  /// column (drizzle serialises a NULL to `null`, not to an absent key), but the
+  /// response schemas declare them `.optional()` — which in Zod means "may be
+  /// undefined", NOT "may be null". So the schemas do not currently describe their
+  /// own wire format for nullable columns. See the explicit test below: that is a
+  /// defect in packages/protocol/schemas/ (shared-owned, not changed here), and it
+  /// is stripped — never ignored — so this suite can still validate the rest.
+  function nullKeys(payload: Record<string, unknown>): string[] {
+    return Object.keys(payload).filter(k => payload[k] === null)
+  }
+
+  function withoutNulls(payload: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== null))
+  }
+
+  describe('the fixture is a payload the server could really send', () => {
+    it.each(responseFixture.cases.map(c => [c.id, c] as const))('%s', (_id, c) => {
+      const payload = responseFixture.responses[c.id]
+      const result = schemaFor(c).safeParse(withoutNulls(payload))
+      expect(
+        result.success ? null : result.error.issues,
+        `${c.schema} rejected the fixture for ${c.swiftType} (${c.endpoint}) — the fixture is not a real server payload`,
+      ).toBeNull()
+    })
+  })
+
+  it('records the nullable-column gap: the server sends null where the schema says optional', () => {
+    // Not a workaround — a pinned, named defect. `messages.read_at` and
+    // `messages.failure_reason` are nullable columns returned verbatim, so the 201
+    // carries `"readAt": null`. `messageResponseSchema` declares `readAt:
+    // z.string().optional()`, which rejects null. Either the schema should be
+    // `.nullish()` or the route should omit null keys; both live in shared-owned
+    // code, so this test states the gap rather than papering over it. iOS is
+    // unaffected — `String?` decodes a JSON null to nil — which is why this is a
+    // contract-accuracy bug and not a client crash.
+    const message = responseFixture.responses.message
+    expect(nullKeys(message).sort()).toEqual(['failureReason', 'readAt'])
+
+    const shape = (conversations.messageResponseSchema as unknown as {
+      shape: Record<string, ZodType>
+    }).shape
+    for (const key of ['readAt', 'failureReason']) {
+      const field = (shape as unknown as Record<string, ZodType>)[key]
+      expect(field, `${key} should be declared by messageResponseSchema`).toBeDefined()
+      // Declared, accepts undefined, and (the gap) rejects null.
+      expect(field.safeParse(undefined).success).toBe(true)
+      expect(field.safeParse(null).success).toBe(false)
+    }
+  })
+
+  describe('every key the Swift model REQUIRES is one the schema declares', () => {
+    // This is the gate. A non-optional Swift field whose key the server never sends is
+    // `keyNotFound` at decode time — the whole response is lost, not just the field.
+    it.each(responseFixture.cases.map(c => [c.id, c] as const))('%s', (_id, c) => {
+      const declared = shapeKeys(schemaFor(c))
+      const missing = c.requiredSwiftKeys.filter(k => !declared.includes(k))
+      expect(
+        missing,
+        `${c.swiftType} (${c.swiftFile}) requires ${missing.join(', ')}, which ${c.schema} does not declare — decoding ${c.endpoint} would throw keyNotFound`,
+      ).toEqual([])
+
+      // and present in the concrete payload, so the Swift decode test is exercised
+      const payload = responseFixture.responses[c.id]
+      for (const key of c.requiredSwiftKeys) {
+        expect(payload, `fixture for ${c.id} omits required key ${key}`).toHaveProperty(key)
+      }
+    })
+  })
+
+  describe('the keys these models used to want are confirmed absent from the contract', () => {
+    it.each(responseFixture.cases.map(c => [c.id, c] as const))('%s', (_id, c) => {
+      const declared = shapeKeys(schemaFor(c))
+      for (const key of c.absentFromServer) {
+        expect(
+          declared,
+          `${c.schema} declares ${key} after all — then ${c.swiftType} may have been right and this fix needs revisiting`,
+        ).not.toContain(key)
+        expect(responseFixture.responses[c.id]).not.toHaveProperty(key)
+      }
+    })
+  })
+
+  it('a message row carries readerEnvelopes and has no channel of its own', () => {
+    const declared = shapeKeys(conversations.messageResponseSchema as unknown as ZodType)
+    expect(declared).toContain('readerEnvelopes')
+    expect(declared).not.toContain('recipientEnvelopes')
+    // The channel belongs to the conversation, not the message — which is why
+    // ConversationMessage.channelType could never have decoded.
+    expect(declared).not.toContain('channelType')
+    expect(shapeKeys(conversations.conversationResponseSchema as unknown as ZodType))
+      .toContain('channelType')
+  })
+
+  it('the send body and the response it returns agree on the envelope key', () => {
+    // The actual lesson of the regression, asserted directly: one endpoint, one name.
+    const body = shapeKeys(conversations.sendMessageBodySchema as unknown as ZodType)
+    const response = shapeKeys(conversations.messageResponseSchema as unknown as ZodType)
+    expect(body).toContain('readerEnvelopes')
+    expect(response).toContain('readerEnvelopes')
   })
 })

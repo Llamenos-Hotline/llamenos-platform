@@ -259,14 +259,13 @@ final class ConversationsViewModel {
         do {
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                readerEnvelopes: message.recipientEnvelopes
+                readerEnvelopes: message.readerEnvelopes
             )
 
             return DecryptedMessage(
                 id: message.id,
                 text: decryptedText,
                 direction: message.direction,
-                channelType: message.channelType,
                 createdAt: DateFormatting.parseISO(message.createdAt) ?? Date(),
                 isRead: message.isRead
             )

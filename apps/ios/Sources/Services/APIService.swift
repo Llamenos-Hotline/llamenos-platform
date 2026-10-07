@@ -201,8 +201,25 @@ final class APIService: @unchecked Sendable {
         // `SecurityEventService.uploadBatch`, the one snake_case endpoint we have).
         self.encoder = JSONEncoder()
 
-        self.decoder = JSONDecoder()
-        self.decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = Self.makeResponseDecoder()
+    }
+
+    /// The decoder every response goes through. Exposed (internal) so
+    /// `APIServiceResponseDecodingTests` can decode fixtures with the *real*
+    /// configuration rather than a re-created one — a response test that builds its
+    /// own decoder proves only that the test is self-consistent.
+    ///
+    /// `.convertFromSnakeCase` is retained deliberately and is a no-op for the
+    /// camelCase the server actually sends: Foundation leaves a key with no underscore
+    /// alone (`components.count == 1` → returned verbatim). It is kept only so a
+    /// genuinely snake_case payload would still decode, and it is *not* a licence for a
+    /// response model to disagree with its schema — it cannot bridge
+    /// `readerEnvelopes` → `recipientEnvelopes`, which is exactly how #1633's
+    /// response-side defect survived.
+    static func makeResponseDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
     }
 
     /// A `URLSession` created with a delegate is retained by the system until it is
