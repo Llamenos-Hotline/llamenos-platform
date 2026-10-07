@@ -173,11 +173,51 @@ final class APIService: @unchecked Sendable {
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
 
-        self.encoder = JSONEncoder()
-        self.encoder.keyEncodingStrategy = .convertToSnakeCase
+        self.encoder = Self.makeEncoder()
+        self.decoder = Self.makeDecoder()
+    }
 
-        self.decoder = JSONDecoder()
-        self.decoder.keyDecodingStrategy = .convertFromSnakeCase
+    // MARK: - Wire Coders
+
+    /// The encoder every request body goes through.
+    ///
+    /// Exposed (rather than configured inline in `init`) so
+    /// `APIServiceWireFormatTests` can assert the bytes PRODUCTION emits. A test
+    /// that built its own `JSONEncoder` would assert its own configuration and
+    /// stay green while this one drifted — which is exactly how
+    /// `.convertToSnakeCase` here shipped `{"push_token":…}` at
+    /// `POST /api/devices/register` for the client's entire history while the
+    /// server's schema required `pushToken`. Every field was dropped as unknown,
+    /// both `.refine()`s failed, the server answered 400, and
+    /// `LlamenosApp.didRegisterForRemoteNotificationsWithDeviceToken` swallowed it
+    /// as "non-fatal" — so iOS has never had a row in `devices`.
+    ///
+    /// The protocol is camelCase: `packages/protocol/schemas/*.ts` and the Swift
+    /// types generated from them. `.useDefaultKeys` is what matches it.
+    ///
+    /// The one endpoint that genuinely wants snake_case —
+    /// `POST /api/security-events`, whose `z.strictObject` in
+    /// `apps/worker/schemas/client-security-events.ts` declares `event_type`,
+    /// `occurred_at`, … — is uploaded by `SecurityEventService` through its own
+    /// `uploadSession` and its own encoder, so it is unaffected by this and must
+    /// keep converting. Do not "simplify" the two into one encoder.
+    static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .useDefaultKeys
+        return encoder
+    }
+
+    /// The decoder every response goes through.
+    ///
+    /// Deliberately left on `.convertFromSnakeCase`: a camelCase key has no
+    /// underscores, so it passes through untouched and already decodes correctly.
+    /// That is why only the request side failed loudly, and why this side is not
+    /// part of the fix — flipping it would be a behaviour change with nothing
+    /// observed to justify it.
+    static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
     }
 
     /// Set or update the hub base URL.
