@@ -16,6 +16,7 @@ import {
   simulatedClientIp,
   ADMIN_SEED,
 } from '../../api-helpers'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 
 // ── State ──────────────────────────────────────────────────────────���
 
@@ -28,7 +29,9 @@ interface InviteTestState {
   /**
    * Unique per-scenario client address. Invite validation AND redemption are
    * rate limited per client; without this every scenario in every Playwright
-   * worker shares one bucket and the suite 429s itself (#1480).
+   * worker shares one bucket and the suite 429s itself (#1480). Presented
+   * through `harnessClientHeaders`, so it also survives the proxy on a
+   * deployed target (#1625).
    */
   scenarioIp: string
 }
@@ -44,8 +47,9 @@ const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 Before(async ({ world }) => {
   // Assign a unique client address per scenario so validation and redemption
   // calls each use an isolated rate limit bucket instead of the shared one for
-  // 127.0.0.1 (which fills up across scenarios when X-Forwarded-For is absent
-  // and answers 429 to scenarios that are not about rate limiting).
+  // the real remote address (which fills up across scenarios and answers 429
+  // to scenarios that are not about rate limiting). The limiter still enforces
+  // its production threshold inside this scenario's bucket — nothing is exempt.
   setState<InviteTestState>(world, STATE_KEY, {
     rateLimitResponses: [],
     scenarioIp: simulatedClientIp(),
@@ -97,7 +101,7 @@ When('the invite code is validated', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -106,7 +110,7 @@ When('the invite code is validated', async ({ request, world }) => {
 When('a random UUID is validated as an invite', async ({ request, world }) => {
   const s = getS(world)
   const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = res.ok() ? await res.json().catch(() => null) : null
   setLastResponse(world, { status: res.status(), data })
@@ -140,15 +144,15 @@ When('the admin revokes the invite', async ({ request, world }) => {
 })
 
 When('a client floods invite validation {int} times', async ({ request, world }, count: number) => {
-  // Use a unique fake IP per scenario so each parallel worker gets its own rate limit bucket.
-  // The server rate-limits invite validation by hashed IP (X-Forwarded-For header).
-  const fakeIp = `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
+  // One client address for the whole flood — this scenario's own, distinct from
+  // every other worker's — so the 5/min invite-validate limiter fires on THIS
+  // flood and not on whatever a parallel scenario was doing.
   const s = getS(world)
   const shared = getSharedState(world)
   shared.floodResponses = []
   for (let i = 0; i < count; i++) {
     const res = await request.get(`${BASE_URL}/api/invites/validate/${crypto.randomUUID()}`, {
-      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fakeIp },
+      headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
     })
     s.rateLimitResponses.push(res.status())
     shared.floodResponses.push(res.status())
@@ -224,7 +228,7 @@ Then('the invite code is no longer valid', async ({ request, world }) => {
   const s = getS(world)
   expect(s.inviteCode).toBeDefined()
   const res = await request.get(`${BASE_URL}/api/invites/validate/${s.inviteCode}`, {
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': s.scenarioIp },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(s.scenarioIp) },
   })
   const data = await res.json().catch(() => null)
   expect(data?.valid).toBe(false)

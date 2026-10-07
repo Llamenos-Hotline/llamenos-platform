@@ -5,6 +5,7 @@ import { expect } from '@playwright/test'
 import { When, Then, Before, getState, setState } from './fixtures'
 import { getSharedState, setLastResponse } from './shared-state'
 import { apiGet } from '../../api-helpers'
+import { harnessClientHeaders } from '../../dev-surface-secret'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -45,8 +46,15 @@ async function submit(
   ip = randomFakeIp(),
 ): Promise<{ status: number; data: unknown }> {
   // Deliberately no Authorization header — the endpoint is unauthenticated.
+  //
+  // `harnessClientHeaders` names the client this submission is from. The
+  // endpoint caps submissions at 5/min per client inside the route handler, and
+  // that cap is NOT relaxed here — one scenario below asserts it fires. What
+  // the named client buys is that the other six scenarios, each submitting
+  // once, do not land in the same bucket as that flood. On a deployed target
+  // every caller shares Caddy's address, so they did (#1625).
   const res = await request.post(`${BASE_URL}/api/security-events`, {
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    headers: { 'Content-Type': 'application/json', ...harnessClientHeaders(ip) },
     data: body,
   })
   const data = await res.json().catch(() => null)
