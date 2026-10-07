@@ -144,11 +144,22 @@ a known recovery (re-run the run). What the command adds over `board`:
 - **The dropped-job fingerprint.** A run that concluded `failure` with no
   failing job did not fail — it lost a job. The command names the run and the
   `gh run rerun` that recreates it.
-- **Multi-app required names.** `CodeQL` is satisfied by a `github-actions`
-  rollup *and* by GHAS's `github-advanced-security` alert gate, and GitHub
-  requires every check-run of a required name to pass. Carriers are collected
-  across the Checks API and the legacy commit statuses, every app is named,
-  and the verdict is the WORST of them.
+- **Worst ACROSS apps, latest WITHIN an app.** `CodeQL` is satisfied by a
+  `github-actions` rollup *and* by GHAS's `github-advanced-security` alert
+  gate, and both count — so carriers are collected across the Checks API and
+  the legacy commit statuses and the verdict is the WORST across apps. Within
+  one app it is the opposite: a re-run leaves the superseded conclusion on the
+  commit, and GitHub counts only the later one. Measured on #1671, where
+  `fleet/verify` carried `cancelled` (19:32:57Z) and `success` (19:33:43Z),
+  both `github-actions`, and GitHub read the PR `CLEAN`. Note what is *not* a
+  usable signal: GraphQL reports `isRequired: true` on **both**. It answers
+  "does this name gate the merge", not "is this the run that counts".
+  Superseded carriers are still printed, marked as superseded — dropping a red
+  signal without a trace is the failure class this command exists to correct —
+  they just do not decide the verdict. Getting this backwards is worse than
+  the bug the command detects: re-runs are routine, so a tool taking the worst
+  within an app cries wolf on nearly every PR, gets ignored, and is then
+  ignored on the day it is right.
 - **`neutral` is reported as what it is.** GitHub accepts `neutral` and
   `skipped` as satisfying a required check, so the command scores them PASS —
   it has to agree with GitHub about whether a merge is blocked. But `neutral`
@@ -164,12 +175,16 @@ $ llamenos-fleet missing-checks --pr 1642
   ABSENT_SETTLED ci-status      no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
   PASS           gitleaks       github-actions=success
   ABSENT_SETTLED CodeQL         no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
-  PASS           fleet/verify   github-actions=success + github-actions=success
-  FAIL           fleet/review   github-actions=success + github-actions=failure
+  PASS           fleet/verify   github-actions=success  (superseded by a later run of the same app: github-actions=success)
+  PASS           fleet/review   github-actions=success  (superseded by a later run of the same app: github-actions=failure)
   run 37655183555 (CI, pull_request, attempt 1) concluded failure with 20 jobs and none of them failing
     -> a job was never created. Re-run the run to recreate it: gh run rerun 37655183555
   BLOCKED FOREVER on: ci-status, CodeQL — a re-run of the owning workflow is the only recovery
 ```
+
+Naming one PR with `--pr N` always prints its full table, including a context
+that is merely red; the sweep across every open PR stays quiet unless a head is
+actually notable, so forty healthy heads cannot bury the one that matters.
 
 An unreadable ruleset is reported `CANNOT DECIDE` and exits `2`, never as a
 clean head: a tool that reports nothing wrong when it could not read the

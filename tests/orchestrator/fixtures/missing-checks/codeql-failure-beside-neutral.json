@@ -8,244 +8,324 @@
   },
   "checkRuns": [
     {
+      "id": 111987013053,
       "name": "docker-canary",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:33:06Z"
     },
     {
+      "id": 111986964228,
       "name": "ci-status",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:33:03Z"
     },
     {
+      "id": 111984915998,
       "name": "e2e",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:27:57Z"
     },
     {
+      "id": 111984059570,
       "name": "ios-e2e",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984059533,
       "name": "backend-bdd",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984059415,
       "name": "android-e2e",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984059401,
       "name": "ios-build-test",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984058974,
       "name": "android-build-test",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984058846,
       "name": "audit",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:41Z"
     },
     {
+      "id": 111984057303,
       "name": "ansible-validate",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:28:19Z"
     },
     {
+      "id": 111984057269,
       "name": "crypto-guardrails",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:55Z"
     },
     {
+      "id": 111984057244,
       "name": "crypto-tests",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:29:26Z"
     },
     {
+      "id": 111984057206,
       "name": "production-smoke",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:45Z"
     },
     {
+      "id": 111984057202,
       "name": "desktop-unit",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:28:59Z"
     },
     {
+      "id": 111984057190,
       "name": "backend-unit",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:49Z"
     },
     {
+      "id": 111984057155,
       "name": "migration-drift",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:50Z"
     },
     {
+      "id": 111984057092,
       "name": "build",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:46Z"
     },
     {
+      "id": 111983827484,
       "name": "CodeQL",
       "status": "completed",
       "conclusion": "failure",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:35:09Z"
     },
     {
+      "id": 111982763160,
       "name": "fleet-review/publish",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:22:47Z"
     },
     {
+      "id": 111980883890,
       "name": "changes",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:25:30Z"
     },
     {
+      "id": 111980883831,
       "name": "lint",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:27:10Z"
     },
     {
+      "id": 111980883786,
       "name": "docs-guard",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:19:27Z"
     },
     {
+      "id": 111980883763,
       "name": "No generated files in git",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:26:06Z"
     },
     {
+      "id": 111980883489,
       "name": "Updater pubkey is set",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:23:17Z"
     },
     {
+      "id": 111980267842,
       "name": "E2E (Linux)",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:26:55Z"
     },
     {
+      "id": 111978426082,
       "name": "CodeQL",
       "status": "completed",
       "conclusion": "neutral",
-      "appSlug": "github-advanced-security"
+      "appSlug": "github-advanced-security",
+      "startedAt": "2026-10-05T21:09:59Z"
     },
     {
+      "id": 111978029614,
       "name": "fleet/review",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:21:45Z"
     },
     {
+      "id": 111975498235,
       "name": "build",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:14:04Z"
     },
     {
+      "id": 111973706957,
       "name": "Analyze staged (java-kotlin)",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:55:46Z"
     },
     {
+      "id": 111973659926,
       "name": "Analyze staged (swift)",
       "status": "completed",
       "conclusion": "skipped",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:55:38Z"
     },
     {
+      "id": 111973658950,
       "name": "Analyze advanced (python)",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:11:39Z"
     },
     {
+      "id": 111973658926,
       "name": "Analyze advanced (actions)",
       "status": "completed",
       "conclusion": "cancelled",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:55:37Z"
     },
     {
+      "id": 111973658792,
       "name": "Analyze advanced (ruby)",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:14:30Z"
     },
     {
+      "id": 111973658758,
       "name": "Analyze advanced (javascript-typescript)",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:07:42Z"
     },
     {
+      "id": 111973658678,
       "name": "Analyze advanced (rust)",
       "status": "completed",
       "conclusion": "cancelled",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:55:37Z"
     },
     {
+      "id": 111972858389,
       "name": "semgrep",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-advanced-security"
+      "appSlug": "github-advanced-security",
+      "startedAt": "2026-10-05T20:53:18Z"
     },
     {
+      "id": 111971626688,
       "name": "fleet/verify",
       "status": "completed",
       "conclusion": "cancelled",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:49:34Z"
     },
     {
+      "id": 111971621549,
       "name": "changes",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T21:00:54Z"
     },
     {
+      "id": 111971621085,
       "name": "gitleaks",
       "status": "completed",
       "conclusion": "cancelled",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:49:33Z"
     },
     {
+      "id": 111971621010,
       "name": "Scan",
       "status": "completed",
       "conclusion": "success",
-      "appSlug": "github-actions"
+      "appSlug": "github-actions",
+      "startedAt": "2026-10-05T20:53:01Z"
     }
   ],
   "statuses": [],

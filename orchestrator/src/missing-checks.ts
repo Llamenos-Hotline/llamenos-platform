@@ -65,14 +65,35 @@
  *    operator which run to re-run.
  *
  * ─── Two deliberate refusals to simplify ────────────────────────────────────
- * **A required name can be carried by more than one app, and all of them
- * count.** `CodeQL` here is satisfied by a `github-actions` rollup AND by
- * GHAS's `github-advanced-security` alert gate; GitHub requires every
- * check-run of a required name to pass, and a required name shared with a
- * commit status needs both. So carriers are collected across both the Checks
- * API and the legacy statuses, every app is named in the report, and the
- * verdict is the WORST of them — a red carrier is never hidden behind a green
- * one.
+ * **Worst ACROSS apps, latest WITHIN an app.** A required name can be carried
+ * by more than one app and every app counts: `CodeQL` here is satisfied by a
+ * `github-actions` rollup AND by GHAS's `github-advanced-security` alert
+ * gate, and a required name shared with a commit status needs both. So
+ * carriers are collected across the Checks API and the legacy statuses, and
+ * the verdict is the WORST across apps — a red carrier from one app is never
+ * hidden behind a green one from another.
+ *
+ * Within a single app it is the opposite, and getting this wrong is a worse
+ * bug than the one this module detects. A re-run leaves the superseded
+ * conclusion on the commit, so one app routinely carries two check runs of
+ * the same name from two different check suites, and GitHub counts only the
+ * later. Measured on PR #1671: `fleet/verify` carried `cancelled` (started
+ * 19:32:57Z) and `success` (19:33:43Z), both `github-actions`, and GitHub
+ * read the PR `CLEAN`. Note what is NOT a usable signal there — GraphQL
+ * reported `isRequired: true` on BOTH of them. `isRequired` answers "does
+ * this name gate the merge", not "is this particular run the one that
+ * counts", and reading it as the latter is how an earlier draft of this
+ * module scored that PR FAIL while `gh pr checks --required` and GitHub both
+ * said it was fine.
+ *
+ * That direction of error is the one that destroys the tool. Re-runs and
+ * cancellations are routine — a day with one Actions incident leaves most
+ * open PRs carrying a superseded conclusion — so a detector taking the worst
+ * within an app reports a blockage GitHub does not see on nearly every PR,
+ * gets ignored, and is then ignored on the day it is right. Superseded
+ * carriers are still PRINTED, marked as superseded, because silently
+ * discarding a red signal is the very failure class this module exists to
+ * correct; they just do not decide the verdict.
  *
  * One limitation, stated rather than hidden: a required check's
  * `integration_id` (the ruleset pinning a context to ONE GitHub App) is not
@@ -106,6 +127,8 @@ import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
  *  be carried by several apps and every one of them counts (see the module
  *  docstring on `CodeQL`). */
 export interface HeadCheckRun {
+  /** Monotonic, and the tiebreaker when two carriers share a `startedAt`. */
+  id: number
   name: string
   /** `queued` | `in_progress` | `completed` */
   status: string
@@ -113,6 +136,9 @@ export interface HeadCheckRun {
    *  `cancelled` | `timed_out` | `action_required` | `stale` | `startup_failure` */
   conclusion: string | null
   appSlug: string
+  /** ISO 8601, or `''` when GitHub has not set one. Orders carriers within an
+   *  app so a re-run supersedes what it replaced. */
+  startedAt: string
 }
 
 /** One legacy commit status on the head. A required name can be satisfied by
@@ -125,6 +151,11 @@ export interface HeadCommitStatus {
   /** `context`-setting app, for the report. GitHub leaves this unset for a
    *  status posted with a plain token. */
   appSlug?: string
+  /** ISO 8601. `GET /commits/{sha}/status` is the COMBINED status and already
+   *  returns only the newest status per context, so this is belt-and-braces
+   *  for the ordering below rather than load-bearing — but an ordering that
+   *  depends on an endpoint's dedup promise should still be able to order. */
+  updatedAt?: string
 }
 
 /** One workflow run on the head. The run list answers the only question that
@@ -172,15 +203,22 @@ export interface Carrier {
   /** `true` for a `neutral` or `skipped` conclusion — a PASS that judged
    *  nothing. */
   unjudged: boolean
+  /** Ordering key within one app: `startedAt` first, `id` as tiebreaker. */
+  startedAt: string
+  id: number
+  /** Set by `splitBySupersession`: an older carrier from the SAME app that a
+   *  later one replaced. Reported, but excluded from the verdict. */
+  superseded?: boolean
 }
 
 export interface RequiredContextDiagnosis {
   name: string
   verdict: RequiredVerdict
+  /** Counted carriers first, then the superseded ones (each flagged). The
+   *  superseded entries are reported and never decide the verdict. */
   carriers: Carrier[]
-  /** Every carrier passes, and at least one of them passed WITHOUT judging
-   *  (`neutral`/`skipped`) while none passed with a plain `success`. Never
-   *  changes the verdict — GitHub accepts these — only annotates it. */
+  /** Every COUNTED carrier passed WITHOUT judging (`neutral`/`skipped`).
+   *  Never changes the verdict — GitHub accepts these — only annotates it. */
   neutralOnly: boolean
 }
 
@@ -247,6 +285,8 @@ export function carrierFromCheckRun(run: HeadCheckRun): Carrier {
     raw: pending ? run.status : conclusion,
     state: pending ? 'PENDING' : PASSING_CONCLUSIONS.has(conclusion) ? 'PASS' : 'FAIL',
     unjudged: !pending && UNJUDGED_CONCLUSIONS.has(conclusion),
+    startedAt: run.startedAt,
+    id: run.id,
   }
 }
 
@@ -259,14 +299,49 @@ export function carrierFromCommitStatus(status: HeadCommitStatus): Carrier {
     raw: status.state,
     state: status.state === 'success' ? 'PASS' : status.state === 'pending' ? 'PENDING' : 'FAIL',
     unjudged: false,
+    startedAt: status.updatedAt ?? '',
+    id: 0,
   }
 }
 
 /**
- * Pure. The verdict for one required name.
+ * Pure. Splits a required name's carriers into the ones that DECIDE the
+ * verdict and the ones a later run from the same app replaced.
+ *
+ * One carrier survives per `(kind, app)` group: the latest by `startedAt`,
+ * with `id` as the tiebreaker (GitHub's ids are monotonic, so this is a real
+ * ordering even when two runs share a second, and a carrier with no
+ * `startedAt` at all still orders rather than winning by accident).
+ *
+ * Grouped by APP and not by check suite, which is the distinction that makes
+ * this correct: two check runs of one name from one app normally come from
+ * two DIFFERENT suites — that is what a re-run produces — and the Checks
+ * API's default `filter=latest` therefore returns both. Deduplicating by
+ * suite would keep both and change nothing; deduplicating by app is what
+ * matches GitHub.
+ */
+export function splitBySupersession(carriers: Carrier[]): { counted: Carrier[]; superseded: Carrier[] } {
+  const latest = new Map<string, Carrier>()
+  for (const c of carriers) {
+    const key = `${c.kind}\u0000${c.app}`
+    const held = latest.get(key)
+    if (held === undefined || c.startedAt > held.startedAt || (c.startedAt === held.startedAt && c.id > held.id)) {
+      latest.set(key, c)
+    }
+  }
+  const counted = new Set(latest.values())
+  return {
+    counted: carriers.filter((c) => counted.has(c)),
+    superseded: carriers.filter((c) => !counted.has(c)),
+  }
+}
+
+/**
+ * Pure. The verdict for one required name, from the carriers that actually
+ * count (see `splitBySupersession`).
  *
  * With carriers: the WORST of them, FAIL beating PENDING beating PASS. That
- * ordering is the whole point of collecting every carrier — a green
+ * ordering is the whole point of collecting every app's carrier — a green
  * `github-actions` rollup standing beside a red `github-advanced-security`
  * gate under the same required name must read FAIL, which is exactly how
  * GitHub will treat it.
@@ -315,13 +390,21 @@ export function diagnoseHead(input: DiagnoseHeadInput): HeadDiagnosis {
   const runsInFlight = input.runs.filter((r) => r.status !== SETTLED_RUN_STATUS).length
 
   const contexts = input.requiredContexts.map((name): RequiredContextDiagnosis => {
-    const carriers = [
+    const all = [
       ...input.checkRuns.filter((r) => r.name === name).map(carrierFromCheckRun),
       ...input.statuses.filter((s) => s.context === name).map(carrierFromCommitStatus),
     ]
-    const verdict = verdictFor(carriers, runsInFlight)
-    const neutralOnly = verdict === 'PASS' && carriers.some((c) => c.unjudged) && carriers.every((c) => c.unjudged)
-    return { name, verdict, carriers, neutralOnly }
+    const { counted, superseded } = splitBySupersession(all)
+    const verdict = verdictFor(counted, runsInFlight)
+    // `neutralOnly` is judged on the counted set too: a superseded neutral
+    // that a real `success` replaced says nothing about the live gate.
+    const neutralOnly = verdict === 'PASS' && counted.every((c) => c.unjudged)
+    return {
+      name,
+      verdict,
+      carriers: [...counted, ...superseded.map((c) => ({ ...c, superseded: true }))],
+      neutralOnly,
+    }
   })
 
   const droppedJobRuns = input.runs
@@ -349,9 +432,19 @@ export function diagnoseHead(input: DiagnoseHeadInput): HeadDiagnosis {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/**
+ * Counted carriers joined by `+`; superseded ones listed after in
+ * parentheses. Printing them matters: a red conclusion dropped from the
+ * verdict with no trace would be this module's own silently-absent signal,
+ * and an operator looking at a PR that was red ten minutes ago needs to see
+ * that the tool saw it and why it stopped counting.
+ */
 function renderCarriers(carriers: Carrier[]): string {
-  if (carriers.length === 0) return 'no carrier on this head'
-  return carriers.map((c) => `${c.app}=${c.raw}`).join(' + ')
+  const counted = carriers.filter((c) => c.superseded !== true)
+  const superseded = carriers.filter((c) => c.superseded === true)
+  const head = counted.length === 0 ? 'no carrier on this head' : counted.map((c) => `${c.app}=${c.raw}`).join(' + ')
+  if (superseded.length === 0) return head
+  return `${head}  (superseded by a later run of the same app: ${superseded.map((c) => `${c.app}=${c.raw}`).join(', ')})`
 }
 
 /**
@@ -369,10 +462,21 @@ function isNotable(result: PrDiagnosis): boolean {
   return d.absentSettled.length > 0 || d.droppedJobRuns.length > 0 || d.contexts.some((c) => c.neutralOnly)
 }
 
-/** Human form. One block per PR; silent-but-for-a-header when nothing is wrong. */
-export function renderMissingChecks(results: PrDiagnosis[]): string {
+/**
+ * Human form. One block per PR; silent-but-for-a-header when nothing is
+ * wrong.
+ *
+ * `showAll` prints every inspected head whether notable or not. It is set
+ * when the operator named ONE PR on the command line, because then the
+ * question is "what is the state of this PR" and the table is the answer —
+ * including for a required context that is merely red, which is this
+ * module's verdict to show but GitHub's job to report. Quiet-by-default is
+ * for the sweep across every open PR, where printing forty healthy heads
+ * would bury the one that matters.
+ */
+export function renderMissingChecks(results: PrDiagnosis[], showAll = false): string {
   const lines: string[] = []
-  const flagged = results.filter(isNotable)
+  const flagged = showAll ? results : results.filter(isNotable)
 
   if (flagged.length === 0) {
     lines.push(`no required context is absent-and-settled on ${results.length} head(s) — nothing blocked by #1662`)
@@ -530,8 +634,8 @@ export async function diagnosePrsWith(deps: MissingChecksDeps, prNumber?: number
   return out
 }
 
-interface GhCheckRunsPage { check_runs?: { name?: string; status?: string; conclusion?: string | null; app?: { slug?: string } | null }[] }
-interface GhStatusResponse { statuses?: { context?: string; state?: string }[] }
+interface GhCheckRunsPage { check_runs?: { id?: number; name?: string; status?: string; conclusion?: string | null; app?: { slug?: string } | null; started_at?: string | null }[] }
+interface GhStatusResponse { statuses?: { context?: string; state?: string; updated_at?: string | null }[] }
 interface GhRunsPage { workflow_runs?: { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; run_attempt?: number }[] }
 interface GhJobsPage { jobs?: { name?: string; conclusion?: string | null }[] }
 
@@ -562,17 +666,27 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       return Array.isArray(pages) ? pages.flat() : pages
     },
     fetchCheckRuns: async (sha) => {
+      // `filter` is left at its default (`latest`), NOT set to `all`.
+      // `latest` is per name per check SUITE, so it still hands back both
+      // carriers when a re-run made a second suite — which is the case
+      // `splitBySupersession` exists for, and the reason the over-report it
+      // fixes was reachable at all. `all` would additionally return every
+      // historical attempt within a suite, which nothing here needs: those
+      // are superseded by definition, and fetching them only widens the
+      // payload and the chance of a mis-ordering.
       const pages = await pagedJson<GhCheckRunsPage>(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`)
       return pages.flatMap((p) => p.check_runs ?? []).map((r) => ({
+        id: r.id ?? 0,
         name: r.name ?? '',
         status: r.status ?? '',
         conclusion: r.conclusion ?? null,
         appSlug: r.app?.slug ?? '(no app)',
+        startedAt: r.started_at ?? '',
       }))
     },
     fetchCommitStatuses: async (sha) => {
       const pages = await pagedJson<GhStatusResponse>(`repos/${REPO}/commits/${sha}/status?per_page=100`)
-      return pages.flatMap((p) => p.statuses ?? []).map((s) => ({ context: s.context ?? '', state: s.state ?? '' }))
+      return pages.flatMap((p) => p.statuses ?? []).map((s) => ({ context: s.context ?? '', state: s.state ?? '', updatedAt: s.updated_at ?? '' }))
     },
     fetchWorkflowRuns: async (sha) => {
       const pages = await pagedJson<GhRunsPage>(`repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100`)
@@ -621,7 +735,7 @@ export async function runMissingChecks(args: string[]): Promise<number> {
   }
 
   const porcelain = args.includes('--porcelain')
-  const text = porcelain ? renderMissingChecksPorcelain(results) : renderMissingChecks(results)
+  const text = porcelain ? renderMissingChecksPorcelain(results) : renderMissingChecks(results, prArg !== undefined)
   if (text.length > 0) process.stdout.write(text + '\n')
 
   if (results.some((r) => !r.ok)) return 2

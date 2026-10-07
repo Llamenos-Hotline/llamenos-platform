@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  diagnoseHead, diagnosePrsWith, verdictFor, isDroppedJobRun,
+  diagnoseHead, diagnosePrsWith, verdictFor, isDroppedJobRun, splitBySupersession,
   carrierFromCheckRun, carrierFromCommitStatus,
   renderMissingChecks, renderMissingChecksPorcelain,
   type HeadCheckRun, type HeadCommitStatus, type HeadWorkflowRun, type HeadRunJob,
@@ -31,14 +31,30 @@ import {
  *                                and green, nothing in flight. The detector
  *                                must be SILENT here — a detector that fires
  *                                on everything reports nothing.
- *   codeql-neutral-only          PR #1653. `CodeQL` carried only by a
- *                                `neutral` conclusion — GitHub accepts it, so
- *                                the verdict is PASS, but it judged nothing
- *                                and must say so.
+ *   codeql-neutral-only          PR #1250 (a Dependabot PR). `CodeQL` carried
+ *                                ONLY by GHAS's `neutral` — no
+ *                                `github-actions` rollup on that head at all.
+ *                                GitHub accepts `neutral`, so the verdict is
+ *                                PASS, but nothing judged the code and the
+ *                                report must say so. This is exactly the case
+ *                                `codeql.yml`'s header warns about ("N
+ *                                configurations not found" on every
+ *                                Dependabot PR under default setup).
  *   codeql-failure-beside-neutral PR #1538. `CodeQL` carried by a `failure`
- *                                AND a `neutral` under the same required
- *                                name. A red carrier must not hide behind a
- *                                green one.
+ *                                (`github-actions`, 21:35:09Z) AND a
+ *                                `neutral` (`github-advanced-security`,
+ *                                21:09:59Z) — a genuine CROSS-app
+ *                                disagreement. A red carrier must not hide
+ *                                behind a green one from another app, and
+ *                                being the earlier of the two must not
+ *                                excuse it. GitHub: BLOCKED.
+ *   same-app-rerun-supersedes    PR #1671. `fleet/verify` carried `cancelled`
+ *                                (19:32:57Z) and `success` (19:33:43Z), both
+ *                                `github-actions`. GitHub reads the PR CLEAN,
+ *                                so the later run supersedes the earlier and
+ *                                the tool must agree. This is the fixture for
+ *                                the over-report: the first draft scored it
+ *                                FAIL.
  *
  * `rules-main.json` is the live `main` ruleset body, so the required set the
  * tests diff against is GitHub's, not a hand-written list.
@@ -139,13 +155,157 @@ describe('#1662 reproduction: a required context absent on a settled head', () =
     expect(text).toContain('gh run rerun 37655183555')
   })
 
-  it('does NOT hide the red fleet/review behind the green one on the same head', () => {
-    // The same fixture carries fleet/review twice — `success` and `failure`.
-    // Whichever the API listed first, the verdict is FAIL.
+  it('scores fleet/review PASS on that head — the red carrier is the SAME app, superseded by a later re-run', () => {
+    // The fixture carries fleet/review twice from `github-actions`: `failure`
+    // started 16:50:29Z, `success` started 18:37:38Z. GitHub counts the
+    // later one, so this context is NOT what blocks #1642 — the two absent
+    // contexts are. An earlier draft scored this FAIL and would have sent an
+    // operator hunting a review failure that no longer existed.
     const d = diagnose('absent-ci-status-and-codeql')
-    expect(verdictOf(d, 'fleet/review')).toBe('FAIL')
+    expect(verdictOf(d, 'fleet/review')).toBe('PASS')
+
     const carriers = d.contexts.find((c) => c.name === 'fleet/review')?.carriers ?? []
-    expect(carriers.map((c) => c.raw).sort()).toEqual(['failure', 'success'])
+    const counted = carriers.filter((c) => c.superseded !== true)
+    expect(counted.map((c) => c.raw)).toEqual(['success'])
+
+    // The discarded failure is still REPORTED. Dropping a red signal without
+    // a trace is the failure class this module exists to correct.
+    const dropped = carriers.filter((c) => c.superseded === true)
+    expect(dropped.map((c) => c.raw)).toEqual(['failure'])
+    const text = renderMissingChecks([
+      { ok: true, pr: 1642, headRefName: 'x', mergeStateStatus: 'BLOCKED', diagnosis: d },
+    ])
+    expect(text).toContain('superseded by a later run of the same app: github-actions=failure')
+  })
+})
+
+describe('worst ACROSS apps, latest WITHIN an app', () => {
+  it('reads PR #1671 as clean: a cancelled fleet/verify superseded by a later success from the same app', () => {
+    // GitHub reads this PR `CLEAN`; the tool must agree or it cries wolf on
+    // every PR that has ever had a run re-run or cancelled.
+    const f = fixture('same-app-rerun-supersedes')
+    expect(f.pr.mergeStateStatus).toBe('CLEAN')
+
+    const d = diagnose('same-app-rerun-supersedes')
+    expect(verdictOf(d, 'fleet/verify')).toBe('PASS')
+    expect(d.absentSettled).toEqual([])
+    expect(d.contexts.map((c) => c.verdict)).toEqual(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])
+  })
+
+  it('is silent on #1671 in a sweep and exits with an empty porcelain body', async () => {
+    const results = await diagnosePrsWith(depsFor(['same-app-rerun-supersedes']))
+    expect(renderMissingChecksPorcelain(results)).toBe('')
+    expect(renderMissingChecks(results)).toContain('nothing blocked by #1662')
+  })
+
+  it('but shows the full table when ONE PR was named — a merely-red context included', async () => {
+    const results = await diagnosePrsWith(depsFor(['codeql-failure-beside-neutral']))
+    const text = renderMissingChecks(results, true)
+    expect(text).toContain('FAIL')
+    expect(text).toContain('github-actions=failure + github-advanced-security=neutral')
+    // ...and that same PR is NOT printed in a sweep: a red required check is
+    // this module's verdict to compute but GitHub's job to surface.
+    expect(renderMissingChecks(results)).toContain('nothing blocked by #1662')
+  })
+
+  it('still FAILS a genuine cross-app disagreement — and the red app being the EARLIER one does not excuse it', () => {
+    const f = fixture('codeql-failure-beside-neutral')
+    expect(f.pr.mergeStateStatus).toBe('BLOCKED')
+
+    const codeql = diagnose('codeql-failure-beside-neutral').contexts.find((c) => c.name === 'CodeQL')
+    expect(codeql?.verdict).toBe('FAIL')
+    // Both survive supersession: they are different apps, so neither can
+    // replace the other however the timestamps fall. The `failure` here is
+    // in fact the LATER of the two, but a per-name "latest wins" rule would
+    // have been just as wrong with them the other way round.
+    expect(codeql?.carriers.filter((c) => c.superseded === true)).toEqual([])
+    expect(codeql?.carriers.map((c) => `${c.app}=${c.raw}`).sort())
+      .toEqual(['github-actions=failure', 'github-advanced-security=neutral'])
+  })
+
+  it('groups by app, not by check suite — two suites of one app collapse to the later', () => {
+    const at = (id: number, startedAt: string, conclusion: string, appSlug = 'github-actions') =>
+      carrierFromCheckRun({ id, name: 'n', status: 'completed', conclusion, appSlug, startedAt })
+
+    const { counted, superseded } = splitBySupersession([
+      at(1, '2026-10-07T19:32:57Z', 'cancelled'),
+      at(2, '2026-10-07T19:33:43Z', 'success'),
+    ])
+    expect(counted.map((c) => c.raw)).toEqual(['success'])
+    expect(superseded.map((c) => c.raw)).toEqual(['cancelled'])
+  })
+
+  it('keeps one carrier per app when several apps are present', () => {
+    const at = (id: number, startedAt: string, conclusion: string, appSlug: string) =>
+      carrierFromCheckRun({ id, name: 'n', status: 'completed', conclusion, appSlug, startedAt })
+
+    const { counted } = splitBySupersession([
+      at(1, '2026-10-07T01:00:00Z', 'failure', 'github-actions'),
+      at(2, '2026-10-07T02:00:00Z', 'success', 'github-actions'),
+      at(3, '2026-10-07T00:30:00Z', 'failure', 'github-advanced-security'),
+    ])
+    expect(counted.map((c) => `${c.app}=${c.raw}`))
+      .toEqual(['github-actions=success', 'github-advanced-security=failure'])
+    expect(verdictFor(counted, 0)).toBe('FAIL')
+  })
+
+  it('breaks a startedAt tie by id, and orders a carrier with no startedAt last', () => {
+    const at = (id: number, startedAt: string, conclusion: string) =>
+      carrierFromCheckRun({ id, name: 'n', status: 'completed', conclusion, appSlug: 'github-actions', startedAt })
+
+    expect(splitBySupersession([
+      at(1, '2026-10-07T19:00:00Z', 'failure'),
+      at(2, '2026-10-07T19:00:00Z', 'success'),
+    ]).counted.map((c) => c.raw)).toEqual(['success'])
+
+    // A missing timestamp sorts first, so it loses to any real one rather
+    // than winning by accident and burying a live conclusion.
+    expect(splitBySupersession([
+      at(9, '', 'success'),
+      at(1, '2026-10-07T19:00:00Z', 'failure'),
+    ]).counted.map((c) => c.raw)).toEqual(['failure'])
+  })
+
+  it('a later PENDING re-run supersedes an older conclusion, red or green', () => {
+    const at = (id: number, startedAt: string, status: string, conclusion: string | null) =>
+      carrierFromCheckRun({ id, name: 'n', status, conclusion, appSlug: 'github-actions', startedAt })
+
+    for (const older of ['failure', 'success']) {
+      const { counted } = splitBySupersession([
+        at(1, '2026-10-07T19:00:00Z', 'completed', older),
+        at(2, '2026-10-07T19:30:00Z', 'in_progress', null),
+      ])
+      expect(verdictFor(counted, 1), older).toBe('PENDING')
+    }
+  })
+
+  it('never lets a check-run supersede a commit status of the same name', () => {
+    // Different kinds are different carriers to GitHub: a required name
+    // shared by a check-run and a status needs BOTH to pass. Grouping on
+    // `kind` as well as `app` is what keeps that true.
+    const d = diagnoseHead({
+      sha: 'sha', baseRef: 'main', requiredContexts: ['shared'],
+      checkRuns: [{ id: 1, name: 'shared', status: 'completed', conclusion: 'success', appSlug: '(no app)', startedAt: '2026-10-07T20:00:00Z' }],
+      statuses: [{ context: 'shared', state: 'failure', updatedAt: '2026-10-07T19:00:00Z' }],
+      runs: [], jobsByRun: new Map(),
+    })
+    expect(verdictOf(d, 'shared')).toBe('FAIL')
+    expect(d.contexts[0]?.carriers.filter((c) => c.superseded === true)).toEqual([])
+  })
+
+  it('a superseded neutral does not make a genuinely-judged PASS read neutral-only', () => {
+    const at = (id: number, startedAt: string, conclusion: string) =>
+      carrierFromCheckRun({ id, name: 'CodeQL', status: 'completed', conclusion, appSlug: 'github-advanced-security', startedAt })
+    const d = diagnoseHead({
+      sha: 'sha', baseRef: 'main', requiredContexts: ['CodeQL'],
+      checkRuns: [
+        { ...at(1, '2026-10-07T19:00:00Z', 'neutral'), name: 'CodeQL' },
+        { ...at(2, '2026-10-07T20:00:00Z', 'success'), name: 'CodeQL' },
+      ].map((c) => ({ id: c.id, name: 'CodeQL', status: 'completed', conclusion: c.raw, appSlug: c.app, startedAt: c.startedAt })),
+      statuses: [], runs: [], jobsByRun: new Map(),
+    })
+    expect(verdictOf(d, 'CodeQL')).toBe('PASS')
+    expect(d.contexts[0]?.neutralOnly).toBe(false)
   })
 })
 
@@ -179,9 +339,10 @@ describe('a required name carried by more than one app', () => {
     const codeql = d.contexts.find((c) => c.name === 'CodeQL')
     expect(codeql?.verdict).toBe('PASS')
     expect(codeql?.neutralOnly).toBe(true)
+    expect(codeql?.carriers.map((c) => `${c.app}=${c.raw}`)).toEqual(['github-advanced-security=neutral'])
     expect(codeql?.carriers.every((c) => c.unjudged)).toBe(true)
     expect(renderMissingChecks([
-      { ok: true, pr: 1653, headRefName: 'x', mergeStateStatus: 'BLOCKED', diagnosis: d },
+      { ok: true, pr: 1250, headRefName: 'x', mergeStateStatus: 'BLOCKED', diagnosis: d },
     ])).toContain('it judged nothing')
   })
 
@@ -229,7 +390,7 @@ describe('absent while something can still post is not a defect', () => {
   it('a present-but-still-running carrier is PENDING, never ABSENT', () => {
     const d = diagnoseHead({
       sha: 'sha', baseRef: 'main', requiredContexts: ['ci-status'],
-      checkRuns: [{ name: 'ci-status', status: 'in_progress', conclusion: null, appSlug: 'github-actions' }],
+      checkRuns: [{ id: 1, name: 'ci-status', status: 'in_progress', conclusion: null, appSlug: 'github-actions', startedAt: '2026-10-07T10:00:00Z' }],
       statuses: [], runs: [DONE], jobsByRun: new Map(),
     })
     expect(verdictOf(d, 'ci-status')).toBe('PENDING')
@@ -251,7 +412,7 @@ describe('a required name satisfied by a commit status rather than a check-run',
   it('needs BOTH to pass when a check-run and a status share the required name', () => {
     const d = diagnoseHead({
       sha: 'sha', baseRef: 'main', requiredContexts: ['shared'],
-      checkRuns: [{ name: 'shared', status: 'completed', conclusion: 'success', appSlug: 'github-actions' }],
+      checkRuns: [{ id: 1, name: 'shared', status: 'completed', conclusion: 'success', appSlug: 'github-actions', startedAt: '2026-10-07T10:00:00Z' }],
       statuses: [{ context: 'shared', state: 'failure' }],
       runs: [], jobsByRun: new Map(),
     })
@@ -290,7 +451,7 @@ describe('the dropped-job fingerprint', () => {
 
 describe('carrier normalisation agrees with GitHub about what satisfies a required check', () => {
   const cr = (status: string, conclusion: string | null): Carrier =>
-    carrierFromCheckRun({ name: 'n', status, conclusion, appSlug: 'a' })
+    carrierFromCheckRun({ id: 1, name: 'n', status, conclusion, appSlug: 'a', startedAt: '2026-10-07T10:00:00Z' })
 
   it('success, neutral and skipped pass; neutral and skipped are flagged unjudged', () => {
     expect(cr('completed', 'success')).toMatchObject({ state: 'PASS', unjudged: false })
