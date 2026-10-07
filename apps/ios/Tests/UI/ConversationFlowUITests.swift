@@ -62,11 +62,15 @@ final class ConversationFlowUITests: XCTestCase {
     func testEmptyStateShowsMessage() {
         navigateToConversationsTab()
 
-        let emptyState = find("conversations-empty-state")
-        if emptyState.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Empty state is displayed when no conversations exist")
-        }
-        // If conversations exist, that's fine too
+        // This class launches with `--test-authenticated` only — no hub URL is
+        // configured, so `ConversationsViewModel.loadConversations()` hits
+        // `APIError.noBaseURL` and deliberately renders the empty state rather
+        // than an error (see ConversationsViewModel.swift). That makes this
+        // deterministic, not merely likely.
+        XCTAssertTrue(
+            find("conversations-empty-state").waitForExistence(timeout: 10),
+            "Empty state should display the 'messages will appear here' copy when no hub is configured"
+        )
     }
 
     // MARK: - Filter Menu
@@ -155,20 +159,29 @@ final class ConversationFlowUITests: XCTestCase {
 
     // MARK: - Channel Header
 
-    func testChannelHeaderVisible() {
+    func testChannelHeaderVisible() throws {
         navigateToConversationsTab()
 
         let conversationsList = find("conversations-list")
-        guard conversationsList.waitForExistence(timeout: 10) else { return }
+        guard conversationsList.waitForExistence(timeout: 10) else {
+            // This class launches with `--test-authenticated` only (no hub
+            // configured), so conversations always render the empty state —
+            // there is never a conversation to open. Report that explicitly
+            // instead of silently passing with no assertion ever evaluated.
+            throw XCTSkip("No hub is configured in this test class, so no conversation ever exists to open")
+        }
 
         let cells = app.cells
-        guard cells.count > 0 else { return }
+        guard cells.count > 0 else {
+            throw XCTSkip("Conversations list rendered with no rows to tap")
+        }
         cells.firstMatch.tap()
 
         let channelHeader = find("conversation-channel-header")
-        if channelHeader.waitForExistence(timeout: 5) {
-            XCTAssertTrue(true, "Channel header is visible in conversation detail")
-        }
+        XCTAssertTrue(
+            channelHeader.waitForExistence(timeout: 5),
+            "Channel header should be visible in conversation detail"
+        )
     }
 
     // MARK: - Navigation Helpers

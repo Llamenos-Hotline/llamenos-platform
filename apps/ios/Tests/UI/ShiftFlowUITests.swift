@@ -70,7 +70,7 @@ final class ShiftFlowUITests: BaseUITest {
         }
     }
 
-    func testClockOutShowsConfirmation() {
+    func testClockOutShowsConfirmation() throws {
         given("I am authenticated") {
             // Already launched
         }
@@ -78,39 +78,35 @@ final class ShiftFlowUITests: BaseUITest {
             navigateToShifts()
         }
         then("if on shift, clock out should show confirmation") {
-            // If we're on shift, the clock out button exists
-            let clockOutButton = find("clock-out-button")
-            guard clockOutButton.waitForExistence(timeout: 5) else {
-                // Not on shift — try clocking in first
-                let clockInButton = find("clock-in-button")
-                guard clockInButton.waitForExistence(timeout: 5) else { return }
-                clockInButton.tap()
-
-                // Wait for clock out button to appear (shift started)
-                guard find("clock-out-button").waitForExistence(timeout: 10) else { return }
-                find("clock-out-button").tap()
-
-                // Confirmation dialog should appear
-                let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
-                if alertExists {
-                    // Cancel to not actually clock out
-                    let cancelButton = app.alerts.firstMatch.buttons.firstMatch
-                    cancelButton.tap()
-                }
-                return
+            // This class launches with `launchAuthenticated()` — no hub is
+            // configured, so ShiftsViewModel.fetchShifts() treats the missing
+            // hub as "show an empty schedule" (see ShiftsViewModel.swift):
+            // shiftDays stays empty and ShiftsView renders only
+            // "shifts-empty-state". Neither clock button appears without a
+            // live hub, so report that explicitly instead of silently
+            // passing with no assertion ever evaluated.
+            guard find("clock-in-button").waitForExistence(timeout: 5) || find("clock-out-button").waitForExistence(timeout: 2) else {
+                throw XCTSkip("No hub is configured in this test class; the clock button never renders")
             }
 
-            clockOutButton.tap()
-
-            // Confirmation dialog should appear
-            let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
-            if alertExists {
-                XCTAssertTrue(true, "Clock out confirmation dialog appeared")
-                // Cancel
-                let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
-                if cancelButton.exists {
-                    cancelButton.tap()
+            if find("clock-in-button").exists {
+                find("clock-in-button").tap()
+                guard find("clock-out-button").waitForExistence(timeout: 10) else {
+                    throw XCTSkip("Clocking in did not transition to an on-shift state")
                 }
+            }
+
+            find("clock-out-button").tap()
+
+            XCTAssertTrue(
+                app.alerts.firstMatch.waitForExistence(timeout: 5),
+                "Clock out confirmation dialog should appear"
+            )
+
+            // Cancel to not actually clock out
+            let cancelButton = app.alerts.firstMatch.buttons.firstMatch
+            if cancelButton.exists {
+                cancelButton.tap()
             }
         }
     }
@@ -135,7 +131,7 @@ final class ShiftFlowUITests: BaseUITest {
         }
     }
 
-    func testTodayBadgeExists() {
+    func testTodayBadgeExists() throws {
         given("I am authenticated") {
             // Already launched
         }
@@ -143,16 +139,18 @@ final class ShiftFlowUITests: BaseUITest {
             navigateToShifts()
         }
         then("today's section should exist if schedule is showing") {
-            // If the weekly schedule is showing, today's day section should be highlighted
-            let emptyState = find("shifts-empty-state")
-            guard !emptyState.waitForExistence(timeout: 3) else { return }
+            // This class launches with no hub configured, so the weekly
+            // schedule never renders (see testClockOutShowsConfirmation) —
+            // only "shifts-empty-state" does. Report that explicitly.
+            guard !find("shifts-empty-state").waitForExistence(timeout: 3) else {
+                throw XCTSkip("No hub is configured in this test class; the weekly schedule never renders")
+            }
 
             let today = Calendar.current.component(.weekday, from: Date()) - 1  // 0-indexed
-            let todaySection = find("shift-day-\(today)")
-
-            if todaySection.waitForExistence(timeout: 3) {
-                XCTAssertTrue(true, "Today's day section exists in the schedule")
-            }
+            XCTAssertTrue(
+                find("shift-day-\(today)").waitForExistence(timeout: 3),
+                "Today's day section should exist in the schedule"
+            )
         }
     }
 
@@ -165,15 +163,16 @@ final class ShiftFlowUITests: BaseUITest {
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("an error or empty state should display without API") {
-            // If there's an error (e.g., hub not configured), it should display
-            let found = anyElementExists([
-                "shifts-error", "shifts-empty-state",
-            ])
-            if found {
-                XCTAssertTrue(true, "Error or empty state displayed when hub connection fails")
-            }
-            // If neither, that's fine — hub might be configured
+        then("the empty state should display without a configured hub") {
+            // ShiftsViewModel.fetchShifts() treats a missing hub URL as "show
+            // an empty schedule", not an error (see ShiftsViewModel.swift) —
+            // this class's `launchAuthenticated()` never configures a hub, so
+            // "shifts-empty-state" is the deterministic outcome here, not
+            // "shifts-error".
+            XCTAssertTrue(
+                find("shifts-empty-state").waitForExistence(timeout: 10),
+                "Empty state should display when no hub is configured"
+            )
         }
     }
 

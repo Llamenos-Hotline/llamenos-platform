@@ -108,10 +108,8 @@ final class HubManagementUITests: BaseUITest {
         }
         then("the create hub button should be visible") {
             let createButton = find("hubs-create-btn")
-            if createButton.waitForExistence(timeout: 5) {
-                XCTAssertTrue(createButton.exists, "Create Hub button should be visible for admins")
-                XCTAssertTrue(createButton.isEnabled, "Create Hub button should be enabled")
-            }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Hub button should be visible for admins")
+            XCTAssertTrue(createButton.isEnabled, "Create Hub button should be enabled")
         }
     }
 
@@ -125,32 +123,20 @@ final class HubManagementUITests: BaseUITest {
         when("I navigate to Hubs and tap Create Hub") {
             navigateToHubs()
             let createButton = find("hubs-create-btn")
-            if createButton.waitForExistence(timeout: 5) {
-                createButton.tap()
-            }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Hub button should be visible for admins")
+            createButton.tap()
         }
         then("the hub creation form should appear with fields") {
-            let nameField = find("hub-name-field")
-            let slugField = find("hub-slug-field")
-
-            if nameField.waitForExistence(timeout: 5) {
-                XCTAssertTrue(nameField.exists, "Hub name field should be visible")
-
-                if slugField.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(slugField.exists, "Hub slug field should be visible")
-                }
-
-                let submitButton = find("hub-create-submit")
-                let cancelButton = find("hub-create-cancel")
-                XCTAssertTrue(
-                    submitButton.waitForExistence(timeout: 3),
-                    "Hub create submit button should exist"
-                )
-                XCTAssertTrue(
-                    cancelButton.waitForExistence(timeout: 3),
-                    "Hub create cancel button should exist"
-                )
-            }
+            XCTAssertTrue(find("hub-name-field").waitForExistence(timeout: 5), "Hub name field should be visible")
+            XCTAssertTrue(find("hub-slug-field").waitForExistence(timeout: 3), "Hub slug field should be visible")
+            XCTAssertTrue(
+                find("hub-create-submit").waitForExistence(timeout: 3),
+                "Hub create submit button should exist"
+            )
+            XCTAssertTrue(
+                find("hub-create-cancel").waitForExistence(timeout: 3),
+                "Hub create cancel button should exist"
+            )
         }
     }
 
@@ -187,7 +173,13 @@ final class HubManagementUITests: BaseUITest {
     // MARK: - Scenario: Hub URL displayed in settings
 
     /// Verifies the current hub URL is displayed in account settings.
-    func testHubUrlDisplayedInSettings() {
+    ///
+    /// SettingsView only renders "settings-hub-url" `if let hubURL =
+    /// appState.authService.hubURL` — `launchAuthenticated()` never
+    /// configures a hub URL, so the row is guaranteed absent here.
+    /// `APIConnectedUITests.testSettingsShowsHubURL` covers the
+    /// hub-configured case against a real connection.
+    func testHubUrlDisplayedInSettings() throws {
         given("I am authenticated") {
             launchAuthenticated()
         }
@@ -195,10 +187,7 @@ final class HubManagementUITests: BaseUITest {
             navigateToSettings()
         }
         then("I should see the hub URL") {
-            let hubUrl = find("settings-hub-url")
-            if hubUrl.waitForExistence(timeout: 5) {
-                XCTAssertTrue(hubUrl.exists, "Hub URL should be displayed in settings")
-            }
+            throw XCTSkip("This test class launches with no hub configured; settings-hub-url never renders")
         }
     }
 }

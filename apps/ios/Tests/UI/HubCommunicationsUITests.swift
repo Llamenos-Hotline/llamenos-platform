@@ -390,24 +390,27 @@ final class HubCommunicationsUITests: BaseUITest {
         }
     }
 
-    func testSettingsListShowsUsageLink() {
+    func testSettingsListShowsUsageLink() throws {
         given("I am logged in as an admin") {
             launchAsAdminWithAPI()
         }
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
         }
-        then("the usage link should exist (when usage data is available)") {
+        then("the usage link should exist when usage data is available") {
             let settingsList = find("hub-comms-settings-list")
             guard settingsList.waitForExistence(timeout: 10) else {
-                return
+                throw XCTSkip("No provider is configured in this test environment; the settings list never renders")
             }
 
+            // Usage link only appears when usage data is non-nil — genuinely
+            // conditional even with a provider configured, since usage data
+            // requires actual call/message volume this suite does not generate.
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
-            // Usage link only appears when usage data is non-nil
-            if usageLink.exists {
-                XCTAssertTrue(true, "Usage link is visible when usage data is available")
+            guard usageLink.exists else {
+                throw XCTSkip("No usage data is available in this test environment; hub-comms-usage-link never renders")
             }
+            XCTAssertTrue(usageLink.exists, "Usage link should be visible when usage data is available")
         }
     }
 
@@ -444,7 +447,7 @@ final class HubCommunicationsUITests: BaseUITest {
         }
     }
 
-    func testUsageNavigationOpensUsageView() {
+    func testUsageNavigationOpensUsageView() throws {
         given("I am logged in as admin with provider configured") {
             launchAsAdminWithAPI()
         }
@@ -452,21 +455,20 @@ final class HubCommunicationsUITests: BaseUITest {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
             guard settingsList.waitForExistence(timeout: 10) else {
-                return
+                throw XCTSkip("No provider is configured in this test environment; the settings list never renders")
             }
 
             let usageLink = scrollToFind("hub-comms-usage-link", maxSwipes: 3)
             guard usageLink.exists else {
-                // No usage data available -- skip
-                return
+                throw XCTSkip("No usage data is available in this test environment; hub-comms-usage-link never renders")
             }
             usageLink.tap()
         }
         then("the usage view should appear") {
-            let usageView = find("hub-usage-view")
-            if usageView.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Usage view rendered successfully")
-            }
+            XCTAssertTrue(
+                find("hub-usage-view").waitForExistence(timeout: 5),
+                "Usage view should appear after tapping the usage link"
+            )
         }
     }
 

@@ -83,12 +83,14 @@ final class DashboardUITests: BaseUITest {
         }
         then("the shift status card should show a status label") {
             let shiftCard = find("shift-status-card")
-            guard shiftCard.waitForExistence(timeout: 10) else {
-                XCTFail("Shift status card should exist")
-                return
-            }
-            // Should have some text indicating shift state
-            XCTAssertTrue(true, "Shift status card is displayed")
+            XCTAssertTrue(shiftCard.waitForExistence(timeout: 10), "Shift status card should exist")
+            // DashboardView marks the card `.accessibilityElement(children: .contain)`,
+            // which merges the shiftStatusBadge text into the card's own label — a
+            // non-empty label is the real signal that a status badge rendered.
+            XCTAssertFalse(
+                shiftCard.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                "Shift status card should display a non-empty status label"
+            )
         }
     }
 

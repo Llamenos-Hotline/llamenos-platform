@@ -79,10 +79,13 @@ final class TriageUITests: BaseUITest {
             navigateToTriage()
         }
         then("the filter button should be visible") {
-            let filterButton = find("triage-filter-button")
-            if filterButton.waitForExistence(timeout: 5) {
-                XCTAssertTrue(filterButton.exists, "Triage filter button should be visible")
-            }
+            // The filter menu is attached to TriageListView's `.toolbar`,
+            // which sits outside the loading/error/empty/list conditional —
+            // it renders on every state, including an empty queue.
+            XCTAssertTrue(
+                find("triage-filter-button").waitForExistence(timeout: 5),
+                "Triage filter button should be visible"
+            )
         }
     }
 
@@ -90,108 +93,101 @@ final class TriageUITests: BaseUITest {
 
     /// Verifies tapping a triage report row opens the detail view
     /// with title, status, and metadata.
-    func testTriageDetailShowsInfo() {
+    func testTriageDetailShowsInfo() throws {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
         when("I navigate to triage and tap a report") {
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
+            // This suite has no way to provision a triage-eligible report
+            // (there is no `/api/test-simulate/...` endpoint for reports, the
+            // way there is for calls and messages), so an empty queue is
+            // genuinely possible here — report that explicitly rather than
+            // silently passing with no assertion ever evaluated.
+            guard find("triage-list").waitForExistence(timeout: 10) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; the triage list never renders")
+            }
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            guard firstRow.waitForExistence(timeout: 5) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; there is no row to tap")
+            }
             firstRow.tap()
         }
         then("I should see the triage detail view with report info") {
-            let found = anyElementExists([
-                "triage-detail-view",
-                "triage-report-title",
-                "triage-report-status",
-            ], timeout: 5)
-
-            if found {
-                let title = find("triage-report-title")
-                if title.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(title.exists, "Triage detail should show report title")
-                }
-
-                let status = find("triage-report-status")
-                if status.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(status.exists, "Triage detail should show report status")
-                }
-
-                let metadata = find("triage-metadata")
-                if metadata.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(metadata.exists, "Triage detail should show metadata section")
-                }
-            }
-            // If no triage reports exist, cannot test detail — pass gracefully
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5), "Triage detail view should open")
+            XCTAssertTrue(find("triage-report-title").waitForExistence(timeout: 3), "Triage detail should show report title")
+            XCTAssertTrue(find("triage-report-status").waitForExistence(timeout: 3), "Triage detail should show report status")
+            XCTAssertTrue(find("triage-metadata").waitForExistence(timeout: 3), "Triage detail should show metadata section")
         }
     }
 
     // MARK: - Scenario: Convert to case button visible
 
     /// Verifies the "Convert to Case" button is present on the triage detail view.
-    func testConvertToCaseButtonVisible() {
+    /// `TriageDetailView` only hides the convert button `if
+    /// report.statusEnum == .closed`, and `TriageListView` defaults to the
+    /// `.pending` filter — a report reached this way is never closed, so the
+    /// button is deterministic once a report exists (not merely "may not
+    /// appear").
+    func testConvertToCaseButtonVisible() throws {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
         when("I open a triage report detail") {
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
+            guard find("triage-list").waitForExistence(timeout: 10) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; the triage list never renders")
+            }
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            guard firstRow.waitForExistence(timeout: 5) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; there is no row to tap")
+            }
             firstRow.tap()
         }
         then("the convert to case button should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5), "Triage detail view should open")
 
             let convertButton = scrollToFind("triage-convert-button", maxSwipes: 3)
-            if convertButton.exists {
-                XCTAssertTrue(convertButton.exists, "Convert to case button should be visible")
-                XCTAssertTrue(convertButton.isEnabled, "Convert to case button should be enabled")
-            }
-            // Button may not appear if the report type doesn't support case conversion
+            XCTAssertTrue(convertButton.exists, "Convert to case button should be visible for a non-closed report")
+            XCTAssertTrue(convertButton.isEnabled, "Convert to case button should be enabled")
         }
     }
 
     // MARK: - Scenario: Triage report type label visible
 
     /// Verifies the report type label is displayed on the triage detail.
-    func testTriageReportTypeLabelVisible() {
+    func testTriageReportTypeLabelVisible() throws {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
         when("I open a triage report detail") {
             navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
+            guard find("triage-list").waitForExistence(timeout: 10) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; the triage list never renders")
+            }
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            guard firstRow.waitForExistence(timeout: 5) else {
+                throw XCTSkip("No triage-eligible report exists in this test environment; there is no row to tap")
+            }
             firstRow.tap()
         }
-        then("the report type label should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+        then("the report type label should be visible for typed reports") {
+            XCTAssertTrue(find("triage-detail-view").waitForExistence(timeout: 5), "Triage detail view should open")
 
+            // The type badge only renders when `reportTypeLabel(for:)`
+            // resolves — i.e. for typed reports; absence is legitimate for
+            // legacy reports. When it IS shown, verify it carries real text
+            // rather than restating the existence check as `XCTAssertTrue(true)`.
             let typeLabel = find("triage-report-type")
             if typeLabel.waitForExistence(timeout: 3) {
-                XCTAssertTrue(typeLabel.exists, "Report type label should be visible in triage detail")
+                XCTAssertFalse(typeLabel.label.isEmpty, "Report type label should not be empty when shown")
             }
-            // Type label only shows for typed reports — absence is valid for legacy reports
         }
     }
 
