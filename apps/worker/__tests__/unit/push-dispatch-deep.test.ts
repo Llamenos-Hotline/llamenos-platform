@@ -78,7 +78,7 @@ describe('createPushDispatcherFromService', () => {
     clearTestPushLog()
 
     const dispatcher = createPushDispatcherFromService(
-      { ENVIRONMENT: 'development' } as any,
+      { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as any,
       mockIdentityService as any,
       mockShiftsService as any,
     )
@@ -91,7 +91,7 @@ describe('createPushDispatcherFromService', () => {
     clearTestPushLog()
 
     const dispatcher = createPushDispatcherFromService(
-      { ENVIRONMENT: 'development' } as any,
+      { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as any,
       mockIdentityService as any,
       mockShiftsService as any,
     )
@@ -113,7 +113,7 @@ describe('createPushDispatcherFromService', () => {
     mockShiftsService.getCurrentVolunteers.mockResolvedValue(['pk-1', 'pk-2', 'pk-3'])
 
     const dispatcher = createPushDispatcherFromService(
-      { ENVIRONMENT: 'development' } as any,
+      { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as any,
       mockIdentityService as any,
       mockShiftsService as any,
     )
