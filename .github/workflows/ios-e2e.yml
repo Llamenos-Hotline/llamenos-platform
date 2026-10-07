@@ -394,29 +394,6 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Download test build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
-        with:
-          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/llamenos-build/Build/Products/
-
-      - name: Download server crypto library
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
-        with:
-          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: packages/crypto/dist/server/
-
       # Each concurrent job on this host needs its own HTTP and PostgreSQL
       # port. The number MUST come from the RUNNER, not from the shard index.
       #
@@ -429,11 +406,15 @@ jobs:
       # executes one job at a time, so a per-runner port cannot collide no
       # matter how many runs overlap.
       #
-      # native-backend.sh takes both ports as env and refuses a port that is
-      # already listening, so a collision is a loud failure rather than two
-      # servers quietly sharing a database. NATIVE_BACKEND_DIR defaults to
+      # native-backend.sh takes both ports as env. A port held by a process it
+      # cannot prove is its own is a loud failure rather than two servers
+      # quietly sharing a database; a port held by a backend this workflow
+      # leaked is reclaimed by the next step. NATIVE_BACKEND_DIR defaults to
       # RUNNER_TEMP, which is already per-runner, so pgdata/logs/pid need no
       # help.
+      #
+      # Runs before the checkout on purpose: it needs nothing but RUNNER_NAME,
+      # and the reclaim below cannot run until the ports are known.
       - name: Allocate this runner's backend ports
         run: |
           set -euo pipefail
@@ -470,6 +451,52 @@ jobs:
           echo "NATIVE_BACKEND_PORT=$((3100 + slot))" >> "$GITHUB_ENV"
           echo "NATIVE_BACKEND_PGPORT=$((5500 + slot))" >> "$GITHUB_ENV"
           echo "$RUNNER_NAME (slot $slot) -> http $((3100 + slot)) / pg $((5500 + slot))"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The loop this breaks (#1639): a cancelled job can leave its backend
+      # running, that backend holds this runner's slot port, and every later
+      # job on the runner then dies at "Start native backend". Each death
+      # ejects a merge group, each ejection cancels more jobs, and each
+      # cancellation leaks another backend. One leak sustained itself for
+      # 5h34m against a 65-minute job cap.
+      #
+      # Placed HERE, before `bun install` and the two artifact downloads,
+      # because the old failure came ~48s into the job and read like a test
+      # problem. A port conflict is knowable from the moment the checkout
+      # lands, and saying so then is the difference between a one-line verdict
+      # and an hour of archaeology.
+      #
+      # It kills only what it can PROVE this workflow started — an argv marker,
+      # our own PostgreSQL data directory, or a process running out of the
+      # runner's work tree — and refuses loudly on anything else. It never
+      # matches on the program name: this host is also somebody's development
+      # machine and their `bun run dev:server` is a bun process too. It also
+      # refuses outright to act on 3000/5432, which is why the allocator above
+      # keeps CI off those numbers.
+      - name: Reclaim this runner's backend ports
+        run: apps/ios/scripts/native-backend.sh reclaim
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download test build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        with:
+          name: ios-e2e-build-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/llamenos-build/Build/Products/
+
+      - name: Download server crypto library
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.7
+        with:
+          name: ios-e2e-server-crypto-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/crypto/dist/server/
 
       - name: Start native backend
         env:
@@ -691,12 +718,21 @@ jobs:
             ${{ runner.temp }}/xcodebuild-test.log
             ${{ runner.temp }}/ui-test-results-shard-${{ matrix.shard }}.json
             ${{ runner.temp }}/llamenos-native-backend/server.log
+            ${{ runner.temp }}/llamenos-native-backend/watchdog.log
           retention-days: 7
 
       # Reads the ports from the environment the allocation step wrote, so
       # there is exactly one place deriving them. The guard matters: with
       # these unset, native-backend.sh falls back to 3000/5432 and would try
       # to stop the OPERATOR's development server on this shared host.
+      #
+      # `always()` is the ORDERLY path and cannot be the only one: a hard
+      # cancellation — which is what a merge-queue ejection does to every job
+      # in the group — can kill this job before this step is ever reached. Two
+      # other mechanisms cover that, neither of which needs anything in this
+      # job to run again: `start` leaves a watchdog that tears the backend
+      # down when the runner's job process goes away, and the next job on this
+      # runner reclaims the port before it installs anything (#1639).
       - name: Stop native backend
         if: always() && env.NATIVE_BACKEND_PORT != ''
         run: apps/ios/scripts/native-backend.sh stop
