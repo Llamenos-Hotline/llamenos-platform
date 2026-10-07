@@ -758,6 +758,169 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # ─── Backend Integration Tests (Bun-native SQL driver) ─────
+  #
+  # apps/worker/__tests__/integration-bun/ exists because the vitest
+  # integration tier CANNOT OBSERVE a class of defect. vitest runs under Node
+  # with `drizzle-orm/postgres-js`, which hands Postgres a plain text
+  # parameter that the `::jsonb` cast then parses — so a double-encoded
+  # predicate (`col @> ${JSON.stringify([...])}::jsonb`) matches correctly
+  # there. Bun's native SQL driver, which production runs, serializes a JS
+  # value bound to a jsonb parameter position itself: the same statement
+  # arrives double-encoded and matches ZERO rows. That is #1600, where GDPR
+  # erasure stripped no envelopes and reported success. A test for that defect
+  # written in the vitest tier passes before and after the fix.
+  #
+  # The tier therefore needs Bun's driver and a real PostgreSQL. It had no job
+  # at all until #1628: `git grep -n integration-bun -- .github` returned
+  # nothing, so four files — including the #1600 regression test — had never
+  # executed in CI.
+  #
+  # NOT gated on `needs.changes.outputs.revalidate`, deliberately. The whole
+  # point of this tier is to catch, at review time, a binding form that every
+  # other suite reports green on; deferring it to the merge group would
+  # reproduce #1584 (a suite reporting green on a PR because it never ran) on
+  # the countermeasure itself. It can afford to run on every backend PR: one
+  # ubuntu runner, contending for nothing scarce — the profile the
+  # `revalidate` comment above names as exempt. The suite itself is 24 tests
+  # in ~1.5s (measured); the job's wall clock is almost entirely the cargo
+  # build below, which rust-cache keys on the same crate crypto-tests already
+  # caches.
+  #
+  # PostgreSQL comes from a service container rather than the
+  # `bootstrap-backend` composite action. The two jobs that bootstrap a real
+  # backend (`e2e`, `backend-bdd`) are both `revalidate`-gated, so reusing
+  # their database would drag this tier behind the gate it must not sit
+  # behind; and this tier needs only Postgres, not the app or the sidecars.
+  # No other job in this file provisions a bare Postgres to share.
+  backend-integration-bun:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
+      # targets that rustup would install on the first `cargo` call. Same
+      # override, same reason, as the crypto-tests job above.
+      RUSTUP_TOOLCHAIN: stable
+      DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+    services:
+      postgres:
+        # Same image and pin as deploy/docker/docker-compose.dev.yml, so the
+        # driver behaviour under test is the behaviour developers see locally.
+        image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af
+        env:
+          POSTGRES_USER: llamenos
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: llamenos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llamenos -d llamenos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      # After the toolchain step: rust-cache keys on the installed rustc.
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
+
+      # The services under test reach the Rust crypto crate through
+      # packages/crypto/ffi.ts, which `dlopen`s dist/server/libllamenos_core.so
+      # at module scope. Measured with the library absent: one of the four
+      # files throws on import and the tier runs 18 tests instead of 24. It
+      # does fail (bun reports the load error and exits non-zero) — but it
+      # fails with a *missing-symbol* message, which reads nothing like the
+      # `ERR_DLOPEN_FAILED` a wrong-architecture or truncated library gives,
+      # and the two are easy to confuse when triaging. Build it here and
+      # neither arises.
+      - name: Build crypto for the server FFI
+        run: bun run crypto:build:server
+
+      - name: Apply migrations
+        run: bun run db:migrate
+
+      # Isolation: each file namespaces every row it writes under a per-run
+      # suite id (`${Date.now()}-${random}`) and deletes exactly those rows on
+      # teardown — no TRUNCATE, no unscoped DELETE, no fixture shared between
+      # files. `bun test` runs the files sequentially in one process, and this
+      # job owns its service container outright, so nothing else is writing to
+      # this database while it runs.
+      #
+      # The count assertion exists because of #1628's third verification step:
+      # "confirm the job actually ran by reading its log for the test count,
+      # not by its conclusion". `bun test` exits 0 when its path argument
+      # matches nothing at all, so a renamed directory, a typo in the script's
+      # glob, or a tier emptied by a bad rebase all land here as a green job
+      # that measured nothing. Comparing bun's own "Ran N tests across M
+      # files" against the directory listing is what makes that a failure.
+      # (A file that throws on import is caught by the exit code instead —
+      # bun still counts the file, but reports the load error and fails.)
+      - name: Run Bun-native integration tests
+        run: |
+          set -o pipefail
+          expected=$(find apps/worker/__tests__/integration-bun -name '*.test.ts' | wc -l)
+          if [ "$expected" -eq 0 ]; then
+            echo "::error::No test files in apps/worker/__tests__/integration-bun/ — the tier is empty"
+            exit 1
+          fi
+
+          # bun's exit status is captured rather than allowed to abort the step,
+          # so the count below is written to the log on a failing run too — a
+          # red job must still say how much it measured.
+          rc=0
+          mkdir -p test-results
+          bun run test:worker:integration-bun 2>&1 | tee test-results/bun-integration.log || rc=$?
+
+          summary=$(grep -oE 'Ran [0-9]+ tests across [0-9]+ files' test-results/bun-integration.log | tail -1 || true)
+          if [ -z "$summary" ]; then
+            echo "::error::bun printed no run summary — the tier did not execute at all"
+            exit 1
+          fi
+          ran_tests=$(echo "$summary" | awk '{print $2}')
+          ran_files=$(echo "$summary" | awk '{print $5}')
+          echo "integration-bun: ran $ran_tests test(s) across $ran_files of $expected file(s)."
+
+          if [ "$ran_files" -ne "$expected" ]; then
+            echo "::error::$expected test file(s) present but bun collected only $ran_files — the tier's path no longer matches what is on disk"
+            exit 1
+          fi
+          if [ "$ran_tests" -eq 0 ]; then
+            echo "::error::bun collected $ran_files file(s) but ran no tests"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-integration-bun-log
+          path: test-results/
+          retention-days: 7
+
   # ─── Ansible Validation ───────────────────────────────────
   ansible-validate:
     needs: changes
@@ -1982,7 +2145,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2007,6 +2170,7 @@ jobs:
           check_job "e2e" "${{ needs.e2e.result }}"
           check_job "backend-bdd" "${{ needs.backend-bdd.result }}"
           check_job "backend-unit" "${{ needs.backend-unit.result }}"
+          check_job "backend-integration-bun" "${{ needs.backend-integration-bun.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
           check_job "android-e2e" "${{ needs.android-e2e.result }}"
