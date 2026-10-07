@@ -81,6 +81,13 @@ Feature: Edge Cases and Error Handling
     When a CORS preflight request is sent to "/api/users"
     Then the response should include CORS headers
 
+  # The scenario above only proves an allowed origin is admitted, which the
+  # development escape hatch alone could satisfy. This one proves a policy
+  # exists at all, and it holds in every environment (#1624).
+  Scenario: OPTIONS preflight from an unlisted origin is refused
+    When a CORS preflight request from an unlisted origin is sent to "/api/users"
+    Then the preflight should be refused
+
   # ─── Rate Limiting ────────────────────────────────────────────────
 
   Scenario: Invite validation is rate limited

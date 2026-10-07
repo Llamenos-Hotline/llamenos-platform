@@ -980,6 +980,18 @@ jobs:
       - name: Check required env vars across templates
         run: python3 deploy/ansible/scripts/check-required-env.py
 
+      # The other half of the same question (#1624). check-required-env.py
+      # covers vars config.ts ASSERTS — miss one and the container will not
+      # boot, so the failure is loud. This covers every var the worker merely
+      # READS: unset, each one silently takes a fallback branch, and four
+      # controls were inert on every deployed host that way
+      # (CORS_ALLOWED_ORIGINS, SIP_BRIDGE_URL, METRICS_SCRAPE_TOKEN,
+      # *_WEBHOOK_IPS). Derives the consumed set from apps/worker/ rather
+      # than a hand list, so a new var fails here until it is rendered or
+      # justified.
+      - name: Check consumed env vars are rendered
+        run: python3 scripts/check-consumed-env.py
+
       # Neither `--syntax-check` nor `ansible-lint` evaluates Jinja, so a
       # filter naming a test that does not exist — `selectattr('status',
       # 'startswith', 'FAIL')` — is green here and raises on the target.

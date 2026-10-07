@@ -27,6 +27,48 @@ updates_domain: "updates.{{ domain }}"
 # Email for Let's Encrypt certificate notifications
 acme_email: admin@yourdomain.org
 
+# ─── CORS / browser origins ──────────────────────────────────────
+# The origins the app returns CORS headers for, and the only http(s) origins
+# an OAuth redirect may target (apps/worker/middleware/cors.ts,
+# apps/worker/lib/redirect-guard.ts). Rendered unconditionally into the
+# worker's .env — before #1624 nothing rendered it, so every deployed host
+# fell through to two origins hardcoded for this project's own hosts and a
+# self-hoster's SPA was not on its own allowlist.
+#
+# Leave both of these unset to get the default, which is the vhost set Caddy
+# actually serves: https://<api_subdomain>.<domain> plus https://<domain> when
+# api_subdomain is set, https://<domain> alone when it is not, and app_domain
+# as well when you define one. Tauri's own origins are always allowed and are
+# never listed here.
+#
+# Setting CORS_ALLOWED_ORIGINS at all switches OFF the localhost-in-
+# development escape hatch in both files, so if you override the list it must
+# be COMPLETE — anything the browser actually loads from has to appear.
+#
+# cors_allowed_origins_extra: []        # appended to the two defaults
+# cors_allowed_origins: []              # replaces them entirely
+
+# ─── Metrics scrape token ────────────────────────────────────────
+# Bearer token Prometheus presents to /api/metrics. Without it the endpoint
+# requires a signed-in admin with `metrics:read`, which a scrape never is, so
+# the app job collects nothing (#1624). Rendered into BOTH the worker's .env
+# and roles/llamenos-prometheus' scrape config from this one value.
+# Generate with: openssl rand -hex 32
+metrics_scrape_token: ""
+
+# ─── Webhook IP allowlists ───────────────────────────────────────
+# Per-provider CIDR allowlists for inbound webhooks, rendered as
+# <PROVIDER>_WEBHOOK_IPS (apps/worker/middleware/webhook-auth.ts,
+# middleware/webhook-ip-allowlist.ts, messaging/router.ts). Empty by default:
+# webhooks are authenticated by provider signature regardless, and a stale
+# CIDR here rejects real traffic. Only add ranges you will keep current with
+# what the provider publishes.
+#
+# webhook_ip_allowlists:
+#   twilio: ["54.172.60.0/23", "34.203.250.0/23"]
+#   telephony: ["54.172.60.0/23"]
+webhook_ip_allowlists: {}
+
 # ─── SSH Hardening ───────────────────────────────────────────────
 # Port to move SSH to (default 22 is heavily targeted by bots). Avoid 2222: the FDE
 # unlock shell (dropbear-initramfs) uses it with a different host key.
@@ -173,6 +215,20 @@ whisper_device: cpu
 ari_username: llamenos
 ari_password: ""
 bridge_secret: ""
+
+# Per-volunteer SIP registrar and its TURN relay (apps/worker/routes/webrtc.ts,
+# apps/worker/telephony/registrar.ts). Leave sip_registrar_secret empty to
+# derive volunteer SIP secrets from hmac_secret; set it to rotate every
+# volunteer's SIP credential without rotating hmac_secret.
+#
+# turn_host and turn_secret must BOTH be set or /api/telephony/sip-token hands
+# clients STUN-only ICE servers — an in-app call behind a symmetric NAT then
+# has no media path. turn_secret is the CoTURN --static-auth-secret, which is
+# not the SIP secret and not ari_password. No Ansible role deploys CoTURN
+# today, so these point at a relay you run separately.
+sip_registrar_secret: ""
+turn_host: ""
+turn_secret: ""
 # pbx_type: asterisk              # roles/llamenos-asterisk/defaults/main.yml
 # sip_bridge_local_port: 3101     # roles/llamenos-asterisk/defaults/main.yml
 

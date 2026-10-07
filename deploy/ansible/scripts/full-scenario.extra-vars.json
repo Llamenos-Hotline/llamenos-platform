@@ -18,5 +18,14 @@
   "llamenos_signal_enabled": true,
   "signal_notifier_bearer_token": "check-required-env-fixture-signal-token",
   "dev_routes_enabled": false,
-  "dev_reset_secret": ""
+  "dev_reset_secret": "",
+  "_comment_1624": "Added with #1624. Each of these switches on a var the worker READS and that no render previously reached, so scripts/check-consumed-env.py has a render to point at: SIP_BRIDGE_URL (asterisk), METRICS_SCRAPE_TOKEN (the Prometheus scrape bearer), SIP_REGISTRAR_SECRET + TURN_HOST/TURN_SECRET (the per-volunteer SIP registrar and its relay), and one <PROVIDER>_WEBHOOK_IPS line. Dummy non-secret placeholders, as above.",
+  "llamenos_asterisk_enabled": true,
+  "metrics_scrape_token": "check-required-env-fixture-metrics-token",
+  "sip_registrar_secret": "check-required-env-fixture-registrar-secret",
+  "turn_host": "turn.example.org",
+  "turn_secret": "check-required-env-fixture-turn-secret",
+  "webhook_ip_allowlists": {
+    "twilio": ["203.0.113.0/24"]
+  }
 }
