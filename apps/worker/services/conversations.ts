@@ -243,7 +243,10 @@ export class ConversationsService {
     if (input.status !== undefined) updates.status = input.status
     if (input.assignedTo !== undefined) updates.assignedTo = input.assignedTo
     if (input.metadata) {
-      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${input.metadata}::jsonb`
+      // Bound through the column's own jsonb type, not interpolated bare —
+      // see the long comment on SettingsService#updateHubSettings for why a
+      // bare object in a raw `sql` template is driver-dependent.
+      updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${sql.param(input.metadata, conversations.metadata)}::jsonb`
     }
 
     const [row] = await this.db

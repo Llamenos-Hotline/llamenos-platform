@@ -921,6 +921,429 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # ─── Worker Integration Tests (vitest / postgres-js) ───────
+  #
+  # apps/worker/__tests__/integration/ — 23 files, 176 tests — ran in NO
+  # workflow until #1641. `git grep -n vitest.integration.config -- .github`
+  # returned nothing: the config existed, the script existed, and
+  # detect-changed-platforms.sh even mapped the config to `backend` with the
+  # comment "no CI job runs it yet — #1167". Twelve of its files had rotted in
+  # the meantime (see the PR for the breakdown): a hub-settings merge that only
+  # bound correctly under Bun's driver, two startup fixtures that predate
+  # config validations added since, four response-conformance tests whose
+  # service mocks had drifted from the middleware, and one file that aborted at
+  # import for a missing FFI alias and contributed zero tests.
+  #
+  # This is the complement of backend-integration-bun above, not a
+  # duplicate of it: that tier exists to exercise Bun's own SQL driver, this
+  # one is the much larger suite of service-level behaviour (concurrency,
+  # hub-shred windows, the migration ledger, OpenAPI response conformance)
+  # that runs under Node so it can use vi.mock.
+  #
+  # NOT gated on `revalidate`, for the reason spelled out on
+  # backend-integration-bun: a tier whose whole purpose is catching what the
+  # other suites report green on must report at review time. One ubuntu
+  # runner, ~3 minutes of suite, contending for nothing scarce.
+  backend-integration:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    env:
+      # Same override, same reason, as crypto-tests and
+      # backend-integration-bun: rust-toolchain.toml pins eleven extra targets
+      # rustup would otherwise install on the first cargo call.
+      RUSTUP_TOOLCHAIN: stable
+      DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+    services:
+      postgres:
+        # Same image and pin as deploy/docker/docker-compose.dev.yml.
+        image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af
+        env:
+          POSTGRES_USER: llamenos
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: llamenos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llamenos -d llamenos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate protocol + i18n types
+        run: bun run codegen && bun run i18n:codegen
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/crypto
+
+      # startup-init.test.ts boots the real `src/server/index.ts` as a
+      # subprocess, and that entry point dlopens
+      # packages/crypto/dist/server/libllamenos_core.so at module scope. Absent,
+      # the server exits 1 before serving and five tests fail with a dlopen
+      # error that reads nothing like the stale-fixture defects they actually
+      # had — measured while triaging this tier for #1641.
+      - name: Build crypto for the server FFI
+        run: bun run crypto:build:server
+
+      - name: Apply migrations
+        run: bun run db:migrate
+
+      # The count assertion is the same rail backend-integration-bun carries,
+      # for the same reason (#1628's third verification step): a renamed
+      # directory, a typo in the config's `include` glob, or a tier emptied by
+      # a bad rebase must land as a RED job, not a green one that measured
+      # nothing. vitest.integration.config.ts also no longer sets
+      # `passWithNoTests`, so an empty collection fails there too.
+      - name: Run worker integration tests
+        run: |
+          set -o pipefail
+          expected=$(find apps/worker/__tests__/integration -name '*.test.ts' | wc -l)
+          if [ "$expected" -eq 0 ]; then
+            echo "::error::No test files in apps/worker/__tests__/integration/ — the tier is empty"
+            exit 1
+          fi
+
+          # vitest's status is captured rather than allowed to abort the step,
+          # so the counts below reach the log on a failing run too.
+          rc=0
+          mkdir -p test-results
+          # vitest invoked directly, with the config named here rather than
+          # behind `bun run test:worker:integration`, because
+          # tests/orchestrator/guards.test.ts derives the config->job binding by
+          # reading `--config vitest.*.config.ts` out of this file: a config
+          # hidden inside a package.json script is a binding that rail cannot
+          # see, and therefore cannot keep honest.
+          bunx vitest run --config vitest.integration.config.ts \
+            --reporter=default --reporter=junit \
+            --outputFile=test-results/worker-integration.xml 2>&1 \
+            | tee test-results/worker-integration.log || rc=$?
+
+          strip() { sed -r 's/\x1b\[[0-9;]*m//g' "$1"; }
+          ran_files=$(strip test-results/worker-integration.log | grep -oE '^ *Test Files .*\([0-9]+\)$' | tail -1 | grep -oE '[0-9]+\)$' | tr -d ')')
+          ran_tests=$(strip test-results/worker-integration.log | grep -oE '^ *Tests .*\([0-9]+\)$' | tail -1 | grep -oE '[0-9]+\)$' | tr -d ')')
+          if [ -z "$ran_files" ] || [ -z "$ran_tests" ]; then
+            echo "::error::vitest printed no run summary — the tier did not execute at all"
+            exit 1
+          fi
+          echo "worker-integration: ran $ran_tests test(s) across $ran_files of $expected file(s)."
+
+          if [ "$ran_files" -ne "$expected" ]; then
+            echo "::error::$expected test file(s) present but vitest collected only $ran_files — the tier's include glob no longer matches what is on disk"
+            exit 1
+          fi
+          if [ "$ran_tests" -eq 0 ]; then
+            echo "::error::vitest collected $ran_files file(s) but ran no tests"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-integration-results
+          path: test-results/
+          retention-days: 7
+
+  # ─── Sidecar Tests (sip-bridge, signal-notifier) ───────────
+  #
+  # Neither package's suite ran anywhere. sip-bridge/ is 109 tests across 6
+  # files (#1589); signal-notifier/ is 43 across 5. Both are already inside
+  # BACKEND_RE in detect-changed-platforms.sh, so the `backend` flag was
+  # already true for a change to either — there was simply no job on the other
+  # end of it.
+  #
+  # Found while wiring them (#1641): signal-notifier's own test script was
+  # `bun --bun vitest run`, under which vite's CJS interop returned `undefined`
+  # for zod's `z` and routes.ts died at collection. It is `bunx vitest run` now,
+  # the same runtime sip-bridge already used. See signal-notifier/src/
+  # test-helpers.ts.
+  #
+  # signal-notifier's store/health/routes suites need a real PostgreSQL (they
+  # create a SCHEMA per suite, not a database), so this job carries the same
+  # bare service container the two integration tiers do. sip-bridge needs
+  # nothing — its PBX clients are driven against fakes.
+  sidecar-tests:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    env:
+      TEST_DATABASE_URL: postgresql://llamenos:ci-test-password@localhost:5432/llamenos
+
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:3430fe182f5065a6ea505c3d432d2c7fff18fbab954df8f277c1dbf4c70124af
+        env:
+          POSTGRES_USER: llamenos
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: llamenos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llamenos -d llamenos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Both suites are counted the same way the two integration tiers are: a
+      # suite that collects nothing must be red. vitest without
+      # `passWithNoTests` already exits non-zero on an empty collection, so the
+      # assertion here is on the count actually reported.
+      - name: Run sip-bridge tests
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          bun run test:sip-bridge 2>&1 | tee test-results/sip-bridge.log
+          ran=$(sed -r 's/\x1b\[[0-9;]*m//g' test-results/sip-bridge.log | grep -oE '^ *Tests .*\([0-9]+\)$' | tail -1 | grep -oE '[0-9]+\)$' | tr -d ')')
+          echo "sip-bridge: ran ${ran:-0} test(s)."
+          if [ -z "$ran" ] || [ "$ran" -eq 0 ]; then
+            echo "::error::sip-bridge reported no tests — the suite did not execute"
+            exit 1
+          fi
+
+      - name: Run signal-notifier tests
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          bun run test:signal-notifier 2>&1 | tee test-results/signal-notifier.log
+          ran=$(sed -r 's/\x1b\[[0-9;]*m//g' test-results/signal-notifier.log | grep -oE '^ *Tests .*\([0-9]+\)$' | tail -1 | grep -oE '[0-9]+\)$' | tr -d ')')
+          echo "signal-notifier: ran ${ran:-0} test(s)."
+          if [ -z "$ran" ] || [ "$ran" -eq 0 ]; then
+            echo "::error::signal-notifier reported no tests — the suite did not execute"
+            exit 1
+          fi
+          # A suite that passes entirely by skipping is still an absent signal
+          # (#1635): these three files SKIP every test when their beforeAll
+          # cannot reach PostgreSQL, and a skip is not a pass.
+          if sed -r 's/\x1b\[[0-9;]*m//g' test-results/signal-notifier.log | grep -qE '^ *Tests .*skipped'; then
+            echo "::error::signal-notifier skipped tests — its PostgreSQL service is unreachable, so the suite measured less than it claims"
+            exit 1
+          fi
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sidecar-test-logs
+          path: test-results/
+          retention-days: 7
+
+  # ─── Repo-level Bun Tests ─────────────────────────────────
+  #
+  # Seven `bun test` files, 99 tests, that belonged to no tier and ran in no
+  # workflow (#1641). None is reachable from a vitest config's `include`, and
+  # Playwright's chromium project explicitly ignores `**/*.test.ts`, so nothing
+  # collected them:
+  #
+  #   packages/shared/__tests__/            the permission catalogue
+  #   packages/test-specs/tools/            the BDD coverage validator's own
+  #                                         self-tests — the thing that reports
+  #                                         whether scenarios are bound
+  #   tests/eslint/                         audits the api-schema-binding lint
+  #                                         rail by breaking it
+  #   tests/manifest-npm-coherence.test.ts  the overrides/dependencies rail
+  #                                         whose failure mode is invisible to
+  #                                         every bun-based job
+  #   scripts/worktree-db.test.ts           every safety condition the database
+  #                                         sweep must satisfy before dropping
+  #   scripts/api-schema-binding/           the CodeQL sanitization finding's rail
+  #
+  # Gated on `docs_only` rather than a platform flag, like crypto-guardrails:
+  # these files span four trees with no single owner, several of them audit
+  # OTHER gates, and the suite is under two seconds. Choosing one platform flag
+  # would mean a change to any of the other three skipped the rail that guards
+  # it — which is how they came to run nowhere in the first place.
+  repo-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # tests/eslint/ lints a real fixture through the repo's own flat config,
+      # which imports from packages/protocol — generated output has to exist.
+      - name: Generate protocol + i18n types
+        run: bun run codegen && bun run i18n:codegen
+
+      # `bun test` exits 0 when its path arguments match nothing at all, so a
+      # moved file or a typo in the script's path list would land here as a
+      # green job that measured nothing. Comparing bun's own "Ran N tests
+      # across M files" against the path list is what makes that a failure.
+      - name: Run repo-level bun tests
+        run: |
+          set -o pipefail
+          rc=0
+          mkdir -p test-results
+          bun run test:repo 2>&1 | tee test-results/repo-tests.log || rc=$?
+
+          summary=$(grep -oE 'Ran [0-9]+ tests across [0-9]+ files' test-results/repo-tests.log | tail -1 || true)
+          if [ -z "$summary" ]; then
+            echo "::error::bun printed no run summary — the tier did not execute at all"
+            exit 1
+          fi
+          ran_tests=$(echo "$summary" | awk '{print $2}')
+          ran_files=$(echo "$summary" | awk '{print $5}')
+          echo "repo-tests: ran $ran_tests test(s) across $ran_files file(s)."
+          if [ "$ran_tests" -eq 0 ] || [ "$ran_files" -eq 0 ]; then
+            echo "::error::bun collected nothing — test:repo's path list no longer matches what is on disk"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repo-test-log
+          path: test-results/
+          retention-days: 7
+
+  # ─── Desktop Rust Tests (the Tauri crate) ─────────────────
+  #
+  # 24 tests in apps/desktop/src/ that `cargo test` never reached: ci.yml's
+  # crypto-tests job builds packages/crypto only, and no workflow ran cargo
+  # against the Tauri crate at all (#1641). What they cover is not incidental —
+  # api_config.rs's single-use pairing token and first-run gate, net.rs's exact
+  # scheme/host/port allowlist and its refusal to forward caller-supplied Host
+  # and hop-by-hop headers, and cert_pin.rs's SPKI pin on both the HTTP client
+  # and the WebSocket connector. Every one of them is a boundary where a
+  # regression is a vulnerability rather than a bug, which is why this runs at
+  # review time rather than behind `revalidate`.
+  #
+  # `dist/client` must exist before cargo: tauri::generate_context! reads
+  # tauri.conf.json's `frontendDist` at COMPILE time and the proc macro panics
+  # if the directory is absent — so the frontend build is a prerequisite of
+  # compiling the crate, not of running it. Built with PLAYWRIGHT_TEST=true for
+  # the same reason the e2e job does: it is the build that needs no Rust
+  # backend present.
+  desktop-rust:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate protocol + i18n types
+        run: bun run codegen && bun run i18n:codegen
+
+      - name: Build frontend (tauri::generate_context! needs frontendDist to exist)
+        run: PLAYWRIGHT_TEST=true bun run build
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop
+
+      # The count assertion, same rail as the tiers above: `cargo test` reports
+      # "test result: ok. 0 passed" for a crate whose #[cfg(test)] modules have
+      # all been renamed out of the build, and exits 0 doing it.
+      - name: Run Tauri crate tests
+        run: |
+          set -o pipefail
+          rc=0
+          mkdir -p test-results
+          bun run test:desktop:rust 2>&1 | tee test-results/desktop-rust.log || rc=$?
+
+          passed=$(grep -oE 'test result: ok\. [0-9]+ passed' test-results/desktop-rust.log \
+            | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          echo "desktop-rust: $passed test(s) passed."
+          if [ "$passed" -eq 0 ]; then
+            echo "::error::cargo test reported no passing tests in apps/desktop — the crate's test modules are no longer in the build"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-rust-log
+          path: test-results/
+          retention-days: 7
+
   # ─── Ansible Validation ───────────────────────────────────
   ansible-validate:
     needs: changes
@@ -2145,7 +2568,7 @@ jobs:
   # one refused.
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, backend-integration, sidecar-tests, repo-tests, desktop-unit, desktop-rust, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
     if: always()
     runs-on: ubuntu-latest
     permissions:

@@ -2748,10 +2748,14 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     return result
   }
 
+  // `repo-tests` is deliberately absent: it gates on `docs_only`, not on a
+  // platform flag, so "runs for this diff" is not a path question for it and
+  // the scenario rows below would all have to special-case it.
   const ALL_GATED_JOBS = [
     'ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit',
-    'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests', 'migration-drift',
-    'ansible-validate', 'audit',
+    'desktop-rust', 'e2e', 'backend-bdd', 'backend-unit', 'backend-integration',
+    'sidecar-tests', 'crypto-tests', 'migration-drift', 'ansible-validate',
+    'audit',
   ]
 
   it.each([
@@ -2770,7 +2774,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     [
       'a packages/protocol/-only change',
       ['packages/protocol/schemas/foo.ts'],
-      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'crypto-tests'],
+      ['ios-build-test', 'android-build-test', 'android-e2e', 'desktop-unit', 'desktop-rust', 'e2e', 'backend-bdd', 'backend-unit', 'backend-integration', 'sidecar-tests', 'crypto-tests'],
       // `audit` stays scoped to dependency manifests even on a shared-dep
       // change that runs everything else — this PR touched neither
       // package.json nor bun.lock and must not be blocked by a pre-existing
@@ -2793,7 +2797,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // above, for the pair that pins both directions.
       'a packages/test-specs/-only change, outside the mobile corpus',
       ['packages/test-specs/features/security/foo.feature'],
-      ['desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['desktop-unit', 'desktop-rust', 'e2e', 'backend-bdd', 'backend-unit', 'backend-integration', 'sidecar-tests', 'migration-drift', 'ansible-validate'],
       // `ios-build-test` and `crypto-tests` correctly skip — iOS doesn't
       // consume packages/test-specs/ yet (ios-e2e.yml stays dispatch-only
       // pending #661) and this touches no Rust. `audit` stays scoped to
@@ -2810,7 +2814,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       // row fail, so the narrowing cannot be over-applied either.
       'a packages/test-specs/ change INSIDE the mobile corpus',
       ['packages/test-specs/features/platform/mobile/hubs/hub-self-service.feature'],
-      ['android-build-test', 'android-e2e', 'desktop-unit', 'e2e', 'backend-bdd', 'backend-unit', 'migration-drift', 'ansible-validate'],
+      ['android-build-test', 'android-e2e', 'desktop-unit', 'desktop-rust', 'e2e', 'backend-bdd', 'backend-unit', 'backend-integration', 'sidecar-tests', 'migration-drift', 'ansible-validate'],
       ['ios-build-test', 'crypto-tests', 'audit'],
     ],
     [
@@ -2854,6 +2858,14 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     ['android-build-test', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
     ['android-e2e', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.android == 'true'"],
     ['desktop-unit', "needs.changes.outputs.desktop == 'true'"],
+    // #1641's four newly-wired tiers. Each ran in no workflow at all before
+    // it, so the mutation that matters most here is the reverse of the usual
+    // one: not "the if: was deleted" but "the job was deleted" — jobBlock()
+    // throws when the job is gone, and ci-status's `needs` names all four.
+    ['desktop-rust', "needs.changes.outputs.desktop == 'true'"],
+    ['backend-integration', "needs.changes.outputs.backend == 'true'"],
+    ['sidecar-tests', "needs.changes.outputs.backend == 'true'"],
+    ['repo-tests', "needs.changes.outputs.docs_only != 'true'"],
     ['crypto-tests', "needs.changes.outputs.crypto == 'true'"],
     ['migration-drift', "needs.changes.outputs.backend == 'true'"],
     ['backend-bdd', "needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.backend == 'true'"],
@@ -3229,6 +3241,7 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       ['backend-unit', 'vitest.unit.config.ts'],
       ['backend-unit', 'vitest.orchestrator.config.ts'],
       ['desktop-unit', 'vitest.desktop.config.ts'],
+      ['backend-integration', 'vitest.integration.config.ts'],
     ]))
     for (const [job, config] of bound) {
       const setupList = readFileSync(join(process.cwd(), config), 'utf8').match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''

@@ -39,7 +39,7 @@ SHARED_DEPS_RE='^(packages/crypto/|packages/protocol/|packages/shared/|packages/
 # codegen — so no iOS, Android, crypto or other-platform job can observe a
 # change to one. Each maps to its own consumer's flag instead of the matrix:
 #   vitest.unit.*          -> backend       (backend-unit)
-#   vitest.integration.*   -> backend       (no CI job runs it yet — #1167)
+#   vitest.integration.*   -> backend       (backend-integration, wired in #1641)
 #   vitest.desktop.*       -> desktop       (desktop-unit)
 #   vitest.orchestrator.*  -> orchestrator  (backend-unit's fleet-tests step)
 # Before this, the two fleet PRs that touched only vitest.orchestrator.config.ts
@@ -77,8 +77,11 @@ DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.
 #   - `playwright.config.ts`'s desktop project already carries
 #     `testIgnore: ["**/live/**", …, "**/orchestrator/**", "**/*.test.ts"]`.
 #     Playwright does not run them; the filter should not schedule a job for them.
-#   - `tests/load` (k6), `tests/iso-builder` and `tests/eslint` are referenced by
-#     no job in ci.yml at all.
+#   - `tests/load` (k6) and `tests/iso-builder` are referenced by no job in
+#     ci.yml at all (iso-builder.yml runs the bats files on its own trigger).
+#     `tests/eslint` IS run now — by ci.yml's `repo-tests` (#1641) — but that
+#     job gates on `docs_only`, not on `desktop`, so the exclusion still holds:
+#     no Playwright project collects it and no desktop-gated job needs it.
 #
 # Deliberately NOT excluded: `tests/steps/`, `tests/mocks/`, `tests/pages/`,
 # `tests/fixtures/`, `tests/helpers/`, `tests/e2e/` and the root `*.spec.ts` /
@@ -95,8 +98,8 @@ DESKTOP_RE='^(apps/desktop/|src/client/|tests/|vitest\.desktop\.(config|setup)\.
 #
 # This stays an EXCLUDE list rather than becoming an include list on purpose.
 # An include list makes "a new test directory gates nothing" the default, which
-# is the same silent-non-execution failure this repo already has three open
-# issues for (#1126, #1153, #1167). Excluding fails toward running too much,
+# is the same silent-non-execution failure this repo has repeatedly paid for
+# (#1126, #1153, #1167, #1589, #1628, #1641). Excluding fails toward running too much,
 # which costs minutes; including fails toward running nothing, which costs a
 # regression nobody sees.
 #

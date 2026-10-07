@@ -54,6 +54,7 @@ vi.mock('../../lib/auth', async (importOriginal) => {
 })
 
 import { describe, it, expect, vi } from 'vitest'
+import { z } from 'zod'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import { assertConformsToSchema } from '../helpers/response-conformance'
@@ -123,12 +124,33 @@ function buildApp(
   } = opts
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
-  // Auth middleware calls services.settings.getRoles() to resolve permissions.
-  // Return a super-admin role with wildcard permission so all routes pass permission checks.
+  // Shared middleware — not the route under test — reaches for these. Each
+  // one is a method some cross-cutting layer calls on EVERY request, so a
+  // test that overrides `settings` or `identity` to set up its own route
+  // must not lose them: SERVICE_DEFAULTS below is merged per service, one
+  // key deep, rather than wholesale. Without that, adding a middleware call
+  // breaks every test that happens to stub the same service — which is
+  // exactly how three of these rotted while the tier went unrun (#1641).
+  //
+  //   settings.getRoles        auth middleware, to resolve permissions
+  //   settings.checkRateLimit  lib/helpers.ts#checkRateLimit, used by
+  //                            POST /auth/login among others
+  //   identity.getWebAuthnSettings  auth middleware's passkey enforcement
   const mockSettingsBase = {
+    // A super-admin role with wildcard permission, so permission checks pass.
     getRoles: vi.fn().mockResolvedValue({
       roles: [{ id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'], hubPermissions: [] }],
     }),
+    checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
+  }
+  const mockIdentityBase = {
+    getWebAuthnSettings: vi.fn().mockResolvedValue({ requireForAdmins: false, requireForUsers: false }),
+    getWebAuthnCredentials: vi.fn().mockResolvedValue({ credentials: [] }),
+  }
+  const SERVICE_DEFAULTS: Record<string, Record<string, unknown>> = {
+    audit: mockAudit,
+    settings: mockSettingsBase,
+    identity: mockIdentityBase,
   }
 
   const app = new Hono<AppEnv>()
@@ -159,11 +181,12 @@ function buildApp(
       callPreference: 'phone' as const,
       specializations: [],
     })
-    c.set('services', {
-      audit: mockAudit,
-      settings: mockSettingsBase,
-      ...services,
-    } as unknown as AppEnv['Variables']['services'])
+    const resolvedServices: Record<string, unknown> = { ...SERVICE_DEFAULTS, ...services }
+    for (const [name, defaults] of Object.entries(SERVICE_DEFAULTS)) {
+      const override = services[name]
+      if (override !== undefined) resolvedServices[name] = { ...defaults, ...(override as object) }
+    }
+    c.set('services', resolvedServices as unknown as AppEnv['Variables']['services'])
 
     await next()
   })
@@ -370,8 +393,20 @@ describe('Calls Routes — response conformance', () => {
           }),
         },
         identity: {
+          // `hubRoles` carries the hub assignment, and it is load-bearing:
+          // services/ringing.ts only rings someone with effective permissions
+          // IN this hub (resolveHubPermissions), so a global `role-volunteer`
+          // with no assignment is correctly unringable and presence answers
+          // `users: []`. The fixture modelled exactly that non-member and so
+          // asserted nothing once the hub-access rule landed.
           getUsers: vi.fn().mockResolvedValue({
-            users: [{ pubkey: MOCK_PUBKEY, active: true, onBreak: false, roles: ['role-volunteer'], hubRoles: [] }],
+            users: [{
+              pubkey: MOCK_PUBKEY,
+              active: true,
+              onBreak: false,
+              roles: ['role-volunteer'],
+              hubRoles: [{ hubId: 'hub-test-1', roleIds: ['role-volunteer'] }],
+            }],
           }),
         },
       },
@@ -459,7 +494,12 @@ describe('Notes Routes — response conformance', () => {
     expect(typeof result.parsed.limit).toBe('number')
   })
 
-  it('POST /notes — conforms to noteResponseSchema (flat, no wrapper)', async () => {
+  // The route answers `{ note }`, the shape src/client/lib/api/notes.ts is
+  // written against, and it DECLARED flat `noteResponseSchema` — so the
+  // declaration, not the response, was the thing that was wrong (#1641).
+  // Asserted against the same wrapper the route now declares, composed from
+  // the protocol schema so the note's own fields still come from one source.
+  it('POST /notes — conforms to the declared { note } wrapper', async () => {
     const mockRecords = {
       createNote: vi.fn().mockResolvedValue(mockNote),
     }
@@ -471,7 +511,7 @@ describe('Notes Routes — response conformance', () => {
       services: { records: mockRecords, cases: mockCasesService },
     })
 
-    const result = await assertConformsToSchema(app, 'POST', '/notes', noteResponseSchema, {
+    const result = await assertConformsToSchema(app, 'POST', '/notes', z.object({ note: noteResponseSchema }), {
       body: {
         callId: 'call-1',
         encryptedContent: 'encrypted-data',
@@ -479,9 +519,8 @@ describe('Notes Routes — response conformance', () => {
       expectedStatus: 201,
       env,
     })
-    // Response must be a flat note, not wrapped in { note: ... }
-    expect(result.parsed.encryptedContent).toBe('encrypted-data-base64')
-    expect(result.parsed.authorPubkey).toBe(MOCK_PUBKEY)
+    expect(result.parsed.note.encryptedContent).toBe('encrypted-data-base64')
+    expect(result.parsed.note.authorPubkey).toBe(MOCK_PUBKEY)
   })
 })
 
