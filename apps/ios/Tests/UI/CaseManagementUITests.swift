@@ -252,7 +252,7 @@ final class CaseManagementUITests: BaseUITest {
         when("I navigate to Cases") {
             navigateToCases()
         }
-        then("pagination controls appear only once there are enough records to page") {
+        try then("pagination controls appear only once there are enough records to page") {
             XCTAssertTrue(
                 find("case-list").waitForExistence(timeout: 10),
                 "Case list should render once a case has been created"

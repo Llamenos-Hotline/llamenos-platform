@@ -397,7 +397,7 @@ final class HubCommunicationsUITests: BaseUITest {
         when("I navigate to Communications settings with a configured provider") {
             navigateToCommunications()
         }
-        then("the usage link should exist when usage data is available") {
+        try then("the usage link should exist when usage data is available") {
             let settingsList = find("hub-comms-settings-list")
             guard settingsList.waitForExistence(timeout: 10) else {
                 throw XCTSkip("No provider is configured in this test environment; the settings list never renders")
@@ -451,7 +451,7 @@ final class HubCommunicationsUITests: BaseUITest {
         given("I am logged in as admin with provider configured") {
             launchAsAdminWithAPI()
         }
-        when("I tap the usage link") {
+        try when("I tap the usage link") {
             navigateToCommunications()
             let settingsList = find("hub-comms-settings-list")
             guard settingsList.waitForExistence(timeout: 10) else {

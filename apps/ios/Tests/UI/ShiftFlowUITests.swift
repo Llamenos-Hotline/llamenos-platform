@@ -77,7 +77,7 @@ final class ShiftFlowUITests: BaseUITest {
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("if on shift, clock out should show confirmation") {
+        try then("if on shift, clock out should show confirmation") {
             // This class launches with `launchAuthenticated()` — no hub is
             // configured, so ShiftsViewModel.fetchShifts() treats the missing
             // hub as "show an empty schedule" (see ShiftsViewModel.swift):
@@ -138,7 +138,7 @@ final class ShiftFlowUITests: BaseUITest {
         when("I navigate to shifts") {
             navigateToShifts()
         }
-        then("today's section should exist if schedule is showing") {
+        try then("today's section should exist if schedule is showing") {
             // This class launches with no hub configured, so the weekly
             // schedule never renders (see testClockOutShowsConfirmation) —
             // only "shifts-empty-state" does. Report that explicitly.

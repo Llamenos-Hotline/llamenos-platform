@@ -97,7 +97,7 @@ final class TriageUITests: BaseUITest {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
-        when("I navigate to triage and tap a report") {
+        try when("I navigate to triage and tap a report") {
             navigateToTriage()
             // This suite has no way to provision a triage-eligible report
             // (there is no `/api/test-simulate/...` endpoint for reports, the
@@ -135,7 +135,7 @@ final class TriageUITests: BaseUITest {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
-        when("I open a triage report detail") {
+        try when("I open a triage report detail") {
             navigateToTriage()
             guard find("triage-list").waitForExistence(timeout: 10) else {
                 throw XCTSkip("No triage-eligible report exists in this test environment; the triage list never renders")
@@ -164,7 +164,7 @@ final class TriageUITests: BaseUITest {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
-        when("I open a triage report detail") {
+        try when("I open a triage report detail") {
             navigateToTriage()
             guard find("triage-list").waitForExistence(timeout: 10) else {
                 throw XCTSkip("No triage-eligible report exists in this test environment; the triage list never renders")
