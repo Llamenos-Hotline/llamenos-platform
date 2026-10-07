@@ -18,6 +18,7 @@ import { checkRoleGrant } from '../lib/hub-scope'
 import type { StorageManager } from '../lib/storage-manager'
 import { revokeSipIdentityIfRoleless } from '../telephony/registrar'
 import { createLogger } from '../lib/logger'
+import { getConnectionManager } from '../lib/ws-manager'
 
 const logger = createLogger('routes.hubs')
 
@@ -289,6 +290,11 @@ routes.delete('/:hubId/members/:pubkey',
 
     try {
       await services.identity.removeHubRole({ pubkey: targetPubkey, hubId })
+      // Drop the departed member's live relay subscription for this hub now.
+      // Without this, their open socket keeps receiving the hub's events until
+      // the next periodic membership revalidation — up to
+      // MEMBERSHIP_REVALIDATION_INTERVAL_MS of delivery to a non-member (#1655).
+      getConnectionManager()?.evictMember(targetPubkey, hubId)
       // Role loss: when the volunteer holds no hub role anywhere left, their
       // per-volunteer SIP identity on our own PBX must die with it (a no-op
       // for vendor providers) — and /sip-token refuses to re-provision it,

@@ -4,6 +4,13 @@ Feature: Real-Time Relay Event Delivery
   authenticated subscribers. Every state mutation that publishes an event
   must result in the event arriving at the relay within 5 seconds.
 
+  Delivery is per-user, not per-connection: a client holds ONE channel for its
+  whole session and that channel carries every hub the user has subscribed,
+  combined. A member must therefore receive a hub's events whichever socket
+  asked for that hub — the multi-hub routing axiom, which exists so a device
+  never misses a ring for a hub it belongs to. Membership, checked at
+  subscribe, is the isolation boundary.
+
   Background:
     And 1 volunteers are on shift
     And the test relay is connected and capturing events
@@ -89,6 +96,16 @@ Feature: Real-Time Relay Event Delivery
     When an inbound SMS message arrives from a unique number
     Then the relay should receive a kind 1010 event within 5 seconds
     And the event hubId should be the scenario hub
+
+  # --- Per-user delivery: one channel per client, carrying every hub ---
+
+  @relay @calls
+  Scenario: A member of two hubs receives the second hub's calls on the channel subscribed to the first
+    Given a volunteer who is a member of the scenario hub and a second hub
+    And that volunteer's first channel is subscribed to the scenario hub
+    And that volunteer's second channel is subscribed to the second hub
+    When an incoming call arrives in the second hub
+    Then the first channel should receive a kind 1000 event for the second hub within 5 seconds
 
   # --- Hub isolation ---
 
