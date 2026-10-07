@@ -48,6 +48,42 @@
 #                       Omit it only where the probe's whole claim genuinely is
 #                       "this command ran clean" and nothing was measured.
 #   smoke_check_detail  optional, default ''. Shown beside a FAIL verdict.
+#   smoke_check_severity
+#                       optional, default 'fatal'. Either 'fatal' or 'advisory'
+#                       — see WHICH FAILURES STOP A DEPLOY below. ANY other
+#                       value, including a typo, is treated as fatal.
+#
+# WHICH FAILURES STOP A DEPLOY (issue #1636)
+#
+# Before this, every FAIL stopped the deploy and nothing said which failures
+# were supposed to. The Kamailio probe is the clearest case of the gap: it
+# reported NOT READY and the deploy succeeded anyway, so an operator reading
+# "Smoke check FAILED" had no way to know whether the deploy had stopped. Three
+# states existed in practice — fatal, advisory, and "reports FAIL and proceeds
+# without comment" — and only the first two are defensible.
+#
+# The rule, applied per check rather than left to whichever task happened to
+# carry a `failed_when`:
+#
+#   fatal     the check measures something THIS DEPLOY is responsible for
+#             putting in place, and whose absence either stops a call being
+#             answered / a note being stored, or leaves the host or its traffic
+#             exposed. A fatal FAIL stops the deploy.
+#
+#   advisory  the check measures an OPTIONAL integration or a convenience
+#             sidecar: its absence costs a feature but neither breaks the call
+#             path nor exposes anything. An advisory FAIL is reported under its
+#             own DEGRADED heading and the deploy proceeds.
+#
+# THE DEFAULT IS FATAL, and an unrecognised severity is fatal too. A check that
+# forgets to declare one is therefore too strict, never silently advisory —
+# the same direction of failure as #1635's "a probe that did not run is not a
+# passing probe". Making the default advisory would let the next check added
+# here inherit "informs, gates nothing", which is the defect being fixed.
+#
+# Note that a fatal verdict does not block the fix for whatever it caught: the
+# smoke check runs AFTER the deploy has applied everything. What it blocks is
+# the deploy REPORTING success over a hotline that cannot route a call.
 #
 # `status` is exactly one of PASS / FAIL / SKIPPED, so the summary counts it by
 # equality and the detail lives in its own key. Folding the detail into the
@@ -59,7 +95,7 @@
 
 - name: "Record smoke result — {{ smoke_check_name }}"
   ansible.builtin.set_fact:
-    smoke_results: "{{ smoke_results + [{'check': smoke_check_name, 'status': _smoke_status, 'detail': _smoke_detail}] }}"
+    smoke_results: "{{ smoke_results + [{'check': smoke_check_name, 'status': _smoke_status, 'detail': _smoke_detail, 'severity': _smoke_severity}] }}"
   vars:
     # Normalised to a mapping first. A task skipped by TAG selection registers
     # nothing at all, so call sites pass `{{ probe | default({}) }}` and an
@@ -85,4 +121,9 @@
         if not (_smoke_ran | bool)
         else (smoke_check_detail | default(''))
       }}
+    # Written as an equality against the one permissive value, not a membership
+    # test against a list of two: a misspelt 'advisroy' then lands on fatal
+    # instead of on neither, and a check can only become advisory by saying so
+    # exactly.
+    _smoke_severity: "{{ 'advisory' if (smoke_check_severity | default('fatal')) == 'advisory' else 'fatal' }}"
   tags: always

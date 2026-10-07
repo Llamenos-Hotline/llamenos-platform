@@ -125,12 +125,24 @@ describe('health route', () => {
       expect(body.checks.sipBridge.status).toBe('failing')
     })
 
-    it('skips sipBridge check when SIP_BRIDGE_URL not configured', async () => {
+    // The measured defect (#1636). SIP_BRIDGE_URL went unrendered on a
+    // deployed host, this check returned null, and `runChecks` dropped the key
+    // — so /api/health/ready answered 200 with THREE checks and status "ok"
+    // where it owed four and `sipBridge: failing`. Nothing reported the dead
+    // call path, because the only probe that would have had removed itself.
+    //
+    // This test previously ASSERTED that omission, which is how the defect
+    // survived a passing suite.
+    it('reports sipBridge FAILING, never absent, when SIP_BRIDGE_URL is not configured', async () => {
       const app = createTestApp({ env: { SIP_BRIDGE_URL: undefined } })
       const res = await app.request('/')
+      // Still 200: whether an unconfigured bridge matters is the deployment's
+      // call, not the app's (#1418). But the report must be complete.
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.checks.sipBridge).toBeUndefined()
+      expect(body.checks.sipBridge).toBeDefined()
+      expect(body.checks.sipBridge.status).toBe('failing')
+      expect(body.checks.sipBridge.detail).toContain('SIP_BRIDGE_URL')
     })
 
     it('reports a failing signal notifier WITHOUT gating readiness', async () => {
@@ -207,12 +219,14 @@ describe('health route', () => {
       expect(body.checks.signalNotifier.status).toBe('failing')
     })
 
-    it('skips signalNotifier check when SIGNAL_NOTIFIER_URL not configured', async () => {
+    it('reports signalNotifier FAILING, never absent, when SIGNAL_NOTIFIER_URL is not configured', async () => {
       const app = createTestApp({ env: { SIGNAL_NOTIFIER_URL: undefined } })
       const res = await app.request('/')
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.checks.signalNotifier).toBeUndefined()
+      expect(body.checks.signalNotifier).toBeDefined()
+      expect(body.checks.signalNotifier.status).toBe('failing')
+      expect(body.checks.signalNotifier.detail).toContain('SIGNAL_NOTIFIER_URL')
     })
 
     it('falls back to NOTIFIER_URL when SIGNAL_NOTIFIER_URL not set', async () => {
@@ -255,20 +269,68 @@ describe('health route', () => {
       expect(body.checks.storage.status).toBe('ok')
     })
 
-    it('skips storage check when STORAGE_ENDPOINT not configured', async () => {
+    // Storage is load-bearing AND has a fallback endpoint in
+    // lib/storage-manager.ts, so an unset STORAGE_ENDPOINT does not mean "no
+    // storage" — it means localhost. The check probes that same default and
+    // reports what it found, rather than removing itself from the response.
+    it('probes the default endpoint and reports storage failing when STORAGE_ENDPOINT is not configured', async () => {
+      fetchSpy.mockImplementation(async (url: unknown) => {
+        // Nothing listening on the default endpoint.
+        if (String(url).includes('localhost:9000')) throw new Error('Connection refused')
+        if (String(url).includes('sip-bridge')) return new Response('ok', { status: 200 })
+        if (String(url).includes('signal-notifier')) {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        return new Response(null, { status: 500 })
+      })
+
       const app = createTestApp({ env: { STORAGE_ENDPOINT: undefined } })
       const res = await app.request('/')
-      expect(res.status).toBe(200)
+      // Load-bearing: this one DOES gate.
+      expect(res.status).toBe(503)
       const body = await res.json()
-      expect(body.checks.storage).toBeUndefined()
+      expect(body.checks.storage).toBeDefined()
+      expect(body.checks.storage.status).toBe('failing')
+      expect(body.checks.storage.detail).toContain('STORAGE_ENDPOINT unset')
     })
 
-    it('skips relay check when SERVER_SECRET not configured', async () => {
+    it('reports relay FAILING, never absent, when SERVER_SECRET is not configured', async () => {
       const app = createTestApp({ env: { SERVER_SECRET: undefined } })
       const res = await app.request('/')
-      expect(res.status).toBe(200)
+      // The relay derives its auth keys from SERVER_SECRET, so without it no
+      // client receives a live event — load-bearing, and it gates.
+      expect(res.status).toBe(503)
       const body = await res.json()
-      expect(body.checks.relay).toBeUndefined()
+      expect(body.checks.relay).toBeDefined()
+      expect(body.checks.relay.status).toBe('failing')
+      expect(body.checks.relay.detail).toContain('SERVER_SECRET')
+    })
+
+    // The invariant, pinned once rather than inferred from the four tests
+    // above: the SET of checks in the response does not depend on
+    // configuration. Without this, a future change that dropped one key again
+    // would only break whichever single test covered that key.
+    it('reports the same set of checks whether or not anything is configured', async () => {
+      const EXPECTED = ['postgres', 'storage', 'relay', 'sipBridge', 'signalNotifier']
+
+      const configured = await (await createTestApp().request('/')).json()
+      expect(Object.keys(configured.checks).sort()).toEqual([...EXPECTED].sort())
+
+      fetchSpy.mockImplementation(async () => { throw new Error('Connection refused') })
+      const bare = await (await createTestApp({
+        env: {
+          STORAGE_ENDPOINT: undefined,
+          SERVER_SECRET: undefined,
+          SIP_BRIDGE_URL: undefined,
+          SIGNAL_NOTIFIER_URL: undefined,
+          NOTIFIER_URL: undefined,
+        },
+      }).request('/')).json()
+      expect(Object.keys(bare.checks).sort()).toEqual([...EXPECTED].sort())
+      // And not one of them claims to be ok.
+      for (const name of EXPECTED.filter(n => n !== 'postgres')) {
+        expect(bare.checks[name].status).toBe('failing')
+      }
     })
 
     it('includes latency measurements for external checks', async () => {
