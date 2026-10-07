@@ -226,22 +226,29 @@ fn androids_label_id_table_matches_the_registry() {
     }
 }
 
-/// Notes, files, and contact identifiers are canonical-AAD envelopes on every
-/// platform: `content_aad(label)` on the content layer, `key_wrap_aad(label)`
-/// on the key wrap. A call site passing an empty AAD beside one of those
-/// labels is the #1517-family defect recurring — writer and reader look
-/// self-consistent on one platform, and every other platform fails the tag
-/// check with no hint of why. Hub-key and PUK envelopes are exempt: every
-/// implementation of those passes empty (or the PUK per-device AAD) by
-/// agreement, so the pair interoperates.
+/// Notes, files, contact identifiers and hub keys are canonical-AAD envelopes
+/// on every platform: `content_aad(label)` on the content layer,
+/// `key_wrap_aad(label)` on the key wrap. A call site passing an empty AAD
+/// beside one of those labels is the #1517-family defect recurring — writer
+/// and reader look self-consistent on one platform, and every other platform
+/// fails the tag check with no hint of why.
+///
+/// `LABEL_HUB_KEY_WRAP` was listed as exempt here until #1631, on the grounds
+/// that desktop, iOS and Android all passed empty so the three interoperated.
+/// They did — with each other, and with nothing else: PROTOCOL.md §2.7, the
+/// crate's own `hpke_wrap_key`/`hpke_unwrap_key` pair, and the interop vectors
+/// had bound `UTF-8("llamenos:hub-key-wrap:key-wrap")` the whole time. An
+/// exemption three clients agree on is still a defect; only the PUK
+/// per-device AAD remains a genuinely different convention.
 #[test]
 fn mobile_never_seals_canonical_envelopes_with_empty_aad() {
-    const CANONICAL_LABELS: [&str; 5] = [
+    const CANONICAL_LABELS: [&str; 6] = [
         "LABEL_NOTE_KEY",
         "LABEL_FILE_KEY",
         "LABEL_FILE_METADATA",
         "LABEL_CONTACT_ID",
         "LABEL_CONTACT_PROFILE",
+        "LABEL_HUB_KEY_WRAP",
     ];
     let mut offenders = Vec::new();
     for dir in ["apps/android/app/src/main", "apps/ios/Sources"] {
@@ -299,28 +306,38 @@ fn mobile_never_seals_canonical_envelopes_with_empty_aad() {
 /// `src/client/lib/platform.ts` seals notes and wraps file/contact keys;
 /// `src/client/lib/file-crypto.ts` seals file content and metadata;
 /// `src/client/components/signal-notification-section.tsx` seals Signal
-/// contact identifiers. A crypto entry point invoked on the same source line
-/// as one of the canonical labels must not pass an empty AAD literal — the
-/// pre-fix shape of this line was `hpkeSealKey(keyHex, pub, LABEL_NOTE_KEY, '')`.
+/// contact identifiers; `src/client/lib/hub-key-manager.ts` wraps and unwraps
+/// the hub key (#1631 — it passed `''` on both). A crypto entry point invoked
+/// on the same source line as one of the canonical labels must not pass an
+/// empty AAD literal — the pre-fix shape of this line was
+/// `hpkeSealKey(keyHex, pub, LABEL_NOTE_KEY, '')`.
+///
+/// This scan is single-line and so only catches the defect in its original
+/// shape; the AAD a call site actually passes is pinned by behaviour, in
+/// `src/client/lib/hub-key-manager.test.ts` and `hub_key_wrap_binds_the_composite_aad`.
 #[test]
 fn desktop_never_seals_canonical_envelopes_with_empty_aad() {
-    const CANONICAL_LABELS: [&str; 5] = [
+    const CANONICAL_LABELS: [&str; 6] = [
         "LABEL_NOTE_KEY",
         "LABEL_FILE_KEY",
         "LABEL_FILE_METADATA",
         "LABEL_CONTACT_ID",
         "LABEL_CONTACT_PROFILE",
+        "LABEL_HUB_KEY_WRAP",
     ];
-    const ENCRYPT_FNS: [&str; 4] = [
+    const ENCRYPT_FNS: [&str; 6] = [
         "hpkeSealKey",
         "hpkeOpenKeyFromState",
         "aesGcmEncrypt",
         "aesGcmDecrypt",
+        "platformWrapHubKeyForMember",
+        "hpkeUnwrapAndSetHubKey",
     ];
     let files = [
         "src/client/lib/platform.ts",
         "src/client/lib/file-crypto.ts",
         "src/client/components/signal-notification-section.tsx",
+        "src/client/lib/hub-key-manager.ts",
     ];
     let mut offenders = Vec::new();
     for file in files {
@@ -345,5 +362,82 @@ fn desktop_never_seals_canonical_envelopes_with_empty_aad() {
         "these desktop call sites seal a canonical-AAD envelope (note / file / \
          contact) with an empty AAD, which no other implementation can open: \
          {offenders:#?}"
+    );
+}
+
+/// The hub-key envelope's AAD, pinned to the spelling `PROTOCOL.md` §2.7 gives
+/// and traced to the one call site on each platform that binds it.
+///
+/// This envelope is the #1631 defect: the desktop, iOS and Android all passed
+/// an empty AAD, agreeing with each other and with nothing else — not §2.7,
+/// not `hpke_wrap_key`/`hpke_unwrap_key` in this crate, not the interop
+/// vectors, and not the BDD seeder, all of which had bound the composite from
+/// the start. The operator's adjudication was that the code moves to the spec,
+/// so the spelling is pinned as a literal here: a derivation that drifts in
+/// casing, in the suffix, or by a trailing byte would otherwise stay
+/// self-consistent across all four languages and still be wrong.
+///
+/// The round trip itself is exercised per platform, not here:
+/// `ffi_v3::tests::hub_key_load_binds_the_key_wrap_aad` (Android),
+/// `CryptoServiceHubKeyAadTests` (iOS), `hub-key-manager.test.ts` (desktop).
+#[test]
+fn hub_key_wrap_binds_the_composite_aad() {
+    // §2.7: aad = UTF-8("llamenos:hub-key-wrap:key-wrap") on both the seal and
+    // the open. Rust is the derivation every platform reaches: directly, via
+    // UniFFI (`mobile_key_wrap_aad_hex` — iOS and Android), or via the
+    // byte-equal TypeScript mirror pinned by
+    // `rust_and_typescript_derive_identical_aad_for_every_label` (desktop).
+    assert_eq!(
+        llamenos_core::key_wrap_aad(llamenos_core::labels::LABEL_HUB_KEY_WRAP),
+        b"llamenos:hub-key-wrap:key-wrap".to_vec(),
+        "the hub-key wrap AAD no longer matches PROTOCOL.md §2.7"
+    );
+
+    // The desktop call site derives it rather than spelling it, and binds the
+    // same value on the wrap and the unwrap. Both passed `''` before #1631.
+    let ts = read("src/client/lib/hub-key-manager.ts");
+    assert!(
+        ts.contains("keyWrapAadHex(LABEL_HUB_KEY_WRAP)"),
+        "hub-key-manager.ts no longer derives its AAD from @shared/envelope-aad"
+    );
+    for call in ["platformWrapHubKeyForMember", "hpkeUnwrapAndSetHubKey"] {
+        // The invocation, not the import of the same name: match on the
+        // opening paren.
+        let invocation = format!("{call}(");
+        let after = ts
+            .split_once(&invocation)
+            .unwrap_or_else(|| panic!("hub-key-manager.ts no longer calls {call}"))
+            .1;
+        // The argument list, whether it is written on one line or several.
+        let args = after.split(')').next().unwrap_or_default();
+        assert!(
+            args.contains("HUB_KEY_WRAP_AAD_HEX"),
+            "hub-key-manager.ts calls {call} without the composite AAD: {args:?}"
+        );
+    }
+
+    // iOS reaches the same derivation through UniFFI, and no longer has the
+    // `noAad` constant that existed for this envelope alone.
+    let swift = read("apps/ios/Sources/Services/CryptoService.swift");
+    assert!(
+        swift.contains("aadHex: try keyWrapAad(CryptoLabels.LABEL_HUB_KEY_WRAP)"),
+        "CryptoService.loadHubKey no longer binds keyWrapAad(LABEL_HUB_KEY_WRAP)"
+    );
+    assert!(
+        !swift.contains("private let noAad"),
+        "the `noAad` constant is back; it existed for the hub-key envelope, \
+         whose empty AAD was the #1631 defect rather than an exemption"
+    );
+
+    // Android's reader is Rust: `mobile_load_hub_key` must not pass `&[]`.
+    let ffi = read("packages/crypto/src/ffi_v3.rs");
+    let load = ffi
+        .split_once("pub fn mobile_load_hub_key")
+        .expect("mobile_load_hub_key is gone — Android's hub-key reader moved")
+        .1;
+    let body = load.split("\n}\n").next().unwrap_or_default();
+    assert!(
+        body.contains("key_wrap_aad(crate::labels::LABEL_HUB_KEY_WRAP)"),
+        "mobile_load_hub_key no longer binds key_wrap_aad(LABEL_HUB_KEY_WRAP)"
     );
 }

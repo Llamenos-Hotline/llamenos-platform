@@ -1151,6 +1151,12 @@ pub fn mobile_clear_ephemeral_key() {
 /// The caller provides only `enc` and `ct` from the server response. The envelope
 /// version and label ID are constructed by Rust from the label registry — clients
 /// never need to hardcode protocol constants.
+///
+/// The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
+/// what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
+/// desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
+/// with the other two clients and with none of the spec, the crate's own
+/// wrap/unwrap pair, or the interop vectors.
 #[uniffi::export]
 pub fn mobile_load_hub_key(hub_id: String, enc: String, ct: String) -> Result<(), CryptoError> {
     let label_id = crate::labels::label_to_id(crate::labels::LABEL_HUB_KEY_WRAP)
@@ -1168,7 +1174,7 @@ pub fn mobile_load_hub_key(hub_id: String, enc: String, ct: String) -> Result<()
         &envelope,
         &secret_hex,
         crate::labels::LABEL_HUB_KEY_WRAP,
-        &[],
+        &crate::envelope_aad::key_wrap_aad(crate::labels::LABEL_HUB_KEY_WRAP),
     )?;
 
     let mut guard = state().lock().unwrap();
@@ -1739,6 +1745,77 @@ mod tests {
         let seed_hex = puk_value["seedHex"].as_str().unwrap().to_string();
         assert_eq!(seed_hex.len(), 64);
 
+        mobile_lock();
+    }
+
+    /// The hub-key envelope's AAD, on the path Android actually takes.
+    ///
+    /// `mobile_load_hub_key` is Android's only hub-key reader
+    /// (`HubRepository` -> `CryptoService.loadHubKey`), and it passed `&[]`
+    /// until #1631 while PROTOCOL.md §2.7, `crate::encryption::hpke_wrap_key`
+    /// and the interop vectors all bound
+    /// `UTF-8("llamenos:hub-key-wrap:key-wrap")`. Three clients agreeing on
+    /// the empty AAD made it unanimous, not correct.
+    ///
+    /// Verified by breaking it: the empty-AAD wrap every pre-#1631 client
+    /// wrote must now fail (the accepted wire break), and a wrap sealed under
+    /// a *different* label's key-wrap AAD must fail too — otherwise the AAD
+    /// is being passed without binding anything.
+    #[test]
+    fn hub_key_load_binds_the_key_wrap_aad() {
+        let _guard = state_guard();
+        let label = crate::labels::LABEL_HUB_KEY_WRAP;
+        let composite = crate::envelope_aad::key_wrap_aad(label);
+        // The bytes §2.7 names, pinned here so a drift in the derivation is a
+        // failure rather than a consistent-but-wrong AAD on every platform.
+        assert_eq!(composite, b"llamenos:hub-key-wrap:key-wrap".to_vec());
+
+        mobile_lock();
+        let _ = mobile_generate_and_load("hub-aad-dev".into(), "12345678".into()).unwrap();
+        let ds = mobile_get_device_state().unwrap();
+        let mut hub_key = [0u8; 32];
+        getrandom::getrandom(&mut hub_key).unwrap();
+
+        let seal = |aad: &[u8]| {
+            hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad).unwrap()
+        };
+
+        // 1. Composite AAD round-trips.
+        let good = seal(&composite);
+        mobile_load_hub_key("hub-composite".into(), good.enc, good.ct).unwrap();
+        assert!(mobile_has_hub_key("hub-composite".into()));
+
+        // 2. The wire break: an empty-AAD wrap no longer opens.
+        let empty = seal(&[]);
+        assert!(
+            mobile_load_hub_key("hub-empty".into(), empty.enc, empty.ct).is_err(),
+            "a hub key sealed with an empty AAD still opened — the #1631 break \
+             is not actually in force"
+        );
+        assert!(!mobile_has_hub_key("hub-empty".into()));
+
+        // 3. The AAD binds: another label's key-wrap AAD is well-formed and
+        //    must still fail.
+        let other = seal(&crate::envelope_aad::key_wrap_aad(
+            crate::labels::LABEL_NOTE_KEY,
+        ));
+        assert!(
+            mobile_load_hub_key("hub-other-label".into(), other.enc, other.ct).is_err(),
+            "hub key opened under another label's key-wrap AAD — the AAD is \
+             being passed but not bound"
+        );
+        assert!(!mobile_has_hub_key("hub-other-label".into()));
+
+        // 4. The content AAD of the same label must not be interchangeable
+        //    with its key-wrap AAD; that separation is the whole point of the
+        //    suffix, since the HPKE `info` is the same label either way.
+        let content = seal(&crate::envelope_aad::content_aad(label));
+        assert!(
+            mobile_load_hub_key("hub-content-aad".into(), content.enc, content.ct).is_err(),
+            "hub key opened under the content AAD of its own label"
+        );
+
+        mobile_clear_hub_keys();
         mobile_lock();
     }
 
