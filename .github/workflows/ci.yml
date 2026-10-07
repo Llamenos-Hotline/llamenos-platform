@@ -1448,6 +1448,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Disk headroom, before anything expensive and before this job creates a
+      # simulator or a build product.
+      #
+      # #1665: this host's shared data volume filled up mid-run and the runner
+      # AGENT died — not the job — throwing `IOException: No space left on
+      # device` from its own `_diag` tracing writer. Both agents on the host
+      # went within one second of each other, because they share one volume.
+      # The consequence is why this step is worth a minute of every iOS job:
+      # no job log was uploaded at all (`BlobNotFound`), every step from the
+      # test onward recorded a `null` conclusion, and the merge queue ejected
+      # a PR that needed no code change — with the only evidence in the
+      # check-run annotations. A job that REFUSES is a red check somebody can
+      # read; an agent that crashes produces nothing.
+      #
+      # The same step reclaims, and that half has to live HERE rather than in
+      # a teardown step: a crashed or cancelled job runs no `if: always()`, so
+      # its simulator (2.4-2.6 GiB of device data, measured) leaks permanently
+      # and the volume ratchets down ~5 GiB per incident. Job start is the only
+      # point guaranteed to run however the previous job died — the same
+      # reasoning #1639 applies to the backend port it leaks for the same
+      # reason. It deletes only what it can prove CI created; read the script
+      # header for what it refuses to touch and why.
+      #
+      # A no-op on a GitHub-hosted runner: that VM is thrown away after the
+      # job and shares nothing with anybody.
+      - name: Guard the runner's disk headroom
+        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
         with:
