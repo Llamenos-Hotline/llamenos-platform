@@ -27,17 +27,18 @@ final class SettingsUITests: BaseUITest {
         }
     }
 
-    func testSettingsShowsHubURL() {
+    func testSettingsShowsHubURL() throws {
         given("I am on the settings screen") {
             // Already navigated
         }
-        then("I should see the hub URL or not-configured state") {
-            // Hub URL may not be set in test-authenticated mode
-            let hubRow = find("settings-hub-url")
-            if hubRow.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Hub URL is displayed")
-            }
-            // Hub URL being absent is acceptable in test mode (no hub configured)
+        then("I should see the hub URL") {
+            // SettingsView only renders "settings-hub-url" `if let hubURL =
+            // appState.authService.hubURL` — this class's setUp() calls
+            // `launchAuthenticated()`, which never configures a hub URL, so the
+            // row is guaranteed absent here, not merely "may not be set".
+            // `APIConnectedUITests.testSettingsShowsHubURL` covers the
+            // hub-configured case against a real connection.
+            throw XCTSkip("This test class launches with no hub configured; settings-hub-url never renders")
         }
     }
 
@@ -176,52 +177,56 @@ final class SettingsUITests: BaseUITest {
     // MARK: - Notification Settings
 
     func testCallSoundsToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences settings screen") {
+            // These toggles live on PreferencesSettingsView, not the top-level
+            // Settings screen — `scrollToFind` against the top-level screen
+            // alone never located them, so `if toggle.exists` was always false
+            // and this test asserted nothing.
+            navigateToPreferencesSettings()
         }
         then("I should see a call sounds toggle") {
-            let toggle = scrollToFind("settings-call-sounds")
-            if toggle.exists {
-                XCTAssertTrue(true, "Call sounds toggle exists")
-            }
+            XCTAssertTrue(
+                scrollToFind("settings-call-sounds").exists,
+                "Call sounds toggle should exist in preferences"
+            )
         }
     }
 
     func testMessageAlertsToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences settings screen") {
+            navigateToPreferencesSettings()
         }
         then("I should see a message alerts toggle") {
-            let toggle = scrollToFind("settings-message-alerts")
-            if toggle.exists {
-                XCTAssertTrue(true, "Message alerts toggle exists")
-            }
+            XCTAssertTrue(
+                scrollToFind("settings-message-alerts").exists,
+                "Message alerts toggle should exist in preferences"
+            )
         }
     }
 
     // MARK: - Security Settings
 
     func testAutoLockPickerExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences settings screen") {
+            navigateToPreferencesSettings()
         }
         then("I should see an auto-lock timeout picker") {
-            let picker = scrollToFind("settings-auto-lock-picker")
-            if picker.exists {
-                XCTAssertTrue(true, "Auto-lock picker exists")
-            }
+            XCTAssertTrue(
+                scrollToFind("settings-auto-lock-picker").exists,
+                "Auto-lock picker should exist in preferences"
+            )
         }
     }
 
     func testBiometricToggleExists() {
-        given("I am on the settings screen") {
-            // Already navigated
+        given("I am on the preferences settings screen") {
+            navigateToPreferencesSettings()
         }
         then("I should see a biometric unlock toggle") {
-            let toggle = scrollToFind("settings-biometric-toggle")
-            if toggle.exists {
-                XCTAssertTrue(true, "Biometric toggle exists")
-            }
+            XCTAssertTrue(
+                scrollToFind("settings-biometric-toggle").exists,
+                "Biometric toggle should exist in preferences"
+            )
         }
     }
 

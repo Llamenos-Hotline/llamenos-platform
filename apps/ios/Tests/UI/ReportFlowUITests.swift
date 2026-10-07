@@ -196,7 +196,7 @@ final class ReportFlowUITests: BaseUITest {
     /// Verifies that selecting a report type from the picker opens the
     /// TypedReportCreateView with dynamic form fields and a submit button.
     /// Requires Docker Compose backend with mobile-optimized report types.
-    func testTypedReportFormRendersFields() {
+    func testTypedReportFormRendersFields() throws {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
@@ -221,24 +221,30 @@ final class ReportFlowUITests: BaseUITest {
             }
         }
         then("I should see the typed report form with fields and submit button") {
-            // The typed form should have a submit button and a cancel button
+            // Whether report types are configured on the server is this test
+            // environment's call, not something this suite configures itself
+            // (unlike case management's `TestAdminAPI.applyTemplate`, there
+            // is no equivalent helper here) — report types created via
+            // `POST /settings/report-types` may be global, not per-hub, so
+            // creating one from this class's hub risks polluting other test
+            // classes running in parallel. Report the no-report-types case
+            // explicitly instead of silently passing with no assertion ever
+            // evaluated.
             let submitButton = find("typed-report-submit")
             let cancelButton = find("cancel-typed-report")
 
-            let hasTypedForm = submitButton.waitForExistence(timeout: 5)
-                || cancelButton.waitForExistence(timeout: 2)
-
-            if hasTypedForm {
-                XCTAssertTrue(
-                    submitButton.exists,
-                    "Typed report form should have a submit button"
-                )
-                XCTAssertTrue(
-                    cancelButton.exists,
-                    "Typed report form should have a cancel button"
-                )
+            guard submitButton.waitForExistence(timeout: 5) || cancelButton.waitForExistence(timeout: 2) else {
+                throw XCTSkip("No report types are configured in this test environment; the typed form never renders")
             }
-            // If no typed form appeared (no report types on server), pass gracefully
+
+            XCTAssertTrue(
+                submitButton.exists,
+                "Typed report form should have a submit button"
+            )
+            XCTAssertTrue(
+                cancelButton.exists,
+                "Typed report form should have a cancel button"
+            )
         }
     }
 
@@ -291,7 +297,7 @@ final class ReportFlowUITests: BaseUITest {
 
     /// Verifies that textarea fields with `supportAudioInput: true` show the
     /// mic button (AudioInputButton) for speech-to-text dictation.
-    func testAudioInputButtonVisibleOnTextareaFields() {
+    func testAudioInputButtonVisibleOnTextareaFields() throws {
         given("I am authenticated as admin with API") {
             launchAsAdminWithAPI()
         }
@@ -313,25 +319,22 @@ final class ReportFlowUITests: BaseUITest {
             }
         }
         then("textarea fields with audio support should show a mic button") {
-            // The audio input button has a fixed identifier
-            let audioButton = find("audio-input-button")
-            let typedSubmit = find("typed-report-submit")
-
-            // Only check for audio button if we're on the typed form
-            if typedSubmit.waitForExistence(timeout: 5) {
-                // Scroll to find the audio button — it may be below the fold
-                let found = scrollToFind("audio-input-button", maxSwipes: 5)
-                // Audio button presence depends on whether the report type
-                // has textarea fields with supportAudioInput: true.
-                // If present, verify it exists; if not, that's acceptable.
-                if found.exists {
-                    XCTAssertTrue(
-                        audioButton.isHittable || audioButton.exists,
-                        "Audio input button should be visible on textarea fields with audio support"
-                    )
-                }
+            // See testTypedReportFormRendersFields: whether report types are
+            // configured, and whether their fields support audio input, are
+            // both this test environment's call, not this suite's.
+            guard find("typed-report-submit").waitForExistence(timeout: 5) else {
+                throw XCTSkip("No report types are configured in this test environment; the typed form never renders")
             }
-            // If no typed form (no report types on server), pass gracefully
+
+            // Scroll to find the audio button — it may be below the fold
+            let audioButton = scrollToFind("audio-input-button", maxSwipes: 5)
+            guard audioButton.exists else {
+                throw XCTSkip("The report type on this server has no textarea field with audio input support")
+            }
+            XCTAssertTrue(
+                audioButton.isHittable,
+                "Audio input button should be visible on textarea fields with audio support"
+            )
         }
     }
 }

@@ -45,7 +45,7 @@ final class RecoveryGroupUITests: BaseUITest {
 
     // MARK: - User Account Recovery Flow
 
-    func testUserCanStartRecoveryFlow() {
+    func testUserCanStartRecoveryFlow() throws {
         app.launchArguments.append(contentsOf: [
             "--reset-keychain",
         ])
@@ -54,8 +54,13 @@ final class RecoveryGroupUITests: BaseUITest {
         // Navigate to recovery from the login screen
         let recoveryLink = scrollToFind("login-recover-account")
         guard recoveryLink.exists else {
-            // Recovery link may not be visible yet; skip test gracefully
-            return
+            // "login-recover-account" does not exist anywhere in
+            // apps/ios/Sources — AccountRecoveryView.swift is a real view,
+            // but LoginView.swift never links to it, so this is not a timing
+            // issue ("not visible yet") but an unreachable feature. Report
+            // that explicitly instead of silently passing with no assertion
+            // ever evaluated.
+            throw XCTSkip("No recovery link exists on the login screen; AccountRecoveryView is unreachable from LoginView")
         }
         recoveryLink.tap()
 

@@ -29,8 +29,6 @@ AdminSidebarUITests/testTapCallSettingsNavigates  # tests a view the app never p
 AdminSidebarUITests/testTapBansNavigates  # tests a view the app never presents — #1245
 AdminSidebarUITests/testTapPlatformHubsNavigates  # tests a view the app never presents — #1245
 
-# navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
-EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
 
 # The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
 CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
@@ -48,3 +46,10 @@ BlastsUITests/testBlastsListShowsContent  # view renders no state on a 200 — #
 # intermittently (passed on one #1407 run, failed the next on an identical diff),
 # which is worse than failing always: it fails other people's PRs at random.
 CaseManagementUITests/testDetailTabSwitching  # contacts tab renders no state — #1246
+
+# The hand-written AppConversation model has drifted from the protocol schema
+# (missing contactIdentifierHash/messageCount/updatedAt/metadata), so the Messages
+# tab shows a decoding error as soon as any conversation exists. #1322 converted
+# this test's `if errorState.exists { print(...); return }` into a real assertion,
+# which now surfaces that failure instead of silently passing.
+APIConnectedUITests/testSimulateIncomingMessageAppearsInConversations  # Messages tab shows a decoding error once a conversation exists — #1294

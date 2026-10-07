@@ -18,23 +18,18 @@ final class AdminFlowUITests: BaseUITest {
     func testSettingsHasAdminSection() {
         navigateToSettings()
 
-        // Admin panel link should be visible for admin users
+        // setUp() registers this device as a super-admin, so the admin panel
+        // link must always be visible — it is gated on server-granted
+        // permissions, not on something this test configuration can lack.
         let adminLink = find("settings-admin-link")
-        if adminLink.waitForExistence(timeout: 10) {
-            XCTAssertTrue(true, "Admin panel link exists in settings for admin users")
-        }
-        // If the admin section is not visible, the user might not have admin role
-        // in the test configuration, which is acceptable
+        XCTAssertTrue(adminLink.waitForExistence(timeout: 10), "Admin panel link should exist in settings for admin users")
     }
 
     func testAdminPanelOpens() {
         navigateToSettings()
 
         let adminLink = find("settings-admin-link")
-        guard adminLink.waitForExistence(timeout: 10) else {
-            // Not an admin — skip test
-            return
-        }
+        XCTAssertTrue(adminLink.waitForExistence(timeout: 10), "Admin panel link should exist for admin users")
         adminLink.tap()
 
         // Admin tab view should appear
@@ -74,14 +69,21 @@ final class AdminFlowUITests: BaseUITest {
 
         // Tap Volunteers link
         let volunteersLink = find("admin-volunteers")
-        guard volunteersLink.waitForExistence(timeout: 5) else { return }
+        XCTAssertTrue(volunteersLink.waitForExistence(timeout: 5), "Volunteers link should exist in the admin panel")
         volunteersLink.tap()
 
         // Wait for content
-        _ = anyElementExists(["volunteers-list", "volunteers-empty-state", "volunteers-loading"])
+        XCTAssertTrue(
+            anyElementExists(["volunteers-list", "volunteers-empty-state", "volunteers-loading"]),
+            "Volunteers view should show list, empty state, or loading"
+        )
 
-        // Search bar should be accessible
-        XCTAssertTrue(true, "Volunteers tab loaded successfully")
+        // UsersView applies `.searchable(...)`, which SwiftUI renders as a
+        // native search field — found via `app.searchFields`, not `find(_:)`.
+        XCTAssertTrue(
+            app.searchFields.firstMatch.waitForExistence(timeout: 5),
+            "Volunteers tab should expose a search field"
+        )
     }
 
     // MARK: - Ban List Tab
