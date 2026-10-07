@@ -173,11 +173,13 @@ final class APIService: @unchecked Sendable {
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
 
+        // Keys go on the wire exactly as the Swift types name them. The API contract
+        // (packages/protocol/schemas) is camelCase throughout, and the generated
+        // protocol types already carry camelCase CodingKeys. A key strategy here
+        // rewrote every multi-word key: `encryptedContent` went out as
+        // `encrypted_content` (#1293), and dictionary keys were rewritten too.
         self.encoder = JSONEncoder()
-        self.encoder.keyEncodingStrategy = .convertToSnakeCase
-
         self.decoder = JSONDecoder()
-        self.decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
 
     /// Set or update the hub base URL.
@@ -367,8 +369,8 @@ final class APIService: @unchecked Sendable {
 
     /// Perform an authenticated API request with a pre-encoded JSON body.
     ///
-    /// Use this when the body must bypass the `convertToSnakeCase` encoder — for example,
-    /// when the backend expects camelCase keys (`reportTypeId`, `encryptedContent`).
+    /// Use this when the body is built as untyped JSON (`JSONSerialization`) rather than
+    /// as an `Encodable` type.
     ///
     /// - Parameters:
     ///   - method: HTTP method.
@@ -652,8 +654,7 @@ final class APIService: @unchecked Sendable {
 
 // MARK: - Entity File Upload
 
-/// Local API response type — distinct from the codegen EntityFileUploadResponse
-/// because the decoder uses convertFromSnakeCase and expects String dates (not Date).
+/// Local API response type — shadows the codegen `EntityFileUploadResponse`.
 struct APIFileUploadResponse: Decodable {
     let fileId: String
     let uploadedAt: String

@@ -46,7 +46,7 @@ struct SystemHealthView: View {
 
     // MARK: - Health Grid
 
-    private func healthGrid(_ health: SystemHealth) -> some View {
+    private func healthGrid(_ health: SystemHealthResponse) -> some View {
         LazyVGrid(
             columns: [
                 GridItem(.flexible(), spacing: 12),
@@ -55,48 +55,96 @@ struct SystemHealthView: View {
             spacing: 12
         ) {
             HealthCardView(
-                status: health.server,
+                key: "server",
                 icon: "server.rack",
-                label: NSLocalizedString("admin_health_server", comment: "Server")
+                label: NSLocalizedString("admin_health_server", comment: "Server"),
+                status: health.server.status,
+                rows: [
+                    HealthRow(label: NSLocalizedString("admin_system_uptime", comment: "Uptime"), value: Self.formatUptime(health.server.uptime)),
+                    HealthRow(label: NSLocalizedString("admin_system_version", comment: "Version"), value: health.server.version),
+                ]
             )
-            .accessibilityIdentifier("health-card-server")
 
             HealthCardView(
-                status: health.services,
+                key: "services",
                 icon: "gearshape.2.fill",
-                label: NSLocalizedString("admin_health_services", comment: "Services")
+                label: NSLocalizedString("admin_health_services", comment: "Services"),
+                status: health.services.map(\.status).max { $0.severity < $1.severity },
+                rows: health.services.isEmpty
+                    ? [HealthRow(label: NSLocalizedString("admin_system_services", comment: "Services"), value: NSLocalizedString("admin_system_no_data", comment: "No data"))]
+                    : health.services.map { HealthRow(label: $0.name, value: $0.status.rawValue) }
             )
-            .accessibilityIdentifier("health-card-services")
 
             HealthCardView(
-                status: health.calls,
+                key: "calls",
                 icon: "phone.fill",
-                label: NSLocalizedString("admin_health_calls", comment: "Calls")
+                label: NSLocalizedString("admin_health_calls", comment: "Calls"),
+                status: nil,
+                rows: [
+                    HealthRow(label: NSLocalizedString("admin_system_calls_today", comment: "Calls Today"), value: Self.count(health.calls.today)),
+                    HealthRow(label: NSLocalizedString("admin_system_active_calls", comment: "Active Calls"), value: Self.count(health.calls.active)),
+                    HealthRow(label: NSLocalizedString("admin_system_avg_response", comment: "Avg Response Time"), value: "\(Self.count(health.calls.avgResponseSeconds))s"),
+                    HealthRow(label: NSLocalizedString("admin_system_missed_calls", comment: "Missed Calls"), value: Self.count(health.calls.missed)),
+                ]
             )
-            .accessibilityIdentifier("health-card-calls")
 
             HealthCardView(
-                status: health.storage,
+                key: "storage",
                 icon: "internaldrive.fill",
-                label: NSLocalizedString("admin_health_storage", comment: "Storage")
+                label: NSLocalizedString("admin_health_storage", comment: "Storage"),
+                status: nil,
+                rows: [
+                    HealthRow(label: NSLocalizedString("admin_system_db_size", comment: "Database Size"), value: health.storage.dbSize),
+                    HealthRow(label: NSLocalizedString("admin_system_blob_storage", comment: "Blob Storage"), value: health.storage.blobStorage),
+                ]
             )
-            .accessibilityIdentifier("health-card-storage")
 
             HealthCardView(
-                status: health.backup,
+                key: "backup",
                 icon: "arrow.triangle.2.circlepath",
-                label: NSLocalizedString("admin_health_backup", comment: "Backup")
+                label: NSLocalizedString("admin_health_backup", comment: "Backup"),
+                status: nil,
+                rows: [
+                    HealthRow(label: NSLocalizedString("admin_system_last_backup", comment: "Last Backup"), value: Self.timestamp(health.backup.lastBackup)),
+                    HealthRow(label: NSLocalizedString("admin_system_backup_size", comment: "Backup Size"), value: health.backup.backupSize),
+                    HealthRow(label: NSLocalizedString("admin_system_last_verify", comment: "Last Verify"), value: Self.timestamp(health.backup.lastVerify)),
+                ]
             )
-            .accessibilityIdentifier("health-card-backup")
 
             HealthCardView(
-                status: health.volunteers,
+                key: "volunteers",
                 icon: "person.3.fill",
-                label: NSLocalizedString("admin_health_users", comment: "Volunteers")
+                label: NSLocalizedString("admin_health_users", comment: "Volunteers"),
+                status: nil,
+                rows: [
+                    HealthRow(label: NSLocalizedString("admin_system_total_active", comment: "Total Active"), value: Self.count(health.users.totalActive)),
+                    HealthRow(label: NSLocalizedString("admin_system_online_now", comment: "Online Now"), value: Self.count(health.users.onlineNow)),
+                    HealthRow(label: NSLocalizedString("admin_system_on_shift", comment: "On Shift"), value: Self.count(health.users.onShift)),
+                    HealthRow(label: NSLocalizedString("admin_system_shift_coverage", comment: "Shift Coverage"), value: "\(Self.count(health.users.shiftCoverage))%"),
+                ]
             )
-            .accessibilityIdentifier("health-card-volunteers")
         }
         .padding()
+    }
+
+    // MARK: - Formatting
+
+    private static func count(_ value: Double) -> String {
+        String(Int(value.rounded()))
+    }
+
+    private static func formatUptime(_ seconds: Double) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: seconds) ?? "-"
+    }
+
+    private static func timestamp(_ iso: String?) -> String {
+        guard let iso else { return NSLocalizedString("admin_system_never", comment: "Never") }
+        guard let date = DateFormatting.parseISO(iso) else { return iso }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     // MARK: - Loading State
@@ -158,11 +206,20 @@ struct SystemHealthView: View {
 
 // MARK: - HealthCardView
 
-/// A single health status card showing an icon, label, status indicator, and details.
+/// One label/value line on a health card.
+struct HealthRow: Hashable {
+    let label: String
+    let value: String
+}
+
+/// A health card: icon, title, an optional status indicator, and label/value rows.
 struct HealthCardView: View {
-    let status: ServiceHealthStatus
+    /// Stable key for accessibility identifiers (`health-card-<key>`).
+    let key: String
     let icon: String
     let label: String
+    let status: SharedServiceStatusStatus?
+    let rows: [HealthRow]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -174,10 +231,11 @@ struct HealthCardView: View {
 
                 Spacer()
 
-                // Status indicator
-                Image(systemName: status.healthLevel.icon)
-                    .font(.body)
-                    .foregroundStyle(statusColor)
+                if let status {
+                    Image(systemName: status.icon)
+                        .font(.body)
+                        .foregroundStyle(statusColor(status))
+                }
             }
 
             // Label
@@ -185,18 +243,26 @@ struct HealthCardView: View {
                 .font(.brand(.headline))
                 .foregroundStyle(Color.brandForeground)
 
-            // Status text
-            Text(status.status.capitalized)
-                .font(.brand(.subheadline))
-                .fontWeight(.medium)
-                .foregroundStyle(statusColor)
+            if let status {
+                Text(status.rawValue.capitalized)
+                    .font(.brand(.subheadline))
+                    .fontWeight(.medium)
+                    .foregroundStyle(statusColor(status))
+                    .accessibilityIdentifier("health-status-\(key)")
+            }
 
-            // Details
-            if let details = status.details, !details.isEmpty {
-                Text(details)
-                    .font(.brand(.caption))
-                    .foregroundStyle(Color.brandMutedForeground)
-                    .lineLimit(2)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.label)
+                        .foregroundStyle(Color.brandMutedForeground)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(row.value)
+                        .foregroundStyle(Color.brandForeground)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("health-value-\(key)-\(index)")
+                }
+                .font(.brand(.caption))
             }
         }
         .padding()
@@ -206,13 +272,15 @@ struct HealthCardView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.brandBorder, lineWidth: 1)
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("health-card-\(key)")
     }
 
-    private var statusColor: Color {
-        switch status.healthLevel {
-        case .healthy: return .green
+    private func statusColor(_ status: SharedServiceStatusStatus) -> Color {
+        switch status {
+        case .ok: return .green
         case .degraded: return .orange
-        case .critical: return .red
+        case .down: return .red
         }
     }
 }

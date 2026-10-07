@@ -232,7 +232,7 @@ final class AdminViewModel {
     // MARK: - System Health State
 
     /// Current system health data.
-    var systemHealth: SystemHealth?
+    var systemHealth: SystemHealthResponse?
 
     /// Whether system health is loading.
     var isLoadingHealth: Bool = false
@@ -950,7 +950,7 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let health: SystemHealth = try await apiService.request(
+            let health: SystemHealthResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/system/health"
             )

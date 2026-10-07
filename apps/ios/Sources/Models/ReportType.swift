@@ -229,10 +229,6 @@ struct ClientReportTypesResponse: Codable, Sendable {
 
 /// Request body for `POST /api/reports` with a report type.
 /// Extends the base report creation with `reportTypeId`.
-///
-/// Encoded with a plain `JSONEncoder` (no `convertToSnakeCase`) and sent via
-/// `APIService.request(method:path:rawBody:)` because the backend expects
-/// camelCase keys (`reportTypeId`, `encryptedContent`, `readerEnvelopes`).
 struct CreateTypedReportRequest: Encodable, Sendable {
     let title: String
     let category: String?

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { pubkeySchema, paginationSchema, paginatedMeta, recipientEnvelopeSchema } from './common'
+import { pubkeySchema, paginationSchema, recipientEnvelopeSchema } from './common'
 
 // --- Response schemas ---
 
@@ -50,14 +50,25 @@ export type ConversationMessage = z.infer<typeof messageResponseSchema>
 
 // --- List/wrapper response schemas ---
 
+/**
+ * `GET /conversations` answers one of two shapes, depending on the caller:
+ * - with `conversations:read-all`: the page plus `total`;
+ * - without it: the caller's assigned conversations followed by the waiting ones
+ *   they may claim, with `assignedCount`, `waitingCount` and `claimableChannels`.
+ * Neither carries `page` or `limit`.
+ */
 export const conversationListResponseSchema = z.object({
   conversations: z.array(conversationResponseSchema),
-  ...paginatedMeta,
+  total: z.number().optional(),
+  assignedCount: z.number().optional(),
+  waitingCount: z.number().optional(),
+  claimableChannels: z.array(z.string()).optional(),
 })
 
+/** `GET /conversations/:id/messages` answers the page plus `total`; no `page` or `limit`. */
 export const messageListResponseSchema = z.object({
   messages: z.array(messageResponseSchema),
-  ...paginatedMeta,
+  total: z.number(),
 })
 
 export const conversationStatsResponseSchema = z.object({

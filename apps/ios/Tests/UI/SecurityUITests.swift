@@ -95,7 +95,10 @@ final class SecurityUITests: BaseUITest {
             } else {
                 navigateToSettings()
                 let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else { return }
+                XCTAssertTrue(
+                    settingsLock.exists,
+                    "No lock mechanism found — neither 'lock-app' on the dashboard nor 'settings-lock-app' in Settings"
+                )
                 settingsLock.tap()
             }
             let pinPad = find("pin-pad")
@@ -189,7 +192,10 @@ final class SecurityUITests: BaseUITest {
             } else {
                 navigateToSettings()
                 let settingsLock = scrollToFind("settings-lock-app", maxSwipes: 10)
-                guard settingsLock.exists else { return }
+                XCTAssertTrue(
+                    settingsLock.exists,
+                    "No lock mechanism found — neither 'lock-app' on the dashboard nor 'settings-lock-app' in Settings"
+                )
                 settingsLock.tap()
             }
         }
@@ -218,14 +224,14 @@ final class SecurityUITests: BaseUITest {
         }
         when("I enter an HTTP hub URL and try to create identity") {
             let hubInput = find("hub-url-input")
-            guard hubInput.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(hubInput.waitForExistence(timeout: 5), "Login screen should show the hub URL input after a clean launch")
             hubInput.tap()
             hubInput.typeText("http://insecure.example.org")
 
             dismissKeyboard()
 
             let createButton = find("create-identity")
-            guard createButton.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create-identity button should appear on the login screen")
             createButton.tap()
         }
         then("I should see an error about insecure connection") {
