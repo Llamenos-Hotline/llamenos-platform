@@ -2,7 +2,7 @@ name: llamenos-asterisk
 
 services:
   asterisk:
-    image: {{ llamenos_asterisk_image | default('andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015') }} # 22.x
+    image: {{ llamenos_asterisk_image | default('andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6') }} # 22.x
     restart: unless-stopped
     volumes:
       - ./asterisk-config:/etc/asterisk:ro

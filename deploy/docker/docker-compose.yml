@@ -258,8 +258,26 @@ services:
       start_period: 30s
 
   # ── Optional: Asterisk PBX ───────────────────────────────
+  #
+  # Minimum Asterisk 22.10.0. Below that, `dtls_verify = fingerprint` — which
+  # apps/worker/telephony/registrar.ts sets on every volunteer endpoint — does
+  # NOT give fingerprint-only verification. asterisk-config/sorcery.conf backs
+  # `endpoint` with astdb, so every endpoint is serialised on write and parsed
+  # back on each inbound INVITE, and before 22.10.0 the serialiser wrote any
+  # non-zero verify mode as the string "Yes". "Yes" parses back as
+  # fingerprint AND certificate, so Asterisk ran full X.509 chain verification
+  # against an empty trust store and no RFC 5763 self-signed peer certificate
+  # could ever pass: every DTLS-SRTP call died at the handshake with
+  # `certificate verify failed` and the leg carried no audio (#1687).
+  #
+  # Upstream fixed the serialiser in 269a566a347f, first released in 22.10.0.
+  # A pin below that silently turns the media plane's only
+  # certificate-to-session binding into a call-killing chain check, so
+  # deploy/docker/tests/telephony/asterisk-image-dtls-pin.test.ts refuses any
+  # digest not vetted for it. If you bump this image, add the new digest there
+  # with its Asterisk version.
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
+    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
