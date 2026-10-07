@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { checkRateLimit } from '../lib/helpers'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
 import { requirePermission } from '../middleware/permission-guard'
@@ -71,8 +71,7 @@ invites.get('/validate/:code',
     const services = c.get('services')
     const code = c.req.param('code')
     // Rate limit invite validation to prevent enumeration
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `invite-validate:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const limited = await checkRateLimit(services.settings, `invite-validate:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
     const result = await services.identity.validateInvite(code)
     return c.json(result)
@@ -129,8 +128,7 @@ invites.post('/redeem',
     }
 
     // Rate limit redemption attempts
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `invite-redeem:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
     const result = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })

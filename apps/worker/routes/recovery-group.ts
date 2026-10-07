@@ -26,7 +26,7 @@ import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { checkPermission } from '../middleware/permission-guard'
 import { authErrors, publicErrors, notFoundError } from '../openapi/helpers'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { checkRateLimit } from '../lib/helpers'
 import { RecoveryGroupError } from '../services/recovery-group'
 import {
@@ -654,13 +654,12 @@ publicRoutes.post('/initiate',
   }),
   validator('json', recoveryInitiateSchema),
   async (c) => {
-    // Rate limit: 10 req / 5 min per IP
-    const clientIp = getClientIp(c.req.raw)
+    // Rate limit: 10 req / 5 min per client
     const services = c.get('services')
 
     const limited = await checkRateLimit(
       services.settings,
-      `recovery-initiate:${hashIP(clientIp, c.env.HMAC_SECRET)}`,
+      `recovery-initiate:${routeRateLimitClient(c)}`,
       2, // 2 per minute = 10 per 5 min
     )
     if (limited) {

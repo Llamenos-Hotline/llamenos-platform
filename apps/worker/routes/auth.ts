@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { isValidE164, checkRateLimit } from '../lib/helpers'
 import { verifyAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
@@ -39,9 +39,11 @@ auth.post('/login',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit login attempts by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const ipKey = `auth-login:${hashIP(clientIp, c.env.HMAC_SECRET)}`
+    // Rate limit login attempts by client — always enforced (security audit
+    // Epic A), and never exempt for anybody: `routeRateLimitClient` lets the
+    // end-to-end harness say WHICH client it is, so each scenario gets its own
+    // bucket, but the 5/min inside that bucket still binds.
+    const ipKey = `auth-login:${routeRateLimitClient(c)}`
     const limited = await checkRateLimit(services.settings, ipKey, 5)
     if (limited) {
       return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
@@ -102,9 +104,8 @@ auth.post('/bootstrap',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit bootstrap by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 3)
+    // Rate limit bootstrap by client — always enforced (security audit Epic A)
+    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${routeRateLimitClient(c)}`, 3)
     if (limited) {
       return c.json({ error: 'Too many attempts. Try again later.' }, 429)
     }

@@ -38,11 +38,23 @@ function makeServices(overrides: { rateLimited?: boolean; alertThrottled?: boole
   }
 }
 
-function createApp(services: ReturnType<typeof makeServices>) {
+/** The three dev-surface opt-ins, so a harness-shaped request can be built. */
+const HARNESS_SECRET = 'd'.repeat(64)
+const STAGING_ENV = {
+  HMAC_SECRET: 'a'.repeat(64),
+  ENVIRONMENT: 'staging',
+  DEV_ROUTES_ENABLED: 'true',
+  DEV_RESET_SECRET: HARNESS_SECRET,
+}
+
+function createApp(
+  services: ReturnType<typeof makeServices>,
+  env: Record<string, string> = { HMAC_SECRET: 'a'.repeat(64) },
+) {
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('services', services as unknown as AppEnv['Variables']['services'])
-    c.env = { HMAC_SECRET: 'a'.repeat(64) } as unknown as AppEnv['Bindings']
+    c.env = env as unknown as AppEnv['Bindings']
     await next()
   })
   app.route('/security-events', publicSecurityEventsRoutes)
@@ -135,6 +147,53 @@ describe('POST /security-events (unauthenticated client submission)', () => {
       expect(key).toMatch(/^security-events-submit:[0-9a-f]+$/)
       expect(key).not.toContain('203.0.113.9')
       expect(maxPerMinute).toBe(5)
+    })
+
+    it('rate limits the end-to-end harness too — the exemption is isolation, not a bypass', async () => {
+      // The API rate-limit MIDDLEWARE exempts a request carrying the dev
+      // surface's secret outright (middleware/rate-limit.ts). This limiter does
+      // NOT: it is a named brute-force control, and the scenario
+      // "Client security event submissions are rate limited per IP" asserts
+      // that it fires. All the secret buys here is which bucket the request
+      // counts against (lib/route-rate-limit.ts) — #1625.
+      services = makeServices({ rateLimited: true })
+      app = createApp(services, STAGING_ENV)
+
+      const res = await post(app, { events: [validEvent()] }, {
+        'X-Test-Secret': HARNESS_SECRET,
+        'X-Test-Client-Address': '10.99.1.1',
+      })
+
+      expect(res.status).toBe(429)
+      expect(services.settings.checkRateLimit).toHaveBeenCalledTimes(1)
+      expect(services.identity.emitSecurityEvent).not.toHaveBeenCalled()
+    })
+
+    it('buckets a harness-named client separately from the real address', async () => {
+      app = createApp(services, STAGING_ENV)
+
+      await post(app, { events: [validEvent()] }, { 'X-Forwarded-For': '203.0.113.9' })
+      await post(app, { events: [validEvent()] }, {
+        'X-Test-Secret': HARNESS_SECRET,
+        'X-Test-Client-Address': '10.99.1.1',
+      })
+
+      const [{ key: real }] = services.settings.checkRateLimit.mock.calls[0]
+      const [{ key: named }] = services.settings.checkRateLimit.mock.calls[1]
+      expect(named).not.toBe(real)
+      expect(named).toMatch(/^security-events-submit:[0-9a-f]+$/)
+      expect(named).not.toContain('10.99.1.1')
+    })
+
+    it('ignores a client address from a caller without the secret', async () => {
+      app = createApp(services, STAGING_ENV)
+
+      await post(app, { events: [validEvent()] }, { 'X-Test-Client-Address': '10.99.1.1' })
+      await post(app, { events: [validEvent()] }, { 'X-Test-Client-Address': '10.99.1.2' })
+
+      const [{ key: first }] = services.settings.checkRateLimit.mock.calls[0]
+      const [{ key: second }] = services.settings.checkRateLimit.mock.calls[1]
+      expect(second).toBe(first)
     })
 
     it('rate limits malformed requests too (counted before validation)', async () => {

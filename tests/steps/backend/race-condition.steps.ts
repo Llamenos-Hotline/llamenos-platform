@@ -13,6 +13,7 @@ import {
   ADMIN_SEED,
 } from '../../api-helpers'
 import { bytesToHex } from '@shared/encoding'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -174,8 +175,14 @@ Given('a provision room has an encrypted payload', async ({ request, world }) =>
 
   // Create a provision room (public endpoint — mounted at /api/provision)
   const ephemeralPubkey = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  // `/api/provision/*` is the `strict` tier — 5/min per IP. The per-ROOM
+  // brute-force cap inside the handler (`provision:room:<id>`,
+  // routes/provisioning.ts) is what this scenario is about and is deliberately
+  // left alone: it is cross-IP by design, each scenario makes its own room, and
+  // the harness header does not touch it. Only the shared per-IP tier in front
+  // of it is removed (#1625).
   const createRes = await request.post(`${BASE_URL}/api/provision/rooms`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() },
     data: { ephemeralPubkey },
   })
   expect(createRes.status()).toBe(200)
@@ -203,7 +210,7 @@ When('two requests simultaneously poll the provision room', async ({ request, wo
   const poll = () =>
     request.get(
       `${BASE_URL}/api/provision/rooms/${s.provisionRoomId}?token=${s.provisionToken}`,
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: { 'Content-Type': 'application/json', ...devSurfaceHeaders() } },
     ).then(async (res) => ({
       status: res.status(),
       data: await res.json().catch(() => null),
