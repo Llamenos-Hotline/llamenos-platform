@@ -13,6 +13,7 @@
 
 import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
+import type { AdminHpkeRecipient } from './admin-recipient'
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -1027,6 +1028,12 @@ function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
  * Generates a random AES-256-GCM key, encrypts content, then HPKE-wraps
  * the key for the author and each admin.
  *
+ * `adminPubkeys` is branded (`AdminHpkeRecipient`, see `./admin-recipient`)
+ * because five call sites used to pass `adminDecryptionPubkey || authorPub`,
+ * which type-checked and silently produced notes no admin could read (#1468).
+ * A bare string — the author's own key above all — can no longer be passed
+ * here. Callers with no admin recipient must refuse to write the note.
+ *
  * Both layers carry the canonical envelope AAD (`contentAad` / `keyWrapAad`
  * for LABEL_NOTE_KEY) — the same convention Rust's `encrypt_note` binds, so a
  * note sealed here opens there and vice versa. The previous empty AAD made the
@@ -1035,7 +1042,7 @@ function reportEnvelopeOpenFailure(kind: string, err: unknown): void {
 export async function encryptNote(
   payloadJson: string,
   authorPubkey: string,
-  adminPubkeys: string[],
+  adminPubkeys: AdminHpkeRecipient[],
 ): Promise<EncryptedNoteResult> {
   // Generate random 32-byte content key
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))

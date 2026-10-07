@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "Ghi chú Hội thoại Mới",
     "newNote": "Ghi chú mới",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Chưa có ghi chú",
     "noReplies": "No replies yet",
     "noSearchResults": "Không có ghi chú nào phù hợp với tìm kiếm của bạn",

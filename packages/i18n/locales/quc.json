@@ -825,6 +825,7 @@
     "loading": "Tajin kesamajix ri taq tz'ib'atajem...",
     "newConversationNote": "K'ak'a' Tz'ib'atajem rech Tzijoxik",
     "newNote": "K'ak'a' Tz'ib'atajem",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Majun tz'ib'atajem k'o",
     "noReplies": "Majun taq tzolixik",
     "noSearchResults": "Majun tz'ib'atajem xriq",

@@ -30,6 +30,7 @@ import {
   listRecords,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
+import { useRecordFieldRecipients } from '@/lib/record-recipients'
 
 type DetailTab = 'details' | 'timeline' | 'cases' | 'reports'
 
@@ -44,6 +45,11 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
   const { t } = useTranslation()
   const [activeTab, setActiveTab] = useState<DetailTab>('details')
   const [fieldValues] = useState<SchemaFieldValues>({})
+
+  // Who may read this record's working content — the server decides. This was
+  // `[]`, which left every timeline comment readable only by its author and
+  // the platform admin, never by the volunteers assigned to the case.
+  const fieldRecipients = useRecordFieldRecipients(record.id)
 
   const isEvent = entityType.category === 'event'
 
@@ -150,7 +156,7 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
           <CaseTimeline
             recordId={record.id}
             volunteerNames={{}}
-            readerPubkeys={[]}
+            readerPubkeys={fieldRecipients}
             statusLabels={Object.fromEntries(
               entityType.statuses.map(s => [s.value, { label: s.label, color: s.color ?? '#6b7280' }]),
             )}

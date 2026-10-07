@@ -825,6 +825,7 @@
     "loading": "Not tên barkirin...",
     "newConversationNote": "Nota Gotûbêjê ya Nû",
     "newNote": "Nota Nû",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Hêj not tune",
     "noReplies": "Hêj bersiv tune",
     "noSearchResults": "Tu not bi lêgerîna te re li hev nakin",

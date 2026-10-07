@@ -825,6 +825,7 @@
     "loading": "Notlar yükleniyor...",
     "newConversationNote": "Yeni Görüşme Notu",
     "newNote": "Yeni Not",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Henüz not yok",
     "noReplies": "Henüz yanıt yok",
     "noSearchResults": "Aramanızla eşleşen not yok",

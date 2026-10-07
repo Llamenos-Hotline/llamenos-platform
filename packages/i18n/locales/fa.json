@@ -825,6 +825,7 @@
     "loading": "در حال بارگذاری یادداشت‌ها...",
     "newConversationNote": "یادداشت مکالمه جدید",
     "newNote": "یادداشت جدید",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "هنوز یادداشتی نیست",
     "noReplies": "هنوز پاسخی نیست",
     "noSearchResults": "یادداشتی با جستجوی شما مطابقت ندارد",

@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "Новая заметка к беседе",
     "newNote": "Новая заметка",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "Заметок пока нет",
     "noReplies": "No replies yet",
     "noSearchResults": "Заметки по вашему запросу не найдены",

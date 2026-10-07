@@ -2667,6 +2667,7 @@
     "loading": "Loading notes...",
     "newConversationNote": "새 대화 메모",
     "newNote": "새 메모",
+    "noAdminRecipient": "Cannot file this note: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one.",
     "noNotes": "아직 메모가 없습니다",
     "noReplies": "No replies yet",
     "noSearchResults": "검색과 일치하는 메모가 없습니다",
