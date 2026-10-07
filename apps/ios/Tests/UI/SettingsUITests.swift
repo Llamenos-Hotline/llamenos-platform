@@ -31,7 +31,7 @@ final class SettingsUITests: BaseUITest {
         given("I am on the settings screen") {
             // Already navigated
         }
-        then("I should see the hub URL") {
+        try then("I should see the hub URL") {
             // SettingsView only renders "settings-hub-url" `if let hubURL =
             // appState.authService.hubURL` — this class's setUp() calls
             // `launchAuthenticated()`, which never configures a hub URL, so the

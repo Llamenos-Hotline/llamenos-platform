@@ -220,7 +220,7 @@ final class ReportFlowUITests: BaseUITest {
                 }
             }
         }
-        then("I should see the typed report form with fields and submit button") {
+        try then("I should see the typed report form with fields and submit button") {
             // Whether report types are configured on the server is this test
             // environment's call, not something this suite configures itself
             // (unlike case management's `TestAdminAPI.applyTemplate`, there
@@ -318,7 +318,7 @@ final class ReportFlowUITests: BaseUITest {
                 }
             }
         }
-        then("textarea fields with audio support should show a mic button") {
+        try then("textarea fields with audio support should show a mic button") {
             // See testTypedReportFormRendersFields: whether report types are
             // configured, and whether their fields support audio input, are
             // both this test environment's call, not this suite's.

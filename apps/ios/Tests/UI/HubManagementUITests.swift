@@ -186,7 +186,7 @@ final class HubManagementUITests: BaseUITest {
         when("I navigate to Settings") {
             navigateToSettings()
         }
-        then("I should see the hub URL") {
+        try then("I should see the hub URL") {
             throw XCTSkip("This test class launches with no hub configured; settings-hub-url never renders")
         }
     }

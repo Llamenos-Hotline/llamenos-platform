@@ -243,7 +243,7 @@ final class APIConnectedUITests: BaseUITest {
             let dashboard = find("dashboard-title")
             _ = dashboard.waitForExistence(timeout: 15)
         }
-        when("I navigate to shifts and tap clock in") {
+        try when("I navigate to shifts and tap clock in") {
             navigateToShifts()
             let clockIn = find("clock-in-button")
             guard clockIn.waitForExistence(timeout: 10) else {
@@ -272,7 +272,7 @@ final class APIConnectedUITests: BaseUITest {
             let dashboard = find("dashboard-title")
             _ = dashboard.waitForExistence(timeout: 15)
         }
-        when("I clock in then try to clock out") {
+        try when("I clock in then try to clock out") {
             navigateToShifts()
 
             // First clock in
