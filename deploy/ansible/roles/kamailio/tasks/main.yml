@@ -281,6 +281,15 @@
   delay: 3
   ignore_errors: true
 
+# The JSONRPC status code, not `is succeeded`: `succeeded` means `not failed`,
+# so a probe that never ran reported HEALTHY (issue #1617). This task only
+# reports — nothing in the role gates on a Kamailio that never answered, which
+# is noted in the PR for #1617 as found-but-not-changed; making it fatal is a
+# deploy-behaviour change, not a reporting fix.
 - name: Report Kamailio status
   ansible.builtin.debug:
-    msg: "Kamailio JSONRPC endpoint: {{ 'HEALTHY' if kamailio_health is succeeded else 'NOT READY' }}"
+    msg: >-
+      Kamailio JSONRPC endpoint:
+      {{ 'HEALTHY' if (kamailio_health is not skipped and (kamailio_health.status | default(0) | int) == 200)
+         else 'NOT CHECKED' if kamailio_health is skipped
+         else 'NOT READY' }}

@@ -1,0 +1,88 @@
+---
+# Record one smoke-check verdict as exactly one of PASS / FAIL / SKIPPED.
+#
+# WHY THIS FILE EXISTS
+#
+# Every check in smoke-check.yml used to record its own verdict inline:
+#
+#     'PASS' if <probe> is succeeded else 'FAIL'
+#
+# Ansible's `succeeded` test is defined as `not failed`. A task that was
+# SKIPPED never ran, so it never failed, so it is `succeeded`, so it recorded
+# PASS. A probe that took no measurement at all scored as a healthy check —
+# 23 times in this suite (issue #1617). Measured, not reasoned about: a
+# skipped task's registered result is
+#
+#     {changed: false, skipped: true, skip_reason: "Conditional result was False"}
+#
+# with no `rc` and no `status` key, and `is succeeded` on it returns true.
+#
+# The confirmed instance was the HSTS assert, which skips whenever the header
+# probe it reads did not succeed — i.e. it recorded "HSTS present" precisely
+# when nothing had looked for HSTS.
+#
+# Two things are fixed here, once, rather than in 21 copies of an expression —
+# 21 copies being how the suite came to carry 21 instances of one mistake:
+#
+#  1. SKIPPED is its own state. A check that did not run is not a passing
+#     check, and it is not a failing one either: it is an ABSENT measurement.
+#     The summary counts and lists it separately, so "20 passed" can no longer
+#     mean "14 passed and 6 never ran".
+#
+#  2. PASS requires the probe's own MEASUREMENT, not the task's self-report.
+#     `smoke_check_pass` carries what the check is actually for — a status
+#     code, a header's value, an exit status, a parsed number — so neither
+#     `ignore_errors`, nor a `failed_when` that stops matching the probe, nor
+#     a module changing what it considers a failure can turn an unmeasured
+#     probe green. `is not failed` is still required as well: a probe that
+#     errored outright has no measurement to read.
+#
+# Inputs:
+#   smoke_check_name    required. Human-readable name of the check.
+#   smoke_check_probe   required. The probe task's registered result.
+#   smoke_check_pass    optional, default true. The measured condition that
+#                       must hold for PASS. ALWAYS write it with `| default()`
+#                       guards — a skipped or errored probe has none of the
+#                       keys a measurement reads, and an unguarded lookup
+#                       raises instead of recording a verdict.
+#                       Omit it only where the probe's whole claim genuinely is
+#                       "this command ran clean" and nothing was measured.
+#   smoke_check_detail  optional, default ''. Shown beside a FAIL verdict.
+#
+# `status` is exactly one of PASS / FAIL / SKIPPED, so the summary counts it by
+# equality and the detail lives in its own key. Folding the detail into the
+# status string ("FAIL: only 1 GiB free") is what forced the summary to reach
+# for a prefix test, and the test it reached for — `startswith` — does not
+# exist in Jinja, which is how the gate came to be unable to fire in either
+# direction (issue #1602 finding 4, fixed in #1615). Keeping the two apart
+# removes the need for that test rather than correcting it.
+
+- name: "Record smoke result — {{ smoke_check_name }}"
+  ansible.builtin.set_fact:
+    smoke_results: "{{ smoke_results + [{'check': smoke_check_name, 'status': _smoke_status, 'detail': _smoke_detail}] }}"
+  vars:
+    # Normalised to a mapping first. A task skipped by TAG selection registers
+    # nothing at all, so call sites pass `{{ probe | default({}) }}` and an
+    # empty mapping arrives here; the `skipped` test raises outright on a
+    # non-mapping ("The 'skipped' test expects a dictionary"), which would turn
+    # an absent measurement into an aborted play. An empty mapping and a
+    # `skipped: true` one mean the same thing: nothing was measured.
+    _smoke_probe: "{{ smoke_check_probe if (smoke_check_probe is mapping) else {} }}"
+    _smoke_ran: "{{ (_smoke_probe | length) > 0 and _smoke_probe is not skipped }}"
+    # The skip test is written out here rather than reached for through
+    # `_smoke_ran` so that the whole verdict reads as one expression, and so
+    # that scripts/check-succeeded-as-pass.py can see the `is not failed` and
+    # its mandatory skip test together without having to reason about scope.
+    _smoke_status: >-
+      {{
+        'SKIPPED' if ((_smoke_probe | length) == 0 or _smoke_probe is skipped)
+        else 'PASS' if (_smoke_probe is not failed and (smoke_check_pass | default(true) | bool))
+        else 'FAIL'
+      }}
+    _smoke_detail: >-
+      {{
+        (_smoke_probe.skip_reason | default('not applicable to this host'))
+        if not (_smoke_ran | bool)
+        else (smoke_check_detail | default(''))
+      }}
+  tags: always

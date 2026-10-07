@@ -79,9 +79,19 @@
       register: ssh_check
       tags: always
 
+    # `is not skipped and is not failed`, not `is succeeded`: `succeeded` means
+    # exactly `not failed`, and a task that never ran never failed — so a
+    # skipped probe reported PASSED (issue #1617). This one has no `when:` and
+    # cannot skip today; the pairing is unconditional so that adding one later
+    # cannot silently turn the report green. `wait_for` has no richer
+    # measurement than "the port opened", which is its pass/fail.
     - name: Report SSH connectivity
       ansible.builtin.debug:
-        msg: "SSH connectivity check: {{ 'PASSED' if ssh_check is succeeded else 'FAILED (may require VPN or different network)' }}"
+        msg: >-
+          SSH connectivity check:
+          {{ 'PASSED' if (ssh_check is not skipped and ssh_check is not failed)
+             else 'NOT CHECKED' if ssh_check is skipped
+             else 'FAILED (may require VPN or different network)' }}
       tags: always
 
     - name: Verify Docker is installed and running
@@ -91,9 +101,16 @@
       ignore_errors: true
       tags: always
 
+    # Reports the version only when `docker version` actually exited 0. See the
+    # SSH report above for why the skip test is paired unconditionally.
     - name: Report Docker status
       ansible.builtin.debug:
-        msg: "Docker status: {{ docker_version.stdout if docker_version is succeeded else 'NOT INSTALLED (will be installed during hardening)' }}"
+        msg: >-
+          Docker status:
+          {{ docker_version.stdout
+             if (docker_version is not skipped and (docker_version.rc | default(1) | int) == 0)
+             else 'NOT CHECKED' if docker_version is skipped
+             else 'NOT INSTALLED (will be installed during hardening)' }}
       tags: always
 
     - name: Assert minimum free disk space (10 GiB on root volume)
