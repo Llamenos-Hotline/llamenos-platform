@@ -102,9 +102,16 @@ final class NotesViewModel {
         adminPubkeys: [String]
     ) async throws {
         let payload = NotePayload(text: text, fields: fields)
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        let payloadJSON = String(data: try encoder.encode(payload), encoding: .utf8) ?? "{}"
+        // #1633: no key conversion. This encoder used to set `.convertToSnakeCase`,
+        // which was a no-op by luck rather than by design — `NotePayload`'s own keys
+        // are `text` and `fields`, both single words, and a nested Dictionary's keys
+        // (the custom field names in `fields`) are not reached by a key strategy, as
+        // `APIServiceWireFormatTests.testWhichKeysAKeyStrategyActuallyReaches` pins.
+        // Add one camelCase field to `NotePayload` and it would have started sealing a
+        // key desktop and Android cannot find into the ciphertext, where no validator
+        // and no test would see it. The encrypted payload is part of the
+        // cross-platform contract: camelCase, with nothing in the way.
+        let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) ?? "{}"
 
         // Build full recipient list: our encryption key + admin encryption keys
         var recipientPubkeys: [String] = []
@@ -203,9 +210,8 @@ final class NotesViewModel {
                 envelope: hpkeEnvelope
             )
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let payload = try decoder.decode(NotePayload.self, from: Data(decryptedJSON.utf8))
+            // Plain decoder, matching the plain encoder above.
+            let payload = try JSONDecoder().decode(NotePayload.self, from: Data(decryptedJSON.utf8))
 
             return DecryptedNote(
                 id: encrypted.id,
