@@ -1,6 +1,7 @@
 import { eq, and, sql } from 'drizzle-orm'
 import { ed25519Verify } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { resolveHubPermissions, type Role } from '@shared/permissions'
 import type { Database } from '../db'
 import {
   hubRecoveryGroups,
@@ -8,6 +9,7 @@ import {
   userRecoveryEnvelopes,
   recoverySessions,
   recoverySessionContributions,
+  users,
 } from '../db/schema'
 import { createLogger } from '../lib/logger'
 import type { AuditService } from './audit'
@@ -17,6 +19,13 @@ const logger = createLogger('service.recovery-group')
 
 const MAX_VERIFICATION_ATTEMPTS = 5
 const VERIFICATION_CODE_LENGTH = 6
+
+/**
+ * One refusal for every reason a pubkey may not contribute to a session: not a
+ * member of the session's hub any more, and not an enrolled share holder. Kept
+ * identical so neither answer confirms the other.
+ */
+const NOT_AUTHORIZED_TO_CONTRIBUTE = 'Contributor is not a share holder for this hub'
 
 export class RecoveryGroupError extends Error {
   constructor(
@@ -28,11 +37,97 @@ export class RecoveryGroupError extends Error {
   }
 }
 
+/**
+ * The role definitions membership resolution needs. Structurally typed rather
+ * than importing `SettingsService`, so this module does not depend on the
+ * settings service's own (much larger) dependency surface and a test can pass
+ * a two-line stub. `SettingsService.getRoles` satisfies it as-is.
+ */
+export interface RoleDefinitionSource {
+  getRoles(): Promise<{ roles: Role[] }>
+}
+
 export class RecoveryGroupService {
+  /**
+   * `roleSource` is REQUIRED, deliberately: contributing a Shamir share is
+   * authorized on current hub membership (see `assertStillHubMember`), and
+   * membership cannot be resolved without the role definitions. Making it
+   * optional would make a fail-open construction expressible — a service
+   * built without it would have to either skip the check or refuse every
+   * contribution. Neither is acceptable, so the type system forbids it.
+   */
   constructor(
     private readonly db: Database,
+    private readonly roleSource: RoleDefinitionSource,
     private readonly audit?: AuditService,
   ) {}
+
+  /**
+   * Refuse unless `pubkey` still holds authority in `hubId` — #1620 gap 1.
+   *
+   * Being enrolled in `hub_recovery_group_shares` is NOT authorization on its
+   * own. Nothing on any removal path deletes those rows today (`removeHubRole`,
+   * the GDPR cascade in `ErasureService.executeErasure`, and
+   * `SettingsService.purgeHub` all omit the table, and `hub_recovery_groups`
+   * has no FK to `hubs.id` for a cascade to travel), so without this check a
+   * member removed from a hub stays a valid threshold participant in
+   * reconstructing that hub's recovery secret indefinitely — the one capability
+   * the hub shred's own target inventory calls out as "not a shred at all" if
+   * it is left behind (`services/hub-shred-targets.ts`).
+   *
+   * "Still a member" is `resolveHubPermissions(...).length > 0` — the exact
+   * admission rule `middleware/hub.ts`'s hubContext, `lib/hub-scope.ts`'s
+   * `callerHasHubAccess` and ringing's candidate filter already apply. Taking
+   * it from that one primitive is the point: "may this pubkey still act in
+   * this hub" must not be able to drift from the answer every other path
+   * gives. A super-admin qualifies everywhere; a non-super-admin global role
+   * qualifies nowhere, because a global role survives removal from a hub
+   * (#1037).
+   *
+   * Fails CLOSED. Membership that cannot be read is not membership: any error
+   * from the two reads below refuses the contribution rather than falling
+   * through to the enrolled-holder check.
+   *
+   * Throws the same error as the not-a-holder case in `contributeShare` so a
+   * caller cannot distinguish "you were removed from the hub" from "you hold
+   * no share here", the same reason `getUserEnvelope` collapses its two
+   * refusal reasons into one message.
+   */
+  private async assertStillHubMember(pubkey: string, hubId: string): Promise<void> {
+    let member: boolean
+    try {
+      const [rows, { roles: allRoles }] = await Promise.all([
+        this.db
+          .select({ roles: users.roles, hubRoles: users.hubRoles })
+          .from(users)
+          .where(eq(users.pubkey, pubkey))
+          .limit(1),
+        this.roleSource.getRoles(),
+      ])
+      const user = rows[0]
+      member =
+        user !== undefined &&
+        resolveHubPermissions(
+          user.roles,
+          (user.hubRoles as { hubId: string; roleIds: string[] }[] | null) ?? [],
+          allRoles,
+          hubId,
+        ).length > 0
+    } catch (err) {
+      logger.error('Hub membership could not be resolved — refusing contribution', {
+        err,
+        hubId,
+      })
+      throw new RecoveryGroupError(
+        'Could not verify hub membership for this contributor',
+        500,
+      )
+    }
+
+    if (!member) {
+      throw new RecoveryGroupError(NOT_AUTHORIZED_TO_CONTRIBUTE, 403)
+    }
+  }
 
   async enrollHub(params: {
     hubId: string
@@ -498,6 +593,12 @@ export class RecoveryGroupService {
       )
     }
 
+    // Current hub membership first, enrollment second (#1620). Enrollment is
+    // evidence that this pubkey was GIVEN a share; it is not evidence that the
+    // pubkey may still use it. Ordered this way so a pubkey with no authority
+    // in the hub is refused without the enrolled-holder set ever being read.
+    await this.assertStillHubMember(contributorPubkey, session.hubId)
+
     const holders = await this.db
       .select({ holderPubkey: hubRecoveryGroupShares.holderPubkey })
       .from(hubRecoveryGroupShares)
@@ -505,7 +606,7 @@ export class RecoveryGroupService {
 
     const isHolder = holders.some((h) => h.holderPubkey === contributorPubkey)
     if (!isHolder) {
-      throw new RecoveryGroupError('Contributor is not a share holder for this hub', 403)
+      throw new RecoveryGroupError(NOT_AUTHORIZED_TO_CONTRIBUTE, 403)
     }
 
     let contributionCount = 0

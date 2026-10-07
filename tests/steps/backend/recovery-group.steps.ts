@@ -1033,6 +1033,15 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // use the id the server actually returned, not a guessed `role-${slug}`.
   const holder1 = await createUserViaApi(request, { name: `Holder One ${Date.now()}`, roleIds: [holderRole.id] })
   const holder2 = await createUserViaApi(request, { name: `Holder Two ${Date.now()}`, roleIds: [holderRole.id] })
+  // A share holder is a member of the hub whose recovery secret they hold
+  // (EP09 D2/D8: the hub is the trust boundary and `recovery:hold-share` is
+  // hub-scoped), and contributing re-checks that membership (#1620) — a
+  // holder removed from the hub has a share that is "compromised by
+  // definition". The global role above only satisfies the unscoped route's
+  // `requirePermission`; membership is the separate axis, exactly as in the
+  // cross-hub viewer step.
+  await addHubMemberViaApi(request, s.hubId!, holder1.pubkey, ['role-volunteer'])
+  await addHubMemberViaApi(request, s.hubId!, holder2.pubkey, ['role-volunteer'])
   const placeholderHolder = `${'e'.repeat(63)}9`
 
   const group = generateX25519Keypair()
