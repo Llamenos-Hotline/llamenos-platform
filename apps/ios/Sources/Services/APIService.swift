@@ -170,6 +170,9 @@ final class APIService: @unchecked Sendable {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
+        // Hub API responses carry E2EE envelopes, hub rosters and call history. None of
+        // it may be written to a response cache, where it would outlive logout (#1658).
+        ResponseCachePolicy.harden(config)
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
 
