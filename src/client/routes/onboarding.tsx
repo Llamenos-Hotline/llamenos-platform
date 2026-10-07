@@ -36,6 +36,9 @@ function OnboardingPage() {
   const [step, setStep] = useState<Step>('loading')
   const [inviteData, setInviteData] = useState<{ name: string; roleIds: string[] } | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  /** A failure the invitee can retry (rate limit, 5xx, dropped connection) —
+   *  as opposed to the server's verdict that the invite itself is no good. */
+  const [errorRetryable, setErrorRetryable] = useState(false)
   const [uiLang, setUiLang] = useState(i18n.language || 'en')
 
   // PIN state
@@ -73,34 +76,58 @@ function OnboardingPage() {
     }
   }, [])
 
-  // Validate invite on initial mount only (ref survives re-renders but not re-mounts)
+  // Validate invite on initial mount only (ref survives re-renders but not re-mounts).
+  // `retryInvite` clears the ref so an explicitly retryable failure can be retried
+  // without a reload — the old code left `step === 'error'` terminal for a 429 (#1712).
   const validatingRef = useRef(false)
-  useEffect(() => {
-    // Skip if already validated or currently validating
-    if (validatingRef.current || step !== 'loading') return
+
+  const runValidation = useCallback(() => {
+    if (validatingRef.current) return
     validatingRef.current = true
 
     if (!inviteCode) {
       setStep('error')
+      setErrorRetryable(false)
       setErrorMsg(t('onboarding.noCode'))
       return
     }
-    validateInvite(inviteCode).then(result => {
-      if (result.valid) {
+    void validateInvite(inviteCode).then(result => {
+      if (result.outcome === 'valid') {
         setInviteData({ name: result.name, roleIds: result.roleIds || ['role-volunteer'] })
         setStep('welcome')
-      } else {
-        setStep('error')
-        setErrorMsg(
-          result.error === 'expired' ? t('onboarding.expired') :
-          result.error === 'already_used' ? t('onboarding.alreadyUsed') :
-          t('onboarding.invalidCode')
-        )
+        return
       }
-    }).catch(() => {
       setStep('error')
-      setErrorMsg(t('onboarding.invalidCode'))
+      if (result.outcome === 'retryable') {
+        // The server said nothing about the invite. Say so, and let them retry.
+        setErrorRetryable(true)
+        setErrorMsg(
+          result.retryAfterSeconds !== undefined
+            ? t('onboarding.validateRetryAfter', { seconds: result.retryAfterSeconds })
+            : t('onboarding.validateUnavailable'),
+        )
+        return
+      }
+      setErrorRetryable(false)
+      setErrorMsg(
+        result.reason === 'expired' ? t('onboarding.expired') :
+        result.reason === 'already_used' ? t('onboarding.alreadyUsed') :
+        t('onboarding.invalidCode')
+      )
     })
+  }, [inviteCode, t])
+
+  function retryInvite() {
+    validatingRef.current = false
+    setErrorRetryable(false)
+    setErrorMsg('')
+    setStep('loading')
+    runValidation()
+  }
+
+  useEffect(() => {
+    if (step !== 'loading') return
+    runValidation()
   }, [inviteCode])
 
   function handlePinComplete(enteredPin: string) {
@@ -199,8 +226,13 @@ function OnboardingPage() {
             <CardTitle>{t('onboarding.errorTitle')}</CardTitle>
             <CardDescription>{errorMsg}</CardDescription>
           </CardHeader>
-          <CardContent className="text-center">
-            <Button variant="outline" onClick={() => navigate({ to: '/login' })}>
+          <CardContent className="flex flex-col items-center gap-2">
+            {errorRetryable && (
+              <Button data-testid="onboarding-retry-btn" onClick={retryInvite} className="w-full">
+                {t('onboarding.tryAgain')}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => navigate({ to: '/login' })} data-testid="onboarding-go-to-login-btn">
               {t('onboarding.goToLogin')}
             </Button>
           </CardContent>
