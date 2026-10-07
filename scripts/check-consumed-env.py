@@ -207,8 +207,12 @@ def consumed_from_process_env(worker_dir: Path) -> set[str]:
             continue
         for direct, bracket in PROCESS_ENV_RE.findall(ts.read_text()):
             found.add(direct or bracket)
-    # Not deployment config: the process's own filesystem/loader environment.
-    return found - {"HOME", "PATH", "LLAMENOS_CRYPTO_LIB"}
+    # No carve-out for process-environment names (HOME, PATH and the like).
+    # None are read in worker source today -- a set subtracted here would be
+    # dead the day it was written, which is the rot UNRENDERED_BY_DESIGN's
+    # stale check exists to prevent. If one ever becomes a real read, failing
+    # and forcing an explicit entry with a reason is the right default.
+    return found
 
 
 def rendered_from_templates(templates: list[Path]) -> tuple[set[str], str]:
