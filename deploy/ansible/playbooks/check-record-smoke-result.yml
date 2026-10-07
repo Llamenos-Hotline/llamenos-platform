@@ -1,0 +1,199 @@
+---
+# Drive tasks/record-smoke-result.yml through every input shape and assert the
+# verdict it records. Self-checking: it fails the play on a wrong verdict.
+#
+# This is the companion to scripts/check-smoke-verdicts.py. That script runs
+# the real smoke suite against real sockets and stub binaries, which covers
+# every probe that can be served from a workstation. The handful that need a
+# publicly-trusted HTTPS name (Caddy HTTPS, HSTS, X-Frame-Options, the ntfy
+# public vhost, the update server) cannot reach PASS there without binding 443
+# with a real chain, so their PASS path is covered here instead — including the
+# exact `caddy_headers` shape that was issue #1617's confirmed instance.
+#
+# The first case is the bug: a probe that was SKIPPED, whose measurement would
+# have passed. `is succeeded` returns TRUE for it, so the old recording wrote
+# PASS. It must write SKIPPED.
+#
+# Run it:
+#   ansible-playbook playbooks/check-record-smoke-result.yml \
+#     -i localhost, -c local -e ansible_become=false
+
+- name: Verify the three-state smoke recorder
+  hosts: all
+  gather_facts: false
+  become: false
+  vars:
+    # Exactly what Ansible registers for a task its `when:` excluded. Measured
+    # from a real run, not invented: no `rc`, no `status`, no `failed`.
+    skipped_result:
+      changed: false
+      skipped: true
+      skip_reason: "Conditional result was False"
+      false_condition: false
+    clean_200:
+      changed: false
+      status: 200
+      strict_transport_security: "max-age=31536000; includeSubDomains; preload"
+      x_frame_options: DENY
+    clean_200_no_headers:
+      changed: false
+      status: 200
+    # What `uri` + `ignore_errors: true` leaves behind on a connection refusal.
+    errored:
+      changed: false
+      failed: true
+      msg: "Connection refused"
+      status: -1
+
+  tasks:
+    - name: Initialize smoke-check results
+      ansible.builtin.set_fact:
+        smoke_results: []
+
+    # ── 1. THE BUG: skipped probe whose measurement would have passed ──────
+    - name: A probe that really is skipped, by a real `when:`
+      ansible.builtin.command: /bin/true
+      register: really_skipped
+      changed_when: false
+      when: false
+
+    - name: Record a genuinely skipped probe
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: genuinely skipped probe
+        smoke_check_probe: "{{ really_skipped }}"
+        # Deliberately TRUE: even a measurement that would pass must not turn a
+        # probe that never ran into a PASS.
+        smoke_check_pass: true
+
+    - name: Record a synthesized skipped probe
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: synthesized skipped probe
+        smoke_check_probe: "{{ skipped_result }}"
+        smoke_check_pass: true
+
+    - name: Record a probe that was never registered at all
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: probe absent from the host's facts
+        # Exactly what the real call sites pass, for a probe a tag-scoped
+        # run never registered: an empty mapping.
+        smoke_check_probe: "{{ never_registered_anywhere | default({}) }}"
+
+    # ── 2. measurement true / false / probe errored ────────────────────────
+    - name: Record a clean probe whose measurement holds
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: clean probe, measurement holds
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: "{{ clean_200.status | default(0) | int == 200 }}"
+
+    # The point of measuring rather than trusting the task: this probe reports
+    # itself fine and is still not a passing check.
+    - name: Record a clean probe whose measurement does NOT hold
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: clean probe, measurement fails
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: "{{ clean_200.status | default(0) | int == 204 }}"
+        smoke_check_detail: the service answered, with the wrong thing
+
+    - name: Record a probe that errored under ignore_errors
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: errored probe
+        smoke_check_probe: "{{ errored }}"
+        smoke_check_pass: "{{ errored.status | default(0) | int == 200 }}"
+
+    - name: Record a clean probe with no measurement supplied
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: clean probe, ran-clean only
+        smoke_check_probe: "{{ clean_200 }}"
+
+    # ── 3. the confirmed instance: header verdicts off one probe ───────────
+    - name: Record HSTS from a header probe that carries the header
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: HSTS present
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: "{{ 'max-age=' in (clean_200.strict_transport_security | default('')) }}"
+
+    - name: Record HSTS from a header probe that lacks the header
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: HSTS absent
+        smoke_check_probe: "{{ clean_200_no_headers }}"
+        smoke_check_pass: "{{ 'max-age=' in (clean_200_no_headers.strict_transport_security | default('')) }}"
+
+    - name: Record HSTS when the header probe itself never ran
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: HSTS unmeasured
+        smoke_check_probe: "{{ skipped_result }}"
+        smoke_check_pass: "{{ 'max-age=' in (skipped_result.strict_transport_security | default('')) }}"
+
+    - name: Record X-Frame-Options from the same probe
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: X-Frame-Options DENY
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: "{{ (clean_200.x_frame_options | default('')) == 'DENY' }}"
+
+    # ── assertions ─────────────────────────────────────────────────────────
+    - name: Show what was recorded
+      ansible.builtin.debug:
+        msg: "[{{ item.status }}] {{ item.check }}{{ ' — ' + item.detail if (item.detail | length > 0) else '' }}"
+      loop: "{{ smoke_results }}"
+      loop_control:
+        label: "{{ item.check }}"
+
+    - name: Every verdict is the expected one
+      ansible.builtin.assert:
+        that:
+          - _recorded == _expected
+        fail_msg: |
+          The recorder returned the wrong verdict(s).
+            expected: {{ _expected }}
+            actual:   {{ _recorded }}
+          {% for name, want in _expected.items() %}
+          {% if _recorded[name] | default('(missing)') != want %}
+            {{ name }}: expected {{ want }}, got {{ _recorded[name] | default('(missing)') }}
+          {% endif %}
+          {% endfor %}
+        success_msg: "all {{ _expected | length }} verdicts correct, including {{ _expected.values() | select('equalto', 'SKIPPED') | list | length }} SKIPPED that `is succeeded` would have called PASS"
+      vars:
+        _recorded: "{{ dict(smoke_results | map(attribute='check') | zip(smoke_results | map(attribute='status'))) }}"
+        _expected:
+          genuinely skipped probe: SKIPPED
+          synthesized skipped probe: SKIPPED
+          probe absent from the host's facts: SKIPPED
+          clean probe, measurement holds: PASS
+          clean probe, measurement fails: FAIL
+          errored probe: FAIL
+          clean probe, ran-clean only: PASS
+          HSTS present: PASS
+          HSTS absent: FAIL
+          HSTS unmeasured: SKIPPED
+          X-Frame-Options DENY: PASS
+
+    # A skipped verdict must carry WHY, or the summary cannot tell an operator
+    # whether the skip was expected.
+    - name: Every SKIPPED verdict explains itself
+      ansible.builtin.assert:
+        that:
+          - smoke_results | selectattr('status', 'equalto', 'SKIPPED')
+            | selectattr('detail', 'equalto', '') | list | length == 0
+        fail_msg: "a SKIPPED verdict was recorded with no reason attached"
+        success_msg: "every SKIPPED verdict carries a reason"
+
+    - name: The three states are mutually exclusive and cover every result
+      ansible.builtin.assert:
+        that:
+          - (smoke_results | selectattr('status', 'equalto', 'PASS') | list | length)
+            + (smoke_results | selectattr('status', 'equalto', 'FAIL') | list | length)
+            + (smoke_results | selectattr('status', 'equalto', 'SKIPPED') | list | length)
+            == (smoke_results | length)
+        fail_msg: "a verdict was recorded that is none of PASS / FAIL / SKIPPED"
+        success_msg: "{{ smoke_results | length }} verdicts, all exactly one of PASS / FAIL / SKIPPED"

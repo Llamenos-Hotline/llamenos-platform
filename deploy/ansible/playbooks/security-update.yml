@@ -151,8 +151,16 @@
         security_scan_fail_on_os_updates: false
       tags: [security-update, scan]
 
+    # `health_check.status == 200`, the same thing `until:` above waited for —
+    # not `is succeeded`, which means `not failed` and is therefore TRUE for a
+    # probe that never ran. The health probe carries tags, so a tag-scoped run
+    # can skip it entirely; announcing "Health check passed" because no health
+    # check happened is issue #1617's shape on the update path.
     - name: Security update completed successfully
-      when: health_check is succeeded
+      when:
+        - health_check is defined
+        - health_check is not skipped
+        - (health_check.status | default(0) | int) == 200
       ansible.builtin.debug:
         msg: "Security update completed. Health check passed. Application is running at https://{{ domain }}"
       tags: [security-update]

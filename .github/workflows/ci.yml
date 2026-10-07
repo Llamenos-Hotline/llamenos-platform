@@ -825,6 +825,33 @@ jobs:
       - name: Check Jinja select/reject test names resolve
         run: python3 deploy/ansible/scripts/check-jinja-tests.py
 
+      # Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED
+      # task never ran, so it never failed, so it is `succeeded`. 27 checks
+      # across the smoke, preflight, security-update and kamailio paths
+      # recorded PASS for a probe that took no measurement at all (#1617).
+      # Neither --syntax-check nor ansible-lint evaluates what a Jinja
+      # expression MEANS, and this one is valid Jinja naming a real test.
+      - name: Check no result test reads a skipped task as a pass
+        run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
+
+      # The rail above rejects the pattern; this proves the replacement
+      # actually records SKIPPED for a probe that did not run, PASS only when
+      # the measurement holds, and FAIL when a probe reports itself fine while
+      # measuring the wrong thing. Runs the real shared recorder against
+      # synthesized probe results in ~1s, no services needed.
+      #
+      # The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the
+      # whole smoke suite against stub binaries and real sockets in a private
+      # network namespace (25 cases, ~5 min). Like
+      # scripts/check-disk-tier-guards.py it is run by hand rather than in CI;
+      # `--compare-old <ref>` replays identical fixtures against an older
+      # playbook and prints the verdicts side by side.
+      - name: Check the smoke recorder's three states
+        run: |
+          cd deploy/ansible
+          ansible-playbook playbooks/check-record-smoke-result.yml \
+            -i localhost, -c local -e ansible_become=false
+
   desktop-unit:
     needs: changes
     if: needs.changes.outputs.desktop == 'true'

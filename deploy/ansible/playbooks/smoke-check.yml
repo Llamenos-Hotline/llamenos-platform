@@ -5,6 +5,25 @@
 # and that application services are healthy. Exits non-zero on the first
 # failure so CI/test scripts catch regressions.
 #
+# EVERY CHECK RECORDS ONE OF THREE STATES: PASS, FAIL or SKIPPED.
+#
+# SKIPPED is a first-class verdict, not a flavour of PASS. The recording used
+# to read `'PASS' if <probe> is succeeded else 'FAIL'`, and Ansible's
+# `succeeded` test means `not failed` — a probe that was skipped never ran, so
+# it never failed, so it recorded PASS. Twenty-one checks in this file scored
+# "healthy" for taking no measurement at all (issue #1617).
+#
+# Two rules follow, and playbooks/tasks/record-smoke-result.yml enforces both
+# in one place so a new check cannot reintroduce the bug:
+#
+#   1. A probe that did not run records SKIPPED, and the summary counts and
+#      lists skipped checks separately from passing ones.
+#   2. PASS requires the probe's own MEASUREMENT — the status code, the header
+#      value, the exit status, the number — not the task's self-report.
+#
+# scripts/check-succeeded-as-pass.py fails CI on any `is succeeded` /
+# `is not failed` that is not paired with a skip test.
+#
 # Usage:
 #   ansible-playbook playbooks/smoke-check.yml -e '@vars.yml'
 #   ansible-playbook playbooks/smoke-check.yml --check --diff
@@ -21,7 +40,8 @@
     _api_base_url: "https://{{ _api_host }}"
     # Each probe runs only where its service is placed (same rule as the
     # service roles: an empty group means every llamenos_servers host). In the
-    # two-tier layout the relay host runs ntfy + Caddy and nothing else.
+    # two-tier layout the relay host runs ntfy + Caddy and nothing else, so the
+    # app/db/storage probes legitimately record SKIPPED there.
     _smoke_serves_app: "{{ groups.get('llamenos_app', []) | length == 0 or inventory_hostname in groups.get('llamenos_app', []) }}"
     _smoke_serves_db: "{{ groups.get('llamenos_db', []) | length == 0 or inventory_hostname in groups.get('llamenos_db', []) }}"
     _smoke_serves_storage: "{{ groups.get('llamenos_storage', []) | length == 0 or inventory_hostname in groups.get('llamenos_storage', []) }}"
@@ -49,8 +69,18 @@
       tags: always
 
     - name: Record ufw result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'UFW active with deny-incoming', 'status': 'PASS' if ufw_check is succeeded else 'FAIL'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: UFW active with deny-incoming
+        smoke_check_probe: "{{ ufw_check | default({}) }}"
+        # `rc`, not `is succeeded`: the exit status is the thing both greps
+        # above actually produced. A skipped result carries no `rc` key at all,
+        # so the default is 1 — an absent measurement can never read as 0.
+        smoke_check_pass: "{{ ufw_check.rc | default(1) | int == 0 }}"
+        smoke_check_detail: ufw is not active, or its default incoming policy is not deny
       tags: always
 
     - name: Assert fail2ban is active
@@ -61,8 +91,19 @@
       tags: always
 
     - name: Record fail2ban result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'fail2ban running', 'status': 'PASS' if fail2ban_check is succeeded else 'FAIL'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: fail2ban running
+        smoke_check_probe: "{{ fail2ban_check | default({}) }}"
+        # The word systemctl printed, which is what the check is for. `rc == 0`
+        # would be equivalent today but `is-active` has had exit codes that
+        # distinguish "inactive" from "unknown unit"; the state string is the
+        # measurement.
+        smoke_check_pass: "{{ (fail2ban_check.stdout | default('') | trim) == 'active' }}"
+        smoke_check_detail: "systemctl is-active fail2ban reported: {{ fail2ban_check.stdout | default('(nothing)') | trim }}"
       tags: always
 
     - name: Assert docker is active
@@ -73,8 +114,15 @@
       tags: always
 
     - name: Record docker result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Docker running', 'status': 'PASS' if docker_check is succeeded else 'FAIL'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: Docker running
+        smoke_check_probe: "{{ docker_check | default({}) }}"
+        smoke_check_pass: "{{ (docker_check.stdout | default('') | trim) == 'active' }}"
+        smoke_check_detail: "systemctl is-active docker reported: {{ docker_check.stdout | default('(nothing)') | trim }}"
       tags: always
 
     - name: Assert docker userns-remap is enabled
@@ -89,8 +137,15 @@
       tags: always
 
     - name: Record userns-remap result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Docker userns-remap enabled', 'status': 'PASS' if userns_check is succeeded else 'FAIL'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: Docker userns-remap enabled
+        smoke_check_probe: "{{ userns_check | default({}) }}"
+        smoke_check_pass: "{{ userns_check.rc | default(1) | int == 0 }}"
+        smoke_check_detail: "docker info SecurityOptions does not list userns — containers run as real root on the host"
       tags: always
 
     - name: Assert sshd disables password + root login
@@ -106,9 +161,15 @@
       tags: always
 
     - name: Record SSH hardening result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'SSH password auth disabled + root login disabled', 'status': 'PASS' if ssh_check is succeeded else 'FAIL'}]
-          }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: SSH password auth disabled + root login disabled
+        smoke_check_probe: "{{ ssh_check | default({}) }}"
+        smoke_check_pass: "{{ ssh_check.rc | default(1) | int == 0 }}"
+        smoke_check_detail: "sshd -T does not report both `passwordauthentication no` and `permitrootlogin no`"
       tags: always
 
     - name: Assert tcp_syncookies is enabled
@@ -120,8 +181,20 @@
       tags: always
 
     - name: Record syncookies result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'TCP syncookies enabled', 'status': 'PASS' if syncookies is succeeded else 'FAIL'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: TCP syncookies enabled
+        smoke_check_probe: "{{ syncookies | default({}) }}"
+        # The sysctl VALUE, asserted here as well as in the task's
+        # `failed_when`. Recording the value rather than the task's verdict is
+        # what makes the two independent: a `failed_when` that stops matching
+        # the probe (a renamed key, an added `| default`) can no longer quietly
+        # turn the check green.
+        smoke_check_pass: "{{ (syncookies.stdout | default('') | trim) == '1' }}"
+        smoke_check_detail: "net.ipv4.tcp_syncookies = {{ syncookies.stdout | default('(unread)') | trim }}, expected 1"
       tags: always
 
     # ─── Container health ────────────────────────────────────────────────────
@@ -142,9 +215,20 @@
       tags: always
 
     - name: Record container health result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'No unhealthy Docker containers', 'status': 'PASS' if container_health_check is succeeded else 'FAIL: ' + container_health_check.stdout
-          | default('')}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: No unhealthy Docker containers
+        smoke_check_probe: "{{ container_health_check | default({}) }}"
+        # Both halves: a clean exit AND no container named. `docker ps` failing
+        # outright (no daemon) is rc != 0 with an empty stdout, which must not
+        # read as "nothing unhealthy".
+        smoke_check_pass: >-
+          {{ container_health_check.rc | default(1) | int == 0
+             and 'UNHEALTHY' not in (container_health_check.stdout | default('UNHEALTHY')) }}
+        smoke_check_detail: "{{ container_health_check.stdout | default('could not list containers') | trim }}"
       tags: always
 
     # ─── Application health endpoints ────────────────────────────────────────
@@ -162,10 +246,20 @@
       when: _smoke_serves_app | bool
       tags: always
 
+    # No `when:` on any recording task. The recorder is what turns "this probe
+    # did not run here" into a visible SKIPPED line; gating it on the same
+    # condition as its probe deletes the check from the summary instead, and a
+    # Total that silently shrinks from 21 to 15 is the same lie told quietly.
     - name: Record app liveness result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'App liveness probe /api/health/live (200)', 'status': 'PASS' if app_live is succeeded else 'FAIL'}] }}"
-      when: _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: App liveness probe /api/health/live (200)
+        smoke_check_probe: "{{ app_live | default({}) }}"
+        smoke_check_pass: "{{ app_live.status | default(0) | int == 200 }}"
+        smoke_check_detail: "/api/health/live returned {{ app_live.status | default('no response') }}"
       tags: always
 
     - name: Check app readiness probe (all dependencies reachable)
@@ -182,10 +276,17 @@
       tags: always
 
     - name: Record app readiness result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'App readiness probe /api/health/ready (200)', 'status': 'PASS' if app_ready is succeeded else 'FAIL (postgres/storage/relay
-          dependency check failed)'}] }}"
-      when: _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: App readiness probe /api/health/ready (200)
+        smoke_check_probe: "{{ app_ready | default({}) }}"
+        smoke_check_pass: "{{ app_ready.status | default(0) | int == 200 }}"
+        smoke_check_detail: >-
+          /api/health/ready returned {{ app_ready.status | default('no response') }}
+          (postgres/storage/relay dependency check failed)
       tags: always
 
     - name: Check app full health endpoint
@@ -202,9 +303,15 @@
       tags: always
 
     - name: Record app health result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'App health endpoint /api/health (200)', 'status': 'PASS' if app_health is succeeded else 'FAIL'}] }}"
-      when: _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: App health endpoint /api/health (200)
+        smoke_check_probe: "{{ app_health | default({}) }}"
+        smoke_check_pass: "{{ app_health.status | default(0) | int == 200 }}"
+        smoke_check_detail: "/api/health returned {{ app_health.status | default('no response') }}"
       tags: always
 
     # ─── Database ────────────────────────────────────────────────────────────
@@ -225,12 +332,20 @@
       tags: always
 
     - name: Record PostgreSQL result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'PostgreSQL accepting connections', 'status': 'PASS' if postgres_check is succeeded else 'FAIL' if postgres_check
-          is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_postgres_enabled | default(true) | bool
-        - _smoke_serves_db | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: PostgreSQL accepting connections
+        smoke_check_probe: "{{ postgres_check | default({}) }}"
+        # pg_isready's own words, not just its exit status: `docker compose
+        # exec` can exit 0 having run nothing useful, and "accepting
+        # connections" is the sentence that means the database answered.
+        smoke_check_pass: >-
+          {{ postgres_check.rc | default(1) | int == 0
+             and 'accepting connections' in (postgres_check.stdout | default('')) }}
+        smoke_check_detail: "pg_isready: {{ postgres_check.stdout | default('no output') | trim }}"
       tags: always
 
     # ─── Object storage ──────────────────────────────────────────────────────
@@ -260,12 +375,23 @@
       tags: always
 
     - name: Record RustFS result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'RustFS object storage reachable (in-container, port 9000)', 'status': 'PASS' if rustfs_check is succeeded else 'FAIL' if
-          rustfs_check is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_rustfs_enabled | default(true) | bool
-        - _smoke_serves_storage | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: RustFS object storage reachable (in-container, port 9000)
+        smoke_check_probe: "{{ rustfs_check | default({}) }}"
+        # The in-container curl's own exit status is the measurement. #1615
+        # replaced the host-side `uri` probe (which could never pass — the
+        # compose template publishes no ports) with `docker compose exec`, so
+        # there is no `status` key to read here; `rc` is what the shell probe
+        # measures, and `|| test $? -eq 22` inside it already folds RustFS's
+        # unauthenticated-root 403 into rc 0.
+        smoke_check_pass: "{{ rustfs_check.rc | default(1) | int == 0 }}"
+        smoke_check_detail: >-
+          in-container curl to port 9000 exited
+          {{ rustfs_check.rc | default('no result — probe did not run') }}
       tags: always
 
     # ─── Optional sidecars ───────────────────────────────────────────────────
@@ -286,12 +412,15 @@
       tags: always
 
     - name: Record ntfy result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'ntfy health endpoint (200)', 'status': 'PASS' if ntfy_check is succeeded else 'FAIL' if ntfy_check is failed
-          else 'SKIP'}] }}"
-      when:
-        - llamenos_ntfy_enabled | default(false) | bool
-        - _smoke_serves_ntfy | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: ntfy health endpoint (200)
+        smoke_check_probe: "{{ ntfy_check | default({}) }}"
+        smoke_check_pass: "{{ ntfy_check.status | default(0) | int == 200 }}"
+        smoke_check_detail: "localhost:2586/v1/health returned {{ ntfy_check.status | default('no response') }}"
       tags: always
 
     # The app publishes wake-ups through the relay's PUBLIC vhost (on another
@@ -314,11 +443,17 @@
       tags: always
 
     - name: Record ntfy public vhost result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'ntfy public vhost https://' + ntfy_domain + '/v1/health (200)', 'status': 'PASS' if ntfy_public_check is succeeded else 'FAIL'}] }}"
-      when:
-        - llamenos_ntfy_enabled | default(false) | bool
-        - (_smoke_serves_app | bool) or (_smoke_serves_ntfy | bool)
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: "ntfy public vhost https://{{ ntfy_domain | default('(ntfy_domain unset)') }}/v1/health (200)"
+        smoke_check_probe: "{{ ntfy_public_check | default({}) }}"
+        smoke_check_pass: "{{ ntfy_public_check.status | default(0) | int == 200 }}"
+        smoke_check_detail: >-
+          the public vhost returned {{ ntfy_public_check.status | default('no response') }} —
+          Android devices can only be rung for a call through this name
       tags: always
 
     - name: Check Signal Notifier sidecar health
@@ -335,10 +470,15 @@
       tags: always
 
     - name: Record Signal Notifier result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Signal Notifier sidecar health (port 3100)', 'status': 'PASS' if signal_notifier_check is succeeded else 'FAIL'
-          if signal_notifier_check is failed else 'SKIP'}] }}"
-      when: llamenos_signal_enabled | default(false) | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: Signal Notifier sidecar health (port 3100)
+        smoke_check_probe: "{{ signal_notifier_check | default({}) }}"
+        smoke_check_pass: "{{ signal_notifier_check.status | default(0) | int == 200 }}"
+        smoke_check_detail: "localhost:3100/health returned {{ signal_notifier_check.status | default('no response') }}"
       tags: always
 
     # Catches the class of bug in issue #1119: preflight could report
@@ -364,12 +504,15 @@
       tags: always
 
     - name: Record SIP bridge result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'SIP bridge health (self-hosted telephony, port ' + (sip_bridge_local_port | default(3101) | string) + ')',
-          'status': 'PASS' if sip_bridge_check is succeeded else 'FAIL' if sip_bridge_check is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_asterisk_enabled | default(false) | bool
-        - _smoke_serves_asterisk | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: "SIP bridge health (self-hosted telephony, port {{ sip_bridge_local_port | default(3101) }})"
+        smoke_check_probe: "{{ sip_bridge_check | default({}) }}"
+        smoke_check_pass: "{{ sip_bridge_check.status | default(0) | int == 200 }}"
+        smoke_check_detail: "the bridge returned {{ sip_bridge_check.status | default('no response') }} — no call can route"
       tags: always
 
     - name: Check update server health (official only)
@@ -386,12 +529,21 @@
       tags: always
 
     - name: Record update server result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Update server health', 'status': 'PASS' if update_health is succeeded else 'FAIL' if update_health is failed
-          else 'SKIP'}] }}"
-      when:
-        - llamenos_update_server_enabled | default(false) | bool
-        - _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: Update server health
+        smoke_check_probe: "{{ update_health | default({}) }}"
+        # Both the code and the body. `uri` defaults to accepting any 2xx, so a
+        # 204 with no body would be `succeeded` while serving nothing.
+        smoke_check_pass: >-
+          {{ update_health.status | default(0) | int == 200
+             and (update_health.content | default('')) == 'ok' }}
+        smoke_check_detail: >-
+          the update server returned {{ update_health.status | default('no response') }}
+          with body {{ (update_health.content | default('')) | truncate(40) | trim }}, expected 200 / "ok"
       tags: always
 
     # ─── TLS / Caddy ─────────────────────────────────────────────────────────
@@ -412,14 +564,30 @@
       tags: always
 
     - name: Record Caddy HTTPS result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Caddy HTTPS serving ' + _api_base_url, 'status': 'PASS' if caddy_check is succeeded else 'FAIL' if caddy_check
-          is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_caddy_enabled | default(true) | bool
-        - _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: "Caddy HTTPS serving {{ _api_base_url }}"
+        smoke_check_probe: "{{ caddy_check | default({}) }}"
+        smoke_check_pass: "{{ caddy_check.status | default(0) | int == 200 }}"
+        smoke_check_detail: "{{ _api_base_url }}/api/health/live returned {{ caddy_check.status | default('no response — no TLS, no DNS, or no certificate') }}"
       tags: always
 
+    # One probe, two header verdicts, read straight off the response.
+    #
+    # There used to be two `assert` tasks between this probe and the recording,
+    # each with `when: ... and caddy_headers is succeeded`, each registering a
+    # result the recording then tested with `is succeeded`. That is issue
+    # #1617's confirmed instance: when the header probe did not succeed the
+    # asserts SKIPPED, a skipped assert is `succeeded`, and the suite recorded
+    # "HSTS header present" at exactly the moment nothing had looked for HSTS.
+    #
+    # The asserts are gone rather than corrected. They measured nothing the
+    # response does not already carry, and an intermediate task whose skip can
+    # be mistaken for a pass is the defect, not the expression that read it.
+    # Their operator guidance moved into the detail strings below.
     - name: Check HSTS and security headers are present in Caddy response
       ansible.builtin.uri:
         url: "{{ _api_base_url }}/api/health/live"
@@ -433,57 +601,34 @@
         - _smoke_serves_app | bool
       tags: always
 
-    - name: Assert HSTS header is present
-      ansible.builtin.assert:
-        that:
-          - caddy_headers.strict_transport_security is defined
-          - "'max-age=' in caddy_headers.strict_transport_security"
-        fail_msg: |
-          MISSING SECURITY HEADER: Strict-Transport-Security (HSTS) not found in Caddy response.
-
-          This header is required to prevent downgrade attacks.
-          Check the Caddyfile security_headers snippet is applied to the API site block.
-        success_msg: "HSTS header present: {{ caddy_headers.strict_transport_security | default('') }}"
-      ignore_errors: true
-      register: hsts_check
-      when:
-        - llamenos_caddy_enabled | default(true) | bool and caddy_headers is succeeded
-        - _smoke_serves_app | bool
-      tags: always
-
     - name: Record HSTS header result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'HSTS header present (Caddy security_headers)', 'status': 'PASS' if hsts_check is succeeded else 'FAIL' if hsts_check
-          is defined and hsts_check is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_caddy_enabled | default(true) | bool
-        - _smoke_serves_app | bool
-      tags: always
-
-    - name: Assert X-Frame-Options header is present
-      ansible.builtin.assert:
-        that:
-          - caddy_headers.x_frame_options is defined
-          - caddy_headers.x_frame_options == 'DENY'
-        fail_msg: |
-          MISSING SECURITY HEADER: X-Frame-Options: DENY not found in Caddy response.
-
-          This header is required to prevent clickjacking attacks.
-        success_msg: "X-Frame-Options: {{ caddy_headers.x_frame_options | default('') }}"
-      ignore_errors: true
-      register: xframe_check
-      when:
-        - llamenos_caddy_enabled | default(true) | bool and caddy_headers is succeeded
-        - _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: HSTS header present (Caddy security_headers)
+        smoke_check_probe: "{{ caddy_headers | default({}) }}"
+        smoke_check_pass: "{{ 'max-age=' in (caddy_headers.strict_transport_security | default('')) }}"
+        smoke_check_detail: >-
+          MISSING SECURITY HEADER: Strict-Transport-Security with a max-age was not in the
+          Caddy response. It is required to prevent downgrade attacks — check the Caddyfile
+          security_headers snippet is applied to the API site block.
       tags: always
 
     - name: Record X-Frame-Options result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'X-Frame-Options: DENY header present', 'status': 'PASS' if xframe_check is succeeded else 'FAIL' if xframe_check
-          is defined and xframe_check is failed else 'SKIP'}] }}"
-      when:
-        - llamenos_caddy_enabled | default(true) | bool
-        - _smoke_serves_app | bool
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: "X-Frame-Options: DENY header present"
+        smoke_check_probe: "{{ caddy_headers | default({}) }}"
+        smoke_check_pass: "{{ (caddy_headers.x_frame_options | default('')) == 'DENY' }}"
+        smoke_check_detail: >-
+          MISSING SECURITY HEADER: X-Frame-Options was
+          "{{ caddy_headers.x_frame_options | default('absent') }}", expected DENY.
+          It is required to prevent clickjacking attacks.
       tags: always
 
     # ─── Disk space ──────────────────────────────────────────────────────────
@@ -495,36 +640,36 @@
         executable: /bin/bash
       register: disk_free_gb
       changed_when: false
-      tags: always
-
-    - name: Assert at least 2 GiB free disk space post-deploy
-      ansible.builtin.assert:
-        that:
-          - disk_free_gb.stdout | int >= 2
-        fail_msg: |
-          LOW DISK SPACE: Only {{ disk_free_gb.stdout }} GiB free on /.
-          At least 2 GiB is required for log rotation, Docker image pulls, and backups.
-        success_msg: "Disk space OK: {{ disk_free_gb.stdout }} GiB free on /"
+      # ignore_errors so a df that cannot read / still reaches the summary as a
+      # FAIL line rather than aborting the play before any verdict is printed.
       ignore_errors: true
-      register: disk_check
       tags: always
 
     - name: Record disk space result
-      ansible.builtin.set_fact:
-        smoke_results: "{{ smoke_results + [{'check': 'Disk space >= 2 GiB free post-deploy', 'status': 'PASS' if disk_check is succeeded else 'FAIL: only ' + disk_free_gb.stdout
-          + ' GiB free'}] }}"
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: Disk space >= 2 GiB free post-deploy
+        smoke_check_probe: "{{ disk_free_gb | default({}) }}"
+        # The parsed number is the measurement. `| int` on unparseable output
+        # yields 0, which fails — an unreadable df must not pass.
+        smoke_check_pass: >-
+          {{ disk_free_gb.rc | default(1) | int == 0
+             and (disk_free_gb.stdout | default('') | trim | int) >= 2 }}
+        smoke_check_detail: >-
+          LOW DISK SPACE: {{ disk_free_gb.stdout | default('(unreadable)') | trim }} GiB free on /.
+          At least 2 GiB is required for log rotation, Docker image pulls, and backups.
       tags: always
 
     # ─── Summary ─────────────────────────────────────────────────────────────
 
-    # `match`, not `startswith`: the 2nd argument of selectattr is a Jinja TEST
-    # name and neither Jinja nor Ansible defines `startswith`. It raised "No
-    # test named 'startswith'" on this debug task, which aborted the play
-    # before "Fail if any smoke check failed" below was ever reached — so the
-    # deploy's pass/fail gate could not fire in either direction, on any host,
-    # while CI stayed green (issue #1602, finding 4). `match` is anchored at
-    # the start of the string, which is what the FAIL/"FAIL: <detail>" status
-    # values need. scripts/check-jinja-tests.py now fails CI on a regression.
+    # Counted by equality on a status that is exactly PASS, FAIL or SKIPPED.
+    # The detail text lives in its own key, so no prefix test is needed to tell
+    # "FAIL" from "FAIL: <detail>" — which is what the dead `startswith` test
+    # existed to do (issue #1602 finding 4, fixed in #1615). A gate that needs
+    # no Jinja test cannot be broken by naming one that does not exist.
     - name: Print pass/fail summary
       ansible.builtin.debug:
         msg: |
@@ -535,20 +680,39 @@
           Distribution: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
           API URL: {{ _api_base_url }}
           {% for result in smoke_results %}
-          [{{ result.status }}] {{ result.check }}
+          [{{ result.status }}] {{ result.check }}{{ ' — ' + result.detail if (result.detail | default('') | length > 0 and result.status != 'PASS') else '' }}
           {% endfor %}
           ===========================================
-          Total: {{ smoke_results | length }} checks
-          Passed: {{ smoke_results | selectattr('status', 'equalto', 'PASS') | list | length }}
-          Failed: {{ smoke_results | selectattr('status', 'match', 'FAIL') | list | length }}
-          Skipped: {{ smoke_results | selectattr('status', 'equalto', 'SKIP') | list | length }}
+          Total:   {{ smoke_results | length }} checks
+          Passed:  {{ _smoke_passed | length }}
+          Failed:  {{ _smoke_failed | length }}
+          Skipped: {{ _smoke_skipped | length }}
+          {% if (_smoke_skipped | length) > 0 %}
+          -------------------------------------------
+          NOT MEASURED on this host — {{ _smoke_skipped | length }} check(s) never ran. A skipped check
+          is not a passing check. If any of these was expected to run here, this
+          host is NOT verified, whatever the Result line says:
+          {% for result in _smoke_skipped %}
+            - {{ result.check }} ({{ result.detail }})
+          {% endfor %}
+          {% endif %}
           ===========================================
-          Result: {{ 'PASSED' if (smoke_results | selectattr('status', 'match', 'FAIL') | list | length) == 0 else 'FAILED' }}
+          Result: {{ 'PASSED' if (_smoke_failed | length) == 0 else 'FAILED' }}{{ ', ' + (_smoke_skipped | length | string) + ' NOT MEASURED' if (_smoke_skipped | length) > 0 else '' }}
           ===========================================
+      vars:
+        _smoke_passed: "{{ smoke_results | selectattr('status', 'equalto', 'PASS') | list }}"
+        _smoke_failed: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | list }}"
+        _smoke_skipped: "{{ smoke_results | selectattr('status', 'equalto', 'SKIPPED') | list }}"
       tags: always
 
     - name: Fail if any smoke check failed
       ansible.builtin.fail:
-        msg: "Smoke check FAILED: {{ smoke_results | selectattr('status', 'match', 'FAIL') | list | length }} check(s) failed."
-      when: (smoke_results | selectattr('status', 'match', 'FAIL') | list | length) > 0
+        msg: |
+          Smoke check FAILED on {{ inventory_hostname }}: {{ _smoke_failed | length }} of {{ smoke_results | length }} check(s) failed.
+          {% for result in _smoke_failed %}
+            - {{ result.check }}{{ ' — ' + result.detail if (result.detail | default('') | length > 0) else '' }}
+          {% endfor %}
+      vars:
+        _smoke_failed: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | list }}"
+      when: (smoke_results | selectattr('status', 'equalto', 'FAIL') | list | length) > 0
       tags: always
