@@ -70,41 +70,67 @@ final class WipeServiceTests: XCTestCase {
     /// Regression test for #1658.
     ///
     /// `wipeAll()` used to "clear" the response cache by replacing `URLCache.shared`
-    /// with a fresh instance built with `diskPath: nil`. That inherits the *same*
-    /// default on-disk store, so nothing was deleted: the cached response survived the
-    /// swap, hidden behind an empty in-memory layer, and was served again as soon as
-    /// the store was consulted. The previous version of this test passed only because
-    /// `storeCachedResponse(_:for:)` is asynchronous — on an idle machine the seeded
-    /// write had not reached the store by the time the assertion ran, so the lookup
-    /// missed for the wrong reason. On a loaded CI host the write landed first and the
-    /// test correctly reported that a wipe leaves cached responses behind.
+    /// with a fresh instance built with `diskPath: nil`. That instance inherits the
+    /// *same* default on-disk store, so the swap deleted nothing and performed no
+    /// operation the store could order anything against. A `storeCachedResponse(_:for:)`
+    /// still in flight when the wipe ran therefore landed afterwards, and the
+    /// replacement served it back.
     ///
-    /// This version takes the timing out of the assertion in both directions: it waits
-    /// for the seeded write to become readable *before* wiping, so it exercises the
-    /// worst case rather than the lucky one; and it then checks the entry is gone from
-    /// the store rather than from one particular cache handle.
+    /// The seed is deliberately *not* awaited, because an unsettled write is the
+    /// condition CI fails under, and the assertion is "gone, and stays gone" rather
+    /// than "gone right now" — the old single-shot `XCTAssertNil` was satisfied by the
+    /// replacement's empty in-memory layer, so on idle hardware it passed for the wrong
+    /// reason.
+    ///
+    /// Measured honestly: this form still does **not** reproduce the CI failure on an
+    /// idle Mac — it passed 12/12 there with the pre-fix wipe, matching the 6 clean
+    /// local runs recorded on #1658. The deterministic catcher is
+    /// `testWipeAllLeavesACacheThatCannotStoreAResponse` below. What this test does buy
+    /// is that it can no longer pass *or* fail for timing reasons once the wipe leaves a
+    /// cache that cannot store anything: the lookup is then unconditionally nil.
     func testWipeAllClearsURLCache() {
         // Per-run-unique, so a stale entry from an earlier run cannot be read as a
         // failure of this one.
         let url = URL(string: "https://test.llamenos.org/wipe-test-\(UUID().uuidString)")!
         let request = Self.seedCachedResponse(for: url)
 
-        // Premise. Without it this test can pass having never cached anything at all.
+        wipeService.wipeAll()
+
+        XCTAssertFalse(
+            waitUntil(timeout: 2) { URLCache.shared.cachedResponse(for: request) != nil },
+            """
+            URL cache should be cleared after wipeAll, and stay cleared. A response \
+            appearing afterwards is an in-flight write the wipe raced instead of \
+            ordering against.
+            """
+        )
+    }
+
+    /// The other half of #1658: the entry must be gone from the *store*, not just from
+    /// whichever cache handle `wipeAll()` happened to leave installed.
+    ///
+    /// Reading back through a fresh cache over the same default on-disk store is the
+    /// distinction the old test could not make, and it is where the pre-fix code was
+    /// wrong in principle: replacing `URLCache.shared` with a `diskPath: nil` instance
+    /// deletes nothing, because the replacement inherits that same store.
+    ///
+    /// Note what this does and does not establish. Waiting for the seeded response to
+    /// be readable rules out asserting against a cache that was never populated, but it
+    /// does not prove the write reached disk — in the simulator it is observable through
+    /// an independent instance before that. So treat this as a structural assertion
+    /// about where the wipe looks, not as a reproduction of the CI timing failure.
+    func testWipeAllDeletesCachedResponsesFromTheStore() {
+        let url = URL(string: "https://test.llamenos.org/wipe-store-\(UUID().uuidString)")!
+        let request = Self.seedCachedResponse(for: url)
+
+        let observer = Self.makeCachingCache()
         XCTAssertTrue(
-            waitUntil { URLCache.shared.cachedResponse(for: request) != nil },
-            "the seeded response should be readable before the wipe — otherwise this test proves nothing"
+            waitUntil { observer.cachedResponse(for: request) != nil },
+            "the seeded response should have reached the store before the wipe — otherwise this test proves nothing"
         )
 
         wipeService.wipeAll()
 
-        XCTAssertNil(
-            URLCache.shared.cachedResponse(for: request),
-            "URL cache should be cleared after wipeAll"
-        )
-
-        // The teeth: the response must be *deleted from the store*, not hidden behind a
-        // replacement cache. A new cache over the same default on-disk store must not
-        // find it either. Before #1658 was fixed, this is exactly what a wipe left.
         URLCache.shared = Self.makeCachingCache()
         XCTAssertNil(
             URLCache.shared.cachedResponse(for: request),
