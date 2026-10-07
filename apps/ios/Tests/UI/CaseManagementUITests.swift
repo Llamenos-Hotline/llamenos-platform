@@ -245,7 +245,7 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Scenario: Pagination controls appear when many records exist.
     /// This tests the pagination bar structure (prev/next/page label).
-    func testPaginationControlsStructure() {
+    func testPaginationControlsStructure() throws {
         given("case management is enabled with a case") {
             seedOneCase()
         }
