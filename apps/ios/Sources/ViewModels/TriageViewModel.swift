@@ -34,7 +34,7 @@ final class TriageViewModel {
     private let apiService: APIService
     private let cryptoService: CryptoService
 
-    var reports: [ClientReportResponse] = []
+    var reports: [SharedConversation] = []
     var total: Int = 0
     var isLoading = false
     var isActionInProgress = false
@@ -44,7 +44,7 @@ final class TriageViewModel {
     var selectedFilter: TriageStatusFilter = .pending
 
     /// Filtered reports based on selected conversion status.
-    var filteredReports: [ClientReportResponse] {
+    var filteredReports: [SharedConversation] {
         guard selectedFilter != .all else { return reports }
         // The conversionStatus filter is applied server-side, but for client-side
         // filtering of already-loaded data:
@@ -52,7 +52,7 @@ final class TriageViewModel {
     }
 
     /// Report type definitions for resolving labels.
-    var reportTypes: [ClientReportTypeDefinition] = []
+    var reportTypes: [CMSReportTypeListResponseReportType] = []
 
     init(apiService: APIService, cryptoService: CryptoService) {
         self.apiService = apiService
@@ -81,12 +81,12 @@ final class TriageViewModel {
             if selectedFilter != .all {
                 path += "&conversionStatus=\(selectedFilter.rawValue)"
             }
-            let response: ReportsListResponse = try await apiService.request(
+            let response: ReportListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             reports = response.conversations
-            total = response.total
+            total = Int(response.total)
         } catch {
             if reports.isEmpty {
                 errorMessage = error.localizedDescription
@@ -130,17 +130,17 @@ final class TriageViewModel {
     ///   - entityTypeId: The target entity type ID selected by the user.
     /// - Returns: `true` if conversion succeeded.
     @discardableResult
-    func convertToEntity(report: ClientReportResponse, entityTypeId: String) async -> Bool {
+    func convertToEntity(report: SharedConversation, entityTypeId: String) async -> Bool {
         isActionInProgress = true
         errorMessage = nil
 
         do {
-            let body = AppConvertFromReportBody(
-                reportId: report.id,
-                entityTypeId: entityTypeId,
-                additionalFields: nil
+            let body = ConvertFromReportBody(
+                additionalFields: [:],
+                entityTypeID: entityTypeId,
+                reportID: report.id
             )
-            let _: AppConvertFromReportResponse = try await apiService.request(
+            let _: ConvertFromReportResponse = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/records/convert-from-report"),
                 body: body
@@ -164,18 +164,5 @@ final class TriageViewModel {
 }
 
 // MARK: - Request/Response Types
-
-struct AppConvertFromReportBody: Encodable, Sendable {
-    let reportId: String
-    let entityTypeId: String
-    let additionalFields: [String: String]?
-}
-
-struct AppConvertFromReportResponse: Codable, Sendable {
-    let recordId: String
-    let reportId: String
-    let entityTypeId: String
-    let caseNumber: String?
-    let autoAssigned: Bool
-    let assignedTo: [String]
-}
+// Convert-from-report uses the generated `ConvertFromReportBody` /
+// `ConvertFromReportResponse` (packages/protocol/schemas/records.ts).

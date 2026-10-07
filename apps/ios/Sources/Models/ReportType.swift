@@ -1,111 +1,115 @@
 import Foundation
 
-// MARK: - ClientReportTypeDefinition
-// Client-only: generated `CMSReportTypeListResponseReportType` uses `TypeEnum` for category,
-// `ReportTypeField` with generated sub-types, and non-optional fields where this client
-// model uses optionals. Kept manual for iOS form rendering compatibility.
+// MARK: - Report type UI extensions
+// CMS report type definitions decode to generated
+// `CMSReportTypeListResponseReportType` (both `GET /api/settings/cms/report-types`
+// and the legacy `GET /api/reports/types` return full definitions from the same
+// settings store) and their fields to generated `SharedField`
+// (packages/protocol/schemas/report-types.ts). Only the display helpers below
+// are client-side.
 
-/// Client-side report type definition for runtime use. Named `Client*` to avoid
-/// conflict with the generated `ReportTypeDefinition` from protocol codegen
-/// (packages/protocol/generated/swift/Types.swift), following the same pattern
-/// as `ClientReportResponse` vs `ReportResponse`.
-///
-/// Fetched from `GET /api/settings/cms/report-types` (full CMS definitions)
-/// or `GET /api/reports/types` (legacy endpoint). Optional fields allow decoding
-/// responses from both endpoints.
-struct ClientReportTypeDefinition: Codable, Identifiable, Equatable, Sendable {
-    let id: String
-    let name: String
-    let label: String
-    let labelPlural: String
-    let description: String
-    let icon: String?
-    let color: String?
-    let category: String  // always "report"
-    let fields: [ClientReportFieldDefinition]
-    let statuses: [StatusOption]
-    let defaultStatus: String
-    let allowFileAttachments: Bool
-    let allowCaseConversion: Bool
-    let mobileOptimized: Bool
-    let isArchived: Bool
+extension CMSReportTypeListResponseReportType: Identifiable {}
 
-    // CMS-specific fields (present from /api/settings/cms/report-types)
-    let hubId: String?
-    let isSystem: Bool?
-    let numberingEnabled: Bool?
-    let numberPrefix: String?
-    let templateId: String?
-    let templateVersion: String?
-    let closedStatuses: [String]?
-    let createdAt: String?
-    let updatedAt: String?
+extension CMSReportTypeListResponseReportType {
+    /// Convenience init matching the old client report-type argument shapes
+    /// (used by previews); maps onto the generated memberwise init.
+    init(id: String, name: String, label: String, labelPlural: String,
+         description: String, icon: String?, color: String?, category: String,
+         fields: [SharedField], statuses: [SharedStatus], defaultStatus: String,
+         allowFileAttachments: Bool, allowCaseConversion: Bool,
+         mobileOptimized: Bool, isArchived: Bool,
+         hubId: String?, isSystem: Bool?, numberingEnabled: Bool?,
+         numberPrefix: String?, templateId: String?, templateVersion: String?,
+         closedStatuses: [String]?, createdAt: String?, updatedAt: String?) {
+        self.init(allowCaseConversion: allowCaseConversion,
+                  allowFileAttachments: allowFileAttachments,
+                  category: ReportTypeCategory(rawValue: category) ?? .report,
+                  closedStatuses: closedStatuses ?? [], color: color,
+                  createdAt: createdAt ?? "", defaultStatus: defaultStatus,
+                  description: description, fields: fields, hubID: hubId ?? "",
+                  icon: icon, id: id, isArchived: isArchived,
+                  isSystem: isSystem ?? false, label: label, labelPlural: labelPlural,
+                  mobileOptimized: mobileOptimized, name: name,
+                  numberingEnabled: numberingEnabled ?? false,
+                  numberPrefix: numberPrefix, statuses: statuses,
+                  templateID: templateId, templateVersion: templateVersion,
+                  updatedAt: updatedAt ?? "")
+    }
 }
 
-// MARK: - ClientReportFieldDefinition
-// Client-only: generated `ReportTypeField` uses `JoinFieldType` enum, `FieldValue`
-// for defaults, `FieldOperator` for showWhen, and `AccessLevel` enum. This client
-// model uses raw strings for flexibility in form rendering.
+extension SharedFieldShowWhen {
+    /// Convenience init matching the old client `FieldShowWhen` argument shape.
+    init(field: String, operator: String, value: FieldValue?) {
+        self.init(field: field,
+                  showWhenOperator: SharedOperator(rawValue: `operator`) ?? .equals,
+                  value: value)
+    }
+}
 
-/// Client-side field definition for runtime use. Named `Client*` to avoid
-/// conflict with the generated `ReportFieldDefinition` from protocol codegen.
-///
-/// Drives dynamic form rendering in `TypedReportCreateView`.
-struct ClientReportFieldDefinition: Codable, Identifiable, Equatable, Sendable {
-    let id: String
-    let name: String
-    let label: String
-    let type: String  // text, textarea, number, select, multiselect, checkbox, date, file
-    let required: Bool
-    let options: [FieldOption]?
-    let section: String?
-    let helpText: String?
-    let order: Int
-    let accessLevel: String
-    let supportAudioInput: Bool
+extension CMSReportTypeListResponseReportType: Equatable {
+    public static func == (lhs: CMSReportTypeListResponseReportType, rhs: CMSReportTypeListResponseReportType) -> Bool {
+        lhs.id == rhs.id
+    }
+}
 
-    // Extended fields from CMS schema
-    let placeholder: String?
-    let defaultValue: FieldDefaultValue?
-    let validation: FieldValidation?
-    let showWhen: FieldShowWhen?
-    let indexable: Bool?
-    let indexType: String?
-    let hubEditable: Bool?
-    let editableByVolunteers: Bool?
-    let visibleToVolunteers: Bool?
-    let accessRoles: [String]?
-    let templateId: String?
-    let lookupId: String?
+extension SharedField: Identifiable {}
 
-    /// Field type as a strongly-typed enum for switch exhaustivity.
+extension SharedField {
+    /// Convenience init matching the old client field-definition argument
+    /// shapes (used by previews); maps onto the generated memberwise init.
+    init(id: String, name: String, label: String, type: String,
+         required: Bool, options: [SharedFieldOption]?,
+         section: String?, helpText: String?, order: Int,
+         accessLevel: String, supportAudioInput: Bool,
+         placeholder: String?, defaultValue: FieldValue?,
+         validation: SharedFieldValidation?, showWhen: SharedFieldShowWhen?,
+         indexable: Bool?, indexType: String?, hubEditable: Bool?,
+         editableByUsers: Bool? = nil, visibleToUsers: Bool? = nil,
+         accessRoles: [String]?, templateId: String?, lookupId: String?) {
+        self.init(accessLevel: SharedAccessLevel(rawValue: accessLevel) ?? .all,
+                  accessRoles: accessRoles, createdAt: nil, defaultValue: defaultValue,
+                  editableByUsers: editableByUsers ?? true, helpText: helpText,
+                  hubEditable: hubEditable ?? false, id: id,
+                  indexable: indexable ?? false,
+                  indexType: SharedIndexType(rawValue: indexType ?? "none") ?? .none,
+                  label: label, locationOptions: nil, lookupID: lookupId, name: name,
+                  options: options, order: order, placeholder: placeholder,
+                  sharedFielRequired: required, section: section, showWhen: showWhen,
+                  supportAudioInput: supportAudioInput, templateID: templateId,
+                  type: SharedType(rawValue: type) ?? .text, validation: validation,
+                  visibleToUsers: visibleToUsers ?? true)
+    }
+
+    /// Wire `required` (quicktype-renamed `sharedFielRequired`).
+    var required: Bool { sharedFielRequired }
+
+    /// Field type as a strongly-typed enum for switch exhaustivity (same raw
+    /// values as generated `SharedType`, minus `location` which renders as text).
     var fieldType: ReportFieldType {
-        ReportFieldType(rawValue: type) ?? .text
+        ReportFieldType(rawValue: type.rawValue) ?? .text
     }
 
     /// Whether this field should be visible given the current form values.
     func isVisible(given fieldValues: [String: AnyCodableValue]) -> Bool {
         guard let condition = showWhen else { return true }
         let currentValue = fieldValues[condition.field]
-        switch condition.`operator` {
-        case "equals":
+        switch condition.showWhenOperator {
+        case .equals:
             return matchesValue(currentValue, condition.value)
-        case "not_equals":
+        case .notEquals:
             return !matchesValue(currentValue, condition.value)
-        case "is_set":
+        case .isSet:
             return currentValue != nil
-        case "contains":
+        case .contains:
             if case .string(let str) = currentValue,
                case .string(let target) = condition.value {
                 return str.contains(target)
             }
             return false
-        default:
-            return true
         }
     }
 
-    private func matchesValue(_ current: AnyCodableValue?, _ expected: FieldDefaultValue?) -> Bool {
+    private func matchesValue(_ current: AnyCodableValue?, _ expected: FieldValue?) -> Bool {
         guard let current, let expected else { return current == nil && expected == nil }
         switch (current, expected) {
         case (.string(let a), .string(let b)): return a == b
@@ -118,8 +122,7 @@ struct ClientReportFieldDefinition: Codable, Identifiable, Equatable, Sendable {
 }
 
 // MARK: - ReportFieldType
-// Client-only: mirrors generated `JoinFieldType` but without `location` case.
-// Kept as separate enum for switch exhaustivity in form rendering.
+// Client display enum (same raw values as generated `SharedType`, minus `location`).
 
 /// Supported field types for report form rendering.
 enum ReportFieldType: String, Sendable {
@@ -133,110 +136,15 @@ enum ReportFieldType: String, Sendable {
     case file
 }
 
-// MARK: - FieldOption
-// Client-only: structurally identical to many generated `*Option` types
-// (IndigoOption, PurpleOption, etc.) but uses a stable, readable name
-// since quicktype names change when schemas are added/removed.
-
-/// Key-label pair for select and multiselect field options.
-struct FieldOption: Codable, Equatable, Sendable {
-    let key: String
-    let label: String
-}
-
-// MARK: - FieldDefaultValue
-// Client-only: structurally similar to generated `FieldValue` but uses a
-// clean enum with associated values rather than quicktype's class-based approach.
-
-/// Type-erased default value for a field definition. Matches the backend's
-/// `defaultValue` which can be a string, number, or boolean.
-enum FieldDefaultValue: Codable, Equatable, Sendable {
-    case string(String)
-    case double(Double)
-    case bool(Bool)
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let val = try? container.decode(Bool.self) {
-            self = .bool(val)
-        } else if let val = try? container.decode(Double.self) {
-            self = .double(val)
-        } else if let val = try? container.decode(String.self) {
-            self = .string(val)
-        } else {
-            throw DecodingError.typeMismatch(
-                FieldDefaultValue.self,
-                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Cannot decode FieldDefaultValue")
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let val): try container.encode(val)
-        case .double(let val): try container.encode(val)
-        case .bool(let val): try container.encode(val)
-        }
-    }
-}
-
-// MARK: - FieldValidation
-// Client-only: generated `PurpleValidation` uses `Double?` for all fields.
-// This uses `Double?` too, matching.
-
-/// Validation constraints for a field definition.
-struct FieldValidation: Codable, Equatable, Sendable {
-    let min: Double?
-    let max: Double?
-    let minLength: Double?
-    let maxLength: Double?
-    let pattern: String?
-}
-
-// MARK: - FieldShowWhen
-// Client-only: generated `PurpleShowWhen` uses `FieldOperator` enum and `FieldValue`
-// for the value. This uses raw strings for the operator and `FieldDefaultValue`.
-
-/// Conditional visibility rule for a field. The field is shown only when
-/// the referenced field's value satisfies the operator/value condition.
-struct FieldShowWhen: Codable, Equatable, Sendable {
-    let field: String
-    let `operator`: String  // equals, not_equals, is_set, contains
-    let value: FieldDefaultValue?
-
-    enum CodingKeys: String, CodingKey {
-        case field
-        case `operator` = "operator"
-        case value
-    }
-}
-
 // MARK: - StatusOption
-// Typealias to generated `EnumOption` (= CaseEnumOption) — identical fields:
+// Typealias to generated `EnumOption` — identical fields:
 // {value, label, color?, icon?, order, isClosed?, isDefault?, isDeprecated?}.
 
 typealias StatusOption = EnumOption
 
-// MARK: - ClientReportTypesResponse
-
-/// API response from `GET /api/reports/types` or `GET /api/settings/cms/report-types`.
-struct ClientReportTypesResponse: Codable, Sendable {
-    let reportTypes: [ClientReportTypeDefinition]
-}
-
-// MARK: - CreateTypedReportRequest
-
-/// Request body for `POST /api/reports` with a report type.
-/// Extends the base report creation with `reportTypeId`.
-///
-/// Encoded with a plain `JSONEncoder` (no `convertToSnakeCase`) and sent via
-/// `APIService.request(method:path:rawBody:)` because the backend expects
-/// camelCase keys (`reportTypeId`, `encryptedContent`, `readerEnvelopes`).
-struct CreateTypedReportRequest: Encodable, Sendable {
-    let title: String
-    let category: String?
-    let reportTypeId: String
-    let encryptedContent: String
-    let readerEnvelopes: [RecipientEnvelope]
-}
+// MARK: - Request Bodies
+// Typed report creation uses the generated `CreateReportBody`. It is encoded
+// with a plain JSONEncoder and sent via `APIService.request(method:path:rawBody:)`
+// because APIService's shared encoder applies convertToSnakeCase, which would
+// mangle the camelCase wire keys (`reportTypeId`, `encryptedContent`,
+// `readerEnvelopes`) declared in the schema.

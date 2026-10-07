@@ -53,7 +53,7 @@ struct AssignmentSheet: View {
 }
 
 private struct SuggestionRow: View {
-    let suggestion: VolunteerSuggestion
+    let suggestion: Suggestion
     let onAssign: () -> Void
 
     var body: some View {
@@ -68,12 +68,12 @@ private struct SuggestionRow: View {
                 HStack(spacing: 6) {
                     Text(suggestion.pubkey.prefix(12) + "...")
                         .font(.caption.monospaced())
-                    Label("\(suggestion.score)", systemImage: "star.fill")
+                    Label("\(Int(suggestion.score))", systemImage: "star.fill")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 6) {
-                    Label("\(suggestion.activeCaseCount)/\(suggestion.maxCases)", systemImage: "tray.2")
+                    Label("\(Int(suggestion.activeCaseCount))/\(Int(suggestion.maxCases))", systemImage: "tray.2")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     if suggestion.languageScore > 0 {

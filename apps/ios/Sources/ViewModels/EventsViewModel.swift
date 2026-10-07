@@ -12,19 +12,19 @@ final class EventsViewModel {
 
     // MARK: - State
 
-    var events: [AppCaseEvent] = []
+    var events: [EventListResponseEvent] = []
     var totalEvents: Int = 0
     var currentPage: Int = 1
     let pageSize: Int = 50
 
-    var selectedEvent: AppCaseEvent?
-    var selectedEntityType: CaseEntityTypeDefinition?
+    var selectedEvent: EventListResponseEvent?
+    var selectedEntityType: EntityType?
 
     /// Entity types with category='event' only.
-    var eventEntityTypes: [CaseEntityTypeDefinition] = []
+    var eventEntityTypes: [EntityType] = []
 
     /// All entity types (for reference).
-    var allEntityTypes: [CaseEntityTypeDefinition] = []
+    var allEntityTypes: [EntityType] = []
 
     /// Whether CMS is enabled.
     var cmsEnabled: Bool?
@@ -38,9 +38,9 @@ final class EventsViewModel {
     var isSaving: Bool = false
 
     // Linked data for detail view
-    var linkedCases: [AppCaseEventLink] = []
-    var linkedReports: [ReportEventLink] = []
-    var subEvents: [AppCaseEvent] = []
+    var linkedCases: [CaseEventListResponseLink] = []
+    var linkedReports: [ReportEventListResponseLink] = []
+    var subEvents: [EventListResponseEvent] = []
     var isLoadingLinks: Bool = false
 
     var errorMessage: String?
@@ -56,12 +56,12 @@ final class EventsViewModel {
         max(1, Int(ceil(Double(totalEvents) / Double(pageSize))))
     }
 
-    func entityType(for id: String) -> CaseEntityTypeDefinition? {
+    func entityType(for id: String) -> EntityType? {
         allEntityTypes.first { $0.id == id }
     }
 
-    func statusDef(for event: AppCaseEvent) -> CaseEnumOption? {
-        entityType(for: event.entityTypeId)?.statuses.first { $0.value == event.statusHash }
+    func statusDef(for event: EventListResponseEvent) -> SharedStatus? {
+        entityType(for: event.entityTypeID)?.statuses.first { $0.value == event.statusHash }
     }
 
     func decryptedTitle(for eventId: String) -> String? {
@@ -93,11 +93,11 @@ final class EventsViewModel {
 
         // Load entity types
         do {
-            let response: EntityTypesResponse = try await apiService.request(
+            let response: EntityTypeListResponse = try await apiService.request(
                 method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
             )
-            allEntityTypes = response.entityTypes.filter { $0.isArchived != true }
-            eventEntityTypes = allEntityTypes.filter { $0.category == "event" }
+            allEntityTypes = response.entityTypes.filter { !$0.isArchived }
+            eventEntityTypes = allEntityTypes.filter { $0.category == .event }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -118,12 +118,12 @@ final class EventsViewModel {
         defer { isLoading = false }
 
         do {
-            let response: EventsListResponse = try await apiService.request(
+            let response: EventListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/events") + "?page=\(currentPage)&limit=\(pageSize)"
             )
             events = response.events
-            totalEvents = response.total
+            totalEvents = Int(response.total)
 
             // Decrypt details for display
             await decryptEventDetails(response.events)
@@ -141,9 +141,9 @@ final class EventsViewModel {
 
     // MARK: - Selection
 
-    func selectEvent(_ event: AppCaseEvent) async {
+    func selectEvent(_ event: EventListResponseEvent) async {
         selectedEvent = event
-        selectedEntityType = entityType(for: event.entityTypeId)
+        selectedEntityType = entityType(for: event.entityTypeID)
         await loadLinkedData(for: event)
     }
 
@@ -157,13 +157,13 @@ final class EventsViewModel {
 
     // MARK: - Linked Data
 
-    private func loadLinkedData(for event: AppCaseEvent) async {
+    private func loadLinkedData(for event: EventListResponseEvent) async {
         isLoadingLinks = true
         defer { isLoadingLinks = false }
 
         // Load linked records (cases)
         do {
-            let response: AppCaseEventLinksResponse = try await apiService.request(
+            let response: CaseEventListResponse = try await apiService.request(
                 method: "GET", path: apiService.hp("/api/events/\(event.id)/records")
             )
             linkedCases = response.links
@@ -173,7 +173,7 @@ final class EventsViewModel {
 
         // Load linked reports
         do {
-            let response: ReportEventLinksResponse = try await apiService.request(
+            let response: ReportEventListResponse = try await apiService.request(
                 method: "GET", path: apiService.hp("/api/events/\(event.id)/reports")
             )
             linkedReports = response.links
@@ -183,7 +183,7 @@ final class EventsViewModel {
 
         // Load sub-events
         do {
-            let response: SubEventsResponse = try await apiService.request(
+            let response: EventListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/events/\(event.id)/subevents")
             )
@@ -196,15 +196,15 @@ final class EventsViewModel {
     // MARK: - Decryption
 
     /// Decrypt event details for display (title, description).
-    private func decryptEventDetails(_ events: [AppCaseEvent]) async {
+    private func decryptEventDetails(_ events: [EventListResponseEvent]) async {
         guard cryptoService.isUnlocked, let ourPubkey = cryptoService.pubkey else { return }
 
         for event in events {
             if decryptedDetails[event.id] != nil { continue }
 
-            guard let encrypted = event.encryptedDetails,
-                  let envelopes = event.detailEnvelopes,
-                  !envelopes.isEmpty else { continue }
+            let encrypted = event.encryptedDetails
+            let envelopes = event.detailEnvelopes
+            guard !envelopes.isEmpty else { continue }
 
             guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { continue }
 
@@ -237,13 +237,21 @@ final class EventsViewModel {
     // MARK: - Create Event
 
     /// Create a new event. Returns true on success.
+    ///
+    /// - Parameter adminPubkeys: X25519 admin decryption pubkeys that must also
+    ///   be able to read the event details. The event route stores
+    ///   `detailEnvelopes` verbatim (`CasesService.createEvent`) and never adds
+    ///   readers of its own, so every reader has to be wrapped for here or
+    ///   admin accountability access is lost — see
+    ///   `docs/security/CRYPTO_ARCHITECTURE.md`.
     func createEvent(
         entityTypeId: String,
         title: String,
         description: String?,
         startDate: Date,
         endDate: Date?,
-        location: String?
+        location: String?,
+        adminPubkeys: [String]
     ) async -> Bool {
         isSaving = true
         defer { isSaving = false }
@@ -264,17 +272,17 @@ final class EventsViewModel {
             return false
         }
 
-        // Encrypt the details
+        // Encrypt the details for the author and every admin reader.
         let encryptedContent: String
-        let envelopes: [CaseEnvelope]
+        let envelopes: [SharedAdminEnvelope]
         do {
             let result = try cryptoService.encryptMessage(
                 plaintext: detailsString,
-                readerPubkeys: [] // Server adds admin pubkeys
+                readerPubkeys: adminPubkeys
             )
             encryptedContent = result.encryptedContent
             envelopes = result.envelopes.map { env in
-                CaseEnvelope(
+                SharedAdminEnvelope(
                     ct: env.ct,
                     enc: env.enc,
                     pubkey: env.pubkey
@@ -288,21 +296,31 @@ final class EventsViewModel {
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime]
 
-        let body = CreateEventRequest(
-            entityTypeId: entityTypeId,
-            startDate: isoFormatter.string(from: startDate),
-            endDate: endDate.map { isoFormatter.string(from: $0) },
-            parentEventId: nil,
-            locationPrecision: location != nil ? "neighborhood" : "none",
-            locationApproximate: location,
-            encryptedDetails: encryptedContent,
+        // The server requires eventTypeHash/statusHash. The create UI has no
+        // event-type concept, so the type hash is sent empty (finding #1329:
+        // event-type picker semantics need a product decision); the status
+        // hash comes from the entity type's default status.
+        let body = CreateEventBody(
+            blindIndexes: [:],
             detailEnvelopes: envelopes,
-            blindIndexes: [:]
+            encryptedDetails: encryptedContent,
+            endDate: endDate.map { isoFormatter.string(from: $0) },
+            entityTypeID: entityTypeId,
+            eventTypeHash: "",
+            locationApproximate: location,
+            locationPrecision: location != nil ? .neighborhood : .none,
+            parentEventID: nil,
+            startDate: isoFormatter.string(from: startDate),
+            statusHash: entityType(for: entityTypeId)?.defaultStatus ?? ""
         )
 
         do {
-            let _: AppCaseEvent = try await apiService.request(
-                method: "POST", path: apiService.hp("/api/events"), body: body
+            // `wireBody:` and not `body:` — `createEventBodySchema` requires
+            // camelCase keys (`entityTypeId`, `detailEnvelopes`, `encryptedDetails`),
+            // which the default encoder's `.convertToSnakeCase` would rewrite into
+            // keys the route validator rejects.
+            let _: ProtocolEvent = try await apiService.request(
+                method: "POST", path: apiService.hp("/api/events"), wireBody: body
             )
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             await loadEvents()

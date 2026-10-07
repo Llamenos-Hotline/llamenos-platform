@@ -61,54 +61,14 @@ struct AppConfig: Decodable {
 }
 
 // MARK: - Recovery Group Response Types
+// Recovery group/session responses decode to the generated types from
+// packages/protocol/schemas/recovery-group.ts: `RecoveryGroupInfo`,
+// `RecoveryInitiateResponse`, `RecoverySessionStatusResponse`,
+// `RecoveryContributeResponse`, `EmergencyOverride`, `Contribution`.
+// `RecoverySessionStatusResponse` gains `Identifiable` below for list UI.
 
-struct AppRecoveryGroupInfo: Decodable {
-    let publicKey: String
-    let threshold: Int
-    let totalShares: Int
-    let commitments: [String]
-    let sigchainLinkHash: String
-    let delayHours: Int
-    let emergencyFloorHours: Int
-    let createdAt: String
-    let rotatedAt: String?
-    let shareHolderLiveness: [ShareHolderLiveness]
-}
-
-
-struct RecoverySessionStatus: Decodable, Identifiable {
-    let sessionId: String
-    let hubId: String
-    let userPubkey: String
-    let newDevicePubkey: String
-    let status: String
-    let contributionCount: Int
-    let threshold: Int
-    let delayRemainingMs: Int?
-    let expiresAt: String
-    let createdAt: String
-    let contributions: [RecoveryContribution]?
-    let emergencyOverride: AppRecoveryEmergencyOverride?
-
-    var id: String { sessionId }
-}
-
-struct RecoveryContribution: Decodable {
-    let contributorPubkey: String
-    let encryptedShare: String
-    let contributorSignature: String
-    let contributedAt: String
-}
-
-struct AppRecoveryEmergencyOverride: Decodable {
-    let justification: String
-    let approverPubkey: String
-    let approverSignature: String
-}
-
-struct AppRecoveryInitiateResponse: Decodable {
-    let sessionId: String
-    let verificationSent: Bool
+extension RecoverySessionStatusResponse: Identifiable {
+    public var id: String { sessionID }
 }
 
 struct RecoveryVerifyResponse: Decodable {
@@ -127,12 +87,6 @@ struct OkResponse: Decodable {
     let ok: Bool
 }
 
-struct ContributeResponse: Decodable {
-    let ok: Bool
-    let status: String
-    let contributionCount: Int
-}
-
 // MARK: - APIService
 
 /// URLSession-based REST client for the Llamenos hub API. Injects CryptoService to
@@ -147,6 +101,17 @@ final class APIService: @unchecked Sendable {
     private let hubContext: HubContext
     private let session: URLSession
     private let encoder: JSONEncoder
+
+    /// Encoder for generated protocol types.
+    ///
+    /// `encoder` applies `.convertToSnakeCase`, which rewrites a type's own
+    /// `CodingKeys` on the way out — a generated `PromoteBanBody` whose key is
+    /// `banId` goes on the wire as `ban_id`. No input schema under
+    /// `packages/protocol/schemas/` accepts a snake_case key, so a body encoded
+    /// that way is rejected (or silently emptied) by the route validator. Types
+    /// generated from those schemas must therefore be encoded with their own
+    /// coding keys and no renaming strategy.
+    private let wireEncoder = JSONEncoder()
     private let decoder: JSONDecoder
 
     /// Offline write queue. Set by AppState after initialization.
@@ -449,18 +414,40 @@ final class APIService: @unchecked Sendable {
         let _: EmptyResponse = try await request(method: method, path: path, body: body)
     }
 
+    /// Request whose body is a type generated from `packages/protocol/schemas/`.
+    ///
+    /// Encodes with `wireEncoder` so the generated `CodingKeys` reach the wire
+    /// verbatim. Prefer this over `body:` for every generated request type.
+    func request<T: Decodable>(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws -> T {
+        try await request(method: method, path: path, rawBody: try wireEncoder.encode(wireBody))
+    }
+
+    /// Fire-and-forget variant of `request(method:path:wireBody:)`.
+    func request(
+        method: String,
+        path: String,
+        wireBody: some Encodable
+    ) async throws {
+        let _: EmptyResponse = try await request(method: method, path: path, wireBody: wireBody)
+    }
+
     // MARK: - CMS Report Types
 
     /// Fetch CMS report type definitions from the settings endpoint.
     ///
     /// Calls `GET /api/settings/cms/report-types` which returns the full
-    /// `ClientReportTypeDefinition` schema including CMS-specific fields like
-    /// `hubId`, `isSystem`, `numberingEnabled`, `closedStatuses`, etc.
+    /// generated `CMSReportTypeListResponseReportType` schema including
+    /// CMS-specific fields like `hubId`, `isSystem`, `numberingEnabled`,
+    /// `closedStatuses`, etc.
     ///
     /// Uses a plain `JSONDecoder` (no snake_case conversion) because the
     /// backend returns camelCase keys natively for this endpoint.
-    func fetchCmsReportTypes() async throws -> [ClientReportTypeDefinition] {
-        let response: ClientReportTypesResponse = try await request(
+    func fetchCmsReportTypes() async throws -> [CMSReportTypeListResponseReportType] {
+        let response: CMSReportTypeListResponse = try await request(
             method: "GET",
             path: hp("/api/settings/cms/report-types")
         )
@@ -482,7 +469,7 @@ final class APIService: @unchecked Sendable {
 
     /// Fetch short-lived SIP credentials for the given hub.
     /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
+    func getSipToken(hubId: String) async throws -> SIPTokenResponse {
         return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
     }
 
@@ -585,11 +572,11 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: hp("/api/recovery-group/enroll"), rawBody: jsonData)
     }
 
-    func getRecoveryGroup(hubId: String) async throws -> AppRecoveryGroupInfo {
+    func getRecoveryGroup(hubId: String) async throws -> RecoveryGroupInfo {
         try await request(method: "GET", path: hp("/api/recovery-group/\(hubId)"))
     }
 
-    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> AppRecoveryInitiateResponse {
+    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> RecoveryInitiateResponse {
         let body: [String: String] = [
             "hubId": hubId,
             "userIdentifier": userIdentifier,
@@ -606,7 +593,7 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: "/api/recovery-group/initiate/verify", body: body)
     }
 
-    func listRecoverySessions() async throws -> [RecoverySessionStatus] {
+    func listRecoverySessions() async throws -> [RecoverySessionStatusResponse] {
         guard let hubId = hubContext.activeHubId else { throw APIError.noBaseURL }
         return try await request(method: "GET", path: hp("/api/recovery-group/sessions?hubId=\(hubId)"))
     }
@@ -617,11 +604,11 @@ final class APIService: @unchecked Sendable {
         try await request(method: "GET", path: hp("/api/recovery-group/shares/my"))
     }
 
-    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatus {
+    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatusResponse {
         try await request(method: "GET", path: hp("/api/recovery-group/session/\(sessionId)"))
     }
 
-    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> ContributeResponse {
+    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> RecoveryContributeResponse {
         let body: [String: String] = [
             "encryptedShare": encryptedShare,
             "contributorSignature": contributorSignature,
@@ -868,19 +855,6 @@ final class CertificatePinningDelegate: NSObject, URLSessionDelegate {
 }
 
 // MARK: - Dynamic Pin Update
-
-/// Response from `GET /api/config/pins` — server-signed pin list for rotation
-/// without requiring an app update.
-struct PinListResponse: Decodable {
-    let pins: [PinEntry]
-    let signature: String
-    let notBefore: String
-    let notAfter: String
-
-    struct PinEntry: Decodable {
-        let algorithm: String
-        let hash: String
-        let label: String
-    }
-}
+// The pin list response is the generated `ConfigPinsResponse`
+// (packages/protocol/schemas/config.ts): pins, signature, notBefore, notAfter.
 

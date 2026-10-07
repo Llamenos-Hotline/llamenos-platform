@@ -222,7 +222,7 @@ enum ContactNavDestination: Hashable {
 // MARK: - ContactRowView
 
 struct ContactRowView: View {
-    let contact: ContactSummary
+    let contact: SharedContactTimelineListResponseContact
 
     var body: some View {
         HStack(spacing: 12) {
@@ -265,11 +265,11 @@ struct ContactRowView: View {
     }
 
     @ViewBuilder
-    private func interactionBadge(icon: String, count: Int, color: Color) -> some View {
+    private func interactionBadge(icon: String, count: Double, color: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.brand(.caption))
-            Text("\(count)")
+            Text("\(Int(count))")
                 .font(.brand(.caption))
                 .fontWeight(.medium)
         }

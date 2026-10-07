@@ -89,7 +89,7 @@ final class AdminViewModel {
     // MARK: - Ban List State
 
     /// All ban entries from the server.
-    var bans: [AppBanEntry] = []
+    var bans: [BanListResponseBan] = []
 
     /// Whether bans are loading.
     var isLoadingBans: Bool = false
@@ -106,7 +106,7 @@ final class AdminViewModel {
     // MARK: - Audit Log State
 
     /// Audit log entries from the server.
-    var auditEntries: [AppAuditEntry] = []
+    var auditEntries: [SharedEntry] = []
 
     /// Total count of audit entries for pagination.
     var auditTotal: Int = 0
@@ -127,7 +127,7 @@ final class AdminViewModel {
     // MARK: - Invites State
 
     /// All invite codes from the server.
-    var invites: [AppInvite] = []
+    var invites: [Invite] = []
 
     /// Whether invites are loading.
     var isLoadingInvites: Bool = false
@@ -141,7 +141,7 @@ final class AdminViewModel {
     // MARK: - Custom Fields State
 
     /// All custom field definitions.
-    var customFields: [CustomFieldDefinition] = []
+    var customFields: [CustomFieldsBodyField] = []
 
     /// Whether custom fields are loading.
     var isLoadingFields: Bool = false
@@ -150,7 +150,7 @@ final class AdminViewModel {
     var showFieldEditor: Bool = false
 
     /// The field being edited (nil for create).
-    var editingField: CustomFieldDefinition?
+    var editingField: CustomFieldsBodyField?
 
     // MARK: - Report Categories State
 
@@ -240,7 +240,7 @@ final class AdminViewModel {
     // MARK: - Erasure Queue State
 
     /// Pending erasure requests from the API.
-    var erasureRequests: [AdminErasureRequest] = []
+    var erasureRequests: [SharedRequest] = []
 
     /// Whether erasure requests are loading.
     var isLoadingErasure: Bool = false
@@ -271,7 +271,7 @@ final class AdminViewModel {
     // MARK: - Platform Bans State
 
     /// Platform-scoped bans from the API.
-    var platformBans: [AppBanEntry] = []
+    var platformBans: [PlatformBanListResponseBan] = []
 
     /// Whether platform bans are loading.
     var isLoadingPlatformBans: Bool = false
@@ -283,7 +283,7 @@ final class AdminViewModel {
     var platformBanSearchQuery: String = ""
 
     /// Search results from cross-hub search.
-    var platformBanSearchResults: [AppBanEntry] = []
+    var platformBanSearchResults: [SearchBansResponseBan] = []
 
     // MARK: - Shared State
 
@@ -368,12 +368,12 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: BanListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans"
             )
             bans = response.bans.sorted { lhs, rhs in
-                (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
+                (lhs.bannedDate ?? Date.distantPast) > (rhs.bannedDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -449,13 +449,13 @@ final class AdminViewModel {
         auditPage = 1
 
         do {
-            let response: AuditLogResponse = try await apiService.request(
+            let response: AuditListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/audit?page=1&limit=\(auditPageSize)"
             )
             auditEntries = response.entries
-            auditTotal = response.total
-            hasMoreAudit = auditEntries.count < response.total
+            auditTotal = Int(response.total)
+            hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -471,14 +471,14 @@ final class AdminViewModel {
         let nextPage = auditPage + 1
 
         do {
-            let response: AuditLogResponse = try await apiService.request(
+            let response: AuditListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/audit?page=\(nextPage)&limit=\(auditPageSize)"
             )
             auditEntries.append(contentsOf: response.entries)
             auditPage = nextPage
-            auditTotal = response.total
-            hasMoreAudit = auditEntries.count < response.total
+            auditTotal = Int(response.total)
+            hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -495,7 +495,7 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: InvitesListResponse = try await apiService.request(
+            let response: InviteListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/identity/invites"
             )
@@ -516,7 +516,7 @@ final class AdminViewModel {
 
         do {
             let request = CreateInviteRequest(role: newInviteRole.rawValue)
-            let _: AppInvite = try await apiService.request(
+            let _: Invite = try await apiService.request(
                 method: "POST",
                 path: "/api/identity/invite",
                 body: request
@@ -542,11 +542,15 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: CustomFieldsResponse = try await apiService.request(
+            let response: CustomFieldsListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/custom-fields?role=admin"
             )
-            customFields = response.fields.sorted { $0.order < $1.order }
+            // `GET` returns whole stored rows; the editor works in the PUT
+            // shape, which is the subset `customFieldsBodySchema` accepts.
+            customFields = response.fields
+                .sorted { $0.order < $1.order }
+                .map(\.bodyField)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -560,7 +564,7 @@ final class AdminViewModel {
         successMessage = nil
 
         do {
-            let body = ["fields": customFields]
+            let body = CustomFieldsBody(fields: customFields)
             try await apiService.request(
                 method: "PUT",
                 path: "/api/settings/custom-fields",
@@ -577,8 +581,8 @@ final class AdminViewModel {
     }
 
     /// Add or update a field in the local list, then save to server.
-    func saveField(_ field: CustomFieldDefinition) async {
-        if let index = customFields.firstIndex(where: { $0.id == field.id }) {
+    func saveField(_ field: CustomFieldsBodyField) async {
+        if let index = customFields.firstIndex(where: { $0.name == field.name }) {
             customFields[index] = field
         } else {
             customFields.append(field)
@@ -589,8 +593,8 @@ final class AdminViewModel {
     }
 
     /// Delete a field by ID, then save to server.
-    func deleteField(id: String) async {
-        customFields.removeAll { $0.id == id }
+    func deleteField(name: String) async {
+        customFields.removeAll { $0.name == name }
         await saveCustomFields()
     }
 
@@ -975,12 +979,13 @@ final class AdminViewModel {
             if let filter = erasureStatusFilter {
                 path += "?status=\(filter)"
             }
-            let response: ErasureQueueResponse = try await apiService.request(
+            let response: ErasureRequestListResponse = try await apiService.request(
                 method: "GET",
                 path: path
             )
             erasureRequests = response.requests.sorted {
-                ($0.requestedAt ?? Date.distantPast) > ($1.requestedAt ?? Date.distantPast)
+                (DateFormatting.parseISO($0.requestedAt) ?? .distantPast)
+                    > (DateFormatting.parseISO($1.requestedAt) ?? .distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -1090,12 +1095,12 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: PlatformBanListResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans/platform"
             )
             platformBans = response.bans.sorted {
-                ($0.createdDate ?? Date.distantPast) > ($1.createdDate ?? Date.distantPast)
+                ($0.bannedDate ?? Date.distantPast) > ($1.bannedDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -1169,7 +1174,7 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let response: AppBanListResponse = try await apiService.request(
+            let response: SearchBansResponse = try await apiService.request(
                 method: "GET",
                 path: "/api/bans/platform/search?q=\(query)"
             )
@@ -1180,21 +1185,26 @@ final class AdminViewModel {
     }
 
     /// Promote a hub-scoped ban to platform scope.
+    ///
+    /// `POST /api/bans/platform/promote` resolves the source ban by its primary
+    /// key server-side and copies the already-hashed phone onto the platform
+    /// list (`apps/worker/routes/platform-bans.ts`); the client never needs — and
+    /// never has — the plaintext number. Body is the generated `PromoteBanBody`.
+    ///
+    /// Note: `GET /api/bans` does not currently return the ban `id`
+    /// (`records.listBans`), so no list row can supply `banId` yet. The
+    /// capability is reachable from any caller that holds an id (deep link,
+    /// search result, future list response) and is covered by
+    /// `AdminViewModelPromoteBanTests`.
     func promoteBanToPlatform(banId: String) async {
         errorMessage = nil
         successMessage = nil
 
-        guard let ban = bans.first(where: { $0.id == banId }) else { return }
-
         do {
-            let request = CreateBanRequest(
-                identifierHash: ban.identifierHash,
-                reason: ban.reason
-            )
             try await apiService.request(
                 method: "POST",
-                path: "/api/bans/platform",
-                body: request
+                path: "/api/bans/platform/promote",
+                wireBody: PromoteBanBody(banID: banId)
             )
 
             let generator = UINotificationFeedbackGenerator()
@@ -1260,21 +1270,11 @@ enum DeleteType: Sendable {
 }
 
 // MARK: - Erasure Models
+// Erasure requests decode to generated `SharedRequest`; the queue response is
+// generated `ErasureRequestListResponse`
+// (packages/protocol/schemas/erasure.ts).
 
-struct AdminErasureRequest: Codable, Identifiable, Sendable {
-    let id: String
-    let userId: String
-    let status: String
-    let requestedAt: Date?
-    let executeAt: Date?
-    let requestedBy: String?
-    let justification: String?
-    let emergencyOverride: Bool?
-}
-
-struct ErasureQueueResponse: Codable, Sendable {
-    let requests: [AdminErasureRequest]
-}
+extension SharedRequest: Identifiable {}
 
 struct ImmediateErasureRequest: Codable, Sendable {
     let justification: String

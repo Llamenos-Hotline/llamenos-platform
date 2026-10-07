@@ -6,8 +6,8 @@ import SwiftUI
 /// Shows decrypted summary header, status pill, severity badge, assignment controls,
 /// and inline comment input for the timeline.
 struct CaseDetailView: View {
-    let record: CaseRecord
-    let entityType: CaseEntityTypeDefinition
+    let record: SharedRecordListResponseRecord
+    let entityType: EntityType
     let viewModel: CaseManagementViewModel
     let appState: AppState
 
@@ -258,16 +258,16 @@ struct CaseDetailView: View {
                     Image(systemName: tabIcon(tab))
                         .font(.system(size: 14))
                     // Show count badges for contacts and evidence
-                    if tab == .contacts, let count = record.contactCount, count > 0 {
-                        Text("\(count)")
+                    if tab == .contacts, record.contactCount > 0 {
+                        Text("\(Int(record.contactCount))")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(Color.brandMuted)
                             .clipShape(Capsule())
                     }
-                    if tab == .evidence, let count = record.fileCount, count > 0 {
-                        Text("\(count)")
+                    if tab == .evidence, record.fileCount > 0 {
+                        Text("\(Int(record.fileCount))")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
@@ -328,7 +328,7 @@ struct CaseDetailView: View {
                 }
 
                 // Render fields grouped by section
-                let sortedFields = entityType.fields.sorted { ($0.order ?? 0) < ($1.order ?? 0) }
+                let sortedFields = entityType.fields.sorted { $0.order < $1.order }
                 let sections = Dictionary(grouping: sortedFields) { $0.section ?? "" }
                 let sectionKeys = sections.keys.sorted()
 
@@ -393,13 +393,13 @@ struct CaseDetailView: View {
         .accessibilityIdentifier("case-details-tab")
     }
 
-    private func fieldRow(_ field: CaseFieldDefinition) -> some View {
+    private func fieldRow(_ field: SharedEntityTypeDefinitionField) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(field.label)
                     .font(.brand(.caption))
                     .foregroundStyle(.secondary)
-                if field.accessLevel != nil && field.accessLevel != "all" {
+                if field.accessLevel != .all {
                     Image(systemName: "lock")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
@@ -430,7 +430,7 @@ struct CaseDetailView: View {
     }
 
     @ViewBuilder
-    private func fieldValueView(value: String, field: CaseFieldDefinition) -> some View {
+    private func fieldValueView(value: String, field: SharedEntityTypeDefinitionField) -> some View {
         switch field.fieldType {
         case .checkbox:
             HStack(spacing: 4) {
@@ -585,7 +585,7 @@ struct CaseDetailView: View {
                         let text = inlineCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
                         inlineCommentText = ""
                         Task {
-                            await viewModel.addComment(recordId: record.id, text: text)
+                            await submitComment(text)
                         }
                     } label: {
                         Image(systemName: "paperplane.fill")
@@ -627,13 +627,28 @@ struct CaseDetailView: View {
             AddCommentSheet(
                 onSubmit: { text in
                     Task {
-                        await viewModel.addComment(recordId: record.id, text: text)
+                        await submitComment(text)
                         viewModel.showCommentSheet = false
                     }
                 }
             )
             .presentationDetents([.medium])
         }
+    }
+
+    /// Encrypt and post a case comment.
+    ///
+    /// The admin decryption pubkey is resolved here, at submit time, because the
+    /// server stores the envelopes it is given verbatim — a comment wrapped only
+    /// for the author would be permanently unreadable to admins, breaking the
+    /// accountability guarantee in `docs/security/CRYPTO_ARCHITECTURE.md`.
+    private func submitComment(_ text: String) async {
+        await appState.ensureAdminPubkeyLoaded()
+        await viewModel.addComment(
+            recordId: record.id,
+            text: text,
+            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
+        )
     }
 
     // MARK: - Contacts Tab
@@ -786,7 +801,7 @@ struct CaseDetailView: View {
 
 private struct TimelineItemRow: View {
     let interaction: Interaction
-    let entityType: CaseEntityTypeDefinition
+    let entityType: EntityType
     let cryptoService: CryptoService
 
     @State private var decryptedContent: String?

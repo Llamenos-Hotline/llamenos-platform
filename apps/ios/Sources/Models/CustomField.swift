@@ -1,64 +1,55 @@
 import Foundation
 
-// MARK: - CustomFieldDefinition
-// Client-only: generated `ProtocolCustomFieldDefinition` uses `CustomFieldDefinitionType`
-// for type, `Context` for context, `Double` for order/maxFiles/maxFileSize, and
-// `editableByUsers`/`visibleToUsers` (vs our `editableByVolunteers`/`visibleToVolunteers`).
-// Uses nested enums for type safety.
+// MARK: - Custom field UI extensions
+// Custom field definitions decode to generated `CustomFieldsListResponseField`
+// (GET /api/settings/custom-fields — the whole stored row, see
+// `customFieldDefinitionSchema`) and are written back as generated
+// `CustomFieldsBodyField` (PUT), which the server validator narrows to the
+// subset of columns it accepts. Only the display helpers below are client-side.
 
-/// Definition of a custom field attached to notes, matching the protocol spec (Appendix B).
-/// Fetched from `GET /api/settings/custom-fields`.
-struct CustomFieldDefinition: Codable, Identifiable, Sendable {
-    let id: String
-    let name: String
-    let label: String
-    let type: FieldType
-    let required: Bool
-    let options: [String]?
-    let validation: FieldValidation?
-    let visibleToVolunteers: Bool
-    let editableByVolunteers: Bool
-    let context: FieldContext
-    let allowFileUpload: Bool?
-    let acceptedFileTypes: [String]?
-    let order: Int
-    let createdAt: String?
+extension CustomFieldsBodyField: Identifiable {
+    public var id: String { name }
 
-    // MARK: - FieldType
-    // Client-only: generated `CustomFieldDefinitionType` has same cases plus `file`
-    // and `location`. This client enum is a subset for custom field forms.
+    /// Whether the field is required (wire `required` is optional on the PUT shape).
+    var isRequired: Bool { fieldRequired ?? true }
 
-    enum FieldType: String, Codable, Sendable {
-        case text
-        case number
-        case select
-        case checkbox
-        case textarea
-    }
-
-    // MARK: - FieldContext
-    // Client-only: generated `Context` enum has `all`, `callNotes`, `conversationNotes`,
-    // `reports`. This client enum uses `both` instead of `all`.
-
-    enum FieldContext: String, Codable, Sendable {
-        case callNotes = "call-notes"
-        case reports
-        case both
-    }
-
-    // MARK: - FieldValidation
-
-    struct FieldValidation: Codable, Sendable {
-        let minLength: Int?
-        let maxLength: Int?
-        let min: Int?
-        let max: Int?
-    }
+    /// Definition order, defaulting to the end of the list.
+    var orderOrZero: Int { order ?? 0 }
 }
 
-// MARK: - CustomFieldsResponse
+// `CustomFieldsListResponseField` carries the server `id` column, so it
+// satisfies `Identifiable` with no client-side key.
+extension CustomFieldsListResponseField: Identifiable {
+    /// Whether the field is required.
+    var isRequired: Bool { fieldRequired }
 
-/// API response from `GET /api/settings/custom-fields`.
-struct CustomFieldsResponse: Codable, Sendable {
-    let fields: [CustomFieldDefinition]
+    /// Definition order.
+    var orderOrZero: Int { Int(order) }
+
+    /// Readable-order init for previews and tests; quicktype emits the
+    /// memberwise init in alphabetical field order.
+    init(name: String, label: String, type: SharedCustomFieldDefinitionType,
+         required: Bool, options: [String]? = nil, order: Double = 0,
+         context: SharedContext = .callNotes,
+         visibleToUsers: Bool = true, editableByUsers: Bool = true,
+         validation: SharedCustomFieldDefinitionValidation? = nil,
+         id: String = "", createdAt: String = "",
+         maxFiles: Double? = nil, maxFileSize: Double? = nil,
+         allowedMimeTypes: [String]? = nil) {
+        self.init(allowedMIMETypes: allowedMimeTypes, context: context,
+                  createdAt: createdAt, editableByUsers: editableByUsers,
+                  id: id, label: label, maxFiles: maxFiles, maxFileSize: maxFileSize,
+                  name: name, options: options, order: order,
+                  fieldRequired: required, type: type, validation: validation,
+                  visibleToUsers: visibleToUsers)
+    }
+
+    /// The PUT-shape projection the server's `customFieldsBodySchema` accepts.
+    var bodyField: CustomFieldsBodyField {
+        CustomFieldsBodyField(
+            context: context.rawValue, label: label, name: name,
+            options: options, order: Int(order), fieldRequired: fieldRequired,
+            type: type, visibleToUsers: visibleToUsers
+        )
+    }
 }

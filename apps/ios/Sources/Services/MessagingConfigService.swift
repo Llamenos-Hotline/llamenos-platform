@@ -88,25 +88,17 @@ struct AppConnectionTestResponse: Codable {
     let connected: Bool
 }
 
-struct A2pRegistrationResponse: Codable {
-    let id: String
-    let hubId: String
-    let providerType: String
-    let brandStatus: String
-    let campaignStatus: String
-    let brandSidMasked: String?
-    let campaignSidMasked: String?
-    let error: String?
-    let submittedAt: String?
-    let approvedAt: String?
-}
+// A2P registration state decodes to the generated `A2PRegistrationState`
+// (packages/protocol/schemas/provider-setup/a2p-registration.ts), which carries
+// `error`/`brandSidMasked`/`campaignSidMasked` — `A2pRegistrationService.toPublic`
+// emits all three on every response.
 
 @Observable
 final class MessagingConfigService {
     private let api: APIService
 
     var config: MessagingConfigResponse?
-    var a2pRegistration: A2pRegistrationResponse?
+    var a2pRegistration: A2PRegistrationState?
     var isLoading = false
     var error: String?
 
@@ -149,7 +141,7 @@ final class MessagingConfigService {
         }
     }
 
-    func submitBrand(hubId: String, brandInfo: [String: Any]) async throws -> A2pRegistrationResponse {
+    func submitBrand(hubId: String, brandInfo: [String: Any]) async throws -> A2PRegistrationState {
         let rawBody = try JSONSerialization.data(withJSONObject: [
             "hubId": hubId,
             "brandInfo": brandInfo,
@@ -157,7 +149,7 @@ final class MessagingConfigService {
         return try await api.request(method: "POST", path: "/provider-setup/a2p/brand", rawBody: rawBody)
     }
 
-    func submitCampaign(registrationId: String, hubId: String, campaignInfo: [String: Any]) async throws -> A2pRegistrationResponse {
+    func submitCampaign(registrationId: String, hubId: String, campaignInfo: [String: Any]) async throws -> A2PRegistrationState {
         let rawBody = try JSONSerialization.data(withJSONObject: [
             "registrationId": registrationId,
             "hubId": hubId,
@@ -166,7 +158,7 @@ final class MessagingConfigService {
         return try await api.request(method: "POST", path: "/provider-setup/a2p/campaign", rawBody: rawBody)
     }
 
-    func skipA2p(hubId: String) async throws -> A2pRegistrationResponse {
+    func skipA2p(hubId: String) async throws -> A2PRegistrationState {
         let rawBody = try JSONSerialization.data(withJSONObject: ["hubId": hubId])
         return try await api.request(method: "POST", path: "/provider-setup/a2p/skip", rawBody: rawBody)
     }

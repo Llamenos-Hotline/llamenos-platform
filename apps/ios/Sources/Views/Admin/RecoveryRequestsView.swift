@@ -9,9 +9,9 @@ struct RecoveryRequestsView: View {
     @Environment(HubContext.self) private var hubContext
     @Environment(AppState.self) private var appState
 
-    @State private var sessions: [RecoverySessionStatus] = []
+    @State private var sessions: [RecoverySessionStatusResponse] = []
     @State private var isLoading = true
-    @State private var selectedSession: RecoverySessionStatus?
+    @State private var selectedSession: RecoverySessionStatusResponse?
     @State private var showUrgentSheet = false
     @State private var isApproving = false
     @State private var errorMessage: String?
@@ -33,9 +33,9 @@ struct RecoveryRequestsView: View {
                 request: session,
                 isApproving: $isApproving,
                 errorMessage: $errorMessage,
-                onApprove: { await approveRecovery(sessionId: session.sessionId) },
+                onApprove: { await approveRecovery(sessionId: session.sessionID) },
                 onUrgent: { showUrgentSheet = true },
-                onCancel: { await cancelRecovery(sessionId: session.sessionId) },
+                onCancel: { await cancelRecovery(sessionId: session.sessionID) },
                 onDismiss: { selectedSession = nil }
             )
         }
@@ -51,7 +51,7 @@ struct RecoveryRequestsView: View {
 
     private var requestList: some View {
         List {
-            let active = sessions.filter { ["pending", "verified", "active"].contains($0.status) }
+            let active = sessions.filter { ["pending", "verified", "active"].contains($0.status.rawValue) }
             if !active.isEmpty {
                 Section {
                     ForEach(active) { request in
@@ -64,7 +64,7 @@ struct RecoveryRequestsView: View {
                 }
             }
 
-            let history = sessions.filter { ["completed", "expired", "cancelled"].contains($0.status) }
+            let history = sessions.filter { ["completed", "expired", "cancelled"].contains($0.status.rawValue) }
             if !history.isEmpty {
                 Section {
                     ForEach(history) { request in
@@ -126,7 +126,7 @@ struct RecoveryRequestsView: View {
         isApproving = true
         errorMessage = nil
         do {
-            guard let session = sessions.first(where: { $0.sessionId == sessionId }) else {
+            guard let session = sessions.first(where: { $0.sessionID == sessionId }) else {
                 errorMessage = NSLocalizedString("recovery_group_error_session_not_found", comment: "Session not found")
                 isApproving = false
                 return
@@ -141,8 +141,7 @@ struct RecoveryRequestsView: View {
             }
 
             // Check if we already contributed
-            if let contributions = session.contributions,
-               contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
+            if session.contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
                 errorMessage = NSLocalizedString("recovery_group_error_already_approved", comment: "Already approved")
                 isApproving = false
                 return
@@ -228,7 +227,7 @@ struct RecoveryRequestsView: View {
 // MARK: - RecoveryRequestRow
 
 struct RecoveryRequestRow: View {
-    let request: RecoverySessionStatus
+    let request: RecoverySessionStatusResponse
     let onTap: () -> Void
 
     var body: some View {
@@ -239,7 +238,7 @@ struct RecoveryRequestRow: View {
                         .font(.brandMono(.body))
                         .lineLimit(1)
                     Spacer()
-                    RecoveryStatusBadge(status: request.status)
+                    RecoveryStatusBadge(status: request.status.rawValue)
                 }
 
                 HStack(spacing: 16) {
@@ -252,9 +251,10 @@ struct RecoveryRequestRow: View {
                     .font(.brand(.caption))
                     .foregroundStyle(Color.brandMutedForeground)
 
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
+                    if request.delayRemainingMS > 0 {
+                        let remaining = Int(request.delayRemainingMS)
                         Label {
-                            Text(formatDelay(ms: remaining))
+                            Text(formatDelay(ms: Int(remaining)))
                         } icon: {
                             Image(systemName: "clock")
                                 .font(.caption)
@@ -266,7 +266,7 @@ struct RecoveryRequestRow: View {
             }
             .padding(.vertical, 4)
         }
-        .accessibilityIdentifier("recovery-request-\(request.sessionId.prefix(8))")
+        .accessibilityIdentifier("recovery-request-\(request.sessionID.prefix(8))")
     }
 
     private func formatDelay(ms: Int) -> String {
@@ -321,7 +321,7 @@ struct RecoveryStatusBadge: View {
 // MARK: - RecoveryRequestDetailSheet
 
 struct RecoveryRequestDetailSheet: View {
-    let request: RecoverySessionStatus
+    let request: RecoverySessionStatusResponse
     @Binding var isApproving: Bool
     @Binding var errorMessage: String?
     let onApprove: () async -> Void
@@ -335,13 +335,14 @@ struct RecoveryRequestDetailSheet: View {
                 // Status
                 Section {
                     LabeledContent("Status") {
-                        RecoveryStatusBadge(status: request.status)
+                        RecoveryStatusBadge(status: request.status.rawValue)
                     }
                     LabeledContent(
                         NSLocalizedString("recovery_group_requests_approval_progress", comment: ""),
                         value: "\(request.contributionCount) / \(request.threshold)"
                     )
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
+                    if request.delayRemainingMS > 0 {
+                        let remaining = Int(request.delayRemainingMS)
                         let hours = remaining / 3_600_000
                         let minutes = (remaining % 3_600_000) / 60_000
                         LabeledContent(
@@ -355,11 +356,11 @@ struct RecoveryRequestDetailSheet: View {
                 Section {
                     LabeledContent("User", value: String(request.userPubkey.prefix(24)) + "...")
                     LabeledContent("New Device", value: String(request.newDevicePubkey.prefix(24)) + "...")
-                    LabeledContent("Session", value: request.sessionId)
+                    LabeledContent("Session", value: request.sessionID)
                 }
 
                 // Actions
-                if ["verified", "active"].contains(request.status) {
+                if ["verified", "active"].contains(request.status.rawValue) {
                     Section {
                         Button {
                             Task { await onApprove() }

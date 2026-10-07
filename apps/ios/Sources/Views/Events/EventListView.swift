@@ -218,7 +218,7 @@ struct EventListView: View {
 
     // MARK: - Filtering
 
-    private func filteredEvents(vm: EventsViewModel) -> [AppCaseEvent] {
+    private func filteredEvents(vm: EventsViewModel) -> [EventListResponseEvent] {
         guard !vm.searchQuery.isEmpty else { return vm.events }
         let query = vm.searchQuery.lowercased()
         return vm.events.filter { event in
@@ -242,7 +242,7 @@ struct EventListView: View {
 // MARK: - EventRow
 
 private struct EventRow: View {
-    let event: AppCaseEvent
+    let event: EventListResponseEvent
     let viewModel: EventsViewModel
 
     var body: some View {
@@ -293,21 +293,21 @@ private struct EventRow: View {
                         )
                     }
 
-                    if let caseCount = event.caseCount, caseCount > 0 {
+                    if event.caseCount > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "folder.fill")
                                 .font(.system(size: 9))
-                            Text("\(caseCount)")
+                            Text("\(Int(event.caseCount))")
                                 .font(.brand(.caption2))
                         }
                         .foregroundStyle(Color.brandMutedForeground)
                     }
 
-                    if let reportCount = event.reportCount, reportCount > 0 {
+                    if event.reportCount > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "doc.text.fill")
                                 .font(.system(size: 9))
-                            Text("\(reportCount)")
+                            Text("\(Int(event.reportCount))")
                                 .font(.brand(.caption2))
                         }
                         .foregroundStyle(Color.brandMutedForeground)

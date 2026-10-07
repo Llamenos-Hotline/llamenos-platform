@@ -11,7 +11,7 @@ final class MockLinphoneService: LinphoneServiceProtocol {
     private(set) var unregisteredHubIds: [String] = []
     var shouldThrowOnRegister: Bool = false
 
-    func registerHubAccount(hubId: String, sipParams: SipTokenResponse) throws {
+    func registerHubAccount(hubId: String, sipParams: SIPTokenResponse) throws {
         if shouldThrowOnRegister {
             throw LinphoneError.accountRegistrationFailed("mock error")
         }
@@ -59,9 +59,9 @@ struct ShiftViewModelLinphoneTests {
         let (vm, _) = makeViewModel(mock: mock)
         await vm.onShiftStarted(
             hubId: "hub-uuid-001",
-            sipParams: SipTokenResponse(
-                username: "testuser", domain: "sip.example.org",
-                password: "secret", transport: "tls", expiry: 3600
+            sipParams: SIPTokenResponse(
+                domain: "sip.example.org", encryption: nil, iceServers: nil,
+                password: "secret", transport: "tls", username: "testuser"
             )
         )
         #expect(mock.registeredHubIds == ["hub-uuid-001"])
@@ -77,9 +77,9 @@ struct ShiftViewModelLinphoneTests {
     @Test func multipleHubsRegisteredAndUnregisteredIndependently() async throws {
         let mock = MockLinphoneService()
         let (vm, _) = makeViewModel(mock: mock)
-        let params = SipTokenResponse(
-            username: "user", domain: "sip.example.org",
-            password: "pass", transport: "tls", expiry: 3600
+        let params = SIPTokenResponse(
+            domain: "sip.example.org", encryption: nil, iceServers: nil,
+            password: "pass", transport: "tls", username: "user"
         )
         await vm.onShiftStarted(hubId: "hub-aaa", sipParams: params)
         await vm.onShiftStarted(hubId: "hub-bbb", sipParams: params)
@@ -95,9 +95,9 @@ struct ShiftViewModelLinphoneTests {
         // Should not throw — errors are logged, not surfaced to the caller
         await vm.onShiftStarted(
             hubId: "hub-uuid-001",
-            sipParams: SipTokenResponse(
-                username: "user", domain: "sip.example.org",
-                password: "pass", transport: "tls", expiry: 3600
+            sipParams: SIPTokenResponse(
+                domain: "sip.example.org", encryption: nil, iceServers: nil,
+                password: "pass", transport: "tls", username: "user"
             )
         )
         #expect(mock.registeredHubIds.isEmpty)

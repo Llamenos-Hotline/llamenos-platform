@@ -5,7 +5,7 @@ import SwiftUI
 /// Sheet view for creating a new encrypted note. Includes a text editor for the note body
 /// and dynamically renders custom field inputs based on the field definitions from the server.
 struct NoteCreateView: View {
-    let customFields: [CustomFieldDefinition]
+    let customFields: [CustomFieldsListResponseField]
     let onSave: (String, [String: AnyCodableValue]?, String?, String?) async throws -> Void
     var transcriptionService: TranscriptionService?
 
@@ -19,9 +19,12 @@ struct NoteCreateView: View {
     @State private var attachedTranscript: String?
 
     /// Editable custom fields (filtered + sorted).
-    private var editableFields: [CustomFieldDefinition] {
+    ///
+    /// `editableByUsers` is the wire field (`customFieldDefinitionSchema`); a
+    /// field an admin marked read-only must not render an input here.
+    private var editableFields: [CustomFieldsListResponseField] {
         customFields
-            .filter { $0.editableByVolunteers }
+            .filter { $0.editableByUsers }
             .sorted { $0.order < $1.order }
     }
 
@@ -192,7 +195,7 @@ struct NoteCreateView: View {
     // MARK: - Custom Field Input
 
     @ViewBuilder
-    private func customFieldInput(for field: CustomFieldDefinition) -> some View {
+    private func customFieldInput(for field: CustomFieldsListResponseField) -> some View {
         switch field.type {
         case .text:
             TextField(
@@ -241,10 +244,15 @@ struct NoteCreateView: View {
         case .checkbox:
             Toggle(field.label, isOn: checkboxBinding(for: field.name))
                 .accessibilityIdentifier("field-\(field.name)")
+
+        case .file, .location:
+            // No inline editor for uploads or map pickers in the note form;
+            // these are captured on the record screens.
+            EmptyView()
         }
 
         // Show required indicator
-        if field.required {
+        if field.isRequired {
             if case .none = fieldValues[field.name] {
                 Text(NSLocalizedString("field_required", comment: "Required"))
                     .font(.brand(.caption2))
@@ -330,7 +338,7 @@ struct NoteCreateView: View {
         guard !trimmedText.isEmpty else { return }
 
         // Validate required fields
-        for field in editableFields where field.required {
+        for field in editableFields where field.isRequired {
             if fieldValues[field.name] == nil {
                 errorMessage = L10n.format("note_create_field_required", comment: "%@ is required", field.label)
                 return
@@ -363,27 +371,19 @@ struct NoteCreateView: View {
 #Preview("Create Note") {
     NoteCreateView(
         customFields: [
-            CustomFieldDefinition(
-                id: "f1", name: "severity", label: "Severity (1-5)", type: .number,
-                required: true, options: nil,
-                validation: CustomFieldDefinition.FieldValidation(minLength: nil, maxLength: nil, min: 1, max: 5),
-                visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 0, createdAt: nil
+            CustomFieldsListResponseField(
+                name: "severity", label: "Severity (1-5)", type: .number,
+                required: true, order: 0
             ),
-            CustomFieldDefinition(
-                id: "f2", name: "category", label: "Category", type: .select,
-                required: false, options: ["Legal", "Medical", "Housing", "Financial", "Other"],
-                validation: nil, visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 1, createdAt: nil
+            CustomFieldsListResponseField(
+                name: "category", label: "Category", type: .select,
+                required: false,
+                options: ["Legal", "Medical", "Housing", "Financial", "Other"],
+                order: 1
             ),
-            CustomFieldDefinition(
-                id: "f3", name: "followUp", label: "Follow-up Needed", type: .checkbox,
-                required: false, options: nil, validation: nil,
-                visibleToVolunteers: true, editableByVolunteers: true,
-                context: .callNotes, allowFileUpload: nil, acceptedFileTypes: nil,
-                order: 2, createdAt: nil
+            CustomFieldsListResponseField(
+                name: "followUp", label: "Follow-up Needed", type: .checkbox,
+                required: false, order: 2
             ),
         ],
         onSave: { _, _, _, _ in }

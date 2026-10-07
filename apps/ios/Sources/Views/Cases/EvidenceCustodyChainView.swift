@@ -1,13 +1,10 @@
 import SwiftUI
 
-// MARK: - CustodyChainEntry (local model)
+// MARK: - Custody chain
+// Custody entries decode to generated `CustodyChainResponse` whose elements
+// are generated `CustodyChain` (packages/protocol/schemas/evidence.ts).
 
-struct CustodyChainEntry: Identifiable, Decodable {
-    let id: String
-    let action: String
-    let actorPubkey: String
-    let timestamp: String
-}
+extension CustodyChain: Identifiable {}
 
 // MARK: - EvidenceCustodyChainView
 
@@ -16,7 +13,7 @@ struct EvidenceCustodyChainView: View {
     let evidenceId: String
     @Environment(AppState.self) private var appState
 
-    @State private var entries: [CustodyChainEntry] = []
+    @State private var entries: [CustodyChain] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
 
@@ -54,7 +51,7 @@ struct EvidenceCustodyChainView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            let response: AppCustodyChainResponse = try await appState.apiService.request(
+            let response: CustodyChainResponse = try await appState.apiService.request(
                 method: "GET",
                 path: "/evidence/\(evidenceId)/custody"
             )
@@ -65,18 +62,11 @@ struct EvidenceCustodyChainView: View {
     }
 }
 
-// MARK: - AppCustodyChainResponse
-
-private struct AppCustodyChainResponse: Decodable {
-    let custodyChain: [CustodyChainEntry]
-    let total: Int
-}
-
 // MARK: - CustodyEntryRow
 
 private struct CustodyEntryRow: View {
     let index: Int
-    let entry: CustodyChainEntry
+    let entry: CustodyChain
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -91,7 +81,7 @@ private struct CustodyEntryRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(entry.action.capitalized)
+                    Text(entry.action.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
                         .font(.subheadline)
                         .fontWeight(.medium)
                     Spacer()
@@ -116,19 +106,19 @@ private struct CustodyEntryRow: View {
 
     private var actionIcon: String {
         switch entry.action {
-        case "upload", "create": return "shield"
-        case "verify": return "checkmark.shield"
-        case "tampered", "integrity_failure": return "exclamationmark.shield"
-        default: return "lock"
+        case .uploaded: return "shield"
+        case .integrityVerified: return "checkmark.shield"
+        case .viewed: return "eye"
+        case .downloaded, .exported, .shared: return "square.and.arrow.up"
         }
     }
 
     private var actionColor: Color {
         switch entry.action {
-        case "upload", "create": return .blue
-        case "verify": return .green
-        case "tampered", "integrity_failure": return .red
-        default: return .secondary
+        case .uploaded: return .blue
+        case .integrityVerified: return .green
+        case .viewed: return .secondary
+        case .downloaded, .exported, .shared: return .brandPrimary
         }
     }
 }
@@ -137,10 +127,10 @@ private struct CustodyEntryRow: View {
 
 /// Groups entity records by month and displays them in a calendar-like list.
 struct EntityCalendarView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var grouped: [(String, [CaseRecord])] {
+    private var grouped: [(String, [SharedRecordListResponseRecord])] {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
 
@@ -186,7 +176,7 @@ struct EntityCalendarView: View {
 }
 
 private struct CalendarRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -211,10 +201,10 @@ private struct CalendarRecordRow: View {
 
 /// Displays entity records in newest-first vertical timeline order.
 struct EntityTimelineView: View {
-    let records: [CaseRecord]
-    let onSelectRecord: (CaseRecord) -> Void
+    let records: [SharedRecordListResponseRecord]
+    let onSelectRecord: (SharedRecordListResponseRecord) -> Void
 
-    private var sorted: [CaseRecord] {
+    private var sorted: [SharedRecordListResponseRecord] {
         records.sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -241,7 +231,7 @@ struct EntityTimelineView: View {
 }
 
 private struct TimelineRecordRow: View {
-    let record: CaseRecord
+    let record: SharedRecordListResponseRecord
     let onTap: () -> Void
 
     var body: some View {
