@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { decryptMessage, encryptMessage } from '@/lib/platform'
+import { useRecordFieldRecipients } from '@/lib/record-recipients'
 import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
@@ -736,6 +737,12 @@ function RecordDetail({
   const [contacts, setContacts] = useState<RecordContact[]>([])
   const [contactsLoading, setContactsLoading] = useState(false)
 
+  // Who may read this record's working content — the server decides, from the
+  // entity type's roles, the record's assignees and each member's permissions.
+  // Passing `[publicKey]` here, as this did, made every timeline comment and
+  // every piece of evidence unreadable by the volunteers assigned to the case.
+  const fieldRecipients = useRecordFieldRecipients(record.id)
+
   // Decrypt summary for title/description display
   const [decryptedSummary, setDecryptedSummary] = useState<{ title?: string; description?: string } | null>(null)
 
@@ -950,7 +957,7 @@ function RecordDetail({
           <CaseTimeline
             recordId={record.id}
             volunteerNames={{}}
-            readerPubkeys={publicKey ? [publicKey] : []}
+            readerPubkeys={fieldRecipients}
             statusLabels={Object.fromEntries(
               entityType.statuses.map(s => [s.value, { label: s.label, color: s.color ?? '#6b7280' }]),
             )}
@@ -967,7 +974,7 @@ function RecordDetail({
           <EvidenceTab
             recordId={record.id}
             volunteerNames={{}}
-            readerPubkeys={publicKey ? [publicKey] : []}
+            readerPubkeys={fieldRecipients}
           />
         )}
         {activeTab === 'related' && <RelatedTab record={record} />}
