@@ -4,6 +4,7 @@ import {
   apiGet,
   apiPost,
   ADMIN_SEED,
+  uniqueName,
 } from '../../api-helpers'
 import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -44,7 +45,7 @@ function getState_(world: Record<string, unknown>): EntityUnificationState {
 Given('an entity type with category {string} exists for the hub', async ({ request, world }, category: string) => {
   const state = getState_(world)
   const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
-    name: `test_${category}_type_${Date.now()}`,
+    name: uniqueName(`test_${category}_type`, '_'),
     label: `Test ${category} Type`,
     labelPlural: `Test ${category} Types`,
     category,
@@ -84,7 +85,7 @@ Given('an event entity type exists with start_date field \\(indexType=date\\)',
   async ({ request, world }) => {
     const state = getState_(world)
     const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
-      name: `event_date_type_${Date.now()}`,
+      name: uniqueName('event_date_type', '_'),
       label: 'Event Date Type',
       labelPlural: 'Event Date Types',
       category: 'event',
@@ -126,7 +127,7 @@ Given('a record exists with start_date blind indexes for {string}',
 Given('a user has permission {string} but not {string}',
   async ({ request, world }, hasPermission: string, _missingPermission: string) => {
     const roleRes = await apiPost<{ id: string }>(request, '/roles', {
-      name: `perm_test_role_${Date.now()}`,
+      name: uniqueName('perm_test_role', '_'),
       permissions: [hasPermission],
     })
     expect(roleRes.status).toBe(201)
@@ -139,7 +140,7 @@ Given('{int} events exist without deprecated_at set', async ({ request, world },
   const state = getState_(world)
   if (!state.entityTypeId) {
     const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
-      name: `event_migration_type_${Date.now()}`,
+      name: uniqueName('event_migration_type', '_'),
       label: 'Event Migration Type',
       labelPlural: 'Event Migration Types',
       category: 'event',

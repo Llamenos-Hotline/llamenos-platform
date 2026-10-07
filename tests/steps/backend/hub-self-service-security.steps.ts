@@ -78,8 +78,8 @@ function resolveHub(world: Record<string, unknown>, hubName: string): string {
 
 Before({ tags: '@hub-selfservice' }, async ({ request, world }) => {
   // Create two hubs for cross-hub security testing
-  const ownHubId = await createHubViaApi(request, `bdd-sec-own-${Date.now()}`)
-  const otherHubId = await createHubViaApi(request, `bdd-sec-other-${Date.now()}`)
+  const ownHubId = await createHubViaApi(request, uniqueName('bdd-sec-own'))
+  const otherHubId = await createHubViaApi(request, uniqueName('bdd-sec-other'))
 
   setState(world, KEY, {
     ownHubId,
@@ -195,7 +195,7 @@ When('I create a provider template with credentialHints containing a secret', as
     '/provider-templates',
     {
       name: uniqueName('sec-template'),
-      slug: `sec-template-${Date.now()}`,
+      slug: uniqueName('sec-template'),
       providerType: 'twilio',
       defaultChannels: ['voice'],
       credentialHints: {

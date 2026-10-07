@@ -1643,6 +1643,13 @@ jobs:
       - name: Check CodeQL language coverage
         run: bun scripts/check-codeql-languages.ts
 
+      # Parallel backend-bdd workers collide on a resource name made unique only
+      # by Date.now() (millisecond resolution) — a 409 that surfaces in the merge
+      # queue as an ejection of an unrelated PR (#1632). Node built-ins only, so
+      # it needs no `bun install`.
+      - name: Check test resource names are unique across parallel workers
+        run: bun scripts/check-unique-test-names.ts
+
   # Brings the PRODUCTION compose stack up and asserts a handful of
   # unauthenticated invariants. Nothing else in CI exercises that path — every
   # other suite runs against a dev build — which is how #1418 shipped: a

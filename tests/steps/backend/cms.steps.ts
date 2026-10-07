@@ -46,6 +46,7 @@ import {
   deleteHubViaApiIfPresent,
   apiGet,
   apiPost,
+  uniqueName,
 } from '../../api-helpers'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -334,7 +335,7 @@ Then('the contact should no longer exist', async ({ request, world }) => {
 Given('a volunteer exists with only contacts:view permission', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
     name: `Viewer ${Date.now()}`,
-    slug: `viewer-${Date.now()}`,
+    slug: uniqueName('viewer'),
     permissions: ['contacts:view'],
     description: 'Contacts view only',
   })
@@ -455,7 +456,7 @@ After({ tags: '@contact-cases' }, async ({ request, world }) => {
 })
 
 Given('a contact exists in another hub', async ({ request, world }) => {
-  const otherHubId = await createHubViaApi(request, `bdd-contact-cases-${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('bdd-contact-cases'))
   getCmsState(world).otherHubId = otherHubId
   getCmsState(world).otherHubContact = await createContactViaApi(request, { hubId: otherHubId })
 })
@@ -513,7 +514,7 @@ Then('the record should include the volunteer in assignedTo', async ({ request, 
 
 Given('an entity type with number prefix {string} exists', async ({ request, world }, prefix: string) => {
   const hubId = getScenarioState(world).hubId
-  const name = `numbered_type_${Date.now()}`
+  const name = uniqueName('numbered_type', '_')
   const created = await createEntityTypeViaApi(request, {
     name,
     category: 'case',
@@ -564,7 +565,7 @@ When('the admin updates the record status hash to {string}', async ({ request, w
 Given('a volunteer exists with cases:read-own and cases:create permissions', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
     name: `Scoped Vol ${Date.now()}`,
-    slug: `scoped-vol-${Date.now()}`,
+    slug: uniqueName('scoped-vol'),
     permissions: ['cases:read-own', 'cases:create', 'cases:update-own'],
     description: 'Scoped record access',
   })
@@ -676,7 +677,7 @@ Then('the event record should have {int} linked report', async ({ request, world
 })
 
 Given('an event record exists in another hub', async ({ request, world }) => {
-  const otherHubId = await createHubViaApi(request, `Other Hub ${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('Other Hub'))
   const entityType = await createEntityTypeViaApi(request, { name: 'Protest', category: 'event', hubId: otherHubId })
   getCmsState(world).otherHubId = otherHubId
   getCmsState(world).otherHubEventRecord = await createRecordViaApi(request, entityType.id as string, { hubId: otherHubId })
@@ -928,7 +929,7 @@ Then('the evidence access log should contain an entry with access type {string}'
 Given('a volunteer without evidence permissions exists', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
     name: `No Evidence Access ${Date.now()}`,
-    slug: `no-evidence-access-${Date.now()}`,
+    slug: uniqueName('no-evidence-access'),
     permissions: ['notes:read-own'],
     description: 'Cannot view or manage evidence',
   })
@@ -949,7 +950,7 @@ When('the volunteer tries to view the evidence', async ({ request, world }) => {
 Given('a volunteer without audit:read permission exists', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
     name: `Evidence Only ${Date.now()}`,
-    slug: `evidence-only-${Date.now()}`,
+    slug: uniqueName('evidence-only'),
     permissions: ['evidence:download', 'evidence:manage-custody'],
     description: 'Can view evidence but not the admin-only access log',
   })

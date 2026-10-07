@@ -460,7 +460,7 @@ When('the {string} user sends {string} to {string} with valid role body', async 
 
   getSharedState(world).lastResponse = await apiPost(request, '/settings/roles', {
     name: uniqueName('PM Role'),
-    slug: `pm-role-${Date.now()}`,
+    slug: uniqueName('pm-role'),
     permissions: ['notes:read-own'],
     description: 'PM test role',
   }, user.deviceKey)

@@ -87,7 +87,7 @@ Given('a provider template {string} exists with channels {string}', async ({ req
     '/provider-templates',
     {
       name: uniqueName(slug),
-      slug: `${slug}-${Date.now()}`,
+      slug: uniqueName(slug),
       providerType: 'twilio',
       defaultChannels: channels,
     },
@@ -126,7 +126,7 @@ Given('I have permission {string}', async ({ request, world }, perm: string) => 
   const state = getOB(world)
   const role = await createRoleViaApi(request, {
     name: uniqueName('onboard-role'),
-    slug: `onboard-${Date.now()}`,
+    slug: uniqueName('onboard'),
     permissions: [perm],
   })
   const user = await createUserViaApi(request, {
@@ -246,7 +246,7 @@ When('I PUT to disable channel {string} for hub {string}', async ({ request, wor
 When('I POST to create hub {string}', async ({ request, world }, hubName: string) => {
   const state = getOB(world)
   const seed = state.actorSeed ?? ADMIN_SEED
-  const slug = `${hubName}-${Date.now()}`
+  const slug = uniqueName(hubName)
   const res = await apiPost<{ hub: { id: string } }>(
     request,
     '/hubs',
@@ -262,7 +262,7 @@ When('I POST to create hub {string}', async ({ request, world }, hubName: string
 
 When('I POST to create provider template {string}', async ({ request, world }, templateName: string) => {
   const state = getOB(world)
-  const slug = `${templateName}-${Date.now()}`
+  const slug = uniqueName(templateName)
   const res = await apiPost<{ template: { id: string } }>(
     request,
     '/provider-templates',
