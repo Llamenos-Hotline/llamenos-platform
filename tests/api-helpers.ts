@@ -449,8 +449,24 @@ export function uniquePhone(): string {
   return `+1212${String(seq).padStart(7, '0')}`
 }
 
-export function uniqueName(prefix: string): string {
-  return `${prefix} ${Date.now()}`
+/**
+ * A name no other parallel test worker can produce — for anything that hits a
+ * uniqueness constraint: hub names (the server derives the slug from them),
+ * slugs, entity and report type names (#1632).
+ *
+ * `Date.now()` alone is millisecond-resolution, so two workers reaching the
+ * same step in the same millisecond asked for the same hub and the second got
+ * a 409. The random suffix is the uniqueness; the timestamp only keeps names
+ * sortable by creation time when reading a database or a log.
+ *
+ * `separator` joins all three parts, so the result is valid wherever the
+ * prefix is: `-` (default) for hub and role slugs, which reject `_`; `_` for
+ * entity and report type names, which reject `-`.
+ *
+ * Enforced by `scripts/check-unique-test-names.ts`.
+ */
+export function uniqueName(prefix: string, separator: '-' | '_' = '-'): string {
+  return [prefix, Date.now(), Math.random().toString(36).slice(2)].join(separator)
 }
 
 // ── Keypair Generation ────────────────────────────────────────────
@@ -1239,7 +1255,7 @@ export async function createEntityTypeViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? `test_type_${Date.now()}`
+  const name = options?.name ?? uniqueName('test_type', '_')
   const defaultStatuses = [
     { value: 'open', label: 'Open', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },
@@ -1452,7 +1468,7 @@ export async function createCmsReportTypeViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? `test_report_type_${Date.now()}`
+  const name = options?.name ?? uniqueName('test_report_type', '_')
   const defaultStatuses = [
     { value: 'submitted', label: 'Submitted', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },

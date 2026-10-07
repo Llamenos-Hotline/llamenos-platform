@@ -26,6 +26,7 @@ import {
   generateTestKeypair,
   ADMIN_SEED,
   seedHexToPubkey,
+  uniqueName,
 } from '../../api-helpers'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
@@ -349,7 +350,7 @@ Given('a recovery group is enrolled for the hub', async ({ request, world }) => 
 Given('a user without {string} permission', async ({ request, world }, _permission: string) => {
   const s = getS(world)
 
-  const roleSlug = `no-recovery-${Date.now()}`
+  const roleSlug = uniqueName('no-recovery')
   await createRoleViaApi(request, {
     name: `No Recovery ${Date.now()}`,
     slug: roleSlug,
@@ -594,7 +595,7 @@ Then('the listed sessions include the seeded session', async ({ world }) => {
 Given('a second hub with a seeded recovery session', async ({ request, world }) => {
   const s = getS(world)
 
-  const secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+  const secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   s.secondHubId = secondHubId
 
   const recoveringUser = await createUserViaApi(request, { name: `Second Hub Recovering User ${Date.now()}` })
@@ -614,7 +615,7 @@ Given('a user with global {string} permission who is only a member of the first 
   const s = getS(world)
   expect(s.hubId).toBeDefined()
 
-  const roleSlug = `recovery-view-global-${Date.now()}`
+  const roleSlug = uniqueName('recovery-view-global')
   const role = await createRoleViaApi(request, {
     name: `Recovery Viewer ${Date.now()}`,
     slug: roleSlug,
@@ -690,7 +691,7 @@ Given('a second hub with a recovery group enrolled', async ({ request, world }) 
   const s = getS(world)
 
   if (!s.secondHubId) {
-    s.secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+    s.secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   }
 
   const { status } = await enrollRecoveryGroup(request, s.secondHubId!, s.adminSeed)
@@ -808,7 +809,7 @@ Given('a verified recovery session exists for the second hub', async ({ request,
   const s = getS(world)
 
   if (!s.secondHubId) {
-    s.secondHubId = await createHubViaApi(request, `recovery-second-hub-${Date.now()}`)
+    s.secondHubId = await createHubViaApi(request, uniqueName('recovery-second-hub'))
   }
 
   const recoveringUser = await createUserViaApi(request, { name: `Second Hub Verified Session User ${Date.now()}` })
@@ -1023,7 +1024,7 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // the two real contributing holders (mirrors the "Given a recovery group
   // is enrolled for the hub" pattern above, which sidesteps this by using
   // the wildcard-permission admin as a holder instead).
-  const holderRoleSlug = `recovery-holder-${Date.now()}`
+  const holderRoleSlug = uniqueName('recovery-holder')
   const holderRole = await createRoleViaApi(request, {
     name: `Recovery Holder ${Date.now()}`,
     slug: holderRoleSlug,

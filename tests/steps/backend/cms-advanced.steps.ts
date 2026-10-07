@@ -17,6 +17,7 @@ import {
   listContactsViaApi,
   apiPost,
   apiGet,
+  uniqueName,
 } from '../../api-helpers'
 
 interface CmsAdvancedState {
@@ -87,7 +88,7 @@ Given('two records exist in the case management system', async ({ world, request
 
   // Create a minimal entity type for the records
   const et = await createEntityTypeViaApi(request, {
-    name: `cms_adv_${Date.now()}`,
+    name: uniqueName('cms_adv', '_'),
     category: 'case',
     hubId,
   })

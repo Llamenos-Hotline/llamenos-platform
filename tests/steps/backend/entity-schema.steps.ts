@@ -20,6 +20,7 @@ import {
   generateCaseNumberViaApi,
   createVolunteerViaApi,
   listRolesViaApi,
+  uniqueName,
 } from '../../api-helpers'
 
 // ── State ───────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ When('the admin creates an entity type with statuses {string} and fields {string
     return { name: fieldName, label: fieldName, type: fieldType || 'text', order: i }
   })
   const result = await createEntityTypeViaApi(request, {
-    name: `type_${Date.now()}`,
+    name: uniqueName('type', '_'),
     category: 'case',
     hubId,
     statuses,
@@ -177,7 +178,7 @@ When('the admin creates a relationship type from {string} to {string} with cardi
 When('a volunteer tries to create an entity type', async ({request, world}) => {
   const vol = await createVolunteerViaApi(request, { name: `vol-schema-${Date.now()}` })
   try {
-    await createEntityTypeViaApi(request, { name: `forbidden_${Date.now()}` }, vol.deviceKey)
+    await createEntityTypeViaApi(request, { name: uniqueName('forbidden', '_') }, vol.deviceKey)
     setLastResponse(world, { status: 201, data: null })
   } catch (e: unknown) {
     const msg = (e as Error).message

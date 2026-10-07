@@ -84,7 +84,7 @@ When('the admin converts the submitted report to a case', async ({ request, worl
     await enableCaseManagementViaApi(request, true)
     const hubId = getScenarioState(world).hubId
     const et = await createEntityTypeViaApi(request, {
-      name: `case_type_${Date.now()}`,
+      name: uniqueName('case_type', '_'),
       hubId,
     })
     getTransitionState(world).entityTypeId = et.id as string

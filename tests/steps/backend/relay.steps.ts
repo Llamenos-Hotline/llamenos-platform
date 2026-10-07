@@ -24,6 +24,7 @@ import {
   apiGet,
   createHubViaApi,
   createVolunteerViaApi,
+  uniqueName,
 } from '../../api-helpers'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
@@ -142,7 +143,7 @@ When('an inbound SMS message arrives from a unique number', async ({ request, wo
 
 Given('a volunteer who is a member of a different hub only', async ({ request, world }) => {
   const rs = getRelayState(world)
-  const otherHubId = await createHubViaApi(request, `bdd-other-hub-${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('bdd-other-hub'))
   const vol = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
   await addHubMemberViaApi(request, otherHubId, vol.pubkey)
   rs.otherHubMember = { seedHex: vol.seedHex, hubId: otherHubId }

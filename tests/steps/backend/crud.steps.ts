@@ -370,7 +370,7 @@ When('an admin creates a custom role {string} with permissions {string}', async 
   const permissions = permsStr.split(',')
   const role = await createRoleViaApi(request, {
     name,
-    slug: `crud-${Date.now()}`,
+    slug: uniqueName('crud'),
     permissions,
     description: 'CRUD test role',
   })
