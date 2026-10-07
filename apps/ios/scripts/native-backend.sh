@@ -1,5 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Run the Llámenos backend natively on macOS, for the iOS XCUITest suite.
+#
+# The interpreter is PINNED to /bin/bash, which on macOS is bash 3.2.57, and
+# this file must keep parsing under it. `#!/usr/bin/env bash` is what it used
+# to say, and that resolved to a modern Homebrew bash on the self-hosted Mac
+# and to 3.2 on GitHub-hosted runners — so a construct 3.2 cannot parse passed
+# on two shards of this suite and failed the other two, at step 5 of 24, with
+# `unexpected EOF` pointing at the last line of the file. Uniform-and-old beats
+# modern-and-divergent for a script whose whole job is to behave identically on
+# every runner. Nothing here needs bash 4 (no associative arrays, no mapfile).
+#
+# Verify before pushing, because a Linux /bin/bash is 5.x and will not catch it:
+#   docker run --rm -v "$PWD/apps/ios/scripts:/s:ro" bash:3.2 bash -n /s/native-backend.sh
 #
 # Why this exists (#661): GitHub-hosted macOS runners have no Docker, so the
 # compose-based .github/actions/bootstrap-backend exits 125 before a single
@@ -233,8 +245,34 @@ reclaim_port() {
     || die "killed the process(es) holding $label port $port but the port is still listening 15s later"
 }
 
+# Refuse an occupied port, naming the real cause. Used on every runner kind,
+# after any reclaim: on a hosted runner it is the only check there is.
+refuse_if_occupied() {
+  local port=$1 label=$2 var=$3 pids
+  pids="$(port_listener_pids "$port")"
+  [ -n "$pids" ] || return 0
+  set -- $pids
+  die "$label port $port is already listening, so this job will not start a backend on it.
+  holder: pid $1 ($(pid_description "$1"))
+  No test has run yet, so this is a port conflict at job startup and NOT a test
+  failure. Do not look at the suite. Running it against a server this job did
+  not start would point it at the wrong database.
+  Stop that server, or set $var."
+}
+
 cmd_reclaim() {
-  [[ "$PORTS_ALLOCATED" == 1 ]] || die "reclaim requires NATIVE_BACKEND_PORT and NATIVE_BACKEND_PGPORT to be set explicitly.
+  # The `ui` matrix in ios-e2e.yml is MIXED: two shards run on the persistent
+  # self-hosted Mac and two on GitHub-hosted macOS runners. A hosted runner is
+  # a fresh VM per job — no earlier job can have leaked into it, and nothing it
+  # leaves behind outlives it — so there is nothing to reclaim, and refusing a
+  # job over whatever else might hold a hashed slot port there would be a
+  # failure mode invented for no benefit. Reclaiming is a property of
+  # PERSISTENT runners only.
+  if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+    log "reclaim: nothing to do — a GitHub-hosted runner is a fresh VM, so no earlier job can have leaked into it"
+    return 0
+  fi
+  [ "$PORTS_ALLOCATED" = 1 ] || die "reclaim requires NATIVE_BACKEND_PORT and NATIVE_BACKEND_PGPORT to be set explicitly.
   It will not act on the $PORT/$PGPORT defaults: on a shared host those are a
   developer's own server and their own PostgreSQL."
   log "reclaim: checking http $PORT / pg $PGPORT on ${RUNNER_NAME:-this host}"
@@ -270,23 +308,29 @@ find_job_guard_pid() {
   return 1
 }
 
-# Launch CMD... as the leader of a brand new session with its output appended
-# to LOGFILE, and print its pid. The redirect belongs to the child and not to
-# this function: redirecting our own stdout would send the pid to the log
-# instead of to the caller, and would leave the child holding the caller's
-# command-substitution pipe open forever.
+# Launch CMD... as the leader of a brand new session, with its output appended
+# to LOGFILE and its pid written to PIDFILE. The redirect belongs to the child,
+# not to this function, so the child never holds a caller pipe open.
+#
+# The pid goes to a FILE and not to stdout deliberately. Handing it back through
+# a command substitution forces the caller to wrap its whole env-and-comment
+# block in "$( ... )", and bash 3.2 mis-parses an apostrophe in a comment there
+# — one "the next job's" in a comment failed the ENTIRE script at parse time
+# and took out both GitHub-hosted shards of this suite. A pid file cannot have
+# that class of bug.
+#
 # macOS ships no setsid(1); perl's POSIX is core on both macOS and Linux.
 spawn_session_leader() {
-  local logfile=$1 pid
-  shift
+  local logfile=$1 pidfile=$2 pid
+  shift 2
   perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or die "exec: $!"' -- "$@" >>"$logfile" 2>&1 &
   pid=$!
+  echo "$pid" >"$pidfile"
   # setsid() happens a moment after fork, so the group id is not ours yet.
   for _ in $(seq 1 20); do
-    [[ "$(pid_pgid "$pid")" == "$pid" ]] && break
+    [ "$(pid_pgid "$pid")" = "$pid" ] && break
     sleep 0.1
   done
-  echo "$pid"
 }
 
 launch_watchdog() {
@@ -295,16 +339,14 @@ launch_watchdog() {
   if [[ -z "$guard" ]]; then
     log "watchdog: no runner job process found — falling back to the ${TTL}s deadline alone"
   fi
-  pid="$(
-    NATIVE_BACKEND_PORT="$PORT" \
-    NATIVE_BACKEND_PGPORT="$PGPORT" \
-    NATIVE_BACKEND_DIR="$STATE_DIR" \
-    NATIVE_BACKEND_TTL_SECONDS="$TTL" \
-    NATIVE_BACKEND_WATCHDOG_SERVER_PID="$server_pid" \
-    NATIVE_BACKEND_WATCHDOG_GUARD_PID="$guard" \
-      spawn_session_leader "$WATCHDOG_LOG" bash "$SELF" _watchdog
-  )"
-  echo "$pid" >"$WATCHDOG_PID"
+  NATIVE_BACKEND_PORT="$PORT" \
+  NATIVE_BACKEND_PGPORT="$PGPORT" \
+  NATIVE_BACKEND_DIR="$STATE_DIR" \
+  NATIVE_BACKEND_TTL_SECONDS="$TTL" \
+  NATIVE_BACKEND_WATCHDOG_SERVER_PID="$server_pid" \
+  NATIVE_BACKEND_WATCHDOG_GUARD_PID="$guard" \
+    spawn_session_leader "$WATCHDOG_LOG" "$WATCHDOG_PID" bash "$SELF" _watchdog
+  pid="$(cat "$WATCHDOG_PID")"
   log "watchdog started (pid $pid, job process ${guard:-none}, ttl ${TTL}s, log: $WATCHDOG_LOG)"
 }
 
@@ -337,18 +379,17 @@ cmd_watchdog() {
 cmd_start() {
   [[ "$(uname -s)" == "Darwin" ]] || die "macOS only — on Linux use deploy/docker/docker-compose.dev.yml"
   [[ -f "$CRYPTO_LIB" ]] || die "missing $CRYPTO_LIB — run packages/crypto/scripts/build-server.sh"
-  if [[ "$PORTS_ALLOCATED" == 1 ]]; then
-    # Idempotent: the job already ran this before installing anything, so
-    # normally there is nothing to do. Repeated here so a hand-run `start` on
-    # the runner gets the same protection.
+  # Idempotent, and a no-op on a hosted runner: the job already reclaimed
+  # before installing anything. Repeated here so a hand-run `start` on a
+  # persistent runner gets the same protection.
+  if [ "$PORTS_ALLOCATED" = 1 ]; then
     cmd_reclaim
-  else
-    # Hand-run with the defaults. Reclaim is off by design, so the only safe
-    # answer is to refuse: health-checking someone else's server would run the
-    # whole suite against the wrong database.
-    port_in_use "$PORT" && die "port $PORT is already listening — stop that server or set NATIVE_BACKEND_PORT"
-    port_in_use "$PGPORT" && die "port $PGPORT is already listening — stop that server or set NATIVE_BACKEND_PGPORT"
   fi
+  # Then, on EVERY runner kind and whether or not anything was reclaimed:
+  # never start against a port somebody else holds. Health-checking a server
+  # this job did not start would run the whole suite on the wrong database.
+  refuse_if_occupied "$PORT" http NATIVE_BACKEND_PORT
+  refuse_if_occupied "$PGPORT" postgres NATIVE_BACKEND_PGPORT
 
   mkdir -p "$STATE_DIR"
 
@@ -376,8 +417,20 @@ cmd_start() {
 
   log "Starting server on 127.0.0.1:$PORT (log: $SERVER_LOG)"
   # Env mirrors the compose `app` service under docker-compose.test.yml.
+  #
+  # The server runs in its own session, for two reasons: cmd_stop can then
+  # signal the whole process tree (`kill $!` alone can hit a version-manager
+  # shim and leave the real server running), and the pid it records is also the
+  # process-group id, which stop_server asserts before it signals any group.
+  #
+  # The trailing argument is the ownership MARKER that the next job on this
+  # runner looks for when it reclaims the port. The server ignores argv.
+  #
+  # Explanatory prose stays OUT of the subshell below. It used to be a
+  # "$( ... )" capture, where bash 3.2 mis-parses an apostrophe in a comment
+  # and fails the whole file at parse time.
   local pid
-  pid="$(
+  (
     cd "$ROOT"
     export PLATFORM=bun
     export PORT
@@ -401,16 +454,9 @@ cmd_start() {
     export STORAGE_ACCESS_KEY=ios-e2e-no-storage
     export STORAGE_SECRET_KEY=ios-e2e-no-storage
     export STORAGE_BUCKET=llamenos-files
-    # Its own session, for two reasons: `stop` can then signal the whole tree
-    # (`kill $!` alone can hit a version-manager shim and leave the real server
-    # running), and the recorded pid is also the process-group id, which
-    # stop_server asserts before it signals any group.
-    #
-    # The trailing argument is the ownership MARKER the next job's reclaim
-    # looks for. The server ignores argv.
-    spawn_session_leader "$SERVER_LOG" bun src/server/index.ts "--${MARKER}-port=$PORT"
-  )"
-  echo "$pid" >"$SERVER_PID"
+    spawn_session_leader "$SERVER_LOG" "$SERVER_PID" bun src/server/index.ts "--${MARKER}-port=$PORT"
+  )
+  pid="$(cat "$SERVER_PID")"
 
   local pgid
   pgid="$(pid_pgid "$pid")"

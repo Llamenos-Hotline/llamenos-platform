@@ -468,13 +468,25 @@ jobs:
       # lands, and saying so then is the difference between a one-line verdict
       # and an hour of archaeology.
       #
-      # It kills only what it can PROVE this workflow started — an argv marker,
-      # our own PostgreSQL data directory, or a process running out of the
-      # runner's work tree — and refuses loudly on anything else. It never
-      # matches on the program name: this host is also somebody's development
-      # machine and their `bun run dev:server` is a bun process too. It also
-      # refuses outright to act on 3000/5432, which is why the allocator above
-      # keeps CI off those numbers.
+      # On a persistent runner it kills only what it can PROVE this workflow
+      # started — an argv marker, our own PostgreSQL data directory, or a
+      # process running out of the runner's work tree — and refuses loudly on
+      # anything else. It never matches on the program name: the Mac host is
+      # also somebody's development machine and their `bun run dev:server` is
+      # a bun process too. It also refuses outright to act on 3000/5432, which
+      # is why the allocator above keeps CI off those numbers.
+      #
+      # This matrix is MIXED — two shards run here on the self-hosted Mac and
+      # two on GitHub-hosted macOS — so the step runs on both kinds and
+      # no-ops on a hosted one: a fresh VM per job cannot have inherited a
+      # leak, and refusing a job there over whatever else might hold a hashed
+      # slot port would be a failure mode invented for no benefit. Left
+      # unconditional rather than given an `if:`, so the log states which
+      # branch it took instead of the step silently disappearing.
+      #
+      # `start` still refuses an occupied port on EVERY runner kind, reclaim
+      # or no reclaim: that check is what keeps the suite off a database this
+      # job did not create.
       - name: Reclaim this runner's backend ports
         run: apps/ios/scripts/native-backend.sh reclaim
 
