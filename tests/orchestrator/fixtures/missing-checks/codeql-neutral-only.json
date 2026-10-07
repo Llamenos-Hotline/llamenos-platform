@@ -1,0 +1,332 @@
+{
+  "pr": {
+    "baseRefName": "main",
+    "headRefName": "chore/1329-ios-generated-types",
+    "headRefOid": "6bc744043d3d3c6fc791c78ddf4984d864e7d9fa",
+    "mergeStateStatus": "BLOCKED",
+    "number": 1653
+  },
+  "checkRuns": [
+    {
+      "name": "fleet/verify",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "fleet/review",
+      "status": "in_progress",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "android-e2e",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "android-build-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "ios-e2e",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "backend-bdd",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "audit",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "ios-build-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "migration-drift",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "build",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "production-smoke",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "crypto-guardrails",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "backend-unit",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "crypto-tests",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "ansible-validate",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "backend-integration-bun",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "desktop-unit",
+      "status": "queued",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "E2E (Linux)",
+      "status": "in_progress",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "fleet-review/publish",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "build",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "semgrep",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-advanced-security"
+    },
+    {
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "neutral",
+      "appSlug": "github-advanced-security"
+    },
+    {
+      "name": "Analyze staged (java-kotlin)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze staged (swift)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "docs-guard",
+      "status": "in_progress",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "No generated files in git",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Updater pubkey is set",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "changes",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Scan",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze advanced (rust)",
+      "status": "in_progress",
+      "conclusion": null,
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze advanced (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze advanced (ruby)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze advanced (python)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "Analyze advanced (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "fleet/review",
+      "status": "completed",
+      "conclusion": "failure",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "fleet/verify",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "changes",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    },
+    {
+      "name": "gitleaks",
+      "status": "completed",
+      "conclusion": "success",
+      "appSlug": "github-actions"
+    }
+  ],
+  "statuses": [],
+  "runs": [
+    {
+      "id": 37673911695,
+      "name": "Fleet Verify",
+      "event": "pull_request",
+      "status": "queued",
+      "conclusion": null,
+      "runAttempt": 1
+    },
+    {
+      "id": 37673911437,
+      "name": "Fleet Review",
+      "event": "pull_request",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280414,
+      "name": "Fleet Verify",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280741,
+      "name": "CI",
+      "event": "pull_request",
+      "status": "queued",
+      "conclusion": null,
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280354,
+      "name": "Secret Scanning",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280556,
+      "name": "Semgrep",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280479,
+      "name": "Desktop E2E Tests",
+      "event": "pull_request",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280349,
+      "name": "Fleet Review",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "failure",
+      "runAttempt": 1
+    },
+    {
+      "id": 37673280513,
+      "name": "CodeQL",
+      "event": "pull_request",
+      "status": "in_progress",
+      "conclusion": null,
+      "runAttempt": 1
+    }
+  ],
+  "jobsByRun": {
+    "37673280349": [
+      {
+        "name": "fleet/review",
+        "conclusion": "failure"
+      },
+      {
+        "name": "fleet-review/publish",
+        "conclusion": "success"
+      }
+    ]
+  }
+}

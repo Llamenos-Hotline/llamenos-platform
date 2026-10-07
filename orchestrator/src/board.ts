@@ -540,9 +540,30 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     }
   }
   if (cheapPendingOrMissing.length > 0) {
+    // "Pending" and "absent" are different facts and used to print as one
+    // (#1662). A required context that is PENDING will resolve on its own; a
+    // required context with no carrier at all may never arrive, because a
+    // job GitHub failed to create leaves the context ABSENT rather than red
+    // and the PR then reads BLOCKED with every visible check green, forever.
+    // This row cannot tell which case it is — deciding that needs the head's
+    // workflow runs, which this query does not fetch — so it names the two
+    // groups separately and points at the command that can
+    // (`llamenos-fleet missing-checks`), instead of describing an absent
+    // context as "still in flight".
+    const pending = cheapPendingOrMissing.filter((c) => c.state === 'PENDING').map((c) => c.name)
+    const absent = cheapPendingOrMissing.filter((c) => c.state === undefined).map((c) => c.name)
+    const parts: string[] = []
+    if (pending.length > 0) parts.push(`still in flight: ${pending.join(', ')}`)
+    if (absent.length > 0) {
+      parts.push(
+        `nothing posted on this head: ${absent.join(', ')} ` +
+        '(if every workflow run on the head has finished, this never arrives — ' +
+        'run `llamenos-fleet missing-checks --pr <n>`)',
+      )
+    }
     return {
       action: 'WAITING',
-      reason: `required check(s) still in flight or not yet posted on this head: ${cheapPendingOrMissing.map((c) => c.name).join(', ')}`,
+      reason: `required check(s) not yet green — ${parts.join('; ')}`,
       failingContexts: [],
     }
   }
