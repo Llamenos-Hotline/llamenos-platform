@@ -205,6 +205,16 @@ final class APIService: @unchecked Sendable {
         self.decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
 
+    /// A `URLSession` created with a delegate is retained by the system until it is
+    /// invalidated — `URLSession` holds a strong reference to its delegate and to itself
+    /// for the lifetime of the session. So an `APIService` that goes out of scope without
+    /// this leaves its session, its `CertificatePinningDelegate` and its operation queue
+    /// alive for the rest of the process. `finishTasksAndInvalidate` rather than
+    /// `invalidateAndCancel` so a request already in flight still completes.
+    deinit {
+        session.finishTasksAndInvalidate()
+    }
+
     /// Set or update the hub base URL.
     func configure(baseURL: URL) {
         self.baseURL = baseURL

@@ -79,19 +79,76 @@ final class APIServiceWireFormatTests: XCTestCase {
 
     private var api: APIService!
 
+    /// This suite drives the **real** `APIService` request path, which is the whole point
+    /// — a re-created encoder would only prove the test's own configuration. The cost is
+    /// that it performs real `URLSession` work, and process-global network state is
+    /// exactly what `WipeServiceTests` asserts on: `URLCache.shared`,
+    /// `HTTPCookieStorage.shared`. A suite that merely tidied up after itself would stay
+    /// one forgotten `tearDown` away from breaking a security assertion in another file,
+    /// and the breakage would be order-dependent and therefore invisible locally.
+    ///
+    /// So the session is built to be *incapable* of reaching shared state:
+    ///
+    ///   - `.ephemeral` — in-memory only; its `urlCache` is a private instance and its
+    ///     `httpCookieStorage` a private store, neither of them the `.shared` singleton
+    ///     (`.default`'s `urlCache` IS `URLCache.shared`, which is the trap).
+    ///   - `urlCache = nil` and `requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData`
+    ///     — belt and braces: no cache object at all, so there is nothing to write to
+    ///     even if a future change swapped the configuration back to `.default`.
+    ///   - `httpCookieStorage = nil`, `httpShouldSetCookies = false`,
+    ///     `httpCookieAcceptPolicy = .never` — same reasoning for
+    ///     `testWipeAllClearsCookies`.
+    ///   - the stub answers every response with `.notAllowed`, so nothing is cacheable.
+    ///   - releasing the `APIService` invalidates its session (`APIService.deinit`). A
+    ///     `URLSession` created with a delegate is retained by the system until
+    ///     invalidated, so without that each test leaked a live session and its pinning
+    ///     delegate for the rest of the process — which is also a real leak in the app,
+    ///     and is why the fix is a `deinit` on `APIService` and not test-only API here.
     override func setUp() {
         super.setUp()
         CapturingURLProtocol.reset()
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [CapturingURLProtocol.self]
-        api = APIService(cryptoService: CryptoService(), hubContext: HubContext(), sessionConfiguration: config)
+        api = APIService(
+            cryptoService: CryptoService(),
+            hubContext: HubContext(),
+            sessionConfiguration: Self.isolatedConfiguration()
+        )
         api.configure(baseURL: URL(string: "https://hub.example.org")!)
     }
 
     override func tearDown() {
-        api = nil
+        api = nil   // triggers APIService.deinit, which invalidates the session
         CapturingURLProtocol.reset()
         super.tearDown()
+    }
+
+    private static func isolatedConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CapturingURLProtocol.self]
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        return config
+    }
+
+    /// Guards the isolation itself, so "cannot pollute" is asserted rather than intended.
+    /// `.default` would fail this: its `urlCache` is `URLCache.shared` by identity.
+    func testTheStubSessionCannotReachProcessGlobalNetworkState() {
+        let config = Self.isolatedConfiguration()
+        XCTAssertNil(config.urlCache, "a nil urlCache cannot store into URLCache.shared")
+        XCTAssertNil(config.httpCookieStorage)
+        XCTAssertFalse(config.httpShouldSetCookies)
+
+        // And the baseline that makes the above non-obvious.
+        XCTAssertTrue(
+            URLSessionConfiguration.default.urlCache === URLCache.shared,
+            "`.default` shares the global cache — that is why this suite must not use it"
+        )
+        XCTAssertFalse(
+            URLSessionConfiguration.ephemeral.urlCache === URLCache.shared,
+            "`.ephemeral` must not share the global cache"
+        )
     }
 
     /// Send `body` through the production `APIService` path and return the bytes it sent.
