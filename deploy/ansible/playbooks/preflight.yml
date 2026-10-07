@@ -352,8 +352,7 @@
         fail_msg: |
           REQUIRED: 'server_secret' must be exactly 64 lowercase hex characters.
 
-          Current value: {{ server_secret | default('NOT SET') }}
-          Length: {{ server_secret | default('') | length }} chars (expected: 64)
+          Length seen: {{ server_secret | default('') | length }} chars (expected: 64)
 
           To generate:
             openssl rand -hex 32
@@ -367,8 +366,7 @@
         fail_msg: |
           REQUIRED: 'pg_password' must be at least 16 characters long.
 
-          Current value: {{ pg_password | default('NOT SET') }}
-          Length: {{ pg_password | default('') | length }} chars (expected: >= 16)
+          Length seen: {{ pg_password | default('') | length }} chars (expected: >= 16)
 
           To generate:
             openssl rand -base64 24
@@ -382,7 +380,7 @@
         fail_msg: |
           REQUIRED: 'storage_access_key' must be set.
 
-          Current value: {{ storage_access_key | default('NOT SET') }}
+          Length seen: {{ storage_access_key | default('') | length }} chars (expected: > 0)
 
           To generate:
             openssl rand -base64 24
@@ -396,8 +394,7 @@
         fail_msg: |
           REQUIRED: 'storage_secret_key' must be at least 16 characters long.
 
-          Current value: {{ storage_secret_key | default('NOT SET') }}
-          Length: {{ storage_secret_key | default('') | length }} chars (expected: >= 16)
+          Length seen: {{ storage_secret_key | default('') | length }} chars (expected: >= 16)
 
           To generate:
             openssl rand -base64 24
@@ -435,7 +432,7 @@
           roles/llamenos-asterisk deploys the sip-bridge sidecar alongside
           Asterisk itself — there is no separate toggle for it.
 
-          Current value: {{ bridge_secret | default('NOT SET') }}
+          Length seen: {{ bridge_secret | default('') | length }} chars (expected: > 0)
 
           To generate:
             openssl rand -hex 32
@@ -475,8 +472,7 @@
           REQUIRED: 'signal_notifier_bearer_token' must be at least 32 characters when the Signal messaging sidecar is enabled.
           This token must match the value configured in the signal-notifier sidecar.
 
-          Current value: {{ signal_notifier_bearer_token | default('NOT SET') }}
-          Length: {{ signal_notifier_bearer_token | default('') | length }} chars (expected: >= 32)
+          Length seen: {{ signal_notifier_bearer_token | default('') | length }} chars (expected: >= 32)
 
           To generate:
             openssl rand -hex 32
@@ -637,7 +633,7 @@
           ===========================================
           Domain: {{ domain }}
           Admin Pubkey: {{ (admin_pubkey[:16] + '...') if (admin_pubkey | default('') | length > 0) else 'NOT SET (bootstrap via Tauri app)' }}
-          Server Secret: {{ server_secret[:8] }}...
+          Server Secret: [set, {{ server_secret | length }} chars]
           PostgreSQL Password: [set, {{ pg_password | length }} chars]
           Storage Access Key: [set]
           Storage Secret Key: [set, {{ storage_secret_key | length }} chars]

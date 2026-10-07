@@ -23,15 +23,29 @@ query_range:
         enabled: true
         max_size_mb: 100
 
+# grafana/loki:3.4.2 refuses to start on the v11/boltdb-shipper pair this used
+# to declare: "schema v13 is required to store Structured Metadata ... your
+# schema version is v11" and "`tsdb` index type is required ... your index type
+# is `boltdb-shipper`". Loki restart-looped and shipped no logs at all
+# (issue #1602, finding 15). Pre-production, so there is no v11 index to
+# migrate from and a single current-schema entry is correct; a live deployment
+# would instead APPEND a v13/tsdb entry with a future `from` date.
 schema_config:
   configs:
     - from: 2020-10-24
-      store: boltdb-shipper
+      store: tsdb
       object_store: filesystem
-      schema: v11
+      schema: v13
       index:
         prefix: index_
         period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+  filesystem:
+    directory: /loki/chunks
 
 ruler:
   alertmanager_url: http://alertmanager:9093
