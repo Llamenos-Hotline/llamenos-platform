@@ -3259,10 +3259,22 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
   })
 
-  it('the changes job diffs against the PR/merge-group base sha, not HEAD^', () => {
+  it('the changes job diffs against the PR base and the QUEUE TARGET, not HEAD^ and not the group base', () => {
     const block = jobBlock(ciYaml(), 'changes')
     expect(block).toContain('github.event.pull_request.base.sha')
-    expect(block).toContain('github.event.merge_group.base_sha')
+    // #1594: `merge_group.base_sha` is the PREVIOUS queue entry's head, so
+    // for any entry but the first it already contains the earlier entries'
+    // files — and platform detection against it filters away the suites
+    // those files require while the group still lands them. The right base
+    // is the branch the group lands ON (`base_ref`). This assertion is the
+    // inverse of what it used to say, deliberately: it used to require the
+    // defect.
+    expect(block).toContain('github.event.merge_group.base_ref')
+    expect(block, 'the changes job must not diff platform scope against the group base')
+      .not.toContain('github.event.merge_group.base_sha }}')
+    // `lint` is the opposite case and keeps base_sha: eslint's verdict is
+    // per file, so every entry's own group lints exactly its own files.
+    expect(jobBlock(ciYaml(), 'lint')).toContain('github.event.merge_group.base_sha')
   })
 
   it('ci.yml, ios-e2e.yml and desktop-e2e.yml all call the one shared classification script — no second copy of the path map', () => {
