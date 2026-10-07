@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { READ_ONLY_CONTRACT, VERDICT_CONTRACT, reviewFilesSection } from './review.js'
+import { DIFF_SCOPE_CONTRACT, READ_ONLY_CONTRACT, VERDICT_CONTRACT, reviewFilesSection } from './review.js'
 
 /**
  * Reviewer PROFILES — the registry half of `fleet/review` (#1158).
@@ -131,8 +131,16 @@ export async function resolveReviewerLabel(label: string, registryDir: string): 
 
 /**
  * A profile's prompt: its own agent definition first (the expertise), then
- * the SAME read-only and verdict contract the general reviewer gets
- * (review.ts), then the PR, the export path as data, and the diff.
+ * the SAME read-only, diff-scope and verdict contracts the general reviewer
+ * gets (review.ts), then the PR, the export path as data, and the diff.
+ *
+ * `DIFF_SCOPE_CONTRACT` is not optional here and it is the same copy the
+ * generalist reads (#1664): the reviewer that rejected #1653 on two UNCHANGED
+ * lines was a profile, not the generalist, and a profile told only "FAIL on
+ * any defect in that scope" with no attribution rule reads its own expertise
+ * as the whole scope. A specialist is MORE likely to hit this than the
+ * generalist, not less — its checklist is written against the codebase rather
+ * than against the diff, so everything its eye lands on looks in bounds.
  */
 export function buildProfileReviewPrompt(
   profile: ReviewerProfile, pr: string, diff: string, changedFiles: readonly string[], exportDir: string,
@@ -141,9 +149,10 @@ export function buildProfileReviewPrompt(
     '## How this review runs\n\n' +
     `You are the \`${profile.agent}\` reviewer for this pull request. You run CONCURRENTLY WITH, and ` +
     'never instead of, the general non-author review: judge only what your expertise covers, and FAIL ' +
-    'on any defect in that scope — a FAIL from you fails `fleet/review` even when every other reviewer ' +
-    'passed.\n\n' +
-    `${READ_ONLY_CONTRACT}\n\n${VERDICT_CONTRACT}\n\n` +
+    'on any defect in that scope THAT THIS DIFF IS RESPONSIBLE FOR — a FAIL from you fails ' +
+    '`fleet/review` even when every other reviewer passed, so the scope rule below is as binding on ' +
+    'you as your checklist is.\n\n' +
+    `${READ_ONLY_CONTRACT}\n\n${DIFF_SCOPE_CONTRACT}\n\n${VERDICT_CONTRACT}\n\n` +
     `## Pull request\n\n${pr}\n\n${reviewFilesSection(changedFiles, exportDir)}\n\n` +
     `## Diff\n\n\`\`\`diff\n${diff}\n\`\`\`\n`
 }

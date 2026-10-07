@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
+import { finalLine, outOfScopeFindings, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
   diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
@@ -708,6 +708,52 @@ export function itemIdFromBranch(branch: string): string | undefined {
   return FLEET_BRANCH_RE.exec(branch)?.[2]
 }
 
+/**
+ * The out-of-scope findings a reviewer reported, rendered for the check's own
+ * summary — or `undefined` when there are none, which is the common case and
+ * leaves the check output byte-identical to what it was before #1664.
+ *
+ * WHY THE CHECK SUMMARY, AND NOT ONLY THE PR COMMENT. The reviewer's full
+ * text already reaches the PR as a comment (`publishReport` →
+ * `writeReviewReport` → the `fleet-review/publish` job), and that is where a
+ * human reads a finding. But that comment is written by a SEPARATE job from
+ * an artifact, and `writeReviewReport` is deliberately non-fatal: a report
+ * that cannot be written must not also cost the PR its verdict. So the
+ * comment alone is a channel that can fail quietly — and a finding that is
+ * only in a channel that can fail quietly is a finding that can be dropped.
+ * The summary this returns is composed by `composeReviewSet`, which is the
+ * SAME composition both producers of the `fleet/review` check use — the CI
+ * gate (`CiVerdict.summary`, this job's own stdout and the check's log) and
+ * `review-and-merge.ts` (the check-run's `output.summary`). Each is written
+ * by the process that produced the verdict, so a green `fleet/review` with
+ * findings behind it cannot read as clean on either channel, and the comment
+ * channel and the check channel fail independently.
+ *
+ * WHY NOT AUTO-FILE AN ISSUE. It was considered and rejected on two grounds.
+ * First authority: this process holds `pull-requests: read` and cannot write
+ * to GitHub at all — on purpose, because it runs a model next to the review
+ * key (see `writeReviewReport`). Giving it `issues: write` to file a model's
+ * unreviewed prose would widen the one boundary that makes the review job
+ * safe to hold that key, to buy a convenience. Second accuracy: these are
+ * model findings nobody has triaged, in a PUBLIC repository, and an
+ * auto-filed issue per review run is a backlog of unverified claims that
+ * nobody owns. A human reading the comment and filing the real ones keeps the
+ * triage step where triage belongs, and the finding is durable in the
+ * meantime because it sits on both the PR and the check.
+ */
+export function outOfScopeSummary(
+  entries: readonly { reviewer: string; findings: readonly string[] }[],
+): string | undefined {
+  const withFindings = entries.filter((e) => e.findings.length > 0)
+  const total = withFindings.reduce((n, e) => n + e.findings.length, 0)
+  if (total === 0) return undefined
+  const lines = withFindings.flatMap((e) => e.findings.map((f) => `- ${e.reviewer}: ${f}`))
+  return `${total} OUT-OF-SCOPE FINDING${total === 1 ? '' : 'S'} — present at the base commit, not introduced ` +
+    'by this diff, and so NOT grounds for rejecting it (#1664). This PR cannot fix them in scope; ' +
+    'file each one as its own issue so it does not die with this check.\n\n' +
+    `${lines.join('\n')}`
+}
+
 /** The one line `parseVerdict` judged — the reviewer's final non-empty line,
  *  selected by the same function (`finalLine`), so the printed summary and the
  *  job's exit code can never name different verdicts. Never an invented
@@ -1130,9 +1176,19 @@ export function composeReviewSet(
   // feature most PRs never use. More than one gets a roll-call line first
   // (which reviewer said what, scannable without scrolling) and then every
   // reviewer's full text under its own heading.
+  //
+  // Out-of-scope findings (#1664) are hoisted to the TOP, directly under the
+  // verdict line or roll-call — not left buried in the reviewer's prose.
+  // Under `DIFF_SCOPE_CONTRACT` these are findings the reviewer judged
+  // pre-existing and therefore did NOT reject for, so this is the one place a
+  // GREEN check has something a human still has to act on; it has to be the
+  // first thing read, not the last. When there are none — the common case —
+  // `outOfScopeSummary` returns `undefined` and this output is unchanged.
+  const outOfScope = outOfScopeSummary(results.map((r) => ({ reviewer: r.name, findings: outOfScopeFindings(r.text) })))
+  const banner = outOfScope === undefined ? '' : `${outOfScope}\n\n`
   const summary = results.length === 1
-    ? `${(results[0] as { headline: string }).headline}\n\n${(results[0] as { text: string }).text}`
-    : `${results.length} reviews \u2014 ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n` +
+    ? `${(results[0] as { headline: string }).headline}\n\n${banner}${(results[0] as { text: string }).text}`
+    : `${results.length} reviews — ${results.map((r) => `${r.name}: ${r.verdict}`).join(', ')}\n\n${banner}` +
       results.map((r) => `### ${r.name}\n\n${r.headline}\n\n${r.text}`).join('\n\n---\n\n')
   // A substantive rejection outranks an UNREADABLE beside it: somebody DID
   // read this diff and reject it, so the outcome to report is "fix the
