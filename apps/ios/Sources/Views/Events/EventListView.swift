@@ -123,6 +123,7 @@ struct EventListView: View {
             ),
             accessibilityID: "events-cms-disabled"
         )
+        .accessibilityIdentifier("events-cms-disabled")
     }
 
     // MARK: - Empty State
@@ -141,6 +142,7 @@ struct EventListView: View {
             actionAccessibilityID: "events-empty-create-btn",
             accessibilityID: "events-empty"
         )
+        .accessibilityIdentifier("events-empty")
     }
 
     // MARK: - Event List Content

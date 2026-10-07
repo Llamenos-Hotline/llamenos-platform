@@ -228,7 +228,15 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
-    func testClockInViaAPI() {
+    /// `clock-in-button` only renders once `ShiftsViewModel.shiftDays` is
+    /// non-empty, which requires an actual shift schedule record on this
+    /// class's hub (see `GET /api/shifts`, `ShiftsView.swift`) — this suite
+    /// does not create one. When it is absent, skip explicitly: the previous
+    /// version of this test accepted "shifts-empty-state" as evidence the
+    /// clock-in request succeeded, even though the empty state means
+    /// clock-in was never tapped at all (the same shape of defect as #1129's
+    /// "dashboard-title" accepted as proof of an active call).
+    func testClockInViaAPI() throws {
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -238,10 +246,8 @@ final class APIConnectedUITests: BaseUITest {
             navigateToShifts()
             let clockIn = find("clock-in-button")
             guard clockIn.waitForExistence(timeout: 10) else {
-                // If empty state, shifts aren't configured — skip gracefully
-                let empty = find("shifts-empty-state")
-                if empty.exists {
-                    return  // Cannot test clock-in without shifts configured
+                if find("shifts-empty-state").exists {
+                    throw XCTSkip("No shift schedule is configured on this test hub; there is nothing to clock into")
                 }
                 XCTFail("Clock in button should exist")
                 return
@@ -249,19 +255,17 @@ final class APIConnectedUITests: BaseUITest {
             clockIn.tap()
         }
         then("I should see the on-shift state or a server error") {
-            // Either clock-out button appears (success) or error message
-            let clockOut = find("clock-out-button")
-            let shiftError = find("shifts-error")
-            let shiftSuccess = find("shifts-success")
-            let found = clockOut.waitForExistence(timeout: 10) ||
-                shiftError.waitForExistence(timeout: 3) ||
-                shiftSuccess.waitForExistence(timeout: 3)
-            XCTAssertTrue(found || find("shifts-empty-state").exists,
-                "API should respond to clock-in request")
+            // Either the clock-out button appears (success) or an error
+            // message — reaching this point means clock-in was actually
+            // tapped, so there is no "empty state" fallback to accept here.
+            let found = find("clock-out-button").waitForExistence(timeout: 10) ||
+                find("shifts-error").waitForExistence(timeout: 3) ||
+                find("shifts-success").waitForExistence(timeout: 3)
+            XCTAssertTrue(found, "API should respond to clock-in request")
         }
     }
 
-    func testClockOutConfirmationViaAPI() {
+    func testClockOutConfirmationViaAPI() throws {
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -272,24 +276,30 @@ final class APIConnectedUITests: BaseUITest {
 
             // First clock in
             let clockIn = find("clock-in-button")
-            guard clockIn.waitForExistence(timeout: 10) else { return }
+            guard clockIn.waitForExistence(timeout: 10) else {
+                if find("shifts-empty-state").exists {
+                    throw XCTSkip("No shift schedule is configured on this test hub; there is nothing to clock into")
+                }
+                XCTFail("Clock in button should exist")
+                return
+            }
             clockIn.tap()
 
             // Wait for clock out to appear
             let clockOut = find("clock-out-button")
-            guard clockOut.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(clockOut.waitForExistence(timeout: 10), "Clock out button should appear after clocking in")
             clockOut.tap()
         }
-        then("I should see a clock out confirmation") {
-            let alertExists = app.alerts.firstMatch.waitForExistence(timeout: 5)
-            if alertExists {
-                // Cancel to not actually clock out
-                let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
-                if cancelButton.exists {
-                    cancelButton.tap()
-                }
+        then("I should see a clock out confirmation dialog") {
+            XCTAssertTrue(
+                app.alerts.firstMatch.waitForExistence(timeout: 5),
+                "A confirmation dialog should appear before clocking out"
+            )
+            // Cancel to not actually clock out
+            let cancelButton = app.alerts.firstMatch.buttons.element(boundBy: 0)
+            if cancelButton.exists {
+                cancelButton.tap()
             }
-            // The important thing is the API roundtrip worked
         }
     }
 
