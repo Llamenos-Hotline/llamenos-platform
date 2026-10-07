@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
+import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.protocol.ErrorEnum
 import java.io.IOException
@@ -79,10 +80,8 @@ class InviteViewModel @Inject constructor(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: IOException) {
-                R.string.connection_failed
-            } catch (_: Exception) {
-                R.string.onboarding_invalid_code
+            } catch (e: Exception) {
+                e.inviteErrorRes(R.string.onboarding_invalid_code)
             }
             _uiState.update {
                 if (errorRes == null) it.copy(code = code, stage = InviteStage.VALID)
@@ -98,21 +97,42 @@ class InviteViewModel @Inject constructor(
         _uiState.update { it.copy(stage = InviteStage.REDEEMING, errorRes = null) }
         viewModelScope.launch {
             val errorRes = try {
-                when (val failure = inviteRepository.redeemInvite(code).exceptionOrNull()) {
-                    null -> null
-                    is IOException -> R.string.connection_failed
-                    else -> R.string.onboarding_redeem_failed
-                }
+                inviteRepository.redeemInvite(code).exceptionOrNull()
+                    ?.inviteErrorRes(R.string.onboarding_redeem_failed)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                R.string.onboarding_redeem_failed
+            } catch (e: Exception) {
+                e.inviteErrorRes(R.string.onboarding_redeem_failed)
             }
             _uiState.update {
                 if (errorRes == null) it.copy(stage = InviteStage.REDEEMED)
                 else it.copy(stage = InviteStage.VALID, errorRes = errorRes)
             }
         }
+    }
+
+    /**
+     * The message for a failed invite call, given what [fallback] would say about the
+     * invite itself.
+     *
+     * A transport or status failure is a different thing from a bad invite code, and the
+     * difference is load-bearing here. `GET /api/invites/validate/:code` is capped at 5
+     * requests per minute per client IP (apps/worker/routes/invites.ts) — reachable by a
+     * volunteer who retypes a code, or by several volunteers enrolling from one office or
+     * carrier NAT. Answering that 429 with "Invalid invite code" blames a code the server
+     * never looked at, and the obvious response to it — type the code again — spends
+     * another request against the same bucket and keeps the lockout alive.
+     *
+     * [org.llamenos.hotline.api.InviteRepository] exists to surface the status for exactly
+     * this classification; see its test.
+     */
+    @StringRes
+    private fun Throwable.inviteErrorRes(@StringRes fallback: Int): Int = when {
+        this is IOException -> R.string.connection_failed
+        this is ApiException && code == 429 -> R.string.enroll_error_rate_limited
+        // 5xx is the hub being unwell, not a judgement on the invite.
+        this is ApiException && code >= 500 -> R.string.connection_failed
+        else -> fallback
     }
 
     data class ParsedInvite(val code: String, val hubUrl: String?)
