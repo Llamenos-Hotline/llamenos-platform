@@ -693,14 +693,47 @@ describe('fleet/review runs the whole review set in one job', () => {
     expect(entries[0]?.body).toContain('why it passed')
   })
 
-  it('hands each profile its own resolved instructions, the diff and the export path', async () => {
-    const d = deps({ reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }) })
+  it('hands each profile its own resolved instructions, the diff, the export path and the PR\'s claim', async () => {
+    const claim = { title: 'fix(x): rename a type', body: 'a pure rename, nothing else' }
+    const d = deps({
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
+      prClaim: async () => claim,
+    })
     await runReviewCi(d)
+    // The claim reaches the PROFILE too, not only the generalist (#1696) —
+    // the reviewer that rejected #1653 on unchanged context lines was a
+    // profile, so a claim wired to the generalist alone would fix the half
+    // that was not broken.
     expect(d.profileReview).toHaveBeenCalledWith(
       { agent: CRYPTO, instructions: `be a ${CRYPTO}` },
       'diff --git a/x b/x',
       passing.changedFiles,
+      claim,
     )
+    expect(d.secondOpinion).toHaveBeenCalledWith(expect.objectContaining({ claim }))
+  })
+
+  it('an unreadable PR read hands every reviewer no claim at all — never an invented one', async () => {
+    const d = deps({
+      reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
+      prClaim: async () => undefined,
+    })
+    const v = await runReviewCi(d)
+    // Fail-soft, exactly like `exportBase`: a missing claim is a worse
+    // review, never an unsafe one, so it must not fail the gate.
+    expect(v.ok).toBe(true)
+    expect(d.profileReview).toHaveBeenCalledWith(
+      { agent: CRYPTO, instructions: `be a ${CRYPTO}` }, 'diff --git a/x b/x', passing.changedFiles, undefined,
+    )
+  })
+
+  it('a prClaim that THROWS does not fail the review', async () => {
+    const d = deps({
+      prClaim: async () => { throw new Error('gh exploded') },
+    })
+    const v = await runReviewCi(d)
+    expect(v.ok).toBe(true)
+    expect(d.secondOpinion).toHaveBeenCalledWith(expect.objectContaining({ claim: undefined }))
   })
 
   it('a set of exactly one keeps the pre-#1158 summary shape byte for byte', async () => {

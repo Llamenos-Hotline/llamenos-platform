@@ -22,6 +22,7 @@ const facts = (over: Partial<PrSnapshotFacts> = {}): PrSnapshotFacts => ({
   authorLogin: 'rhonda-rodododo',
   authorIsBot: false,
   headBranch: 'fleet/infra/9',
+  claim: { title: 'fix(infra): a thing', body: 'because of a reason' },
   ...over,
 })
 
