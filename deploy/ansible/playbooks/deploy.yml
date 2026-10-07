@@ -107,3 +107,23 @@
     - role: alerting
       tags: [alerting, deploy]
       when: llamenos_alerting_enabled | default(false) | bool
+
+# Deploy is not "done" until the push relay demonstrably works from outside the
+# host: health over public TLS, anonymous publish rejected, the backend's token
+# accepted, and a subscriber receiving the message (#959).
+#
+# This ran only from playbooks/deploy-demo.yml until #1604 deleted that playbook
+# with demo mode. The check is about the ntfy relay, not about demo mode, and
+# Android devices are rung through it on any deployment that enables it — so it
+# moved here rather than being deleted with its only former caller.
+- name: Verify the ntfy push relay end to end
+  hosts: llamenos_servers
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars.yml
+  tasks:
+    - name: Verify ntfy relay
+      ansible.builtin.import_tasks: tasks/verify-ntfy.yml
+      when: llamenos_ntfy_enabled | default(false) | bool
+      tags: [ntfy, verify]

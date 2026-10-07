@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # Розгорнути все (додаток + маркетинговий сайт)
-bun run deploy:demo     # Розгорнути лише Worker додатку
 bun run deploy:site     # Розгорнути лише маркетинговий сайт
 ```
 

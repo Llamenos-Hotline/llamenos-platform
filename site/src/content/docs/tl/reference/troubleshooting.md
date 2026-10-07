@@ -97,7 +97,6 @@ Huwag kailanman patakbuhin ang `wrangler pages deploy` o `wrangler deploy` nang 
 
 ```bash
 bun run deploy
-bun run deploy:demo
 bun run deploy:site
 ```
 

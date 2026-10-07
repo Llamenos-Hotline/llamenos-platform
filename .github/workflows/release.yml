@@ -17,8 +17,9 @@
 # GitHub Releases created by GITHUB_TOKEN do NOT fire the `release: published`
 # event for downstream workflows (anti-recursion rule). This is why the
 # `dispatch` job below calls `gh workflow run` directly instead of relying on
-# tauri-release.yml / mobile-release.yml / deploy-demo.yml to trigger
-# themselves — see #712 for the decision record. Dispatching via
+# tauri-release.yml / mobile-release.yml to trigger themselves — see #712 for
+# the decision record. (A third dispatch, to deploy-demo.yml, went with demo
+# mode in #1604: there is no demo deployment to push a release to.) Dispatching via
 # `POST /actions/workflows/{id}/dispatches` requires `actions: write` on the
 # job token; `contents: read` alone gets the request rejected (#711).
 
@@ -637,38 +638,3 @@ jobs:
             exit 1
           fi
           echo "Mobile Release run: $RUN_URL"
-
-      - name: Dispatch Demo deploy
-        # #712 decision: option (a), explicit dispatch from this job rather
-        # than relying on `release: [published]` (which never fires for
-        # GITHUB_TOKEN-created releases). Targets deploy-demo.yml, not
-        # auto-deploy-demo.yml — deploy-demo.yml already declares
-        # `workflow_dispatch` and needs no trigger changes; auto-deploy-demo.yml
-        # only has the dead `release: [published]` trigger and is outside this
-        # workflow's file ownership, so it is not wired up here (flagged
-        # separately for retirement/follow-up).
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          WORKFLOW="deploy-demo.yml"
-          gh workflow run "$WORKFLOW" \
-            --repo "${{ github.repository }}" \
-            --ref "v${NEW_VERSION}"
-          echo "Dispatched $WORKFLOW for v${NEW_VERSION}"
-
-          RUN_URL=""
-          for _ in $(seq 1 15); do
-            sleep 2
-            RUN_URL=$(gh run list --repo "${{ github.repository }}" \
-              --workflow="$WORKFLOW" --limit 5 \
-              --json url,createdAt,event \
-              --jq '[.[] | select(.event=="workflow_dispatch")] | sort_by(.createdAt) | reverse | .[0].url // empty')
-            [ -n "$RUN_URL" ] && break
-          done
-          if [ -z "$RUN_URL" ]; then
-            echo "::error::$WORKFLOW dispatch did not produce a workflow run within 30s"
-            exit 1
-          fi
-          echo "Demo Deploy run: $RUN_URL"

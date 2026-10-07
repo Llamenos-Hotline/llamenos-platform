@@ -182,21 +182,12 @@ glitchtip_dsn: ""
 # Generate with: openssl rand -hex 32
 signal_notifier_bearer_token: ""
 
-# ─── Demo / Staging Mode ──────────────────────────────────────────
-# NEVER set demo_mode: true when app_environment is 'production' — both the
-# app (apps/worker/lib/config.ts) and the Ansible preflight guard
-# (playbooks/tasks/guard-demo-mode.yml) hard-fail if you do.
-# When demo_mode is true, demo_mode_confirm must be exactly "DESTROY_ALL_DATA"
-# (two-factor confirmation the app requires at startup before it will run
-# scheduled data resets).
-demo_mode: false
-demo_mode_confirm: ""
-
 # ─── Developer/Test Routes ────────────────────────────────────────
 # NEVER set dev_routes_enabled: true or a non-empty dev_reset_secret in
-# production — same guard as demo_mode above applies. Currently these only
-# take effect when app_environment is 'development' (widening that to
-# staging/demo is tracked separately — #723).
+# production: playbooks/tasks/guard-dev-routes.yml hard-fails the play, the
+# env templates omit both vars, and apps/worker/lib/config.ts refuses to start.
+# They take effect on app_environment 'development' and 'staging' — see
+# docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
 dev_routes_enabled: false
 dev_reset_secret: ""
 

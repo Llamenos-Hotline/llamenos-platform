@@ -37,7 +37,7 @@ class TranscriptionPreferencesSteps : BaseSteps() {
 
     @Given("transcription opt-out is not allowed")
     fun transcriptionOptOutIsNotAllowed() {
-        // In demo mode, opt-out defaults to allowed
+        // With seeded sample data, opt-out defaults to allowed
     }
 
     @Then("I should see the transcription managed message")

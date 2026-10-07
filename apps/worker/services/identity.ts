@@ -35,7 +35,8 @@ import type {
   DeviceRecord,
 } from '../types'
 import { ServiceError } from './settings'
-import type { DemoIdentity } from '../lib/demo-identities'
+import type { SampleIdentity } from '../lib/sample-identities'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
@@ -384,7 +385,7 @@ export class IdentityService {
 
   /**
    * Seed (or restore) the given admin as an active super-admin. Used by the
-   * dev and demo resets; server startup uses ensurePlatformAdmin, which does
+   * the dev-surface reset; server startup uses ensurePlatformAdmin, which does
    * not overwrite an existing row.
    */
   async ensureInit(adminPubkey?: string): Promise<void> {
@@ -403,10 +404,10 @@ export class IdentityService {
   }
 
   /**
-   * Register the demo accounts. The identities can only come from
-   * `demoIdentities(env)`, which refuses anywhere but a development server.
+   * Register the sample cast. The identities can only come from
+   * `sampleIdentities(env)`, which refuses anywhere the dev surface is closed.
    */
-  async ensureDemoAccounts(identities: readonly DemoIdentity[]): Promise<void> {
+  async ensureSampleAccounts(identities: readonly SampleIdentity[]): Promise<void> {
     for (const account of identities) {
       await this.db.insert(users).values({
         pubkey: account.pubkey,
@@ -2284,20 +2285,23 @@ export class IdentityService {
   }
 
   // =========================================================================
-  // Test Reset (demo/development only)
+  // Test Reset (the secret-gated dev surface only)
   // =========================================================================
 
   /**
-   * Truncate all identity-related tables. Only allowed in demo/development mode.
+   * Truncate all identity-related tables.
+   *
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts), the same
+   * predicate the whole `/api/test-*` surface uses: `ENVIRONMENT=production` is
+   * refused before any secret is read, `staging` additionally needs
+   * `DEV_ROUTES_ENABLED=true` and a 32-character `DEV_RESET_SECRET`, and the
+   * REQUEST must present that secret. `presentedSecret` is the caller's
+   * `X-Test-Secret` header, which `routes/dev.ts` has already checked — this is
+   * the service layer's own copy of the check, not the gate.
    */
-  async reset(demoMode: boolean, environment: string, demoModeConfirm?: string): Promise<void> {
-    const isDev = environment === 'development'
-    if (!demoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    if (demoMode && !isDev && demoModeConfirm !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(403, 'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-    }
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<void> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.transaction(async (tx) => {
       // Delete in FK-safe order (children first)

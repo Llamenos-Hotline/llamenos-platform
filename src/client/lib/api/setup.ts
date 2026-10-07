@@ -16,10 +16,10 @@ export async function updateSetupState(data: Partial<SetupState>) {
   })
 }
 
-export async function completeSetup(demoMode = false) {
+export async function completeSetup() {
   return request<SetupState>('/setup/complete', {
     method: 'POST',
-    body: JSON.stringify({ demoMode }),
+    body: JSON.stringify({}),
   })
 }
 

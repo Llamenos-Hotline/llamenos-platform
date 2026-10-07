@@ -193,9 +193,7 @@ async function completeFirstRunSetup(baseUrl: string): Promise<void> {
       Authorization: `Bearer ${JSON.stringify(token)}`,
       ...devSurfaceHeaders(),
     },
-    // demoMode stays false: the suites exercise the real product, and demo
-    // mode seeds a fictional dataset they do not expect.
-    body: JSON.stringify({ demoMode: false }),
+    body: JSON.stringify({}),
   })
   if (!res.ok) {
     const text = await res.text()

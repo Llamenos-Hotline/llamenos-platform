@@ -107,7 +107,6 @@ Pa janm kouri `wrangler pages deploy` oswa `wrangler deploy` dirèkteman. Toujou
 
 ```bash
 bun run deploy          # Deplwaye tout bagay (app + sit maketing)
-bun run deploy:demo     # Deplwaye sèlman Worker app
 bun run deploy:site     # Deplwaye sèlman sit maketing
 ```
 

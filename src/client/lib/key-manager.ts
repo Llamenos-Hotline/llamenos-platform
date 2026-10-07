@@ -203,22 +203,6 @@ export async function wipeKey() {
 }
 
 /**
- * Disable auto-lock timers (idle + tab-hide).
- * Used in demo mode where frequent lock-outs ruin the experience.
- */
-export function disableAutoLock() {
-  autoLockDisabled = true
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-    idleTimer = null
-  }
-  if (visibilityTimer) {
-    clearTimeout(visibilityTimer)
-    visibilityTimer = null
-  }
-}
-
-/**
  * Error thrown when crypto operations are attempted while locked.
  */
 export class KeyLockedError extends Error {

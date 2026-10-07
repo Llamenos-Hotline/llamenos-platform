@@ -1301,9 +1301,6 @@
     "complete": "¡Ni̱ ndíꞌi configuración! Nda̱kú kivi nu̱ú línea de ayuda miíún.",
     "completeFailed": "Ñá ni̱ kúu sandíꞌi configuración",
     "configured": "Configurado",
-    "demoMode": "Chikaa datos de ejemplo",
-    "demoModeDescription": "Savaꞌa cuenta de voluntario de ejemplo, turno, ji entrada de bloqueo ña prueba ji demo. Credencial de cuenta demo naꞌa nu̱ú página de kivi.",
-    "demoSeedFailed": "Datos de ejemplo ni̱ savaꞌa parcial",
     "generateInvite": "Savaꞌa Invitación",
     "generatedInvites": "Invitación Ni̱ Savaꞌa",
     "goToDashboard": "Kuaꞌan nu̱ú Panel",
@@ -2319,18 +2316,6 @@
     "webhook": {
       "errorTitle": "Webhook Error"
     }
-  },
-  "demo": {
-    "volunteer": "Voluntario",
-    "admin": "Admin",
-    "dismiss": "Sandákua",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "Yóʼo ña kuenta prueba — mákunda información yaʼa ndaa xaʼa persona na cha̱xin. Datos yaʼa vá kúu iin secreto ta kunda̱a̱ tuku iora.",
-    "bannerTextSchedule": "Yóʼo ña kuenta prueba — mákunda información yaʼa ndaa xaʼa persona na cha̱xin. Datos kunda̱a̱ tuku {{schedule}} ta kúu iin secreto.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "volunteer": "Voluntario",

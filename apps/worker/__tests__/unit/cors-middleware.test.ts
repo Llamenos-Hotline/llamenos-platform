@@ -58,10 +58,14 @@ describe('CORS production defaults', () => {
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
   })
 
-  it('allows https://demo.llamenos-platform.com', async () => {
+  // https://demo.llamenos-platform.com was in the built-in origin set until
+  // #1604. There is no demo deployment, so it is now refused like any other
+  // unlisted origin — an allowlist entry for a host nobody runs is a standing
+  // invitation to whoever registers it next.
+  it('refuses https://demo.llamenos-platform.com', async () => {
     const { app, env } = makeApp()
     const res = await req(app, env, 'https://demo.llamenos-platform.com')
-    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://demo.llamenos-platform.com')
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
   it('allows tauri://localhost (desktop client)', async () => {

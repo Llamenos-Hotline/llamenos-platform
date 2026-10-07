@@ -15,8 +15,8 @@
 #      required platform, and each installer's SHA-256 matches CHECKSUMS.txt.
 #      This is how internal-beta testers actually install desktop.
 #   2. staging-backend — the staging backend's health probes are up,
-#      /api/config reports demoMode: true, and the self-hosted ntfy push
-#      relay Android testers are rung through (UnifiedPush, no FCM) is
+#      /api/config is served and reports a completed setup, and the self-hosted
+#      ntfy push relay Android testers are rung through (UnifiedPush, no FCM) is
 #      reachable and reports healthy (#959).
 #   3. play-track — the Play Console internal track's live versionCode
 #      matches what the most recent mobile-release.yml run targeted for
@@ -407,7 +407,7 @@ jobs:
 
   # ─── Surface 2: Staging backend ──────────────────────────────────
   staging-backend:
-    name: "Surface 2 — Staging backend health + demo mode + ntfy push relay"
+    name: "Surface 2 — Staging backend health + setup state + ntfy push relay"
     needs: config
     if: ${{ needs.config.outputs.staging-backend == 'true' }}
     runs-on: ubuntu-latest
@@ -429,7 +429,7 @@ jobs:
                   elif self.path == "/v1/health":
                       body = json.dumps({"healthy": True}).encode()
                   elif self.path == "/api/config":
-                      body = json.dumps({"demoMode": True}).encode()
+                      body = json.dumps({"setupCompleted": True}).encode()
                   else:
                       self.send_response(404)
                       self.end_headers()
@@ -452,12 +452,13 @@ jobs:
             sleep 0.25
           done
 
-      # demoMode here is the deployment's DEMO_MODE: it drives the
-      # test-environment banner testers must see. It does not mean demo accounts
-      # exist — those are only ever generated on a development server
-      # (apps/worker/lib/demo-identities.ts), and the setup wizard's stored flag
-      # no longer counts anywhere else.
-      - name: Verify /health/ready, /health/live, and /api/config demoMode
+      # This used to assert /api/config reported `demoMode: true`, which drove a
+      # test-environment banner. #1604 removed demo mode — there is no demo
+      # product, only the secure hosted shape and the self-hosted one — so the
+      # field no longer exists. `setupCompleted` is what actually says a staging
+      # backend is usable by a tester, and it is asserted in its place rather
+      # than dropping the /api/config check altogether.
+      - name: Verify /health/ready, /health/live, and /api/config setup state
         env:
           STAGING_BASE_URL: ${{ inputs.staging_base_url || vars.STAGING_BASE_URL }}
         run: |
@@ -484,12 +485,12 @@ jobs:
             echo "::error::SURFACE BROKEN: staging backend — /api/config returned HTTP $CODE"
             FAILED=1
           else
-            DEMO_MODE=$(jq -r '.demoMode // empty' /tmp/config-resp.json 2>/dev/null || echo "")
-            if [ "$DEMO_MODE" != "true" ]; then
-              echo "::error::SURFACE BROKEN: staging backend — /api/config demoMode is '${DEMO_MODE:-<missing>}', expected true"
+            SETUP_COMPLETED=$(jq -r '.setupCompleted // empty' /tmp/config-resp.json 2>/dev/null || echo "")
+            if [ "$SETUP_COMPLETED" != "true" ]; then
+              echo "::error::SURFACE BROKEN: staging backend — /api/config setupCompleted is '${SETUP_COMPLETED:-<missing>}', expected true (an un-onboarded backend is not usable by a tester)"
               FAILED=1
             else
-              echo "OK: /api/config demoMode=true"
+              echo "OK: /api/config setupCompleted=true"
             fi
           fi
 

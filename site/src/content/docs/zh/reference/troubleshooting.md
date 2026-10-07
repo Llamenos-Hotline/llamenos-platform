@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # 部署所有内容（应用 + 营销网站）
-bun run deploy:demo     # 仅部署应用 Worker
 bun run deploy:site     # 仅部署营销网站
 ```
 

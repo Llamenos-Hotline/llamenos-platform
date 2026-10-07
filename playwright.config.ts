@@ -95,7 +95,7 @@ export default defineConfig({
           ...desktopStepDirs.map((d) => `tests/steps/${d}/**/*.ts`),
         ],
         featuresRoot: "packages/test-specs/features",
-        tags: "@desktop and not @backend and not @wip and not @fixme and not @requires-camera and not @requires-live-calls and not @requires-demo",
+        tags: "@desktop and not @backend and not @wip and not @fixme and not @requires-camera and not @requires-live-calls",
         missingSteps: MISSING_STEPS,
       }),
       use: { ...devices["Desktop Chrome"] },
@@ -111,7 +111,7 @@ export default defineConfig({
         features: "packages/test-specs/features/**/*.feature",
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
-        tags: "@backend and not @wip and not @fixme and not @global-setting and not @demo-mode and not @signed-webhooks",
+        tags: "@backend and not @wip and not @fixme and not @global-setting and not @simulated-telephony and not @signed-webhooks",
         missingSteps: MISSING_STEPS,
       }),
       use: BACKEND_PROJECT_USE,
@@ -149,17 +149,19 @@ export default defineConfig({
       dependencies: ["bootstrap"],
     },
     {
-      // Serial project for @demo-mode scenarios (#723). They exercise the MockTelephonyAdapter,
-      // which is only constructible on a server started with DEMO_MODE=true and
-      // DEMO_MODE_CONFIRM set — so they are excluded from backend-bdd above (whose server is
-      // not in demo mode) and run here, opt-in, via `BDD_DEMO_MODE=true bun run test:backend:bdd`
-      // against a demo-mode server. They fail loudly (never skip) when the server is not.
+      // Serial project for @simulated-telephony scenarios. They exercise the
+      // MockTelephonyAdapter and reconfigure the hub's telephony provider, so they cannot
+      // share a worker with the parallel project above — that, not the gate, is why they
+      // are separate. Until #1604 the mock additionally required DEMO_MODE=true +
+      // DEMO_MODE_CONFIRM, which no BDD server set, so this project was opt-in and ran
+      // nowhere; the mock is now gated on `devSurfacesEnabled`, which every BDD server
+      // already satisfies, and scripts/test-backend-bdd.sh runs it every time.
       ...defineBddProject({
-        name: "backend-bdd-demo-mode",
+        name: "backend-bdd-simulated-telephony",
         features: "packages/test-specs/features/**/*.feature",
         steps: "tests/steps/backend/**/*.ts",
         featuresRoot: "packages/test-specs/features",
-        tags: "@backend and @demo-mode and not @wip and not @fixme",
+        tags: "@backend and @simulated-telephony and not @wip and not @fixme",
         missingSteps: MISSING_STEPS,
       }),
       use: BACKEND_PROJECT_USE,

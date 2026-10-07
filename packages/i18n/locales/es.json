@@ -1791,18 +1791,6 @@
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
     "title": "Delete role"
   },
-  "demo": {
-    "admin": "Admin",
-    "banner": "Demo Mode",
-    "bannerText": "Entorno de prueba: no ingrese información real de quienes llaman. Los datos aquí no son confidenciales y pueden eliminarse en cualquier momento.",
-    "bannerTextSchedule": "Entorno de prueba: no ingrese información real de quienes llaman. Los datos se restablecen {{schedule}} y no son confidenciales.",
-    "dismiss": "Dismiss",
-    "getStarted": "Deploy your own",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo",
-    "volunteer": "Volunteer"
-  },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
     "codePlaceholder": "Pega los datos del QR o el código...",
@@ -3797,9 +3785,6 @@
     "complete": "Setup complete! Welcome to your hotline.",
     "completeFailed": "Failed to complete setup",
     "configured": "Configured",
-    "demoMode": "Populate with sample data",
-    "demoModeDescription": "Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.",
-    "demoSeedFailed": "Sample data partially created",
     "generateInvite": "Generate Invite",
     "generatedInvites": "Generated Invites",
     "goToDashboard": "Go to Dashboard",

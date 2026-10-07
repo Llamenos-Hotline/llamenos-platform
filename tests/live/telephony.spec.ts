@@ -18,11 +18,10 @@ const hasLiveCreds = !!process.env.TWILIO_ACCOUNT_SID
 
 /**
  * No beforeAll reset. This suite runs against a DEPLOYED server, and a
- * deployed server has no reset — `devGuard` 404s every /api/test-* outside a
- * development host, and /api/demo/reset is gated on exactly the same
- * condition. The old `resetStaging()` could therefore only ever succeed
- * against a development box, which is the opposite of what a live suite is
- * for (#1423).
+ * deployed server has no reset — `devGuard` 404s every /api/test-* unless the
+ * host declared itself a test target AND the request carries its shared
+ * secret. The old `resetStaging()` could therefore only ever succeed against
+ * such a box, which is the opposite of what a live suite is for (#1423).
  *
  * Nothing is lost, because nothing depended on it. Every assertion here was
  * `.first()` being visible — "some call row exists" — which a row left over

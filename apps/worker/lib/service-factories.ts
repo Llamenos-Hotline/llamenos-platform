@@ -186,11 +186,12 @@ export async function getMessagingAdapterFromService(
 /**
  * Create adapter from saved config.
  * Supports Twilio, SignalWire, Vonage, Plivo, Asterisk, Telnyx, Bandwidth, and FreeSWITCH,
- * plus the demo-only MockTelephonyAdapter (type `mock`, which throws
- * MockTelephonyRefusedError unless DEMO_MODE is confirmed and ENVIRONMENT permits it).
+ * plus the test-only MockTelephonyAdapter (type `mock`, which throws
+ * MockTelephonyRefusedError unless this host may serve the dev surface — see
+ * lib/dev-surfaces.ts).
  */
 function createAdapterFromConfig(config: TelephonyProviderConfig, webhookBaseUrl: string, env: Env): TelephonyAdapter {
-  // `mock` is a worker-side demo type, deliberately not part of the wire-level
+  // `mock` is a worker-side test type, deliberately not part of the wire-level
   // TelephonyProviderType enum — compare on the raw string.
   if (isMockProviderConfig(config)) {
     return new MockTelephonyAdapter(env, config.phoneNumber)

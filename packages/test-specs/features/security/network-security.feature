@@ -251,10 +251,15 @@ Feature: Network Security
     When they query /api/auth/me
     Then the response should contain serverEventKeyHex
 
+  # Renamed in #1604: this used to read "DEMO_MODE=false prevents DO reset in production",
+  # whose Given did nothing (DEMO_MODE was process env, unsettable from a scenario) and
+  # whose subject had not existed since the Durable Objects backend was replaced. What it
+  # actually exercises — and all it ever exercised — is that the destructive reset refuses a
+  # caller who does not present the dev surface's shared secret. Demo mode is gone; that
+  # refusal is the real control, so the name now says so.
   @backend
-  Scenario: DEMO_MODE=false prevents DO reset in production
-    Given DEMO_MODE is set to "false"
-    When a reset request is sent to any Durable Object
+  Scenario: The destructive reset is refused without the dev-surface secret
+    When a reset request is sent without the dev-surface secret
     Then the reset should be rejected
 
   @backend

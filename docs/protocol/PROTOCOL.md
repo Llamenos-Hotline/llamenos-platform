@@ -1213,8 +1213,6 @@ Response: {
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "...", ... }],
   "defaultHubId": "...",
@@ -2090,7 +2088,7 @@ Response: SetupState
 
 POST /api/setup/complete
 Permission: settings:manage
-Body: { "demoMode"?: boolean }
+Body: {}
 Response: SetupState
 // Also creates a default hub if none exists
 

@@ -20,7 +20,6 @@ function createTestApp(opts: {
     c.env = {
       HOTLINE_NAME: 'Test Hotline',
       TWILIO_PHONE_NUMBER: '+15551234567',
-      DEMO_MODE: 'false',
       GLITCHTIP_DSN: 'https://example.com/dsn',
       SERVER_SECRET: 'a'.repeat(64),
       ...opts.env,
@@ -77,7 +76,6 @@ describe('config route', () => {
       expect(body.channels.voice).toBe(true)
       expect(body.channels.sms).toBe(true)
       expect(body.setupCompleted).toBe(true)
-      expect(body.demoMode).toBe(false)
       expect(body.needsBootstrap).toBe(false)
       expect(body.hubs).toHaveLength(1)
       expect(body.hubs[0].id).toBe('hub-1')
@@ -119,23 +117,18 @@ describe('config route', () => {
       })
     })
 
-    it('defaults setupCompleted to true and demoMode from env when getSetupState fails', async () => {
+    it('defaults setupCompleted to true when getSetupState fails', async () => {
       const services = createMockServices({
         settings: {
           getSetupState: vi.fn().mockRejectedValue(new Error('DB error')),
         },
       })
-      const app = createTestApp({
-        services,
-        env: { DEMO_MODE: 'true', DEMO_RESET_CRON: '0 */4 * * *' },
-      })
+      const app = createTestApp({ services })
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.setupCompleted).toBe(true)
-      expect(body.demoMode).toBe(true)
-      expect(body.demoResetSchedule).toBe('0 */4 * * *')
     })
 
     it('defaults needsBootstrap to false when hasAdmin fails', async () => {
@@ -282,38 +275,23 @@ describe('config route', () => {
       deriveSpy.mockRestore()
     })
 
-    it('honours the stored setup-wizard demoMode flag on a development server', async () => {
+    // Three scenarios stood here, asserting how `demoMode` was computed from
+    // DEMO_MODE, the stored setup-wizard flag and `demoSurfacesEnabled`. #1604
+    // removed the field from /api/config along with demo mode. Nothing replaced
+    // them: the thing they were about does not exist.
+    it('does not report a demoMode field', async () => {
       const services = createMockServices({
         settings: {
-          getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: true }),
+          getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
         },
       })
-      const app = createTestApp({
-        services,
-        env: { DEMO_MODE: 'false', ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' },
-      })
+      const app = createTestApp({ services, env: { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } })
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.demoMode).toBe(true)
-    })
-
-    it.each(['production', 'staging', 'demo'])('ignores the stored demoMode flag on ENVIRONMENT=%s', async (environment) => {
-      const services = createMockServices({
-        settings: {
-          getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: true }),
-        },
-      })
-      const app = createTestApp({
-        services,
-        env: { DEMO_MODE: 'false', ENVIRONMENT: environment, DEV_ROUTES_ENABLED: 'true' },
-      })
-
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.demoMode).toBe(false)
+      const body = await res.json() as Record<string, unknown>
+      expect(Object.keys(body)).not.toContain('demoMode')
+      expect(Object.keys(body)).not.toContain('demoResetSchedule')
     })
   })
 

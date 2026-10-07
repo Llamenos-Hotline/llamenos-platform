@@ -1,12 +1,9 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CHANNEL_LABELS, type ChannelType } from '@shared/types'
 import { LANGUAGE_MAP } from '@shared/languages'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
 import {
   Phone,
   MessageSquare,
@@ -17,13 +14,12 @@ import {
   AlertCircle,
   Rocket,
   Loader2,
-  Database,
 } from 'lucide-react'
 import type { SetupData } from './SetupWizard'
 
 interface Props {
   data: SetupData
-  onComplete: (options: { demoMode: boolean }) => void
+  onComplete: () => void
   saving: boolean
   headingRef?: React.RefObject<HTMLHeadingElement | null>
 }
@@ -43,7 +39,6 @@ const STATUS_STYLES = {
 
 export function StepSummary({ data, onComplete, saving, headingRef }: Props) {
   const { t } = useTranslation()
-  const [demoMode, setDemoMode] = useState(false)
   const langConfig = LANGUAGE_MAP[data.language]
 
   function getChannelStatus(channel: ChannelType): 'configured' | 'pending' {
@@ -153,29 +148,8 @@ export function StepSummary({ data, onComplete, saving, headingRef }: Props) {
         </Card>
       )}
 
-      {/* Demo mode option */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="space-y-1">
-            <Label htmlFor="demo-mode" className="flex items-center gap-1.5 font-medium cursor-pointer">
-              <Database className="h-4 w-4 text-muted-foreground" />
-              {t('setup.demoMode', { defaultValue: 'Populate with sample data' })}
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {t('setup.demoModeDescription', { defaultValue: 'Creates sample volunteer accounts, shifts, and ban entries for testing and demos. Demo account credentials will be shown on the login page.' })}
-            </p>
-          </div>
-          <Switch
-            id="demo-mode"
-            data-testid="demo-mode-toggle"
-            checked={demoMode}
-            onCheckedChange={setDemoMode}
-          />
-        </div>
-      </Card>
-
       {/* Launch button */}
-      <Button data-testid="setup-complete-btn" onClick={() => onComplete({ demoMode })} disabled={saving} className="w-full" size="lg">
+      <Button data-testid="setup-complete-btn" onClick={() => onComplete()} disabled={saving} className="w-full" size="lg">
         {saving ? (
           <><Loader2 className="h-4 w-4 animate-spin" /> {t('common.loading')}</>
         ) : (

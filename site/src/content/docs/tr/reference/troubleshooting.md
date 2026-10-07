@@ -107,7 +107,6 @@ Yaygın nedenler:
 
 ```bash
 bun run deploy          # Her şeyi dağıt (uygulama + pazarlama sitesi)
-bun run deploy:demo     # Sadece uygulama Worker'ını dağıt
 bun run deploy:site     # Sadece pazarlama sitesini dağıt
 ```
 

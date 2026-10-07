@@ -1301,9 +1301,6 @@
     "complete": "ပြင်ဆင်မှု ပြီးဆုံးပါပြီ! သင့်ဟော့လိုင်းသို့ ကြိုဆိုပါသည်။",
     "completeFailed": "ပြင်ဆင်မှု ပြီးဆုံးခြင်း မအောင်မြင်ပါ",
     "configured": "ပြင်ဆင်ပြီး",
-    "demoMode": "နမူနာဒေတာဖြင့် ဖြည့်မည်",
-    "demoModeDescription": "စမ်းသပ်ခြင်းနှင့် သရုပ်ပြခြင်းအတွက် နမူနာစေတနာ့ဝန်ထမ်းအကောင့်များ၊ အလှည့်များနှင့် ပိတ်ပင်ခြင်းများကို ဖန်တီးသည်။ သရုပ်ပြအကောင့် အထောက်အထားများကို ဝင်ရောက်ရန်စာမျက်နှာတွင် ပြမည်။",
-    "demoSeedFailed": "နမူနာဒေတာ တစ်စိတ်တစ်ပိုင်း ဖန်တီးပြီး",
     "generateInvite": "ဖိတ်ကြားချက် ဖန်တီးမည်",
     "generatedInvites": "ဖန်တီးထားသော ဖိတ်ကြားချက်များ",
     "goToDashboard": "ဒက်ရှ်ဘုတ်သို့ သွားမည်",
@@ -4023,18 +4020,6 @@
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
     "updated": "Report type updated"
-  },
-  "demo": {
-    "dismiss": "ပယ်မည်",
-    "getStarted": "Deploy your own",
-    "admin": "စီမံခန့်ခွဲသူ",
-    "volunteer": "စေတနာ့ဝန်ထမ်း",
-    "banner": "Demo Mode",
-    "bannerText": "Test environment — do not enter real caller information. Data here is not confidential and may be deleted at any time.",
-    "bannerTextSchedule": "Test environment — do not enter real caller information. Data resets {{schedule}} and is not confidential.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "dismiss": "ပယ်မည်",
   "smsWebhook": "SMS Webhook",

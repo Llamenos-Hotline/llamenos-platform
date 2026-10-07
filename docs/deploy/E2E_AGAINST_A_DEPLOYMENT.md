@@ -180,8 +180,9 @@ Four independent layers, in the order a mistake meets them:
 1. **`playbooks/tasks/guard-dev-routes.yml`** — the play fails before a single
    file is rendered to the host when `dev_routes_enabled` or
    `dev_reset_secret` is set with `app_environment: production`. Keyed on
-   `app_environment` alone, with no reference to demo mode or to the deployment
-   profile.
+   `app_environment` alone, with no reference to the deployment profile. (It
+   never referenced demo mode either, which is why #1604's removal of the mode
+   left it untouched.)
 2. **The templates** — `templates/env/_worker-required-env.j2` omits both
    variables under `production`, and the compose templates publish no database
    port. `deploy/ansible/scripts/check-required-env.py` renders both roles in a
@@ -216,13 +217,46 @@ controls — and with the environment allowlist and the explicit flag ensuring
 only a host someone deliberately designated as the test target has the surface
 at all.
 
-One surface is deliberately *not* opened by any of this: minting the demo
-cast's signing seeds (`lib/demo-identities.ts`) and the admin-authenticated
-demo reset (`lib/demo-reset-gate.ts`) go through `demoSurfacesEnabled`, which
-stays pinned to `ENVIRONMENT=development`. Demo mode is being removed from the
-product entirely, and that predicate exists so the removal is the only thing
-that ever changes those surfaces — widening them to a test instance on the way
-out would be strictly worse than leaving them alone.
+### The sample dataset, and the surface that used to be held back
+
+Minting the sample cast's signing seeds (`lib/sample-identities.ts`) and
+seeding the fixed fictional dataset (`POST /api/test-seed-sample`) used to go
+through a second, narrower predicate pinned to `ENVIRONMENT=development`, so
+they answered `404` on a staging target even with all three factors satisfied.
+The reason was not the seeds: it was that the *same* seeds were handed to an
+unauthenticated login picker, `GET /api/config/demo/credentials`, and widening
+the predicate would have published a super-admin seed on a reachable host.
+
+**#1604 removed demo mode**, that picker and `POST /api/demo/reset` with it.
+What is left is a secret-gated `/test-*` route handing out seeds for a
+fictional cast on a host that already serves `POST /api/test-reset` behind the
+same credential — strictly less authority than that caller holds already. So
+the narrow predicate is gone and the sample dataset is reachable here like every
+other `/test-*` route. That is what lets the five `admin/sample-dataset.feature`
+scenarios run against a deployment; before it they failed at their first step
+with a 404.
+
+Three further scenarios in that file covered `POST /api/demo/reset` and were
+**removed, not re-pointed**: there is no demo product, and the same effect is
+`POST /api/test-reset` followed by `POST /api/test-seed-sample`.
+
+The one thing that did not change: `production` is still refused before any
+flag or secret is read, on all four layers above.
+
+### The destructive reset's own gate
+
+`IdentityService.reset`, `SettingsService.reset`, `ContactsService.reset` and
+`CasesService.reset` — the calls `POST /api/test-reset` and
+`POST /api/test-reset-no-admin` make, and the suite's very first action — ask
+`destructiveResetRefusal` (`lib/dev-surfaces.ts`), which is
+`devSurfacesEnabled` **and** the request presenting the secret.
+
+Until #1604 they asked `DEMO_MODE=true` plus
+`DEMO_MODE_CONFIRM=DESTROY_ALL_DATA` instead, with an
+`ENVIRONMENT === 'development'` arm that needed no secret at all. That is why a
+staging rig had to be put into demo mode to run this suite, and why removing
+the mode without moving the gate first would have taken the deployed-target
+capability with it.
 
 ## Rate limiting, and why the suite is exempt
 

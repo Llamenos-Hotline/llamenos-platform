@@ -8,43 +8,8 @@ import { configResponseSchema, configVerifyResponseSchema, configPinsResponseSch
 import { publicErrors } from '../openapi/helpers'
 import { ed25519Sign } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
-import { demoIdentities } from '../lib/demo-identities'
-import { demoSurfacesEnabled } from '../lib/dev-surfaces'
 
 const config = new Hono<AppEnv>()
-
-/**
- * Whether the deployment presents itself as a demo/test environment.
- *
- * The two arms carry deliberately different authority, and the asymmetry is the
- * point:
- *
- *   - `DEMO_MODE` is deployment configuration an operator set on purpose, and
- *     what it drives on the client is a WARNING — the demo banner
- *     (`src/client/routes/__root.tsx`) telling a viewer that nothing here is
- *     real. Suppressing a warning on a deployed host would be the less safe
- *     choice, so this arm is not narrowed: a staging end-to-end target may
- *     legitimately run `DEMO_MODE=true` (see `routes/dev.ts`) and still reports
- *     `demoMode: true`. That is exactly what it did before the staging
- *     allowlist existed.
- *   - the `demoMode` flag the setup wizard stores in the DATABASE only counts
- *     on a development server. A row no operator reviewed must never change how
- *     a reachable host describes itself on a PUBLIC, unauthenticated endpoint.
- *
- * `demoSurfacesEnabled`, NOT `devSurfacesEnabled`: the staging allowlist widened
- * the latter so an opted-in staging host may serve `/api/test-*`, and keying the
- * stored-flag arm on it would have let a database row flip public `/api/config`
- * there by side effect. The demo predicate stays pinned to a development server
- * (lib/dev-surfaces.ts).
- *
- * The capability — the demo cast's signing seeds, below — is gated on
- * `demoSurfacesEnabled` ALONE, with no `DEMO_MODE` arm. So an opted-in staging
- * host running `DEMO_MODE=true` advertises demo mode and still refuses the
- * seeds. Warn widely; hand out key material narrowly.
- */
-function effectiveDemoMode(env: AppEnv['Bindings'], storedDemoMode: boolean): boolean {
-  return env.DEMO_MODE === 'true' || (demoSurfacesEnabled(env) && storedDemoMode)
-}
 
 config.get('/',
   describeRoute({
@@ -82,13 +47,9 @@ config.get('/',
 
     // Fetch setup state
     let setupCompleted = true
-    let storedDemoMode = false
     try {
-      const setupState = await services.settings.getSetupState()
-      setupCompleted = setupState.setupCompleted
-      storedDemoMode = setupState.demoMode ?? false
-    } catch { /* setup state unreadable — DEMO_MODE alone decides demo mode */ }
-    const demoMode = effectiveDemoMode(c.env, storedDemoMode)
+      setupCompleted = (await services.settings.getSetupState()).setupCompleted
+    } catch { /* setup state unreadable — assume complete */ }
 
     // Check if bootstrap is needed (no admin exists)
     let needsBootstrap = false
@@ -127,8 +88,6 @@ config.get('/',
       hotlineNumber,
       channels,
       setupCompleted,
-      demoMode,
-      demoResetSchedule: c.env.DEMO_MODE === 'true' ? (c.env.DEMO_RESET_CRON || null) : null,
       needsBootstrap,
       hubs,
       defaultHubId,
@@ -242,43 +201,5 @@ config.get('/pins',
 
     return c.json({ ...payload, signature })
   })
-
-// MARK: - Demo Credentials (demo mode only)
-
-/**
- * GET /api/config/demo/credentials
- *
- * Hands the login page's demo picker the demo accounts' signing seeds, keyed by
- * their listed handle, on a development server in demo mode. The seeds are
- * generated per server process (lib/demo-identities.ts) and never appear in any
- * client bundle or image. Everywhere else this is a 404 decided before the
- * database is read, so no stored setup state can open it.
- *
- * Unauthenticated, and it dispenses Ed25519 signing seeds — so the gate is
- * `demoSurfacesEnabled` (a development server), the same split `routes/dev.ts`
- * `demoRouteDenied` makes, and NOT `devSurfacesEnabled`, which the staging
- * allowlist widened for `/api/test-*`. On an opted-in staging host this answers
- * the indistinguishable 404 up front rather than reaching `demoIdentities()` and
- * letting `DemoIdentitiesUnavailableError` become a 500: non-disclosure must
- * rest on the guard, never on an exception a layer below it.
- */
-config.get('/demo/credentials', async (c) => {
-  if (!demoSurfacesEnabled(c.env)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-  let storedDemoMode = false
-  try {
-    storedDemoMode = (await c.get('services').settings.getSetupState()).demoMode ?? false
-  } catch { /* default to false */ }
-  if (!effectiveDemoMode(c.env, storedDemoMode)) {
-    return c.json({ error: 'Not Found' }, 404)
-  }
-
-  const credentials = demoIdentities(c.env).map(identity => ({
-    pubkey: identity.listedPubkey,
-    seedHex: identity.seedHex,
-  }))
-  return c.json({ credentials })
-})
 
 export default config

@@ -84,8 +84,6 @@ describe('server request env', () => {
     expect(bridged).toContain('NTFY_URL')
     expect(bridged).toContain('NTFY_AUTH_TOKEN')
     expect(bridged).toContain('NTFY_PUBLIC_URL')
-    // Demo reset schedule reported by routes/config.ts.
-    expect(bridged).toContain('DEMO_RESET_CRON')
   })
 
   it('stays an explicit literal — no blanket env spread', () => {

@@ -7,10 +7,13 @@ inventory-production.yml
 .vault-pass
 vars-production.yml.*
 inventory-production.yml.*
-# The demo workflow writes these two into the checkout on a SELF-HOSTED
-# runner and only removes them in an `if: always()` step. A killed job left
-# an untracked, un-ignored vault file and a real inventory in the worktree.
-demo_vars.yml
-inventory-demo.yml
-demo_vars.yml.*
-inventory-demo.yml.*
+# A deploy workflow writes a vars file and an inventory into the checkout on a
+# SELF-HOSTED runner and only removes them in an `if: always()` step. A killed
+# job left an untracked, un-ignored vault file and a real inventory in the
+# worktree. (The demo_vars.yml / inventory-demo.yml pair these patterns were
+# written for went with demo mode in #1604; the staging equivalents are the
+# vars-staging / inventory-staging names below.)
+vars-staging.yml
+inventory-staging.yml
+vars-staging.yml.*
+inventory-staging.yml.*

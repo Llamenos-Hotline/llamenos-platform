@@ -81,8 +81,8 @@ console.log('[llamenos] Services initialized')
 // exists, or a request authenticating in between resolves role-super-admin
 // against an empty table and is refused (see the ordering note in
 // routes/dev.ts test-reset). Both only fill what is missing, so they are safe
-// on every boot against an existing database. Mode-specific seeding (demo
-// accounts, a pre-completed setup) stays with the demo/dev flows that own it.
+// on every boot against an existing database. Mode-specific seeding (the
+// sample cast, a pre-completed setup) stays with the dev-surface flows that own it.
 // A failure here must stop the boot: a server without roles cannot authorise.
 await services.settings.ensureInit()
 await services.identity.ensurePlatformAdmin()
@@ -126,10 +126,6 @@ const env: Record<string, unknown> = {
   TWILIO_ACCOUNT_SID: readSecret('twilio-account-sid', 'TWILIO_ACCOUNT_SID'),
   TWILIO_AUTH_TOKEN: readSecret('twilio-auth-token', 'TWILIO_AUTH_TOKEN'),
   TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER || '',
-  DEMO_MODE: process.env.DEMO_MODE || undefined,
-  DEMO_MODE_CONFIRM: process.env.DEMO_MODE_CONFIRM || undefined,
-  // Read by apps/worker/routes/config.ts:101 to report the demo reset schedule.
-  DEMO_RESET_CRON: process.env.DEMO_RESET_CRON || undefined,
   AI: createTranscriptionService(),
   BLOB_STORAGE: createBlobStorage(),
   STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT || undefined,

@@ -33,7 +33,6 @@ export function isAllowedOAuthRedirectUrl(
     }
   } else {
     allowed.add('https://app.llamenos-hotline.org')
-    allowed.add('https://demo.llamenos-platform.com')
   }
   if (env.ENVIRONMENT === 'development' && !env.CORS_ALLOWED_ORIGINS) {
     // In development, allow any localhost origin for OAuth redirects

@@ -35,14 +35,6 @@ Re' kuk'otob' konojel ri etz'apwach taq tzij, tik'otob' ri runik'oj, chuqa' tik'
 4. **Tawokisaj taq k'utunela'** — tak'oj retalib'al chi kij chi jujun b'eyal e tijaq
 5. **Tak'utj chuqa' tak'oj**
 
-### Tach'aj ri demo modoj
-
-Chike ri atk'utunik ruk' tzij:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Tik'otob' chike okisaxik
 
 Che jun servidor ruk' jun k'ojik dominio chuqa' TLS rub'anikil:

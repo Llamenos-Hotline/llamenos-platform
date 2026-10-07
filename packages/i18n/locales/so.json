@@ -1301,9 +1301,6 @@
     "complete": "Habeynta waa la dhammeeyay! Ku soo dhawoow khadkaaga taleefanka.",
     "completeFailed": "Waa lagu guul dareeystay dhammaynta habeynta",
     "configured": "Waa la habeeyay",
-    "demoMode": "Ku buuxi xog tusaale",
-    "demoModeDescription": "Waxay sameysaa xisaabyo mutadawwiciin tusaale ah, wareegyo, iyo liiska mamnuucida tijaabo iyo muujin. Xisaabaha tijaabada aqoonsigoodii waxaa lagu muujin doonaa bogga gelitaanka.",
-    "demoSeedFailed": "Xogta tusaalaha ayaa si qayb ah loo sameeyay",
     "generateInvite": "Samee Martiqaad",
     "generatedInvites": "Martiqaadaha La Sameeyay",
     "goToDashboard": "Aad Bogga Guud",
@@ -4383,18 +4380,6 @@
     "banReasonPlaceholder": "Reason (optional)",
     "banSuccess": "Caller banned and call ended",
     "noteForCall": "Note for call {{callId}}"
-  },
-  "demo": {
-    "admin": "Maamulka",
-    "dismiss": "Iska dhaaf",
-    "getStarted": "Deploy your own",
-    "volunteer": "Mutadawwic",
-    "banner": "Demo Mode",
-    "bannerText": "Deegaan tijaabo ah — ha gelin macluumaad dhab ah oo ku saabsan wicitaanka. Xogta halkan ma aha mid qarsoodi ah waana la tirtiri karaa waqti kasta.",
-    "bannerTextSchedule": "Deegaan tijaabo ah — ha gelin macluumaad dhab ah oo ku saabsan wicitaanka. Xogta waxaa dib loo dejiyaa {{schedule}}, mana aha mid qarsoodi ah.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "admin": "Maamulka",

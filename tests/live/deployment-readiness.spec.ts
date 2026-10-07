@@ -18,7 +18,7 @@
  *     one an operator cannot run on the box they actually care about.
  *
  * Run: `bun run test:live -- deployment-readiness`
- *   LIVE_BASE_URL     the deployment to check (default in playwright.live.config.ts)
+ *   LIVE_BASE_URL     the deployment to check (required — no default)
  *   STAGING_ADMIN_SEED  enables the authenticated half; without it those skip
  */
 import { test, expect } from '@playwright/test'
@@ -102,40 +102,24 @@ test.describe('deployment readiness', () => {
       expect(res.status(), `POST ${path} must not exist on a deployment`).toBe(404)
     }
 
-    // `/api/demo/reset` is the other destructive surface, gated by
-    // demoResetRefusal (lib/demo-reset-gate.ts) on the same ENVIRONMENT +
-    // DEV_ROUTES_ENABLED condition plus DEMO_MODE and an explicit confirmation
-    // string. It sits behind the authenticated router, so unauthenticated it
-    // answers 401 rather than 404.
-    //
-    // This suite deliberately does NOT call it with credentials. The assertion
-    // would be "an admin is refused", and if that gate were ever broken the
-    // check would destroy the deployment it exists to vet — the one test whose
-    // failure mode is worse than the bug. `demoMode === false` from
-    // /api/config below is the safe precondition to assert instead, and
-    // apps/worker/__tests__/unit/demo-reset-gate covers the refusal itself.
-    const demo = await request.post('/api/demo/reset', {
-      headers: { 'Content-Type': 'application/json' },
-      data: {},
-      failOnStatusCode: false,
-    })
-    expect(
-      demo.status(),
-      'POST /api/demo/reset must require authentication (404 if the route is absent entirely)',
-    ).not.toBe(200)
+    // `POST /api/demo/reset` — the demo product's admin-authenticated full wipe,
+    // the other destructive surface this block used to probe — no longer exists:
+    // #1604 removed demo mode, and with it the only reset reachable from outside
+    // the secret-gated `/api/test-*` surface the loop above already covers. The
+    // probe is gone rather than kept asserting `!== 200` against a 404, which
+    // would pass for the wrong reason forever.
   })
 
   test('the public config is served and reports a completed setup', async ({ request }) => {
     const res = await request.get('/api/config')
     expect(res.status()).toBe(200)
-    const cfg = await res.json() as { setupCompleted?: boolean; needsBootstrap?: boolean; demoMode?: boolean }
+    const cfg = await res.json() as { setupCompleted?: boolean; needsBootstrap?: boolean }
 
     // An un-onboarded server is a legitimate state — it is what a fresh ISO
     // boots into — but it is not one a volunteer can use, so a readiness check
     // has to say so rather than pass quietly.
     expect(cfg.setupCompleted, 'setup wizard has not been completed on this deployment').toBe(true)
     expect(cfg.needsBootstrap, 'no admin exists yet').toBe(false)
-    expect(cfg.demoMode, 'a deployment serving real callers must not be in demo mode').toBe(false)
   })
 
   test('an unauthenticated request for hub data is refused', async ({ request }) => {
@@ -269,11 +253,12 @@ test.describe('deployment readiness', () => {
      *
      * It was not measurable at all: nothing reported what
      * `resolveRingableVolunteers` resolves to, and its only non-provider caller
-     * is `POST /demo/telephony/simulate/incoming-call`, which is demo-gated. On
-     * a VM running `DEMO_MODE=false` — the configuration that actually ships —
+     * is `POST /hubs/:id/simulated-telephony/simulate/incoming-call`, which only
+     * a host that declared itself a test target may serve. On a VM without that
+     * declaration — the configuration that actually ships —
      * the ring-eligibility checks in the live suite skipped, so R1's "that
      * volunteer clocks in, receives a call" could only ever be verified on a
-     * demo server. A check that skips on the one configuration that counts is
+     * test instance. A check that skips on the one configuration that counts is
      * not coverage. `GET /calls/routing` is the read-only oracle; it resolves,
      * it does not ring.
      *
@@ -283,7 +268,7 @@ test.describe('deployment readiness', () => {
      *
      *  - the oracle EXISTS and answers on this deployment, in this mode. This
      *    is the load-bearing one, and it is unconditional: it fails if the
-     *    route is absent, unauthorised, or demo-gated, which is the whole
+     *    route is absent, unauthorised, or test-target-gated, which is the whole
      *    defect;
      *  - its verdict, its count and its list agree with each other —
      *    unconditional;
@@ -313,7 +298,7 @@ test.describe('deployment readiness', () => {
         expect(
           status,
           `GET /hubs/${hub.id}/calls/routing — without this route the ring decision cannot be `
-          + 'measured on a deployment at all, only on a demo-mode server',
+          + 'measured on a deployment at all, only on a test instance',
         ).toBe(200)
 
         expect(typeof ring.wouldRing, 'the oracle returned no verdict').toBe('boolean')

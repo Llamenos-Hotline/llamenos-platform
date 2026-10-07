@@ -81,8 +81,6 @@ Returns public hub configuration, enabled channels, chuqa' server identity.
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **Body:**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 Also creates jun default hub we majun k'o.

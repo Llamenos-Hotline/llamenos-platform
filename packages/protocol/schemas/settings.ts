@@ -136,9 +136,7 @@ export const updateReportTypeBodySchema = z.object({
 
 export const ttlOverridesBodySchema = z.record(z.string(), z.number().int().min(0))
 
-export const setupCompleteBodySchema = z.object({
-  demoMode: z.boolean().optional(),
-})
+export const setupCompleteBodySchema = z.object({})
 
 export const spamSettingsSchema = z.object({
   voiceCaptchaEnabled: z.boolean().optional(),

@@ -11,7 +11,6 @@ Cross-boundary TypeScript types, constants, and utilities shared between the fro
 | `languages.ts` | Language configuration (codes, display labels, Twilio voice IDs) |
 | `permissions.ts` | Role-based permission definitions |
 | `ws-events.ts` | Nostr event type constants |
-| `demo-accounts.ts` | Demo/seed account data for development |
 | `voice-prompts.ts` | IVR voice prompt configuration |
 
 ## Usage

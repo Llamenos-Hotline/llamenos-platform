@@ -1301,9 +1301,6 @@
     "complete": "¡Xk'is ri chojmixik! Utz apetik pa ri oyonem tzij awech.",
     "completeFailed": "Man xtikir ta xk'is ri chojmixik",
     "configured": "Chojmirisan",
-    "demoMode": "Tinojisax rik'in taq etamab'al rech rayik",
-    "demoModeDescription": "Keb'an taq retal aj samajel, taq samaj, xuqujeʼ taq q'atoj rech rayik xuqujeʼ k'utik. Ri taq etal rech tok kek'ut pa ri raqan wuj rech tok.",
-    "demoSeedFailed": "Ri taq etamab'al rech rayik man xek'is ta ronojel",
     "generateInvite": "Tib'an Etal rech Okem",
     "generatedInvites": "Taq Etal rech Okem B'an",
     "goToDashboard": "Tib'e pa Nab'ey Raqan Wuj",
@@ -4221,18 +4218,6 @@
     "app": "Titz'apix ri K'uxlab'al",
     "keyWiped": "Key has been wiped due to too many failed attempts",
     "wrongPin": "Wrong PIN"
-  },
-  "demo": {
-    "dismiss": "Tib'an che ri'",
-    "getStarted": "Deploy your own",
-    "admin": "B'anel",
-    "volunteer": "Aj Samajel",
-    "banner": "Demo Mode",
-    "bannerText": "Kꞌutbꞌal etaꞌmanik — makokisaj qas etaꞌmabꞌal rech ri sikꞌinel. Ri etaꞌmabꞌal waral man ewal taj xuqujeꞌ kkunataj kesax pa jubꞌiqꞌ qꞌij.",
-    "bannerTextSchedule": "Kꞌutbꞌal etaꞌmanik — makokisaj qas etaꞌmabꞌal rech ri sikꞌinel. Ri etaꞌmabꞌal {{schedule}} ktzalij chi na jun mul, man ewal taj.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "dismiss": "Tib'an che ri'",
   "continueButton": "Tisamajix na",
