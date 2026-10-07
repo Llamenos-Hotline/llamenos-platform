@@ -9,7 +9,7 @@ import {
 } from './github-app.js'
 import {
   composeReviewSet, decideReviewSet, reviewTriggerLogins, GENERAL_REVIEWER, REVIEW_JOB,
-  type ReviewSetDecision,
+  REVIEW_REQUEST_LOGIN, type ReviewSetDecision,
 } from './ci.js'
 import {
   buildProfileReviewPrompt, resolveReviewerLabel, AGENT_REGISTRY_DIR,
@@ -469,6 +469,35 @@ async function readRequiredChecks(pr: string): Promise<RequiredCheck[] | undefin
   return ghJson<RequiredCheck[]>(['pr', 'checks', pr, '--required', '--json', 'name,state,bucket'])
 }
 
+/**
+ * Whether this PR was opened by the FLEET rather than by a human making a
+ * decision — the condition under which this command stops short of merging
+ * and asks for a human code-owner instead.
+ *
+ * GitHub's `author.is_bot` alone is NOT that test, and #1637's live run
+ * against PR #1546 proved it by breaking the stop: every PR the fleet's own
+ * workers open is authored by `llamenos-auto` (`REVIEW_REQUEST_LOGIN`,
+ * ci.ts), which is a real GitHub USER account — a second write identity, not
+ * a GitHub App — so `gh pr view --json author` answers
+ * `{"login":"llamenos-auto","is_bot":false}` and the `is_bot` branch never
+ * fired. The guard read as "the fleet never merges its own work unapproved"
+ * and in fact covered only App-authored PRs, of which the fleet opens none.
+ *
+ * `is_bot` is KEPT alongside the login check rather than replaced by it:
+ * dependabot and any future App-authored PR are genuinely non-human and must
+ * stop here too, and matching on a login list alone would silently let a new
+ * App through.
+ *
+ * Matched on AUTHOR, never on branch name — a `fleet/...` branch name is a
+ * convention anyone with push access can imitate, and `REVIEW_SKIP_AUTHORS`
+ * (ci.ts) already records why keying this class of decision on a branch
+ * hands out a free bypass. Logins are case-insensitive on GitHub, so the
+ * comparison is too.
+ */
+export function authorNeedsHumanApproval(facts: Pick<PrSnapshotFacts, 'authorLogin' | 'authorIsBot'>): boolean {
+  return facts.authorIsBot || facts.authorLogin.trim().toLowerCase() === REVIEW_REQUEST_LOGIN
+}
+
 export type MergeReadiness = { ready: true } | { ready: false; reason: string }
 
 /**
@@ -543,7 +572,8 @@ export function describeOutcome(o: ReviewAndMergeOutcome): string {
     case 'merged': return `review-and-merge: merged PR ${o.pr} at ${o.headSha}`
     case 'needs-codeowner':
       return `review-and-merge: PR ${o.pr} (head ${o.headSha}) is ready to merge but was opened by ` +
-        `${o.authorLogin}, a bot — a human code-owner must approve it first; not merging on the operator's behalf`
+        `${o.authorLogin} — the fleet, not a human making a decision. A human code-owner must approve it ` +
+        'first; not merging on the operator\'s behalf'
     case 'not-mergeable': return `review-and-merge: PR ${o.pr} not merged — ${o.reason}`
     case 'cannot-record':
       return `review-and-merge: PR ${o.pr} NOT reviewed and NOT merged — this command cannot record a ` +
@@ -762,12 +792,13 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
   if (!readiness.ready) return { kind: 'not-mergeable', pr, reason: readiness.reason }
 
   // Reached only once every required check, including our own fresh
-  // `fleet/review`, is green on an unmoved head. A bot-authored PR (the
-  // fleet's own workers) still needs a human code-owner's approval —
-  // CODEOWNERS forbids self-approval, and this command never approves a PR
-  // on the operator's behalf, so it stops here rather than attempting (and
-  // having GitHub reject) the merge.
-  if (facts.authorIsBot) {
+  // `fleet/review`, is green on an unmoved head. A PR the FLEET opened still
+  // needs a human code-owner's approval — CODEOWNERS forbids self-approval,
+  // and this command never approves a PR on the operator's behalf, so it
+  // stops here rather than attempting (and having GitHub reject) the merge.
+  // See `authorNeedsHumanApproval` for why `is_bot` alone did not express
+  // that, and for the live run that found it.
+  if (authorNeedsHumanApproval(facts)) {
     return { kind: 'needs-codeowner', pr, headSha: facts.headSha, authorLogin: facts.authorLogin }
   }
 

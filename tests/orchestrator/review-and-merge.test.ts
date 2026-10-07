@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   hasSuccessfulReview, checkRunConclusion, evaluateMergeReadiness, describeOutcome,
   runReviewAndMerge, postReviewCheckRun, REVIEW_AND_MERGE_FALLBACK_MODEL, reviewAndMergeEngine,
-  uncoveredProfiles,
+  uncoveredProfiles, authorNeedsHumanApproval,
   type CheckRunInfo, type RequiredCheck, type ReviewAndMergeDeps, type PrSnapshotFacts,
 } from '../../orchestrator/src/review-and-merge.js'
 import { REVIEW_JOB } from '../../orchestrator/src/ci.js'
@@ -292,6 +292,26 @@ describe('runReviewAndMerge', () => {
     expect(deps.merge).not.toHaveBeenCalled()
   })
 
+  // #1637's live run against #1546 broke this stop: `llamenos-auto` is a
+  // real GitHub USER account (`is_bot: false`), so the `is_bot`-only guard
+  // never fired for ANY PR the fleet opens — and the fleet opens no
+  // App-authored PRs at all, so the guard covered nothing it was written
+  // for. `merge` was reached on a bot-authored PR.
+  it('a PR the fleet opened as llamenos-auto stops short of merging, even though is_bot is false', async () => {
+    const deps = baseDeps({
+      readPr: vi.fn(async () => facts({ authorLogin: 'llamenos-auto', authorIsBot: false })),
+    })
+    const outcome = await runReviewAndMerge('1546', deps)
+    expect(outcome).toEqual({ kind: 'needs-codeowner', pr: '1546', headSha: 'head111', authorLogin: 'llamenos-auto' })
+    expect(deps.merge, 'the fleet must never merge its own PR without a human code-owner').not.toHaveBeenCalled()
+  })
+
+  it('and a human-authored PR still merges — the stop is not "never merge anything"', async () => {
+    const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorLogin: 'rhonda-rodododo', authorIsBot: false })) })
+    expect((await runReviewAndMerge('9', deps)).kind).toBe('merged')
+    expect(deps.merge).toHaveBeenCalledTimes(1)
+  })
+
   it('bot-authored PR: stops short of merging and asks for a human code-owner, never approving itself', async () => {
     const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorIsBot: true, authorLogin: 'llamenos-bot' })) })
     const outcome = await runReviewAndMerge('9', deps)
@@ -546,6 +566,29 @@ describe('runReviewAndMerge still refuses a review set it cannot fully earn (#16
     expect(outcome.kind).toBe('not-mergeable')
     expect(deps.postCheckRun).not.toHaveBeenCalled()
     expect(deps.merge).not.toHaveBeenCalled()
+  })
+})
+
+describe('authorNeedsHumanApproval', () => {
+  it('is true for the fleet\'s own write identity, whose is_bot GitHub reports as false', () => {
+    expect(authorNeedsHumanApproval({ authorLogin: 'llamenos-auto', authorIsBot: false })).toBe(true)
+  })
+  it('is case-insensitive, as GitHub logins are', () => {
+    expect(authorNeedsHumanApproval({ authorLogin: 'Llamenos-Auto', authorIsBot: false })).toBe(true)
+    expect(authorNeedsHumanApproval({ authorLogin: ' llamenos-auto ', authorIsBot: false })).toBe(true)
+  })
+  it('still catches a genuine App author — the login list does not replace is_bot', () => {
+    expect(authorNeedsHumanApproval({ authorLogin: 'dependabot[bot]', authorIsBot: true })).toBe(true)
+  })
+  it('is false for a human', () => {
+    expect(authorNeedsHumanApproval({ authorLogin: 'rhonda-rodododo', authorIsBot: false })).toBe(false)
+  })
+  // MUTATION: `is_bot` alone was the whole guard, and it covered nothing the
+  // fleet actually opens. Reverting to it must fail here.
+  it('MUTATION: an is_bot-only guard is not enough', () => {
+    const fleetPr = { authorLogin: 'llamenos-auto', authorIsBot: false }
+    expect(fleetPr.authorIsBot, 'the premise of the defect: GitHub says this is not a bot').toBe(false)
+    expect(authorNeedsHumanApproval(fleetPr)).toBe(true)
   })
 })
 
