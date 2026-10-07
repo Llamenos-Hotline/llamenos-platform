@@ -277,6 +277,30 @@ final class APIServiceWireFormatTests: XCTestCase {
             // not happen, and the route still wrote a `recordUpdated` audit entry.
             ("updateRecord", UpdateRecordRequest(statusHash: "aa11", severityHash: "bb22")),
 
+            // POST /api/devices/register — registerDeviceBodySchema. The only body in
+            // this set whose breakage was observed end to end against a live server
+            // rather than inferred from the schema: the real client, on every launch,
+            // sent {"device_id","push_token","wake_key_public","platform"} and the
+            // server answered 400 "Provide pushToken … or x25519Pubkey …" because both
+            // of the schema's `.refine()`s read keys that were no longer there.
+            //
+            // `pushToken` and `wakeKeyPublic` are `.optional()` on the object, so the
+            // key-drop analysis alone puts this in the "silent" column — but the two
+            // refines make them conditionally required, which is what turned it loud.
+            // That is why it is here with `optionalKeys: []`: the refine, not the field
+            // modifier, decides whether a dropped key 400s.
+            //
+            // It failed in silence anyway, because
+            // `LlamenosApp.didRegisterForRemoteNotificationsWithDeviceToken` swallows the
+            // throw as "non-fatal" — so iOS has never had a row in `devices`, and no
+            // push token, wake key or HPKE device recipient has ever been registered.
+            ("registerDevice", DeviceRegistrationRequest(
+                pushToken: Self.pubkey,
+                wakeKeyPublic: Self.enc,
+                platform: "ios",
+                deviceId: "44444444-4444-4444-8444-444444444444"
+            )),
+
             // POST /api/recovery-group/user-envelope — a `[String: String]` body.
             // A key strategy rewrites Dictionary keys too, so untyped bodies were
             // affected as much as the generated structs.

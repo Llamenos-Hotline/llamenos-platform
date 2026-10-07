@@ -36,6 +36,7 @@ import * as contactsV2 from '@protocol/schemas/contacts-v2'
 import * as reports from '@protocol/schemas/reports'
 import * as records from '@protocol/schemas/records'
 import * as recoveryGroup from '@protocol/schemas/recovery-group'
+import * as devices from '@protocol/schemas/devices'
 
 const MODULES: Record<string, Record<string, unknown>> = {
   '@protocol/schemas/notes': notes,
@@ -44,6 +45,7 @@ const MODULES: Record<string, Record<string, unknown>> = {
   '@protocol/schemas/reports': reports,
   '@protocol/schemas/records': records,
   '@protocol/schemas/recovery-group': recoveryGroup,
+  '@protocol/schemas/devices': devices,
 }
 
 const FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-request-bodies.json')
@@ -59,6 +61,13 @@ interface WireCase {
   callSite: string
   /** Keys that are `.optional()` in the schema — the ones a drop cannot be seen through. */
   optionalKeys: string[]
+  /**
+   * Keys iOS sends that the schema does not declare at all, so they are stripped
+   * even in their correct camelCase form. Not an exclusion for convenience: the
+   * suite asserts separately that each of these really is absent from the schema
+   * shape AND really is sent, so it cannot be used to wave away a genuine drop.
+   */
+  unmodelledKeys?: string[]
 }
 
 interface Fixture {
@@ -95,6 +104,18 @@ function schemaFor(c: WireCase): ZodType {
   return schema as ZodType
 }
 
+/**
+ * The keys a schema declares. Module scope so the request-body and response-model
+ * suites share one definition — `registerDeviceBodySchema` is `.refine()`d twice and
+ * still exposes `.shape`, which is what lets the request side assert a key the
+ * contract does not model.
+ */
+function shapeKeys(schema: ZodType): string[] {
+  const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape
+  expect(shape, 'expected a z.object schema with an inspectable shape').toBeDefined()
+  return Object.keys(shape as Record<string, unknown>)
+}
+
 const multiWord = (key: string) => /[a-z][A-Z]/.test(key)
 
 describe('#1633 iOS request bodies against the real input schemas', () => {
@@ -127,7 +148,8 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
       // Validating is not enough — a non-strict schema validates while discarding.
       // Assert the keys SURVIVED into the parsed output, which is what the route reads.
       const parsed = (result as { data: Record<string, unknown> }).data
-      for (const key of Object.keys(body)) {
+      const unmodelled = c.unmodelledKeys ?? []
+      for (const key of Object.keys(body).filter(k => !unmodelled.includes(k))) {
         expect(parsed, `${c.schema} dropped ${key} from ${c.swiftType}`).toHaveProperty(key)
       }
     })
@@ -165,6 +187,73 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
         ).toBeUndefined()
       }
     })
+  })
+
+  describe('a key declared unmodelled really is absent from the contract, and really is sent', () => {
+    // The escape hatch above is only sound if both halves hold. If a key were merely
+    // misspelled in the fixture, or had since been added to the schema, this fails
+    // rather than letting the survival sweep quietly skip a real drop.
+    const withUnmodelled = fixture.cases.filter(c => (c.unmodelledKeys ?? []).length > 0)
+
+    it('at least one case exercises the hatch', () => {
+      expect(withUnmodelled.length).toBeGreaterThan(0)
+    })
+
+    it.each(withUnmodelled.map(c => [c.id, c] as const))('%s', (_id, c) => {
+      const declared = shapeKeys(schemaFor(c))
+      const sent = Object.keys(fixture.bodies[c.id].wire)
+      for (const key of c.unmodelledKeys ?? []) {
+        expect(sent, `${c.id} declares ${key} unmodelled but does not send it`).toContain(key)
+        expect(
+          declared,
+          `${c.schema} now declares ${key} — drop it from unmodelledKeys so the sweep covers it`,
+        ).not.toContain(key)
+      }
+    })
+  })
+
+  it('POST /api/devices/register discards the device id iOS generates and stores', () => {
+    // Found by adding this endpoint to the suite, not by reading the schema.
+    //
+    // `WakeKeyService.registerDevice` mints a UUID, persists it to the Keychain under
+    // `KeychainKey.deviceID` and sends it as `deviceId`. `registerDeviceBodySchema`
+    // does not declare the field, so it is stripped — in the correct camelCase form,
+    // not only in the historic snake_case one. The server therefore never learns the
+    // identifier the device believes identifies it, and nothing on the client observes
+    // that, because the route answers 204.
+    //
+    // Separate from #1633: fixing the key casing does NOT fix this. Filed rather than
+    // changed here — whether the contract should carry `deviceId` or the client should
+    // stop sending it is a protocol decision, and packages/protocol is shared-owned.
+    const { wire } = fixture.bodies.registerDevice
+    expect(wire).toHaveProperty('deviceId')
+
+    const declared = shapeKeys(devices.registerDeviceBodySchema as unknown as ZodType)
+    expect(declared).not.toContain('deviceId')
+
+    const parsed = devices.registerDeviceBodySchema.safeParse(wire)
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data).not.toHaveProperty('deviceId')
+  })
+
+  it('POST /api/devices/register 400s on the historic bytes because its refines read the dropped keys', () => {
+    // The one case in this suite whose breakage was observed end to end against a live
+    // server: the real client sent the snake_case form on every launch and the server
+    // answered 400 "Provide pushToken (to register for push) or x25519Pubkey (to
+    // register this device as an HPKE recipient)" — both refines reading keys that were
+    // no longer present. `devices` had 0 rows; after the fix the same client gets 204
+    // and a row persists.
+    //
+    // Note which mechanism makes this loud: `pushToken` and `wakeKeyPublic` are
+    // `.optional()` on the object, so the field modifiers alone would put this in the
+    // silent-drop column. The `.refine()`s are what turn it into a 400.
+    const { legacySnakeCase } = fixture.bodies.registerDevice
+    const legacy = devices.registerDeviceBodySchema.safeParse(legacySnakeCase)
+    expect(legacy.success).toBe(false)
+    expect(
+      legacy.success ? '' : JSON.stringify(legacy.error.issues),
+      'expected the refine that names pushToken / x25519Pubkey',
+    ).toContain('x25519Pubkey')
   })
 
   it('PATCH /api/contacts-v2/:id lost the ciphertext and the HPKE envelopes, and still validated', () => {
@@ -291,12 +380,6 @@ describe('#1633 iOS response models against the real response schemas', () => {
     const schema = mod[c.schema]
     expect(schema, `${c.module} does not export ${c.schema}`).toBeDefined()
     return schema as ZodType
-  }
-
-  function shapeKeys(schema: ZodType): string[] {
-    const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape
-    expect(shape, 'expected a z.object schema with an inspectable shape').toBeDefined()
-    return Object.keys(shape as Record<string, unknown>)
   }
 
   it('the response fixture covers every case it declares', () => {
