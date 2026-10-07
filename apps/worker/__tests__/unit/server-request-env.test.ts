@@ -96,3 +96,48 @@ describe('server request env', () => {
     expect(code).not.toMatch(/\.\.\.\s*process\.env/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// The SECOND env literal: the one handed to createServices
+// ---------------------------------------------------------------------------
+
+/**
+ * `src/server/index.ts` builds a separate, much smaller env literal for
+ * `createServices` — the services are constructed once at startup, before the
+ * request env above exists. Same failure mode, different object: a key missing
+ * here is permanently `undefined` to every SERVICE, and nothing fails loudly.
+ *
+ * `SignalRegistrationService` decides per request whether a caller may take
+ * the synthetic Signal bridge path, using `devSurfaceRequestAuthorized`. That
+ * predicate needs all three dev-surface factors. With only `ENVIRONMENT`
+ * bridged — which is all this literal carried — the opt-in flag and the secret
+ * read as unset, so the predicate is false on every host and the synthetic
+ * path is unreachable even where it is meant to be available. That is the
+ * exact shape of #1623's original defect, one layer further out, so it is
+ * pinned rather than left to a future reader to notice.
+ */
+function serviceEnvLiteral(): string {
+  const source = readFileSync(SERVER_ENTRY, 'utf-8')
+  const start = source.indexOf('const services: Services = createServices(db, {')
+  expect(start, 'createServices call not found in src/server/index.ts').toBeGreaterThan(-1)
+  const envStart = source.indexOf('env: {', start)
+  expect(envStart, 'createServices env literal not found').toBeGreaterThan(-1)
+  const end = source.indexOf('\n  },', envStart)
+  return source.slice(envStart, end)
+}
+
+describe('createServices env', () => {
+  it('bridges every dev-surface factor the predicate reads', () => {
+    const literal = serviceEnvLiteral()
+    // Derived from DevSurfacesEnv rather than restated: the predicate cannot
+    // grow a fourth input without this failing.
+    for (const key of ['ENVIRONMENT', 'DEV_ROUTES_ENABLED', 'DEV_RESET_SECRET', 'E2E_TEST_SECRET']) {
+      expect(literal, `${key} missing from the createServices env literal`).toContain(`${key}:`)
+    }
+  })
+
+  it('stays an explicit literal — no blanket env spread', () => {
+    const code = serviceEnvLiteral().replace(/\/\/[^\n]*/g, '')
+    expect(code).not.toMatch(/\.\.\.\s*process\.env/)
+  })
+})
