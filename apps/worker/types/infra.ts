@@ -71,10 +71,6 @@ export interface Env {
   DEV_AUTH_BYPASS?: string           // "true" to skip Ed25519 signature verification (dev only)
   DEV_ROUTES_ENABLED?: string        // "true" to enable /test-* dev routes (dev only)
 
-  // Demo mode (scheduled resets all data on a cron schedule)
-  DEMO_MODE?: string              // "true" to enable (blocked in ENVIRONMENT=production)
-  DEMO_MODE_CONFIRM?: string      // Must be "DESTROY_ALL_DATA" when DEMO_MODE=true (two-factor confirmation)
-  DEMO_RESET_CRON?: string        // Human-readable schedule label (e.g., "every 4 hours")
 
   // Server secret — hex 32 bytes used for HKDF key derivation (signing, encryption, auth)
   SERVER_SECRET?: string

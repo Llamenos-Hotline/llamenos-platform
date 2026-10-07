@@ -149,14 +149,12 @@ health.get('/',
   async (c) => {
     const { status, checks } = await runChecks(c.env as unknown as Record<string, unknown>)
     const mem = typeof process !== 'undefined' ? process.memoryUsage() : null
-    const demoMode = (c.env as unknown as Record<string, unknown>).DEMO_MODE === 'true'
 
     return c.json({
       status,
       checks,
       version: typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev',
       uptime: typeof process !== 'undefined' ? Math.floor(process.uptime()) : undefined,
-      demoMode,
       ...(mem && {
         memory: {
           heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
@@ -218,13 +216,11 @@ health.get('/ready',
   }),
   async (c) => {
     const { status, checks } = await runChecks(c.env as unknown as Record<string, unknown>)
-    const demoMode = (c.env as unknown as Record<string, unknown>).DEMO_MODE === 'true'
 
     return c.json({
       status,
       checks,
       version: typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev',
-      demoMode,
     }, status === 'ok' ? 200 : 503)
   },
 )

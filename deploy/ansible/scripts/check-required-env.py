@@ -3,7 +3,7 @@
 actually produced by BOTH Ansible .env templates.
 
 Why this exists (PR #771 review round 2, issue #716): roles/llamenos/templates/
-env.j2 (the monolithic/demo deploy path) silently drifted from
+env.j2 (the deprecated monolithic deploy path) silently drifted from
 roles/llamenos-app/templates/env/app.j2 (the per-service production path) and
 ended up missing DATABASE_URL entirely -- config.ts hard-fails at startup
 without it, so the container never booted. That bug shipped because nothing
@@ -116,15 +116,14 @@ ENV_LOOKUP_RE = re.compile(r"env\['([A-Z_][A-Z0-9_]*)'\]")
 #   NTFY_URL/NTFY_AUTH_TOKEN             -> same two files (Android push via ntfy)
 #   GLITCHTIP_DSN                        -> apps/worker/routes/config.ts (client crash reporting DSN)
 #   SIGNAL_NOTIFIER_BEARER_TOKEN         -> signal-notifier/ sidecar auth
-#   DEMO_RESET_CRON                      -> apps/worker/routes/config.ts -> demoResetSchedule
-#                                            -> src/client/components/demo-banner.tsx (display only)
 #
 # Verified in review round 2 (PR #771): the first four groups already had
 # real consumers AND unit test coverage (push-dispatch.test.ts,
 # voip-push.test.ts) despite the review flagging them as possibly dead --
 # only DEMO_RESET_CRON was genuinely unwired at the Ansible layer (no var
 # existed in vars.example.yml or either .env template) despite already
-# having an app-side consumer and test (config.test.ts). This list, checked
+# having an app-side consumer and test -- and it went with demo mode in #1604,
+# along with DEMO_MODE and DEMO_MODE_CONFIRM. This list, checked
 # against the "optional vars" scenario render
 # (scripts/full-scenario.extra-vars.json), is what proves that's still true
 # and stays true.
@@ -136,7 +135,6 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
     "NTFY_AUTH_TOKEN",
     "GLITCHTIP_DSN",
     "SIGNAL_NOTIFIER_BEARER_TOKEN",
-    "DEMO_RESET_CRON",
 ]
 
 
@@ -150,7 +148,7 @@ OPTIONAL_VARS_WITH_CONSUMERS = [
 #
 # Those are opposite outcomes from the SAME inputs, so neither can be proven by
 # the existing renders: the required-vars scenario is production with the flags
-# off, and the full scenario is demo with the flags off. Two extra renders,
+# off, and the full scenario is staging with the flags off. Two extra renders,
 # differing only in app_environment, are what make the conditional in
 # templates/env/_worker-required-env.j2 falsifiable in both directions.
 DEV_ROUTE_VARS = ["DEV_ROUTES_ENABLED", "DEV_RESET_SECRET"]
@@ -681,7 +679,7 @@ def main() -> int:
     required = unconditional + conditional
 
     targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role)": args.monolithic_env,
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role)": args.monolithic_env,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role)": args.app_env,
     }
 
@@ -707,7 +705,7 @@ def main() -> int:
     print(f"  {', '.join(OPTIONAL_VARS_WITH_CONSUMERS)}")
 
     full_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, full scenario)": args.monolithic_env_full,
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, full scenario)": args.monolithic_env_full,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, full scenario)": args.app_env_full,
     }
     for label, path in full_targets.items():
@@ -756,13 +754,13 @@ def main() -> int:
     print("  app_environment=production + dev_routes_enabled=true -> MUST be absent")
 
     staging_devroute_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, staging + dev routes)":
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, staging + dev routes)":
             args.monolithic_env_staging_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, staging + dev routes)":
             args.app_env_staging_devroutes,
     }
     production_devroute_targets = {
-        "roles/llamenos/templates/env.j2 (monolithic/demo role, production + dev routes)":
+        "roles/llamenos/templates/env.j2 (deprecated monolithic role, production + dev routes)":
             args.monolithic_env_prod_devroutes,
         "roles/llamenos-app/templates/env/app.j2 (per-service app role, production + dev routes)":
             args.app_env_prod_devroutes,

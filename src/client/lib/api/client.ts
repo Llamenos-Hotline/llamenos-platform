@@ -290,8 +290,6 @@ export async function getConfig() {
       channels?: import('@shared/types').EnabledChannels
       setupCompleted?: boolean
       adminPubkey?: string
-      demoMode?: boolean
-      demoResetSchedule?: string | null
       needsBootstrap?: boolean
       hubs?: import('@shared/types').Hub[]
       defaultHubId?: string

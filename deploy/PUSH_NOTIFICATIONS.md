@@ -21,11 +21,11 @@ Consequences that follow from this decision:
 - Testers must run the **ntfy** UnifiedPush distributor app and point it at
   **our** relay (see "Tester setup").
 
-## Staging = demo: the relay is mandatory
+## Staging: the relay is mandatory
 
-The staging backend is the `demo` deployment
-(`deploy/ansible/playbooks/deploy-demo.yml`, see `docs/deploy/staging.md`).
-`demo_vars.yml` (vault-encrypted, not checked in) must set:
+The staging backend is an ordinary deployment with `app_environment: staging`
+(see `docs/deploy/staging.md`). Its vars file (vault-encrypted, not checked in)
+must set:
 
 ```yaml
 llamenos_ntfy_enabled: true
@@ -38,17 +38,20 @@ ntfy_domain: "push.<staging host>.llamenos-hotline.org"
 # first deploy and persists it on the host.
 ```
 
-`deploy-demo.yml` **refuses to deploy** if `llamenos_ntfy_enabled` is not
-true or `ntfy_domain` is missing, equals `domain`, or is not a subdomain of
-`domain` (the deployment's own domain, which is the pinned domain). Deploy order on this path (`roles/llamenos`): the ntfy
-container is started and provisioned first (publish account, bearer token,
-ACLs), then the app `.env` is rendered with `NTFY_URL` / `NTFY_AUTH_TOKEN`,
-then the rest of the stack starts. Caddy serves `ntfy_domain` alongside the
-app hostname.
+`ntfy_domain` must be a real public hostname with DNS and TLS. Deploy order in
+`playbooks/deploy.yml`: `roles/llamenos-ntfy` runs in the infrastructure play,
+before `roles/llamenos-app`, because it is what mints the publish account and
+bearer token the app `.env` then carries as `NTFY_URL` / `NTFY_AUTH_TOKEN`.
+Caddy serves `ntfy_domain` alongside the app hostname.
+
+A guard that refused to deploy without the relay lived in
+`playbooks/deploy-demo.yml` and went with demo mode in #1604; the end-to-end
+verification below moved into `playbooks/deploy.yml` and still fails the run.
 
 ## Verification (all fail loudly — none can report green with ntfy down)
 
-1. **At deploy time** — after every `deploy-demo.yml` run,
+1. **At deploy time** — at the end of every `deploy.yml` run where
+   `llamenos_ntfy_enabled` is true,
    `playbooks/tasks/verify-ntfy.yml` checks from the Ansible control node
    (i.e. from outside the host, over public DNS + TLS):
    - `https://<ntfy_domain>/v1/health` → 200 and `healthy: true`;

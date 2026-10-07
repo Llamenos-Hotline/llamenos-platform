@@ -1,5 +1,17 @@
 # Epic 58: Demo Mode
 
+> **RETIRED — #1604 (2026-10-07).** The operator decided the product is a secure
+> hosted version plus self-hosting, with no demo mode. Everything this epic
+> shipped that was demo-the-*product* is deleted: `DEMO_MODE`,
+> `DEMO_MODE_CONFIRM`, `DEMO_RESET_CRON`, `POST /api/demo/reset`, the
+> unauthenticated `GET /api/config/demo/credentials` login picker, the demo
+> banner on desktop and Android, and the setup wizard's demo toggle. What was
+> demo-the-*test-affordance* survives under honest names: the fixed fictional
+> dataset is `apps/worker/lib/sample-dataset.ts`, seeded by
+> `POST /api/test-seed-sample`, and the carrier-free call simulation is
+> `apps/worker/routes/simulated-telephony.ts`. Kept below as the historical
+> record of what was built.
+
 ## Overview
 
 The production deployment at `demo.llamenos-platform.com` needs a demo mode that lets potential users explore the app without going through the full setup flow. Demo mode pre-populates the system with realistic test data across all roles (admin, volunteer, reporter) and shows login credentials on the login page so visitors can immediately try the app. The demo instance has real Twilio integration, so calls/SMS actually work.

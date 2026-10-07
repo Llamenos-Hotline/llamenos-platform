@@ -1301,9 +1301,6 @@
     "complete": "ማዘጋጀት ተጠናቋል! ወደ ስልክ መስመርዎ እንኳን ደህና መጡ።",
     "completeFailed": "ማዘጋጀቱን ማጠናቀቅ አልተሳካም",
     "configured": "ተዋቅሯል",
-    "demoMode": "በናሙና ውሂብ ሙላ",
-    "demoModeDescription": "ለሙከራና ማሳያ ናሙና የፈቃደኛ መለያዎች፣ ፈረቃዎችና የእገዳ ምዝገባዎች ይፈጥራል። የማሳያ መለያ ምስክርነቶች በመግቢያ ገጹ ላይ ይታያሉ።",
-    "demoSeedFailed": "ናሙና ውሂብ በከፊል ተፈጥሯል",
     "generateInvite": "ግብዣ ፍጠር",
     "generatedInvites": "የተፈጠሩ ግብዣዎች",
     "goToDashboard": "ወደ ዳሽቦርድ ሂድ",
@@ -4193,18 +4190,6 @@
     "statusAnswered": "የተመለሱ",
     "statusVoicemail": "የድምጽ መልዕክት",
     "statusMissed": "Missed"
-  },
-  "demo": {
-    "volunteer": "ፈቃደኛ",
-    "admin": "አስተዳዳሪ",
-    "dismiss": "አስወግድ",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "የሙከራ አካባቢ ነው — እውነተኛ የደዋይ መረጃ አያስገቡ። እዚህ ያለው መረጃ ሚስጥር አይደለም፤ በማንኛውም ጊዜ ሊሰረዝ ይችላል።",
-    "bannerTextSchedule": "የሙከራ አካባቢ ነው — እውነተኛ የደዋይ መረጃ አያስገቡ። መረጃው {{schedule}} ዳግም ይጀምራል፤ ሚስጥርም አይደለም።",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "volunteer": "ፈቃደኛ",

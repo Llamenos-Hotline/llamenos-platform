@@ -107,7 +107,6 @@ Nunca ejecute `wrangler pages deploy` o `wrangler deploy` directamente. Siempre 
 
 ```bash
 bun run deploy          # Desplegar todo (app + sitio marketing)
-bun run deploy:demo     # Desplegar solo Worker app
 bun run deploy:site     # Desplegar solo sitio marketing
 ```
 

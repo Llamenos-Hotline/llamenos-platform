@@ -143,14 +143,15 @@ calls.get('/presence',
  *
  * The ring decision used to be unmeasurable on a deployment. Nothing reported
  * what `resolveRingableVolunteers` resolves to, and its only non-provider caller
- * is `POST /demo/telephony/simulate/incoming-call`, which is demo-gated — so on
- * a VM running `DEMO_MODE=false` the live suite's ring-eligibility checks
- * skipped, and R1's "that volunteer clocks in, receives a call" could only be
- * verified on a demo server. This is the read-only oracle for it, and the answer
- * an operator needs before a caller finds out.
+ * is `POST /hubs/:id/simulated-telephony/simulate/incoming-call`, which only a
+ * host with the dev surface enabled may serve — so on a VM without it the live
+ * suite's ring-eligibility checks skipped, and R1's "that volunteer clocks in,
+ * receives a call" could only be verified on a test instance. This is the
+ * read-only oracle for it, and the answer an operator needs before a caller
+ * finds out.
  *
  * Read-only by construction: it resolves, it does not ring. No provider call, no
- * call record, no demo gate.
+ * call record, no host-level gate.
  *
  * Two tiers, following `/active`'s `calls:read-active` + `calls:read-active-full`
  * precedent rather than a new rule. The gate is `calls:read-active`, which the

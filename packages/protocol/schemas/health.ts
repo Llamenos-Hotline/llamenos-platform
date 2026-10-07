@@ -13,7 +13,6 @@ export const healthResponseSchema = z.object({
   checks: z.record(z.string(), checkResultSchema),
   version: z.string().optional(),
   uptime: z.number().optional(),
-  demoMode: z.boolean().optional(),
 })
 
 export const livenessResponseSchema = z.object({
@@ -24,5 +23,4 @@ export const readinessResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
   checks: z.record(z.string(), checkResultSchema),
   version: z.string().optional(),
-  demoMode: z.boolean().optional(),
 })

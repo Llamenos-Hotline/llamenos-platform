@@ -6,7 +6,6 @@ import { useToast } from '@/lib/toast'
 import {
   updateSetupState,
   completeSetup,
-  seedDemoData,
   getConfig,
   setActiveHub,
 } from '@/lib/api'
@@ -185,27 +184,19 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
     if (step < TOTAL_STEPS - 1) setStep(s => s + 1)
   }
 
-  async function handleComplete({ demoMode }: { demoMode: boolean }) {
+  async function handleComplete() {
     setSaving(true)
     try {
-      await completeSetup(demoMode)
+      await completeSetup()
       sessionStorage.removeItem('bootstrapComplete')
-      if (demoMode) {
-        // Re-fetch config to get the default hub ID (created during setup) — non-fatal
-        try {
-          const config = await getConfig()
-          if (config.hubs?.length) {
-            const hubId = config.defaultHubId || config.hubs[0].id
-            setActiveHub(hubId)
-          }
-        } catch { /* ignore — hub switching is best-effort */ }
-        // Seed demo volunteers — always attempt, regardless of config fetch
-        try {
-          await seedDemoData()
-        } catch {
-          toast(t('setup.demoSeedFailed', { defaultValue: 'Sample data partially created' }), 'error')
+      // Switch to the default hub the setup just created — non-fatal.
+      try {
+        const config = await getConfig()
+        if (config.hubs?.length) {
+          const hubId = config.defaultHubId || config.hubs[0].id
+          setActiveHub(hubId)
         }
-      }
+      } catch { /* ignore — hub switching is best-effort */ }
       toast(t('setup.complete'), 'success')
       navigate({ to: '/' })
     } catch {

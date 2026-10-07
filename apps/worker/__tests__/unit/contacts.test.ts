@@ -400,26 +400,41 @@ describe('ContactsService', () => {
   })
 
   describe('reset', () => {
-    it('allows reset in demo mode with DEMO_MODE_CONFIRM', async () => {
+    // Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) since #1604 — see
+    // identity-service.test.ts for the four directions and why the DEMO_MODE /
+    // DEMO_MODE_CONFIRM pair this used to assert is gone.
+    const SECRET = 'a'.repeat(64)
+    const STAGING = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }
+
+    it('allows the reset on staging with the correct secret', async () => {
       const { service } = setup()
-      await expect(service.reset({ DEMO_MODE: 'true', DEMO_MODE_CONFIRM: 'DESTROY_ALL_DATA', ENVIRONMENT: 'staging' })).resolves.toBeUndefined()
+      await expect(service.reset(STAGING, SECRET)).resolves.toBeUndefined()
     })
 
-    it('rejects reset in demo mode without DEMO_MODE_CONFIRM', async () => {
+    it('refuses on staging without the secret', async () => {
       const { service } = setup()
-      await expect(service.reset({ DEMO_MODE: 'true', ENVIRONMENT: 'staging' }))
-        .rejects.toThrow('DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
+      await expect(service.reset(STAGING, undefined))
+        .rejects.toThrow('requires the dev-surface shared secret')
     })
 
-    it('allows reset in development without DEMO_MODE_CONFIRM', async () => {
+    it('refuses on staging with the wrong secret', async () => {
       const { service } = setup()
-      await expect(service.reset({ ENVIRONMENT: 'development' })).resolves.toBeUndefined()
+      await expect(service.reset(STAGING, 'b'.repeat(64)))
+        .rejects.toThrow('requires the dev-surface shared secret')
     })
 
-    it('rejects reset in production', async () => {
+    it('allows the reset on development with the configured secret', async () => {
       const { service } = setup()
-      await expect(service.reset({ ENVIRONMENT: 'production' }))
-        .rejects.toThrow('Reset not allowed outside demo/development mode')
+      await expect(
+        service.reset({ ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET),
+      ).resolves.toBeUndefined()
+    })
+
+    it('refuses on production even with a valid secret', async () => {
+      const { service } = setup()
+      await expect(
+        service.reset({ ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: SECRET }, SECRET),
+      ).rejects.toThrow('ENVIRONMENT=production never serves /api/test-*')
     })
   })
 })

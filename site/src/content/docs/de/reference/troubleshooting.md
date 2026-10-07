@@ -107,7 +107,6 @@ Fuehren Sie niemals `wrangler pages deploy` oder `wrangler deploy` direkt aus. V
 
 ```bash
 bun run deploy          # Alles bereitstellen (App + Marketing-Site)
-bun run deploy:demo     # Nur App-Worker bereitstellen
 bun run deploy:site     # Nur Marketing-Site bereitstellen
 ```
 

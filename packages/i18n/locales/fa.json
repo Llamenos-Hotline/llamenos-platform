@@ -1301,9 +1301,6 @@
     "complete": "راه‌اندازی کامل شد! به خط اضطراری خود خوش آمدید.",
     "completeFailed": "تکمیل راه‌اندازی ناموفق بود",
     "configured": "پیکربندی شده",
-    "demoMode": "پر کردن با داده‌های نمونه",
-    "demoModeDescription": "حساب‌های داوطلب نمونه، شیفت‌ها و مسدودیت‌ها را برای آزمایش و نمایش ایجاد می‌کند. اعتبارنامه‌های حساب نمایشی در صفحه ورود نمایش داده می‌شوند.",
-    "demoSeedFailed": "داده‌های نمونه به صورت ناقص ایجاد شد",
     "generateInvite": "تولید دعوتنامه",
     "generatedInvites": "دعوتنامه‌های تولید شده",
     "goToDashboard": "رفتن به داشبورد",
@@ -3117,18 +3114,6 @@
       "title": "Active Sessions",
       "unknown": "Unknown device"
     }
-  },
-  "demo": {
-    "volunteer": "داوطلب",
-    "admin": "مدیریت",
-    "dismiss": "رد کردن",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "محیط آزمایشی — اطلاعات واقعی تماس‌گیرنده‌ها را وارد نکنید. داده‌های اینجا محرمانه نیستند و ممکن است هر لحظه حذف شوند.",
-    "bannerTextSchedule": "محیط آزمایشی — اطلاعات واقعی تماس‌گیرنده‌ها را وارد نکنید. داده‌ها {{schedule}} بازنشانی می‌شوند و محرمانه نیستند.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "volunteer": "داوطلب",

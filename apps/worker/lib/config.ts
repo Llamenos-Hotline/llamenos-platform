@@ -131,40 +131,7 @@ export function validateConfig(env: ConfigInput = process.env): void {
   assertNonEmpty(env, 'HOTLINE_NAME')
   assertNonEmpty(env, 'ENVIRONMENT')
 
-  // --- Demo mode production gate ---
-  // DEMO_MODE=true in a production environment would allow scheduled data destruction.
-  // Hard-fail at startup to prevent accidental misconfiguration.
-  const demoMode = env['DEMO_MODE']?.trim() === 'true'
   const environment = env['ENVIRONMENT']?.trim() ?? ''
-  if (demoMode) {
-    if (environment === 'production') {
-      throw new Error(
-        '[llamenos] CRITICAL: DEMO_MODE=true is set in a production environment. ' +
-        'This would allow scheduled destruction of all application data. ' +
-        'Remove DEMO_MODE from your production environment configuration immediately.',
-      )
-    }
-    if (environment !== 'development' && environment !== 'staging' && environment !== 'demo') {
-      logger.error(
-        'CRITICAL: DEMO_MODE=true detected in unrecognized environment "%s". ' +
-        'Demo mode should only run in development, staging, or demo environments. ' +
-        'Verify your environment configuration before proceeding.',
-        environment,
-      )
-    }
-    const confirm = env['DEMO_MODE_CONFIRM']?.trim()
-    if (confirm !== 'DESTROY_ALL_DATA') {
-      throw new Error(
-        '[llamenos] DEMO_MODE=true requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA. ' +
-        'This two-factor confirmation prevents accidental data destruction. ' +
-        'Set DEMO_MODE_CONFIRM=DESTROY_ALL_DATA alongside DEMO_MODE=true.',
-      )
-    }
-    logger.warn(
-      'DEMO_MODE is enabled — scheduled data resets are active. ' +
-      'This server will periodically destroy all application data.',
-    )
-  }
 
   // --- Dev-surface production gate ---
   // The /api/test-* routes reset the database, delete the admin and promote

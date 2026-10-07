@@ -98,11 +98,11 @@ export async function warnOnUnroutableHubs(services: Services): Promise<HubRouti
  *
  * Before this, the decision was unmeasurable on a deployment: nothing exposed
  * what `resolveRingableVolunteers` would resolve to, and its only non-provider
- * caller was `POST /demo/telephony/simulate/incoming-call`, which is demo-gated.
- * With `DEMO_MODE=false` — what a real VM runs — five ring-eligibility checks in
- * the live suite skipped, so R1's "that volunteer clocks in, receives a call"
- * could only ever be verified on a demo server. A suite that skips on the one
- * configuration that ships is not coverage.
+ * caller was `POST /hubs/:id/simulated-telephony/simulate/incoming-call`, which
+ * only a host with the dev surface enabled may serve. On a VM without it, five
+ * ring-eligibility checks in the live suite skipped, so R1's "that volunteer
+ * clocks in, receives a call" could only ever be verified on a test instance. A
+ * suite that skips on the one configuration that ships is not coverage.
  *
  * It CALLS the resolver rather than restating it, for the same reason presence
  * does: a second copy of the eligibility rule drifts from the first. The counts

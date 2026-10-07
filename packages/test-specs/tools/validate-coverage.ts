@@ -255,7 +255,7 @@ export function parseFeatureFile(path: string, featuresDir = FEATURES_DIR): Scen
  */
 const PLATFORM_EXCLUDE_TAGS: Partial<Record<Platform, string[]>> = {
   android: ["wip"],
-  desktop: ["backend", "wip", "fixme", "requires-camera", "requires-live-calls", "requires-demo"],
+  desktop: ["backend", "wip", "fixme", "requires-camera", "requires-live-calls"],
   backend: ["wip", "fixme"],
 };
 

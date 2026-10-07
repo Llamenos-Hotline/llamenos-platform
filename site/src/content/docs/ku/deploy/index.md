@@ -35,14 +35,6 @@ Ev hemû sirrên pêwîst çêdike, sepanê ava dike, û xizmetên destpêk dike
 4. **Pêşkêşkeran mîheng bike** — jîgir ji bo her kanaleke çalak têkevê
 5. **Kontrol bike û bi dawî bike**
 
-### Moda demo biceribîne
-
-Ji bo bi daneyên nimûneyê yên pêş-çandî bigere:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Deploykirina hilberînê
 
 Ji bo serverek bi domainek rastîn û TLS ya otomatîk:

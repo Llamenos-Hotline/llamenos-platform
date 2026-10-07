@@ -1301,9 +1301,6 @@
     "complete": "Налаштування завершено! Ласкаво просимо до вашої гарячої лінії.",
     "completeFailed": "Не вдалося завершити налаштування",
     "configured": "Налаштовано",
-    "demoMode": "Заповнити демо-даними",
-    "demoModeDescription": "Створює зразкові акаунти волонтерів, зміни та записи блокувань для тестування та демонстрацій. Облікові дані демо-акаунтів будуть показані на сторінці входу.",
-    "demoSeedFailed": "Демо-дані створено частково",
     "generateInvite": "Згенерувати запрошення",
     "generatedInvites": "Згенеровані запрошення",
     "goToDashboard": "Перейти до панелі",
@@ -2870,18 +2867,6 @@
     "phoneNumbersLabel": "Phone Numbers",
     "saveCredentials": "Save Credentials",
     "title": "Provider Setup"
-  },
-  "demo": {
-    "volunteer": "Волонтер",
-    "admin": "Адміністрування",
-    "dismiss": "Закрити",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "Тестове середовище — не вводьте реальні дані абонентів. Дані тут не є конфіденційними і можуть бути видалені в будь-який момент.",
-    "bannerTextSchedule": "Тестове середовище — не вводьте реальні дані абонентів. Дані скидаються {{schedule}} і не є конфіденційними.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "volunteer": "Волонтер",

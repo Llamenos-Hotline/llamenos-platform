@@ -7,15 +7,15 @@ import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
-import { seedDemoDataset } from '../services/demo-seeder'
+import { seedSampleDataset } from '../services/sample-seeder'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers } from '../services/ringing'
-import { DEMO_HUB } from '../lib/demo-dataset'
-import { demoIdentities } from '../lib/demo-identities'
+import { SAMPLE_HUB } from '../lib/sample-dataset'
+import { sampleIdentities } from '../lib/sample-identities'
 import { getDb } from '../db'
 import { sql as rawSql } from 'drizzle-orm'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
-import { devSurfacesEnabled, devSurfaceSecretPresented, demoSurfacesEnabled, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
  * Decode a pubkey (hex only — npub1 bech32 encoding is no longer supported).
@@ -60,24 +60,6 @@ function devRouteDenied(c: {
   return null
 }
 
-/**
- * The guard for the three `/test-*` routes that hand out or register the demo
- * cast's identities. Those seeds are only mintable on a development server
- * (`demoSurfacesEnabled`, lib/dev-surfaces.ts), which the staging allowlist
- * deliberately does not widen — so on a staging E2E target these must answer a
- * clean 404 rather than let `demoIdentities()` throw into a 500.
- */
-function demoRouteDenied(c: {
-  env: DevSurfacesEnv
-  req: { header(name: string): string | undefined }
-  json(obj: unknown, status: 404): Response
-}): Response | null {
-  const denied = devRouteDenied(c)
-  if (denied) return denied
-  if (!demoSurfacesEnabled(c.env)) return c.json({ error: 'Not Found' }, 404)
-  return null
-}
-
 // Intentionally undefended (no ENVIRONMENT/checkResetSecret check) — every other
 // /test-* route carries its own inner guard, which means the outer devGuard
 // (app.ts `api.use('/test-*', devGuard)`) could silently stop matching and
@@ -94,38 +76,34 @@ dev.post('/test-reset', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   const adminPubkey = c.env.ADMIN_PUBKEY
   await services.audit.reset()
-  await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
+  await services.identity.reset(env, secret)
   // Reset settings (including roles table and hubs) BEFORE re-seeding admin.
   // The old order was: identity.reset → identity.ensureInit → settings.reset.
   // That created a window where the admin existed but the roles table was empty,
   // causing resolvePermissions('role-super-admin', []) → [] → 403 on hub routes.
   // By resetting settings first, the roles table is re-seeded before the admin
   // user is created and before concurrent requests can authenticate.
-  await services.settings.reset(env)
+  await services.settings.reset(env, secret)
   await services.settings.ensureInit()
   // Re-seed admin immediately — minimizes the window where hasAdmin()=false
   // (concurrent browser requests between reset() and the later ensureInit() would
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
   if (adminPubkey) {
     await services.identity.ensureInit(adminPubkey)
-    // `demoSurfacesEnabled`, not `DEMO_MODE === 'true'`: the demo cast's signing
-    // seeds are only mintable on a development server (lib/dev-surfaces.ts), and
-    // a staging E2E target can legitimately run DEMO_MODE=true. Keying off the
-    // flag made `demoIdentities` throw there and turned this reset into a 500.
-    if (c.env.DEMO_MODE === 'true' && demoSurfacesEnabled(c.env)) {
-      await services.identity.ensureDemoAccounts(demoIdentities(c.env))
-    }
   }
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
   await services.blasts.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   await services.providerSetup.reset()
   // Final safety net: verify the admin user has role-super-admin after all
   // resets complete. A race condition between reset() and ensureInit() or
@@ -149,18 +127,21 @@ dev.post('/test-reset-no-admin', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   // Reset all services
   await services.audit.reset()
-  await services.identity.reset(true, c.env.ENVIRONMENT, c.env.DEMO_MODE_CONFIRM)
-  await services.settings.reset(env)
+  await services.identity.reset(env, secret)
+  await services.settings.reset(env, secret)
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
   await services.blasts.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   // Tell IdentityService to skip admin re-creation from ADMIN_PUBKEY on next ensureInit().
   await services.identity.testSkipAdminSeed()
   // Delete the admin volunteer that the reset's ensureInit() already created
@@ -185,13 +166,16 @@ dev.post('/test-reset-records', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  const env = { DEMO_MODE: c.env.DEMO_MODE, DEMO_MODE_CONFIRM: c.env.DEMO_MODE_CONFIRM, ENVIRONMENT: c.env.ENVIRONMENT }
+  // `devRouteDenied` above has already proved both halves; the services re-check
+  // the same predicate (lib/dev-surfaces.ts `destructiveResetRefusal`) with these.
+  const env: DevSurfacesEnv = c.env
+  const secret = c.req.header('X-Test-Secret')
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('')
   await services.conversations.reset()
-  await services.contacts.reset(env)
-  await services.cases.reset(env)
+  await services.contacts.reset(env, secret)
+  await services.cases.reset(env, secret)
   return c.json({ ok: true })
 })
 
@@ -755,35 +739,42 @@ dev.post('/test-seed', async (c) => {
 })
 
 
-// ─── Demo dataset (BDD helper) ─────────────────────────────────────────────────
-// Runs the same seeder the demo reset uses, without the destructive global wipe,
-// so BDD can exercise it against the shared dev server. Creates the demo accounts
-// if they are missing; DELETE removes the demo hub and accounts again.
+// ─── Sample dataset (test helper) ─────────────────────────────────────────────
+// Seeds the fixed fictional dataset (lib/sample-dataset.ts) into one hub without
+// the destructive global wipe, so a scenario can exercise it against a shared
+// server. Creates the sample accounts if they are missing; DELETE removes the
+// sample hub and accounts again.
+//
+// Until #1604 these three carried a SECOND, narrower guard pinned to
+// ENVIRONMENT=development, because the same per-process seeds were also handed
+// to an unauthenticated login picker. That picker went with demo mode, so these
+// ask `devRouteDenied` like every other /test-* route — which is what makes the
+// sample dataset reachable on a deployed staging target at all (#1625).
 
-dev.post('/test-seed-demo', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.post('/test-seed-sample', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.identity.ensureDemoAccounts(demoIdentities(c.env))
-  const summary = await seedDemoDataset(services, c.env)
+  await services.identity.ensureSampleAccounts(sampleIdentities(c.env))
+  const summary = await seedSampleDataset(services, c.env)
   return c.json({ ok: true, summary })
 })
 
-// The demo accounts' signing keys are generated per server process and never
+// The sample accounts' signing keys are generated per server process and never
 // committed, so a test signs in as one by asking the process that holds them.
-dev.get('/test-demo-identities', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.get('/test-sample-identities', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
-  const identities = demoIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
+  const identities = sampleIdentities(c.env).map(({ name, pubkey, seedHex }) => ({ name, pubkey, seedHex }))
   return c.json({ identities })
 })
 
-dev.delete('/test-seed-demo', async (c) => {
-  const denied = demoRouteDenied(c)
+dev.delete('/test-seed-sample', async (c) => {
+  const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.settings.purgeHub(DEMO_HUB.id)
-  for (const account of demoIdentities(c.env)) {
+  await services.settings.purgeHub(SAMPLE_HUB.id)
+  for (const account of sampleIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
   return c.json({ ok: true })

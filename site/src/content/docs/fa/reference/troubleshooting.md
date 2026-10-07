@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # همه چیز را مستقر کنید (برنامه + سایت بازاریابی)
-bun run deploy:demo     # فقط Worker برنامه را مستقر کنید
 bun run deploy:site     # فقط سایت بازاریابی را مستقر کنید
 ```
 

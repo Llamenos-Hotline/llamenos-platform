@@ -1,13 +1,17 @@
 /**
- * Demo telephony routes — admin-only, hub-scoped, OUTSIDE the dev router.
+ * Simulated telephony routes — admin-only, hub-scoped, OUTSIDE the dev router.
  *
- * Mounted at /hubs/:hubId/demo/telephony. Lets an admin on a demo/staging instance select the
+ * Mounted at /hubs/:hubId/simulated-telephony. Lets an admin on a test instance select the
  * MockTelephonyAdapter for the hub and simulate an incoming call, so a tester can trigger,
  * answer and take a note on a call with no PSTN number, curl or shell.
  *
- * Unlike /test-* (dev router, 404 unless ENVIRONMENT=development + DEV_ROUTES_ENABLED), these
- * are real authenticated routes gated by the mock's own environment guard:
- * DEMO_MODE=true + DEMO_MODE_CONFIRM, and never ENVIRONMENT=production.
+ * Unlike /test-* (dev router, 404 unless the dev surface is enabled AND the request carries
+ * its shared secret), these are real authenticated routes: the caller needs
+ * `settings:manage-telephony`, and the host must be one where the mock provider is selectable
+ * at all — `isMockTelephonyAllowed`, i.e. `devSurfacesEnabled` (lib/dev-surfaces.ts), which
+ * refuses ENVIRONMENT=production before reading any flag. The gate used to be DEMO_MODE=true +
+ * DEMO_MODE_CONFIRM; demo mode was removed in #1604 and this is a test affordance, not a
+ * product mode, so it moved onto the predicate that says "this host is a test target".
  */
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
@@ -18,7 +22,7 @@ import { audit } from '../services/audit'
 import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
 import { isMockTelephonyAllowed } from '../telephony/mock'
-import { simulateIncomingCall, simulateCallerHangup, randomFictionalCallerNumber } from '../services/demo-call-simulation'
+import { simulateIncomingCall, simulateCallerHangup, randomFictionalCallerNumber } from '../services/call-simulation'
 import { ServiceError } from '../services/settings'
 
 /** Fictional hotline number the mock answers for (555-01xx is reserved for fiction). */
@@ -49,25 +53,25 @@ const hangupResponseSchema = z.object({
   status: z.literal('completed'),
 })
 
-const demoTelephony = new Hono<AppEnv>()
+const simulatedTelephony = new Hono<AppEnv>()
 
 // Every route here is admin-only …
-demoTelephony.use('*', requirePermission('settings:manage-telephony'))
+simulatedTelephony.use('*', requirePermission('settings:manage-telephony'))
 
-// … and every mutating route additionally requires the demo-mode environment guard.
+// … and every mutating route additionally requires the host-level guard.
 // /status stays reachable so a client can hide the affordance when it is unavailable;
 // it reveals only a boolean, never why.
-demoTelephony.use('*', async (c, next) => {
+simulatedTelephony.use('*', async (c, next) => {
   if (c.req.path.endsWith('/status')) return next()
   if (!isMockTelephonyAllowed(c.env)) {
-    return c.json({ error: 'Demo telephony is not available in this environment' }, 403)
+    return c.json({ error: 'Simulated telephony is not available on this host' }, 403)
   }
   return next()
 })
 
-demoTelephony.get('/status',
+simulatedTelephony.get('/status',
   describeRoute({
-    tags: ['Demo Telephony'],
+    tags: ['Simulated Telephony'],
     summary: 'Whether the mock telephony provider is available and enabled for this hub',
     responses: {
       200: { description: 'Status', content: { 'application/json': { schema: resolver(statusResponseSchema) } } },
@@ -82,9 +86,9 @@ demoTelephony.get('/status',
   },
 )
 
-demoTelephony.put('/mock',
+simulatedTelephony.put('/mock',
   describeRoute({
-    tags: ['Demo Telephony'],
+    tags: ['Simulated Telephony'],
     summary: 'Select (or deselect) the mock telephony provider for this hub',
     responses: {
       200: { description: 'Updated', content: { 'application/json': { schema: resolver(statusResponseSchema) } } },
@@ -107,14 +111,14 @@ demoTelephony.put('/mock',
       if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 409)
       throw err
     }
-    await audit(services.audit, 'demoMockTelephonyToggled', c.get('pubkey'), { enabled }, undefined, hubId)
+    await audit(services.audit, 'mockTelephonyToggled', c.get('pubkey'), { enabled }, undefined, hubId)
     return c.json({ available: true, enabled })
   },
 )
 
-demoTelephony.post('/simulate/incoming-call',
+simulatedTelephony.post('/simulate/incoming-call',
   describeRoute({
-    tags: ['Demo Telephony'],
+    tags: ['Simulated Telephony'],
     summary: 'Simulate an incoming call through the real routing path',
     description: 'Runs ban check, shift/ring-group resolution and call:ring for an on-shift volunteer. Answer, hang up and notes then use the ordinary calls/notes endpoints.',
     responses: {
@@ -140,7 +144,7 @@ demoTelephony.post('/simulate/incoming-call',
     })
     if (!result.ok) return c.json({ error: result.code }, result.status)
 
-    await audit(services.audit, 'demoCallSimulated', c.get('pubkey'), {
+    await audit(services.audit, 'callSimulated', c.get('pubkey'), {
       callId: result.callId,
       callerLast4: result.callerLast4,
       volunteersNotified: result.volunteersNotified,
@@ -155,9 +159,9 @@ demoTelephony.post('/simulate/incoming-call',
   },
 )
 
-demoTelephony.post('/simulate/caller-hangup',
+simulatedTelephony.post('/simulate/caller-hangup',
   describeRoute({
-    tags: ['Demo Telephony'],
+    tags: ['Simulated Telephony'],
     summary: 'Simulate the caller hanging up a simulated call',
     responses: {
       200: { description: 'Call ended', content: { 'application/json': { schema: resolver(hangupResponseSchema) } } },
@@ -173,9 +177,9 @@ demoTelephony.post('/simulate/caller-hangup',
     const hubId = c.get('hubId') ?? ''
     const result = await simulateCallerHangup({ env: c.env, services, hubId, callId })
     if (!result.ok) return c.json({ error: result.code }, result.status)
-    await audit(services.audit, 'demoCallerHungUp', c.get('pubkey'), { callId }, undefined, hubId)
+    await audit(services.audit, 'simulatedCallerHungUp', c.get('pubkey'), { callId }, undefined, hubId)
     return c.json({ ok: true as const, callId, status: 'completed' as const })
   },
 )
 
-export default demoTelephony
+export default simulatedTelephony

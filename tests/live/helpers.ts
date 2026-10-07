@@ -39,7 +39,7 @@ export function getLiveConfig() {
     hotlineNumber: requireEnv('TWILIO_PHONE_NUMBER'),
     testCallerNumber: requireEnv('TWILIO_TEST_CALLER'),
     adminSeed: requireEnv('STAGING_ADMIN_SEED'),
-    baseURL: process.env.LIVE_BASE_URL || 'https://demo-next.llamenos-platform.com',
+    baseURL: requireEnv('LIVE_BASE_URL'),
   }
 }
 
@@ -202,10 +202,10 @@ export async function hangUp(sid: string) {
  *
  * That matters beyond assertion strength: there is no way to reset a
  * production-shaped deployment through any route, by design. `devGuard`
- * (app.ts) answers 404 for every /api/test-* outside a development server, and
- * `demoResetRefusal` gates /api/demo/reset on exactly the same condition. A
- * suite that needs a wipe can only ever run against a development box, which
- * is the opposite of what a LIVE suite is for. See #1423.
+ * (app.ts) answers 404 for every /api/test-* unless the host declared itself a
+ * test target AND the request carries its shared secret. A suite that needs a
+ * wipe can only ever run against such a box, which is the opposite of what a
+ * LIVE suite is for. See #1423.
  */
 export async function callCount(request: APIRequestContext): Promise<number> {
   const res = await request.get('/api/calls/today-count')
@@ -602,8 +602,8 @@ export async function openNote(
 // no live evidence at all, and could not have any: the only answer test was a
 // negative probe (401/404 for a call that does not exist), because the suite
 // had no way to make a call exist. Twilio's half places a real call but never
-// answers it, and the one block that does answer runs only under
-// `DEMO_MODE=true`, which is not what a deployment ships.
+// answers it, and the one block that does answer runs only where the mock
+// telephony provider is selectable, which a production deployment is not.
 //
 // What follows closes that by driving the webhook chain a PBX drives, signed
 // with the credential that deployment's PBX signs it with. Be precise about

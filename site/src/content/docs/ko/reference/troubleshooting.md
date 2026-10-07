@@ -107,7 +107,6 @@ bunx wrangler tail
 
 ```bash
 bun run deploy          # 전체 배포 (앱 + 마케팅 사이트)
-bun run deploy:demo     # 앱 Worker만 배포
 bun run deploy:site     # 마케팅 사이트만 배포
 ```
 

@@ -81,8 +81,6 @@ Genel merkez yapılandırmasını, etkin kanalları ve sunucu kimliğini döndü
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **Gövde:**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 Ayrıca hiçbiri yoksa varsayılan bir merkez oluşturur.

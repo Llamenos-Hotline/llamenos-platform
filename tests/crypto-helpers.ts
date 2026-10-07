@@ -57,7 +57,7 @@ export interface TestHpkeRecipient {
  *
  * The one derivation of a device's X25519 encryption secret from its Ed25519
  * signing seed, matching `device_import_and_load` in the Rust core,
- * `scripts/bootstrap-admin.ts`, and `apps/worker/lib/demo-crypto.ts`.
+ * `scripts/bootstrap-admin.ts`, and `apps/worker/lib/sample-crypto.ts`.
  */
 function deviceEncryptionSeed(signingSeedHex: string): Uint8Array {
   return hkdf(
@@ -125,7 +125,7 @@ export function testDeviceHpkeRecipient(seedHex: string): TestHpkeRecipient {
  * signing seed (`device_import_and_load`): the encryption key is HKDF'd from
  * the signing seed, not the signing seed itself.
  *
- * This is what the admin and the demo accounts are — any identity whose
+ * This is what the admin and the sample accounts are — any identity whose
  * encryption key the server learned from configuration or a seeder rather than
  * from a device registration.
  */
@@ -334,7 +334,7 @@ export function decryptContent(ciphertextHex: string, key: Uint8Array, label: st
  *
  * Uses DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM, with
  * info = label bytes and aad = `keyWrapAad(label)`. That is the convention for
- * notes, files, contacts, hub keys, recovery material, and anything the demo
+ * notes, files, contacts, hub keys, recovery material, and anything the sample
  * seeder writes — see `@shared/envelope-aad`.
  *
  * It is NOT the convention for a record the SERVER sealed
@@ -392,7 +392,7 @@ async function hpkeOpenKeyWrap(
  *
  * The exact inverse of `wrapKeyForRecipient`, and only of that: it binds
  * `keyWrapAad(label)`, so it opens notes, files, contacts, hub keys, recovery
- * material and demo-seeded records — never a record the server sealed.
+ * material and sample-seeded records — never a record the server sealed.
  *
  * `OpenError` from hpke-js says only "the operation failed", with no hint as to
  * which of the two #1393 conventions the envelope actually carries. That cost
@@ -443,7 +443,7 @@ export async function openStoredRecordKey(
     throw new Error(
       `openStoredRecordKey: could not open this key wrap for "${label}" with no AAD. ` +
       `If the envelope was written canonically — by a client, by ` +
-      `apps/worker/lib/demo-crypto.ts, or by the Rust interop vectors — it binds ` +
+      `apps/worker/lib/sample-crypto.ts, or by the Rust interop vectors — it binds ` +
       `"${label}:key-wrap" and opens with unwrapKey(). Otherwise the recipient secret ` +
       `does not match the envelope's pubkey (for the admin, use adminHpkeRecipient()).`,
       { cause },

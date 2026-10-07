@@ -81,8 +81,6 @@ GET /api/config
     "signal": false, "rcs": false, "reports": true
   },
   "setupCompleted": true,
-  "demoMode": false,
-  "demoResetSchedule": null,
   "needsBootstrap": false,
   "hubs": [{ "id": "...", "name": "...", "slug": "..." }],
   "defaultHubId": "...",
@@ -1377,7 +1375,7 @@ POST /api/setup/complete
 **ကိုယ်ထည်-**
 
 ```json
-{ "demoMode": false }
+{}
 ```
 
 မရှိသေးပါက ပုံသေ hub တစ်ခုကိုလည်း ဖန်တီးသည်။

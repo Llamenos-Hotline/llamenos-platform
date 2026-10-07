@@ -137,7 +137,7 @@ export const test = base.extend<
 
     // After each test: hard-fail on 500s which indicate real server bugs.
     // Filter out known non-test-related 500s (SIP bridge health, WebSocket upgrades,
-    // hub users list during demo mode setup, call simulation endpoints).
+    // hub users list during setup, call simulation endpoints).
     const ignoredPaths = ['/api/health', '/api/sip-bridge', '/ws', '/api/hubs/', '/api/test-', '/api/calls/simulate']
     const serverErrors = state.responses.filter(r =>
       r.status >= 500 && !ignoredPaths.some(p => r.url.includes(p))

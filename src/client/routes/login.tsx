@@ -9,7 +9,6 @@ import { isSafeRelativePath } from '@/lib/redirect-guard'
 import { readBackupFile, restoreFromBackupWithPin, restoreFromBackupWithRecoveryKey } from '@/lib/backup'
 import * as keyManager from '@/lib/key-manager'
 import { isWebAuthnAvailable } from '@/lib/webauthn'
-import { DemoAccountPicker } from '@/components/demo-account-picker'
 import { AccountRecoveryFlow } from '@/components/account-recovery-flow'
 import { KeyRound, LogIn, Shield, Sun, Moon, Monitor, Fingerprint, Key, Upload, ArrowRight } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
@@ -29,7 +28,7 @@ export const Route = createFileRoute('/login')({
 function LoginPage() {
   const { t } = useTranslation()
   const { signIn, loginAfterKeyLoaded, signInWithPasskey, unlockWithPin, error, isLoading } = useAuth()
-  const { hotlineName, demoMode, needsBootstrap } = useConfig()
+  const { hotlineName, needsBootstrap } = useConfig()
   const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [validationError, setValidationError] = useState('')
@@ -307,7 +306,6 @@ function LoginPage() {
               {t('recoveryGroup.initiate.title')}
             </Button>
 
-            {demoMode && <DemoAccountPicker />}
           </CardContent>
 
           <CardFooter className="justify-center">
@@ -573,7 +571,6 @@ function LoginPage() {
             </Button>
           )}
 
-          {demoMode && <DemoAccountPicker />}
         </CardContent>
 
         <CardFooter className="justify-center">

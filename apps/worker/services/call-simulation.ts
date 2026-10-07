@@ -1,5 +1,5 @@
 /**
- * Demo call simulation — drives the MockTelephonyAdapter through the REAL routing path.
+ * Call simulation — drives the MockTelephonyAdapter through the REAL routing path.
  *
  * A real inbound call goes: webhook → ban check → shift / ring-group resolution →
  * `call:ring` to on-shift volunteers → answer → end → note. There is no provider here to
@@ -19,7 +19,7 @@ import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE } from '@shared/event-kinds'
 import { createLogger } from '../lib/logger'
 
-const logger = createLogger('demo-call-simulation')
+const logger = createLogger('call-simulation')
 
 export type SimulateIncomingCallResult =
   | { ok: true; callId: string; callerLast4: string; volunteersNotified: number }

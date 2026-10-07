@@ -63,14 +63,12 @@ import org.llamenos.hotline.ui.components.LoadingOverlay
  *
  * Device linking was removed from the pilot build (#1405); it returns when the
  * identity layer can carry a device's keys across (#1300).
- *
- * Also includes demo mode buttons for testing.
+
  */
 @Composable
 fun LoginScreen(
     viewModel: AuthViewModel,
     onNavigateToPinSet: () -> Unit,
-    onDemoLogin: (String) -> Unit = {},
     inviteState: InviteUiState = InviteUiState(),
     onInviteChange: (String) -> Unit = {},
     onSubmitInvite: () -> Unit = {},
@@ -82,13 +80,10 @@ fun LoginScreen(
     // Staggered entrance animation
     var showLogo by remember { mutableStateOf(false) }
     var showForm by remember { mutableStateOf(false) }
-    var showDemo by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         showLogo = true
         delay(200)
         showForm = true
-        delay(150)
-        showDemo = true
     }
 
     Scaffold(modifier = modifier) { paddingValues ->
@@ -254,71 +249,6 @@ fun LoginScreen(
                 }
 
                 Spacer(Modifier.height(24.dp))
-
-                // ---- Demo mode section ----
-                AnimatedVisibility(
-                    visible = showDemo,
-                    enter = fadeIn(),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.demo_try_demo),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.testTag("demo-mode-label"),
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            OutlinedButton(
-                                onClick = { onDemoLogin("admin") },
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(44.dp)
-                                    .testTag("demo-admin-button"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(R.string.demo_admin),
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = { onDemoLogin("volunteer") },
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(44.dp)
-                                    .testTag("demo-volunteer-button"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(R.string.demo_volunteer),
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            }
-                        }
-                    }
-                }
 
                 Spacer(Modifier.height(48.dp))
             }

@@ -10,9 +10,9 @@
  * 1. **AAD convention.** #1393 adjudicated two, and which one applies is a
  *    property of the WRITER, not of the label: `apps/worker/lib/crypto.ts`
  *    seals stored records with no AAD, while clients,
- *    `apps/worker/lib/demo-crypto.ts` and the Rust interop vectors seal the
+ *    `apps/worker/lib/sample-crypto.ts` and the Rust interop vectors seal the
  *    same labels canonically. `unwrapKey` assumed canonical unconditionally;
- *    `tests/steps/backend/demo-dataset.steps.ts` assumed the other one.
+ *    `tests/steps/backend/sample-dataset.steps.ts` assumed the other one.
  *
  * 2. **The admin's HPKE recipient key.** Derived three times now as
  *    `x25519PubkeyFromSeed(ADMIN_SEED)` — the signing seed used as a raw

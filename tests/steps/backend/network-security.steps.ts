@@ -518,17 +518,13 @@ Then('the hash should depend on HMAC_SECRET, not a public constant', async ({ wo
   expect(true).toBeTruthy()
 })
 
-// ── DEMO_MODE Steps ─────────────────────────────────────────────
+// ── Destructive reset guard ─────────────────────────────────────
 
-Given('DEMO_MODE is set to {string}', async ({ world: _world }, _value: string) => {
-  // DEMO_MODE is an environment variable
-  // In test mode, DEMO_MODE is typically not set or set to a dev value
-})
-
-When('a reset request is sent to any Durable Object', async ({ request, world }) => {
-  // In production (DEMO_MODE=false), reset should be rejected
-  // In test mode, reset is allowed with the correct secret
-  // We test the production guard by sending without the secret
+// `/api/test-*` answers 404 — never 401/403 — to a caller without the secret, so the
+// surface is not discoverable by probing. `devRouteDenied` (apps/worker/routes/dev.ts)
+// decides that, and `destructiveResetRefusal` (apps/worker/lib/dev-surfaces.ts) is the
+// second, service-level copy of the same predicate behind it.
+When('a reset request is sent without the dev-surface secret', async ({ request, world }) => {
   const res = await request.post(`${BASE_URL}/api/test-reset`, {
     headers: { 'Content-Type': 'application/json' },
     // No X-Test-Secret header

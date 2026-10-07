@@ -4,13 +4,23 @@
  *
  * Why this is more than a flag
  * ----------------------------
- * These routes reset the database, delete the admin and promote arbitrary
- * pubkeys to admin. Until now they were pinned to `ENVIRONMENT=development`,
- * which made them unreachable on any deployed instance — correct, and the
- * reason the end-to-end suite could not be pointed at one. #723 declined to
- * widen this gate for the demo/telephony feature it was about, and that
- * judgement is kept for the surfaces that hand out signing material: see
- * `demoSurfacesEnabled`.
+ * These routes reset the database, delete the admin, promote arbitrary pubkeys
+ * to admin and mint the sample cast's signing seeds. Until now they were pinned
+ * to `ENVIRONMENT=development`, which made them unreachable on any deployed
+ * instance — correct, and the reason the end-to-end suite could not be pointed
+ * at one.
+ *
+ * The seed-minting routes used to carry a SECOND, narrower predicate
+ * (`demoSurfacesEnabled`), pinned to `development` alone, because on the way
+ * out of demo mode the seeds were also handed to an UNAUTHENTICATED login
+ * picker (`GET /api/config/demo/credentials`) and widening that to a reachable
+ * host would have been strictly worse than leaving the feature alone. #1604
+ * deleted the picker along with the rest of demo mode, so what remains is a
+ * secret-gated `/test-*` route handing out seeds for a fictional cast on a host
+ * that already serves `POST /api/test-reset` behind the same credential — less
+ * authority than the caller holds already. The narrow predicate is therefore
+ * gone, and the sample seeds live behind this one gate like every other
+ * `/test-*` route.
  *
  * A deployed, non-production TEST instance is a different case, and it gets a
  * deliberately three-factor opt-in. The axis is the ENVIRONMENT plus an
@@ -88,7 +98,7 @@ export interface DevSurfacesEnv {
  * `ENVIRONMENT` as given, with NO trimming and NO case folding.
  *
  * The allowlist below compares this EXACTLY, and that strictness is itself a
- * rail: `apps/worker/__tests__/unit/demo-identity-rail.test.ts` asserts that
+ * rail: `apps/worker/__tests__/unit/sample-identity-rail.test.ts` asserts that
  * `"Development"` and `"development "` are refused. An environment value is a
  * deployment's own identifier, not user input to be guessed at — normalising it
  * would make the gate accept spellings nobody configured on purpose, which is
@@ -294,15 +304,41 @@ export function devSurfaceSimulatedClientAddress(
  * (`lib/demo-reset-gate.ts`), and the `demoMode` the public `/api/config`
  * reports off a STORED database flag (`routes/config.ts` `effectiveDemoMode`) —
  * keep their own predicate, still pinned to a developer's own machine.
+ * Why a DESTRUCTIVE SERVICE-LEVEL RESET must be refused, or `null` when it may
+ * proceed. `IdentityService.reset`, `SettingsService.reset`,
+ * `ContactsService.reset` and `CasesService.reset` all ask this one function.
  *
- * Demo mode is being removed from the product altogether (the deployment
- * shapes are the hosted one and the self-hosted one; there is no demo
- * instance). This predicate exists so that removal is the ONLY thing that
- * changes these surfaces: without it, widening `devSurfacesEnabled` for a test
- * instance would have handed signing seeds to a staging host on the way out,
- * which is a strictly worse place to leave a feature nobody wants. It costs
- * nothing and it dies with `lib/demo-identities.ts`.
+ * It is the conjunction `devSurfaceRequestAuthorized` already names — the HOST
+ * may serve the dev surface at all, AND the REQUEST carries its shared secret —
+ * stated separately only so the refusal can say which half failed to an
+ * operator reading a log. The ordering of `devSurfacesRefusal` is preserved
+ * exactly, which is the load-bearing property: `ENVIRONMENT=production` is
+ * refused FIRST and unconditionally, before any secret is read, so there is no
+ * path on which a secret alone suffices.
+ *
+ * Until demo mode was removed (#1604) these four resets were gated on
+ * `DEMO_MODE=true` plus `DEMO_MODE_CONFIRM=DESTROY_ALL_DATA` instead, with an
+ * `ENVIRONMENT === 'development'` escape hatch that needed no secret at all.
+ * That was both looser and narrower than this: looser because two environment
+ * flags an operator could set on a whim were the whole gate, and narrower
+ * because the only way to reset a deployed target was to put it into a product
+ * mode that is being deleted — which is why the deployed-target end-to-end
+ * suite could not start without it (#1625). This predicate is per-REQUEST, is
+ * refused on `production` ahead of any flag, and requires a 32-character
+ * secret on every reachable host.
+ *
+ * `routes/dev.ts` answers `404` on the same two conditions before a handler is
+ * reached, so a real caller never sees these strings. They exist for the
+ * service layer's own 403, which is defence in depth rather than the gate.
  */
-export function demoSurfacesEnabled(env: DevSurfacesEnv): boolean {
-  return environmentOf(env) === 'development' && devSurfacesEnabled(env)
+export function destructiveResetRefusal(
+  env: DevSurfacesEnv,
+  presentedSecret: string | undefined,
+): string | null {
+  const refusal = devSurfacesRefusal(env)
+  if (refusal) return `destructive reset refused: ${refusal}`
+  if (!devSurfaceSecretPresented(env, presentedSecret)) {
+    return 'destructive reset requires the dev-surface shared secret in X-Test-Secret'
+  }
+  return null
 }

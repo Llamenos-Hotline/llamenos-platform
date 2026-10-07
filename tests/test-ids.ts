@@ -310,7 +310,6 @@ export const TestIds = {
   SETUP_NEXT_BTN: 'setup-next-btn',
   SETUP_BACK_BTN: 'setup-back-btn',
   SETUP_SKIP_BTN: 'setup-skip-btn',
-  DEMO_MODE_TOGGLE: 'demo-mode-toggle',
 
   // ============ Forms (Generic) ============
   FORM_SAVE_BTN: 'form-save-btn',

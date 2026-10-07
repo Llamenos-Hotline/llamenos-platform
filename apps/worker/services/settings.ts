@@ -108,6 +108,7 @@ import {
 import { createLogger } from '../lib/logger'
 import { withRetry, isRetryableDbError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 const log = createLogger('services.settings')
 
@@ -260,16 +261,16 @@ export function invalidateRolesCache(): void {
 
 /**
  * What an `ensureInit` call seeds: the defaults every deployment needs, plus —
- * in demo or development mode — a completed setup state and enabled messaging.
+ * on a development server — a completed setup state and enabled messaging.
  */
-type InitMode = 'default' | 'development' | 'demo'
+type InitMode = 'default' | 'development'
 
 export class SettingsService {
   /**
    * Modes already initialised by this process (cleared by `reset`). Tracked per
    * mode, not as one flag: the server initialises defaults at boot, and a later
-   * demo/development call must still apply its mode-specific seeding rather than
-   * being swallowed as a repeat.
+   * development-mode call must still apply its mode-specific seeding rather
+   * than being swallowed as a repeat.
    */
   private initializedModes = new Set<InitMode>()
 
@@ -284,12 +285,8 @@ export class SettingsService {
    * ever fills what is empty, so it is safe on every server boot: values an
    * operator has set, and roles that exist, are never overwritten.
    */
-  async ensureInit(env?: {
-    DEMO_MODE?: string
-    ENVIRONMENT?: string
-  }): Promise<void> {
-    const mode: InitMode =
-      env?.DEMO_MODE === 'true' ? 'demo' : env?.ENVIRONMENT === 'development' ? 'development' : 'default'
+  async ensureInit(env?: { ENVIRONMENT?: string }): Promise<void> {
+    const mode: InitMode = env?.ENVIRONMENT === 'development' ? 'development' : 'default'
     if (this.initializedModes.has(mode)) return
     this.initializedModes.add(mode)
 
@@ -345,9 +342,8 @@ export class SettingsService {
       }
     }
 
-    // Demo/development mode: mark setup complete, enable messaging
+    // Development mode: mark setup complete, enable messaging
     if (mode !== 'default') {
-      const isDemoMode = mode === 'demo'
       const setupState = row.setupState as SetupState | null
       if (!setupState || !setupState.setupCompleted) {
         await this.db
@@ -358,7 +354,6 @@ export class SettingsService {
               completedSteps: ['welcome', 'telephony', 'channels'],
               pendingChannels: [],
               selectedChannels: ['voice', 'sms', 'signal', 'reports'],
-              demoMode: isDemoMode,
             },
           })
           .where(eq(systemSettings.id, SINGLETON_ID))
@@ -2503,7 +2498,7 @@ export class SettingsService {
   }
 
   /**
-   * Select the demo-only mock telephony provider (type `mock`) for a hub.
+   * Select the test-only mock telephony provider (type `mock`) for a hub.
    *
    * Callers MUST have already checked `assertMockTelephonyAllowed` — this only
    * persists the selection. Refuses to overwrite a real provider's credentials.
@@ -3526,7 +3521,7 @@ export class SettingsService {
   }
 
   // =========================================================================
-  // Test Reset (demo/development only)
+  // Test Reset (the secret-gated dev surface only)
   // =========================================================================
 
   /** Clear rate limit counters — used in BDD tests to prevent cross-scenario bleed.
@@ -3539,23 +3534,16 @@ export class SettingsService {
     }
   }
 
-  async reset(env: {
-    DEMO_MODE?: string
-    DEMO_MODE_CONFIRM?: string
-    ENVIRONMENT?: string
-  }): Promise<{ ok: true }> {
-    const isDemoMode = env.DEMO_MODE === 'true'
-    const isDev = env.ENVIRONMENT === 'development'
-    if (!isDemoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    // When resetting via DEMO_MODE (not a development env), require explicit two-factor confirmation.
-    if (isDemoMode && !isDev && env.DEMO_MODE_CONFIRM !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(
-        403,
-        'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA',
-      )
-    }
+  /**
+   * Wipe every settings table and re-seed the defaults.
+   *
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) — see
+   * `IdentityService.reset` for why that predicate and not the demo flags this
+   * used to read.
+   */
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<{ ok: true }> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.transaction(async (tx) => {
       // Clear all settings tables

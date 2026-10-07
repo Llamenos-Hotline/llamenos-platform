@@ -7,8 +7,6 @@ interface ConfigContextValue {
   hotlineNumber: string
   channels: EnabledChannels
   setupCompleted: boolean
-  demoMode: boolean
-  demoResetSchedule: string | null
   needsBootstrap: boolean
   isLoading: boolean
   hubs: Hub[]
@@ -37,8 +35,6 @@ const ConfigContext = createContext<ConfigContextValue>({
   hotlineNumber: '',
   channels: defaultChannels,
   setupCompleted: true,
-  demoMode: false,
-  demoResetSchedule: null,
   needsBootstrap: false,
   isLoading: true,
   hubs: [],
@@ -55,8 +51,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const [hotlineNumber, setHotlineNumber] = useState('')
   const [channels, setChannels] = useState<EnabledChannels>(defaultChannels)
   const [setupCompleted, setSetupCompleted] = useState(true)
-  const [demoMode, setDemoMode] = useState(false)
-  const [demoResetSchedule, setDemoResetSchedule] = useState<string | null>(null)
   const [needsBootstrap, setNeedsBootstrap] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [hubs, setHubs] = useState<Hub[]>([])
@@ -77,8 +71,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         setHotlineNumber(config.hotlineNumber || '')
         if (config.channels) setChannels(config.channels)
         if (config.setupCompleted !== undefined) setSetupCompleted(config.setupCompleted)
-        if (config.demoMode) setDemoMode(config.demoMode)
-        if (config.demoResetSchedule !== undefined) setDemoResetSchedule(config.demoResetSchedule ?? null)
         setNeedsBootstrap(!!config.needsBootstrap)
         if (config.hubs?.length) {
           setHubs(config.hubs)
@@ -120,7 +112,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   return (
     <ConfigContext.Provider value={{
       hotlineName, hotlineNumber, channels, setupCompleted,
-      demoMode, demoResetSchedule, needsBootstrap, isLoading, hubs, defaultHubId, currentHubId,
+      needsBootstrap, isLoading, hubs, defaultHubId, currentHubId,
       setCurrentHubId, isMultiHub, serverPubkey, wsRelayUrl,
     }}>
       {children}

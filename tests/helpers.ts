@@ -558,8 +558,6 @@ export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promi
         hotlineNumber: '+15551234567',
         channels: { voice: true, sms: true, whatsapp: false, signal: true, rcs: false, telegram: false, reports: true },
         setupCompleted: true,
-        demoMode: false,
-        demoResetSchedule: null,
         needsBootstrap: false,
         hubs: [{ id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active', createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
         defaultHubId: hubId,

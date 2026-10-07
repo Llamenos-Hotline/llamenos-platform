@@ -273,7 +273,7 @@ export class CallsService {
 
   /**
    * Insert an already-finished call straight into history.
-   * Only for seeding demo data — live calls go through addCall → endCall.
+   * Only for seeding the sample dataset — live calls go through addCall → endCall.
    */
   async recordHistoricalCall(
     hubId: string,

@@ -30,7 +30,6 @@ function buildAllowedOrigins(env: { CORS_ALLOWED_ORIGINS?: string }): Set<string
     }
   } else {
     base.add('https://app.llamenos-hotline.org')
-    base.add('https://demo.llamenos-platform.com')
   }
   return base
 }

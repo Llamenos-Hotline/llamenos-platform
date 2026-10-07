@@ -417,17 +417,13 @@
             openssl rand -base64 24
         success_msg: "storage_secret_key: [set, {{ storage_secret_key | length }} chars]"
 
-    # Demo/dev-only settings (demo_mode, dev_routes_enabled, dev_reset_secret) must
-    # never reach a production instance. See issue #716.
+    # The /api/test-* surface: dev_routes_enabled and dev_reset_secret must never
+    # reach a production instance (#716). Keyed on app_environment alone — which
+    # is why it survived demo mode's removal (#1604) while the demo_mode guard it
+    # used to sit beside, tasks/guard-demo-mode.yml, went with the mode.
     # import_tasks so the tag reaches every guard task under `--tags` (see the RAM
     # assert above for why include_tasks is not enough).
-    - name: Include shared demo/dev-mode production safety guard
-      ansible.builtin.import_tasks: tasks/guard-demo-mode.yml
-      tags: always
-
-    # The /api/test-* surface specifically, keyed on app_environment alone and
-    # with no reference to demo mode — so it survives the removal of demo mode
-    # and the guard above. See tasks/guard-dev-routes.yml for the four layers.
+    # See tasks/guard-dev-routes.yml for the four layers.
     - name: Include shared /api/test-* production safety guard
       ansible.builtin.import_tasks: tasks/guard-dev-routes.yml
       tags: always
@@ -661,8 +657,7 @@
           iOS Push (APNs): {{ 'ENABLED' if (apns_key_p8 | default('') | length > 0 and apns_key_id | default('') | length > 0 and apns_team_id | default('') | length > 0) else 'DISABLED' }}
           Android Push (ntfy): {{ 'ENABLED' if llamenos_ntfy_enabled | default(false) | bool else 'DISABLED' }}
           Crash Reporting (GlitchTip): {{ 'ENABLED' if glitchtip_dsn | default('') | length > 0 else 'DISABLED' }}
-          Demo Mode: {{ 'ENABLED' if demo_mode | default(false) | bool else 'DISABLED' }} (app_environment={{ app_environment | default('production') }})
-          Dev Routes: {{ 'ENABLED' if dev_routes_enabled | default(false) | bool else 'DISABLED' }}
+          Dev Routes: {{ 'ENABLED' if dev_routes_enabled | default(false) | bool else 'DISABLED' }} (app_environment={{ app_environment | default('production') }})
           Webhook Base URL: {{ webhook_base_url if (webhook_base_url | default('') | length > 0) else 'NOT SET' }}
           ===========================================
           Proceeding with deployment...

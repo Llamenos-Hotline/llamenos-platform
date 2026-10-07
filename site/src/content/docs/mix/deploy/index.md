@@ -35,14 +35,6 @@ Yaa genera todos secretos requeridos, construye aplicación, ni inicia servicios
 4. **Configurar proveedores** — ke ingresar credenciales nuu cada canal habilitado
 5. **Revisar ni ke terminar**
 
-### Probar modo demo
-
-Nu explorar nuu datos muestra presembrados:
-
-```bash
-./scripts/docker-setup.sh --demo
-```
-
 ## Despliegue producción
 
 Nu servidor nuu dominio real ni TLS automático:

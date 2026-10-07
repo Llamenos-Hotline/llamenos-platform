@@ -91,7 +91,7 @@
         # ── Phase 2: Pull New Images ───────────────────────────────
         # Sourced from the `llamenos` role's own templates (not a second,
         # hand-maintained copy) so a rolling update produces byte-identical
-        # output to a fresh deploy-demo.yml run. This is the monolithic
+        # output to a fresh deploy.yml run. This is the deprecated monolithic
         # single-host layout (one docker-compose.yml / .env at app_dir
         # root, services postgres/rustfs/caddy/app) — the same layout this
         # playbook operates on below. See issue #798.

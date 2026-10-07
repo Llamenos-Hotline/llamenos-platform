@@ -107,7 +107,6 @@ Marnaba run `wrangler pages deploy` ama `wrangler deploy` directly. Had iyo jeer
 
 ```bash
 bun run deploy          # Deploy dhammaan (app + marketing site)
-bun run deploy:demo     # Deploy app Worker kaliya
 bun run deploy:site     # Deploy marketing site kaliya
 ```
 

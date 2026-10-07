@@ -85,8 +85,8 @@ hotline_name: Hotline
 
 # Application environment. Consumed as ENVIRONMENT by the worker container
 # (apps/worker/lib/config.ts requires it non-empty at startup) and by
-# playbooks/tasks/guard-demo-mode.yml to refuse demo_mode/dev_routes_enabled/
-# dev_reset_secret on anything but a demo/staging/development host.
+# playbooks/tasks/guard-dev-routes.yml to refuse dev_routes_enabled/
+# dev_reset_secret on anything but a staging/development host.
 #
 # NOTE: this used to be a var literally named `environment`, which Ansible
 # treats as a reserved name (it collides with the per-task `environment:`
@@ -102,7 +102,7 @@ app_environment: production
 # REQUIRED by apps/worker/lib/config.ts whenever app_environment is
 # "production" — without it, webhook signature validation falls back to the
 # spoofable Host header and the app refuses to start. Optional (with a
-# startup warning) for demo/staging/development. See
+# startup warning) for staging/development. See
 # playbooks/preflight.yml's webhook_base_url assert.
 webhook_base_url: ""
 
@@ -190,9 +190,9 @@ apns_team_id: ""
 
 # ntfy/UnifiedPush (Android push). Set llamenos_ntfy_enabled: true to stand
 # up a self-hosted ntfy broker (roles/llamenos-ntfy) via this playbook.
-# Off by default here, but a staging/demo backend MUST enable it — without it
+# Off by default here, but a staging backend MUST enable it — without it
 # Android devices can never be rung for a call (no FCM by design). See
-# deploy/PUSH_NOTIFICATIONS.md; playbooks/deploy-demo.yml enforces it.
+# deploy/PUSH_NOTIFICATIONS.md.
 llamenos_ntfy_enabled: false
 ntfy_url: "http://ntfy:80" # Compose service name:port, not a public URL
 ntfy_domain: "push.hotline.example.org" # Public hostname — required when enabled
@@ -205,25 +205,6 @@ ntfy_auth_token: ""
 # GlitchTip/Sentry-compatible DSN for client-side crash reporting.
 # Leave empty to disable — crash reporting is skipped gracefully.
 glitchtip_dsn: ""
-
-# ─── Demo / Staging Mode ──────────────────────────────────────────
-# See docs/deploy/staging.md. NEVER set demo_mode: true when
-# app_environment is "production" — both the app and an Ansible preflight
-# assert (playbooks/tasks/guard-demo-mode.yml) refuse to proceed if you do.
-# When demo_mode is true, demo_mode_confirm MUST be exactly the literal
-# string "DESTROY_ALL_DATA" — this two-factor confirmation is required by
-# apps/worker/lib/config.ts before it will run scheduled data resets.
-demo_mode: false
-demo_mode_confirm: ""
-
-# Optional human-readable label describing how often YOU manually re-run
-# playbooks/reset-demo.yml, e.g. "every 4 hours". Purely cosmetic — there is
-# no actual cron/scheduler for demo resets, reset-demo.yml is manual
-# workflow_dispatch only (see docs/deploy/staging.md). Shown verbatim in the
-# demo banner (apps/worker/routes/config.ts -> demoResetSchedule ->
-# src/client/components/demo-banner.tsx). Leave empty to omit the schedule
-# clause from the banner text. Only takes effect when demo_mode is true.
-demo_reset_cron: ""
 
 # ─── Developer/Test Routes (the end-to-end suite's staging knobs) ─
 # These two open the `/api/test-*` HTTP surface, which can WIPE THE DATABASE

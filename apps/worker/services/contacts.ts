@@ -24,6 +24,7 @@ const logger = createLogger('contacts-service')
 import type { MergeContactsBody } from '@protocol/schemas/contact-merge'
 import type { BulkContactAction, BulkCreateContactBody } from '@protocol/schemas/contact-bulk'
 import { ServiceError } from './settings'
+import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import type { CreateContactBody, UpdateContactBody } from '@protocol/schemas/contacts-v2'
 import type {
   CreateRelationshipBody,
@@ -889,18 +890,17 @@ export class ContactsService {
   }
 
   // =========================================================================
-  // Reset (demo/development only)
+  // Reset (the secret-gated dev surface only)
   // =========================================================================
 
-  async reset(env: { DEMO_MODE?: string; DEMO_MODE_CONFIRM?: string; ENVIRONMENT?: string }): Promise<void> {
-    const isDemoMode = env.DEMO_MODE === 'true'
-    const isDev = env.ENVIRONMENT === 'development'
-    if (!isDemoMode && !isDev) {
-      throw new ServiceError(403, 'Reset not allowed outside demo/development mode')
-    }
-    if (isDemoMode && !isDev && env.DEMO_MODE_CONFIRM !== 'DESTROY_ALL_DATA') {
-      throw new ServiceError(403, 'DEMO_MODE reset requires DEMO_MODE_CONFIRM=DESTROY_ALL_DATA')
-    }
+  /**
+   * Gated by `destructiveResetRefusal` (lib/dev-surfaces.ts) — see
+   * `IdentityService.reset` for why that predicate and not the demo flags this
+   * used to read.
+   */
+  async reset(env: DevSurfacesEnv, presentedSecret?: string): Promise<void> {
+    const refusal = destructiveResetRefusal(env, presentedSecret)
+    if (refusal) throw new ServiceError(403, refusal)
 
     await this.db.delete(groupMembers)
     await this.db.delete(affinityGroups)

@@ -8,13 +8,12 @@
  *   - packages/test-specs/features/desktop/admin/multi-hub.feature
  *   - packages/test-specs/features/desktop/misc/setup-wizard.feature
  *   - packages/test-specs/features/admin/reports.feature
- *   - packages/test-specs/features/admin/demo-mode.feature
  *   - packages/test-specs/features/messaging/blasts.feature
  */
 import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds, navTestIdMap } from '../../test-ids'
-import { Timeouts, navigateAfterLogin, loginAsAdmin, reenterPinAfterReload } from '../../helpers'
+import { Timeouts, navigateAfterLogin, reenterPinAfterReload } from '../../helpers'
 
 /**
  * Select a channel card in the setup wizard by label.
@@ -544,53 +543,13 @@ Then('I should see the report content', async ({ page }) => {
   await expect(page.getByText(/report/i).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-// --- Demo mode ---
+// --- Setup wizard ---
 
 When('I navigate to the setup wizard summary step', async ({ page }) => {
   await advanceWizardToStep(page, 5)
 })
 
-When('I enable the demo mode toggle', async ({ page }) => {
-  // Find the Switch by its id (linked to the "Populate with sample data" label via htmlFor="demo-mode")
-  const toggle = page.getByTestId(TestIds.DEMO_MODE_TOGGLE)
-  await expect(toggle).toBeVisible({ timeout: Timeouts.ELEMENT })
-  if ((await toggle.getAttribute('data-state')) !== 'checked') {
-    await toggle.click()
-  }
-  await expect(toggle).toHaveAttribute('data-state', 'checked')
-})
-
-Given('demo mode has been enabled', async ({ page }) => {
-  // This step opens its scenarios (no Background), so the page is never authenticated
-  // yet. The old 1s sidebar isVisible probe (whose timeout is ignored) raced that; log in
-  // unconditionally — loginAsAdmin is idempotent.
-  await loginAsAdmin(page)
-  // Navigate to wizard summary and enable the demo mode toggle
-  await advanceWizardToStep(page, 5)
-  const toggle = page.getByTestId(TestIds.DEMO_MODE_TOGGLE)
-  await expect(toggle).toBeVisible({ timeout: Timeouts.ELEMENT })
-  if ((await toggle.getAttribute('data-state')) !== 'checked') {
-    await toggle.click()
-  }
-  await expect(toggle).toHaveAttribute('data-state', 'checked')
-  // Complete the setup wizard to persist demo mode and create demo accounts
-  const completeBtn = page.getByTestId('setup-complete-btn')
-  await expect(completeBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await completeBtn.click()
-  // Wait for redirect to dashboard (wizard completion includes async demo seeding)
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible({ timeout: Timeouts.AUTH })
-  // Verify demo mode was persisted by checking the API — the config endpoint
-  // must return demoMode: true before we proceed, otherwise the login page
-  // won't render the demo account picker.
-  await page.waitForFunction(async () => {
-    const res = await fetch('/api/config', { headers: { 'Cache-Control': 'no-cache' } })
-    const data = await res.json()
-    return data.demoMode === true
-  }, { timeout: Timeouts.ELEMENT })
-})
-
 // 'I visit the login page' -> defined in common/navigation-steps.ts
-// 'I dismiss the demo banner' -> defined in common/interaction-steps.ts
 
 // --- Blasts ---
 

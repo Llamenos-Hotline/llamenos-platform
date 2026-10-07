@@ -7,8 +7,6 @@ export const configResponseSchema = z.object({
   hotlineNumber: z.string(),
   channels: z.record(z.string(), z.boolean()),
   setupCompleted: z.boolean(),
-  demoMode: z.boolean(),
-  demoResetSchedule: z.string().nullable(),
   needsBootstrap: z.boolean(),
   hubs: z.array(z.object({ id: z.string(), name: z.string(), slug: z.string(), status: z.string() })),
   defaultHubId: z.string().optional(),

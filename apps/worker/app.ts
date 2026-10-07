@@ -43,7 +43,6 @@ import metricsRoutes from './routes/metrics'
 import systemRoutes from './routes/system'
 import entitySchemaRoutes from './routes/entity-schema'
 import evidenceRoutes from './routes/evidence'
-import demoRoutes from './routes/demo'
 import geocodingRoutes from './routes/geocoding'
 import analyticsRoutes from './routes/analytics'
 import sigchainRoutes from './routes/sigchain'
@@ -60,7 +59,7 @@ import retentionRoutes from './routes/retention'
 import platformBansRoutes from './routes/platform-bans'
 import platformSettingsRoutes from './routes/platform-settings'
 import ringGroupsRoutes from './routes/ring-groups'
-import demoTelephonyRoutes from './routes/demo-telephony'
+import simulatedTelephonyRoutes from './routes/simulated-telephony'
 import recoveryGroupRoutes from './routes/recovery-group'
 import teamsRoutes from './routes/teams'
 import tagsRoutes from './routes/tags'
@@ -269,7 +268,6 @@ authenticated.route('/events', eventsRoutes)
 authenticated.route('/admin/events', eventsAdminRouter)
 authenticated.route('/', evidenceRoutes)
 authenticated.route('/system', systemRoutes)
-authenticated.route('/demo', demoRoutes)
 authenticated.route('/geocoding', geocodingRoutes)
 authenticated.route('/analytics', analyticsRoutes)
 // Phase 6: per-user sigchain (mounted at /users/:targetPubkey/sigchain via nested router)
@@ -320,7 +318,7 @@ hubScoped.route('/onboard', hubOnboardRoutes)
 hubScoped.route('/ring-groups', ringGroupsRoutes)
 hubScoped.route('/teams', teamsRoutes)
 hubScoped.route('/tags', tagsRoutes)
-hubScoped.route('/demo/telephony', demoTelephonyRoutes)
+hubScoped.route('/simulated-telephony', simulatedTelephonyRoutes)
 
 authenticated.route('/hubs/:hubId', hubScoped)
 

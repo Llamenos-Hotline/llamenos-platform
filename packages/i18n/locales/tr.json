@@ -1301,9 +1301,6 @@
     "complete": "Kurulum tamamlandı! Hat hattınıza hoş geldiniz.",
     "completeFailed": "Kurulum tamamlanamadı",
     "configured": "Yapılandırıldı",
-    "demoMode": "Örnek verilerle doldur",
-    "demoModeDescription": "Test ve demolar için örnek gönüllü hesapları, vardiyalar ve engel kayıtları oluşturur. Demo hesap bilgileri giriş sayfasında gösterilecektir.",
-    "demoSeedFailed": "Örnek veriler kısmen oluşturuldu",
     "generateInvite": "Davet Oluştur",
     "generatedInvites": "Oluşturulan Davetler",
     "goToDashboard": "Gösterge Paneline Git",
@@ -3102,18 +3099,6 @@
     "scope": "scope",
     "tiers": "Data access tiers",
     "toggleAll": "Toggle all {{domain}} permissions"
-  },
-  "demo": {
-    "admin": "Yönetim",
-    "volunteer": "Gönüllü",
-    "dismiss": "Kapat",
-    "getStarted": "Deploy your own",
-    "banner": "Demo Mode",
-    "bannerText": "Test ortamı — gerçek arayan bilgilerini girmeyin. Buradaki veriler gizli değildir ve herhangi bir zamanda silinebilir.",
-    "bannerTextSchedule": "Test ortamı — gerçek arayan bilgilerini girmeyin. Veriler {{schedule}} sıfırlanır ve gizli değildir.",
-    "pickAccount": "Pick a demo account to explore",
-    "resetNotice": "Demo data resets daily",
-    "tryDemo": "Try the demo"
   },
   "role": {
     "admin": "Yönetim",

@@ -239,7 +239,7 @@ test.describe('R1 — a call arriving now would reach somebody', () => {
 /** 555-01xx is reserved for fiction; the mock provider answers for one. */
 const MOCK_HOTLINE_NUMBER = '+15555550199'
 
-interface DemoTelephonyStatus { available: boolean; enabled: boolean }
+interface SimulatedTelephonyStatus { available: boolean; enabled: boolean }
 interface SimulateResult { callId?: string; volunteersNotified?: number }
 
 /**
@@ -275,12 +275,12 @@ interface RingDecision {
  *
  * By `GET /hubs/:id/calls/routing`, which calls the same
  * `resolveRingableVolunteers` the ringing path and the answer route call, and
- * is **not demo-gated**.
+ * is served on every deployment.
  *
  * These five cases used to decide the outcome with `POST
- * /demo/telephony/simulate/incoming-call`, which needs `DEMO_MODE=true`. A VM
- * runs `DEMO_MODE=false`, so on the only configuration that ships all five
- * SKIPPED — and R1's readiness rested on a table that could not be read on the
+ * /hubs/:id/simulated-telephony/simulate/incoming-call`, which only a host that
+ * declared itself a test target may serve. A production VM has not, so on the
+ * only configuration that ships all five SKIPPED — and R1's readiness rested on a table that could not be read on the
  * deployment it was declaring ready. A suite that skips on the configuration
  * that counts is not coverage. The oracle now runs everywhere, and nothing in
  * this block skips for anything but a missing credential.
@@ -295,14 +295,14 @@ interface RingDecision {
  *
  * ## Two oracles where the deployment offers two
  *
- * Where the demo oracle is also available (a staging or demo server) it is run
- * as well and the two are asserted to AGREE: `simulate/incoming-call` actually
+ * Where the simulated-telephony oracle is also available (a test instance) it is
+ * run as well and the two are asserted to AGREE: `simulate/incoming-call` actually
  * rings, and `POST /calls/:callId/answer` as the subject answers 403 "Not rung
  * for this call" or 200. Two independent oracles agreeing is stronger than
  * either alone, and it is what proves the read-only route reports the same
  * decision the ringing path takes rather than a second copy of the rule. On a
- * `DEMO_MODE=false` deployment that half is simply absent and the routing
- * oracle carries the block — see `demoOracleOff`.
+ * production deployment that half is simply absent and the routing
+ * oracle carries the block — see `simOracleOff`.
  *
  * ## The subject is the operator's own identity
  *
@@ -335,7 +335,7 @@ interface RingDecision {
  *
  * Writes, all reversed in afterAll: one all-day shift created and deleted, the
  * subject clocked in and out, the fallback group saved and restored, and —
- * only where the demo oracle runs — the mock provider selected for the hub
+ * only where the simulated-telephony oracle runs — the mock provider selected for the hub
  * (refused with 409 if the hub already has a real provider; that hub is left
  * alone, never switched) and each simulated call hung up.
  */
@@ -354,7 +354,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
    * Why the SECOND oracle is not running, or null when it is. Never a reason
    * to skip: the routing oracle has no gate and always decides these cases.
    */
-  let demoOracleOff: string | null = 'not resolved yet'
+  let simOracleOff: string | null = 'not resolved yet'
   let mockWasEnabled = false
   /**
    * The hub's fallback group as it was found, and whether it was ever read.
@@ -387,9 +387,9 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     // members stay: the per-pubkey oracle is immune to them.
     await setFallback(request, originalFallback.filter(pk => pk !== subject))
 
-    demoOracleOff = await enableDemoOracle(request)
-    if (demoOracleOff !== null) {
-      console.log(`[live] second (demo) ring oracle not running: ${demoOracleOff}`)
+    simOracleOff = await enableSimulatedOracle(request)
+    if (simOracleOff !== null) {
+      console.log(`[live] second (simulated-telephony) ring oracle not running: ${simOracleOff}`)
     }
   })
 
@@ -407,30 +407,30 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
       shiftId = null
     }
     if (fallbackRead) await setFallback(request, originalFallback)
-    if (demoOracleOff === null && !mockWasEnabled) {
-      await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () =>
-        apiPut(request, `/hubs/${hubId}/demo/telephony/mock`, { enabled: false }, seed))
+    if (simOracleOff === null && !mockWasEnabled) {
+      await pacedWrite('PUT /api/hubs/:id/simulated-telephony/mock', () =>
+        apiPut(request, `/hubs/${hubId}/simulated-telephony/mock`, { enabled: false }, seed))
     }
   })
 
   /**
    * Try to bring up the second oracle. Returns the reason it cannot run, or
    * null when it can. Never throws and never skips anything: a deployment
-   * without demo mode is the normal case, and the routing oracle covers it.
+   * without the mock provider is the normal case, and the routing oracle covers it.
    */
-  async function enableDemoOracle(request: APIRequestContext): Promise<string | null> {
-    const status = await apiGet<DemoTelephonyStatus>(request, `/hubs/${hubId}/demo/telephony/status`, seed)
+  async function enableSimulatedOracle(request: APIRequestContext): Promise<string | null> {
+    const status = await apiGet<SimulatedTelephonyStatus>(request, `/hubs/${hubId}/simulated-telephony/status`, seed)
     if (status.status !== 200) {
-      return `GET /demo/telephony/status answered ${status.status}`
+      return `GET /simulated-telephony/status answered ${status.status}`
     }
     if (!status.data.available) {
-      return 'DEMO_MODE is not on (telephony/mock.ts) — the expected state for a deployment'
+      return 'the mock provider is not selectable here (telephony/mock.ts) — the expected state for a deployment'
     }
     mockWasEnabled = status.data.enabled
     if (mockWasEnabled) return null
 
-    const sel = await pacedWrite('PUT /api/hubs/:id/demo/telephony/mock', () => apiPut(
-      request, `/hubs/${hubId}/demo/telephony/mock`,
+    const sel = await pacedWrite('PUT /api/hubs/:id/simulated-telephony/mock', () => apiPut(
+      request, `/hubs/${hubId}/simulated-telephony/mock`,
       { enabled: true, phoneNumber: MOCK_HOTLINE_NUMBER }, seed,
     ))
     if (sel.status === 409) {
@@ -438,7 +438,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
         + 'the hotline off the air, so it is not done'
     }
     if (sel.status !== 200) {
-      return `PUT /demo/telephony/mock answered ${sel.status}`
+      return `PUT /simulated-telephony/mock answered ${sel.status}`
     }
     return null
   }
@@ -545,7 +545,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
    *
    * `GET /calls/routing` is read-only — it resolves, it does not ring — so it
    * can be asked on any deployment and in any state, including states a test
-   * created a second earlier. It is asked FIRST, before the demo oracle, so
+   * created a second earlier. It is asked FIRST, before the simulated oracle, so
    * the verdict is never read while a simulated call of this block's own is
    * holding the subject busy.
    *
@@ -560,7 +560,7 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     expect(
       res.status,
       'GET /api/hubs/:id/calls/routing — the read-only ring oracle (#1490). Without it the '
-      + 'ring decision can only be read on a DEMO_MODE=true server, which is not what ships',
+      + 'ring decision can only be read on a test instance, which is not what ships',
     ).toBe(200)
 
     const volunteers = present(
@@ -572,8 +572,8 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
     expect(res.data.wouldRing, 'routing: wouldRing disagrees with volunteerCount').toBe(volunteers.length > 0)
 
     const rings = volunteers.some(v => v.pubkey === subject)
-    if (demoOracleOff === null) {
-      const byRinging = await demoWouldRingSubject(request)
+    if (simOracleOff === null) {
+      const byRinging = await simulatedWouldRingSubject(request)
       expect(
         byRinging,
         'the two oracles disagree about whether the subject would ring: GET /calls/routing says '
@@ -588,8 +588,8 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
   /**
    * The SECOND oracle, where the deployment has one: actually ring the hub.
    *
-   *  1. `POST /hubs/:id/demo/telephony/simulate/incoming-call` — a real
-   *     authenticated route (routes/demo-telephony.ts, not the /test-* dev
+   *  1. `POST /hubs/:id/simulated-telephony/simulate/incoming-call` — a real
+   *     authenticated route (routes/simulated-telephony.ts, not the /test-* dev
    *     router), which runs the ban check and `startParallelRinging` exactly
    *     as the Twilio webhook does. 422 `no-volunteers` when the resolver
    *     found nobody; 200 with a ringing `callId` when it did.
@@ -602,13 +602,13 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
    * Every simulated call is ended, answered or not — an answered call left
    * open would make the subject `busy` and change the next case's answer.
    */
-  async function demoWouldRingSubject(request: APIRequestContext): Promise<boolean> {
-    const sim = await pacedWrite('POST /api/hubs/:id/demo/telephony/simulate/incoming-call', () =>
-      apiPost<SimulateResult>(request, `/hubs/${hubId}/demo/telephony/simulate/incoming-call`, {}, seed))
+  async function simulatedWouldRingSubject(request: APIRequestContext): Promise<boolean> {
+    const sim = await pacedWrite('POST /api/hubs/:id/simulated-telephony/simulate/incoming-call', () =>
+      apiPost<SimulateResult>(request, `/hubs/${hubId}/simulated-telephony/simulate/incoming-call`, {}, seed))
     if (sim.status === 422) return false
     expect(
       sim.status,
-      'POST /api/hubs/:id/demo/telephony/simulate/incoming-call — expected 200 (ringing) '
+      'POST /api/hubs/:id/simulated-telephony/simulate/incoming-call — expected 200 (ringing) '
       + 'or 422 (nobody to ring)',
     ).toBe(200)
     const callId = present(sim.data.callId, 'the simulated call\'s id')
@@ -624,8 +624,8 @@ test.describe('R1 — ringing requires both a shift and a clock-in', () => {
       ).toBe(200)
       return true
     } finally {
-      await pacedWrite('POST /api/hubs/:id/demo/telephony/simulate/caller-hangup', () =>
-        apiPost(request, `/hubs/${hubId}/demo/telephony/simulate/caller-hangup`, { callId }, seed))
+      await pacedWrite('POST /api/hubs/:id/simulated-telephony/simulate/caller-hangup', () =>
+        apiPost(request, `/hubs/${hubId}/simulated-telephony/simulate/caller-hangup`, { callId }, seed))
     }
   }
 

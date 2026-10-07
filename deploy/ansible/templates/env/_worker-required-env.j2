@@ -4,13 +4,13 @@
 #
 # Included by BOTH deployment paths via `lookup('ansible.builtin.template', ...)`:
 #   - roles/llamenos-app/templates/env/app.j2   (per-service role — production/staging)
-#   - roles/llamenos/templates/env.j2           (monolithic role — demo/staging path)
+#   - roles/llamenos/templates/env.j2           (deprecated monolithic role)
 #
 # DO NOT duplicate this list into either of those two files again. That
 # duplication is exactly how #716/#771 happened: roles/llamenos/templates/env.j2
 # silently drifted from roles/llamenos-app/templates/env/app.j2 and ended up
 # missing DATABASE_URL entirely, so the app container failed to boot on the
-# demo/staging deploy path. If a new var needs to reach the worker container,
+# monolithic deploy path. If a new var needs to reach the worker container,
 # add it HERE ONCE — both roles pick it up automatically.
 #
 # Each role may still append its OWN extra vars (e.g. DOMAIN/ACME_EMAIL in the
@@ -115,13 +115,6 @@ GLITCHTIP_DSN={{ glitchtip_dsn }}
 {% if llamenos_signal_enabled | default(false) | bool %}
 SIGNAL_NOTIFIER_BEARER_TOKEN={{ signal_notifier_bearer_token }}
 {% endif %}
-{% if demo_mode | default(false) | bool %}
-DEMO_MODE=true
-DEMO_MODE_CONFIRM={{ demo_mode_confirm }}
-{% if (demo_reset_cron | default('')) | length > 0 %}
-DEMO_RESET_CRON={{ demo_reset_cron }}
-{% endif %}
-{% endif %}
 {# ── Developer/test routes (/api/test-*) — THIRD of three independent layers ──
    DEV_ROUTES_ENABLED and DEV_RESET_SECRET open the destructive `/api/test-*`
    surface (reset the database, mint identities). They are ONLY ever wanted on
@@ -141,8 +134,8 @@ DEMO_RESET_CRON={{ demo_reset_cron }}
         when app_environment == 'production' and dev_routes_enabled or
         dev_reset_secret is set. Imported by preflight.yml, which both the
         hosted and the self-hosted deploy path run via setup.yml. Keyed on
-        app_environment alone, with no reference to demo mode, so it survives
-        demo mode's removal.
+        app_environment alone — it never referenced demo mode, which is why it
+        survived demo mode's removal in #1604 unchanged.
      2. RENDER TIME (here) — the var never reaches the .env on disk, so even a
         path that skipped the preflight guard (an ad-hoc role invocation, a
         future playbook that forgets the import) cannot template a backdoor onto

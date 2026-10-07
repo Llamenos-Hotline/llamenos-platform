@@ -107,7 +107,6 @@ Never run `wrangler pages deploy` o `wrangler deploy` directly. Always okisax ri
 
 ```bash
 bun run deploy          # Deploy ronojel (app + marketing site)
-bun run deploy:demo     # Deploy app Worker only
 bun run deploy:site     # Deploy marketing site only
 ```
 

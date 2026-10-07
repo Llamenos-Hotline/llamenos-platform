@@ -1183,7 +1183,7 @@ export class BlastsService {
     return row?.identifierHash ?? null
   }
 
-  // --- Reset (demo/development only) ---
+  // --- Reset (the secret-gated dev surface only) ---
 
   async reset(): Promise<void> {
     await this.db.delete(blastDeliveries)
