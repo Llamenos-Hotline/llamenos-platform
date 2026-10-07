@@ -191,11 +191,19 @@ def consumed_from_env_interface(infra_ts: Path) -> set[str]:
     return fields - NON_ENV_BINDINGS
 
 
+# Directories under apps/worker/ that are not the worker's own source: its
+# tests (a test's env var is not deployment config) and anything vendored or
+# generated. Named rather than inferred, so a stray node_modules cannot start
+# contributing third-party env vars to the consumed set and failing this check
+# on something no deploy path should ever render.
+SKIP_DIRS = {"__tests__", "node_modules", "dist", ".features-gen", "generated"}
+
+
 def consumed_from_process_env(worker_dir: Path) -> set[str]:
     found: set[str] = set()
     for ts in worker_dir.rglob("*.ts"):
         rel = ts.relative_to(worker_dir)
-        if "__tests__" in rel.parts:
+        if SKIP_DIRS & set(rel.parts):
             continue
         for direct, bracket in PROCESS_ENV_RE.findall(ts.read_text()):
             found.add(direct or bracket)
