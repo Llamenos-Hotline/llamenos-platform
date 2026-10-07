@@ -879,6 +879,7 @@
     "backupAcknowledge": "Kurtarma anahtarımı güvenli bir yere kaydettim",
     "backupDescription": "Bu kurtarma anahtarını yazın ve güvenli bir yerde saklayın. Yeni bir cihazda hesabınızı kurtarmanın tek yolu budur.",
     "backupDownloaded": "Yedek indirildi",
+    "backupFailed": "Şifreli yedeğiniz oluşturulamadı: {{reason}}",
     "backupTitle": "Kurtarma Anahtarınızı Kaydedin",
     "confirmPin": "PIN onaylayın",
     "confirmPinDescription": "Onaylamak için aynı PIN kodunu tekrar girin",

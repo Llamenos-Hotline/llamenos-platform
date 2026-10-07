@@ -14,8 +14,8 @@
 use std::sync::{Mutex, MutexGuard};
 
 use llamenos_core::{
-    auth, device_keys, hpke_envelope,
-    labels::{LABEL_BACKUP_HKDF_INFO, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH},
+    auth, backup, device_keys, hpke_envelope,
+    labels::{LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH},
     puk, sas, sigchain,
 };
 use tauri::Manager;
@@ -1086,63 +1086,107 @@ pub fn generate_ephemeral_ed25519() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Generate an encrypted backup from the current CryptoState.
-/// Encrypts device secrets with recovery key via HKDF + AES-256-GCM.
+/// Generate a fresh 128-bit recovery key for display to the user.
+/// Base32, dash-grouped — the exact string `generate_backup_from_state` expects back.
+#[tauri::command]
+pub fn generate_recovery_key() -> String {
+    backup::generate_recovery_key()
+}
+
+/// Generate an encrypted backup of the loaded device key.
+///
+/// Both credentials protect the same 32-byte signing seed: the PIN (Argon2id)
+/// and the recovery key (HKDF-SHA256). Format, KDFs and rationale live in
+/// `packages/crypto/src/backup.rs` — this command only plumbs CryptoState into
+/// it so the seed never crosses the IPC boundary.
 #[tauri::command]
 pub fn generate_backup_from_state(
     state: tauri::State<'_, CryptoState>,
-    pubkey: String,
     pin: String,
     recovery_key: String,
 ) -> Result<String, String> {
     let ds = state.get_device_state()?;
-    let secrets_guard = lock_mutex(&state.secrets)?;
-    let secrets = secrets_guard
-        .as_ref()
-        .ok_or_else(|| "Device key is locked. Enter PIN to unlock.".to_string())?;
+    let file = state.with_secrets(|secrets| {
+        backup::create_backup(
+            &secrets.signing_seed,
+            &ds.signing_pubkey_hex,
+            &pin,
+            &recovery_key,
+            unix_now_seconds(),
+        )
+        .map_err(err_str)
+    })?;
+    serde_json::to_string(&file).map_err(err_str)
+}
 
-    // Concatenate signing_seed || encryption_seed
-    let mut plaintext = Vec::with_capacity(64);
-    plaintext.extend_from_slice(&secrets.signing_seed);
-    plaintext.extend_from_slice(&secrets.encryption_seed);
+/// Check that a credential opens a backup file, without restoring anything.
+///
+/// Lets the restore UI reject a mistyped recovery key or PIN at the step where
+/// it was entered, instead of failing later during the new-PIN step. The
+/// recovered seed is dropped (and zeroized) immediately.
+#[tauri::command]
+pub fn backup_verify_credential(
+    backup_json: String,
+    credential: String,
+    is_recovery_key: bool,
+) -> Result<(), String> {
+    let file: backup::BackupFile = serde_json::from_str(&backup_json).map_err(err_str)?;
+    backup::open_backup(&file, backup_credential(&credential, is_recovery_key))
+        .map(|_| ())
+        .map_err(err_str)
+}
 
-    // Derive encryption key from recovery_key via HKDF
-    let recovery_key_bytes = hex::decode(&recovery_key).map_err(err_str)?;
-    let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, &recovery_key_bytes);
-    let mut backup_key = [0u8; 32];
-    hk.expand(LABEL_BACKUP_HKDF_INFO.as_bytes(), &mut backup_key)
-        .map_err(|e| format!("HKDF expand failed: {e}"))?;
+/// Restore a device key from a backup file and load it into CryptoState.
+///
+/// The recovered signing seed goes straight from the backup into
+/// `CryptoState` — it is never returned to the webview. The returned blob is
+/// the device key re-encrypted under `new_pin`, for the caller to persist in
+/// the vault exactly as `device_import_and_load` does.
+#[tauri::command]
+pub fn restore_backup_and_load(
+    state: tauri::State<'_, CryptoState>,
+    backup_json: String,
+    credential: String,
+    is_recovery_key: bool,
+    new_pin: String,
+    device_id: String,
+) -> Result<serde_json::Value, String> {
+    let file: backup::BackupFile = serde_json::from_str(&backup_json).map_err(err_str)?;
+    let signing_seed = backup::open_backup(&file, backup_credential(&credential, is_recovery_key))
+        .map_err(err_str)?;
 
-    // AES-256-GCM encrypt
-    let mut nonce_bytes = [0u8; 12];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let secrets = device_keys::DeviceSecrets {
+        signing_seed: *signing_seed,
+        encryption_seed: derive_encryption_seed_from_signing(&signing_seed),
+    };
+    let device_state = device_keys::DeviceKeyState {
+        device_id,
+        signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+        encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+    };
 
-    let cipher =
-        Aes256Gcm::new_from_slice(&backup_key).map_err(|e| format!("Invalid backup key: {e}"))?;
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| format!("Backup encryption failed: {e}"))?;
+    let encrypted = encrypt_secrets_with_pin(&secrets, &new_pin, &device_state)?;
 
-    // Pack: nonce(12) + ciphertext
-    let mut packed = Vec::with_capacity(12 + ciphertext.len());
-    packed.extend_from_slice(&nonce_bytes);
-    packed.extend_from_slice(&ciphertext);
+    *lock_mutex(&state.secrets)? = Some(secrets);
+    *lock_mutex(&state.device_state)? = Some(device_state);
 
-    // Return JSON with backup metadata
-    let backup = serde_json::json!({
-        "v": 3,
-        "deviceId": ds.device_id,
-        "signingPubkeyHex": ds.signing_pubkey_hex,
-        "encryptionPubkeyHex": ds.encryption_pubkey_hex,
-        "encryptedPayload": hex::encode(packed),
-    });
+    serde_json::to_value(&encrypted).map_err(err_str)
+}
 
-    // Suppress unused variable warnings
-    let _ = pubkey;
-    let _ = pin;
+fn backup_credential(credential: &str, is_recovery_key: bool) -> backup::BackupCredential<'_> {
+    if is_recovery_key {
+        backup::BackupCredential::RecoveryKey(credential)
+    } else {
+        backup::BackupCredential::Pin(credential)
+    }
+}
 
-    Ok(backup.to_string())
+/// Wall-clock unix seconds. Used only for the hour-rounded `t` field of a backup.
+fn unix_now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 // ── H17: Stronghold vault file wipe ─────────────────────────────────

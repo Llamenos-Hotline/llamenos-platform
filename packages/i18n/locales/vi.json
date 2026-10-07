@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "Tôi đã lưu khóa khôi phục của mình ở một vị trí an toàn",
     "backupDescription": "Ghi lại khóa khôi phục này và giữ nó an toàn. Đây là cách duy nhất để khôi phục tài khoản trên thiết bị mới.",
     "backupDownloaded": "Đã tải bản sao lưu",
+    "backupFailed": "Không thể tạo bản sao lưu được mã hóa của bạn: {{reason}}",
     "backupTitle": "Lưu Khóa Khôi Phục Của Bạn",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

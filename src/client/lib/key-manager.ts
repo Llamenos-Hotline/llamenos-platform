@@ -14,6 +14,7 @@ import {
   decryptWithPin,
   lockCrypto,
   deviceImportAndLoad,
+  restoreBackupAndLoad,
   persistAndUnlockDeviceKeys,
   wipeVaultFile,
   isValidSeedHex,
@@ -136,6 +137,33 @@ export async function importKey(seedHex: string, pin: string): Promise<string> {
   const deviceId = crypto.randomUUID()
   const encrypted = await deviceImportAndLoad(seedHex, pin, deviceId)
   await persistAndUnlockDeviceKeys(encrypted, pin)
+
+  const pubkeyHex = encrypted.state.signingPubkeyHex
+  publicKey = pubkeyHex
+  unlocked = true
+  resetIdleTimer()
+  unlockCallbacks.forEach(cb => cb())
+  return pubkeyHex
+}
+
+/**
+ * Restore a device key from an encrypted backup file under a new PIN.
+ *
+ * Rust opens the backup, loads the recovered seed into CryptoState and hands
+ * back only the re-encrypted blob — the seed never enters the webview, unlike
+ * the pre-#1709 flow which round-tripped it through React state.
+ *
+ * Throws if the credential does not open the backup.
+ */
+export async function restoreFromBackup(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+  newPin: string,
+): Promise<string> {
+  const deviceId = crypto.randomUUID()
+  const encrypted = await restoreBackupAndLoad(backupJson, credential, isRecoveryKey, newPin, deviceId)
+  await persistAndUnlockDeviceKeys(encrypted, newPin)
 
   const pubkeyHex = encrypted.state.signingPubkeyHex
   publicKey = pubkeyHex
