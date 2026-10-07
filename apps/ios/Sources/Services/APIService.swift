@@ -757,7 +757,7 @@ enum CertificatePins {
 
     /// ISRG Root X2 (ECDSA P-384, backup root).
     /// Extracted via same procedure against isrg-root-x2.pem.
-    static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA="
+    static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
 
     /// Static default pins — used until dynamic pins are fetched and verified.
     /// Minimum 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).

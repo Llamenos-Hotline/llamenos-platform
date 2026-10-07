@@ -135,6 +135,13 @@ android {
         //   src/debug/jniLibs/   — test-kdf params (x86_64 emulator)
         //   src/release/jniLibs/ — production params (arm64-v8a + armeabi-v7a)
         // Gradle discovers these automatically — no explicit config needed.
+        getByName("test") {
+            // See copyProductionNetworkSecurityConfig below: the debug build variant
+            // (which `testDebugUnitTest` runs against) overrides network_security_config.xml
+            // with a pin-less debug/LAN config, so CertificatePinDerivationTest reads the real
+            // production file from this generated copy instead of the merged resources.
+            resources.srcDir("${layout.buildDirectory.get().asFile}/generated/testFixtures")
+        }
     }
 
     packaging {
@@ -189,6 +196,27 @@ val copyFeatureFiles by tasks.registering(Copy::class) {
 tasks.named("preBuild") {
     dependsOn(copyTestVectors)
     dependsOn(copyFeatureFiles)
+}
+
+// Copy the production (release-variant) network_security_config.xml into test resources so
+// CertificatePinDerivationTest (#1593) can validate its <pin-set> against digests derived from
+// the real ISRG root certificates. The debug build variant overrides this resource with a
+// pin-less config for local/LAN development, so `testDebugUnitTest`'s merged Android resources
+// never contain the production <pin-set> — this task sidesteps that by reading the file
+// directly off disk, independent of which variant's resources would otherwise be merged.
+val copyProductionNetworkSecurityConfig by tasks.registering(Copy::class) {
+    from("src/main/res/xml/network_security_config.xml")
+    into(layout.buildDirectory.dir("generated/testFixtures/fixtures"))
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(copyProductionNetworkSecurityConfig)
+}
+// The copied fixture is consumed as a test `resources.srcDir`, so the resource-merging task
+// for each unit test variant (e.g. processDebugUnitTestJavaRes) also needs an explicit
+// dependency — Gradle doesn't infer it from the sourceSet wiring alone.
+tasks.matching { it.name.endsWith("UnitTestJavaRes") }.configureEach {
+    dependsOn(copyProductionNetworkSecurityConfig)
 }
 
 /**
