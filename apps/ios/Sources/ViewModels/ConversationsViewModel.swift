@@ -167,7 +167,7 @@ final class ConversationsViewModel {
 
             let request = SendMessageRequest(
                 encryptedContent: encrypted.encryptedContent,
-                recipientEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes
             )
 
             let _: ConversationMessage = try await apiService.request(

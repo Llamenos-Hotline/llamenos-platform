@@ -158,7 +158,11 @@ struct ConversationMessagesResponse: Codable, Sendable {
 /// Request body for `POST /api/conversations/:id/messages`.
 struct SendMessageRequest: Encodable, Sendable {
     let encryptedContent: String
-    let recipientEnvelopes: [RecipientEnvelope]
+    /// #1633: `sendMessageBodySchema` (packages/protocol/schemas/conversations.ts)
+    /// names this `readerEnvelopes`. It was `recipientEnvelopes` here, a key the
+    /// schema does not declare — and since it is `.optional()`, one the validator
+    /// dropped instead of rejecting.
+    let readerEnvelopes: [RecipientEnvelope]
 }
 
 // MARK: - MarkReadResponse
