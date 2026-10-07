@@ -166,9 +166,16 @@ hash changes, which reviews afresh. An infrastructure failure (timeout,
 quota, unparseable response) is **never** cached, so it is always retried.
 Adding or removing a `-reviewer` label cannot orphan either verdict.
 
-**`llamenos-fleet review-and-merge` only runs the general review**, so it
-refuses outright on a PR whose set needs more — request a review from
-`llamenos-auto` and let the CI gate run the whole set.
+**`llamenos-fleet review-and-merge` runs the WHOLE set too (#1637).** It
+calls the same `decideReviewSet` from the same base code, resolves each
+profile against the same `.claude/agents/` registry, runs the general
+reviewer and every profile concurrently against one read-only export, and
+composes them with the same `composeReviewSet` — ANY FAIL FAILS. It refuses,
+posting nothing, only when a required reviewer cannot be RUN at all
+(`review-set-unrunnable`): a `fleet/review` narrower than its own name is
+the one thing it must never produce. That is also what makes it the escape
+hatch for a PR owned by its required reviewer, which `review_requested`
+cannot reach (#1471) and `synchronize` is forbidden from reviewing.
 
 **`llamenos-fleet review-and-merge` is non-functional until the GitHub App
 exists (#1483).** The Checks API refuses a personal access token

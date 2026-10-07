@@ -1840,15 +1840,16 @@ export function salvageArgs(input: { model: string; maxTurns: number }): string[
  *
  * `model`, when given, overrides the resolved claude model
  * (`reviewerInvocationFor(authorEngine).model`). Added for
- * `review-and-merge.ts`'s operator command, which reviews at a claude model
- * tier deliberately different from the authoring lanes' own default
- * (`cli.ts`'s `DEFAULT_MODEL`, `'sonnet'`). The override names a CLAUDE
- * tier: it applies whenever claude runs (primary under
- * `FLEET_REVIEW_PRIMARY=claude`, or as the fallback); the kimi reviewer
- * never receives it and resolves `FLEET_REVIEW_KIMI_MODEL` or its own
- * configured default (see `kimiArgs`). Every other property below — the
- * read-only posture, the env allowlist, the empty project root, the export
- * as the one readable directory — is unchanged and shared by both engines.
+ * `review-and-merge.ts`'s operator command, whose reviewer engine is kimi
+ * (`reviewAndMergeEngine`) but which still pins the tier claude reviews at
+ * whenever claude is what actually runs — the fallback arm, or
+ * `FLEET_REVIEW_PRIMARY=claude` — deliberately different from the authoring
+ * lanes' own default (`cli.ts`'s `DEFAULT_MODEL`, `'sonnet'`). The override
+ * names a CLAUDE tier only; the kimi reviewer never receives it and resolves
+ * `FLEET_REVIEW_KIMI_MODEL` or its own configured default (see `kimiArgs`).
+ * Every other property below — the read-only posture, the env allowlist, the
+ * empty project root, the export as the one readable directory — is unchanged
+ * and shared by both engines.
  */
 export async function invokeVerifierEngine(input: {
   authorEngine: EngineId
