@@ -751,8 +751,13 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
     } finally {
       await snapshot.cleanup()
     }
+    // The engine is NAMED in the log, not just in a doc comment: which
+    // engine earned a verdict is the first thing an operator needs when a
+    // review reads oddly, and `reviewAndMergeEngine` resolves a dial
+    // (`FLEET_REVIEW_PRIMARY`) rather than a constant — so "it was kimi" is
+    // a fact to record per run, never an assumption.
     deps.log(
-      `review-and-merge: PR ${pr} review set — ${names.join(', ')} ` +
+      `review-and-merge: PR ${pr} review set on ${reviewAndMergeEngine()} — ${names.join(', ')} ` +
       `(${composed.results.map((r) => `${r.name}: ${r.verdict}`).join(', ')})`,
     )
     // `composeReviewSet` (ci.ts) is the SAME composition the CI gate
