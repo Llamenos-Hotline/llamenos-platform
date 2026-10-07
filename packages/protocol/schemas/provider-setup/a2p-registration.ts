@@ -32,6 +32,12 @@ export const a2pRegistrationStateSchema = z.object({
   providerType: telephonyProviderTypeSchema,
   brandStatus: a2pBrandStatusSchema,
   campaignStatus: a2pCampaignStatusSchema,
+  // `A2pRegistrationService.toPublic` emits these on every response; omitting
+  // them from the documented shape is what cost the iOS client its "why did
+  // registration fail" display.
+  brandSidMasked: z.string().nullable().optional(),
+  campaignSidMasked: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
   submittedAt: z.string().optional(),
   approvedAt: z.string().optional(),
   createdAt: z.string(),

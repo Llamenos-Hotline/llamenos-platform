@@ -33,9 +33,9 @@ struct RecoveryRequestsView: View {
                 request: session,
                 isApproving: $isApproving,
                 errorMessage: $errorMessage,
-                onApprove: { await approveRecovery(sessionId: session.sessionId) },
+                onApprove: { await approveRecovery(sessionId: session.sessionID) },
                 onUrgent: { showUrgentSheet = true },
-                onCancel: { await cancelRecovery(sessionId: session.sessionId) },
+                onCancel: { await cancelRecovery(sessionId: session.sessionID) },
                 onDismiss: { selectedSession = nil }
             )
         }
@@ -51,7 +51,7 @@ struct RecoveryRequestsView: View {
 
     private var requestList: some View {
         List {
-            let active = sessions.filter { ["pending", "verified", "active"].contains($0.status) }
+            let active = sessions.filter { ["pending", "verified", "active"].contains($0.status.rawValue) }
             if !active.isEmpty {
                 Section {
                     ForEach(active) { request in
@@ -64,7 +64,7 @@ struct RecoveryRequestsView: View {
                 }
             }
 
-            let history = sessions.filter { ["completed", "expired", "cancelled"].contains($0.status) }
+            let history = sessions.filter { ["completed", "expired", "cancelled"].contains($0.status.rawValue) }
             if !history.isEmpty {
                 Section {
                     ForEach(history) { request in
@@ -126,7 +126,7 @@ struct RecoveryRequestsView: View {
         isApproving = true
         errorMessage = nil
         do {
-            guard let session = sessions.first(where: { $0.sessionId == sessionId }) else {
+            guard let session = sessions.first(where: { $0.sessionID == sessionId }) else {
                 errorMessage = NSLocalizedString("recovery_group_error_session_not_found", comment: "Session not found")
                 isApproving = false
                 return
@@ -141,8 +141,7 @@ struct RecoveryRequestsView: View {
             }
 
             // Check if we already contributed
-            if let contributions = session.contributions,
-               contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
+            if session.contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
                 errorMessage = NSLocalizedString("recovery_group_error_already_approved", comment: "Already approved")
                 isApproving = false
                 return
@@ -253,7 +252,7 @@ struct RecoveryRequestRow: View {
                     .foregroundStyle(Color.brandMutedForeground)
 
                     if request.delayRemainingMS > 0 {
-                        let remaining = request.delayRemainingMS
+                        let remaining = Int(request.delayRemainingMS)
                         Label {
                             Text(formatDelay(ms: Int(remaining)))
                         } icon: {
@@ -267,7 +266,7 @@ struct RecoveryRequestRow: View {
             }
             .padding(.vertical, 4)
         }
-        .accessibilityIdentifier("recovery-request-\(request.sessionId.prefix(8))")
+        .accessibilityIdentifier("recovery-request-\(request.sessionID.prefix(8))")
     }
 
     private func formatDelay(ms: Int) -> String {
@@ -361,7 +360,7 @@ struct RecoveryRequestDetailSheet: View {
                 }
 
                 // Actions
-                if ["verified", "active"].contains(request.status) {
+                if ["verified", "active"].contains(request.status.rawValue) {
                     Section {
                         Button {
                             Task { await onApprove() }

@@ -455,7 +455,7 @@ final class AdminViewModel {
             )
             auditEntries = response.entries
             auditTotal = Int(response.total)
-            hasMoreAudit = auditEntries.count < response.total
+            hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -478,7 +478,7 @@ final class AdminViewModel {
             auditEntries.append(contentsOf: response.entries)
             auditPage = nextPage
             auditTotal = Int(response.total)
-            hasMoreAudit = auditEntries.count < response.total
+            hasMoreAudit = auditEntries.count < Int(response.total)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -500,7 +500,7 @@ final class AdminViewModel {
                 path: "/api/identity/invites"
             )
             invites = response.invites.sorted { lhs, rhs in
-                (lhs.bannedDate ?? Date.distantPast) > (rhs.bannedDate ?? Date.distantPast)
+                (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -546,18 +546,11 @@ final class AdminViewModel {
                 method: "GET",
                 path: "/api/settings/custom-fields?role=admin"
             )
-            // The GET shape (`CustomFieldsListResponseField`) is a read-only
-            // variant of the PUT shape; key fields by name for editing.
+            // `GET` returns whole stored rows; the editor works in the PUT
+            // shape, which is the subset `customFieldsBodySchema` accepts.
             customFields = response.fields
-                .map {
-                    CustomFieldsBodyField(
-                        context: $0.context, label: $0.label, name: $0.name,
-                        options: $0.options, order: $0.order.map(Int.init),
-                        fieldRequired: $0.fieldRequired, type: $0.type,
-                        visibleToUsers: $0.visibleToUsers
-                    )
-                }
-                .sorted { $0.orderOrZero < $1.orderOrZero }
+                .sorted { $0.order < $1.order }
+                .map(\.bodyField)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1191,6 +1184,39 @@ final class AdminViewModel {
         }
     }
 
+    /// Promote a hub-scoped ban to platform scope.
+    ///
+    /// `POST /api/bans/platform/promote` resolves the source ban by its primary
+    /// key server-side and copies the already-hashed phone onto the platform
+    /// list (`apps/worker/routes/platform-bans.ts`); the client never needs — and
+    /// never has — the plaintext number. Body is the generated `PromoteBanBody`.
+    ///
+    /// Note: `GET /api/bans` does not currently return the ban `id`
+    /// (`records.listBans`), so no list row can supply `banId` yet. The
+    /// capability is reachable from any caller that holds an id (deep link,
+    /// search result, future list response) and is covered by
+    /// `AdminViewModelPromoteBanTests`.
+    func promoteBanToPlatform(banId: String) async {
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            try await apiService.request(
+                method: "POST",
+                path: "/api/bans/platform/promote",
+                wireBody: PromoteBanBody(banID: banId)
+            )
+
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+
+            successMessage = NSLocalizedString("platform_bans_promote_button", comment: "Promoted to platform ban")
+            await loadPlatformBans()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     // MARK: - Recording URL
 
     /// Build a streaming URL for a recording.
@@ -1247,6 +1273,8 @@ enum DeleteType: Sendable {
 // Erasure requests decode to generated `SharedRequest`; the queue response is
 // generated `ErasureRequestListResponse`
 // (packages/protocol/schemas/erasure.ts).
+
+extension SharedRequest: Identifiable {}
 
 struct ImmediateErasureRequest: Codable, Sendable {
     let justification: String

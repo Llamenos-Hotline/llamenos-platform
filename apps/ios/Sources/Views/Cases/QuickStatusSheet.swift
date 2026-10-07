@@ -6,7 +6,7 @@ import SwiftUI
 /// Shows template-defined status options with color indicators.
 struct QuickStatusSheet: View {
     let currentStatus: String
-    let statuses: [CaseEnumOption]
+    let statuses: [SharedStatus]
     let onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss

@@ -259,7 +259,7 @@ struct CaseDetailView: View {
                         .font(.system(size: 14))
                     // Show count badges for contacts and evidence
                     if tab == .contacts, record.contactCount > 0 {
-                        Text("\(count)")
+                        Text("\(Int(record.contactCount))")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
@@ -267,7 +267,7 @@ struct CaseDetailView: View {
                             .clipShape(Capsule())
                     }
                     if tab == .evidence, record.fileCount > 0 {
-                        Text("\(count)")
+                        Text("\(Int(record.fileCount))")
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)

@@ -89,9 +89,9 @@ struct AppConnectionTestResponse: Codable {
 }
 
 // A2P registration state decodes to the generated `A2PRegistrationState`
-// (packages/protocol/schemas/provider-setup/a2p-registration.ts). The old
-// hand-written shape carried `error`/`brandSidMasked`/`campaignSidMasked`,
-// which the wire has never included.
+// (packages/protocol/schemas/provider-setup/a2p-registration.ts), which carries
+// `error`/`brandSidMasked`/`campaignSidMasked` — `A2pRegistrationService.toPublic`
+// emits all three on every response.
 
 @Observable
 final class MessagingConfigService {

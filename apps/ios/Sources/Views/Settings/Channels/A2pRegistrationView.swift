@@ -51,6 +51,13 @@ struct A2pRegistrationView: View {
                     .foregroundStyle(campaignStatus == .approved ? .green : campaignStatus == .failed ? .red : .secondary)
             }
 
+            if let failureReason = service.a2pRegistration?.error, !failureReason.isEmpty {
+                Text(failureReason)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("a2p-error")
+            }
+
             if brandStatus == .notSubmitted || brandStatus == .failed {
                 Button(brandStatus == .failed
                     ? NSLocalizedString("channels_a2p_resubmit_brand", comment: "Re-submit Brand")
@@ -69,8 +76,8 @@ struct A2pRegistrationView: View {
                 .foregroundStyle(.secondary)
             }
 
-            if brandStatus == "approved" && (campaignStatus == "not_submitted" || campaignStatus == "failed") {
-                Button(campaignStatus == "failed"
+            if brandStatus == .approved && (campaignStatus == .notSubmitted || campaignStatus == .failed) {
+                Button(campaignStatus == .failed
                     ? NSLocalizedString("channels_a2p_resubmit_campaign", comment: "Re-submit Campaign")
                     : NSLocalizedString("channels_a2p_submit_campaign", comment: "Register Campaign")) {
                     showCampaignForm = true

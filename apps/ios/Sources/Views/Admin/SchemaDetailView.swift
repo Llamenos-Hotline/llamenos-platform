@@ -58,24 +58,22 @@ struct SchemaDetailView: View {
                 value: entityType.labelPlural
             )
 
-            if let description = entityType.description, !description.isEmpty {
+            if !entityType.description.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(NSLocalizedString("schema_description", comment: "Description"))
                         .font(.brand(.caption))
                         .foregroundStyle(Color.brandMutedForeground)
-                    Text(description)
+                    Text(entityType.description)
                         .font(.brand(.body))
                 }
             }
 
-            if let category = entityType.category {
-                LabeledContent(
-                    NSLocalizedString("schema_category", comment: "Category"),
-                    value: category
-                )
-            }
+            LabeledContent(
+                NSLocalizedString("schema_category", comment: "Category"),
+                value: entityType.category.rawValue
+            )
 
-            if let templateId = entityType.templateId {
+            if let templateId = entityType.templateID {
                 LabeledContent(
                     NSLocalizedString("schema_template", comment: "Template"),
                     value: templateId
@@ -135,7 +133,7 @@ struct SchemaDetailView: View {
                             .clipShape(Capsule())
                     }
 
-                    if entityType.closedStatuses?.contains(status.value) == true ||
+                    if entityType.closedStatuses.contains(status.value) ||
                         status.isClosed == true {
                         Text(NSLocalizedString("schema_closed", comment: "Closed"))
                             .font(.brand(.caption))
@@ -161,7 +159,7 @@ struct SchemaDetailView: View {
 
     // MARK: - Severities Section
 
-    private func severitiesSection(_ severities: [CaseEnumOption]) -> some View {
+    private func severitiesSection(_ severities: [SharedStatus]) -> some View {
         Section {
             ForEach(severities) { severity in
                 HStack(spacing: 8) {
@@ -194,7 +192,7 @@ struct SchemaDetailView: View {
 
     // MARK: - Contact Roles Section
 
-    private func contactRolesSection(_ roles: [CaseEnumOption]) -> some View {
+    private func contactRolesSection(_ roles: [SharedStatus]) -> some View {
         Section {
             ForEach(roles) { role in
                 HStack(spacing: 8) {
@@ -224,30 +222,28 @@ struct SchemaDetailView: View {
 
             configToggle(
                 NSLocalizedString("schema_numbering", comment: "Auto-Numbering"),
-                value: entityType.numberingEnabled ?? false
+                value: entityType.numberingEnabled
             )
 
             configToggle(
                 NSLocalizedString("schema_sub_records", comment: "Sub-Records"),
-                value: entityType.allowSubRecords ?? false
+                value: entityType.allowSubRecords
             )
 
             configToggle(
                 NSLocalizedString("schema_file_attachments", comment: "File Attachments"),
-                value: entityType.allowFileAttachments ?? true
+                value: entityType.allowFileAttachments
             )
 
             configToggle(
                 NSLocalizedString("schema_interactions", comment: "Interaction Links"),
-                value: entityType.allowInteractionLinks ?? true
+                value: entityType.allowInteractionLinks
             )
 
-            if let accessLevel = entityType.defaultAccessLevel {
-                LabeledContent(
-                    NSLocalizedString("schema_access_level", comment: "Default Access"),
-                    value: accessLevel
-                )
-            }
+            LabeledContent(
+                NSLocalizedString("schema_access_level", comment: "Default Access"),
+                value: entityType.defaultAccessLevel.rawValue
+            )
         } header: {
             Text(NSLocalizedString("schema_configuration", comment: "Configuration"))
         }
@@ -265,7 +261,7 @@ struct SchemaDetailView: View {
         }
     }
 
-    private func statusColor(_ status: CaseEnumOption) -> Color {
+    private func statusColor(_ status: SharedStatus) -> Color {
         if let colorHex = status.color, !colorHex.isEmpty {
             return Color(hex: colorHex) ?? Color.brandPrimary
         }
@@ -301,14 +297,14 @@ private struct FieldRow: View {
 
             // Badges row
             HStack(spacing: 6) {
-                if field.required == true {
+                if field.sharedEntityTypeDefinitionFielRequired {
                     RequiredBadge()
                 } else {
                     OptionalBadge()
                 }
 
-                if let accessLevel = field.accessLevel, accessLevel != "all" {
-                    AccessLevelBadge(level: accessLevel)
+                if field.accessLevel != .all {
+                    AccessLevelBadge(level: field.accessLevel.rawValue)
                 }
 
                 if let section = field.section, !section.isEmpty {
@@ -386,7 +382,6 @@ private struct AccessLevelBadge: View {
     NavigationStack {
         SchemaDetailView(entityType: EntityType(
             id: "preview-1",
-            hubId: nil,
             name: "incident",
             label: "Incident",
             labelPlural: "Incidents",
@@ -407,17 +402,17 @@ private struct AccessLevelBadge: View {
                 ),
             ],
             statuses: [
-                CaseEnumOption(value: "open", label: "Open", color: "#22C55E",
+                SharedStatus(value: "open", label: "Open", color: "#22C55E",
                                icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil),
-                CaseEnumOption(value: "closed", label: "Closed", color: "#6B7280",
+                SharedStatus(value: "closed", label: "Closed", color: "#6B7280",
                                icon: nil, order: 1, isDefault: nil, isClosed: true, isDeprecated: nil),
             ],
             defaultStatus: "open",
             closedStatuses: ["closed"],
             severities: [
-                CaseEnumOption(value: "low", label: "Low", color: "#3B82F6",
+                SharedStatus(value: "low", label: "Low", color: "#3B82F6",
                                icon: nil, order: 0, isDefault: true, isClosed: nil, isDeprecated: nil),
-                CaseEnumOption(value: "high", label: "High", color: "#EF4444",
+                SharedStatus(value: "high", label: "High", color: "#EF4444",
                                icon: nil, order: 1, isDefault: nil, isClosed: nil, isDeprecated: nil),
             ],
             defaultSeverity: "low",

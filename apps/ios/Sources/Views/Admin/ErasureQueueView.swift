@@ -62,7 +62,7 @@ struct ErasureQueueView: View {
         List {
             ForEach(viewModel.erasureRequests) { request in
                 ErasureRequestRow(request: request) {
-                    viewModel.immediateErasureTargetId = request.userId
+                    viewModel.immediateErasureTargetId = request.userID
                     viewModel.showImmediateErasureDialog = true
                 }
                 .accessibilityIdentifier("erasure-row-\(request.id)")

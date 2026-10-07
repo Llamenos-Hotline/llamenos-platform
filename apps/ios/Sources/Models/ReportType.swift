@@ -64,11 +64,11 @@ extension SharedField {
          placeholder: String?, defaultValue: FieldValue?,
          validation: SharedFieldValidation?, showWhen: SharedFieldShowWhen?,
          indexable: Bool?, indexType: String?, hubEditable: Bool?,
-         editableByVolunteers: Bool? = nil, visibleToVolunteers: Bool? = nil,
+         editableByUsers: Bool? = nil, visibleToUsers: Bool? = nil,
          accessRoles: [String]?, templateId: String?, lookupId: String?) {
         self.init(accessLevel: SharedAccessLevel(rawValue: accessLevel) ?? .all,
                   accessRoles: accessRoles, createdAt: nil, defaultValue: defaultValue,
-                  editableByUsers: editableByVolunteers ?? true, helpText: helpText,
+                  editableByUsers: editableByUsers ?? true, helpText: helpText,
                   hubEditable: hubEditable ?? false, id: id,
                   indexable: indexable ?? false,
                   indexType: SharedIndexType(rawValue: indexType ?? "none") ?? .none,
@@ -77,7 +77,7 @@ extension SharedField {
                   sharedFielRequired: required, section: section, showWhen: showWhen,
                   supportAudioInput: supportAudioInput, templateID: templateId,
                   type: SharedType(rawValue: type) ?? .text, validation: validation,
-                  visibleToUsers: visibleToVolunteers ?? true)
+                  visibleToUsers: visibleToUsers ?? true)
     }
 
     /// Wire `required` (quicktype-renamed `sharedFielRequired`).

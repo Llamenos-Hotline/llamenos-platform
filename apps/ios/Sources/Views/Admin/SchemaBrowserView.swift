@@ -129,12 +129,10 @@ private struct EntityTypeRow: View {
                         icon: "circle.fill"
                     )
 
-                    if let category = entityType.category {
-                        BadgeView(
-                            text: category,
-                            icon: "folder"
-                        )
-                    }
+                    BadgeView(
+                        text: entityType.category.rawValue,
+                        icon: "folder"
+                    )
                 }
                 .padding(.top, 2)
             }
@@ -149,9 +147,9 @@ private struct EntityTypeRow: View {
             return icon
         }
         switch entityType.category {
-        case "event": return "calendar"
-        case "contact": return "person.crop.circle"
-        default: return "doc.text"
+        case .event: return "calendar"
+        case .contact: return "person.crop.circle"
+        case .categoryCase, .custom: return "doc.text"
         }
     }
 

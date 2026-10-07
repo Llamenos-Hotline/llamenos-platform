@@ -81,17 +81,6 @@ export const roleResponseSchema = z.object({
 
 export type RoleDefinition = z.infer<typeof roleResponseSchema>
 
-export const customFieldResponseSchema = z.object({
-  name: z.string(),
-  label: z.string(),
-  type: z.enum(['text', 'number', 'select', 'checkbox', 'textarea', 'file', 'location']),
-  required: z.boolean().optional(),
-  options: z.array(z.string()).optional(),
-  order: z.number().optional(),
-  context: z.string().optional(),
-  visibleToUsers: z.boolean().optional(),
-})
-
 export const reportTypeResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -249,7 +238,14 @@ export const setupStateSchema = z.object({
 // --- List/wrapper response schemas ---
 
 export const customFieldsListResponseSchema = z.object({
-  fields: z.array(customFieldResponseSchema),
+  // `GET`/`PUT /api/settings/custom-fields` return whole stored rows
+  // (`services.settings.getCustomFields` / `updateCustomFields` map every column
+  // of `customFieldDefinitions`), so the documented shape is the canonical
+  // definition. The narrow `customFieldResponseSchema` projection this used to
+  // reference described a response the server never sends: clients decoding it
+  // silently dropped `editableByUsers`, `validation`, `id`, `createdAt` and the
+  // file-upload limits, so it is gone rather than left to drift again.
+  fields: z.array(customFieldDefinitionSchema),
 })
 
 export const roleListResponseSchema = z.object({

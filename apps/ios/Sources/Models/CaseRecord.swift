@@ -7,12 +7,11 @@ import Foundation
 
 typealias CaseEnvelope = RecipientEnvelope
 
-// MARK: - CaseEnumOption
-// Typealias to generated `SharedStatus` — the entity type definition schema's
-// enum option shape ({value, label, color?, icon?, order, isClosed?, isDefault?,
-// isDeprecated?}), used for statuses, severities, categories, and contact roles.
-
-typealias CaseEnumOption = SharedStatus
+// MARK: - SharedStatus (generated)
+// The entity type definition schema's enum option shape ({value, label, color?,
+// icon?, order, isClosed?, isDefault?, isDeprecated?}) is generated as
+// `SharedStatus` and used for statuses, severities, categories and contact roles.
+// Only the UI conveniences below are client-side.
 
 extension SharedStatus: Identifiable {
     public var id: String { value }
@@ -25,7 +24,8 @@ extension SharedStatus: Equatable {
 }
 
 extension SharedStatus {
-    /// Convenience init matching the old `CaseEnumOption` argument order.
+    /// Readable-order init for previews and tests; quicktype emits the
+    /// memberwise init in alphabetical field order.
     init(value: String, label: String, color: String? = nil, icon: String? = nil,
          order: Int = 0, isDefault: Bool? = nil, isClosed: Bool? = nil, isDeprecated: Bool? = nil) {
         self.init(color: color, icon: icon, isClosed: isClosed, isDefault: isDefault,

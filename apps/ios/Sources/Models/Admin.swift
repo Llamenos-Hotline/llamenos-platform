@@ -152,6 +152,10 @@ extension SearchBansResponseBan: Identifiable, BanRowDisplay {
 // shape shared with the evidence access log). Wire truth: `details` is a JSON
 // object (`[String: JSONAny]`), not a string.
 
+// `SharedEntry` carries the server `id` column, so it satisfies `Identifiable`
+// with no client-side key.
+extension SharedEntry: Identifiable {}
+
 extension SharedEntry {
     /// Truncated actor pubkey for display.
     var actorDisplay: String {

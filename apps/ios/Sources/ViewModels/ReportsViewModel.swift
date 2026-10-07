@@ -57,7 +57,7 @@ final class ReportsViewModel {
     var filteredReports: [SharedConversation] {
         var result = reports
         if selectedFilter != .all {
-            result = result.filter { $0.status == selectedFilter.rawValue }
+            result = result.filter { $0.status?.rawValue == selectedFilter.rawValue }
         }
         if let typeFilter = selectedTypeFilter {
             result = result.filter { $0.reportTypeId == typeFilter }

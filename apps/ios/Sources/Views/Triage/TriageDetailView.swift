@@ -156,7 +156,7 @@ struct TriageDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let updatedAt = report.updatedAt, let date = DateFormatting.parseISO(updatedAt) {
+            if let date = DateFormatting.parseISO(report.updatedAt) {
                 LabeledContent {
                     Text(date.formatted(date: .long, time: .shortened))
                         .foregroundStyle(.primary)
