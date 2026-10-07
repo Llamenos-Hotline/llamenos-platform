@@ -1,0 +1,116 @@
+# LABEL_REGISTRY wire snapshot — the labelId -> label-string contract.
+#
+# Each line is `<index>\t<label string>`, where <index> is the labelId byte in
+# the HPKE envelope wire format. `<TOMBSTONE>` is a permanently retired index.
+#
+# APPEND ONLY. An existing line may NEVER change: no insertion, no reordering,
+# no removal, no reuse of a tombstoned index. Any of those repoints labelIds
+# that are already on the wire and in stored envelopes on every platform.
+#
+# Rust constant NAMES are intentionally absent: renaming a constant does not
+# change the wire, so it must not churn this file. Only the strings are pinned.
+#
+# To APPEND a label: add it to the end of LABEL_REGISTRY, then regenerate:
+#   cargo test --manifest-path packages/crypto/Cargo.toml -- --ignored \
+#     --exact labels::tests::regenerate_label_registry_snapshot
+# The resulting diff must be additions at the end ONLY. A reviewer who sees a
+# changed or deleted line should reject the PR, not re-run the regenerator.
+0	llamenos:note-key
+1	llamenos:file-key
+2	llamenos:file-metadata
+3	llamenos:hub-key-wrap
+4	llamenos:transcription
+5	llamenos:message
+6	llamenos:call-meta
+7	llamenos:shift-schedule
+8	llamenos:hkdf-salt:v1
+9	llamenos:notes
+10	llamenos:drafts
+11	llamenos:export
+12	llamenos:hub-event
+13	llamenos:device-provision
+14	llamenos:sas
+15	llamenos:provisioning-sas
+16	llamenos:auth:
+17	llamenos:phone:
+18	llamenos:ip:
+19	llamenos:keyid:
+20	llamenos:subscriber
+21	llamenos:preference-token
+22	llamenos:recovery
+23	llamenos:backup
+24	llamenos:server-nostr-key
+25	llamenos:server-nostr-key:v1
+26	llamenos:push-wake
+27	llamenos:push-full
+28	llamenos:contact-identifier
+29	llamenos:contact-profile
+30	llamenos:case-summary
+31	llamenos:case-fields
+32	llamenos:event-details
+33	llamenos:blind-index-key
+34	llamenos:cross-hub-share
+35	llamenos:contact-name
+36	llamenos:contact-tag
+37	llamenos:case-status
+38	llamenos:case-severity
+39	llamenos:case-category
+40	llamenos:event-type
+41	llamenos:puk:sign:v1
+42	llamenos:puk:dh:v1
+43	llamenos:puk:secretbox:v1
+44	llamenos:puk:wrap:device:v1
+45	llamenos:puk:prev-gen:v1
+46	llamenos:device-auth:v1
+47	llamenos:items-key-export:v1
+48	llamenos:note-epoch-key:v1
+49	llamenos:hub-ptk:prev-gen:v1
+50	llamenos:sframe-call-secret:v1
+51	llamenos:sframe-base-key:v1
+52	llamenos:mls-provision:v1
+53	<TOMBSTONE>
+54	llamenos:provisioning:v1
+55	llamenos:blind-idx:
+56	llamenos:hub-ptk:v1
+57	llamenos:event
+58	llamenos:provision-
+59	llamenos:stronghold:v1
+60	llamenos:storage-credential-wrap
+61	llamenos:server-nostr-signing:v1
+62	llamenos:server-nostr-signing-info:v1
+63	llamenos:server-event-encryption:v1
+64	llamenos:server-event-encryption-info:v1
+65	llamenos:hub-event-epoch:v1
+66	llamenos:server-signing-key:v1
+67	llamenos:server-signing-key-info:v1
+68	llamenos:ws-auth:v1
+69	llamenos:audit-user-key-wrap:v1
+70	llamenos:erasure-override-sig:v1
+71	llamenos:audit-details:v1
+72	llamenos:device-wipe-sig:v1
+73	llamenos:recovery-group:share-wrap:v1
+74	llamenos:recovery-group:puk-seed-wrap:v1
+75	llamenos:recovery-group:share-contribute:v1
+76	llamenos:recovery-group:liveness-proof:v1
+77	llamenos:platform-role-name-encrypt:v1
+78	llamenos:platform-role-desc-encrypt:v1
+79	llamenos:hub-role-encrypt:v1
+80	llamenos:sas-derive:v1
+81	llamenos:availability-reason
+82	llamenos:ring-group-name
+83	llamenos:shift-name
+84	llamenos:shift-override-note
+85	llamenos:team-field:v1
+86	llamenos:tag-field:v1
+87	llamenos:entity-type-def:v1
+88	llamenos:sframe-nonce:v1
+89	llamenos:shamir-commit:v1
+90	llamenos:backup:v1
+91	llamenos:device-encryption-seed:v1
+92	llamenos:lockdown-intent:v1
+93	llamenos:firehose:agent-seal
+94	llamenos:firehose:buffer-encrypt
+95	llamenos:firehose:report-wrap
+96	llamenos:ivr-media-url:v1
+97	llamenos:device-auth-no-nonce:v1
+98	llamenos:sip-volunteer-secret:v1
