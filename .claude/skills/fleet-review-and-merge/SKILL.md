@@ -36,17 +36,33 @@ planned follow-up, once this command is proven on real PRs.
    *current* head SHA (`GET repos/{R}/commits/{sha}/check-runs?check_name=fleet/review`).
    If one already concluded `success`, the review is skipped entirely — never re-run for an
    unchanged head. A prior `failure`/`neutral`/in-progress run is never treated as fresh.
-2. **Otherwise, review.** Exports the head commit with `git archive | tar -x` (no `.git`,
-   nothing executed), strips agent-control files, and runs a non-author `claude --print`
-   session (model `opus` — deliberately a different tier than the `sonnet` a dispatched
-   worker authors with) against the diff and file list, read-only. Reuses
-   `review.ts`'s own prompt construction and export/strip helpers rather than a second copy.
-3. **Records the verdict.** Posts a real check-run named `fleet/review` on that head SHA —
+2. **Works out the review set.** `decideReviewSet` (`ci.ts`) — the *same* function the CI
+   gate calls, not a copy — from the PR's `-reviewer` labels **and from the diff itself**, so
+   a crypto diff gets `crypto-security-reviewer` whether or not anybody labelled it. Each
+   profile is resolved to an agent definition in the local checkout's `.claude/agents/`.
+   If any required profile cannot be run (missing, malformed, or unreadable definition), the
+   command **refuses** — `review-set-unrunnable`, nothing spent, nothing posted. It will not
+   post a `fleet/review` for a narrower set than the PR requires.
+3. **Otherwise, review — the whole set.** Exports the head commit with
+   `git archive | tar -x` (no `.git`, nothing executed), strips agent-control files, and runs
+   the mandatory general non-author review *plus every profile in the set* concurrently
+   (`Promise.allSettled`) against that one read-only export. The engine is **kimi**
+   (`reviewPrimaryEngine()`, default `kimi`); `FLEET_REVIEW_PRIMARY=claude` is still the
+   operator dial, and whenever claude runs — as the fallback arm, or under that dial — it
+   runs at `opus`, deliberately a different tier than the `sonnet` a dispatched worker
+   authors with. Reuses `review.ts`'s own prompt construction, engine invocation and
+   export/strip helpers, and `specialist.ts`'s `buildProfileReviewPrompt`, rather than a
+   second copy of any of them.
+4. **Composes one verdict.** `composeReviewSet` (`ci.ts`), again the same function the gate
+   uses: **ANY FAIL FAILS**, and an UNREADABLE is a failure too, so a profile's verdict can
+   never be outranked by the general reviewer's PASS. A reviewer that throws is recorded as
+   its own UNREADABLE rather than discarding the others' verdicts.
+5. **Records the verdict.** Posts a real check-run named `fleet/review` on that head SHA —
    `success` only for a PASS verdict; `failure` for FAIL or an unreadable/ambiguous verdict.
    This is the one call that cannot use the operator's `gh` credentials: the Checks API
    refuses a PAT, so it authenticates as the `llamenos-fleet-review` GitHub App (#1483) —
    see "Credentials" below.
-4. **Merges, if ready.** Re-reads the PR's required checks (`gh pr checks <pr> --required`)
+6. **Merges, if ready.** Re-reads the PR's required checks (`gh pr checks <pr> --required`)
    and merges (`--squash --delete-branch`) only if: the head has not moved since the review,
    `fleet/review` itself is passing, and every OTHER required check is green. A bot-authored
    PR (the fleet's own workers) always stops here with a message instead of merging — a
@@ -80,9 +96,20 @@ and forbid a commit-status write anywhere in `orchestrator/src`.
 Running the command twice against an unchanged head does no second review and no second
 merge attempt — an already-merged PR is detected up front and the command exits
 immediately. Every other early return is an explicit refusal with a stated reason (head
-moved, checks unreadable, a required check red, an unreadable review verdict, no usable App
-credentials, a verdict that could not be recorded) — there is no path that merges on a
-guess, and none that loses a verdict quietly.
+moved, checks unreadable, a required check red, an unreadable review verdict, a review set
+that cannot be worked out or cannot be run, no usable App credentials, a verdict that could
+not be recorded) — there is no path that merges on a guess, and none that loses a verdict
+quietly.
+
+## Why this command is the escape hatch for a code-owned PR (#1637)
+
+A PR that touches a path owned by its required reviewer, carries a standing FAIL or no
+earned verdict, **and** needs a reviewer profile beyond the general review used to have no
+route back to green: `review_requested` never fires (GitHub re-adds a CODEOWNER's request
+the instant it is removed — #1471), `synchronize` is structurally limited to republishing
+(`republishOnly`, `ci.ts`), and this command refused outright. Running the full review set
+here is what opens that route. The refusal is not gone — it moved to the one honest trigger
+for it, a required reviewer that cannot be run at all.
 
 ## Usage
 

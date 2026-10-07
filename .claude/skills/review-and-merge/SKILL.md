@@ -41,7 +41,7 @@ agent triggers a real merge, rather than trusting them to be remembered:
    approval before this command will merge it (`needs-codeowner`); it never approves on the
    operator's behalf.
 
-And one that is specific to this command rather than to merging in general:
+And two that are specific to this command rather than to merging in general:
 
 6. **A verdict is recorded as a GitHub App, or not at all (#1483).** The `fleet/review`
    check-run is posted with a short-lived App installation token minted per invocation
@@ -49,6 +49,20 @@ And one that is specific to this command rather than to merging in general:
    the command uses that token, nothing persists it, and no failure path prints the key, the
    JWT or the token. Without working credentials the command refuses *before* reviewing
    rather than reviewing and then losing the answer.
+7. **The verdict covers the WHOLE review set, or it is not posted (#1637).** The reviews a
+   PR needs come from `decideReviewSet` (`ci.ts`) — the same function the CI gate calls,
+   reading the PR's `-reviewer` labels **and** the diff itself — and the command runs the
+   general non-author review plus every profile in that set, composing them with
+   `composeReviewSet` (`ci.ts`): **ANY FAIL FAILS**, UNREADABLE included. If a required
+   profile cannot be run at all, it refuses (`review-set-unrunnable`) with nothing spent
+   and nothing posted, rather than posting a narrower verdict under the same check name.
+   The engine is **kimi**; whenever claude runs instead (the fallback arm, or
+   `FLEET_REVIEW_PRIMARY=claude`) it runs at `opus`, never the authoring tier. On a lane
+   that itself authors with kimi, vendor independence is not automatic — non-authorship
+   then rests on session independence (separate session, no shared context, a `.git`-less
+   stripped read-only export, no shell and no edit tool), and
+   `FLEET_REVIEW_PRIMARY=claude` / `FLEET_REVIEW_KIMI_MODEL` are the operational dials for
+   restoring vendor or tier separation.
 
 ## Running it
 
@@ -66,9 +80,13 @@ llamenos-fleet review-and-merge <pr-number>
 - Exit **1** for `review-unrecorded` — the review RAN and its verdict could not be written
   to GitHub. The verdict is LOST, nothing was posted, nothing was merged. The command says
   so plainly rather than reporting a success it did not achieve.
+- Exit **1** for `review-set-unrunnable` — the PR requires a reviewer profile whose agent
+  definition is missing, malformed, or unreadable in this checkout's `.claude/agents/`.
+  Nothing was spent and nothing was posted.
 - Exit **1** for `not-mergeable` (with the reason — unreviewed head, red check, missing
-  `fleet/review`, or a real `FAIL`/`UNREADABLE` verdict) or `needs-codeowner` (bot-authored
-  PR awaiting human approval) — both are refusals, not errors to retry past.
+  `fleet/review`, a review set that could not be worked out, or a real `FAIL`/`UNREADABLE`
+  verdict) or `needs-codeowner` (bot-authored PR awaiting human approval) — both are
+  refusals, not errors to retry past.
 - Idempotent on an unchanged head: a PR whose head already carries a successful
   `fleet/review` check-run skips straight to the readiness check, so running it twice costs
   one extra `gh` read, never a second review or a second merge attempt.
