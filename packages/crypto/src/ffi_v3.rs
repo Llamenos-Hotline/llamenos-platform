@@ -8,6 +8,7 @@
 //! ## Architecture
 //!
 //! A static `MobileState` holds the decrypted `DeviceSecrets` in a Mutex.
+//! (Under `cfg(test)` that storage is per thread — see [`state`].)
 //! - `mobile_generate_and_load` / `mobile_unlock`: load secrets into state
 //! - `mobile_lock`: zeroize and clear secrets
 //! - All `mobile_*` functions that need secrets extract them from the static state
@@ -16,7 +17,7 @@
 //! access the static state and can be called without unlocking.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use crate::auth;
 use crate::device_keys::{self, DeviceKeyState, DeviceSecrets, EncryptedDeviceKeys};
@@ -58,9 +59,48 @@ impl MobileState {
     }
 }
 
+/// The device's mobile crypto state.
+///
+/// A shipped build has exactly one `MobileState` per process — the device has
+/// one identity, and every `mobile_*` entry point reads and writes it under a
+/// `Mutex`, from whichever thread Swift or Kotlin happens to call on.
+#[cfg(not(test))]
 fn state() -> &'static Mutex<MobileState> {
-    static STATE: OnceLock<Mutex<MobileState>> = OnceLock::new();
+    static STATE: std::sync::OnceLock<Mutex<MobileState>> = std::sync::OnceLock::new();
     STATE.get_or_init(|| Mutex::new(MobileState::new()))
+}
+
+/// The same state, resolved **per thread** under `cfg(test)`.
+///
+/// `cargo test` runs each `#[test]` on its own thread, so this gives every test
+/// its own device: a test can neither observe nor disturb another test's lock
+/// state. Isolation is therefore structural rather than something each new test
+/// has to remember.
+///
+/// This replaces a serialising mutex the test module used to take by hand.
+/// That guard worked only for the tests that asked for it, and #1484 is what
+/// happened when one did not: a later test called `mobile_lock()` outside the
+/// guard, wiped the device out from under `hpke_roundtrip_with_state`
+/// mid-roundtrip, and ejected an unrelated PR from the merge queue with
+/// `InvalidInput("Device is locked. Enter PIN to unlock.")`. A guard narrows
+/// the window; per-thread storage removes it.
+///
+/// Scope: `cfg(test)` is set only for this crate's own unit tests. Integration
+/// tests under `tests/` link the library as a normal dependency and get the
+/// process-wide state above — none of them touch the `mobile_*` surface today,
+/// and one that did would share state between its own `#[test]`s.
+///
+/// The box is leaked so the reference is `'static`, matching the shipped
+/// signature and leaving every call site identical. One allocation per test
+/// thread in a short-lived process, with the same never-dropped lifetime the
+/// `static` above has.
+#[cfg(test)]
+fn state() -> &'static Mutex<MobileState> {
+    thread_local! {
+        static STATE: &'static Mutex<MobileState> =
+            Box::leak(Box::new(Mutex::new(MobileState::new())));
+    }
+    STATE.with(|s| *s)
 }
 
 fn with_secrets<T>(
@@ -1401,28 +1441,84 @@ mod tests {
         .is_err());
     }
 
-    /// Serialise the tests that touch the process-wide [`MobileState`].
+    /// Isolation regression test for #1484.
     ///
-    /// Every `mobile_*` entry point reads and writes one static `Mutex<MobileState>`,
-    /// so two tests running concurrently clobber each other: `mobile_lock()` in
-    /// one wipes the hub key another just set, and `mobile_generate_and_load` in
-    /// one replaces the device key another is mid-round-trip on. The full suite
-    /// passed only because 280 tests spread thinly enough across threads that
-    /// these thirteen rarely interleaved — `cargo test --features mobile ffi_v3::`
-    /// on its own fails reliably on `main` for exactly this reason, and a
-    /// wrong-AAD assertion is worthless if the key under it can change mid-test.
+    /// `hpke_roundtrip_with_state` failed a merge-queue run with
+    /// `InvalidInput("Device is locked. Enter PIN to unlock.")`. The roundtrip
+    /// was correct; a sibling test's `mobile_lock()` landed between this test's
+    /// unlock and its open. That is only reachable while every test shares one
+    /// `MobileState`, so this test forces the interleaving rather than waiting
+    /// for a loaded runner to produce it: one thread loads a device and parks,
+    /// a second thread calls every state-clearing entry point, and the first
+    /// must still hold its own device and complete an HPKE roundtrip.
     ///
-    /// Poisoning is recovered from rather than propagated: one failing test
-    /// should report its own failure, not cascade into every other test in the
-    /// module.
-    fn state_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// Against a process-wide `MobileState` this fails on every run with the
+    /// exact panic from CI. It is the deterministic form of that flake, and it
+    /// fails again if the per-test state resolution in [`state`] is reverted.
+    #[test]
+    fn one_threads_lock_cannot_reach_anothers_device() {
+        use std::sync::{Arc, Barrier};
+
+        let loaded = Arc::new(Barrier::new(2));
+        let cleared = Arc::new(Barrier::new(2));
+        let (their_loaded, their_cleared) = (Arc::clone(&loaded), Arc::clone(&cleared));
+
+        let clearer = std::thread::spawn(move || {
+            their_loaded.wait();
+            // Every entry point that wipes state, fired inside the window the
+            // flake hit.
+            mobile_lock();
+            mobile_clear_hub_keys();
+            mobile_clear_server_event_keys();
+            mobile_clear_ephemeral_key();
+            assert!(
+                !mobile_is_unlocked(),
+                "the clearing thread must see its own device locked"
+            );
+            their_cleared.wait();
+        });
+
+        let _encrypted = mobile_generate_and_load("iso-dev".into(), "19283746".into()).unwrap();
+        let ds = mobile_get_device_state().unwrap();
+        mobile_set_hub_key("iso-hub".into(), hex::encode([0x11u8; 32])).unwrap();
+
+        loaded.wait();
+        cleared.wait();
+
+        assert!(
+            mobile_is_unlocked(),
+            "another thread's mobile_lock() must not lock this test's device"
+        );
+        assert!(
+            mobile_has_hub_key("iso-hub".into()),
+            "another thread's mobile_clear_hub_keys() must not reach this test's hub key"
+        );
+        assert_eq!(
+            mobile_get_device_state().unwrap().device_id,
+            "iso-dev",
+            "the loaded device must still be the one this test generated"
+        );
+
+        let plaintext = hex::encode(b"isolated");
+        let label = crate::labels::LABEL_NOTE_KEY;
+        let aad = hex::encode(b"iso-aad");
+        let envelope = mobile_hpke_seal(
+            plaintext.clone(),
+            ds.encryption_pubkey_hex.clone(),
+            label.into(),
+            aad.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            mobile_hpke_open(envelope, label.into(), aad).unwrap(),
+            plaintext
+        );
+
+        clearer.join().unwrap();
     }
 
     #[test]
     fn generate_unlock_lock_cycle() {
-        let _guard = state_guard();
         // Generate and load
         let encrypted = mobile_generate_and_load("test-dev".into(), "12345678".into()).unwrap();
         assert!(mobile_is_unlocked());
@@ -1443,13 +1539,11 @@ mod tests {
         assert_eq!(ds2.device_id, "test-dev");
         assert_eq!(ds2.signing_pubkey_hex, ds.signing_pubkey_hex);
 
-        // Clean up for other tests
         mobile_lock();
     }
 
     #[test]
     fn auth_token_roundtrip() {
-        let _guard = state_guard();
         let _encrypted = mobile_generate_and_load("auth-dev".into(), "12345678".into()).unwrap();
 
         let token =
@@ -1513,8 +1607,7 @@ mod tests {
 
     #[test]
     fn hpke_roundtrip_with_state() {
-        let _guard = state_guard();
-        let encrypted = mobile_generate_and_load("hpke-dev".into(), "65432100".into()).unwrap();
+        let _encrypted = mobile_generate_and_load("hpke-dev".into(), "65432100".into()).unwrap();
         let ds = mobile_get_device_state().unwrap();
 
         // Seal to our own encryption pubkey
@@ -1596,7 +1689,6 @@ mod tests {
     /// of the wire, not a mobile-shaped stand-in.
     #[test]
     fn opens_a_server_shaped_message_envelope_and_rejects_a_mislabelled_one() {
-        let _guard = state_guard();
         let label = crate::labels::LABEL_MESSAGE;
         let encrypted = mobile_generate_and_load("aad-dev".into(), "24681357".into()).unwrap();
         assert!(!encrypted.ciphertext.is_empty());
@@ -1729,7 +1821,6 @@ mod tests {
 
     #[test]
     fn puk_create_and_rotate() {
-        let _guard = state_guard();
         let _encrypted = mobile_generate_and_load("puk-dev".into(), "12345678".into()).unwrap();
 
         let puk_json = mobile_puk_create().unwrap();
@@ -1744,7 +1835,6 @@ mod tests {
 
     #[test]
     fn hub_key_set_and_decrypt() {
-        let _guard = state_guard();
         use aes_gcm::{
             aead::{Aead, KeyInit, Payload},
             Aes256Gcm, Nonce,
@@ -1798,7 +1888,6 @@ mod tests {
 
     #[test]
     fn server_event_key_set_and_decrypt() {
-        let _guard = state_guard();
         use aes_gcm::{
             aead::{Aead, KeyInit, Payload},
             Aes256Gcm, Nonce,
@@ -1859,7 +1948,6 @@ mod tests {
 
     #[test]
     fn draft_encrypt_decrypt_with_hub_key() {
-        let _guard = state_guard();
         let mut key = [0u8; 32];
         getrandom::getrandom(&mut key).unwrap();
         let key_hex = hex::encode(&key);
@@ -1883,7 +1971,6 @@ mod tests {
 
     #[test]
     fn lock_clears_hub_and_server_keys() {
-        let _guard = state_guard();
         let mut key_bytes = [0u8; 32];
         getrandom::getrandom(&mut key_bytes).unwrap();
         let key = hex::encode(&key_bytes);
@@ -1900,7 +1987,6 @@ mod tests {
 
     #[test]
     fn sigchain_create_and_verify() {
-        let _guard = state_guard();
         let _encrypted = mobile_generate_and_load("sig-dev".into(), "12345678".into()).unwrap();
 
         let link = mobile_sigchain_create_link(
