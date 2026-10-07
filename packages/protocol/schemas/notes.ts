@@ -24,6 +24,11 @@ export const noteStoredResponseSchema = z.object({
   note: noteResponseSchema,
 })
 
+/** What `POST /notes/:id/replies` (201) answers: the stored reply, wrapped under `reply` — never bare. */
+export const noteReplyStoredResponseSchema = z.object({
+  reply: noteResponseSchema,
+})
+
 // --- List/wrapper response schemas ---
 
 export const noteListResponseSchema = z.object({
