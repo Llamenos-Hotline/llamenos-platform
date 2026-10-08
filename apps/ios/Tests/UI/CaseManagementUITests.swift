@@ -127,7 +127,27 @@ final class CaseManagementUITests: BaseUITest {
         let picker = find("case-type-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "A case type picker should be shown for two entity types")
         picker.tap()
-        let option = app.buttons[typeLabel]
+        // `app.buttons[typeLabel]` searches the WHOLE app, not just the
+        // picker's pushed option list, and the picker's pushed list renders
+        // as its own overlay directly under the Window — NOT nested inside
+        // `create-case-sheet`'s own accessibility subtree (confirmed via
+        // xcresult: the option Button has no ancestor carrying that
+        // identifier), so scoping to `sheet` finds nothing instead.
+        //
+        // Once this class's hub holds a prior case of this type,
+        // `case-type-tabs` on the Cases list underneath the sheet grows a
+        // filter tab (accessibilityIdentifier "case-tab-\(et.id)") whose
+        // LABEL is also `typeLabel` — a sheet presentation does not remove
+        // the covered screen from the accessibility tree, so that tab and
+        // the picker's own (identifier-less) option row both match
+        // `app.buttons[typeLabel]`, throwing "Multiple matching elements
+        // found" on every createCase() call after the first one in this
+        // class. Excluding the "case-tab-" identifier prefix keeps the
+        // search app-wide (where the option row actually lives) while
+        // dropping the one specific element that collides with it.
+        let option = app.buttons.matching(
+            NSPredicate(format: "label == %@ AND NOT (identifier BEGINSWITH 'case-tab-')", typeLabel)
+        ).firstMatch
         XCTAssertTrue(option.waitForExistence(timeout: 5), "Case type '\(typeLabel)' should be selectable")
         option.tap()
 
@@ -576,11 +596,25 @@ final class CaseManagementUITests: BaseUITest {
         given("I am authenticated as admin with API and a case exists") {
             XCTAssertTrue(launchAsAdminWithNewCase(), "A newly created case should open its detail view")
         }
+        when("the case is unassigned from me") {
+            // CaseListView's create-case submit sends `assignedTo: [encPubkey]`
+            // (the creating admin's own key) — a case created through the
+            // create-case sheet is NOT unassigned, it is self-assigned by the
+            // creator. So "case-unassign-btn" is what should be showing right
+            // after creation; unassign to reach the state this scenario is
+            // actually about.
+            let unassignButton = find("case-unassign-btn")
+            XCTAssertTrue(
+                unassignButton.waitForExistence(timeout: 5),
+                "A case is self-assigned by its creator on creation, so the unassign button should show first"
+            )
+            unassignButton.tap()
+        }
         then("I should see the assign button for an unassigned case") {
             let assignButton = find("case-assign-btn")
             XCTAssertTrue(
                 assignButton.waitForExistence(timeout: 5),
-                "Assign to me button should be visible for a freshly created, unassigned case"
+                "Assign to me button should be visible once the creator is unassigned"
             )
             XCTAssertTrue(
                 assignButton.isEnabled,

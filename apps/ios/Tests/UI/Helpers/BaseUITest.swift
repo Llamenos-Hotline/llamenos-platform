@@ -215,11 +215,18 @@ class BaseUITest: XCTestCase {
 
     /// Simulate an incoming call via the test simulation API.
     /// Returns (callId, status) on success, or nil values on failure.
+    ///
+    /// Sends this class's hubId — `/test-simulate/incoming-call` defaults to
+    /// `hubId: ''` when omitted (apps/worker/routes/dev.ts), which files the
+    /// call under no hub at all. A test then querying
+    /// `/api/hubs/<realHubId>/calls/active` finds nothing, so
+    /// `active-call-card` never renders no matter how long it waits — not a
+    /// decode failure, a hub-scoping gap in the simulation request itself.
     @discardableResult
     func simulateIncomingCall(callerNumber: String = "+15551234567") -> (callId: String, status: String) {
         return simulationRequest(
             endpoint: "incoming-call",
-            body: ["callerNumber": callerNumber],
+            body: ["callerNumber": callerNumber, "hubId": testHubId],
             extractKeys: ("callId", "status")
         )
     }
@@ -262,6 +269,12 @@ class BaseUITest: XCTestCase {
 
     /// Simulate an incoming message via the test simulation API.
     /// Returns (conversationId, messageId) on success.
+    ///
+    /// Sends this class's hubId — `ConversationsService.handleIncoming`
+    /// (apps/worker/services/conversations.ts) files the conversation under
+    /// `hubId IS NULL` when it is omitted, so a test querying this class's
+    /// hub-scoped `/api/conversations` never sees it. Same class of gap as
+    /// `simulateIncomingCall`'s hubId fix above.
     @discardableResult
     func simulateIncomingMessage(
         senderNumber: String = "+15559876543",
@@ -270,7 +283,7 @@ class BaseUITest: XCTestCase {
     ) -> (conversationId: String, messageId: String) {
         return simulationRequest(
             endpoint: "incoming-message",
-            body: ["senderNumber": senderNumber, "body": body, "channel": channel],
+            body: ["senderNumber": senderNumber, "body": body, "channel": channel, "hubId": testHubId],
             extractKeys: ("conversationId", "messageId")
         )
     }
