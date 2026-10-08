@@ -279,41 +279,40 @@ struct CreateReportCategoryRequest: Encodable, Sendable {
     let name: String
 }
 
-// MARK: - Client Telephony Provider
-// Client-only: UI display properties (displayName) for provider selection.
+// MARK: - Telephony Provider Display Names
 
-/// Supported telephony providers (client-side enum with UI properties).
-/// Named `ClientTelephonyProvider` to avoid conflict with generated `TelephonyProvider`.
-enum ClientTelephonyProvider: String, Codable, Sendable, CaseIterable {
-    case twilio
-    case signalwire
-    case vonage
-    case plivo
-    case asterisk
-
+/// The provider's own brand name, for the picker.
+///
+/// `SharedProviderType` is generated from `telephonyProviderTypeSchema`, so the
+/// eight cases here are exactly the eight the server accepts. It replaces a
+/// hand-written `ClientTelephonyProvider` that listed five of them, so an
+/// operator on Telnyx, Bandwidth or FreeSWITCH could not select their own
+/// provider at all — and a hand-written `TelephonySettings { provider,
+/// accountSid, authToken, phoneNumber }`, which described neither the read
+/// shape (`telephonyProviderSchema`, surfaced as `TelephonyProvider`) nor the
+/// write shape (`configureProviderRequestSchema`, as
+/// `ConfigureProviderRequest`). See #1724.
+///
+/// Brand names are not localized: these are the vendors' own trademarks, the
+/// same strings the desktop provider picker shows.
+extension SharedProviderType {
     var displayName: String {
         switch self {
         case .twilio: return "Twilio"
         case .signalwire: return "SignalWire"
         case .vonage: return "Vonage"
         case .plivo: return "Plivo"
+        case .telnyx: return "Telnyx"
+        case .bandwidth: return "Bandwidth"
         case .asterisk: return "Asterisk"
+        case .freeswitch: return "FreeSWITCH"
         }
     }
-}
 
-/// Telephony provider configuration from the API.
-struct TelephonySettings: Codable, Sendable {
-    var provider: String
-    var accountSid: String
-    var authToken: String
-    var phoneNumber: String
-
-    /// Parsed provider enum.
-    var telephonyProvider: ClientTelephonyProvider {
-        get { ClientTelephonyProvider(rawValue: provider) ?? .twilio }
-        set { provider = newValue.rawValue }
-    }
+    /// Picker order: the cloud providers first, then the self-hosted PBXes.
+    static let pickerOrder: [SharedProviderType] = [
+        .twilio, .signalwire, .vonage, .plivo, .telnyx, .bandwidth, .asterisk, .freeswitch,
+    ]
 }
 
 // MARK: - Client Call Settings
@@ -327,34 +326,16 @@ struct ClientCallSettings: Codable, Sendable {
     var parallelRingCount: Int
 }
 
-// MARK: - Client IVR Languages
-// Client-only: generated `IvrLanguages` has `languages: [String]?` while
-// the client uses `[String: Bool]` (language code → enabled/disabled map).
-
-/// IVR language configuration from the API (client-side model).
-/// Named `ClientIvrLanguages` to avoid conflict with generated `IvrLanguages`.
-struct ClientIvrLanguages: Codable, Sendable {
-    var languages: [String: Bool]
-}
-
-// MARK: - Client Transcription Settings
-// Client-only: no matching generated type.
-
-/// Transcription configuration from the API (client-side model).
-struct ClientTranscriptionSettings: Codable, Sendable {
-    var enabled: Bool
-    var allowVolunteerOptOut: Bool
-}
-
-// MARK: - Client Spam Settings
-// Client-only: no matching generated type.
-
-/// Spam mitigation configuration from the API (client-side model).
-struct ClientSpamSettings: Codable, Sendable {
-    var maxCallsPerHour: Int
-    var voiceCaptchaEnabled: Bool
-    var knownNumberBypass: Bool
-}
+// The IVR, transcription and spam screens used to each carry a hand-written
+// `Client*` struct here. Every one of them named fields the server does not
+// have — `ClientIvrLanguages.languages` as a `[String: Bool]` map against the
+// ordered `enabledLanguages` array, `ClientTranscriptionSettings.enabled /
+// allowVolunteerOptOut` against `globalEnabled / allowUserOptOut`, and
+// `ClientSpamSettings.maxCallsPerHour / knownNumberBypass` against
+// `maxCallsPerMinute / rateLimitEnabled / blockDurationMinutes` — so every GET
+// failed to decode and every screen showed hardcoded defaults behind an error
+// banner. They are gone; the screens use the generated `IvrLanguages`,
+// `TranscriptionSettings` and `SpamSettings`. See #1724.
 
 // MARK: - System Health
 // Client-only: generated `HealthResponse` has different shape (checks array, not named services).

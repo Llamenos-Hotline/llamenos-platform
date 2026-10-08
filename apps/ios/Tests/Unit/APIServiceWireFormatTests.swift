@@ -304,6 +304,42 @@ final class APIServiceWireFormatTests: XCTestCase {
                 deviceId: "44444444-4444-4444-8444-444444444444"
             )),
 
+            // PATCH /api/settings/transcription — transcriptionSettingsSchema. Both
+            // fields are `.optional()`, so a dropped key here is the silent kind.
+            // Added with #1724: the screen used to send `{enabled,
+            // allowVolunteerOptOut}` to `PUT`, which the server does not mount.
+            ("patchTranscriptionSettings", TranscriptionSettings(
+                allowUserOptOut: false,
+                globalEnabled: true
+            )),
+
+            // PATCH /api/settings/spam — spamSettingsSchema, all four optional.
+            // `voiceCAPTCHAEnabled` carries an explicit CodingKey of
+            // "voiceCaptchaEnabled", so this is also a generated-CodingKeys case.
+            ("patchSpamSettings", SpamSettings(
+                blockDurationMinutes: 45,
+                maxCallsPerMinute: 7,
+                rateLimitEnabled: true,
+                voiceCAPTCHAEnabled: true
+            )),
+
+            // PATCH /api/settings/ivr-languages — ivrLanguagesSchema. The one
+            // required body in this group, and the list is ordered: position
+            // decides the caller's keypad digit.
+            ("patchIvrLanguages", IvrLanguages(enabledLanguages: ["es", "en", "de"])),
+
+            // POST /api/provider-setup/configure — configureProviderRequestSchema.
+            // The telephony screen's write path. `credentials` is a nested
+            // Dictionary, so compare it with createContact's blindIndexes: the
+            // container key is converted, its contents are not.
+            ("configureTelephonyProvider", ConfigureProviderRequest(
+                credentials: ["accountSid": "AC" + String(repeating: "a", count: 32),
+                              "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+                hubID: nil,
+                phoneNumber: "+15550001111",
+                provider: .twilio
+            )),
+
             // POST /api/recovery-group/user-envelope — a `[String: String]` body.
             // A key strategy rewrites Dictionary keys too, so untyped bodies were
             // affected as much as the generated structs.
