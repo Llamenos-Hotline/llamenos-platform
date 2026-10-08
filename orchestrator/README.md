@@ -154,9 +154,19 @@ a known recovery (re-run the run). What the command adds over `board`:
   both `github-actions`, and GitHub read the PR `CLEAN`. Note what is *not* a
   usable signal: GraphQL reports `isRequired: true` on **both**. It answers
   "does this name gate the merge", not "is this the run that counts".
-  Superseded carriers are still printed, marked as superseded — dropping a red
-  signal without a trace is the failure class this command exists to correct —
-  they just do not decide the verdict. Getting this backwards is worse than
+  Superseded carriers are still printed — dropping a red signal without a
+  trace is the failure class this command exists to correct — they just do not
+  decide the verdict. Every carrier on both sides of the line carries its
+  `startedAt`, and the parenthetical describes what its contents ARE ("not
+  counted — an earlier run of the same app") rather than what superseded them.
+  Both of those are scars: the first wording named the discarded carrier in
+  the slot where it had just promised the superseder, so on #1718 it asserted
+  that the *failure* was the later run when the counted `success` was, and a
+  reader nearly took it as evidence the PR's review of record was a rejection.
+  An inverted explanation is worse than none — it defeats the only reason to
+  print the discarded carrier. The timestamps are load-bearing too: when both
+  carriers share a conclusion (live on #1653, two `github-actions` failures
+  2m46s apart) they are the only thing that distinguishes them. Getting this backwards is worse than
   the bug the command detects: re-runs are routine, so a tool taking the worst
   within an app cries wolf on nearly every PR, gets ignored, and is then
   ignored on the day it is right.
@@ -173,10 +183,10 @@ $ llamenos-fleet missing-checks --pr 1642
 #1642 (fix/1633-ios-wire-keys) head 92d2f27e base main — mergeStateStatus=BLOCKED
   9 workflow run(s) on the head, 0 still in flight
   ABSENT_SETTLED ci-status      no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
-  PASS           gitleaks       github-actions=success
+  PASS           gitleaks       github-actions=success@2026-10-07T16:50:29Z
   ABSENT_SETTLED CodeQL         no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
-  PASS           fleet/verify   github-actions=success  (superseded by a later run of the same app: github-actions=success)
-  PASS           fleet/review   github-actions=success  (superseded by a later run of the same app: github-actions=failure)
+  PASS           fleet/verify   github-actions=success@2026-10-07T18:38:02Z  (not counted — an earlier run of the same app: github-actions=success@2026-10-07T16:50:30Z)
+  PASS           fleet/review   github-actions=success@2026-10-07T18:37:38Z  (not counted — an earlier run of the same app: github-actions=failure@2026-10-07T16:50:29Z)
   run 37655183555 (CI, pull_request, attempt 1) concluded failure with 20 jobs and none of them failing
     -> a job was never created. Re-run the run to recreate it: gh run rerun 37655183555
   BLOCKED FOREVER on: ci-status, CodeQL — a re-run of the owning workflow is the only recovery

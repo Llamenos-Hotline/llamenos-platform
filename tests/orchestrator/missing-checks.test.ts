@@ -48,6 +48,16 @@ import {
  *                                behind a green one from another app, and
  *                                being the earlier of the two must not
  *                                excuse it. GitHub: BLOCKED.
+ *   same-app-later-success-wins  PR #1718, head 447578fb, `mergeStateStatus:
+ *                                CLEAN`. `fleet/review` carried `failure`
+ *                                (started 02:36:45Z) then `success`
+ *                                (02:37:35Z), both `github-actions`. The head
+ *                                the supersession NOTE was reported inverted
+ *                                on: the verdict was right, but the line
+ *                                named the discarded `failure` as the later
+ *                                run. Orientation is pinned here from real
+ *                                data, and again in the opposite direction
+ *                                (later run FAILS) below.
  *   same-app-rerun-supersedes    PR #1671. `fleet/verify` carried `cancelled`
  *                                (19:32:57Z) and `success` (19:33:43Z), both
  *                                `github-actions`. GitHub reads the PR CLEAN,
@@ -172,10 +182,16 @@ describe('#1662 reproduction: a required context absent on a settled head', () =
     // a trace is the failure class this module exists to correct.
     const dropped = carriers.filter((c) => c.superseded === true)
     expect(dropped.map((c) => c.raw)).toEqual(['failure'])
+    // The parenthetical must describe its contents as the EARLIER,
+    // not-counted run. The first version of this assertion encoded the
+    // inverted wording ("superseded by a later run ... failure") and is
+    // exactly what let the inversion ship.
     const text = renderMissingChecks([
       { ok: true, pr: 1642, headRefName: 'x', mergeStateStatus: 'BLOCKED', diagnosis: d },
     ])
-    expect(text).toContain('superseded by a later run of the same app: github-actions=failure')
+    expect(text).toContain('github-actions=success@2026-10-07T18:37:38Z')
+    expect(text).toContain('not counted — an earlier run of the same app: github-actions=failure@2026-10-07T16:50:29Z')
+    expect(text).not.toContain('superseded by a later run')
   })
 })
 
@@ -202,7 +218,7 @@ describe('worst ACROSS apps, latest WITHIN an app', () => {
     const results = await diagnosePrsWith(depsFor(['codeql-failure-beside-neutral']))
     const text = renderMissingChecks(results, true)
     expect(text).toContain('FAIL')
-    expect(text).toContain('github-actions=failure + github-advanced-security=neutral')
+    expect(text).toContain('github-actions=failure@2026-10-05T21:35:09Z + github-advanced-security=neutral@2026-10-05T21:09:59Z')
     // ...and that same PR is NOT printed in a sweep: a red required check is
     // this module's verdict to compute but GitHub's job to surface.
     expect(renderMissingChecks(results)).toContain('nothing blocked by #1662')
@@ -247,6 +263,135 @@ describe('worst ACROSS apps, latest WITHIN an app', () => {
     expect(counted.map((c) => `${c.app}=${c.raw}`))
       .toEqual(['github-actions=success', 'github-advanced-security=failure'])
     expect(verdictFor(counted, 0)).toBe('FAIL')
+  })
+
+  /**
+   * The supersession NOTE, in both orientations.
+   *
+   * The selection logic was never wrong — the sentence explaining it was,
+   * naming the discarded carrier in the slot where it had just promised the
+   * one that won (PR #1718). An inverted explanation is worse than none: the
+   * only reason to print a discarded carrier is so a reader can check the
+   * choice, and this told them the opposite. It shipped because the test
+   * asserted the inverted string, so the fix is not one assertion but the
+   * orientation pinned from BOTH ends, each against data that decides it.
+   */
+  describe('the supersession note names the winner and the superseded, not the reverse', () => {
+    function lineFor(name: string, fixtureName: string, pr: number): string {
+      const d = diagnose(fixtureName)
+      const text = renderMissingChecks([
+        { ok: true, pr, headRefName: 'x', mergeStateStatus: 'x', diagnosis: d },
+      ], true)
+      const line = text.split('\n').find((l) => l.includes(` ${name} `))
+      if (line === undefined) throw new Error(`no rendered line for ${name}`)
+      return line
+    }
+
+    it('LATER SUCCEEDS (real, PR #1718): counts the success, labels the earlier failure as not counted', () => {
+      const f = fixture('same-app-later-success-wins')
+      expect(f.pr.mergeStateStatus).toBe('CLEAN')
+
+      const d = diagnose('same-app-later-success-wins')
+      const ctx = d.contexts.find((c) => c.name === 'fleet/review')
+      expect(ctx?.verdict).toBe('PASS')
+
+      const counted = ctx?.carriers.filter((c) => c.superseded !== true) ?? []
+      const dropped = ctx?.carriers.filter((c) => c.superseded === true) ?? []
+      expect(counted.map((c) => c.raw)).toEqual(['success'])
+      expect(dropped.map((c) => c.raw)).toEqual(['failure'])
+
+      // Derived, not hardcoded: whatever the fixture says, the carrier that
+      // counts is the LATER one. This is the invariant, and it is what the
+      // rendered sentence must agree with.
+      for (const d0 of dropped) {
+        for (const c0 of counted) expect(d0.startedAt < c0.startedAt).toBe(true)
+      }
+
+      const line = lineFor('fleet/review', 'same-app-later-success-wins', 1718)
+      expect(line).toContain('github-actions=success@2026-10-08T02:37:35Z')
+      expect(line).toContain('not counted — an earlier run of the same app: github-actions=failure@2026-10-08T02:36:45Z')
+      // The specific inversion that shipped: the discarded failure must
+      // never be described as the later run.
+      expect(line).not.toMatch(/later run[^)]*failure/)
+    })
+
+    it('LATER FAILS: counts the failure, labels the earlier success as not counted', () => {
+      // No open PR currently carries success-then-failure on one name from
+      // one app (scanned), so this direction is synthetic — but it is the
+      // direction a hardcoded label gets away with, so it is the one that
+      // must be asserted rather than assumed.
+      const at = (id: number, startedAt: string, conclusion: string) =>
+        ({ id, name: 'ci-status', status: 'completed', conclusion, appSlug: 'github-actions', startedAt })
+      const d = diagnoseHead({
+        sha: 'sha', baseRef: 'main', requiredContexts: ['ci-status'],
+        checkRuns: [at(1, '2026-10-08T01:00:00Z', 'success'), at(2, '2026-10-08T02:00:00Z', 'failure')],
+        statuses: [], runs: [], jobsByRun: new Map(),
+      })
+      expect(verdictOf(d, 'ci-status')).toBe('FAIL')
+
+      const ctx = d.contexts[0]
+      expect(ctx?.carriers.filter((c) => c.superseded !== true).map((c) => c.raw)).toEqual(['failure'])
+      expect(ctx?.carriers.filter((c) => c.superseded === true).map((c) => c.raw)).toEqual(['success'])
+
+      const line = renderMissingChecks([
+        { ok: true, pr: 1, headRefName: 'x', mergeStateStatus: 'x', diagnosis: d },
+      ], true).split('\n').find((l) => l.includes(' ci-status ')) ?? ''
+      expect(line).toContain('github-actions=failure@2026-10-08T02:00:00Z')
+      expect(line).toContain('not counted — an earlier run of the same app: github-actions=success@2026-10-08T01:00:00Z')
+    })
+
+    it('carries timestamps, which is the ONLY discriminator when both carriers share a conclusion', () => {
+      // Live shape, PR #1653: two `github-actions` fleet/review FAILUREs
+      // 2m46s apart. Without the timestamp the line would read
+      // "failure (not counted — an earlier run: failure)" and say nothing.
+      const at = (id: number, startedAt: string) =>
+        ({ id, name: 'fleet/review', status: 'completed', conclusion: 'failure', appSlug: 'github-actions', startedAt })
+      const d = diagnoseHead({
+        sha: 'sha', baseRef: 'main', requiredContexts: ['fleet/review'],
+        checkRuns: [at(1, '2026-10-07T19:19:07Z'), at(2, '2026-10-07T19:21:53Z')],
+        statuses: [], runs: [], jobsByRun: new Map(),
+      })
+      const line = renderMissingChecks([
+        { ok: true, pr: 1653, headRefName: 'x', mergeStateStatus: 'x', diagnosis: d },
+      ], true).split('\n').find((l) => l.includes(' fleet/review ')) ?? ''
+      expect(line).toContain('github-actions=failure@2026-10-07T19:21:53Z')
+      expect(line).toContain('not counted — an earlier run of the same app: github-actions=failure@2026-10-07T19:19:07Z')
+    })
+
+    it('pluralises, and names every superseded run rather than just the newest of them', () => {
+      const at = (id: number, startedAt: string, conclusion: string) =>
+        ({ id, name: 'ci-status', status: 'completed', conclusion, appSlug: 'github-actions', startedAt })
+      const d = diagnoseHead({
+        sha: 'sha', baseRef: 'main', requiredContexts: ['ci-status'],
+        checkRuns: [
+          at(1, '2026-10-08T01:00:00Z', 'failure'),
+          at(2, '2026-10-08T02:00:00Z', 'cancelled'),
+          at(3, '2026-10-08T03:00:00Z', 'success'),
+        ],
+        statuses: [], runs: [], jobsByRun: new Map(),
+      })
+      expect(verdictOf(d, 'ci-status')).toBe('PASS')
+      const line = renderMissingChecks([
+        { ok: true, pr: 1, headRefName: 'x', mergeStateStatus: 'x', diagnosis: d },
+      ], true).split('\n').find((l) => l.includes(' ci-status ')) ?? ''
+      expect(line).toContain('earlier runs of the same app: github-actions=failure@2026-10-08T01:00:00Z, github-actions=cancelled@2026-10-08T02:00:00Z')
+    })
+
+    it('says nothing about supersession when nothing was superseded', () => {
+      expect(lineFor('gitleaks', 'healthy', 1519)).not.toContain('not counted')
+    })
+
+    it('renders a carrier with no timestamp as unknown-time rather than a bare @', () => {
+      const d = diagnoseHead({
+        sha: 'sha', baseRef: 'main', requiredContexts: ['ci-status'],
+        checkRuns: [{ id: 1, name: 'ci-status', status: 'completed', conclusion: 'success', appSlug: 'github-actions', startedAt: '' }],
+        statuses: [], runs: [], jobsByRun: new Map(),
+      })
+      const line = renderMissingChecks([
+        { ok: true, pr: 1, headRefName: 'x', mergeStateStatus: 'x', diagnosis: d },
+      ], true).split('\n').find((l) => l.includes(' ci-status ')) ?? ''
+      expect(line).toContain('github-actions=success@unknown-time')
+    })
   })
 
   it('breaks a startedAt tie by id, and orders a carrier with no startedAt last', () => {

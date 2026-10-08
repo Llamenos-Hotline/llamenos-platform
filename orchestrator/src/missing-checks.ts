@@ -432,19 +432,46 @@ export function diagnoseHead(input: DiagnoseHeadInput): HeadDiagnosis {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/** `app=conclusion@when`. The timestamp is not decoration: it is the ONLY
+ *  thing that distinguishes a counted carrier from a superseded one when both
+ *  carry the same conclusion (live case: PR #1653's `fleet/review`, two
+ *  `github-actions` failures 2m46s apart), and it is what lets a reader check
+ *  the tool's choice instead of taking it on faith. */
+function renderCarrier(c: Carrier): string {
+  return `${c.app}=${c.raw}@${c.startedAt === '' ? 'unknown-time' : c.startedAt}`
+}
+
 /**
- * Counted carriers joined by `+`; superseded ones listed after in
- * parentheses. Printing them matters: a red conclusion dropped from the
+ * Counted carriers joined by `+`, then the superseded ones.
+ *
+ * Printing the superseded carriers matters: a red conclusion dropped from the
  * verdict with no trace would be this module's own silently-absent signal,
  * and an operator looking at a PR that was red ten minutes ago needs to see
  * that the tool saw it and why it stopped counting.
+ *
+ * Which makes the WORDING load-bearing, and it was wrong. The first version
+ * read `(superseded by a later run of the same app: github-actions=failure)`
+ * — a sentence that names the superSEDED carrier in the slot where it has
+ * just promised the superSEDER. On PR #1718 the counted run was the `success`
+ * (started 02:37:35Z) and the discarded one the `failure` (02:36:45Z), so the
+ * line asserted the exact opposite of the truth, and a reader nearly took it
+ * as evidence that the PR's review of record was a rejection. An inverted
+ * explanation is worse than none: it defeats the only reason to print the
+ * discarded carrier at all, and it costs the reader the archaeology this
+ * command exists to replace.
+ *
+ * So the parenthetical now says what its contents ARE — earlier, same app,
+ * not counted — rather than what superseded them, and every carrier on both
+ * sides carries its timestamp so the ordering is checkable rather than
+ * asserted.
  */
 function renderCarriers(carriers: Carrier[]): string {
   const counted = carriers.filter((c) => c.superseded !== true)
   const superseded = carriers.filter((c) => c.superseded === true)
-  const head = counted.length === 0 ? 'no carrier on this head' : counted.map((c) => `${c.app}=${c.raw}`).join(' + ')
+  const head = counted.length === 0 ? 'no carrier on this head' : counted.map(renderCarrier).join(' + ')
   if (superseded.length === 0) return head
-  return `${head}  (superseded by a later run of the same app: ${superseded.map((c) => `${c.app}=${c.raw}`).join(', ')})`
+  const noun = superseded.length === 1 ? 'an earlier run' : 'earlier runs'
+  return `${head}  (not counted — ${noun} of the same app: ${superseded.map(renderCarrier).join(', ')})`
 }
 
 /**
