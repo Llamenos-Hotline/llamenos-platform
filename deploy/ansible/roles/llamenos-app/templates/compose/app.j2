@@ -15,6 +15,37 @@ services:
     # truth now — do not add an `environment:` list back here.
     env_file:
       - .env.app
+{% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
+    # The SIP edge's PUBLIC trust anchor, which the app publishes to clients in
+    # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env.app). roles/kamailio
+    # writes `sip-edge-anchor.pem` into kamailio_tls_anchor_dir on the HOST;
+    # without this mount the container cannot open it, `readSipTlsTrustAnchor`
+    # logs "not readable" and returns undefined, and the rendered path is
+    # strictly worse than no path at all — the same outcome plus an error line
+    # implying a broken anchor rather than an absent one. That is why #1656
+    # declined to render the variable without a verifiable mount, and why the
+    # two land together.
+    #
+    # kamailio_tls_anchor_dir, NOT kamailio_tls_dir: that one is 0750 and holds
+    # kamailio.key, and under `docker_userns_remap: true` (roles/docker's
+    # default) the app container's uid is neither its owner nor in the deploy
+    # group. MEASURED on a hardened host: mounting it gave the app "Permission
+    # denied" on the directory itself. The anchor gets a 0755 directory of its
+    # own holding nothing else — it is a public certificate this deployment
+    # hands to every client, so that is not a loosening.
+    #
+    # READ-ONLY, and the DIRECTORY rather than the file: the app publishes an
+    # anchor, it never writes one, and `readSipTlsTrustAnchor` re-reads on an
+    # mtime/size change so a regenerated PBX certificate is picked up without an
+    # app restart — which needs the directory entry to be re-stattable, not a
+    # file handle pinned at container start.
+    #
+    # Only certificates ever leave the worker (`certificatesOnly` strips key
+    # material even if the operator points this at a keypair), and the role
+    # copies the certificate only — never kamailio.key.
+    volumes:
+      - {{ kamailio_tls_anchor_dir | default(app_dir ~ '/services/kamailio/anchor') }}:{{ sip_tls_anchor_container_path | default('/var/lib/llamenos/sip-tls') }}:ro
+{% endif %}
     ports:
       - "127.0.0.1:3000:3000"
     networks:

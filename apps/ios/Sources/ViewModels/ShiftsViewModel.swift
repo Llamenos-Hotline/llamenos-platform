@@ -81,11 +81,24 @@ final class ShiftsViewModel {
 
     // MARK: - SIP Account Lifecycle
 
+    /// Why in-app audio is unavailable for this shift, when it is. Nil when the SIP
+    /// account registered, and nil on a hub that never asked for one.
+    ///
+    /// Recorded rather than swallowed: `registerHubAccount` refuses an unencryptable
+    /// media leg and an unverifiable TLS chain, and each refusal means this volunteer
+    /// will not be rung in the app. Discarding it is how a volunteer ends up believing
+    /// they are reachable. Not yet rendered — that needs a localized string in
+    /// packages/i18n (follow-up); this makes it observable and testable now.
+    var sipRegistrationError: String?
+
     /// Register a SIP account with Linphone for the given hub. Called after clock-in succeeds.
     func onShiftStarted(hubId: String, sipParams: SipTokenResponse) async {
         do {
             try linphoneService.registerHubAccount(hubId: hubId, sipParams: sipParams)
-        } catch {}
+            sipRegistrationError = nil
+        } catch {
+            sipRegistrationError = error.localizedDescription
+        }
     }
 
     /// Unregister the SIP account for the given hub. Called after clock-out succeeds.
@@ -136,9 +149,20 @@ final class ShiftsViewModel {
             startTimer()
 
             // Register a SIP account so the volunteer receives VoIP calls for this hub.
-            if let hubId = hubContext.activeHubId,
-               let sipParams = try? await apiService.getSipToken(hubId: hubId) {
-                await onShiftStarted(hubId: hubId, sipParams: sipParams)
+            //
+            // `try?` is gone: it is what hid #1659 for the whole life of this code. The
+            // token could not decode on any build, `getSipToken` threw on every call, and
+            // the discarded error meant clock-in reported success with no SIP
+            // registration and nothing anywhere recording why. The failure is now
+            // observable state (`sipRegistrationError`) that the unit tests pin; putting
+            // it on screen needs a localized string in packages/i18n and is follow-up —
+            // but it can no longer be lost.
+            if let hubId = hubContext.activeHubId {
+                do {
+                    await onShiftStarted(hubId: hubId, sipParams: try await apiService.getSipToken())
+                } catch {
+                    sipRegistrationError = error.localizedDescription
+                }
             }
 
             let generator = UIImpactFeedbackGenerator(style: .medium)

@@ -80,6 +80,23 @@
     - role: llamenos-asterisk
       tags: [asterisk, deploy]
       when: llamenos_asterisk_enabled | default(false)
+    # The SIP edge. roles/kamailio existed but was on NO deploy path, so the
+    # trust anchor it writes — the only thing that makes a self-hosted PBX
+    # certificate verifiable on either mobile client — was never written on a
+    # deployed host, and nothing said so (#1657). Default off: a phone-only
+    # deployment needs no SIP edge. It runs AFTER llamenos-app on purpose,
+    # because the certificate it generates has to exist before the app's next
+    # restart reads the anchor — and it notifies that restart itself.
+    - role: kamailio
+      tags: [kamailio, sip, deploy]
+      when: kamailio_enabled | default(false) | bool
+    # The STUN/TURN relay. Without it /api/telephony/sip-token hands clients
+    # STUN-only ICE and a call between two peers behind symmetric NAT has no
+    # media path (#1657). Gated on the same variable as the TURN_HOST/TURN_SECRET
+    # render, so the ICE set never names a relay that is not running.
+    - role: llamenos-coturn
+      tags: [coturn, turn, sip, deploy]
+      when: llamenos_coturn_enabled | default(false) | bool
     - role: llamenos-signal
       tags: [signal, deploy]
       when: llamenos_signal_enabled | default(false)

@@ -109,6 +109,59 @@ NTFY_PUBLIC_URL=https://{{ ntfy_domain }}
 NTFY_AUTH_TOKEN={{ ntfy_auth_token }}
 {% endif %}
 {% endif %}
+{# ── In-app calling: the registrar, the relay, and the SIP edge's anchor ──
+   Every variable below was consumed by apps/worker/ and assigned in NO Ansible
+   template, so on a deployed host each silently took its absent branch and
+   nothing reported it. roles/kamailio/tasks/main.yml carried a COMMENT saying
+   an operator had to add them "by hand"; a comment is not a check, and nothing
+   failed when the hand-step was skipped (#1657). #}
+{% if llamenos_asterisk_enabled | default(false) | bool %}
+{# SIP_REGISTRAR_SECRET is the master secret every volunteer's PJSIP endpoint
+   password is derived from (HMAC_SIP_VOLUNTEER_SECRET over `vol_<pubkey16>` —
+   apps/worker/telephony/registrar.ts `deriveVolunteerSipSecret`). Rotating it
+   rotates every volunteer at once, which is why it is its own value and not
+   HMAC_SECRET. Gated on asterisk because only our own PBX issues per-volunteer
+   identities at all: every vendor path is refused at the source
+   (`sipCredentialsMayBeIssued`, #1203), so on a vendor deployment this would
+   be a secret nothing can use. #}
+SIP_REGISTRAR_SECRET={{ sip_registrar_secret }}
+{% endif %}
+{% if llamenos_coturn_enabled | default(false) | bool %}
+{# TURN_HOST/TURN_SECRET are what turn a STUN-only ICE set into one with a
+   relay. apps/worker/routes/webrtc.ts returns undefined unless BOTH are set,
+   and /api/telephony/sip-token then emits STUN only — a valid ICE
+   configuration, a 200, and no media path for a volunteer behind a symmetric
+   NAT (common on mobile carriers, i.e. exactly the volunteers this is for).
+   TURN_SECRET must equal roles/llamenos-coturn's --static-auth-secret: the
+   worker MINTS credentials under it and coturn VERIFIES them. Both render from
+   `turn_secret`, so they cannot drift.
+   Gated on the role that runs the relay, so these never name a host that
+   refuses every allocation — a relay candidate that cannot work is worse than
+   no relay candidate, because ICE spends its check budget on it. #}
+TURN_HOST={{ turn_host }}
+TURN_SECRET={{ turn_secret }}
+{% endif %}
+{% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
+{# SIP_TLS_CA_FILE is the SIP edge's public trust anchor, published to clients
+   inside the authenticated /api/telephony/sip-token response so a volunteer's
+   client can VERIFY a self-hosted PBX certificate that no public CA vouches
+   for. It matters because liblinphone does not consult the platform trust store
+   for its SIP socket — it verifies against its own CA set — so on both mobile
+   clients this anchor is the only way that chain becomes verifiable at all.
+   Absent means "verify against the device trust store"; it never means "do not
+   verify".
+   This is a CONTAINER path, and the mount that makes it readable is in both app
+   compose templates (roles/llamenos-app/templates/compose/app.j2 and
+   roles/llamenos/templates/docker-compose.j2). Rendering the path WITHOUT that
+   mount is why #1656 declined to ship this: `readSipTlsTrustAnchor` would then
+   log "not readable" and return undefined, which is strictly worse than the
+   unset variable it replaced — the same outcome, plus an error line implying a
+   broken anchor rather than an absent one.
+   Both conditions matter: with publish_anchor false the role writes no anchor
+   (correct for a publicly-trusted certificate, where pinning a leaf breaks at
+   every renewal), so the path would name a file that is deliberately absent. #}
+SIP_TLS_CA_FILE={{ sip_tls_anchor_container_path | default('/var/lib/llamenos/sip-tls') }}/sip-edge-anchor.pem
+{% endif %}
 {% if (glitchtip_dsn | default('')) | length > 0 %}
 GLITCHTIP_DSN={{ glitchtip_dsn }}
 {% endif %}

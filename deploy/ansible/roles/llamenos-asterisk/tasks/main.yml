@@ -61,6 +61,36 @@
     directory_mode: "0755"
   notify: Restart asterisk service
 
+# The two scripts compose/asterisk.j2 bind-mounts. Both were absent from this
+# role while present in deploy/docker/docker-compose.yml, and without the
+# entrypoint Asterisk does not start at all — MEASURED: "Unable to open Asterisk
+# database '/var/lib/asterisk/astdb/astdb.sqlite3'", then a restart loop.
+# Copied, not templated: they are plain shell and take their inputs from the
+# environment the compose file sets.
+- name: Install the Asterisk entrypoint and SIP TLS certificate scripts
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../docker/{{ item }}"
+    dest: "{{ app_dir }}/services/asterisk/{{ item }}"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+  loop:
+    - asterisk-entrypoint.sh
+    - sip-tls-cert.sh
+  notify: Restart asterisk service
+
+# Media, not signalling. SIP reaches the PBX through Kamailio, which is a
+# signalling proxy with no media relay, so RTP runs directly between the
+# volunteer and this container. Unopened, a call connects and carries no audio —
+# which is the same user-visible failure as a missing TURN relay, from the other
+# end of the path. roles/firewall opens 80/443/ssh only.
+- name: Open the Asterisk RTP port range
+  community.general.ufw:
+    rule: allow
+    port: "{{ asterisk_rtp_min_port | default(10000) | string }}:{{ asterisk_rtp_max_port | default(10199) | string }}"
+    proto: udp
+    comment: "Asterisk RTP (llamenos-asterisk)"
+
 - name: Template asterisk compose file
   ansible.builtin.template:
     src: compose/asterisk.j2

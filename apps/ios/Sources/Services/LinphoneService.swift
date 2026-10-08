@@ -35,14 +35,195 @@ enum LinphoneError: LocalizedError {
 
 // MARK: - SipTokenResponse
 
-/// SIP credentials returned by `GET /api/hubs/{hubId}/telephony/sip-token`.
-/// Used to register the volunteer's SIP account for the active shift.
+/// Response body of `GET /api/telephony/sip-token`.
+///
+/// Mirrors `sipTokenResponseSchema` (packages/protocol/schemas/webrtc.ts), which
+/// `SipConnectionParams` in apps/worker/telephony/sip-tokens.ts is now `z.infer` of —
+/// so this is the shape the server really sends, not the shape its OpenAPI snapshot
+/// used to claim.
+///
+/// It was previously five FLAT, REQUIRED fields (`username`, `domain`, `password`,
+/// `transport`, `expiry`). Four of those are one level too deep in the real response
+/// and `expiry` has never been sent at all, so `APIService.getSipToken` threw
+/// `keyNotFound` on every response the server could produce and
+/// `LinphoneService.registerHubAccount` was unreachable — in-app SIP registration
+/// could not work on any build (#1659). `expiry` is gone rather than made optional:
+/// the registration lifetime is the one the registrar GRANTS in its 200 to REGISTER,
+/// which belle-sip's refresher already follows, and the TURN credential's own expiry
+/// is carried inside its username (see `turnCredentialExpiresAt`).
+///
+/// Pinned against the server's BYTES, not against this type:
+/// `SipTokenResponseDecodingTests` decodes `apps/ios/Tests/Wire/sip-token-response.json`
+/// through `APIService`'s real decoder, and
+/// `apps/worker/__tests__/unit/sip-token-wire-body.test.ts` holds that same fixture to
+/// `sipTokenResponseSchema` and asserts every key this model REQUIRES is a key the
+/// schema declares. Constructing this value in Swift — which is all the previous tests
+/// did — confirms the model instead of checking it.
 struct SipTokenResponse: Decodable {
-    let username: String
+    let provider: String
+    let sip: SipAccountParams
+}
+
+/// The SIP account half of a `/api/telephony/sip-token` response.
+struct SipAccountParams: Decodable, Equatable {
     let domain: String
-    let password: String
     let transport: String
-    let expiry: Int
+    let username: String
+    let password: String
+    let mediaEncryption: String
+
+    /// STUN/TURN servers the client must gather candidates from. Defaulted rather than
+    /// required: the server always sends the key, and a client that loses its whole
+    /// credential because an ICE list was omitted is a worse failure than one that
+    /// registers with host candidates only.
+    let iceServers: [SipIceServer]
+
+    /// PEM trust anchor for the SIP edge's TLS certificate.
+    ///
+    /// A self-hoster has no publicly-trusted certificate for their PBX, so nothing in
+    /// the device trust store can vouch for it — and verification is never switched off
+    /// on a leg carrying a crisis call. liblinphone does NOT consult the platform trust
+    /// store for its SIP socket (it verifies against its own CA set), so this anchor is
+    /// the only way that chain becomes verifiable at all. It arrives inside this
+    /// response, which travelled over the app's own pinned HTTPS channel, so SIP trust
+    /// derives from the API pin: no trust-on-first-use, and the public CA store is not
+    /// consulted for SIP.
+    ///
+    /// Nil means "verify against the device trust store" — correct for a deployment
+    /// whose SIP edge serves a publicly-trusted certificate. It never means "do not
+    /// verify".
+    let tlsTrustAnchorPem: String?
+
+    enum CodingKeys: String, CodingKey {
+        case domain, transport, username, password, mediaEncryption, iceServers, tlsTrustAnchorPem
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        domain = try c.decode(String.self, forKey: .domain)
+        transport = try c.decode(String.self, forKey: .transport)
+        username = try c.decode(String.self, forKey: .username)
+        password = try c.decode(String.self, forKey: .password)
+        mediaEncryption = try c.decode(String.self, forKey: .mediaEncryption)
+        iceServers = try c.decodeIfPresent([SipIceServer].self, forKey: .iceServers) ?? []
+        tlsTrustAnchorPem = try c.decodeIfPresent(String.self, forKey: .tlsTrustAnchorPem)
+    }
+
+    init(
+        domain: String,
+        transport: String,
+        username: String,
+        password: String,
+        mediaEncryption: String,
+        iceServers: [SipIceServer] = [],
+        tlsTrustAnchorPem: String? = nil
+    ) {
+        self.domain = domain
+        self.transport = transport
+        self.username = username
+        self.password = password
+        self.mediaEncryption = mediaEncryption
+        self.iceServers = iceServers
+        self.tlsTrustAnchorPem = tlsTrustAnchorPem
+    }
+
+    /// Never let the SIP password reach a log line or a crash report.
+    var redactedDescription: String {
+        "SipAccountParams(domain: \(domain), transport: \(transport), username: \(username), "
+            + "password: <redacted>, mediaEncryption: \(mediaEncryption), iceServers: \(iceServers), "
+            + "tlsTrustAnchorPem: \(tlsTrustAnchorPem.map { "<\($0.count) bytes>" } ?? "nil"))"
+    }
+
+    /// The soonest expiry among the issued TURN credentials, as Unix seconds, or nil when
+    /// no relay was issued (STUN-only ICE servers, or none at all).
+    var turnCredentialExpiresAt: TimeInterval? {
+        iceServers.compactMap(\.turnCredentialExpiresAt).min()
+    }
+}
+
+/// The transport a TURN relay is reached over. liblinphone supports exactly one at a
+/// time — see `LinphoneService.natPolicy`.
+enum RelayTransport: String, Equatable {
+    case udp, tcp, tls
+}
+
+/// One ICE server from a `/api/telephony/sip-token` response.
+struct SipIceServer: Decodable, Equatable, CustomStringConvertible {
+    let url: String
+    let username: String?
+    let credential: String?
+
+    init(url: String, username: String? = nil, credential: String? = nil) {
+        self.url = url
+        self.username = username
+        self.credential = credential
+    }
+
+    /// `stun`, `stuns`, `turn` or `turns` — RFC 7064/7065 URIs, which are NOT
+    /// hierarchical: there is no `//`, so `URL`/`URLComponents` mis-reads them. One is
+    /// tolerated anyway in case an operator writes it.
+    var scheme: String {
+        String(url.prefix(while: { $0 != ":" })).lowercased()
+    }
+
+    /// `host:port`, which is what liblinphone's `NatPolicy.stunServer` takes.
+    var hostAndPort: String {
+        var rest = url.drop(while: { $0 != ":" }).dropFirst()
+        if rest.hasPrefix("//") { rest = rest.dropFirst(2) }
+        return String(rest.prefix(while: { $0 != "?" })).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    /// The `?transport=` hint on a TURN URI (RFC 7065), lowercased: which transport the
+    /// client should reach the relay over. Nil when unspecified, which means UDP.
+    var turnTransport: String? {
+        guard let q = url.firstIndex(of: "?") else { return nil }
+        return url[url.index(after: q)...]
+            .split(separator: "&")
+            .first { $0.lowercased().hasPrefix("transport=") }
+            .map { $0.drop(while: { $0 != "=" }).dropFirst().lowercased() }
+            .flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// When the time-limited TURN credential stops being honoured, as Unix seconds.
+    ///
+    /// CoTURN's long-term-credential REST convention (RFC 8489) puts the expiry in the
+    /// username itself (`<expiry>:<user>`), so the client can see it without the server
+    /// stating it separately — which is why this response carries no `expiry` field.
+    var turnCredentialExpiresAt: TimeInterval? {
+        guard let username, let colon = username.firstIndex(of: ":") else { return nil }
+        return TimeInterval(username[username.startIndex..<colon])
+    }
+
+    /// Which transport this entry asks the relay to be reached over, as liblinphone's
+    /// NAT policy models it. Nil when the entry is not a TURN URI at all.
+    ///
+    /// `turns:` implies TLS regardless of any `?transport=` hint (RFC 7065), and a `turn:`
+    /// URI with no hint means UDP.
+    var relayTransport: RelayTransport? {
+        switch scheme {
+        case "turns": return .tls
+        case "turn":
+            switch turnTransport {
+            case nil, "udp": return .udp
+            case "tcp": return .tcp
+            case "tls": return .tls
+            default: return nil
+            }
+        default: return nil
+        }
+    }
+
+    /// A usable relay: a TURN URI with both halves of a credential. STUN needs neither.
+    var isTurnRelay: Bool {
+        (scheme == "turn" || scheme == "turns") && username != nil && credential != nil
+    }
+
+    /// The TURN credential is a live secret for its (short) lifetime: never let string
+    /// interpolation put one in a log line or a crash report. The username is not
+    /// secret — it is the expiry and the volunteer's own SIP identity.
+    var description: String {
+        "SipIceServer(url: \(url), username: \(username ?? "nil"), credential: <redacted>)"
+    }
 }
 
 // MARK: - LinphoneService
@@ -69,6 +250,18 @@ final class LinphoneService: LinphoneServiceProtocol {
     #if canImport(linphonesw)
     private var core: Core?
     private var hubAccounts: [String: Account] = [:]
+    /// The AuthInfos each hub's registration owns: the SIP password, and the TURN
+    /// credential when a relay was issued. Tracked so clock-out can remove them from the
+    /// Core instead of leaving a clocked-out volunteer's credentials resident in it.
+    private var hubAuthInfos: [String: (sip: AuthInfo, turn: AuthInfo?)] = [:]
+    /// `username@domain;transport=…` per hub, so a rotated credential on a DIFFERENT
+    /// identity replaces its account rather than adding a second registration — two
+    /// registrations for one AOR fork every INVITE to two contacts on this device.
+    private var registeredIdentities: [String: String] = [:]
+    /// The trust anchor currently installed on the Core. Tracked because
+    /// `Core.rootCaData` is a `willSet`-only stored property on the Swift wrapper and
+    /// does not read back from liblinphone.
+    private var appliedTrustAnchor: String?
     private var stateDirectory: URL?
 
     /// liblinphone's LC_SIP_TRANSPORT_DONTBIND, which the Swift wrapper does not export:
@@ -86,6 +279,30 @@ final class LinphoneService: LinphoneServiceProtocol {
     private static let quietLogMask: LogLevel = [.Error, .Fatal]
     /// Levels that must never be enabled.
     private static let forbiddenLogMask: LogLevel = [.Debug, .Trace, .Message, .Warning]
+
+    /// Expiry requested in each REGISTER. liblinphone's own default, stated explicitly so
+    /// the refresh cadence is visible here. The registrar may grant less — belle-sip's
+    /// refresher follows the GRANTED value, not this one, which is why no `expiry` field
+    /// is needed in the token response.
+    static let registerExpiresSeconds = 3600
+
+    /// The media encryption the server's `mediaEncryption` string names.
+    static func mediaEncryption(for value: String) -> MediaEncryption? {
+        switch value.lowercased() {
+        case "dtls-srtp", "dtls": return .DTLS
+        case "srtp": return .SRTP
+        case "zrtp": return .ZRTP
+        default: return nil
+        }
+    }
+
+    /// One registration per distinct SIP identity.
+    static func identityKey(_ sip: SipAccountParams) -> String {
+        "\(sip.username)@\(sip.domain);transport=\(sip.transport)"
+    }
+
+    /// Order the single supported TURN transport is chosen in. See `natPolicy`.
+    static let relayTransportPreference: [RelayTransport] = [.udp, .tcp, .tls]
     #endif
 
     // MARK: - Initialization
@@ -179,11 +396,14 @@ final class LinphoneService: LinphoneServiceProtocol {
         try core.setMediaencryption(newValue: .SRTP)
         core.mediaEncryptionMandatory = true
 
-        // TODO(#1173): liblinphone verifies SIP/TLS against its own bundled rootca.pem, not
-        // the iOS trust store, so neither the app's NSAppTransportSecurity nor any
-        // URLSession-level pinning applies to the PBX connection. When TLS to the registrar
-        // is wired, set `core.rootCaData` (or `core.rootCa`) to our own trust anchor and
-        // leave `verifyServerCertificates` on.
+        // liblinphone verifies SIP/TLS against its own bundled rootca.pem, not the iOS
+        // trust store, so neither the app's NSAppTransportSecurity nor any
+        // URLSession-level pinning applies to the PBX connection. The anchor is therefore
+        // supplied per-credential: `registerHubAccount` sets `core.rootCaData` from the
+        // `tlsTrustAnchorPem` the token publishes (see `applyTlsTrustAnchor`), which
+        // REPLACES the bundled set. Certificate verification is never switched off, so an
+        // edge whose chain the client cannot build fails to register rather than
+        // registering insecurely.
 
         // Allow only Opus and G.711 µ-law; disable all others.
         for pt in core.audioPayloadTypes {
@@ -245,32 +465,261 @@ final class LinphoneService: LinphoneServiceProtocol {
     // MARK: - SIP Account Management
 
     /// Register a SIP account for the given hub. Called when the volunteer clocks in.
+    ///
+    /// Every field of the issued credential is applied, which is the point: before
+    /// #1659 this set only the identity and server addresses, so even a response that
+    /// had decoded would have produced an account with no password (401 on the first
+    /// REGISTER), no NAT policy (host candidates only — reachable on the same LAN and
+    /// nowhere else), the SDK's bundled CA set rather than the published trust anchor
+    /// (`tlsv1 alert unknown ca` against a self-hosted PBX), and a hardcoded media
+    /// encryption the registrar's endpoint cannot negotiate.
     func registerHubAccount(hubId: String, sipParams: SipTokenResponse) throws {
         #if canImport(linphonesw)
         guard let core else { throw LinphoneError.notInitialized }
+        let sip = sipParams.sip
+
+        // Both of these refuse rather than degrade: an unencryptable media leg and an
+        // unverifiable TLS chain are each a reason not to register at all. They are
+        // core-global, so they are applied before anything is bound.
+        try applyMediaEncryption(core: core, sip: sip)
+        try applyTlsTrustAnchor(core: core, sip: sip)
+
+        let identityKey = Self.identityKey(sip)
+        if let existing = hubAccounts[hubId], registeredIdentities[hubId] != identityKey {
+            // Rotated onto a different identity: drop the old account first, or this
+            // device holds two registrations and every INVITE forks to both contacts.
+            core.removeAccount(account: existing)
+            releaseAuthInfo(core: core, hubId: hubId)
+            hubAccounts[hubId] = nil
+        }
+
+        let authInfo = try Factory.Instance.createAuthInfo(
+            username: sip.username,
+            userid: nil,
+            passwd: sip.password,
+            ha1: nil,
+            realm: nil,
+            domain: sip.domain
+        )
+        core.addAuthInfo(info: authInfo)
+
+        // liblinphone resolves the TURN password through a SECOND AuthInfo keyed on the
+        // TURN username (which is what `NatPolicy.stunServerUsername` names), so the
+        // relay credential never has to be held on the policy itself.
+        let turnAuthInfo = try turnAuthInfo(for: sip)
+        turnAuthInfo.map { core.addAuthInfo(info: $0) }
+
         let params = try core.createAccountParams()
         let identity = try Factory.Instance.createAddress(
-            addr: "sip:\(sipParams.username)@\(sipParams.domain)"
+            addr: "sip:\(sip.username)@\(sip.domain)"
         )
         try params.setIdentityaddress(newValue: identity)
         let server = try Factory.Instance.createAddress(
-            addr: "sip:\(sipParams.domain);transport=\(sipParams.transport)"
+            addr: "sip:\(sip.domain);transport=\(sip.transport)"
         )
         try params.setServeraddress(newValue: server)
+        params.expires = Self.registerExpiresSeconds
         params.registerEnabled = true
+        // The issued ICE servers, finally applied. Without a NAT policy liblinphone
+        // offers host candidates only, and Asterisk's endpoint has `ice_support: yes`
+        // waiting for the other half.
+        params.natPolicy = try natPolicy(core: core, sip: sip)
+
         let account = try core.createAccount(params: params)
-        try core.addAccount(account: account)
+        do {
+            try core.addAccount(account: account)
+        } catch {
+            core.removeAuthInfo(info: authInfo)
+            turnAuthInfo.map { core.removeAuthInfo(info: $0) }
+            throw LinphoneError.accountRegistrationFailed("\(error)")
+        }
+        if let previous = hubAccounts[hubId] { core.removeAccount(account: previous) }
         hubAccounts[hubId] = account
+        hubAuthInfos[hubId] = (authInfo, turnAuthInfo)
+        registeredIdentities[hubId] = identityKey
+        #else
+        _ = (hubId, sipParams)
         #endif
     }
 
     /// Unregister the SIP account for the given hub. Called when the volunteer clocks out.
     func unregisterHubAccount(hubId: String) {
         #if canImport(linphonesw)
-        guard let account = hubAccounts.removeValue(forKey: hubId) else { return }
-        core?.removeAccount(account: account)
+        registeredIdentities[hubId] = nil
+        guard let core, let account = hubAccounts.removeValue(forKey: hubId) else { return }
+        // Removing a registered account makes liblinphone send REGISTER with Expires: 0.
+        core.removeAccount(account: account)
+        releaseAuthInfo(core: core, hubId: hubId)
         #endif
     }
+
+    #if canImport(linphonesw)
+    /// Drop the AuthInfos this hub's registration owned, so a clocked-out volunteer's
+    /// SIP password and relay credential stop living in the Core.
+    private func releaseAuthInfo(core: Core, hubId: String) {
+        guard let (authInfo, turnAuthInfo) = hubAuthInfos.removeValue(forKey: hubId) else { return }
+        core.removeAuthInfo(info: authInfo)
+        turnAuthInfo.map { core.removeAuthInfo(info: $0) }
+    }
+
+    /// The media encryption the credential names, applied — refusing anything this
+    /// client will not carry.
+    ///
+    /// `none` is deliberately absent from `mediaEncryption(for:)`: a crisis hotline's
+    /// volunteer leg does not carry unencrypted media, so an issued credential asking
+    /// for it is refused rather than honoured. Anything unrecognised is refused for the
+    /// same reason. The ALGORITHM is the server's to choose — it provisions the matching
+    /// PJSIP endpoint — which is why this reads the value instead of hardcoding one: the
+    /// pair that could not negotiate in #1188 was a client mandating SDES-SRTP against
+    /// an endpoint provisioned for DTLS-SRTP.
+    private func applyMediaEncryption(core: Core, sip: SipAccountParams) throws {
+        guard let encryption = Self.mediaEncryption(for: sip.mediaEncryption) else {
+            throw LinphoneError.accountRegistrationFailed(
+                "Server asked for media encryption '\(sip.mediaEncryption)', which this client will not use"
+            )
+        }
+        guard core.mediaEncryptionSupported(menc: encryption) else {
+            throw LinphoneError.accountRegistrationFailed(
+                "liblinphone does not support media encryption \(encryption) on this device"
+            )
+        }
+        try core.setMediaencryption(newValue: encryption)
+        guard core.isMediaEncryptionMandatory else {
+            throw LinphoneError.accountRegistrationFailed(
+                "media encryption is no longer mandatory — refusing a leg that may run in the clear"
+            )
+        }
+    }
+
+    /// Install the server-published trust anchor as the ONLY thing the SIP TLS chain is
+    /// verified against, when one was published.
+    ///
+    /// `Core.rootCaData` is the hook belle-sip's `root_ca_data` is fed from, and it
+    /// REPLACES the SDK's bundled anchors rather than adding to them — so "narrower than
+    /// the public CA set" is a property, not an intent. This closes the
+    /// `TODO(#1173)` in `initialize`.
+    ///
+    /// Where no anchor is published the set is left alone, which is what a deployment
+    /// whose SIP edge holds a publicly-trusted certificate wants: ISRG Root X1 and X2
+    /// are both in the SDK's bundled rootca.pem. Verification stays on regardless, so an
+    /// unverifiable edge fails to register rather than registering insecurely.
+    private func applyTlsTrustAnchor(core: Core, sip: SipAccountParams) throws {
+        // Whitespace is TRIMMED FOR THE EMPTINESS CHECK ONLY — `pem` below is the
+        // server's bytes verbatim. A PEM whose final `-----END CERTIFICATE-----`
+        // has no trailing newline is a classic parser edge, and the worker emits
+        // one (`certificatesOnly` joins the blocks and appends "\n"); re-deriving
+        // a trimmed copy would hand belle-sip a subtly different document from
+        // the one the server published and the one a test can compare against.
+        guard let pem = sip.tlsTrustAnchorPem,
+              !pem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        guard !pem.contains("PRIVATE KEY") else {
+            throw LinphoneError.accountRegistrationFailed(
+                "SIP TLS trust anchor contains private key material — refusing it"
+            )
+        }
+        guard pem.contains("-----BEGIN CERTIFICATE-----") else {
+            throw LinphoneError.accountRegistrationFailed(
+                "SIP TLS trust anchor is not a PEM certificate"
+            )
+        }
+        if pem == appliedTrustAnchor { return }
+        core.rootCaData = pem
+        appliedTrustAnchor = pem
+    }
+
+    /// The NAT policy for the issued ICE servers, or nil when none were issued.
+    ///
+    /// liblinphone takes ONE server address for both roles, so the TURN host wins when
+    /// the two differ: the relay candidate is the one that cannot be substituted. A
+    /// volunteer behind a full-cone or address-restricted NAT connects on the
+    /// server-reflexive candidate STUN discovers; behind a SYMMETRIC NAT that candidate
+    /// is useless (the mapping is per-destination) and the relay TURN allocates is what
+    /// carries the call. With no TURN server configured the server says so honestly
+    /// (STUN-only `iceServers`) and a symmetric-NAT volunteer is reachable only by phone.
+    private func natPolicy(core: Core, sip: SipAccountParams) throws -> NatPolicy? {
+        if sip.iceServers.isEmpty { return nil }
+        let stun = sip.iceServers.first { $0.scheme == "stun" || $0.scheme == "stuns" }
+        let turnServers = sip.iceServers.filter { $0.scheme == "turn" || $0.scheme == "turns" }
+        let turn = turnServers.first { $0.isTurnRelay }
+        guard let address = (turn ?? stun)?.hostAndPort, !address.isEmpty else { return nil }
+
+        let policy = try core.createNatPolicy()
+        policy.iceEnabled = true
+        policy.stunServer = address
+        policy.stunEnabled = true
+        if let turn {
+            policy.turnEnabled = true
+            policy.stunServerUsername = turn.username
+
+            // EXACTLY ONE relay transport, not one per issued entry.
+            //
+            // liblinphone says so itself — "Enabling more than one transport (UDP, TCP,
+            // TLS) at a time is currently not supported" on each of the three setters —
+            // and it ENFORCES it: MEASURED, setting udp then tcp leaves tcp reading back
+            // false (`registerAppliesTheIssuedCredentialToAStartedCore` asserted all the
+            // issued transports and failed on exactly that). So a policy built by
+            // enabling one per `?transport=` hint in `iceServers` describes something
+            // liblinphone will not do, and the reader cannot tell which one it got.
+            //
+            // The server issues a UDP and a TCP entry for the same relay (see
+            // `buildVolunteerSipParams`) precisely so a client can choose. UDP first:
+            // relayed RTP over TCP adds head-of-line blocking to a live voice path, and
+            // TCP/TLS exist for networks that drop UDP outright.
+            // EXACTLY ONE relay transport, and every other one explicitly off.
+            //
+            // liblinphone says so itself — "Enabling more than one transport (UDP, TCP,
+            // TLS) at a time is currently not supported" on each of the three setters.
+            // MEASURED on linphone-sdk 5.5.23 (iPhone 17 Pro simulator), by setting each
+            // and reading it back, including across the AccountParams assignment:
+            //
+            //   a fresh NatPolicy has ALL THREE off, turn off
+            //   turnEnabled = true leaves all three off  — so not setting one means NO relay
+            //   tcpTurnTransportEnabled = true does take on the policy object
+            //   but after `params.natPolicy = policy`, turnEnabled survives and the
+            //   TRANSPORT FLAGS DO NOT: tcp reads back false.
+            //
+            // UDP does survive that round trip, which is the case that matters: the
+            // server issues a UDP and a TCP entry for the same relay
+            // (`buildVolunteerSipParams`), and UDP is the one to want anyway — relayed
+            // RTP over TCP adds head-of-line blocking to a live voice path. A deployment
+            // whose relay is reachable ONLY over TCP cannot be served through an
+            // account-scoped NAT policy on this SDK; see
+            // `aTcpOnlyRelayCannotBeCarriedByThisSdk`, which pins that so an SDK upgrade
+            // reports it rather than hiding it.
+            let chosen = Self.relayTransportPreference.first { wanted in
+                turnServers.contains { $0.relayTransport == wanted }
+            }
+            policy.udpTurnTransportEnabled = chosen == .udp
+            policy.tcpTurnTransportEnabled = chosen == .tcp
+            policy.tlsTurnTransportEnabled = chosen == .tls
+            if chosen == nil {
+                // A relay with both halves of a credential but no transport this client
+                // recognises. Leave TURN off rather than advertise a relay that cannot be
+                // allocated — the reflexive candidate STUN discovers still stands.
+                policy.turnEnabled = false
+            }
+        }
+        return policy
+    }
+
+    /// AuthInfo for the time-limited TURN credential, which liblinphone looks up by the
+    /// username set as `NatPolicy.stunServerUsername`. Nil when no relay was issued.
+    private func turnAuthInfo(for sip: SipAccountParams) throws -> AuthInfo? {
+        guard let turn = sip.iceServers.first(where: { $0.isTurnRelay }),
+              let username = turn.username,
+              let credential = turn.credential
+        else { return nil }
+        return try Factory.Instance.createAuthInfo(
+            username: username,
+            userid: username,
+            passwd: credential,
+            ha1: nil,
+            realm: nil,
+            domain: nil
+        )
+    }
+    #endif
 
     // MARK: - VoIP Push Handling
 
@@ -406,6 +855,90 @@ final class LinphoneService: LinphoneServiceProtocol {
         #else
         return nil
         #endif
+    }
+
+    /// SDK-independent snapshot of what one hub's registration actually asked liblinphone
+    /// for. The test target deliberately does not import `linphonesw`, so every SDK enum
+    /// is carried as its raw value — the same convention as
+    /// `CoreConfigurationSnapshot.mediaEncryption`.
+    ///
+    /// It reads back from the Account/NatPolicy objects liblinphone holds, not from the
+    /// values this file passed in, so it cannot pass while the apply silently failed.
+    struct RegistrationSnapshot: Equatable {
+        let identityAddress: String?
+        let serverAddress: String?
+        let registerEnabled: Bool
+        let expires: Int
+        /// Whether a matching AuthInfo exists in the Core. Without one the registrar
+        /// answers 401 and no volunteer is ever rung.
+        let hasAuthInfo: Bool
+        /// Whether a TURN AuthInfo exists for the relay credential.
+        let hasTurnAuthInfo: Bool
+        /// `MediaEncryption.rawValue`: 0 None, 1 SRTP, 2 ZRTP, 3 DTLS.
+        let mediaEncryption: Int
+        let mediaEncryptionMandatory: Bool
+        let iceEnabled: Bool
+        let stunEnabled: Bool
+        let turnEnabled: Bool
+        let stunServer: String?
+        let stunServerUsername: String?
+        let udpTurnTransportEnabled: Bool
+        let tcpTurnTransportEnabled: Bool
+        let tlsTurnTransportEnabled: Bool
+        /// Length of the trust anchor installed on the Core, or nil when none is.
+        let trustAnchorByteCount: Int?
+    }
+
+    func registrationForTesting(hubId: String) -> RegistrationSnapshot? {
+        #if canImport(linphonesw)
+        guard let core, let account = hubAccounts[hubId] else { return nil }
+        let params = account.params
+        let policy = params?.natPolicy
+        let authInfos = hubAuthInfos[hubId]
+        return RegistrationSnapshot(
+            identityAddress: params?.identityAddress?.asStringUriOnly(),
+            serverAddress: params?.serverAddress?.asStringUriOnly(),
+            registerEnabled: params?.registerEnabled ?? false,
+            expires: params?.expires ?? 0,
+            hasAuthInfo: authInfos?.sip != nil && core.authInfoList.contains { $0.username == params?.identityAddress?.username },
+            hasTurnAuthInfo: authInfos?.turn != nil,
+            mediaEncryption: core.mediaEncryption.rawValue,
+            mediaEncryptionMandatory: core.isMediaEncryptionMandatory,
+            iceEnabled: policy?.iceEnabled ?? false,
+            stunEnabled: policy?.stunEnabled ?? false,
+            turnEnabled: policy?.turnEnabled ?? false,
+            stunServer: policy?.stunServer,
+            stunServerUsername: policy?.stunServerUsername,
+            udpTurnTransportEnabled: policy?.udpTurnTransportEnabled ?? false,
+            tcpTurnTransportEnabled: policy?.tcpTurnTransportEnabled ?? false,
+            tlsTurnTransportEnabled: policy?.tlsTurnTransportEnabled ?? false,
+            trustAnchorByteCount: appliedTrustAnchor?.count
+        )
+        #else
+        _ = hubId
+        return nil
+        #endif
+    }
+
+    /// `MediaEncryption.rawValue` for a server-supplied `mediaEncryption` string, or nil
+    /// when this client refuses it. Raw value because the test target cannot name the
+    /// SDK's enum.
+    static func mediaEncryptionRawValueForTesting(_ value: String) -> Int? {
+        #if canImport(linphonesw)
+        return mediaEncryption(for: value)?.rawValue
+        #else
+        _ = value
+        return nil
+        #endif
+    }
+
+    /// Raw values of the encryptions this client will carry, for assertions that must not
+    /// hardcode liblinphone's numbering.
+    enum MediaEncryptionRawValue {
+        static let none = 0
+        static let srtp = 1
+        static let zrtp = 2
+        static let dtls = 3
     }
     #endif
 }
