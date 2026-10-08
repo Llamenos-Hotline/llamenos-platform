@@ -1,13 +1,15 @@
-# Telephony end-to-end: a real call through self-hosted Asterisk
+# Telephony end-to-end: a real call through the SIP edge and self-hosted Asterisk
 
-`run-call-e2e.sh` proves that a phone call is actually routed, and that the
-caller actually hears what the operator uploaded — not that Asterisk booted. It
-starts, in its own compose project (`ll-telephony-e2e`), on one Docker network:
+`run-call-e2e.sh` proves that a phone call is routed through the same
+client-facing Kamailio edge as a deployment, and that the caller hears the
+uploaded prompt — not just that Asterisk booted. It starts, in its own compose
+project (`ll-telephony-e2e`), on one Docker network:
 
 | Service       | Role                                                                  |
 |---------------|-----------------------------------------------------------------------|
 | `app`         | The shipped app image, built from this tree, with the project's own `postgres` and `rustfs` |
-| `asterisk`    | The hotline PBX, with the shipped `asterisk-config/` — and, like a fresh deployment, no SIP trunk |
+| `kamailio`    | Client-facing SIP edge; the only published SIP listener |
+| `asterisk`    | The hotline PBX, with the shipped `asterisk-config/` — and no published SIP ports |
 | `sip-bridge`  | The shipped bridge image (ARI ↔ app webhooks at `http://app:3000`)   |
 | `sip-carrier` | A second Asterisk playing the phone network — TEST ONLY (`carrier/`)  |
 
@@ -15,7 +17,9 @@ starts, in its own compose project (`ll-telephony-e2e`), on one Docker network:
 
 Every scenario provisions the SIP trunk the way an operator does, through
 `POST /api/provider-setup/create-sip-trunk`, which writes it into the PBX over
-ARI (astdb, on the `asterisk-db` volume). Nothing configures a trunk any other way.
+ARI (astdb, on the `asterisk-db` volume). The simulated caller sends SIP
+traffic to Kamailio, which dispatches it to Asterisk; no E2E client can connect
+directly to a host-published Asterisk SIP port.
 
 1. **Answered call** — provisions a hub, the Asterisk provider, a volunteer and
    the trunk through the API; the carrier dials the hotline over SIP; the worker's IVR and
@@ -65,26 +69,37 @@ played through µ-law and rejects one that was not.
 ## The per-volunteer SIP registrar
 
 `run-register-e2e.sh` proves the safe half of #1435 against the same stack
-(own compose project `ll-telephony-register-e2e`): `/api/telephony/sip-token`
+(own compose project `ll-telephony-register-e2e`). It runs two specs.
+
+`kamailio-edge.e2e.ts` (#1688) asserts the SIP edge is **actually up** —
+measured at the socket, never in file text: the Kamailio container is running
+with zero restarts and answers `kamcmd core.version`; a SIP OPTIONS over UDP
+5060, TCP 5060 and TLS 5061 each gets a 200 from Kamailio itself (TLS verified
+against the published trust anchor); and a REGISTER through the TLS listener
+with an ARI-provisioned credential gets 200 while a wrong secret gets 401.
+It replaces a test that asserted the compose file *contained certain strings*
+— an assertion a dead edge satisfies, which is how the edge spent its life
+down while everything looked configured.
+
+`asterisk-register.e2e.ts`: `/api/telephony/sip-token`
 issues a REAL per-volunteer identity — username `vol_<pubkey16>`, a derived
 per-endpoint secret, time-limited TURN credentials — and that identity
-actually registers against the live PBX:
+registers through the client-facing SIP edge against the live PBX:
 
 1. The operator configures the Asterisk provider through the API
    (`sipDomain` is the public registrar host clients REGISTER against).
 2. A volunteer fetches `/api/telephony/sip-token`; the worker provisions
    `auth`/`aor`/`endpoint` on the PBX over ARI (the #1327 trunk path) and
    returns the credential plus RFC 8489 TURN credentials.
-3. `sip-register.ts` — a minimal hand-rolled SIP REGISTER client — answers
-   the digest challenge over TCP and registers: 200 OK with the issued
-   credential, 401 with a wrong one, 401 again after the volunteer's account
-   is deleted (the revocation hook removes the PJSIP objects; the e2e checks
-   they are gone over ARI).
+3. `sip-register.ts` — a minimal SIP REGISTER client — validates Kamailio's
+   published trust anchor, answers the digest challenge over TLS, and registers
+   through the edge: 200 OK with the issued credential, 401 with a wrong one,
+   401 again after the volunteer's account is deleted (the revocation hook
+   removes the PJSIP objects; the e2e checks they are gone over ARI).
 
-The TLS (`:5061`) and WSS (`:8089`) transports the mobile/desktop clients use
-are enabled in `asterisk-config/pjsip.conf` with an entrypoint-generated
-self-signed certificate; this e2e exercises the same registrar over TCP,
-which is transport-agnostic as far as the endpoint objects are concerned.
+The app-facing TLS listener (`:5061`) belongs to Kamailio. The PBX TLS
+transport remains internal for PBX-side integration; this e2e verifies the
+client-facing TLS handshake and registration rather than a direct PBX socket.
 
 ```sh
 deploy/docker/tests/telephony/run-register-e2e.sh                       # needs only Docker and bun
@@ -101,7 +116,7 @@ produced a client that believed it was configured correctly.
 
 | Defect | What was wrong | Evidence it is fixed |
 |---|---|---|
-| TLS trust | The client set no root CA, the PBX certificate is self-signed → `tlsv1 alert unknown ca`. | A `200 OK` for a `REGISTER` on Asterisk's TLS transport, with `verifyServerCertificates`/`verifyServerCn` still on. |
+| TLS trust | The client set no root CA, the edge certificate is self-signed → `tlsv1 alert unknown ca`. | A `200 OK` for a `REGISTER` through Kamailio's TLS listener, with `verifyServerCertificates`/`verifyServerCn` still on; Asterisk receives the forwarded request over its internal UDP transport. |
 | SRTP vs DTLS | The client mandated `SRTP`; the endpoint is provisioned `media_encryption: dtls`. Nothing could negotiate. | Asterisk's SDP answer (`UDP/TLS/RTP/SAVPF`, `a=fingerprint`) and `StreamsRunning` with `currentParams.mediaEncryption == DTLS`. |
 | ICE dropped | `iceServers` was deserialised and discarded — no STUN, no TURN, no `natPolicy`. | `a=candidate` lines of types beyond `host` in the offer Asterisk logs. |
 
@@ -113,8 +128,8 @@ How the pieces fit:
 
 * The emulator reaches the host, and only the host, at `10.0.2.2`. So that is
   the configured `sipDomain`, the `TURN_HOST`, **and** a mandatory
-  `subjectAltName` on the PBX certificate — a client verifies the hostname as
-  well as the chain.
+  `subjectAltName` on the Kamailio edge certificate — a client verifies the
+  hostname as well as the chain.
 * The trust anchor is not installed out of band. `/api/telephony/sip-token`
   publishes the SIP edge's certificate (public half only) in its response, and
   that response arrives over the app's own certificate-pinned HTTPS channel.

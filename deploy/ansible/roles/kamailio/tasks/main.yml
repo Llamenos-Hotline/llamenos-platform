@@ -297,30 +297,35 @@
     state: present
   register: kamailio_compose
 
-- name: Wait for Kamailio JSONRPC endpoint
-  ansible.builtin.uri:
-    url: "http://localhost:{{ kamailio_jsonrpc_port }}/jsonrpc"
-    method: POST
-    body_format: json
-    body:
-      jsonrpc: "2.0"
-      method: "core.psx"
-      id: 1
-    status_code: 200
+# The management probe is `kamcmd core.version` over the ctl.so binrpc socket,
+# NOT the HTTP JSONRPC endpoint this task used to poll. kamailio.cfg serves
+# jsonrpcs with transport=2 (FIFO) and never loads xhttp.so, so nothing binds
+# kamailio_jsonrpc_port and a uri probe of /jsonrpc cannot succeed on ANY
+# deployment of this role — it measured an endpoint that does not exist
+# (issue #1688, defect 4). kamcmd talks to the same ctl socket the container
+# healthcheck uses, so a daemon that is up answers and one that is not does
+# not.
+- name: Wait for Kamailio to answer on its management socket
+  ansible.builtin.command: >
+    docker compose --project-directory {{ app_dir }}/services/kamailio
+    exec -T kamailio kamcmd core.version
   register: kamailio_health
   retries: 10
   delay: 3
+  until: kamailio_health.rc == 0
   ignore_errors: true
+  changed_when: false
 
-# The JSONRPC status code, not `is succeeded`: `succeeded` means `not failed`,
+# The kamcmd exit status, not `is succeeded`: `succeeded` means `not failed`,
 # so a probe that never ran reported HEALTHY (issue #1617). This task only
 # reports — nothing in the role gates on a Kamailio that never answered, which
 # is noted in the PR for #1617 as found-but-not-changed; making it fatal is a
-# deploy-behaviour change, not a reporting fix.
+# deploy-behaviour change, not a reporting fix (#1636 owns the fatal-vs-nonfatal
+# policy).
 - name: Report Kamailio status
   ansible.builtin.debug:
     msg: >-
-      Kamailio JSONRPC endpoint:
-      {{ 'HEALTHY' if (kamailio_health is not skipped and (kamailio_health.status | default(0) | int) == 200)
+      Kamailio management socket (kamcmd core.version):
+      {{ 'HEALTHY' if (kamailio_health is not skipped and (kamailio_health.rc | default(1) | int) == 0)
          else 'NOT CHECKED' if kamailio_health is skipped
          else 'NOT READY' }}

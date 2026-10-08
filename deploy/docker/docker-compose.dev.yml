@@ -11,7 +11,7 @@
 #
 # Optional profiles:
 #   --profile signal      - Signal CLI + notifier sidecar
-#   --profile telephony   - Asterisk PBX + SIP bridge + CoTURN (STUN/TURN)
+#   --profile telephony   - Kamailio SIP edge + Asterisk PBX + SIP bridge + CoTURN (STUN/TURN)
 #   --profile push        - ntfy (UnifiedPush relay for Android push notifications)
 #
 # Stop:
@@ -123,7 +123,7 @@ services:
       retries: 3
       start_period: 30s
 
-  # ── Optional: Asterisk PBX for local SIP telephony dev ─────────────────
+  # ── Optional: Asterisk PBX behind the Kamailio SIP edge ────────────────
   # Start with: docker compose -f deploy/docker/docker-compose.dev.yml --profile telephony up -d
   # No call can route until the app provisions the SIP trunk
   # (POST /api/provider-setup/create-sip-trunk; see asterisk-config/sorcery.conf).
@@ -135,19 +135,15 @@ services:
     image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
     profiles: ["telephony"]
     ports:
-      - "5060:5060/udp"   # SIP
-      - "5060:5060/tcp"   # SIP TCP
-      - "5061:5061/tcp"   # SIP TLS — the transport /sip-token hands clients
-      - "8088:8088"       # ARI HTTP
+      - "8088:8088"       # ARI HTTP; SIP is reached only through Kamailio.
     # Root only for the entrypoint's chown of the astdb volume; Asterisk drops
     # to the asterisk user as it starts (-U/-G, as the image's own CMD does).
     user: root
     entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
     environment:
-      # Names the self-signed SIP edge certificate must cover. Asterisk is the
-      # edge in the dev stack (no Kamailio), so a client checking the hostname
-      # needs the address it dials in here: 10.0.2.2 is the Android emulator's
-      # alias for the host, 127.0.0.1/localhost are added unconditionally.
+      # Names covered by the Asterisk internal TLS certificate and by the
+      # Kamailio edge certificate. 10.0.2.2 is the Android emulator's alias
+      # for the host; 127.0.0.1/localhost are added unconditionally.
       - SIP_TLS_SANS=${SIP_TLS_SANS:-10.0.2.2}
       # Certificate and key the TLS/WSS transports serve. Unset = the
       # entrypoint generates a self-signed combined PEM at
@@ -252,6 +248,42 @@ services:
       retries: 3
       start_period: 15s
 
+  # Kamailio is the client-facing SIP edge in the telephony dev profile, as it
+  # is in the self-hosted deployment. Asterisk has no published SIP ports, so
+  # clients and call measurements cannot accidentally bypass this listener.
+  kamailio:
+    image: ghcr.io/kamailio/kamailio:5.7.1-bookworm@sha256:a5c0564fe4bf12315ec3aed97303bc63207c0cec0c5b1150ea6500f4747163e9 # pinned 2026-09-19
+    profiles: ["telephony"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/kamailio-entrypoint.sh"]
+    ports:
+      - "${SIP_UDP_PORT:-5060}:5060/udp"
+      - "${SIP_TCP_PORT:-5060}:5060/tcp"
+      - "${SIPS_PORT:-5061}:5061/tcp"
+    environment:
+      - SIP_TLS_SANS=${SIP_TLS_SANS:-10.0.2.2}
+      - SIP_TLS_ANCHOR_SOURCE=${KAMAILIO_TLS_ANCHOR_SOURCE:-}
+      - KAMAILIO_TLS_CERT_FILE=${KAMAILIO_TLS_CERT_FILE:-/var/lib/kamailio/cert.pem}
+      - KAMAILIO_TLS_KEY_FILE=${KAMAILIO_TLS_KEY_FILE:-/var/lib/kamailio/cert.pem}
+    volumes:
+      - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      - ./kamailio/tls.cfg.template:/usr/local/share/llamenos/tls.cfg.template:ro
+      - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list:ro
+      - ./kamailio/kamailio-entrypoint.sh:/usr/local/share/llamenos/kamailio-entrypoint.sh:ro
+      - ./sip-tls-cert.sh:/usr/local/share/llamenos/sip-tls-cert.sh:ro
+      - ${SIP_TLS_CERT_DIR:-./sip-tls-mount}:/etc/llamenos/sip-tls:ro
+      - kamailio-keys:/var/lib/kamailio
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls
+    depends_on:
+      asterisk:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kamcmd", "core.version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   # ── Optional: ntfy push relay for UnifiedPush (Android) ──────────────────
   # Start with: docker compose -f deploy/docker/docker-compose.dev.yml --profile push up -d
   ntfy:
@@ -284,6 +316,7 @@ configs:
 volumes:
   asterisk-db:
   asterisk-keys:
+  kamailio-keys:
   sip-tls-anchor:
   pgdata:
   rustfsdata:

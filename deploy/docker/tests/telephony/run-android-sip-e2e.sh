@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prove the Android SIP transport and media layer against a real PBX (#1188).
+# Prove the Android SIP transport and media layer through the client-facing SIP
+# edge and against the real PBX (#1188).
 #
 # Three defects, each only observable where liblinphone meets Asterisk:
 #
@@ -10,17 +11,17 @@
 #   3. `iceServers` was parsed and dropped — no STUN, no TURN, no natPolicy.
 #
 # What this does:
-#   1. Boots the telephony stack (app, Postgres, RustFS, Asterisk + CoTURN +
-#      simulated carrier), with Asterisk's TLS port on the host and its
-#      certificate covering 10.0.2.2 — the emulator's alias for the host.
+#   1. Boots the telephony stack (app, Postgres, RustFS, Kamailio, Asterisk +
+#      CoTURN + simulated carrier), with Kamailio's TLS port on the host and
+#      its certificate covering 10.0.2.2 — the emulator's alias for the host.
 #   2. Enrols a volunteer through the API and fetches a REAL per-volunteer
 #      credential from /api/telephony/sip-token (android-sip-params.e2e.ts).
 #   3. Boots an emulator, installs the app, and runs LiveSipRegistrationTest:
 #      the production LinphoneService registers over TLS with that credential
 #      and places an INVITE at the harness's echo target.
-#   4. Reads the evidence off ASTERISK'S OWN LOG: a 200 OK REGISTER on a TLS
-#      transport, the SDP answer's agreed media encryption, and the ICE
-#      candidates in the client's offer.
+#   4. Reads the forwarded REGISTER and SDP answer off ASTERISK'S OWN LOG.
+#      The client can only reach Kamailio's published TLS listener; Asterisk
+#      publishes no SIP ports, so the successful exchange traversed the edge.
 #
 # Receiving-end evidence, not a client-side assertion — that is the whole point:
 # every one of the three defects produced a client that believed it was
@@ -60,7 +61,7 @@ EVIDENCE_DIR="${E2E_EVIDENCE_DIR:-$ROOT/.android-sip-evidence}"
 PARAMS_FILE="$EVIDENCE_DIR/sip-params.json"
 
 # The emulator reaches the host, and only the host, at 10.0.2.2 — so that is the
-# SIP domain, the TURN host, and a mandatory SAN on the PBX certificate (the
+# SIP domain, the TURN host, and a mandatory SAN on the edge certificate (the
 # client verifies the hostname as well as the chain).
 EMULATOR_HOST_ALIAS=10.0.2.2
 
@@ -92,6 +93,7 @@ COMPOSE=(docker compose -p "$PROJECT"
   --profile telephony)
 
 ASTERISK="$PROJECT-asterisk-1"
+KAMAILIO="$PROJECT-kamailio-1"
 ASTERISK_LOG="$EVIDENCE_DIR/asterisk.log"
 
 cleanup() {
@@ -117,20 +119,22 @@ done
 echo "── booting the telephony stack ─────────────────────────────────────────"
 "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
 docker volume rm -f \
-  "${PROJECT}_asterisk-db" "${PROJECT}_asterisk-keys" "${PROJECT}_sip-tls-anchor" \
+  "${PROJECT}_asterisk-db" "${PROJECT}_asterisk-keys" "${PROJECT}_kamailio-keys" "${PROJECT}_sip-tls-anchor" \
   "${PROJECT}_pgdata" "${PROJECT}_rustfsdata" >/dev/null 2>&1 || true
-"${COMPOSE[@]}" up -d --build --wait app asterisk coturn sip-carrier sip-bridge
+"${COMPOSE[@]}" up -d --build --wait app asterisk kamailio coturn sip-carrier sip-bridge
 
-echo "── PBX TLS transport and certificate ───────────────────────────────────"
+echo "── Kamailio TLS edge and trust anchor ──────────────────────────────────"
+docker exec "$KAMAILIO" kamcmd core.version
+docker exec "$KAMAILIO" sh -c 'grep -c "BEGIN CERTIFICATE" /var/lib/llamenos/sip-tls/kamailio.pem'
+if docker exec "$KAMAILIO" sh -c 'grep -q "PRIVATE KEY" /var/lib/llamenos/sip-tls/kamailio.pem'; then
+  echo "FATAL: the published SIP edge trust anchor contains a private key" >&2
+  exit 1
+fi
+
+echo "── Internal PBX transport ─────────────────────────────────────────────"
 docker exec "$ASTERISK" asterisk -rx "pjsip show transports"
 docker exec "$ASTERISK" sh -c \
   'openssl x509 -in /var/lib/asterisk/keys/asterisk.pem -noout -subject -ext subjectAltName'
-# The anchor the app will publish — certificates only, never key material.
-docker exec "$ASTERISK" sh -c 'grep -c "BEGIN CERTIFICATE" /var/lib/llamenos/sip-tls/asterisk.pem'
-if docker exec "$ASTERISK" sh -c 'grep -q "PRIVATE KEY" /var/lib/llamenos/sip-tls/asterisk.pem'; then
-  echo "FATAL: the published trust anchor contains a private key" >&2
-  exit 1
-fi
 
 # Every SIP message in the log from here on: this is the receiving end.
 docker exec "$ASTERISK" asterisk -rx "pjsip set logger on"
@@ -208,26 +212,26 @@ check() {
 }
 
 # Asterisk's pjsip logger prints each message under a header naming the
-# transport, e.g. "Transmitting SIP response (…) to TLS:10.0.2.16:41234".
+# transport, e.g. "Transmitting SIP response (…) to UDP:198.51.100.10:41234".
 # sip-blocks.awk cuts the log into whole messages on those markers, so each
 # claim below is about ONE message rather than greps that might be about
 # different ones.
 BLOCKS="$ROOT/deploy/docker/tests/telephony/sip-blocks.awk"
 block() { awk -v dir="$1" -v want="$2" -v also="${3:-}" -f "$BLOCKS" "$ASTERISK_LOG"; }
 
-TLS_REGISTER_200="$(block "to TLS:" "200 OK" "REGISTER" | grep -c '^SIP/2.0 200 OK')"
+EDGE_REGISTER_200="$(block "to UDP:" "200 OK" "REGISTER" | grep -c '^SIP/2.0 200 OK')"
 
 echo
-echo "── 1. REGISTER answered 200 OK over TLS ────────────────────────────────"
-echo "   200 OK responses to a REGISTER, transmitted over TLS: $TLS_REGISTER_200"
+echo "── 1. REGISTER forwarded through the edge and answered 200 OK ──────────"
+echo "   200 OK responses to a REGISTER, received by Asterisk over UDP: $EDGE_REGISTER_200"
 # The exchange itself, so the claim is checkable and not just counted.
-block "from TLS:" "REGISTER sip:" | head -24
-block "to TLS:" "200 OK" "REGISTER" | head -16
+block "from UDP:" "REGISTER sip:" | head -24
+block "to UDP:" "200 OK" "REGISTER" | head -16
 CA_BUFFER_ERRORS="$(grep -c 'Error reading CA certificates from buffer' "$ASTERISK_LOG")"
 echo "   pjproject empty-CA-buffer errors (expected 0): $CA_BUFFER_ERRORS"
 UNKNOWN_CA_ALERTS="$(grep -ci 'alert unknown ca' "$ASTERISK_LOG")"
 echo "   TLS alerts from the client (expected 0):       $UNKNOWN_CA_ALERTS"
-check "a REGISTER was answered 200 OK over TLS" '[ "$TLS_REGISTER_200" -ge 1 ]'
+check "a REGISTER through Kamailio was answered 200 OK by Asterisk" '[ "$EDGE_REGISTER_200" -ge 1 ]'
 check "no pjproject empty-CA-buffer errors" '[ "$CA_BUFFER_ERRORS" -eq 0 ]'
 check "no TLS alert unknown ca from the client" '[ "$UNKNOWN_CA_ALERTS" -eq 0 ]'
 
@@ -237,7 +241,7 @@ echo "── 2. Agreed media encryption, from the PBX's own SDP answer ───
 # PBX stating what it agreed to — not the client stating what it asked for.
 # An empty a=fingerprint here means the endpoint has no DTLS key material and
 # no handshake can ever complete, which is how that defect was found.
-block "to TLS:" "200 OK" "m=audio" \
+block "to UDP:" "200 OK" "m=audio" \
   | grep -E "^(SIP/2.0|CSeq:|c=IN|m=audio|a=fingerprint|a=setup|a=crypto|a=ice-ufrag)" | head -14
 SAVP_LINES="$(grep -cE '^m=audio .*SAVPF?' "$ASTERISK_LOG")"
 echo "   SAVP/SAVPF audio lines (encrypted profiles):  $SAVP_LINES"
@@ -247,7 +251,7 @@ NOT_ACCEPTABLE="$(grep -c '488 Not Acceptable Here' "$ASTERISK_LOG")"
 # An answer whose fingerprint is EMPTY is the signature of an endpoint with no
 # DTLS key material: the SDP looks right and no handshake can ever run. That is
 # how that defect was found, so it is checked and not merely printed.
-ANSWER_FINGERPRINTS="$(block "to TLS:" "200 OK" "m=audio" | grep -cE '^a=fingerprint:SHA-256 [0-9A-F][0-9A-F]:')"
+ANSWER_FINGERPRINTS="$(block "to UDP:" "200 OK" "m=audio" | grep -cE '^a=fingerprint:SHA-256 [0-9A-F][0-9A-F]:')"
 echo "   488 Not Acceptable Here (expected 0):        $NOT_ACCEPTABLE"
 echo "   non-empty DTLS fingerprints in PBX answers:  $ANSWER_FINGERPRINTS"
 check "the PBX answered with an encrypted media profile" '[ "$SAVP_LINES" -ge 1 ]'
@@ -267,7 +271,7 @@ echo "   relay (TURN allocated):         $RELAY"
 check "the client offered server-reflexive candidates (STUN applied)" '[ "$SRFLX" -ge 1 ]'
 check "the client offered relay candidates (TURN applied)" '[ "$RELAY" -ge 1 ]'
 echo "   the PBX's own candidates (it does ICE too):"
-block "to TLS:" "200 OK" "m=audio" | grep -E "^a=candidate" | sed 's/^/     /' | head -4
+block "to UDP:" "200 OK" "m=audio" | grep -E "^a=candidate" | sed 's/^/     /' | head -4
 
 echo
 echo "── Channel the echo target answered ────────────────────────────────────"

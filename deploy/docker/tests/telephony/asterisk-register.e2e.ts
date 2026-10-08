@@ -4,8 +4,10 @@
  *   volunteer ──GET /api/telephony/sip-token──▶ worker
  *     worker ──ARI dynamic config──▶ Asterisk: PUT auth/aor/endpoint vol_<pubkey16>
  *     worker ◀── per-volunteer credential + time-limited TURN credentials
- *   volunteer (this test) ──REGISTER over TCP──▶ Asterisk ──401 challenge──▶
- *     digest answer ──200 OK──▶ the endpoint is LIVE on the PBX
+ *   volunteer (this test) ──REGISTER over TLS──▶ Kamailio ──UDP──▶ Asterisk
+ *     ◀──401 challenge───────◀────────────────── ◀──401 challenge──
+ *     digest answer ──TLS──▶ Kamailio ──UDP──▶ Asterisk ──200 OK──▶
+ *     the endpoint is LIVE on the PBX through the client-facing edge
  *   admin ──DELETE /api/users/:pubkey──▶ worker ──ARI delete──▶ Asterisk
  *     re-REGISTER with the same (still derivable) credential ──401──▶ revoked
  *
@@ -15,8 +17,9 @@
  * config path as the SIP trunk (#1327), so a green run here means the trunk
  * machinery and the registrar machinery agree with the live PBX.
  *
- * Run with run-register-e2e.sh (it starts the app and the PBX stack).
+ * Run with run-register-e2e.sh (it starts the app, SIP edge and PBX stack).
  */
+import { execFileSync } from 'node:child_process'
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto'
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import {
@@ -27,11 +30,12 @@ import {
   createUserViaApi,
   updateUserViaApi,
 } from '../../../../tests/api-helpers'
-import { registerOverTcp } from './sip-register'
+import { registerOverTls } from './sip-register'
 
-/** The PBX's SIP port, published on the host by docker-compose.dev.yml */
-const PBX_HOST = process.env.E2E_PBX_HOST ?? '127.0.0.1'
-const PBX_PORT = Number(process.env.E2E_PBX_PORT ?? 5060)
+/** The published TLS listener owned by Kamailio, not Asterisk. */
+const SIP_EDGE_HOST = process.env.E2E_SIP_EDGE_HOST ?? '127.0.0.1'
+const SIP_EDGE_TLS_PORT = Number(process.env.E2E_SIP_EDGE_TLS_PORT ?? 5061)
+const KAMAILIO_CONTAINER = process.env.E2E_KAMAILIO_CONTAINER ?? 'll-telephony-register-e2e-kamailio-1'
 /** ARI as the host reaches it (published by the dev compose) */
 const ARI_REST_URL = process.env.E2E_ARI_REST_URL ?? 'http://127.0.0.1:8088/ari'
 const ARI_USERNAME = process.env.ARI_USERNAME ?? 'llamenos'
@@ -89,10 +93,22 @@ async function configureAsteriskProvider(request: APIRequestContext): Promise<vo
       sipDomain: REGISTRAR_DOMAIN,
     },
   })
-  expect(res.status, JSON.stringify(res.data)).toBe(200)
+  expect(res.status, 'Asterisk provider configuration succeeds').toBe(200)
 }
 
-test('a volunteer SIP identity registers against the PBX, and deletion revokes it', async ({ request }) => {
+function sipEdgeTrustAnchor(): string {
+  const pem = execFileSync(
+    'docker',
+    ['exec', KAMAILIO_CONTAINER, 'cat', '/var/lib/llamenos/sip-tls/kamailio.pem'],
+    { encoding: 'utf8' },
+  )
+  if (!pem.includes('-----BEGIN CERTIFICATE-----') || pem.includes('PRIVATE KEY')) {
+    throw new Error('Kamailio did not publish a certificate-only SIP TLS trust anchor')
+  }
+  return pem
+}
+
+test('a volunteer SIP identity registers through the Kamailio edge, and deletion revokes it', async ({ request }) => {
   await configureAsteriskProvider(request)
 
   // Hub membership is what authorises the credential (#1540), so the
@@ -113,7 +129,7 @@ test('a volunteer SIP identity registers against the PBX, and deletion revokes i
 
   // /sip-token issues a REAL per-volunteer credential.
   const token = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', volunteer.seedHex)
-  expect(token.status, JSON.stringify(token.data)).toBe(200)
+  expect(token.status, 'the volunteer SIP token is issued').toBe(200)
   const { sip } = token.data
   const expectedUsername = `vol_${volunteer.pubkey.slice(0, 16)}`
   expect(token.data.provider).toBe('asterisk')
@@ -152,37 +168,29 @@ test('a volunteer SIP identity registers against the PBX, and deletion revokes i
     expect(res.status, `ARI ${type}/${expectedUsername}`).toBe(200)
   }
 
-  // The credential actually registers against the PBX: challenge, digest, 200.
-  const registered = await registerOverTcp({
-    host: PBX_HOST,
-    port: PBX_PORT,
+  // The credential registers over authenticated TLS at the client-facing edge,
+  // which forwards it to the real Asterisk registrar.
+  const caPem = sipEdgeTrustAnchor()
+  const register = (password: string) => registerOverTls({
+    host: SIP_EDGE_HOST,
+    port: SIP_EDGE_TLS_PORT,
     domain: REGISTRAR_DOMAIN,
     username: sip.username,
-    password: sip.password,
+    password,
+    caPem,
   })
+  const registered = await register(sip.password)
   expect(registered.status, `REGISTER: ${registered.reason}`).toBe(200)
 
-  // The wrong password does not.
-  const wrong = await registerOverTcp({
-    host: PBX_HOST,
-    port: PBX_PORT,
-    domain: REGISTRAR_DOMAIN,
-    username: sip.username,
-    password: 'definitely-not-the-issued-secret',
-  })
+  // The edge must not weaken the registrar's digest challenge.
+  const wrong = await register('definitely-not-the-issued-secret')
   expect(wrong.status).toBe(401)
 
   // Re-issuance is idempotent: the same credential, still registering.
   const reissued = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', volunteer.seedHex)
   expect(reissued.status).toBe(200)
   expect(reissued.data.sip.password).toBe(sip.password)
-  const reregistered = await registerOverTcp({
-    host: PBX_HOST,
-    port: PBX_PORT,
-    domain: REGISTRAR_DOMAIN,
-    username: sip.username,
-    password: sip.password,
-  })
+  const reregistered = await register(sip.password)
   expect(reregistered.status, `re-REGISTER: ${reregistered.reason}`).toBe(200)
 
   // Revocation: deleting the volunteer removes the PJSIP objects, and the
@@ -193,13 +201,7 @@ test('a volunteer SIP identity registers against the PBX, and deletion revokes i
     const res = await ariConfigObject(type, expectedUsername)
     expect(res.status, `ARI ${type}/${expectedUsername} after revocation`).toBe(404)
   }
-  const afterRevoke = await registerOverTcp({
-    host: PBX_HOST,
-    port: PBX_PORT,
-    domain: REGISTRAR_DOMAIN,
-    username: sip.username,
-    password: sip.password,
-  })
+  const afterRevoke = await register(sip.password)
   expect(afterRevoke.status).toBe(401)
 })
 
@@ -235,17 +237,25 @@ test('removal tears the endpoint down at the PBX, and /sip-token will not re-pro
 
   const removedUsername = `vol_${removed.pubkey.slice(0, 16)}`
   const keptUsername = `vol_${kept.pubkey.slice(0, 16)}`
+  const caPem = sipEdgeTrustAnchor()
   const register = (username: string, password: string) =>
-    registerOverTcp({ host: PBX_HOST, port: PBX_PORT, domain: REGISTRAR_DOMAIN, username, password })
+    registerOverTls({
+      host: SIP_EDGE_HOST,
+      port: SIP_EDGE_TLS_PORT,
+      domain: REGISTRAR_DOMAIN,
+      username,
+      password,
+      caPem,
+    })
 
-  // Both members are issued a credential and both REGISTER against the PBX.
+  // Both members are issued a credential and register through the TLS edge.
   const issued = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', removed.seedHex)
-  expect(issued.status, JSON.stringify(issued.data)).toBe(200)
+  expect(issued.status, 'the removed volunteer receives an initial SIP token').toBe(200)
   expect(issued.data.sip.username).toBe(removedUsername)
   expect((await register(removedUsername, issued.data.sip.password)).status).toBe(200)
 
   const keptIssued = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', kept.seedHex)
-  expect(keptIssued.status, JSON.stringify(keptIssued.data)).toBe(200)
+  expect(keptIssued.status, 'the retained volunteer receives a SIP token').toBe(200)
   expect((await register(keptUsername, keptIssued.data.sip.password)).status).toBe(200)
 
   // --- the one administrative act: removal from the hub --------------------
@@ -274,7 +284,7 @@ test('removal tears the endpoint down at the PBX, and /sip-token will not re-pro
   // 3. The control: the member who is still a member is untouched —
   //    issuance, re-issuance and registration all work exactly as before.
   const keptReissue = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', kept.seedHex)
-  expect(keptReissue.status, JSON.stringify(keptReissue.data)).toBe(200)
+  expect(keptReissue.status, 'the retained volunteer can reissue a SIP token').toBe(200)
   expect(keptReissue.data.sip.password).toBe(keptIssued.data.sip.password)
   expect((await register(keptUsername, keptReissue.data.sip.password)).status).toBe(200)
   for (const type of ['auth', 'aor', 'endpoint']) {
@@ -285,7 +295,7 @@ test('removal tears the endpoint down at the PBX, and /sip-token will not re-pro
   //    that leaked while they were out of the hub is not resurrected.
   await addHubMemberViaApi(request, hubId, removed.pubkey)
   const readmitted = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', removed.seedHex)
-  expect(readmitted.status, JSON.stringify(readmitted.data)).toBe(200)
+  expect(readmitted.status, 'the readmitted volunteer receives a fresh SIP token').toBe(200)
   expect(readmitted.data.sip.password).not.toBe(issued.data.sip.password)
   expect((await register(removedUsername, readmitted.data.sip.password)).status).toBe(200)
   expect((await register(removedUsername, issued.data.sip.password)).status).toBe(401)

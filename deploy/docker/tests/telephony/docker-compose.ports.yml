@@ -1,10 +1,9 @@
-# Overlay: move the PBX's published host ports, so a telephony e2e stack can
+# Overlay: isolate a telephony e2e stack's host ports, so it can
 # run beside the shared dev telephony stack (docker-compose.dev.yml --profile
 # telephony) instead of failing on "port is already allocated".
 #
 # Paths and services are those of docker-compose.dev.yml. `!override` replaces
-# the port list rather than appending to it (a merged list would still carry
-# the dev stack's 5060/8088).
+# the port lists rather than appending to them.
 #
 # TEST ONLY. Every variable is required: a runner that includes this overlay
 # without setting them would silently fall back to the colliding defaults it
@@ -12,10 +11,12 @@
 services:
   asterisk:
     ports: !override
-      - "127.0.0.1:${E2E_PBX_SIP_PORT:?set by the runner}:5060/udp"
-      - "127.0.0.1:${E2E_PBX_SIP_PORT:?set by the runner}:5060/tcp"
-      - "127.0.0.1:${E2E_PBX_TLS_PORT:?set by the runner}:5061/tcp"
       - "127.0.0.1:${E2E_PBX_ARI_PORT:?set by the runner}:8088"
+  kamailio:
+    ports: !override
+      - "127.0.0.1:${E2E_SIP_EDGE_PORT:?set by the runner}:5060/udp"
+      - "127.0.0.1:${E2E_SIP_EDGE_PORT:?set by the runner}:5060/tcp"
+      - "127.0.0.1:${E2E_SIP_EDGE_TLS_PORT:?set by the runner}:5061/tcp"
   # fetch-recording.ts reaches the bridge from the host, so it stays published
   # — just not on the dev stack's port.
   sip-bridge:
