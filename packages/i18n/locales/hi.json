@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "मैंने अपनी रिकवरी कुंजी को एक सुरक्षित स्थान पर सहेज लिया है",
     "backupDescription": "इस रिकवरी कुंजी को लिख लें और सुरक्षित रखें। नए डिवाइस पर अपना खाता पुनर्प्राप्त करने का यही एकमात्र तरीका है।",
     "backupDownloaded": "बैकअप डाउनलोड हो गया",
+    "backupFailed": "आपका एन्क्रिप्टेड बैकअप नहीं बनाया जा सका: {{reason}}",
     "backupTitle": "अपनी रिकवरी कुंजी सहेजें",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

@@ -879,6 +879,7 @@
     "backupAcknowledge": "Xa̱ ni̱ chikaa llave de recuperación mií nu̱ú iin lugar seguro",
     "backupDescription": "Tee llave de recuperación yóꞌo ta chikaa va̱ꞌa. Soo yóꞌo kúu ña nasa̱ka̱ cuenta miíún nu̱ú inka dispositivo.",
     "backupDownloaded": "Ni̱ descarga respaldo",
+    "backupFailed": "Ña ni kuu kasáꞌa respaldo ña yuꞌu nuꞌu: {{reason}}",
     "backupTitle": "Chikaa Llave de Recuperación",
     "confirmPin": "Nakachí PIN miíún",
     "confirmPinDescription": "Chikaa PIN iin kuiti inka vuelta ña nakachí",

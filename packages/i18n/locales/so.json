@@ -879,6 +879,7 @@
     "backupAcknowledge": "Furuhayga soo celinta waxaan ku kaydiyay meel amaan ah",
     "backupDescription": "Qor furahan soo celinta oo meel amaan ah kaydi. Waa habka keliya ee lagu soo celiyo xisaabtaada qalabka cusub.",
     "backupDownloaded": "Kaydkii waa la soo dejiyay",
+    "backupFailed": "Lama abuuri karin kaydkaaga sirroobay: {{reason}}",
     "backupTitle": "Kaydi Furuhaa Soo Celinta",
     "confirmPin": "Xaqiiji PIN-kaaga",
     "confirmPinDescription": "Mar kale geli PIN-kii si aad u xaqiijiso",

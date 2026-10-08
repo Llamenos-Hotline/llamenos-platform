@@ -879,6 +879,7 @@
     "backupAcknowledge": "Min kilîda xwe ya vegerandinê li cihekî ewle hilaniye",
     "backupDescription": "Vê kilîda vegerandinê binivîse û bi ewlehî hilîne. Ew tenê rê ye ku tu hesabê xwe li ser amûreke nû vegerînî.",
     "backupDownloaded": "Hilanîn hat daxistin",
+    "backupFailed": "Nesxeya we ya şîfrekirî nehat çêkirin: {{reason}}",
     "backupTitle": "Kilîda Vegerandinê Hilîne",
     "confirmPin": "PIN a xwe piştrast bike",
     "confirmPinDescription": "Ji bo piştrastkirinê heman PIN ê dîsa binivîse",

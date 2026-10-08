@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "Mwen te anrejistre kle rekiperasyon mwen nan yon kote ki an sekirite",
     "backupDescription": "Ekri kle rekiperasyon sa a epi kenbe li an sekirite. Se sèl fason pou rekipere kont ou sou yon nouvo aparèy.",
     "backupDownloaded": "Sovgad telechaje",
+    "backupFailed": "Nou pa t kapab kreye backup chifre ou a: {{reason}}",
     "backupTitle": "Anrejistre Kle Rekiperasyon Ou",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

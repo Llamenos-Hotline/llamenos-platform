@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "Я сохранил свой ключ восстановления в безопасном месте",
     "backupDescription": "Запишите этот ключ восстановления и храните его в безопасном месте. Это единственный способ восстановить аккаунт на новом устройстве.",
     "backupDownloaded": "Резервная копия скачана",
+    "backupFailed": "Не удалось создать зашифрованную резервную копию: {{reason}}",
     "backupTitle": "Сохраните ключ восстановления",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

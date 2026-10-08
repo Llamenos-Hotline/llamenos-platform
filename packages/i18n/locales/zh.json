@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "我已将恢复密钥保存在安全的位置",
     "backupDescription": "请记下此恢复密钥并妥善保管。这是在新设备上恢复账户的唯一方式。",
     "backupDownloaded": "备份已下载",
+    "backupFailed": "无法创建您的加密备份：{{reason}}",
     "backupTitle": "保存您的恢复密钥",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "Ich habe meinen Wiederherstellungsschlüssel an einem sicheren Ort gespeichert",
     "backupDescription": "Notieren Sie diesen Wiederherstellungsschlüssel und bewahren Sie ihn sicher auf. Er ist die einzige Möglichkeit, Ihr Konto auf einem neuen Gerät wiederherzustellen.",
     "backupDownloaded": "Backup heruntergeladen",
+    "backupFailed": "Ihr verschlüsseltes Backup konnte nicht erstellt werden: {{reason}}",
     "backupTitle": "Wiederherstellungsschlüssel speichern",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
