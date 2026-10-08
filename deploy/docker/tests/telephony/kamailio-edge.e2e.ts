@@ -67,7 +67,10 @@ async function ariConfigObject(
   const url = `${ARI_REST_URL}/asterisk/config/dynamic/res_pjsip/${type}/${encodeURIComponent(id)}`
   return fetch(url, {
     method,
-    headers: { Authorization: `Basic ${btoa(`${ARI_USERNAME}:${ARI_PASSWORD}`)}` },
+    headers: {
+      Authorization: `Basic ${btoa(`${ARI_USERNAME}:${ARI_PASSWORD}`)}`,
+      ...(fields ? { 'Content-Type': 'application/json' } : {}),
+    },
     ...(fields ? { body: JSON.stringify({ fields: Object.entries(fields).map(([attribute, value]) => ({ attribute, value })) }) } : {}),
   })
 }
