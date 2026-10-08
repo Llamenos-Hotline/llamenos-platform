@@ -1419,6 +1419,49 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     expect(text).not.toContain('add the \\`review\\` label')
   })
 
+  // THE FLEET MUST REQUEST THE REVIEW IT NEEDS (#1379).
+  //
+  // `fleet-review.yml` triggers on `review_requested`, and that is the ONLY
+  // event that can START a review (`synchronize` republishes an earned
+  // verdict and nothing more). `fleet/review` is a required context. So a
+  // fleet PR opened with no review request is not "unreviewed", it is
+  // unmergeable forever — measured on #1722, which arrived with
+  // `review_requested events: 0` and no `fleet/review` carrier at all.
+  //
+  // This is a SOURCE rail rather than a behavioural one because the defect
+  // is an absent CALL, not a wrong result: every unit test of
+  // `requestReviewAtOpen` passes just as well when nothing invokes it, which
+  // is exactly the state `main` shipped in. Deleting the call site has to
+  // break something.
+  it('realDispatch requests a review at PR open, next to the other at-open actions', () => {
+    const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'cli.ts'), 'utf8')
+    const dispatchIdx = text.indexOf('async function realDispatch(')
+    expect(dispatchIdx, 'realDispatch is gone from cli.ts').toBeGreaterThan(-1)
+    const body = text.slice(dispatchIdx, text.indexOf('\nasync function prDiff(', dispatchIdx))
+    expect(body).toContain('requestReviewAtOpen(')
+    // Same gating as the auto-merge arm beside it: no PR, or a worker that
+    // pushed somewhere else, means there is nothing to request a review on.
+    expect(body).toContain('branchMismatch: resolved.branchMismatch')
+  })
+
+  // The two idioms that look like they start a review and do not. Both are
+  // measured, both returned 200/201 while emitting no event, and both were in
+  // this module's own earlier design — so they are pinned OUT by name rather
+  // than left to a reviewer to notice coming back.
+  it('request-review.ts emits no retired `review` label and no reviewer DELETE', () => {
+    const text = readFileSync(join(process.cwd(), 'orchestrator', 'src', 'request-review.ts'), 'utf8')
+    // #1169: the label is deleted from .github/labels.yml; nothing fires on
+    // it. Applying it is an API call that reports success and starts nothing.
+    expect(text).not.toContain("'--add-label'")
+    // #1611: GitHub re-pins a CODEOWNER's request the instant it is removed,
+    // the DELETE answers 200 with the login still listed, and the re-request
+    // is then the #1471 no-op. The loop cannot terminate.
+    expect(text).not.toContain("'-X', 'DELETE'")
+    // The live request list is read BEFORE any POST, which is what makes the
+    // POST a true add rather than a no-op.
+    expect(text).toContain('readRequestedReviewers')
+  })
+
   it('fleet/review still carries no write permission and no --approve', () => {
     const block = jobBlock(fleetReviewYaml(), 'fleet-review')
     const permsBlock = block.match(/\n {4}permissions:\n((?:\s{6}.*\n)*)/)?.[1] ?? ''

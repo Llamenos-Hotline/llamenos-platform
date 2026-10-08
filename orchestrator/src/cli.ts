@@ -23,6 +23,9 @@ import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } fr
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import {
+  runRequestReview, defaultRequestReviewDeps, requestReviewAtOpen, executeRequestReview,
+} from './request-review.js'
+import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   reviewNotRequestedAdvice, reviewGateFailsClosed,
@@ -444,6 +447,27 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
       log(`issue link: failed for PR ${resolved.pr}: ${errMsg(e)}`)
     }
   }
+
+  // The non-author review, requested in the same step the PR is discovered.
+  // NOT optional polish: `fleet/review` is a required context and only a
+  // `review_requested` event can bring it into being (`fleet-review.yml`;
+  // `synchronize` may only republish a verdict already earned). A fleet PR
+  // opened without this is unmergeable forever — measured on #1722, which
+  // arrived with `review_requested events: 0` and no `fleet/review` carrier.
+  await requestReviewAtOpen(
+    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
+    {
+      readPr: async (n) => {
+        const view = await ghJson<{ number: number; author: { login: string } | null; headRefName: string }>(
+          ['pr', 'view', n, '--json', 'number,author,headRefName'])
+        const author = view?.author?.login
+        if (view === undefined || author === undefined) return undefined
+        return { number: view.number, authorLogin: author, headRefName: view.headRefName }
+      },
+      execute: (target) => executeRequestReview(target, defaultRequestReviewDeps(log)),
+      log,
+    },
+  )
 
   // Standard auto-merge, requested in the same step the PR is discovered —
   // see automerge.ts's module comment for why this is safe and why it is
@@ -1614,6 +1638,24 @@ async function runReviewAndMergeCommand(pr: string | undefined): Promise<number>
   return outcome.kind === 'merged' || outcome.kind === 'already-merged' ? 0 : 1
 }
 
+/**
+ * `llamenos-fleet request-review <pr>` — the executing half of the board's
+ * `REQUEST_REVIEW` action, and the by-hand route for a PR the fleet did not
+ * open. Requests a review from whichever login `reviewTriggerLogins` (ci.ts)
+ * allows for this PR's author, and exits non-zero unless the PR's
+ * `review_requested` event count actually ROSE — see request-review.ts's
+ * module comment for why a 201 from the API is not evidence.
+ */
+async function runRequestReviewCommand(pr: string | undefined): Promise<number> {
+  return runRequestReview(
+    pr,
+    (n) => ghJson<{ number: number; author: { login: string } | null; headRefName: string }>(
+      ['pr', 'view', n, '--json', 'number,author,headRefName']),
+    defaultRequestReviewDeps(log),
+    (text) => process.stdout.write(text),
+  )
+}
+
 type CommandHandler = (rest: string[]) => Promise<number> | number
 
 /**
@@ -1708,6 +1750,9 @@ const HANDLERS: Record<string, CommandHandler> = {
   })),
   'review-gate': () => runReviewGate(),
   'review-and-merge': (rest) => runReviewAndMergeCommand(rest[0]),
+  // The board's `REQUEST_REVIEW` action, executed — and confirmed against
+  // the PR's own `review_requested` event count (#1158).
+  'request-review': (rest) => runRequestReviewCommand(rest[0]),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),
   // The deterministic gate decision table (board.ts) — read-only: derives
