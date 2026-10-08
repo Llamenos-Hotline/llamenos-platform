@@ -10,6 +10,7 @@
 import { createConnection, isIP, type Socket } from 'node:net'
 import { createHash, randomBytes } from 'node:crypto'
 import { connect as connectTls } from 'node:tls'
+import { createSocket as createDgramSocket } from 'node:dgram'
 
 export interface RegisterResult {
   status: number
@@ -193,6 +194,90 @@ async function registerOverTransport(
     sendRegister(digestAuthorization(parsed, { username, password }, 'REGISTER', uri, cnonce))
     const final = await readSipMessage(socket, state)
     return { status: final.status, reason: final.reason }
+  } finally {
+    socket.destroy()
+  }
+}
+
+export type ProbeTransport = 'udp' | 'tcp' | 'tls'
+
+/**
+ * One SIP OPTIONS, one response, over any of the edge's three listeners. A
+ * listener that is not bound fails the connect (or times the UDP wait out);
+ * one that is bound but not SERVING never answers — both are the failure
+ * modes of "the container is up but the edge is not" that #1688 is about.
+ * Kamailio answers OPTIONS itself (route[REQINIT]), so a 200 proves the
+ * listener and the request path without needing a provisioned credential.
+ */
+export async function probeOptions(opts: {
+  host: string
+  port: number
+  transport: ProbeTransport
+  domain: string
+  caPem?: string
+  timeoutMs?: number
+}): Promise<RegisterResult> {
+  const { host, port, transport, domain } = opts
+  const timeoutMs = opts.timeoutMs ?? 5000
+  const request = [
+    `OPTIONS sip:${domain} SIP/2.0`,
+    `Via: SIP/2.0/${transport.toUpperCase()} 127.0.0.1:9;branch=z9hG4bK${randomBytes(8).toString('hex')};rport`,
+    `From: <sip:edge-probe@${domain}>;tag=${randomBytes(8).toString('hex')}`,
+    `To: <sip:${domain}>`,
+    `Call-ID: ${randomBytes(16).toString('hex')}@llamenos-edge-probe`,
+    'CSeq: 1 OPTIONS',
+    'Max-Forwards: 70',
+    'User-Agent: llamenos-edge-probe',
+    'Content-Length: 0',
+    '',
+    '',
+  ].join('\r\n')
+
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`OPTIONS over ${transport} to ${host}:${port}: no response in ${timeoutMs}ms`)), timeoutMs),
+  )
+
+  if (transport === 'udp') {
+    const exchange = new Promise<RegisterResult>((resolve, reject) => {
+      const socket = createDgramSocket('udp4')
+      socket.once('error', reject)
+      socket.on('message', (msg: Buffer) => {
+        const head = msg.toString('utf8').split('\r\n')[0]
+        const [, statusStr, ...reasonParts] = head.split(' ')
+        socket.close()
+        resolve({ status: Number(statusStr), reason: reasonParts.join(' ') })
+      })
+      socket.send(request, port, host, (err: Error | null) => {
+        if (err) {
+          socket.close()
+          reject(err)
+        }
+      })
+    })
+    return Promise.race([exchange, timeout])
+  }
+
+  const secure = transport === 'tls'
+  const socket: Socket = secure
+    ? connectTls({
+        host,
+        port,
+        ca: opts.caPem,
+        rejectUnauthorized: true,
+        ...(isIP(host) ? {} : { servername: host }),
+      })
+    : createConnection({ host, port })
+  try {
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        socket.once(secure ? 'secureConnect' : 'connect', () => resolve())
+        socket.once('error', reject)
+      }),
+      timeout,
+    ])
+    const state = { rest: '' }
+    socket.write(request)
+    return await Promise.race([readSipMessage(socket, state), timeout])
   } finally {
     socket.destroy()
   }

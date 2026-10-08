@@ -69,7 +69,19 @@ played through µ-law and rejects one that was not.
 ## The per-volunteer SIP registrar
 
 `run-register-e2e.sh` proves the safe half of #1435 against the same stack
-(own compose project `ll-telephony-register-e2e`): `/api/telephony/sip-token`
+(own compose project `ll-telephony-register-e2e`). It runs two specs.
+
+`kamailio-edge.e2e.ts` (#1688) asserts the SIP edge is **actually up** —
+measured at the socket, never in file text: the Kamailio container is running
+with zero restarts and answers `kamcmd core.version`; a SIP OPTIONS over UDP
+5060, TCP 5060 and TLS 5061 each gets a 200 from Kamailio itself (TLS verified
+against the published trust anchor); and a REGISTER through the TLS listener
+with an ARI-provisioned credential gets 200 while a wrong secret gets 401.
+It replaces a test that asserted the compose file *contained certain strings*
+— an assertion a dead edge satisfies, which is how the edge spent its life
+down while everything looked configured.
+
+`asterisk-register.e2e.ts`: `/api/telephony/sip-token`
 issues a REAL per-volunteer identity — username `vol_<pubkey16>`, a derived
 per-endpoint secret, time-limited TURN credentials — and that identity
 registers through the client-facing SIP edge against the live PBX:

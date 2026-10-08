@@ -2,7 +2,14 @@
 # Prove the per-volunteer SIP registrar against the real PBX, end to end.
 #
 # Boots the same stack as run-call-e2e.sh (app built from this tree, Postgres,
-# RustFS, Asterisk, sip-bridge, simulated carrier) and runs
+# RustFS, Asterisk, sip-bridge, simulated carrier) and runs two specs:
+#
+# kamailio-edge.e2e.ts (#1688) — the edge is actually UP, measured at the
+#   socket, not in file text: container running with zero restarts and
+#   answering kamcmd, SIP OPTIONS answered on UDP 5060 / TCP 5060 / TLS 5061,
+#   and a REGISTER through the verified-TLS listener getting 200 with a real
+#   credential and 401 with a wrong one.
+#
 # asterisk-register.e2e.ts, which:
 #   1. configures the Asterisk provider through the API,
 #   2. fetches /api/telephony/sip-token as a volunteer and checks the issued
@@ -82,7 +89,7 @@ docker volume rm -f "${PROJECT}_asterisk-db" "${PROJECT}_asterisk-keys" "${PROJE
 "${COMPOSE[@]}" up -d --build --wait app asterisk kamailio sip-carrier sip-bridge
 
 status=0
-bunx playwright test --config deploy/docker/tests/telephony/playwright.config.ts asterisk-register.e2e.ts "$@" || status=$?
+bunx playwright test --config deploy/docker/tests/telephony/playwright.config.ts kamailio-edge.e2e.ts asterisk-register.e2e.ts "$@" || status=$?
 
 if [[ $status -ne 0 ]]; then
   for service in app asterisk kamailio; do
