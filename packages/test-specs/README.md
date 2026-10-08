@@ -2,6 +2,11 @@
 
 Cross-platform BDD test specifications using Gherkin `.feature` files.
 
+See [`STRATEGY.md`](./STRATEGY.md) for the ratified all-BDD testing
+strategy (BDD specs as source of truth, platform step definitions,
+`tools/validate-coverage.ts` as the coverage gate, and the silent-pass
+step audit in `tools/audit-silent-steps.ts`).
+
 ## Approach
 
 **Behavioral Contracts** -- Feature files define *what the system does*, not what the UI looks like. Every scenario tests state changes, data correctness, or permission enforcement. Shallow UI-existence checks (`Then I should see the "foo" element`) are not allowed.
@@ -90,4 +95,17 @@ bun run test-specs:validate --platform android
 bun run test-specs:validate --platform desktop
 bun run test-specs:validate --platform ios
 bun run test-specs:validate --platform all
+```
+
+### Silent-pass step audit
+
+`validate-coverage.ts` proves a step is *bound*; it does not prove the
+step's body does anything (see its own doc comment). `audit-silent-steps.ts`
+checks that instead — see [`STRATEGY.md`](./STRATEGY.md) for the full
+rationale and the current ratchet baseline.
+
+```bash
+bun packages/test-specs/tools/audit-silent-steps.ts
+bun packages/test-specs/tools/audit-silent-steps.ts --platform desktop-backend
+bun packages/test-specs/tools/audit-silent-steps.ts --platform android
 ```
