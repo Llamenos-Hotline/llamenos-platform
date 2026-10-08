@@ -258,6 +258,25 @@ private fun AdminUiState.applying(settings: TranscriptionSettings): AdminUiState
     transcriptionOptOut = settings.allowUserOptOut ?: transcriptionOptOut,
 )
 
+/**
+ * `voiceCAPTCHAEnabled`, not `voiceCaptchaEnabled`, is the generated property
+ * name. The wire key is `voiceCaptchaEnabled` — the schema's — and codegen
+ * carries it on a `@SerialName`:
+ *
+ *     data class SpamSettings (
+ *         ...
+ *         @SerialName("voiceCaptchaEnabled")
+ *         val voiceCAPTCHAEnabled: Boolean? = null
+ *     )
+ *
+ * quicktype's `acronym-style: pascal` does uppercase CAPTCHA, in Swift as well
+ * as Kotlin (`packages/protocol/generated/{kotlin/Types.kt,swift/Types.swift}`).
+ * Worth stating in the source because `packages/protocol/generated/` is
+ * gitignored and built on demand, so the declaration is not in a fresh
+ * checkout: reading the property name out of `settings.ts` instead gives the
+ * wrong answer, and `bun run codegen` is a prerequisite for compiling — or
+ * reviewing — this file.
+ */
 private fun AdminUiState.applying(settings: SpamSettings): AdminUiState = copy(
     voiceCaptchaEnabled = settings.voiceCAPTCHAEnabled ?: voiceCaptchaEnabled,
     rateLimitEnabled = settings.rateLimitEnabled ?: rateLimitEnabled,
@@ -1292,6 +1311,9 @@ class AdminViewModel @Inject constructor(
                         blockDurationMinutes = state.blockDurationMinutes,
                         maxCallsPerMinute = state.maxCallsPerMinute,
                         rateLimitEnabled = state.rateLimitEnabled,
+                        // See `applying(SpamSettings)` above: the generated
+                        // property is `voiceCAPTCHAEnabled`, serialized as
+                        // `voiceCaptchaEnabled`.
                         voiceCAPTCHAEnabled = state.voiceCaptchaEnabled,
                     ),
                 )
