@@ -24,6 +24,47 @@
 # scripts/check-succeeded-as-pass.py fails CI on any `is succeeded` /
 # `is not failed` that is not paired with a skip test.
 #
+# EVERY CHECK ALSO DECLARES A SEVERITY: fatal or advisory (issue #1636).
+#
+# A FATAL failure stops the deploy. An ADVISORY failure is reported under its
+# own DEGRADED heading and the deploy proceeds. Nothing is allowed to sit in
+# the third state this suite used to have — reporting FAIL while the deploy
+# carries on and nothing says why that was permitted, which is what the
+# Kamailio probe did.
+#
+# THE RULE
+#
+#   fatal     the check measures something THIS DEPLOY is responsible for
+#             putting in place, and whose absence either stops a call being
+#             answered / a note being stored, or leaves the host or its
+#             traffic exposed.
+#   advisory  the check measures an OPTIONAL integration or convenience
+#             sidecar: its absence costs a feature but neither breaks the call
+#             path nor exposes anything.
+#
+# THE RULING, per check, in this file:
+#
+#   FATAL     ufw · fail2ban · docker · docker userns-remap · sshd hardening ·
+#             tcp_syncookies · no unhealthy containers · app live/ready/health ·
+#             PostgreSQL · RustFS · ntfy (local + public vhost) ·
+#             Caddy HTTPS · HSTS · X-Frame-Options · disk space ·
+#             SIP bridge health · SIP TLS listener · Kamailio JSONRPC ·
+#             app readiness reports the SIP bridge dependency ok
+#   ADVISORY  Signal Notifier sidecar · update server ·
+#             app readiness reports no failing dependency
+#
+# Why ntfy is fatal: an Android volunteer learns of a call through the push
+# relay, so an unreachable relay means an unanswered hotline. Why Kamailio is
+# fatal: it is the SIP edge every registration and call leg traverses, so a
+# Kamailio that never answered is the call path being down, not a degradation —
+# the same consequence as the SIP bridge probe next to it, which was already
+# fatal. Why Signal and the update server are advisory: the phone still rings
+# without either.
+#
+# The DEFAULT is fatal, and so is any unrecognised value — see
+# tasks/record-smoke-result.yml. A check that forgets to declare a severity is
+# too strict, never silently advisory.
+#
 # Usage:
 #   ansible-playbook playbooks/smoke-check.yml -e '@vars.yml'
 #   ansible-playbook playbooks/smoke-check.yml --check --diff
@@ -47,6 +88,26 @@
     _smoke_serves_storage: "{{ groups.get('llamenos_storage', []) | length == 0 or inventory_hostname in groups.get('llamenos_storage', []) }}"
     _smoke_serves_ntfy: "{{ groups.get('llamenos_ntfy', []) | length == 0 or inventory_hostname in groups.get('llamenos_ntfy', []) }}"
     _smoke_serves_asterisk: "{{ groups.get('llamenos_asterisk', []) | length == 0 or inventory_hostname in groups.get('llamenos_asterisk', []) }}"
+    _smoke_serves_kamailio: "{{ groups.get('llamenos_kamailio', []) | length == 0 or inventory_hostname in groups.get('llamenos_kamailio', []) }}"
+
+    # ── SIP TLS probe inputs ────────────────────────────────────────────────
+    # Role defaults are not visible to a playbook, so every kamailio_* default
+    # below is restated rather than inherited. Keep them in step with
+    # roles/kamailio/defaults/main.yml.
+    smoke_sip_tls_host: 127.0.0.1
+    smoke_sip_tls_port: "{{ kamailio_tls_port | default(5061) }}"
+    # The names a volunteer's client may dial. The certificate must cover each
+    # one: a client verifies the hostname as well as the chain, so a name that
+    # is missing fails the handshake however the chain is anchored.
+    smoke_sip_tls_names: "{{ kamailio_tls_sans | default([kamailio_sip_domain | default(domain)]) }}"
+    # Where the trust anchor published to clients lands. Two candidates because
+    # the role is moving it to its own directory; the first that exists wins,
+    # and when the deployment publishes an anchor and NONE exists the probe is
+    # pointed at the first anyway, so it fails saying the anchor is missing
+    # rather than quietly skipping the verification.
+    smoke_sip_tls_anchor_candidates:
+      - "{{ kamailio_tls_anchor_dir | default(kamailio_tls_dir | default(app_dir ~ '/services/kamailio/tls')) }}/sip-edge-anchor.pem"
+      - "{{ kamailio_tls_dir | default(app_dir ~ '/services/kamailio/tls') }}/sip-edge-anchor.pem"
 
   tasks:
     - name: Initialize smoke-check results
@@ -74,6 +135,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: UFW active with deny-incoming
         smoke_check_probe: "{{ ufw_check | default({}) }}"
         # `rc`, not `is succeeded`: the exit status is the thing both greps
@@ -96,6 +158,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: fail2ban running
         smoke_check_probe: "{{ fail2ban_check | default({}) }}"
         # The word systemctl printed, which is what the check is for. `rc == 0`
@@ -119,6 +182,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: Docker running
         smoke_check_probe: "{{ docker_check | default({}) }}"
         smoke_check_pass: "{{ (docker_check.stdout | default('') | trim) == 'active' }}"
@@ -142,6 +206,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: Docker userns-remap enabled
         smoke_check_probe: "{{ userns_check | default({}) }}"
         smoke_check_pass: "{{ userns_check.rc | default(1) | int == 0 }}"
@@ -166,6 +231,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: SSH password auth disabled + root login disabled
         smoke_check_probe: "{{ ssh_check | default({}) }}"
         smoke_check_pass: "{{ ssh_check.rc | default(1) | int == 0 }}"
@@ -186,6 +252,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: TCP syncookies enabled
         smoke_check_probe: "{{ syncookies | default({}) }}"
         # The sysctl VALUE, asserted here as well as in the task's
@@ -220,6 +287,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: No unhealthy Docker containers
         smoke_check_probe: "{{ container_health_check | default({}) }}"
         # Both halves: a clean exit AND no container named. `docker ps` failing
@@ -256,6 +324,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: App liveness probe /api/health/live (200)
         smoke_check_probe: "{{ app_live | default({}) }}"
         smoke_check_pass: "{{ app_live.status | default(0) | int == 200 }}"
@@ -281,12 +350,110 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: App readiness probe /api/health/ready (200)
         smoke_check_probe: "{{ app_ready | default({}) }}"
         smoke_check_pass: "{{ app_ready.status | default(0) | int == 200 }}"
         smoke_check_detail: >-
           /api/health/ready returned {{ app_ready.status | default('no response') }}
           (postgres/storage/relay dependency check failed)
+      tags: always
+
+    # The readiness STATUS CODE is not the whole report. /api/health/ready
+    # deliberately does not 503 on an optional integration (#1418), so a
+    # configured-but-dead sidecar leaves a 200 behind and the two checks above
+    # see nothing. These read the body.
+    #
+    # They also close the loop on the defect that motivated them: SIP_BRIDGE_URL
+    # went unrendered on a deployed host, the app's sipBridge check returned
+    # null, and the check was OMITTED from the response entirely — three checks
+    # plus `ok` where there should have been four plus `sipBridge: failing`. The
+    # app no longer omits a probe (apps/worker/routes/health.ts), and this is
+    # the deploy-side half: the app reports, and the DEPLOYMENT decides whether
+    # a given dependency matters here, because only the deployment knows it
+    # deployed self-hosted telephony.
+    #
+    # THE `when:` GOES ON THE PROBE, NEVER ON THE RECORDING. That is the house
+    # rule in this file and it is the whole reason the recordings below are
+    # unconditional: a `when:` on a recording makes the check VANISH from the
+    # summary — 24 checks instead of 25 — and a check that can delete itself is
+    # the same defect as a probe that can delete itself. A gated probe, read by
+    # an ungated recording, records SKIPPED and stays visible. (Measured: the
+    # first version of this block had the condition on the recordings, and a
+    # live run against a deployment with no self-hosted telephony printed one
+    # check fewer with nothing saying which.)
+    - name: Read the app's readiness report for the SIP bridge dependency
+      ansible.builtin.set_fact:
+        _ready_sipbridge_status: "{{ app_ready.json.checks.sipBridge.status | default('absent') }}"
+        _ready_sipbridge_detail: "{{ app_ready.json.checks.sipBridge.detail | default('no detail') }}"
+      register: ready_sipbridge_probe
+      when:
+        - llamenos_asterisk_enabled | default(false) | bool
+        - _smoke_serves_app | bool
+      tags: always
+
+    - name: Record app readiness SIP bridge dependency result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: fatal
+        smoke_check_name: App readiness reports the SIP bridge dependency ok
+        smoke_check_probe: "{{ ready_sipbridge_probe | default({}) }}"
+        # `== 'ok'` on the value, so BOTH a `failing` status and an ABSENT
+        # sipBridge key fail: an omitted check reads as 'absent', not 'ok'.
+        smoke_check_pass: "{{ (_ready_sipbridge_status | default('absent')) == 'ok' }}"
+        smoke_check_detail: >-
+          {{ '/api/health/ready did not answer, so nothing reports on the SIP bridge dependency'
+             if (app_ready.status | default(0) | int) != 200
+             else '/api/health/ready reports sipBridge as "' ~ (_ready_sipbridge_status | default('absent'))
+                  ~ '" (' ~ (_ready_sipbridge_detail | default('no detail'))
+                  ~ ') while this deployment runs self-hosted telephony — no call can route to a volunteer.
+                     An "absent" status means the app omitted the check, which SIP_BRIDGE_URL being unrendered used to cause.' }}
+      tags: always
+
+    - name: Read the app's readiness report for every other dependency
+      ansible.builtin.set_fact:
+        _ready_failing: >-
+          {{ (app_ready.json.checks | default({})) | dict2items
+             | selectattr('value.status', 'defined')
+             | selectattr('value.status', 'equalto', 'failing')
+             | map(attribute='key') | list }}
+      register: ready_deps_probe
+      when: _smoke_serves_app | bool
+      tags: always
+
+    - name: Record app readiness dependency report result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: advisory
+        smoke_check_name: App readiness reports no failing dependency
+        smoke_check_probe: "{{ ready_deps_probe | default({}) }}"
+        # The 200 is part of the measurement: a readiness probe that never
+        # answered cannot support the claim that no dependency is failing. Its
+        # `checks` would be empty, and an empty list of failures is not the
+        # same statement as "nothing is failing".
+        smoke_check_pass: >-
+          {{ (app_ready.status | default(0) | int) == 200
+             and ((_ready_failing | default([])) | length) == 0 }}
+        # Advisory, because which of these is load-bearing depends on the
+        # deployment: an unconfigured Signal sidecar reports failing on a
+        # hotline that is perfectly able to answer the phone. The dependencies
+        # that ARE load-bearing have their own fatal checks — the readiness
+        # status code itself for postgres/storage/relay, and the two SIP checks
+        # for telephony.
+        smoke_check_detail: >-
+          {{ '/api/health/ready returned ' ~ (app_ready.status | default('no response'))
+             ~ ', so its dependency report could not be read'
+             if (app_ready.status | default(0) | int) != 200
+             else '/api/health/ready returned 200 but reports '
+                  ~ ((_ready_failing | default([])) | length) ~ ' failing dependency/dependencies: '
+                  ~ ((_ready_failing | default([])) | join(', '))
+                  ~ '. Each names a capability that is unavailable on this host.' }}
       tags: always
 
     - name: Check app full health endpoint
@@ -308,6 +475,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: App health endpoint /api/health (200)
         smoke_check_probe: "{{ app_health | default({}) }}"
         smoke_check_pass: "{{ app_health.status | default(0) | int == 200 }}"
@@ -337,6 +505,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: PostgreSQL accepting connections
         smoke_check_probe: "{{ postgres_check | default({}) }}"
         # pg_isready's own words, not just its exit status: `docker compose
@@ -380,6 +549,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: RustFS object storage reachable (in-container, port 9000)
         smoke_check_probe: "{{ rustfs_check | default({}) }}"
         # The in-container curl's own exit status is the measurement. #1615
@@ -417,6 +587,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: ntfy health endpoint (200)
         smoke_check_probe: "{{ ntfy_check | default({}) }}"
         smoke_check_pass: "{{ ntfy_check.status | default(0) | int == 200 }}"
@@ -448,6 +619,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: "ntfy public vhost https://{{ ntfy_domain | default('(ntfy_domain unset)') }}/v1/health (200)"
         smoke_check_probe: "{{ ntfy_public_check | default({}) }}"
         smoke_check_pass: "{{ ntfy_public_check.status | default(0) | int == 200 }}"
@@ -475,6 +647,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: advisory
         smoke_check_name: Signal Notifier sidecar health (port 3100)
         smoke_check_probe: "{{ signal_notifier_check | default({}) }}"
         smoke_check_pass: "{{ signal_notifier_check.status | default(0) | int == 200 }}"
@@ -509,10 +682,159 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: "SIP bridge health (self-hosted telephony, port {{ sip_bridge_local_port | default(3101) }})"
         smoke_check_probe: "{{ sip_bridge_check | default({}) }}"
         smoke_check_pass: "{{ sip_bridge_check.status | default(0) | int == 200 }}"
         smoke_check_detail: "the bridge returned {{ sip_bridge_check.status | default('no response') }} — no call can route"
+      tags: always
+
+    # ─── SIP edge: TLS listener and proxy ────────────────────────────────────
+    #
+    # deploy/docker/sip-tls-cert.sh degrades gracefully when certificate
+    # generation fails: the container still comes up and still serves SIP over
+    # UDP and TCP, because stopping it would remove the transports that do
+    # work. That is deliberate and stays. What did not exist was any REPORT of
+    # the degradation — the deploy came up TLS-less and the smoke check said
+    # nothing, while every client that registers over TLS verifies the
+    # certificate and has no "accept anything" mode, so it fails closed and no
+    # volunteer is reachable (issue #1636).
+    #
+    # The probe completes a REAL TLS handshake. A config read proves nothing
+    # (Kamailio reads TLS material once, at module init, and carries on without
+    # the listener if it cannot load it) and a plain TCP connect proves less
+    # than nothing — a port forward to a dead container accepts, and so does a
+    # TCP listener with no TLS behind it.
+
+    - name: Locate the SIP edge trust anchor published to clients
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ smoke_sip_tls_anchor_candidates }}"
+      register: sip_tls_anchor_stat
+      changed_when: false
+      when:
+        - kamailio_enabled | default(false) | bool
+        - kamailio_tls_enabled | default(true) | bool
+        - kamailio_tls_publish_anchor | default(true) | bool
+        - _smoke_serves_kamailio | bool
+      tags: always
+
+    - name: Probe the SIP TLS listener with a real TLS handshake
+      ansible.builtin.script:
+        cmd: >-
+          {{ playbook_dir }}/../../docker/sip-tls-probe.sh
+          --host {{ smoke_sip_tls_host | quote }}
+          --port {{ smoke_sip_tls_port | quote }}
+          {% for name in smoke_sip_tls_names %}--expect-name {{ name | quote }} {% endfor %}
+          {{ ('--ca-file ' ~ (_sip_tls_anchor | quote)) if (_sip_tls_anchor | length > 0) else '' }}
+      vars:
+        # The anchor the probe must verify against: the first candidate that
+        # exists, else — when the deployment says it publishes one — the first
+        # candidate regardless, so a missing anchor is measured as a failure
+        # instead of silently dropping the verification step.
+        _sip_tls_anchor_found: >-
+          {{ (sip_tls_anchor_stat.results | default([]))
+             | selectattr('stat', 'defined')
+             | selectattr('stat.exists', 'equalto', true)
+             | map(attribute='stat.path') | list }}
+        _sip_tls_anchor: >-
+          {{ (_sip_tls_anchor_found | first)
+             if (_sip_tls_anchor_found | length) > 0
+             else (smoke_sip_tls_anchor_candidates | first
+                   if (kamailio_tls_publish_anchor | default(true) | bool) else '') }}
+      register: sip_tls_probe
+      changed_when: false
+      ignore_errors: true
+      when:
+        - kamailio_enabled | default(false) | bool
+        - kamailio_tls_enabled | default(true) | bool
+        - _smoke_serves_kamailio | bool
+      tags: always
+
+    - name: Record SIP TLS listener result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: fatal
+        smoke_check_name: "SIP TLS listener bound and serving TLS (port {{ smoke_sip_tls_port }})"
+        smoke_check_probe: "{{ sip_tls_probe | default({}) }}"
+        # The script's exit status IS the measurement: it exits 0 only after a
+        # completed handshake that produced a parseable, unexpired,
+        # name-matching certificate — and non-zero when it could not measure at
+        # all, so "no openssl on the host" cannot read as healthy.
+        smoke_check_pass: "{{ sip_tls_probe.rc | default(1) | int == 0 }}"
+        smoke_check_detail: >-
+          {{ (sip_tls_probe.stdout_lines | default([]) | select('match', '^DETAIL: ') | list
+              | first | default('the SIP TLS probe produced no DETAIL line — see the task output'))
+             | regex_replace('^DETAIL: ', '') }}
+      tags: always
+
+    # Kamailio is the SIP edge: every registration and every call leg traverses
+    # it. This probe existed in roles/kamailio but only ever printed HEALTHY /
+    # NOT READY, so the verdict changed nothing — the open question in #1636.
+    #
+    # The ruling is FATAL, and the gate lives HERE rather than in the role. A
+    # role that aborts stops the rest of the deploy mid-way, which is the real
+    # form of the "it could block a deploy that fixes something else" worry.
+    # The smoke check runs after everything has been applied, so a fatal
+    # verdict here cannot prevent a fix landing; what it prevents is the deploy
+    # reporting success over a hotline whose SIP proxy never answered.
+    # IN-CONTAINER, for the same reason #1615 moved the RustFS probe inside the
+    # container: a host-side probe of a port the compose file does not publish
+    # can never pass, so it would have been a fatal check that is red on every
+    # healthy deployment.
+    #
+    # And that is not hypothetical here. roles/kamailio still carries a
+    # host-side `uri` probe of http://localhost:{{ kamailio_jsonrpc_port
+    # }}/jsonrpc, and it CANNOT succeed on any deployment: the compose template
+    # publishes 5060/udp, 5060/tcp and 5061/tcp and nothing else, kamailio.cfg
+    # has no `listen` for the JSONRPC port, xhttp.so is not loaded, and
+    # `modparam("jsonrpcs", "transport", 1)` enables the FIFO transport ONLY —
+    # the HTTP transport is bit 4 and is off. Its verdict gated nothing, so a
+    # probe that could never be green was never noticed; this is the other half
+    # of why #1636's "Kamailio's verdict gates nothing" had to be settled
+    # before a gate could be put on it.
+    #
+    # `kamcmd` speaks binrpc over the ctl.so unix socket, which kamailio.cfg
+    # DOES load, and it is what the container's own healthcheck runs.
+    - name: Check the Kamailio SIP proxy answers its management interface
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f "{{ app_dir }}/services/kamailio/docker-compose.yml" exec -T kamailio \
+          kamcmd core.version
+      args:
+        executable: /bin/bash
+      register: kamailio_rpc_check
+      changed_when: false
+      ignore_errors: true
+      when:
+        - kamailio_enabled | default(false) | bool
+        - _smoke_serves_kamailio | bool
+      tags: always
+
+    - name: Record Kamailio SIP proxy result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: fatal
+        smoke_check_name: Kamailio SIP proxy answering on its management socket
+        smoke_check_probe: "{{ kamailio_rpc_check | default({}) }}"
+        # The exit status AND the answer: `docker compose exec` returns 0 for a
+        # command that ran, so a kamcmd that printed nothing useful must not
+        # pass. A live Kamailio answers `core.version` with its version banner.
+        smoke_check_pass: >-
+          {{ kamailio_rpc_check.rc | default(1) | int == 0
+             and 'kamailio' in (kamailio_rpc_check.stdout | default('') | lower) }}
+        smoke_check_detail: >-
+          `kamcmd core.version` in the kamailio container returned
+          rc={{ kamailio_rpc_check.rc | default('(did not run)') }}
+          "{{ (kamailio_rpc_check.stdout | default('') | trim) | truncate(60) }}" —
+          the SIP proxy every registration and call leg traverses is not answering,
+          so no call can route
       tags: always
 
     - name: Check update server health (official only)
@@ -534,6 +856,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: advisory
         smoke_check_name: Update server health
         smoke_check_probe: "{{ update_health | default({}) }}"
         # Both the code and the body. `uri` defaults to accepting any 2xx, so a
@@ -569,6 +892,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: "Caddy HTTPS serving {{ _api_base_url }}"
         smoke_check_probe: "{{ caddy_check | default({}) }}"
         smoke_check_pass: "{{ caddy_check.status | default(0) | int == 200 }}"
@@ -607,6 +931,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: HSTS header present (Caddy security_headers)
         smoke_check_probe: "{{ caddy_headers | default({}) }}"
         smoke_check_pass: "{{ 'max-age=' in (caddy_headers.strict_transport_security | default('')) }}"
@@ -622,6 +947,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: "X-Frame-Options: DENY header present"
         smoke_check_probe: "{{ caddy_headers | default({}) }}"
         smoke_check_pass: "{{ (caddy_headers.x_frame_options | default('')) == 'DENY' }}"
@@ -651,6 +977,7 @@
         apply:
           tags: always
       vars:
+        smoke_check_severity: fatal
         smoke_check_name: Disk space >= 2 GiB free post-deploy
         smoke_check_probe: "{{ disk_free_gb | default({}) }}"
         # The parsed number is the measurement. `| int` on unparseable output
@@ -683,10 +1010,10 @@
           [{{ result.status }}] {{ result.check }}{{ ' — ' + result.detail if (result.detail | default('') | length > 0 and result.status != 'PASS') else '' }}
           {% endfor %}
           ===========================================
-          Total:   {{ smoke_results | length }} checks
-          Passed:  {{ _smoke_passed | length }}
-          Failed:  {{ _smoke_failed | length }}
-          Skipped: {{ _smoke_skipped | length }}
+          Total:    {{ smoke_results | length }} checks
+          Passed:   {{ _smoke_passed | length }}
+          Failed:   {{ _smoke_failed | length }} ({{ _smoke_fatal | length }} fatal, {{ _smoke_advisory | length }} advisory)
+          Skipped:  {{ _smoke_skipped | length }}
           {% if (_smoke_skipped | length) > 0 %}
           -------------------------------------------
           NOT MEASURED on this host — {{ _smoke_skipped | length }} check(s) never ran. A skipped check
@@ -696,23 +1023,48 @@
             - {{ result.check }} ({{ result.detail }})
           {% endfor %}
           {% endif %}
+          {% if (_smoke_advisory | length) > 0 %}
+          -------------------------------------------
+          DEGRADED but NOT FATAL — {{ _smoke_advisory | length }} advisory check(s) failed. The deploy is
+          allowed to proceed: each of these costs a feature without breaking the
+          call path or exposing anything. They are still real failures and the
+          named capability is unavailable until each is fixed:
+          {% for result in _smoke_advisory %}
+            - {{ result.check }}{{ ' — ' + result.detail if (result.detail | default('') | length > 0) else '' }}
+          {% endfor %}
+          {% endif %}
           ===========================================
-          Result: {{ 'PASSED' if (_smoke_failed | length) == 0 else 'FAILED' }}{{ ', ' + (_smoke_skipped | length | string) + ' NOT MEASURED' if (_smoke_skipped | length) > 0 else '' }}
+          Result: {{ 'FAILED' if (_smoke_fatal | length) > 0 else 'PASSED' }}{{ ', ' + (_smoke_advisory | length | string) + ' DEGRADED' if (_smoke_advisory | length) > 0 else '' }}{{ ', ' + (_smoke_skipped | length | string) + ' NOT MEASURED' if (_smoke_skipped | length) > 0 else '' }}
           ===========================================
       vars:
         _smoke_passed: "{{ smoke_results | selectattr('status', 'equalto', 'PASS') | list }}"
         _smoke_failed: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | list }}"
+        _smoke_fatal: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | selectattr('severity', 'equalto', 'fatal') | list }}"
+        _smoke_advisory: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | selectattr('severity', 'equalto', 'advisory') | list }}"
         _smoke_skipped: "{{ smoke_results | selectattr('status', 'equalto', 'SKIPPED') | list }}"
       tags: always
 
-    - name: Fail if any smoke check failed
+    # The gate fires on FATAL failures only, and every advisory failure is
+    # named in the DEGRADED block above. The state issue #1636 set out to
+    # remove is the third one: a check reporting FAIL while the deploy proceeds
+    # and nothing says why that was allowed.
+    - name: Fail if any FATAL smoke check failed
       ansible.builtin.fail:
         msg: |
-          Smoke check FAILED on {{ inventory_hostname }}: {{ _smoke_failed | length }} of {{ smoke_results | length }} check(s) failed.
-          {% for result in _smoke_failed %}
+          Smoke check FAILED on {{ inventory_hostname }}: {{ _smoke_fatal | length }} of {{ smoke_results | length }} check(s) failed fatally.
+          {% for result in _smoke_fatal %}
             - {{ result.check }}{{ ' — ' + result.detail if (result.detail | default('') | length > 0) else '' }}
           {% endfor %}
+          {% if (_smoke_advisory | length) > 0 %}
+          Also DEGRADED (advisory, did not cause this failure):
+          {% for result in _smoke_advisory %}
+            - {{ result.check }}
+          {% endfor %}
+          {% endif %}
       vars:
-        _smoke_failed: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | list }}"
-      when: (smoke_results | selectattr('status', 'equalto', 'FAIL') | list | length) > 0
+        _smoke_fatal: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | selectattr('severity', 'equalto', 'fatal') | list }}"
+        _smoke_advisory: "{{ smoke_results | selectattr('status', 'equalto', 'FAIL') | selectattr('severity', 'equalto', 'advisory') | list }}"
+      when: >-
+        (smoke_results | selectattr('status', 'equalto', 'FAIL')
+                       | selectattr('severity', 'equalto', 'fatal') | list | length) > 0
       tags: always

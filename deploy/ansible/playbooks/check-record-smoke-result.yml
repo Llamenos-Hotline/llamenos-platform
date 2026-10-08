@@ -141,6 +141,61 @@
         smoke_check_probe: "{{ clean_200 }}"
         smoke_check_pass: "{{ (clean_200.x_frame_options | default('')) == 'DENY' }}"
 
+    # ── 4. severity: which failures stop a deploy (issue #1636) ───────────
+    #
+    # The DEFAULT is the point. Before #1636 every FAIL stopped the deploy
+    # except the ones that quietly did not, and nothing in the file said which
+    # was which. Now a check says so — and a check that forgets lands on
+    # FATAL, so the failure mode of forgetting is "too strict", never
+    # "informs, gates nothing".
+    - name: Record a failing check that declares no severity
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: severity undeclared
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: false
+        smoke_check_detail: no severity declared at this call site
+
+    - name: Record a failing check that declares fatal
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: severity fatal
+        smoke_check_severity: fatal
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: false
+        smoke_check_detail: declared fatal
+
+    - name: Record a failing check that declares advisory
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: severity advisory
+        smoke_check_severity: advisory
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: false
+        smoke_check_detail: declared advisory
+
+    # A typo must not be a downgrade. `advisroy` is not `advisory`, and the
+    # recorder tests for equality with the one permissive value rather than
+    # membership in a list of two, so anything else is fatal.
+    - name: Record a failing check whose severity is misspelt
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: severity misspelt
+        smoke_check_severity: advisroy
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: false
+        smoke_check_detail: misspelt severity
+
+    # Severity is recorded for passing and skipped checks too, so the summary
+    # can filter on it without special-casing.
+    - name: Record an advisory check that passes
+      ansible.builtin.include_tasks: tasks/record-smoke-result.yml
+      vars:
+        smoke_check_name: severity advisory passing
+        smoke_check_severity: advisory
+        smoke_check_probe: "{{ clean_200 }}"
+        smoke_check_pass: true
+
     # ── assertions ─────────────────────────────────────────────────────────
     - name: Show what was recorded
       ansible.builtin.debug:
@@ -177,6 +232,67 @@
           HSTS absent: FAIL
           HSTS unmeasured: SKIPPED
           X-Frame-Options DENY: PASS
+          severity undeclared: FAIL
+          severity fatal: FAIL
+          severity advisory: FAIL
+          severity misspelt: FAIL
+          severity advisory passing: PASS
+
+    - name: Every severity is the expected one, and an undeclared or misspelt one is FATAL
+      ansible.builtin.assert:
+        that:
+          - _severities == _expected_severities
+        fail_msg: |
+          The recorder assigned the wrong severity/severities.
+            expected: {{ _expected_severities }}
+            actual:   {{ _severities }}
+        success_msg: >-
+          every severity correct; an undeclared severity and a misspelt one both
+          landed on fatal, so forgetting to declare cannot make a check advisory
+      vars:
+        _severities: >-
+          {{ dict(smoke_results | map(attribute='check')
+                  | zip(smoke_results | map(attribute='severity'))) }}
+        _expected_severities:
+          genuinely skipped probe: fatal
+          synthesized skipped probe: fatal
+          probe absent from the host's facts: fatal
+          clean probe, measurement holds: fatal
+          clean probe, measurement fails: fatal
+          errored probe: fatal
+          clean probe, ran-clean only: fatal
+          HSTS present: fatal
+          HSTS absent: fatal
+          HSTS unmeasured: fatal
+          X-Frame-Options DENY: fatal
+          severity undeclared: fatal
+          severity fatal: fatal
+          severity advisory: advisory
+          severity misspelt: fatal
+          severity advisory passing: advisory
+
+    # The gate smoke-check.yml runs: FATAL failures stop the deploy, advisory
+    # ones are reported and do not. Asserted here on the same data the summary
+    # filters, so the two cannot disagree about what "fatal" selects.
+    - name: Only fatal failures would stop a deploy
+      ansible.builtin.assert:
+        that:
+          - (smoke_results | selectattr('status', 'equalto', 'FAIL')
+             | selectattr('severity', 'equalto', 'fatal')
+             | map(attribute='check') | list) == _want_fatal
+          - (smoke_results | selectattr('status', 'equalto', 'FAIL')
+             | selectattr('severity', 'equalto', 'advisory')
+             | map(attribute='check') | list) == ['severity advisory']
+        fail_msg: "the fatal/advisory split does not select the expected checks"
+        success_msg: "{{ _want_fatal | length }} fatal failure(s) would stop the deploy; 1 advisory failure would not"
+      vars:
+        _want_fatal:
+          - clean probe, measurement fails
+          - errored probe
+          - HSTS absent
+          - severity undeclared
+          - severity fatal
+          - severity misspelt
 
     # A skipped verdict must carry WHY, or the summary cannot tell an operator
     # whether the skip was expected.
