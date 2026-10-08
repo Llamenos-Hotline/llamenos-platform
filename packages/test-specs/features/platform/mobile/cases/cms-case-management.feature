@@ -7,10 +7,11 @@ Feature: Case Management (Mobile)
   Background:
     Given the app is launched and authenticated as admin
 
-  Scenario: Case list shows entity type tabs
+  Scenario: Selecting entity type shows matching case
+    Given case management is enabled with two entity types
+    And a case exists
     When I navigate to the Cases screen
-    Then I should see the entity type tabs
-    And the "All" tab should be active
+    Then selecting Arrest Case should keep its case in the filtered list
 
   Scenario: Case list shows case cards with status badges
     Given cases exist in the system
