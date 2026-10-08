@@ -95,6 +95,18 @@ val Shift.dayIndices: List<Int>
 val Shift.displayStatus: String
     get() = if (userPubkeys.isEmpty()) "available" else "assigned"
 
+/**
+ * Display name — maps to `encryptedName` in the generated type. Despite the
+ * field name, no client currently encrypts this value (iOS renders it directly
+ * too — see ShiftsView.swift); it is plaintext today.
+ */
+val Shift.name: String
+    get() = encryptedName
+
+/** Number of volunteers assigned to this shift. */
+val Shift.volunteerCount: Int
+    get() = userPubkeys.size
+
 // ── CallRecordResponse ─────────────────────────────────────────────────────
 
 /** Duration as Int (seconds), converting from Double?. */

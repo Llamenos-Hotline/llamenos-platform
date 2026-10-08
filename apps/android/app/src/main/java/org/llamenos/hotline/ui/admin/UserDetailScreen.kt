@@ -48,6 +48,7 @@ import org.llamenos.hotline.R
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.hotline.model.detailsString
 import org.llamenos.hotline.model.displayName
+import org.llamenos.hotline.model.name
 import org.llamenos.hotline.model.role
 import org.llamenos.hotline.model.status
 import org.llamenos.hotline.model.timestamp

@@ -53,20 +53,18 @@ fun AdminSectionHost(
             )
             "firehose" -> Text(stringResource(R.string.admin_nav_items_firehose))
             "call-settings" -> CallSettingsSection(
-                ringTimeout = uiState.ringTimeout,
-                maxCallDuration = uiState.maxCallDuration,
-                parallelRingCount = uiState.parallelRingCount,
+                queueTimeoutSeconds = uiState.queueTimeoutSeconds,
+                voicemailMaxSeconds = uiState.voicemailMaxSeconds,
                 isLoading = uiState.isLoadingCallSettings,
                 error = uiState.callSettingsError,
-                onRingTimeoutChange = { viewModel.updateRingTimeout(it) },
-                onMaxCallDurationChange = { viewModel.updateMaxCallDuration(it) },
-                onParallelRingCountChange = { viewModel.updateParallelRingCount(it) },
+                onQueueTimeoutChange = { viewModel.updateQueueTimeout(it) },
+                onVoicemailMaxChange = { viewModel.updateVoicemailMax(it) },
                 onSave = { viewModel.saveCallSettings() },
                 modifier = Modifier.padding(16.dp),
             )
             "voice-prompts" -> Text(stringResource(R.string.admin_nav_items_voice_prompts))
             "phone-menu-languages" -> IvrLanguagesSection(
-                languages = uiState.ivrLanguages,
+                enabledLanguages = uiState.ivrEnabledLanguages,
                 isLoading = uiState.isLoadingIvrLanguages,
                 error = uiState.ivrLanguagesError,
                 onToggleLanguage = { code, enabled -> viewModel.toggleIvrLanguage(code, enabled) },
@@ -81,14 +79,16 @@ fun AdminSectionHost(
                 modifier = Modifier.padding(16.dp),
             )
             "spam-protection" -> SpamSettingsSection(
-                maxCallsPerHour = uiState.maxCallsPerHour,
+                maxCallsPerMinute = uiState.maxCallsPerMinute,
+                blockDurationMinutes = uiState.blockDurationMinutes,
+                rateLimitEnabled = uiState.rateLimitEnabled,
                 voiceCaptchaEnabled = uiState.voiceCaptchaEnabled,
-                knownNumberBypass = uiState.knownNumberBypass,
                 isLoading = uiState.isLoadingSpamSettings,
                 error = uiState.spamSettingsError,
-                onMaxCallsPerHourChange = { viewModel.updateMaxCallsPerHour(it) },
+                onMaxCallsPerMinuteChange = { viewModel.updateMaxCallsPerMinute(it) },
+                onBlockDurationChange = { viewModel.updateBlockDuration(it) },
+                onToggleRateLimit = { viewModel.toggleRateLimit(it) },
                 onToggleVoiceCaptcha = { viewModel.toggleVoiceCaptcha(it) },
-                onToggleKnownNumberBypass = { viewModel.toggleKnownNumberBypass(it) },
                 onSave = { viewModel.saveSpamSettings() },
                 modifier = Modifier.padding(16.dp),
             )
