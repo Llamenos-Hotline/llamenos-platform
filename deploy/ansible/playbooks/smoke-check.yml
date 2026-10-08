@@ -1146,6 +1146,7 @@
           tags: always
       vars:
         smoke_check_name: coturn explicit relay address configured
+        smoke_check_severity: fatal
         smoke_check_probe: "{{ coturn_relay_addr | default({}) }}"
         # Three halves: the log was actually read (rc 0), it is NON-EMPTY (an
         # empty log would "pass" while measuring nothing — coturn without
