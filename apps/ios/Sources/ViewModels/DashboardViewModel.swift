@@ -363,9 +363,9 @@ final class DashboardViewModel {
                         ciphertextHex: encrypted.encryptedContent,
                         envelope: envelope
                     )
-                    let decoder = JSONDecoder()
-                    decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    let payload = try decoder.decode(NotePayload.self, from: Data(json.utf8))
+                    // #1633: plain decoder — the note payload is camelCase on every platform, and the
+                    // `.convertFromSnakeCase` that was here would have hidden an encoder regression.
+                    let payload = try JSONDecoder().decode(NotePayload.self, from: Data(json.utf8))
 
                     let previewText = payload.text.count > 80
                         ? String(payload.text.prefix(80)) + "..."
