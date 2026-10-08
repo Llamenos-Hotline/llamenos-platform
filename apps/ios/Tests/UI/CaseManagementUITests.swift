@@ -829,21 +829,6 @@ final class CaseManagementUITests: BaseUITest {
 
     // MARK: - Helpers
 
-    /// Whether this class's hub already has case management on with the jail-support
-    /// template. Re-applying a template replaces its entity types with new ids, which
-    /// would orphan the cases earlier tests in the class created — so it runs once.
-    private static var caseManagementEnabled = false
-
-    /// Case management on, with the jail-support template (Arrest Case + Mass Arrest
-    /// Event) applied to this class's hub through the real API.
-    private func enableCaseManagementWithTemplate() {
-        if !Self.caseManagementEnabled {
-            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
-            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
-            Self.caseManagementEnabled = true
-        }
-    }
-
     private func uniqueCaseTitle() -> String {
         "Case \(UUID().uuidString.prefix(8))"
     }

@@ -110,6 +110,12 @@ struct CreateEventRequest: Codable, Sendable {
     let parentEventId: String?
     let locationPrecision: String?
     let locationApproximate: String?
+    /// `createEventBodySchema` requires both hashes — omitting them answered 400,
+    /// so no event could ever be created from iOS. iOS stores the plaintext
+    /// discriminators it filters on locally (same convention as record creation,
+    /// which sends `entityType.defaultStatus` as `statusHash`).
+    let eventTypeHash: String
+    let statusHash: String
     let encryptedDetails: String
     let detailEnvelopes: [CaseEnvelope]
     let blindIndexes: [String: String]

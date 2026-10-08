@@ -35,8 +35,6 @@ AdminSidebarUITests/testTapPlatformHubsNavigates  # tests a view the app never p
 
 # navigateToEvents() goes to the Cases tab; Events lives under Admin and needs case management.
 EventsUITests/testEventListShowsEvents  # never reaches the Events screen — #1245
-EventsUITests/testEventDetailShowsInfo  # never reaches the Events screen, and no Given creates an event — #1245, #1314
-EventsUITests/testEventDetailTabSwitching  # never reaches the Events screen, and no Given creates an event — #1245, #1314
 
 # The case-detail Contacts tab renders none of its states (Timeline and Evidence do).
 CaseManagementUITests/testContactsTabShowsLinkedContacts  # contacts tab renders no state — #1246
@@ -77,9 +75,4 @@ ConversationFlowUITests/testChannelHeaderVisible  # conversation list fails to d
 
 # The hand-written SystemHealth model does not match /api/system/health.
 AdminSettingsUITests/testSystemHealthShowsCards  # system health fails to decode — #1304
-
-# No Given creates the conversion-enabled report the triage queue lists.
-TriageUITests/testTriageDetailShowsInfo  # no triage report fixture — #1314
-TriageUITests/testConvertToCaseButtonVisible  # no triage report fixture — #1314
-TriageUITests/testTriageReportTypeLabelVisible  # no triage report fixture — #1314
 

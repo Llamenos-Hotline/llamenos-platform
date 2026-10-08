@@ -203,6 +203,26 @@ class BaseUITest: XCTestCase {
         launchConnected(["--test-admin"])
     }
 
+    // MARK: - CMS Template Fixture
+
+    /// Hubs that already have case management on with the jail-support template.
+    private static var cmsTemplateHubIds: Set<String> = []
+
+    /// Enable case management and apply the jail-support template (Arrest Case,
+    /// Mass Arrest Event, and the LO Arrest Report type whose `allowCaseConversion`
+    /// feeds the triage queue) to this class's hub through the real API. Runs once
+    /// per hub: re-applying a template replaces its entity types with new ids,
+    /// orphaning the records earlier tests in the class created.
+    func enableCaseManagementWithTemplate() {
+        Self.hubLock.lock()
+        let alreadyApplied = Self.cmsTemplateHubIds.contains(testHubId)
+        if !alreadyApplied { Self.cmsTemplateHubIds.insert(testHubId) }
+        Self.hubLock.unlock()
+        guard !alreadyApplied else { return }
+        TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
+        TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+    }
+
     // MARK: - Server State (deprecated)
 
     /// Deprecated: hub isolation via class-level createClassHub() replaces this.
@@ -413,6 +433,17 @@ class BaseUITest: XCTestCase {
     func navigateToConversations() { navigateToTab(index: 3) }
     func navigateToShifts() { navigateToTab(index: 4) }
     func navigateToSettings() { navigateToTab(index: 5) }
+
+    /// Navigate to the reports screen via the Dashboard quick action card.
+    /// The quick actions section is below identity, shift, and activity sections
+    /// in the List, so we must scroll down to find it.
+    func navigateToReports() {
+        scrollAndTap("dashboard-reports-action")
+
+        _ = anyElementExists([
+            "reports-list", "reports-empty-state", "reports-loading", "reports-error",
+        ])
+    }
 
     /// Open the admin panel from Settings, failing the test if it does not open.
     func navigateToAdminPanel() {
