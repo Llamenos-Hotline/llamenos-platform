@@ -66,11 +66,14 @@ function watchConsole(page: Page): string[] {
 /**
  * A hub this test can rely on, reusing the suite's if there is one.
  *
- * `chromium` runs fullyParallel over one database, and `/api/config` has long
- * windows listing **no** hub at all while the hub specs work — measured at over
- * 60 seconds. So a hub cannot simply be waited for. Nor should one always be
- * created: other specs resolve "the" hub positionally (`config.hubs[0]`), and an
- * extra hub sent `simulation.spec` looking for calls in the wrong one.
+ * `chromium` runs fullyParallel over one database, and the hub list has long
+ * windows carrying **no** hub at all while the hub specs work — measured at
+ * over 60 seconds. So a hub cannot simply be waited for. Nor should one always
+ * be created: other specs resolve "the" hub positionally, and an extra hub sent
+ * `simulation.spec` looking for calls in the wrong one.
+ *
+ * Read from the authenticated `GET /hubs` (the admin's memberships) — the
+ * public `/api/config` no longer publishes a hub roster (#1710).
  *
  * Reuse when there is something to reuse, create only when there is not, and
  * always clean up what was created.
@@ -78,7 +81,7 @@ function watchConsole(page: Page): string[] {
 async function acquireHub(
   request: APIRequestContext,
 ): Promise<{ hubId: string; release: () => Promise<void> }> {
-  const { data } = await apiGet<{ hubs?: Array<{ id: string }> }>(request, '/config')
+  const { data } = await apiGet<{ hubs?: Array<{ id: string }> }>(request, '/hubs')
   const existing = data?.hubs?.[0]?.id
   if (existing) return { hubId: existing, release: async () => {} }
 
@@ -89,11 +92,10 @@ async function acquireHub(
 /**
  * Pin the client to `hubId` before its first render.
  *
- * `ConfigProvider` honours `window.__TEST_WORKER_HUB` unconditionally, even when
- * `/api/config` lists no hub (`src/client/lib/config.tsx:90-97`) — it is the
- * mechanism the BDD suite's per-worker hub uses. Its own `config.hubs[0]`
- * fallback runs once on mount and never retries, so a client that mounts during
- * an empty window otherwise has no active hub for the rest of its life.
+ * `ConfigProvider` treats `window.__TEST_WORKER_HUB` as a pin that membership
+ * resolution never overrides (`chooseActiveHub` in `src/client/lib/config.tsx`)
+ * — it is the mechanism the BDD suite's per-worker hub uses, and it is what
+ * lets this spec browse a hub the shared admin may not be a member of.
  */
 async function pinHubBeforeLoad(page: Page, hubId: string): Promise<void> {
   await page.addInitScript((id) => {

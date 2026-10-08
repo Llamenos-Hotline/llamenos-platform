@@ -739,7 +739,9 @@
     "keyUnavailable": "በዚህ ሃብ ውስጥ ያለው የተመሰጠረ ይዘት በዚህ መሣሪያ ላይ እስካሁን ሊከፈት አይችልም",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "ሃቦችዎን መጫን አልተቻለም",
+    "membershipLoadFailedBody": "አገልጋዩ የትኞቹ ሃቦች አባል እንደሆኑ አልገለጸም፣ ስለዚህ እስካሁን ምንም ማሳየት አይቻልም። ግንኙነትዎን ያረጋግጡ እና እንደገና ይሞክሩ።"
   },
   "ivr": {
     "selfAnnouncement": "አማርኛ ለ፣ [N] ይጫኑ።",

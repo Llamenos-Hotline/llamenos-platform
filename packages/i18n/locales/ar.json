@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "تعذّر تحميل المراكز الخاصة بك",
+    "membershipLoadFailedBody": "لم يذكر الخادم المراكز التي تنتمي إليها، لذا لا يمكن عرض أي شيء بعد. تحقّق من اتصالك وحاول مرة أخرى."
   },
   "identityLabel": "Identity",
   "import": {

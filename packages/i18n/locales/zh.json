@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "无法加载你的中心",
+    "membershipLoadFailedBody": "服务器没有说明你属于哪些中心，因此暂时无法显示任何内容。请检查网络连接后重试。"
   },
   "identityLabel": "Identity",
   "import": {

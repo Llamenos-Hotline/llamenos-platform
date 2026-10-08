@@ -739,7 +739,9 @@
     "keyUnavailable": "ဤဟပ်ရှိ စာဝှက်ထားသောအကြောင်းအရာကို ဤစက်ပစ္စည်းတွင် ယခုအချိန်တွင် မဖွင့်နိုင်သေးပါ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "သင့်ဟပ်များကို ဖွင့်မရပါ",
+    "membershipLoadFailedBody": "သင်မည်သည့်ဟပ်များတွင် ပါဝင်သည်ကို ဆာဗာမှ မဖြေကြားသဖြင့် ယခုအချိန်တွင် မည်သည့်အရာမျှ ပြသနိုင်ခြင်း မရှိပါ။ ချိတ်ဆက်မှုကို စစ်ဆေးပြီး ပြန်လုပ်ကြည့်ပါ။"
   },
   "ivr": {
     "selfAnnouncement": "မြန်မာဘာသာအတွက် [N] နှိပ်ပါ။",

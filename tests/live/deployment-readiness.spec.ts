@@ -143,6 +143,22 @@ test.describe('deployment readiness', () => {
     expect(res.status(), 'GET /api/hubs must require authentication').toBe(401)
   })
 
+  /**
+   * `/api/hubs` answering 401 was never the whole story: `/api/config` served
+   * the same hub objects — name, slug, description, `createdBy`, timestamps —
+   * to anyone who could reach the host (#1710). Asserted here because it is a
+   * property of the DEPLOYMENT as reached over the wire, which is the only
+   * place the two endpoints can be compared.
+   */
+  test('the public config does not publish the hub roster', async ({ request }) => {
+    const res = await request.get('/api/config')
+    expect(res.status()).toBe(200)
+    const body = await res.json() as Record<string, unknown>
+
+    expect(body, 'the unauthenticated config must not carry hub objects').not.toHaveProperty('hubs')
+    expect(body, 'the unauthenticated config must not name a hub').not.toHaveProperty('defaultHubId')
+  })
+
   test.describe('with the admin identity', () => {
     test.skip(
       !adminSeed,

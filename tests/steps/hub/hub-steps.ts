@@ -8,7 +8,7 @@ import { expect, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts, loginAsVolunteer, navigateAfterLogin } from '../../helpers'
-import { apiGet, createUserViaApi, createHubViaApi, addHubMemberViaApi } from '../../api-helpers'
+import { createUserViaApi, createHubViaApi, addHubMemberViaApi } from '../../api-helpers'
 
 // ── Hub Management UI Steps ───────────────────────────────────────
 
@@ -83,18 +83,14 @@ Then('each hub card should display a member count', async ({ page }) => {
 
 // ── Hub Context Steps ─────────────────────────────────────────────
 
-Given('a volunteer in a single-hub deployment', async ({ page, backendRequest: request, $test }) => {
-  // The hub switcher renders whenever the SERVER has more than one active hub
-  // (/api/config returns all active hubs). The shared E2E backend accumulates
-  // one hub per Playwright worker, so the single-hub premise only holds on a
-  // fresh single-hub deployment. When it does not, SKIP — reported as skipped.
-  // (The old version set a window flag and the Then step then passed on the
-  // page title, so the scenario reported a pass it never checked.)
-  const { status, data } = await apiGet<{ hubs?: unknown[] }>(request, '/config')
-  expect(status).toBe(200)
-  const hubCount = Array.isArray(data.hubs) ? data.hubs.length : 0
-  $test.skip(hubCount > 1, `single-hub premise does not hold: the server has ${hubCount} active hubs`)
-  const vol = await createUserViaApi(request)
+Given('a volunteer in a single-hub deployment', async ({ page, backendRequest: request, workerHub }) => {
+  // The switcher renders on the volunteer's OWN membership count, not on how
+  // many hubs the server has (#1708) — so a volunteer granted exactly one hub
+  // satisfies this premise on the shared E2E backend, which accumulates a hub
+  // per Playwright worker. It used to read the server-wide count from
+  // `/api/config` and SKIP whenever another worker had created a hub, which was
+  // almost always.
+  const vol = await createUserViaApi(request, { hubId: workerHub })
   await loginAsVolunteer(page, vol.nsec)
 })
 

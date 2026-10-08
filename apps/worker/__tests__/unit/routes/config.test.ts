@@ -79,9 +79,6 @@ describe('config route', () => {
       expect(body.setupCompleted).toBe(true)
       expect(body.demoMode).toBe(false)
       expect(body.needsBootstrap).toBe(false)
-      expect(body.hubs).toHaveLength(1)
-      expect(body.hubs[0].id).toBe('hub-1')
-      expect(body.defaultHubId).toBe('hub-1')
       expect(body.wsRelayUrl).toBe('/ws')
       expect(body.apiVersion).toBeDefined()
       expect(body.minApiVersion).toBeDefined()
@@ -152,28 +149,45 @@ describe('config route', () => {
       expect(body.needsBootstrap).toBe(false)
     })
 
-    it('returns empty hubs when getHubs fails', async () => {
-      const services = createMockServices({
-        settings: {
-          getHubs: vi.fn().mockRejectedValue(new Error('DB error')),
-        },
-      })
+    // --- Unauthenticated disclosure (#1710) ---------------------------------
+    // This route answers anyone who can reach the host. The assertions below
+    // are about the SHAPE, not about any one field: a widening of the
+    // anonymous payload has to be a deliberate edit here, not a side effect of
+    // adding a key to a c.json() call.
+
+    it('exposes exactly the agreed public key set and nothing else', async () => {
+      const services = createMockServices()
       const app = createTestApp({ services })
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.hubs).toEqual([])
-      expect(body.defaultHubId).toBeUndefined()
+      const body = await res.json() as Record<string, unknown>
+
+      expect(Object.keys(body).sort()).toEqual([
+        'apiVersion',
+        'channels',
+        'demoMode',
+        'demoResetSchedule',
+        'hotlineName',
+        'hotlineNumber',
+        'minApiVersion',
+        'needsBootstrap',
+        'sentryDsn',
+        'serverPubkey',
+        'setupCompleted',
+        'wsRelayUrl',
+      ])
     })
 
-    it('does not set defaultHubId when multiple active hubs exist', async () => {
+    it('does not publish the hub roster to an unauthenticated caller', async () => {
+      // Several active hubs with the full field set the leak carried: name,
+      // slug, description, createdBy, timestamps.
       const services = createMockServices({
         settings: {
           getHubs: vi.fn().mockResolvedValue({
             hubs: [
-              { id: 'hub-1', name: 'Hub 1', status: 'active' as const },
-              { id: 'hub-2', name: 'Hub 2', status: 'active' as const },
+              { id: 'hub-1', name: 'Northern Chapter', slug: 'northern', description: 'secret', status: 'active' as const, createdBy: 'f'.repeat(64), createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' },
+              { id: 'hub-2', name: 'Partner Org', slug: 'partner', status: 'active' as const, createdBy: 'e'.repeat(64) },
             ],
           }),
         },
@@ -182,20 +196,28 @@ describe('config route', () => {
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.hubs).toHaveLength(2)
+      const body = await res.json() as Record<string, unknown>
+
+      expect(body.hubs).toBeUndefined()
       expect(body.defaultHubId).toBeUndefined()
+      // Nothing hub-shaped may reach an anonymous caller by any other name.
+      const raw = JSON.stringify(body)
+      expect(raw).not.toContain('Northern Chapter')
+      expect(raw).not.toContain('Partner Org')
+      expect(raw).not.toContain('hub-1')
+      expect(raw).not.toContain('f'.repeat(64))
     })
 
-    it('filters out inactive hubs', async () => {
-      const services = createMockServices()
+    it('does not read hubs at all while building the public config', async () => {
+      // The hub roster is not merely filtered out of the response — it is never
+      // fetched, so there is nothing to leak by a later refactor.
+      const getHubs = vi.fn()
+      const services = createMockServices({ settings: { getHubs } })
       const app = createTestApp({ services })
 
       const res = await app.request('/')
       expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.hubs).toHaveLength(1)
-      expect(body.hubs[0].status).toBe('active')
+      expect(getHubs).not.toHaveBeenCalled()
     })
 
     it('returns /ws for relay url when server secret is configured', async () => {

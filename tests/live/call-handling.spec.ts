@@ -837,9 +837,11 @@ test.describe('R1 — a rung volunteer answers an inbound call', () => {
     // exact match on an ACTIVE hub's `phone_number`). A hub without one cannot
     // receive a call at all, which is a readiness failure rather than a
     // credential this run lacks — so it is reported as one.
-    const cfg = await request.get('/api/config')
-    const hubs = (await cfg.json() as { hubs?: Array<{ id: string; phoneNumber?: string }> }).hubs ?? []
-    hotlineNumber = hubs.find(h => h.id === hubId)?.phoneNumber ?? ''
+    // Authenticated: the public `/api/config` no longer publishes hubs (#1710).
+    const { data: hubData } = await apiGet<{ hubs?: Array<{ id: string; phoneNumber?: string }> }>(
+      request, '/hubs', seed,
+    )
+    hotlineNumber = (hubData.hubs ?? []).find(h => h.id === hubId)?.phoneNumber ?? ''
     expect(
       hotlineNumber,
       `hub ${hubId} has no phone number, so no inbound call can be routed to it: `

@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "No se pudieron cargar tus centros",
+    "membershipLoadFailedBody": "El servidor no indicó a qué centros perteneces, así que todavía no se puede mostrar nada. Comprueba tu conexión e inténtalo de nuevo."
   },
   "identityLabel": "Identity",
   "import": {
