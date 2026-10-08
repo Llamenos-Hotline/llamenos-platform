@@ -85,12 +85,15 @@ final class EventsUITests: BaseUITest {
         when("I navigate to events and tap an event") {
             navigateToEvents()
             let eventList = find("events-list")
-            guard eventList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                eventList.waitForExistence(timeout: 10),
+                "Events screen should render its list — this scenario needs at least one event in the hub"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'event-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "Events list should contain at least one row ('event-row-*')")
             firstRow.tap()
         }
         then("I should see the event detail with tabs") {
@@ -126,18 +129,22 @@ final class EventsUITests: BaseUITest {
         when("I open an event detail") {
             navigateToEvents()
             let eventList = find("events-list")
-            guard eventList.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                eventList.waitForExistence(timeout: 10),
+                "Events screen should render its list — this scenario needs at least one event in the hub"
+            )
 
             let firstRow = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH 'event-row-'"))
                 .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 5), "Events list should contain at least one row ('event-row-*')")
             firstRow.tap()
         }
         then("switching tabs should render different content areas") {
-            guard anyElementExists(["event-details-tab", "event-detail-tabs"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(
+                anyElementExists(["event-details-tab", "event-detail-tabs"], timeout: 5),
+                "Event detail should open with its tabs after tapping an event row"
+            )
 
             // Details tab content
             let detailsTab = find("event-tab-details")

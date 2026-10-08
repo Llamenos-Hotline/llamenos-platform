@@ -191,7 +191,10 @@ final class APIConnectedUITests: BaseUITest {
             navigateToNotes()
 
             let createButton = anyElement(["create-note-button", "create-first-note"])
-            guard createButton.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                createButton.waitForExistence(timeout: 10),
+                "Notes tab should offer a create-note button ('create-note-button' or 'create-first-note')"
+            )
             createButton.tap()
 
             let textEditor = find("note-text-editor")
@@ -273,12 +276,12 @@ final class APIConnectedUITests: BaseUITest {
 
             // First clock in
             let clockIn = find("clock-in-button")
-            guard clockIn.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(clockIn.waitForExistence(timeout: 10), "Clock-in button should appear on the Shifts tab for an off-shift volunteer")
             clockIn.tap()
 
             // Wait for clock out to appear
             let clockOut = find("clock-out-button")
-            guard clockOut.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(clockOut.waitForExistence(timeout: 10), "Clock-out button should replace clock-in once the clock-in API call succeeds")
             clockOut.tap()
         }
         then("I should see a clock out confirmation") {
@@ -517,7 +520,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let volunteersLink = find("admin-volunteers")
-            guard volunteersLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(volunteersLink.waitForExistence(timeout: 5), "Volunteers link ('admin-volunteers') should be listed in the admin panel")
             volunteersLink.tap()
         }
         then("I should see the volunteers list or empty state") {
@@ -538,7 +541,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let bansLink = find("admin-bans")
-            guard bansLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "Ban list link ('admin-bans') should be listed in the admin panel")
             bansLink.tap()
         }
         then("I should see the ban list or empty state") {
@@ -559,7 +562,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let bansLink = find("admin-bans")
-            guard bansLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(bansLink.waitForExistence(timeout: 5), "Ban list link ('admin-bans') should be listed in the admin panel")
             bansLink.tap()
 
             _ = anyElementExists(["ban-list", "bans-empty-state", "bans-loading"])
@@ -580,7 +583,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let auditLink = find("admin-audit-log")
-            guard auditLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(auditLink.waitForExistence(timeout: 5), "Audit log link ('admin-audit-log') should be listed in the admin panel")
             auditLink.tap()
         }
         then("I should see the audit log or empty state") {
@@ -601,7 +604,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let invitesLink = find("admin-invites")
-            guard invitesLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "Invites link ('admin-invites') should be listed in the admin panel")
             invitesLink.tap()
         }
         then("I should see the invites list or empty state") {
@@ -622,7 +625,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let invitesLink = find("admin-invites")
-            guard invitesLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(invitesLink.waitForExistence(timeout: 5), "Invites link ('admin-invites') should be listed in the admin panel")
             invitesLink.tap()
 
             _ = anyElementExists(["invites-list", "invites-empty-state", "invites-loading"])
@@ -667,7 +670,7 @@ final class APIConnectedUITests: BaseUITest {
             navigateToAdminPanel()
 
             let customFieldsLink = find("admin-custom-fields")
-            guard customFieldsLink.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(customFieldsLink.waitForExistence(timeout: 5), "Custom fields link ('admin-custom-fields') should be listed in the admin panel")
             customFieldsLink.tap()
 
             _ = anyElementExists([
@@ -727,7 +730,7 @@ final class APIConnectedUITests: BaseUITest {
             ])
 
             let createButton = find("create-report-button")
-            guard createButton.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create-report button should appear on the Reports screen for a connected user")
             createButton.tap()
         }
         then("I should see the report creation form") {
@@ -838,7 +841,7 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to help via settings") {
             navigateToSettings()
             let helpButton = scrollToFind("settings-help")
-            guard helpButton.exists else { return }
+            XCTAssertTrue(helpButton.exists, "Help link ('settings-help') should be reachable by scrolling Settings")
             helpButton.tap()
         }
         then("I should see the help screen") {
@@ -859,7 +862,7 @@ final class APIConnectedUITests: BaseUITest {
         when("I navigate to help via settings") {
             navigateToSettings()
             let helpButton = scrollToFind("settings-help")
-            guard helpButton.exists else { return }
+            XCTAssertTrue(helpButton.exists, "Help link ('settings-help') should be reachable by scrolling Settings")
             helpButton.tap()
         }
         then("I should see the admin guide section") {
@@ -1111,11 +1114,14 @@ final class APIConnectedUITests: BaseUITest {
             navigateToNotes()
 
             let createButton = anyElement(["create-note-button", "create-first-note"])
-            guard createButton.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                createButton.waitForExistence(timeout: 10),
+                "Notes tab should offer a create-note button ('create-note-button' or 'create-first-note')"
+            )
             createButton.tap()
 
             let textEditor = find("note-text-editor")
-            guard textEditor.waitForExistence(timeout: 5) else { return }
+            XCTAssertTrue(textEditor.waitForExistence(timeout: 5), "Note text editor should appear after tapping create note")
             textEditor.tap()
             textEditor.typeText("Note for call \(call.callId)")
         }
