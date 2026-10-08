@@ -279,41 +279,21 @@ struct CreateReportCategoryRequest: Encodable, Sendable {
     let name: String
 }
 
-// MARK: - Telephony Provider Display Names
-
-/// The provider's own brand name, for the picker.
-///
-/// `SharedProviderType` is generated from `telephonyProviderTypeSchema`, so the
-/// eight cases here are exactly the eight the server accepts. It replaces a
-/// hand-written `ClientTelephonyProvider` that listed five of them, so an
-/// operator on Telnyx, Bandwidth or FreeSWITCH could not select their own
-/// provider at all — and a hand-written `TelephonySettings { provider,
-/// accountSid, authToken, phoneNumber }`, which described neither the read
-/// shape (`telephonyProviderSchema`, surfaced as `TelephonyProvider`) nor the
-/// write shape (`configureProviderRequestSchema`, as
-/// `ConfigureProviderRequest`). See #1724.
-///
-/// Brand names are not localized: these are the vendors' own trademarks, the
-/// same strings the desktop provider picker shows.
-extension SharedProviderType {
-    var displayName: String {
-        switch self {
-        case .twilio: return "Twilio"
-        case .signalwire: return "SignalWire"
-        case .vonage: return "Vonage"
-        case .plivo: return "Plivo"
-        case .telnyx: return "Telnyx"
-        case .bandwidth: return "Bandwidth"
-        case .asterisk: return "Asterisk"
-        case .freeswitch: return "FreeSWITCH"
-        }
-    }
-
-    /// Picker order: the cloud providers first, then the self-hosted PBXes.
-    static let pickerOrder: [SharedProviderType] = [
-        .twilio, .signalwire, .vonage, .plivo, .telnyx, .bandwidth, .asterisk, .freeswitch,
-    ]
-}
+// MARK: - Telephony Provider Selection
+//
+// The telephony screen used to hold a hand-written `ClientTelephonyProvider`
+// enum listing five providers, with its own `displayName`, and a hand-written
+// `TelephonySettings { provider, accountSid, authToken, phoneNumber }` that
+// described neither the read shape (`telephonyProviderSchema`, surfaced as
+// `TelephonyProvider`) nor the write shape (`configureProviderRequestSchema`,
+// as `ConfigureProviderRequest`). An operator on Telnyx, Bandwidth or
+// FreeSWITCH could not select their own provider at all.
+//
+// Both are gone. The screen uses the generated `SharedProviderType`, whose
+// eight cases are exactly the eight `telephonyProviderTypeSchema` accepts, and
+// `ProviderInfo.all` (ViewModels/ProviderSetup/ProviderSetupViewModel.swift) —
+// which already listed all eight, in picker order, with the `displayName` the
+// provider-setup screens show. See #1724.
 
 // MARK: - Client Call Settings
 // Client-only: generated `CallSettings` has different fields (maxDuration: Double, etc.).

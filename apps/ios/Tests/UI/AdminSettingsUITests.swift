@@ -100,8 +100,12 @@ final class AdminSettingsUITests: BaseUITest {
         try openAdminScreen("admin-telephony-settings", renderedWhenLoaded: "telephony-phone-number")
 
         // A value the server cannot already be holding, so a save that quietly
-        // does nothing cannot satisfy the assertion below.
-        let wanted = "+1555\(Int(Date().timeIntervalSince1970) % 1_000_000)"
+        // does nothing cannot satisfy the assertion below. Digits only: the
+        // field carries `.phonePad`, and a leading "+" is not reliably typeable
+        // through it. The server stores whatever string it is given here —
+        // `configureProviderRequestSchema.phoneNumber` is a plain
+        // `z.string().optional()`, with no E.164 shape of its own.
+        let wanted = "555\(Int(Date().timeIntervalSince1970) % 1_000_000)"
         try replaceFieldText("telephony-phone-number", with: wanted)
         XCTAssertEqual(
             try fieldText("telephony-phone-number"), wanted,
@@ -184,9 +188,12 @@ final class AdminSettingsUITests: BaseUITest {
         try openAdminScreen("admin-ivr-settings", renderedWhenLoaded: "ivr-enabled-order")
 
         // A language the server does not currently have enabled, so a save that
-        // stores nothing cannot satisfy the assertion. "de" is in
-        // `LANGUAGE_CODES`, so the route accepts it.
-        let added = ["de", "pt", "hi"].first { !before.contains($0) }
+        // stores nothing cannot satisfy the assertion. All three are in
+        // `LANGUAGE_CODES` and all three are speakable by every provider with
+        // an IVR voice catalog, so `updateIvrLanguages` accepts them; and all
+        // three are near the top of the picker, so the row is reached with one
+        // or two swipes rather than thirteen.
+        let added = ["tl", "vi", "ar"].first { !before.contains($0) }
         let wanted: [String]
         if let added {
             toggleOn("ivr-language-\(added)")
@@ -278,15 +285,18 @@ final class AdminSettingsUITests: BaseUITest {
         try openAdminScreen("admin-spam-settings", renderedWhenLoaded: "spam-max-calls-value")
 
         XCTAssertEqual(
-            try numberLabel("spam-max-calls-value"), stored["maxCallsPerMinute"] as? Int,
+            try numberLabel("spam-max-calls-value"),
+            try XCTUnwrap(stored["maxCallsPerMinute"] as? Int),
             "The rate limit should show what GET /api/settings/spam returned"
         )
         XCTAssertEqual(
-            try numberLabel("spam-block-duration-value"), stored["blockDurationMinutes"] as? Int,
+            try numberLabel("spam-block-duration-value"),
+            try XCTUnwrap(stored["blockDurationMinutes"] as? Int),
             "The block duration should show what GET /api/settings/spam returned"
         )
         XCTAssertEqual(
-            try switchValue("spam-captcha-toggle"), stored["voiceCaptchaEnabled"] as? Bool,
+            try switchValue("spam-captcha-toggle"),
+            try XCTUnwrap(stored["voiceCaptchaEnabled"] as? Bool),
             "The CAPTCHA switch should show what GET /api/settings/spam returned"
         )
     }
@@ -304,21 +314,26 @@ final class AdminSettingsUITests: BaseUITest {
         )
 
         try openAdminScreen("admin-spam-settings", renderedWhenLoaded: "spam-max-calls-value")
-        incrementStepper("spam-max-calls-stepper", times: 2)
+
+        // Drive the slider to whichever end of its range the server is NOT at,
+        // so a save that quietly does nothing cannot satisfy the assertion.
+        let slider = scrollToVisible("spam-max-calls-slider")
+        XCTAssertTrue(slider.isHittable, "The rate limit slider should be reachable on screen")
+        slider.adjust(toNormalizedSliderPosition: stored > 50 ? 0 : 1)
 
         let pending = try numberLabel("spam-max-calls-value")
-        XCTAssertEqual(
-            pending, stored + 2,
-            "The stepper must raise the pending rate limit, or the save assertion proves nothing"
+        XCTAssertNotEqual(
+            pending, stored,
+            "The slider adjustment must change the pending rate limit, or the save assertion proves nothing"
         )
 
         tapSave("spam-save-button")
 
         let persisted = try waitForStored(
-            "/api/settings/spam", key: "maxCallsPerMinute", toEqual: stored + 2
+            "/api/settings/spam", key: "maxCallsPerMinute", toEqual: pending
         )
         XCTAssertEqual(
-            persisted, Self.describe(stored + 2),
+            persisted, Self.describe(pending),
             "Saving should store the rate limit the screen shows; the server holds \(persisted ?? "nothing")"
         )
         XCTAssertFalse(
@@ -488,16 +503,28 @@ final class AdminSettingsUITests: BaseUITest {
         field.typeText(text)
     }
 
-    /// A static text's label.
+    /// A static text's label, scrolling in **either** direction to reach it.
+    ///
+    /// `scrollToFind` only swipes up, i.e. further down the list. A SwiftUI
+    /// `Form` deallocates rows well above the viewport, so the IVR screen's
+    /// ordered-language summary — which sits in the first section — stops
+    /// existing, at any timeout, once a test has scrolled 13 rows down the
+    /// available-languages list to reach a toggle.
     private func labelText(
         _ identifier: String, file: StaticString = #filePath, line: UInt = #line
     ) throws -> String {
-        let label = scrollToFind(identifier, timeout: 10)
-        guard label.exists else {
-            XCTFail("\(identifier) should be on screen", file: file, line: line)
-            throw SettingsProbeError.unreadable(identifier)
+        let label = find(identifier)
+        if label.waitForExistence(timeout: 10) { return label.label }
+        for _ in 0..<8 {
+            app.swipeUp()
+            if label.waitForExistence(timeout: 1) { return label.label }
         }
-        return label.label
+        for _ in 0..<16 {
+            app.swipeDown()
+            if label.waitForExistence(timeout: 1) { return label.label }
+        }
+        XCTFail("\(identifier) should be on screen", file: file, line: line)
+        throw SettingsProbeError.unreadable(identifier)
     }
 
     /// The whole number a value label is showing.
@@ -512,53 +539,90 @@ final class AdminSettingsUITests: BaseUITest {
         return value
     }
 
-    /// A switch's state. `app.switches[...]`, not `find(...)`: `find` is
-    /// `descendants(matching: .any)`, which matches the row containing the
-    /// switch before the switch itself and so never reports a value.
+    /// The switch carrying `identifier`, scrolled into the rendered window.
+    ///
+    /// Two separate things are needed here and each one alone is not enough.
+    /// `app.switches[...]` rather than this file's `find(...)`, because `find`
+    /// is `descendants(matching: .any)` and matches the row *containing* the
+    /// switch first, which reports no value. And a scroll first, because a
+    /// SwiftUI `Form` only instantiates rows near the viewport: the IVR screen
+    /// lists 22 languages, and `app.switches["ivr-language-de"]` does not exist
+    /// — at any timeout — until that row has been scrolled to.
+    private func settingSwitch(
+        _ identifier: String, file: StaticString = #filePath, line: UInt = #line
+    ) -> XCUIElement? {
+        let direct = app.switches[identifier].firstMatch
+        // `isHittable`, not merely `exists`. A SwiftUI `Form` row can exist in
+        // the hierarchy while scrolled off the screen, and tapping a
+        // non-hittable element taps its frame coordinates — which land on
+        // whatever is actually there. On the IVR screen that read back as "the
+        // switch did not change", indistinguishable from the product defect
+        // these tests exist to catch.
+        if direct.waitForExistence(timeout: 2), direct.isHittable { return direct }
+        for _ in 0..<14 {
+            app.swipeUp()
+            if direct.waitForExistence(timeout: 1), direct.isHittable { return direct }
+        }
+        XCTFail("\(identifier) should be a switch on screen and hittable", file: file, line: line)
+        return nil
+    }
+
     private func switchValue(
         _ identifier: String, file: StaticString = #filePath, line: UInt = #line
     ) throws -> Bool {
-        let toggle = app.switches[identifier].firstMatch
-        guard toggle.waitForExistence(timeout: 10) else {
-            XCTFail("\(identifier) should be a switch on screen", file: file, line: line)
+        guard let toggle = settingSwitch(identifier, file: file, line: line) else {
             throw SettingsProbeError.unreadable(identifier)
         }
         return (toggle.value as? String) == "1"
     }
 
+    /// Set a switch and wait for it to actually hold the new value.
+    ///
+    /// The wait is not padding. A `Toggle` bound to an `@Observable` view model
+    /// re-renders a frame later, so reading `value` immediately after the tap
+    /// returns the old state — which failed as
+    /// `XCTAssertEqual failed: ("false") is not equal to ("true")` on a screen
+    /// that was in fact switching correctly, i.e. a false negative that looks
+    /// exactly like the defect these tests exist to catch.
     private func setSwitch(
         _ identifier: String, to wanted: Bool,
         file: StaticString = #filePath, line: UInt = #line
     ) {
-        let toggle = app.switches[identifier].firstMatch
-        guard toggle.waitForExistence(timeout: 10) else {
-            XCTFail("\(identifier) should be a switch on screen", file: file, line: line)
-            return
+        guard let toggle = settingSwitch(identifier, file: file, line: line) else { return }
+        let isOn = { (toggle.value as? String) == "1" }
+        // Two taps, in two different places, because the first one does not
+        // work on these rows and the reason is not obvious.
+        //
+        // `.accessibilityIdentifier` on a SwiftUI `Toggle` whose label is a
+        // `VStack` lands on the merged row element, which XCUITest reports as a
+        // `.switch` and whose `value` is the switch's — so reading it works.
+        // But its frame is the whole row, so `tap()` hits the centre, which is
+        // over the label; tapping a `Form` Toggle's label does not toggle it.
+        // Measured: `transcription-enabled-toggle` and `ivr-language-de` both
+        // read back unchanged after `tap()`, on screens that switch correctly
+        // by hand. The trailing-edge coordinate is where the control actually
+        // is.
+        let taps: [() -> Void] = [
+            { toggle.tap() },
+            { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() },
+        ]
+        for tap in taps {
+            if isOn() == wanted { return }
+            tap()
+            let deadline = Date().addingTimeInterval(3)
+            while isOn() != wanted, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.2)
+            }
         }
-        if ((toggle.value as? String) == "1") != wanted { toggle.tap() }
+        XCTAssertEqual(
+            isOn(), wanted,
+            "\(identifier) should be \(wanted ? "on" : "off") after being tapped",
+            file: file, line: line
+        )
     }
 
     private func toggleOn(_ identifier: String) { setSwitch(identifier, to: true) }
     private func toggleOff(_ identifier: String) { setSwitch(identifier, to: false) }
-
-    /// Tap a Stepper's increment button. A SwiftUI Stepper exposes its two
-    /// buttons as children named "Increment"/"Decrement".
-    private func incrementStepper(
-        _ identifier: String, times: Int,
-        file: StaticString = #filePath, line: UInt = #line
-    ) {
-        let stepper = scrollToVisible(identifier)
-        guard stepper.exists else {
-            XCTFail("\(identifier) should be on screen", file: file, line: line)
-            return
-        }
-        let increment = stepper.buttons["Increment"]
-        guard increment.waitForExistence(timeout: 5) else {
-            XCTFail("\(identifier) should expose an Increment button", file: file, line: line)
-            return
-        }
-        for _ in 0..<times { increment.tap() }
-    }
 
     // MARK: - System Health
 

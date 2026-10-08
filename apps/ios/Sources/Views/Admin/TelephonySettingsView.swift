@@ -65,9 +65,12 @@ struct TelephonySettingsView: View {
                 NSLocalizedString("admin_telephony_provider", comment: "Provider"),
                 selection: $viewModel.telephonyProvider
             ) {
-                ForEach(SharedProviderType.pickerOrder, id: \.self) { provider in
+                // `ProviderInfo.all` is the provider list the provider-setup
+                // screens already use: all eight the server accepts, in the
+                // order those screens show them.
+                ForEach(ProviderInfo.all) { provider in
                     Text(provider.displayName)
-                        .tag(provider)
+                        .tag(provider.id)
                 }
             }
             .accessibilityIdentifier("telephony-provider-picker")

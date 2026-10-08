@@ -79,27 +79,27 @@ struct SpamSettingsView: View {
             .tint(Color.brandPrimary)
             .accessibilityIdentifier("spam-rate-limit-toggle")
 
-            countStepper(
+            countSlider(
                 title: NSLocalizedString(
                     "spam_max_calls_per_minute",
                     comment: "Max calls per minute per number"
                 ),
                 identifier: "spam-max-calls",
                 range: AdminViewModel.maxCallsPerMinuteRange,
+                step: 1,
                 value: $viewModel.spamMaxCallsPerMinute
             )
-            .disabled(!viewModel.spamRateLimitEnabled)
 
-            countStepper(
+            countSlider(
                 title: NSLocalizedString(
                     "spam_block_duration",
                     comment: "Block duration (minutes)"
                 ),
                 identifier: "spam-block-duration",
                 range: AdminViewModel.blockDurationMinutesRange,
+                step: 15,
                 value: $viewModel.spamBlockDurationMinutes
             )
-            .disabled(!viewModel.spamRateLimitEnabled)
         } header: {
             Text(NSLocalizedString("admin_spam_rate_limit_header", comment: "Rate Limiting"))
         }
@@ -129,32 +129,51 @@ struct SpamSettingsView: View {
         }
     }
 
-    /// One labelled stepper over a whole-number setting.
+    /// One labelled slider over a whole-number setting, matching the shape the
+    /// call settings screen uses.
     ///
-    /// The current value carries its own identifier (`<identifier>-value`) so a
-    /// test can read what the screen is about to save and compare it with what
-    /// the server stored. The number itself is formatted by Foundation rather
-    /// than through a localized format string: it is a bare count, and the unit
-    /// is already in the label.
-    private func countStepper(
+    /// The current value carries its own identifier (`<identifier>-value`), and
+    /// sits outside the slider, so a test can read what the screen is about to
+    /// save and compare it with what the server stored. The number itself is
+    /// formatted by Foundation rather than through a localized format string:
+    /// it is a bare count, and the unit is already in the label.
+    ///
+    /// A slider rather than a `Stepper` on purpose. Putting the value label
+    /// inside a `Stepper`'s own label displaces the stepper's accessibility
+    /// element, so neither the value nor its Increment button is reliably
+    /// addressable — and a control a test cannot drive is how the four
+    /// `…HasSaveButton` assertions this screen used to carry became the only
+    /// thing anyone checked.
+    private func countSlider(
         title: String,
         identifier: String,
         range: ClosedRange<Int>,
+        step: Int,
         value: Binding<Int>
     ) -> some View {
-        Stepper(value: value, in: range) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
                 Text(title)
                     .font(.brand(.body))
-
+                Spacer()
                 Text(value.wrappedValue.formatted())
-                    .font(.brand(.subheadline))
+                    .font(.brand(.body))
                     .foregroundStyle(Color.brandPrimary)
                     .fontWeight(.medium)
                     .accessibilityIdentifier("\(identifier)-value")
             }
+
+            Slider(
+                value: Binding(
+                    get: { Double(value.wrappedValue) },
+                    set: { value.wrappedValue = Int($0) }
+                ),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Double(step)
+            )
+            .tint(Color.brandPrimary)
+            .accessibilityIdentifier("\(identifier)-slider")
         }
-        .accessibilityIdentifier("\(identifier)-stepper")
     }
 
     // MARK: - Save Section
