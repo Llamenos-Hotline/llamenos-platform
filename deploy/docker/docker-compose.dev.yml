@@ -128,8 +128,11 @@ services:
   # No call can route until the app provisions the SIP trunk
   # (POST /api/provider-setup/create-sip-trunk; see asterisk-config/sorcery.conf).
   # An end-to-end call against a simulated carrier: deploy/docker/tests/telephony/README.md
+  # Asterisk >= 22.10.0 is required: older builds silently turn
+  # `dtls_verify = fingerprint` into chain verification and kill every
+  # DTLS-SRTP call. See deploy/docker/docker-compose.yml and #1687.
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
+    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
     profiles: ["telephony"]
     ports:
       - "5060:5060/udp"   # SIP
