@@ -53,5 +53,8 @@ test.describe('WebRTC init never claims a client SDK that is not installed (#114
     // with no client SDK actually installed to carry the audio.
     await expect(status).not.toHaveAttribute('data-state', 'error')
     await expect(status).not.toHaveAttribute('data-state', 'ready')
+    // The phone-rings path (#728) must actually render: the volunteer is told
+    // the PSTN leg carries the audio, not left at a dead-end error badge.
+    await expect(status).toContainText("Calls ring volunteers' phones")
   })
 })
