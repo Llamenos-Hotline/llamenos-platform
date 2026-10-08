@@ -101,7 +101,7 @@ final class AdminFlowUITests: BaseUITest {
         XCTAssertTrue(found, "Ban list view should show list, empty state, or loading")
     }
 
-    func testAddBanButtonExists() {
+    func testAddBanEnablesSubmissionAfterEnteringAnIdentifier() {
         navigateToAdminPanel()
 
         // Tap Bans link
@@ -109,12 +109,18 @@ final class AdminFlowUITests: BaseUITest {
         guard bansLink.waitForExistence(timeout: 5) else { return }
         bansLink.tap()
 
-        // Wait for content to load
-        _ = anyElementExists(["ban-list", "bans-empty-state", "bans-loading"])
+        // The identifier belongs to a SwiftUI toolbar Button. Query the button
+        // itself so tapping it exercises the action rather than its container.
+        app.buttons["add-ban-button"].tap()
 
-        // Add ban button should exist (either in toolbar or empty state)
-        let found = anyElementExists(["add-ban-button", "add-first-ban"], timeout: 5)
-        XCTAssertTrue(found, "Add ban button should exist")
+        let identifierInput = app.textFields["ban-hash-input"]
+        identifierInput.tap()
+        identifierInput.typeText(String(repeating: "a", count: 64))
+
+        XCTAssertTrue(
+            app.buttons["submit-add-ban"].isEnabled,
+            "Entering a ban identifier should enable submission"
+        )
     }
 
     // MARK: - Audit Log Tab

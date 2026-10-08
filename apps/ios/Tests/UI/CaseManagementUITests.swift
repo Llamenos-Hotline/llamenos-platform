@@ -68,7 +68,7 @@ final class CaseManagementUITests: BaseUITest {
 
     // MARK: - Case List View (API-Connected)
 
-    /// Scenario: Case list shows entity type tabs (platform/mobile/cases/cms-case-management.feature)
+    /// Scenario: Selecting an entity type keeps its matching record in the list.
     ///
     /// The tabs render only on a hub with case management on, more than one entity
     /// type, and at least one case — an empty hub shows the empty state instead. So
@@ -76,56 +76,116 @@ final class CaseManagementUITests: BaseUITest {
     /// finds: the jail-support template (Arrest Case + Mass Arrest Event) is applied
     /// to this class's hub through the real API, and a case is created through the
     /// app's own create-case sheet (client-side E2EE included).
-    func testCaseListShowsEntityTypeTabs() {
+    func testSelectingEntityTypeShowsMatchingCase() {
         given("case management is enabled with two entity types") {
-            TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
-            TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+            configureCaseManagementWithTwoTypes()
         }
         and("the app is launched and authenticated as admin") {
             launchAsAdminWithAPI()
         }
         and("a case exists") {
             navigateToCases()
-            createCase(title: "Entity tabs \(UUID().uuidString.prefix(8))", typeLabel: "Arrest Case")
+            createCase(title: entityTabsCaseTitle, typeLabel: "Arrest Case")
         }
         when("I navigate to the Cases screen") {
             navigateToCases()
         }
-        then("I should see the entity type tabs") {
-            XCTAssertTrue(find("case-type-tabs").waitForExistence(timeout: 15), "Entity type tabs should render")
+        then("selecting Arrest Case should keep its case in the filtered list") {
+            let arrestCaseTab = entityTypeFilterButton(label: "Arrest Case")
+            arrestCaseTab.tap()
+            XCTAssertTrue(
+                waitForSelected(arrestCaseTab),
+                "Selecting Arrest Case should apply that entity type filter"
+            )
+
+            let caseTitle = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", entityTabsCaseTitle)
+            ).firstMatch
+            let titleAppears = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label CONTAINS %@", entityTabsCaseTitle),
+                object: caseTitle
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [titleAppears], timeout: 10),
+                .completed,
+                "Selecting Arrest Case should retain the matching case in the list"
+            )
         }
-        and("the \"All\" tab should be active") {
-            let allTab = find("case-tab-all")
-            XCTAssertTrue(allTab.waitForExistence(timeout: 5), "The All tab should exist")
-            XCTAssertTrue(allTab.isSelected, "The All tab should be the selected tab")
+    }
+
+    /// Scenario: Selecting entity type filters updates the selected filter state.
+    func testEntityTypeTabFiltering() {
+        given("case management is enabled with two entity types and a case") {
+            configureCaseManagementWithTwoTypes()
+            launchAsAdminWithAPI()
+            navigateToCases()
+            createCase(title: entityTabsCaseTitle, typeLabel: "Arrest Case")
+            navigateToCases()
         }
+        when("I switch between All and an entity type") {
+            let allTab = app.buttons["case-tab-all"]
+            allTab.tap()
+            XCTAssertTrue(waitForSelected(allTab), "Selecting All should reset the entity type filter")
+
+            let arrestCaseTab = entityTypeFilterButton(label: "Arrest Case")
+            arrestCaseTab.tap()
+            XCTAssertTrue(waitForSelected(arrestCaseTab), "Selecting Arrest Case should apply that filter")
+
+            allTab.tap()
+        }
+        then("the entity type filter returns to All") {
+            XCTAssertTrue(
+                waitForSelected(app.buttons["case-tab-all"]),
+                "Selecting All should clear the entity type filter"
+            )
+        }
+    }
+
+    private let entityTabsCaseTitle = "Entity tabs \(UUID().uuidString.prefix(8))"
+
+    private func configureCaseManagementWithTwoTypes() {
+        TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
+        TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+    }
+
+    private func entityTypeFilterButton(label: String) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'case-tab-' AND label CONTAINS %@", label)
+        ).firstMatch
+    }
+
+    private func waitForSelected(_ button: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isSelected == true"),
+                object: button
+            )],
+            timeout: timeout
+        ) == .completed
     }
 
     /// Create a case through the create-case sheet and wait for the sheet to close.
     private func createCase(title: String, typeLabel: String) {
-        let newCase = find("case-new-btn")
-        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be offered once case management is on")
+        let newCase = app.buttons["case-new-btn"]
         newCase.tap()
 
         let sheet = find("create-case-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 5), "The create-case sheet should open")
-
         let picker = find("case-type-picker")
-        XCTAssertTrue(picker.waitForExistence(timeout: 5), "A case type picker should be shown for two entity types")
         picker.tap()
         let option = app.buttons[typeLabel]
-        XCTAssertTrue(option.waitForExistence(timeout: 5), "Case type '\(typeLabel)' should be selectable")
         option.tap()
 
         let titleInput = find("case-title-input")
-        XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
         titleInput.tap()
         titleInput.typeText(title)
 
         let submit = find("case-create-submit")
         XCTAssertTrue(submit.isEnabled, "Create should be enabled with a type and a title")
         submit.tap()
-        XCTAssertTrue(sheet.waitForNonExistence(timeout: 20), "The sheet should close once the case is created")
+        XCTAssertTrue(
+            sheet.waitForNonExistence(timeout: 20),
+            "The create-case sheet should close once the case is created"
+        )
         XCTAssertFalse(find("case-create-error").exists, "Case creation should not report an error")
     }
 
@@ -195,41 +255,6 @@ final class CaseManagementUITests: BaseUITest {
                 // Records already exist (server wasn't fully reset) — still valid
                 XCTAssertTrue(true, "Case list visible — records exist on server")
             }
-        }
-    }
-
-    /// Scenario: Tapping an entity type tab changes the selected filter.
-    func testEntityTypeTabFiltering() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
-        }
-        when("I navigate to Cases and entity type tabs are visible") {
-            navigateToCases()
-        }
-        then("tapping the 'All' tab should keep it selected") {
-            let tabs = find("case-type-tabs")
-            if tabs.waitForExistence(timeout: 10) {
-                let allTab = find("case-tab-all")
-                XCTAssertTrue(allTab.waitForExistence(timeout: 3), "All tab should exist")
-                allTab.tap()
-                // After tapping All, the tab should remain visible (filter reset)
-                XCTAssertTrue(allTab.exists, "All tab should still exist after tapping")
-
-                // If there are per-type tabs, try tapping one and verify it exists
-                let typeTabs = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'case-tab-' AND identifier != 'case-tab-all'"))
-                if typeTabs.count > 0 {
-                    let firstTypeTab = typeTabs.firstMatch
-                    firstTypeTab.tap()
-                    // Wait for list to reload
-                    Thread.sleep(forTimeInterval: 1)
-                    // The tab should still exist
-                    XCTAssertTrue(firstTypeTab.exists, "Entity type tab should remain after selection")
-                    // Tap All again to reset
-                    allTab.tap()
-                }
-            }
-            // If no tabs (single entity type or CMS disabled), pass gracefully
         }
     }
 
