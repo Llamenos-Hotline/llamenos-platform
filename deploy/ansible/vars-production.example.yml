@@ -84,6 +84,23 @@ llamenos_app_image: ""           # REQUIRED e.g. llamenos:0.19.16 (docker load) 
 # llamenos_app_image_pull_policy: missing
 # Admin Ed25519 public key (64 lowercase hex): `bun run bootstrap-admin` on your
 # workstation. Optional — the first admin can be bootstrapped from the desktop app.
+# ─── Self-hosted telephony image (only used if asterisk is enabled) ─
+# The sip-bridge sidecar's image. The bridge is obtained by WHICHEVER ROUTE
+# this deployment uses for the app image — never a different one (issue #1697):
+#   * Docker Hub release path: leave empty. Derived from llamenos_app_image by
+#     putting `-sip-bridge` on the REPOSITORY, which is how
+#     .github/workflows/docker.yml publishes it.
+#   * docker save | docker load: build and side-load it next to the app image —
+#         docker build -t llamenos-sip-bridge:<version> ./sip-bridge
+#         docker save llamenos-sip-bridge:<version> | ssh <host> sudo docker load
+#     then set this to the tag you loaded.
+#   * REQUIRED when llamenos_app_image is digest-pinned (repo@sha256:...): one
+#     image's digest cannot imply a sibling's, so nothing can be derived.
+# roles/llamenos-asterisk refuses to declare the service at all unless this
+# image is actually obtainable, rather than rendering a compose entry that
+# answers `manifest unknown` while the deploy reports success.
+# llamenos_sip_bridge_image: ""
+
 admin_pubkey: ""
 # The admin's X25519 ENCRYPTION public key — a different value from
 # admin_pubkey (which is the Ed25519 SIGNING key). Both are printed by
