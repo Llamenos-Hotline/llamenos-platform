@@ -997,6 +997,17 @@ jobs:
       - name: Check no result test reads a skipped task as a pass
         run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
 
+      # Issue #1636: before it, the suite had three behaviours and named one.
+      # A FAIL stopped the deploy except where it quietly did not (the Kamailio
+      # probe reported NOT READY and the deploy succeeded), so "Smoke check
+      # FAILED" did not tell an operator whether anything had stopped. Every
+      # check now declares fatal or advisory. The recorder defaults an
+      # undeclared severity to fatal, so a forgotten one is too strict rather
+      # than silently advisory — this keeps the ruling readable in the playbook
+      # instead of living in that default.
+      - name: Check every smoke check declares a severity
+        run: python3 deploy/ansible/scripts/check-smoke-severity.py --list
+
       # The rail above rejects the pattern; this proves the replacement
       # actually records SKIPPED for a probe that did not run, PASS only when
       # the measurement holds, and FAIL when a probe reports itself fine while
@@ -1004,8 +1015,10 @@ jobs:
       # synthesized probe results in ~1s, no services needed.
       #
       # The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the
-      # whole smoke suite against stub binaries and real sockets in a private
-      # network namespace (25 cases, ~5 min). Like
+      # whole smoke suite against stub binaries and real sockets — including a
+      # real TLS listener, and a bare TCP acceptor for the false green a
+      # reachability probe reports as healthy — in a private network
+      # namespace. Like
       # scripts/check-disk-tier-guards.py it is run by hand rather than in CI;
       # `--compare-old <ref>` replays identical fixtures against an older
       # playbook and prints the verdicts side by side.
