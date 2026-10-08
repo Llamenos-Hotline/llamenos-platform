@@ -416,15 +416,25 @@ final class AdminSettingsUITests: BaseUITest {
 
     /// A stable string for a JSON scalar, bridging `NSNumber` booleans and
     /// integers to the same spelling Swift's own `Bool`/`Int` produce.
+    ///
+    /// `NSNumber` is asked FIRST, and asked CoreFoundation which kind it is,
+    /// because `NSNumber(1) as? Bool` succeeds: with the `Bool` case first, a
+    /// rate limit of 1 read back from the server described itself as `"true"`
+    /// while the expected Swift `Int` described itself as `"1"` — a failure
+    /// that reads exactly like "the save did not persist" on a save that did
+    /// (`("Optional("true")") is not equal to ("Optional("1")")`). A Swift
+    /// `Bool` bridges to an `NSNumber` whose type id IS `CFBoolean`, and a
+    /// Swift `Int` to one that is not, so both sides agree here.
     private static func describe(_ value: Any?) -> String? {
+        if let number = value as? NSNumber {
+            return CFGetTypeID(number) == CFBooleanGetTypeID()
+                ? (number.boolValue ? "true" : "false")
+                : String(number.intValue)
+        }
         switch value {
         case let bool as Bool: return bool ? "true" : "false"
         case let int as Int: return String(int)
         case let string as String: return string
-        case let number as NSNumber:
-            return CFGetTypeID(number) == CFBooleanGetTypeID()
-                ? (number.boolValue ? "true" : "false")
-                : String(number.intValue)
         default: return nil
         }
     }
