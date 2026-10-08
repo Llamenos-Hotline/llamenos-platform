@@ -739,7 +739,9 @@
     "keyUnavailable": "Waxa sirta ah ee xaruntan lagama furi karo qalabkan weli",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Xarumahaada lama soo rarin",
+    "membershipLoadFailedBody": "Server-ku ma sheegin xarumaha aad ka tirsan tahay, sidaas darteed weli wax lama muujin karo. Hubi xiriirkaaga oo isku day mar kale."
   },
   "ivr": {
     "selfAnnouncement": "Soomaaliga, taabo [N].",

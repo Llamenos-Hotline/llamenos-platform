@@ -108,6 +108,12 @@ function createTestApp(opts: {
     Object.defineProperty(c, 'env', {
       value: {
         ENVIRONMENT: 'development',
+        // The push recorder follows `devSurfacesEnabled` rather than the
+        // environment NAME (#1623), so the dev surface has to be opted in for
+        // the claim test below to see a recorded payload — the same three
+        // factors a deployed host needs. Without the flag the recorder is off,
+        // which is correct: `GET /api/test-push-log` would 404 too.
+        DEV_ROUTES_ENABLED: 'true',
       },
       writable: true,
       configurable: true,

@@ -16,14 +16,23 @@ vi.mock('./relay/hooks', () => ({
     if (hubIds.length) subscribed.push({ hubIds, kinds, handler })
   },
 }))
+// `useConfig().hubs` is the user's MEMBERSHIP, resolved from the authenticated
+// `GET /api/hubs` (#1708). It used to be the public, pre-login `/api/config`
+// roster, which is why `hub-public-only` below is modelled as a hub that
+// exists on the server and is absent from this set — the shape the hooks must
+// never widen to.
 vi.mock('./config', () => ({
-  useConfig: () => ({ currentHubId: 'hub-A', hubs: [{ id: 'hub-A' }, { id: 'hub-B' }, { id: 'hub-public-only' }], isMultiHub: true }),
+  useConfig: () => ({ currentHubId: 'hub-A', hubs: [{ id: 'hub-A' }, { id: 'hub-B' }], isMultiHub: true }),
 }))
 vi.mock('./notifications', () => ringing)
 vi.mock('./api/client', async (importActual) => ({
   ...(await importActual<typeof import('./api/client')>()),
   request: vi.fn(async (path: string, options?: RequestInit) => {
     requested.push({ path, method: options?.method ?? 'GET' })
+    // The membership endpoint ConfigProvider reads. Not reached from here —
+    // these hooks take membership from the mocked context above — but the
+    // server-side truth it states is the same: hub-public-only is not the
+    // user's, so nothing may subscribe to or poll it.
     if (path === '/hubs') return { hubs: [{ id: 'hub-A' }, { id: 'hub-B' }] }
     if (path === '/hubs/hub-B/calls/active') {
       // Wire shape: the server sends the raw active_calls row, keyed callId (not id)
@@ -57,16 +66,21 @@ describe('useCalls with the user in two hubs and hub A active', () => {
     await waitFor(() => expect(new Set(latest(KIND_CALL_RING).hubIds)).toEqual(new Set(['hub-A', 'hub-B'])))
   })
 
-  it('does not subscribe to hubs the user is not a member of (public instance list)', async () => {
+  it('does not subscribe to a hub the user is not a member of', async () => {
     renderHook(() => useCalls())
     await waitFor(() => expect(latest(KIND_CALL_RING).hubIds).toContain('hub-B'))
+    // `hub-public-only` is active on the server and not in this user's
+    // membership. Subscribing to it would be the inverse of the multi-hub
+    // axiom: the app must receive events from every hub the user IS in, and
+    // from no other.
     expect(latest(KIND_CALL_RING).hubIds).not.toContain('hub-public-only')
   })
 
   it('polls active calls on every member hub and tags each call with its hub', async () => {
     const { result } = renderHook(() => useCalls())
     await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
-    // hub-A alone is polled once while membership loads; the set of polled hubs must be exactly the members
+    // Membership is resolved before these hooks mount, so both hubs are polled
+    // from the first cycle; the set of polled hubs must be exactly the members
     expect([...new Set(requested.filter(r => r.path.endsWith('/calls/active')).map(r => r.path))].sort())
       .toEqual(['/hubs/hub-A/calls/active', '/hubs/hub-B/calls/active'])
     expect(result.current.ringingCalls[0]).toMatchObject({ id: 'CA-on-hub-B', hubId: 'hub-B' })

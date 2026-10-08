@@ -739,7 +739,9 @@
     "keyUnavailable": "Naveroka şîfrekirî ya vê navendê hîn li ser vê amûrê nayê vekirin",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Navendên te nehatin barkirin",
+    "membershipLoadFailedBody": "Rajeyê negot ku tu endamê kîjan navendan î, loma hêj tiştek nayê nîşandan. Girêdana xwe kontrol bike û dîsa biceribîne."
   },
   "ivr": {
     "selfAnnouncement": "Ji bo Kurdî, bişkoka [N] bixin.",

@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Impossible de charger vos hubs",
+    "membershipLoadFailedBody": "Le serveur n'a pas indiqué à quels hubs vous appartenez, rien ne peut donc encore être affiché. Vérifiez votre connexion et réessayez."
   },
   "identityLabel": "Identity",
   "import": {

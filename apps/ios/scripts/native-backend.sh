@@ -1,5 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Run the Llámenos backend natively on macOS, for the iOS XCUITest suite.
+#
+# The interpreter is PINNED to /bin/bash, which on macOS is bash 3.2.57, and
+# this file must keep parsing under it. `#!/usr/bin/env bash` is what it used
+# to say, and that resolved to a modern Homebrew bash on the self-hosted Mac
+# and to 3.2 on GitHub-hosted runners — so a construct 3.2 cannot parse passed
+# on two shards of this suite and failed the other two, at step 5 of 24, with
+# `unexpected EOF` pointing at the last line of the file. Uniform-and-old beats
+# modern-and-divergent for a script whose whole job is to behave identically on
+# every runner. Nothing here needs bash 4 (no associative arrays, no mapfile).
+#
+# Verify before pushing, because a Linux /bin/bash is 5.x and will not catch it:
+#   docker run --rm -v "$PWD/apps/ios/scripts:/s:ro" bash:3.2 bash -n /s/native-backend.sh
 #
 # Why this exists (#661): GitHub-hosted macOS runners have no Docker, so the
 # compose-based .github/actions/bootstrap-backend exits 125 before a single
@@ -19,51 +31,365 @@
 #   - signal-notifier / sip-bridge sidecars. No iOS UI test exercises them.
 #
 # Usage (from the repo root):
-#   apps/ios/scripts/native-backend.sh start   # returns once /api/health/live answers
+#   apps/ios/scripts/native-backend.sh start    # returns once /api/health/live answers
 #   apps/ios/scripts/native-backend.sh stop
+#   apps/ios/scripts/native-backend.sh reclaim  # CI only — see "Leaked backends" below
 #
 # Requires Homebrew, bun (with `bun install` already run), and the server
 # crypto library at packages/crypto/dist/server/libllamenos_core.dylib
 # (packages/crypto/scripts/build-server.sh builds it).
 #
+# ---------------------------------------------------------------------------
+# Leaked backends, and why three mechanisms guard the port (#1639)
+# ---------------------------------------------------------------------------
+# On a persistent self-hosted runner a leaked server is not an untidy process,
+# it is an outage. The ports are allocated per RUNNER (ios-e2e.yml, "Allocate
+# this runner's backend ports"), so a server that outlives its job holds the
+# port that the NEXT job on that runner needs. One leak on one runner failed
+# every following shard in ~48s at startup, each failure ejected a merge group,
+# each ejection cancelled more jobs, and each cancellation leaked another
+# backend. The loop sustained itself for 5h34m against a 65-minute job cap.
+#
+# `if: always()` teardown is not enough, because the case that leaks is the
+# case where nothing in the job runs again: a hard cancellation can kill the
+# job before the teardown step is ever reached. So:
+#
+#   1. `start` puts the server in its own SESSION, so `stop` can signal the
+#      whole tree rather than a version-manager shim that leaves the real
+#      server running.
+#   2. `start` also launches a WATCHDOG that outlives the step and tears the
+#      backend down as soon as the runner's job process goes away — the
+#      cancellation case, covered without the job having to run anything.
+#   3. `reclaim`, run at the START of the next job, frees the port if both of
+#      the above somehow failed. This is the layer that actually breaks the
+#      loop: it needs nothing of the job that leaked.
+#
+# None of these may ever match on the binary name. This host is also somebody's
+# development machine and their own `bun run dev:server` is a bun process too;
+# killing it would destroy their work. Ownership is proved by an argv marker
+# this script stamps, or by the process running out of the runner's own work
+# tree — and `reclaim` refuses outright to act on the 3000/5432 defaults.
+#
 # Environment:
 #   NATIVE_BACKEND_PORT  HTTP port (default 3000 — BaseUITest's default TEST_HUB_URL)
 #   NATIVE_BACKEND_PGPORT  PostgreSQL port (default 5432)
 #   NATIVE_BACKEND_DIR   State directory: pgdata, logs, pid (default $RUNNER_TEMP or /tmp)
+#   NATIVE_BACKEND_TTL_SECONDS  Watchdog deadline (default 4500 — the shard job cap is 65 min)
+#   NATIVE_BACKEND_GUARD_PID    Override the auto-detected job process the watchdog follows
 #   ADMIN_PUBKEY         Admin signing pubkey the server seeds (default: the CI test admin)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# Recorded BEFORE defaulting: everything that kills a process keys off this.
+# Unset ports mean a developer running the script by hand, where 3000/5432 are
+# very likely their own server and their own PostgreSQL.
+PORTS_ALLOCATED=0
+if [[ -n "${NATIVE_BACKEND_PORT:-}" && -n "${NATIVE_BACKEND_PGPORT:-}" ]]; then
+  PORTS_ALLOCATED=1
+fi
 PORT="${NATIVE_BACKEND_PORT:-3000}"
 PGPORT="${NATIVE_BACKEND_PGPORT:-5432}"
 STATE_DIR="${NATIVE_BACKEND_DIR:-${RUNNER_TEMP:-/tmp}/llamenos-native-backend}"
 PGDATA="$STATE_DIR/pgdata"
 SERVER_LOG="$STATE_DIR/server.log"
 SERVER_PID="$STATE_DIR/server.pid"
+WATCHDOG_LOG="$STATE_DIR/watchdog.log"
+WATCHDOG_PID="$STATE_DIR/watchdog.pid"
 PG_FORMULA="postgresql@17"
 CRYPTO_LIB="$ROOT/packages/crypto/dist/server/libllamenos_core.dylib"
 DATABASE_URL="postgresql://llamenos@127.0.0.1:${PGPORT}/llamenos"
 # Same value as TEST_ADMIN_PUBKEY in ci.yml / desktop-e2e.yml.
 ADMIN_PUBKEY="${ADMIN_PUBKEY:-79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183}"
+# Stamped into the server's argv by `start` and looked for by `reclaim`. The
+# server ignores argv entirely, so this is a label and nothing else.
+MARKER="llamenos-native-backend"
+# Comfortably past a legitimate shard (65-minute job cap) and nowhere near the
+# 5h34m a leak survived with no deadline at all.
+TTL="${NATIVE_BACKEND_TTL_SECONDS:-4500}"
+# Ports this script will never kill anything on, whatever else it concludes.
+# They are the conventional defaults a person's own `bun run dev:server` and
+# local PostgreSQL use, and this runner host is also a development machine.
+PROTECTED_PORTS="3000 5432"
 
 log() { echo "[native-backend] $*"; }
+warn() { echo "[native-backend] WARNING: $*" >&2; }
 die() { echo "[native-backend] ERROR: $*" >&2; exit 1; }
 
 pg_bin() {
   echo "$(brew --prefix "$PG_FORMULA")/bin"
 }
 
-port_in_use() {
-  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+# --- process and port inspection (identical idioms on macOS and Linux) ------
+
+port_listener_pids() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
 }
+
+port_in_use() {
+  [[ -n "$(port_listener_pids "$1")" ]]
+}
+
+# Read for MATCHING only, never printed. A run log on a public repo is public:
+# a stranger's argv can carry their credentials, and even our own carries the
+# runner's absolute paths and therefore its user account.
+pid_argv() { ps -p "$1" -o command= 2>/dev/null || true; }
+
+# Enough to tell a reader WHICH process is in the way — program and age — and
+# nothing that identifies the host or its owner.
+pid_description() {
+  local comm etime
+  comm="$(ps -p "$1" -o comm= 2>/dev/null || true)"
+  etime="$(ps -p "$1" -o etime= 2>/dev/null | tr -d ' ' || true)"
+  echo "${comm##*/}, running for ${etime:-an unknown time}"
+}
+
+pid_cwd() {
+  lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
+pid_pgid() { ps -p "$1" -o pgid= 2>/dev/null | tr -d ' ' || true; }
+
+wait_pid_gone() {
+  local pid=$1 secs=$2
+  for _ in $(seq 1 "$secs"); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 1
+  done
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+wait_port_free() {
+  local port=$1 secs=$2
+  for _ in $(seq 1 "$secs"); do
+    port_in_use "$port" || return 0
+    sleep 1
+  done
+  ! port_in_use "$port"
+}
+
+# --- ownership ---------------------------------------------------------------
+
+# Succeeds, printing WHY, only when PID is provably a backend this workflow
+# started and then leaked. Deliberately never considers the program name: the
+# operator's own `bun run dev:server` is a bun too, and killing it would
+# destroy their work. Prints a reason, never a path or an argv.
+reclaim_proof() {
+  local pid=$1 argv cwd root
+  argv="$(pid_argv "$pid")"
+  case "$argv" in
+    # Our own argv marker — definitive, and the normal case.
+    *"$MARKER"*) echo "it carries this script's argv marker"; return 0 ;;
+    # Our PostgreSQL, named by the data directory this job would use.
+    *"-D $PGDATA"*) echo "it is a PostgreSQL serving this job's own data directory"; return 0 ;;
+  esac
+  # Anything running out of the runner's own work tree: a backend leaked by a
+  # job that predates the marker, or a helper it spawned. A developer's
+  # checkout is never under the runner work tree, which is what makes this
+  # safe on a shared host.
+  cwd="$(pid_cwd "$pid")"
+  [[ -n "$cwd" ]] || return 1
+  for root in "${RUNNER_WORKSPACE:-}" "${RUNNER_TEMP:-}"; do
+    [[ -n "$root" ]] || continue
+    if [[ "$cwd" == "$root"/* || "$cwd" == "$root" ]]; then
+      echo "it is running out of the runner's own work tree"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# --- reclaim -----------------------------------------------------------------
+
+reclaim_port() {
+  local port=$1 label=$2 pids pid proof protected
+  for protected in $PROTECTED_PORTS; do
+    [[ "$port" == "$protected" ]] && die "refusing to reclaim port $port: it is the conventional default for a developer's own server, and this host is shared"
+  done
+
+  pids="$(port_listener_pids "$port")"
+  [[ -n "$pids" ]] || return 0
+
+  for pid in $pids; do
+    if ! proof="$(reclaim_proof "$pid")"; then
+      die "$label port $port is held by a process this workflow did not start, and will NOT be killed.
+  holder: pid $pid ($(pid_description "$pid"))
+  No test has run yet, so this is a port conflict at job startup and NOT a test
+  failure. Do not look at the suite.
+  If it is a backend leaked by an earlier cancelled job on ${RUNNER_NAME:-this runner},
+  it predates the argv marker this script stamps — stop that pid by hand, once.
+  Otherwise this runner's allocated port has collided with an unrelated server:
+  see 'Allocate this runner's backend ports' in .github/workflows/ios-e2e.yml."
+    fi
+    # The SPECIFIC pid, never its process group. A process leaked by an earlier
+    # job may still sit in the runner agent's own process group, and
+    # `kill -<sig> -<pgid>` against that takes the whole runner offline — a
+    # host lost an hour of capacity to exactly that mistake. A group kill is
+    # correct only in stop_server, which first proves the group is one we
+    # created.
+    log "reclaiming leaked $label backend on port $port: pid $pid ($(pid_description "$pid")) — $proof"
+    kill -TERM "$pid" 2>/dev/null || true
+    if ! wait_pid_gone "$pid" 15; then
+      warn "pid $pid ignored SIGTERM after 15s — escalating to SIGKILL on that pid only"
+      kill -KILL "$pid" 2>/dev/null || true
+      wait_pid_gone "$pid" 10 || die "pid $pid survived SIGKILL — port $port cannot be reclaimed"
+    fi
+    # GitHub surfaces this in the run's annotations, so a leak stays visible
+    # even though it no longer fails anything. A silent self-heal would hide
+    # how often cancellation leaks.
+    echo "::warning::reclaimed a leaked $label backend (pid $pid) holding port $port on ${RUNNER_NAME:-this runner} — left behind by an earlier cancelled or killed job (#1639)"
+  done
+
+  # The port, not the pid, is what the next step needs.
+  wait_port_free "$port" 15 \
+    || die "killed the process(es) holding $label port $port but the port is still listening 15s later"
+}
+
+# Refuse an occupied port, naming the real cause. Used on every runner kind,
+# after any reclaim: on a hosted runner it is the only check there is.
+refuse_if_occupied() {
+  local port=$1 label=$2 var=$3 pids
+  pids="$(port_listener_pids "$port")"
+  [ -n "$pids" ] || return 0
+  set -- $pids
+  die "$label port $port is already listening, so this job will not start a backend on it.
+  holder: pid $1 ($(pid_description "$1"))
+  No test has run yet, so this is a port conflict at job startup and NOT a test
+  failure. Do not look at the suite. Running it against a server this job did
+  not start would point it at the wrong database.
+  Stop that server, or set $var."
+}
+
+cmd_reclaim() {
+  # The `ui` matrix in ios-e2e.yml is MIXED: two shards run on the persistent
+  # self-hosted Mac and two on GitHub-hosted macOS runners. A hosted runner is
+  # a fresh VM per job — no earlier job can have leaked into it, and nothing it
+  # leaves behind outlives it — so there is nothing to reclaim, and refusing a
+  # job over whatever else might hold a hashed slot port there would be a
+  # failure mode invented for no benefit. Reclaiming is a property of
+  # PERSISTENT runners only.
+  if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+    log "reclaim: nothing to do — a GitHub-hosted runner is a fresh VM, so no earlier job can have leaked into it"
+    return 0
+  fi
+  [ "$PORTS_ALLOCATED" = 1 ] || die "reclaim requires NATIVE_BACKEND_PORT and NATIVE_BACKEND_PGPORT to be set explicitly.
+  It will not act on the $PORT/$PGPORT defaults: on a shared host those are a
+  developer's own server and their own PostgreSQL."
+  log "reclaim: checking http $PORT / pg $PGPORT on ${RUNNER_NAME:-this host}"
+  reclaim_port "$PGPORT" postgres
+  reclaim_port "$PORT" http
+  # A PostgreSQL killed outright leaves its lock file behind, and pg_ctl then
+  # refuses to start ("another server might be running"). Only safe once we
+  # know nothing is listening on the port, which reclaim_port just proved.
+  if [[ -f "$PGDATA/postmaster.pid" ]] && ! port_in_use "$PGPORT"; then
+    log "removing stale $PGDATA/postmaster.pid"
+    rm -f "$PGDATA/postmaster.pid"
+  fi
+  log "reclaim: http $PORT and pg $PGPORT are free"
+}
+
+# --- watchdog ----------------------------------------------------------------
+
+# PID of the runner's per-job worker process, found by walking up our own
+# parent chain. That process exists for exactly as long as the job does and
+# exits when the job is cancelled or killed, which is the signal an `always()`
+# step cannot give us. Best effort: empty on a hosted runner or a developer's
+# Mac, where the TTL is then the only deadline.
+find_job_guard_pid() {
+  local pid="$PPID" depth=0 argv
+  while [[ -n "$pid" && "$pid" -gt 1 && "$depth" -lt 20 ]]; do
+    argv="$(pid_argv "$pid")"
+    case "$argv" in
+      *Runner.Worker*) echo "$pid"; return 0 ;;
+    esac
+    pid="$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+# Launch CMD... as the leader of a brand new session, with its output appended
+# to LOGFILE and its pid written to PIDFILE. The redirect belongs to the child,
+# not to this function, so the child never holds a caller pipe open.
+#
+# The pid goes to a FILE and not to stdout deliberately. Handing it back through
+# a command substitution forces the caller to wrap its whole env-and-comment
+# block in "$( ... )", and bash 3.2 mis-parses an apostrophe in a comment there
+# — one "the next job's" in a comment failed the ENTIRE script at parse time
+# and took out both GitHub-hosted shards of this suite. A pid file cannot have
+# that class of bug.
+#
+# macOS ships no setsid(1); perl's POSIX is core on both macOS and Linux.
+spawn_session_leader() {
+  local logfile=$1 pidfile=$2 pid
+  shift 2
+  perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or die "exec: $!"' -- "$@" >>"$logfile" 2>&1 &
+  pid=$!
+  echo "$pid" >"$pidfile"
+  # setsid() happens a moment after fork, so the group id is not ours yet.
+  for _ in $(seq 1 20); do
+    [ "$(pid_pgid "$pid")" = "$pid" ] && break
+    sleep 0.1
+  done
+}
+
+launch_watchdog() {
+  local server_pid=$1 guard pid
+  guard="${NATIVE_BACKEND_GUARD_PID:-$(find_job_guard_pid || true)}"
+  if [[ -z "$guard" ]]; then
+    log "watchdog: no runner job process found — falling back to the ${TTL}s deadline alone"
+  fi
+  NATIVE_BACKEND_PORT="$PORT" \
+  NATIVE_BACKEND_PGPORT="$PGPORT" \
+  NATIVE_BACKEND_DIR="$STATE_DIR" \
+  NATIVE_BACKEND_TTL_SECONDS="$TTL" \
+  NATIVE_BACKEND_WATCHDOG_SERVER_PID="$server_pid" \
+  NATIVE_BACKEND_WATCHDOG_GUARD_PID="$guard" \
+    spawn_session_leader "$WATCHDOG_LOG" "$WATCHDOG_PID" bash "$SELF" _watchdog
+  pid="$(cat "$WATCHDOG_PID")"
+  log "watchdog started (pid $pid, job process ${guard:-none}, ttl ${TTL}s, log: $WATCHDOG_LOG)"
+}
+
+cmd_watchdog() {
+  local server_pid="${NATIVE_BACKEND_WATCHDOG_SERVER_PID:?}"
+  local guard="${NATIVE_BACKEND_WATCHDOG_GUARD_PID:-}"
+  local deadline=$((SECONDS + TTL)) reason=""
+  log "watchdog up: server pid $server_pid, job process ${guard:-none}, ttl ${TTL}s"
+  while :; do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      log "watchdog: server pid $server_pid is already gone — nothing to reclaim"
+      exit 0
+    fi
+    if [[ -n "$guard" ]] && ! kill -0 "$guard" 2>/dev/null; then
+      reason="the runner's job process ($guard) exited — the job was cancelled, killed or finished without running its teardown"
+      break
+    fi
+    if (( SECONDS >= deadline )); then
+      reason="the ${TTL}s deadline elapsed, which is longer than any legitimate shard"
+      break
+    fi
+    sleep 5
+  done
+  log "watchdog: tearing the backend down because $reason"
+  teardown
+}
+
+# --- start / stop ------------------------------------------------------------
 
 cmd_start() {
   [[ "$(uname -s)" == "Darwin" ]] || die "macOS only — on Linux use deploy/docker/docker-compose.dev.yml"
   [[ -f "$CRYPTO_LIB" ]] || die "missing $CRYPTO_LIB — run packages/crypto/scripts/build-server.sh"
-  # Refuse an occupied port rather than health-checking someone else's server
-  # and running the suite against the wrong database.
-  port_in_use "$PORT" && die "port $PORT is already listening — stop that server or set NATIVE_BACKEND_PORT"
-  port_in_use "$PGPORT" && die "port $PGPORT is already listening — stop that server or set NATIVE_BACKEND_PGPORT"
+  # Idempotent, and a no-op on a hosted runner: the job already reclaimed
+  # before installing anything. Repeated here so a hand-run `start` on a
+  # persistent runner gets the same protection.
+  if [ "$PORTS_ALLOCATED" = 1 ]; then
+    cmd_reclaim
+  fi
+  # Then, on EVERY runner kind and whether or not anything was reclaimed:
+  # never start against a port somebody else holds. Health-checking a server
+  # this job did not start would run the whole suite on the wrong database.
+  refuse_if_occupied "$PORT" http NATIVE_BACKEND_PORT
+  refuse_if_occupied "$PGPORT" postgres NATIVE_BACKEND_PGPORT
 
   mkdir -p "$STATE_DIR"
 
@@ -91,6 +417,19 @@ cmd_start() {
 
   log "Starting server on 127.0.0.1:$PORT (log: $SERVER_LOG)"
   # Env mirrors the compose `app` service under docker-compose.test.yml.
+  #
+  # The server runs in its own session, for two reasons: cmd_stop can then
+  # signal the whole process tree (`kill $!` alone can hit a version-manager
+  # shim and leave the real server running), and the pid it records is also the
+  # process-group id, which stop_server asserts before it signals any group.
+  #
+  # The trailing argument is the ownership MARKER that the next job on this
+  # runner looks for when it reclaims the port. The server ignores argv.
+  #
+  # Explanatory prose stays OUT of the subshell below. It used to be a
+  # "$( ... )" capture, where bash 3.2 mis-parses an apostrophe in a comment
+  # and fails the whole file at parse time.
+  local pid
   (
     cd "$ROOT"
     export PLATFORM=bun
@@ -115,15 +454,21 @@ cmd_start() {
     export STORAGE_ACCESS_KEY=ios-e2e-no-storage
     export STORAGE_SECRET_KEY=ios-e2e-no-storage
     export STORAGE_BUCKET=llamenos-files
-    nohup bun src/server/index.ts >"$SERVER_LOG" 2>&1 &
-    echo $! >"$SERVER_PID"
+    spawn_session_leader "$SERVER_LOG" "$SERVER_PID" bun src/server/index.ts "--${MARKER}-port=$PORT"
   )
-
-  local pid
   pid="$(cat "$SERVER_PID")"
+
+  local pgid
+  pgid="$(pid_pgid "$pid")"
+  [[ "$pgid" == "$pid" ]] || die "server pid $pid did not become its own process-group leader (pgid '${pgid:-gone}').
+  Refusing to continue: the teardown's group kill is only safe while that holds,
+  and a group kill aimed at the wrong group takes the whole runner offline."
+
+  launch_watchdog "$pid"
+
   for _ in $(seq 1 90); do
     if curl -sf "http://127.0.0.1:$PORT/api/health/live" >/dev/null 2>&1; then
-      log "Server is live (pid $pid)"
+      log "Server is live (pid $pid, process group $pgid)"
       # The first dev-route request on a fresh database seeds default roles and
       # settings; on a CI runner that took 49s, past BaseUITest's 15s hub-creation
       # timeout, so whichever test class ran first had no hub. Pay it here.
@@ -145,26 +490,67 @@ cmd_start() {
   die "server did not answer /api/health/live within 90s"
 }
 
-cmd_stop() {
-  if [[ -f "$SERVER_PID" ]]; then
-    local pid
-    pid="$(cat "$SERVER_PID")"
-    if kill -0 "$pid" 2>/dev/null; then
-      log "Stopping server (pid $pid)"
+stop_server() {
+  [[ -f "$SERVER_PID" ]] || return 0
+  local pid pgid
+  pid="$(cat "$SERVER_PID" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    pgid="$(pid_pgid "$pid")"
+    if [[ "$pgid" == "$pid" ]]; then
+      # Safe BECAUSE of that equality: a process group whose id is this very
+      # pid is the session `start` created, and contains nothing but the server
+      # and whatever it spawned. Never signal a group this script did not
+      # create — on a persistent runner the Actions agent is itself a
+      # process-group leader, and a `kill -<sig> -<pgid>` aimed there takes the
+      # runner offline for as long as nobody notices.
+      log "Stopping server process group $pgid"
+      kill -TERM "-$pgid" 2>/dev/null || true
+      if ! wait_pid_gone "$pid" 10; then
+        kill -KILL "-$pgid" 2>/dev/null || true
+      fi
+    else
+      warn "server pid $pid is not its own group leader (pgid '${pgid:-gone}') — signalling that pid alone"
       kill -TERM "$pid" 2>/dev/null || true
-      for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      kill -KILL "$pid" 2>/dev/null || true
+      wait_pid_gone "$pid" 10 || kill -KILL "$pid" 2>/dev/null || true
     fi
-    rm -f "$SERVER_PID"
   fi
+  rm -f "$SERVER_PID"
+}
+
+stop_postgres() {
   if [[ -f "$PGDATA/postmaster.pid" ]]; then
     log "Stopping PostgreSQL"
     "$(pg_bin)/pg_ctl" -D "$PGDATA" -m fast -w stop || true
   fi
 }
 
+# Everything except the watchdog, so the watchdog can call it without killing
+# itself mid-teardown.
+teardown() {
+  stop_server
+  stop_postgres
+}
+
+cmd_stop() {
+  if [[ -f "$WATCHDOG_PID" ]]; then
+    local wpid
+    wpid="$(cat "$WATCHDOG_PID" 2>/dev/null || true)"
+    # That pid and nothing else: the watchdog has no children but a sleep, and
+    # a group kill here would be a group this invocation did not create.
+    if [[ -n "$wpid" ]] && kill -0 "$wpid" 2>/dev/null; then
+      log "Stopping watchdog (pid $wpid)"
+      kill -TERM "$wpid" 2>/dev/null || true
+      wait_pid_gone "$wpid" 5 || kill -KILL "$wpid" 2>/dev/null || true
+    fi
+    rm -f "$WATCHDOG_PID"
+  fi
+  teardown
+}
+
 case "${1:-}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
-  *) die "usage: $0 start|stop" ;;
+  reclaim) cmd_reclaim ;;
+  _watchdog) cmd_watchdog ;;
+  *) die "usage: $0 start|stop|reclaim" ;;
 esac

@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Hindi ma-load ang iyong mga hub",
+    "membershipLoadFailedBody": "Hindi sinabi ng server kung aling mga hub ang kinabibilangan mo, kaya wala pang maipapakita. Tingnan ang iyong koneksyon at subukan muli."
   },
   "identityLabel": "Identity",
   "import": {

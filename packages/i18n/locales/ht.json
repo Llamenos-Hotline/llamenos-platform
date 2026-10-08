@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Nou pa t kapab chaje hub ou yo",
+    "membershipLoadFailedBody": "Sèvè a pa t di nan ki hub ou ye, konsa nou pa ka montre anyen ankò. Tcheke koneksyon ou epi eseye ankò."
   },
   "identityLabel": "Identity",
   "import": {

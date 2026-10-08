@@ -72,6 +72,14 @@ const services: Services = createServices(db, {
     SERVER_SECRET: serverSecret || undefined,
     ENVIRONMENT: process.env.ENVIRONMENT || undefined,
     DOMAIN: process.env.DOMAIN || undefined,
+    // The dev-surface factors, for services that decide per request whether a
+    // caller is the test harness (services/provider-setup/signal-registration.ts).
+    // All three are needed: `devSurfaceRequestAuthorized` wants the environment
+    // allowlist, the explicit opt-in AND the configured secret — ENVIRONMENT
+    // alone is what #1623 replaced.
+    DEV_ROUTES_ENABLED: process.env.DEV_ROUTES_ENABLED || undefined,
+    DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
+    E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
   },
 })
 console.log('[llamenos] Services initialized')

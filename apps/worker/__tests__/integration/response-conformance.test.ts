@@ -274,7 +274,6 @@ describe('Config Routes — response conformance', () => {
       getEnabledChannels: vi.fn().mockResolvedValue({ voice: true, sms: false, whatsapp: false, signal: false, rcs: false, telegram: false, reports: false }),
       getTelephonyProvider: vi.fn().mockResolvedValue(null),
       getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
-      getHubs: vi.fn().mockResolvedValue({ hubs: [] }),
     }
     const mockIdentity = {
       hasAdmin: vi.fn().mockResolvedValue({ hasAdmin: true }),
@@ -287,8 +286,9 @@ describe('Config Routes — response conformance', () => {
     const result = await assertConformsToSchema(app, 'GET', '/config', configResponseSchema, { env })
     expect(result.parsed.hotlineName).toBe('Test Hotline')
     expect(typeof result.parsed.setupCompleted).toBe('boolean')
-    expect(Array.isArray(result.parsed.hubs)).toBe(true)
     expect(typeof result.parsed.apiVersion).toBe('number')
+    // The unauthenticated payload carries no hub roster (#1710).
+    expect(result.parsed).not.toHaveProperty('hubs')
   })
 })
 

@@ -174,6 +174,8 @@ final class WebSocketService: @unchecked Sendable {
         self.cryptoService = cryptoService
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
+        // `.default` shares `URLCache.shared`; relay traffic must never reach it (#1658).
+        ResponseCachePolicy.harden(config)
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
     }
 

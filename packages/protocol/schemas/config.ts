@@ -2,6 +2,18 @@ import { z } from 'zod'
 
 // --- Response schemas ---
 
+/**
+ * The UNAUTHENTICATED pre-login payload. Every field here is readable by anyone
+ * who can reach the host, so the shape is the security boundary — see the
+ * contract comment on the route itself (`apps/worker/routes/config.ts`).
+ *
+ * The hub roster and `defaultHubId` were removed (#1710): hub names, slugs,
+ * descriptions and `createdBy` are organisational structure, and the only
+ * client that read them pre-login was choosing an active hub from an
+ * instance-wide list instead of the user's own memberships (#1708). Hubs are
+ * served by the authenticated `GET /api/hubs`, filtered to the caller's
+ * memberships.
+ */
 export const configResponseSchema = z.object({
   hotlineName: z.string(),
   hotlineNumber: z.string(),
@@ -10,8 +22,6 @@ export const configResponseSchema = z.object({
   demoMode: z.boolean(),
   demoResetSchedule: z.string().nullable(),
   needsBootstrap: z.boolean(),
-  hubs: z.array(z.object({ id: z.string(), name: z.string(), slug: z.string(), status: z.string() })),
-  defaultHubId: z.string().optional(),
   serverPubkey: z.string().optional(),
   apiVersion: z.number(),
   minApiVersion: z.number(),

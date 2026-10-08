@@ -3,7 +3,6 @@ import { describeRoute, resolver } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { deriveServerKeypair } from '../lib/server-identity'
 import { CURRENT_API_VERSION, MIN_API_VERSION } from '../lib/api-versions'
-import type { Hub } from '@shared/types'
 import { configResponseSchema, configVerifyResponseSchema, configPinsResponseSchema } from '@protocol/schemas/config'
 import { publicErrors } from '../openapi/helpers'
 import { ed25519Sign } from '@llamenos/crypto/ffi'
@@ -46,6 +45,47 @@ function effectiveDemoMode(env: AppEnv['Bindings'], storedDemoMode: boolean): bo
   return env.DEMO_MODE === 'true' || (demoSurfacesEnabled(env) && storedDemoMode)
 }
 
+/**
+ * What this endpoint may say to an anonymous caller.
+ *
+ * `/api/config` is the one route a client reads BEFORE it has any credentials,
+ * so it is also the one route whose payload an adversary who can merely reach
+ * the host gets for free. Everything below is here because a pre-login client
+ * cannot function without it:
+ *
+ *   - `hotlineName`, `channels` — rendered on the sign-in screen and used to
+ *     route first-run setup. The deployment is self-identifying pre-login by
+ *     construction: it has to greet the volunteer by the hotline's name.
+ *   - `hotlineNumber` — the number the organisation publishes so callers can
+ *     dial it. Public by purpose, and it names nothing `hotlineName` does not.
+ *   - `setupCompleted`, `needsBootstrap` — decide between the wizard, the
+ *     bootstrap screen and the login screen before anyone can authenticate.
+ *   - `serverPubkey` — a verification key; publishing it is the point.
+ *   - `wsRelayUrl` — the relay address every client (Android included) needs
+ *     before it holds a session.
+ *   - `apiVersion` / `minApiVersion` — version negotiation happens on the
+ *     first request, which is this one.
+ *   - `demoMode` / `demoResetSchedule` — a WARNING that nothing here is real,
+ *     and operator-set. Suppressing it would be the less safe choice.
+ *   - `sentryDsn` — a write-only ingest DSN, needed to report a pre-login crash.
+ *
+ * What is deliberately NOT here: the hub roster. It used to return every active
+ * hub with name, slug, description, `createdBy` and timestamps, to an
+ * unauthenticated caller, while `GET /api/hubs` — the same data — answered 401
+ * (#1710). Hub names are the organisation's internal structure (chapters,
+ * regions, partner orgs), `createdBy` is an admin's Ed25519 pubkey, and the
+ * timestamps date the organisation's expansion; this project's threat model
+ * treats organisational structure as implicating, not merely as metadata.
+ *
+ * `defaultHubId` went with it. Its only consumer was the desktop client
+ * choosing an active hub before login, which is a defect in its own right
+ * (#1708): the active hub must come from the authenticated user's memberships
+ * via `GET /api/hubs`, never from an instance-wide list. With that fixed,
+ * nothing needs a hub id pre-authentication.
+ *
+ * Adding a field here widens an anonymous read. `__tests__/unit/routes/config.test.ts`
+ * asserts the exact key set so that widening cannot happen by accident.
+ */
 config.get('/',
   describeRoute({
     tags: ['Config'],
@@ -97,17 +137,6 @@ config.get('/',
       needsBootstrap = !hasAdmin
     } catch { /* default to false */ }
 
-    // Fetch active hubs
-    let hubs: Hub[] = []
-    let defaultHubId: string | undefined
-    try {
-      const hubsData = await services.settings.getHubs()
-      hubs = hubsData.hubs.filter(h => h.status === 'active')
-      if (hubs.length === 1) {
-        defaultHubId = hubs[0].id
-      }
-    } catch { /* default to empty */ }
-
     // Derive server Ed25519 pubkey for client event signature verification
     const serverSecret = c.env.SERVER_SECRET
     let serverPubkey: string | undefined
@@ -130,8 +159,6 @@ config.get('/',
       demoMode,
       demoResetSchedule: c.env.DEMO_MODE === 'true' ? (c.env.DEMO_RESET_CRON || null) : null,
       needsBootstrap,
-      hubs,
-      defaultHubId,
       serverPubkey,
       wsRelayUrl,
       apiVersion: CURRENT_API_VERSION,

@@ -739,7 +739,9 @@
     "keyUnavailable": "Зашифрований вміст цього хаба поки не можна відкрити на цьому пристрої",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Не вдалося завантажити ваші хаби",
+    "membershipLoadFailedBody": "Сервер не повідомив, до яких хабів ви належите, тому поки нічого не можна показати. Перевірте з'єднання та спробуйте ще раз."
   },
   "ivr": {
     "selfAnnouncement": "Для української мови натисніть [N].",

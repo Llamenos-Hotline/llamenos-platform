@@ -739,7 +739,9 @@
     "keyUnavailable": "محتوای رمزگذاری‌شدهٔ این هاب هنوز روی این دستگاه باز نمی‌شود",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "هاب‌های شما بارگیری نشد",
+    "membershipLoadFailedBody": "سرور نگفت که عضو کدام هاب‌ها هستید، بنابراین هنوز چیزی نمایش داده نمی‌شود. اتصال خود را بررسی کنید و دوباره تلاش کنید."
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",

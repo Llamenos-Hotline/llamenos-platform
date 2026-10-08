@@ -129,7 +129,6 @@ struct DecryptedMessage: Identifiable, Sendable {
     let id: String
     let text: String
     let direction: String
-    let channelType: String
     let createdAt: Date
     let isRead: Bool
 
@@ -138,11 +137,6 @@ struct DecryptedMessage: Identifiable, Sendable {
 
     /// Whether this is an outbound message (from the volunteer).
     var isOutbound: Bool { direction == "outbound" }
-
-    /// Parsed channel type.
-    var channel: ClientChannelType {
-        ClientChannelType(rawValue: channelType) ?? .sms
-    }
 
     /// Formatted time string for display alongside the message bubble.
     var timeDisplay: String {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRelaySubscriptions } from './relay/hooks'
 import { useMemberHubIds } from './member-hubs'
+import { useConfig } from './config'
 import { startRinging, stopRinging } from './notifications'
 import {
   getMyShiftStatus,
@@ -202,12 +203,26 @@ export function useCalls() {
 
 /**
  * Hook to fetch and periodically refresh the current user's shift status.
+ *
+ * Keyed on the active hub: shift status is hub-scoped (`/hubs/<id>/shifts/my-status`),
+ * so it has to be re-read when the active hub resolves or the user switches
+ * hubs. Without that dependency the first poll won the race against hub
+ * resolution and the result stood for a minute — the mechanism that reported an
+ * on-shift volunteer as "Off Shift" in #1708.
  */
 export function useShiftStatus() {
+  const { currentHubId } = useConfig()
   const [status, setStatus] = useState<ShiftStatus>({ onShift: false, currentShift: null, nextShift: null })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (!currentHubId) {
+      // No hub, no shift. Reporting "loading" forever would be a spinner that
+      // never resolves; reporting off-shift is the truth here.
+      setStatus({ onShift: false, currentShift: null, nextShift: null })
+      setLoading(false)
+      return
+    }
     let mounted = true
 
     function fetch() {
@@ -219,7 +234,7 @@ export function useShiftStatus() {
     fetch()
     const interval = setInterval(fetch, 60_000) // Refresh every 60s
     return () => { mounted = false; clearInterval(interval) }
-  }, [])
+  }, [currentHubId])
 
   return { ...status, loading }
 }
