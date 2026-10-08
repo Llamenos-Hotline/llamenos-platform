@@ -22,18 +22,19 @@ import org.llamenos.hotline.model.CallSettingsRequest
 import org.llamenos.hotline.model.CallSettingsResponse
 import org.llamenos.hotline.model.CreateInviteRequest
 import org.llamenos.hotline.model.CreateReportCategoryRequest
-import org.llamenos.hotline.model.CreateShiftRequest
 import org.llamenos.hotline.model.CreateUserRequest
 import org.llamenos.hotline.model.CreateUserResponse
 import org.llamenos.hotline.model.CustomFieldDef
 import org.llamenos.hotline.model.CustomFieldsResponse
-import org.llamenos.hotline.model.FallbackGroupRequest
 import org.llamenos.hotline.model.Invite
 import org.llamenos.hotline.model.InvitesListResponse
 import org.llamenos.hotline.model.IvrLanguagesRequest
 import org.llamenos.hotline.model.IvrLanguagesResponse
-import org.llamenos.hotline.model.AdminShiftDetail
-import org.llamenos.hotline.model.AdminShiftsListResponse
+import org.llamenos.hotline.model.ShiftResponse
+import org.llamenos.hotline.model.ShiftsListResponse
+import org.llamenos.protocol.CreateShiftBody
+import org.llamenos.protocol.FallbackGroup
+import org.llamenos.protocol.UpdateShiftBody
 import org.llamenos.hotline.model.ReportCategory
 import org.llamenos.hotline.model.ReportTypesResponse
 import org.llamenos.hotline.model.SpamSettingsRequest
@@ -126,11 +127,11 @@ data class AdminUiState(
     val editingField: CustomFieldDef? = null,
 
     // Admin shifts
-    val adminShifts: List<AdminShiftDetail> = emptyList(),
+    val adminShifts: List<ShiftResponse> = emptyList(),
     val isLoadingAdminShifts: Boolean = false,
     val adminShiftsError: String? = null,
     val showCreateShiftDialog: Boolean = false,
-    val editingShift: AdminShiftDetail? = null,
+    val editingShift: ShiftResponse? = null,
 
     // Admin settings (transcription)
     val transcriptionEnabled: Boolean = false,
@@ -399,7 +400,7 @@ class AdminViewModel @Inject constructor(
             try {
                 val response = apiService.request<AuditLogResponse>(
                     "GET",
-                    "/api/admin/audit?page=$page&limit=50",
+                    apiService.hp("/api/audit") + "?page=$page&limit=50",
                 )
 
                 _uiState.update {
@@ -673,8 +674,8 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAdminShifts = true, adminShiftsError = null) }
             try {
-                val response = apiService.request<AdminShiftsListResponse>(
-                    "GET", "/api/admin/shifts",
+                val response = apiService.request<ShiftsListResponse>(
+                    "GET", apiService.hp("/api/shifts"),
                 )
                 _uiState.update {
                     it.copy(adminShifts = response.shifts, isLoadingAdminShifts = false)
@@ -694,7 +695,7 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showCreateShiftDialog = true, editingShift = null) }
     }
 
-    fun showEditShiftDialog(shift: AdminShiftDetail) {
+    fun showEditShiftDialog(shift: ShiftResponse) {
         _uiState.update { it.copy(showCreateShiftDialog = true, editingShift = shift) }
     }
 
@@ -702,14 +703,30 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null) }
     }
 
-    fun createShift(name: String, startTime: String, endTime: String, volunteerIds: List<String> = emptyList()) {
+    /**
+     * Create a new shift. [days] is the 0=Sun..6=Sat recurrence (see
+     * [org.llamenos.hotline.util.DateFormatUtils.shortDayName]) — always required,
+     * since the server has no default for a brand-new shift.
+     */
+    fun createShift(
+        name: String,
+        startTime: String,
+        endTime: String,
+        days: List<Int>,
+        volunteerIds: List<String> = emptyList(),
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null, adminShiftsError = null) }
             try {
-                val request = CreateShiftRequest(
-                    name = name, startTime = startTime, endTime = endTime, volunteerIds = volunteerIds,
+                val request = CreateShiftBody(
+                    id = java.util.UUID.randomUUID().toString(),
+                    encryptedName = name,
+                    startTime = startTime,
+                    endTime = endTime,
+                    days = days.map { it.toLong() },
+                    userPubkeys = volunteerIds,
                 )
-                apiService.requestNoContent("POST", "/api/admin/shifts", request)
+                apiService.requestNoContent("POST", apiService.hp("/api/shifts"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -719,14 +736,33 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun updateShift(shiftId: String, name: String, startTime: String, endTime: String, volunteerIds: List<String> = emptyList()) {
+    /**
+     * Update an existing shift. [days] is always sent explicitly (never defaulted) —
+     * the edit dialog pre-fills it from the shift being edited, so saving an unrelated
+     * field (name, time) never silently rewrites recurrence (issue #1149).
+     * [volunteerIds] defaults to null (omitted from the request) so that saving from
+     * this dialog — which doesn't surface volunteer assignment — never wipes the
+     * existing roster; volunteer assignment happens via [ShiftDetailViewModel].
+     */
+    fun updateShift(
+        shiftId: String,
+        name: String,
+        startTime: String,
+        endTime: String,
+        days: List<Int>,
+        volunteerIds: List<String>? = null,
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null, adminShiftsError = null) }
             try {
-                val request = CreateShiftRequest(
-                    name = name, startTime = startTime, endTime = endTime, volunteerIds = volunteerIds,
+                val request = UpdateShiftBody(
+                    encryptedName = name,
+                    startTime = startTime,
+                    endTime = endTime,
+                    days = days.map { it.toLong() },
+                    userPubkeys = volunteerIds,
                 )
-                apiService.requestNoContent("PUT", "/api/admin/shifts/$shiftId", request)
+                apiService.requestNoContent("PUT", apiService.hp("/api/shifts/$shiftId"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -740,7 +776,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
-                apiService.requestNoContent("DELETE", "/api/admin/shifts/$shiftId")
+                apiService.requestNoContent("DELETE", apiService.hp("/api/shifts/$shiftId"))
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -754,8 +790,8 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
-                val request = FallbackGroupRequest(volunteerIds = volunteerIds)
-                apiService.requestNoContent("PUT", "/api/admin/shifts/fallback", request)
+                val request = FallbackGroup(userPubkeys = volunteerIds)
+                apiService.requestNoContent("PUT", apiService.hp("/api/shifts/fallback"), request)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(adminShiftsError = e.message ?: "Failed to set fallback group")

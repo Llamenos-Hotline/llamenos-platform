@@ -92,24 +92,6 @@ object DateFormatUtils {
     }
 
     /**
-     * Format a list of 1-based day-of-week integers (1=Mon..7=Sun) into
-     * a comma-separated string of locale-aware short names.
-     * Used by shift schedule admin tab.
-     */
-    fun formatDayList(days: List<Int>): String {
-        // 1=Mon..7=Sun → Calendar.MONDAY..Calendar.SUNDAY
-        return days.mapNotNull { dayNum ->
-            if (dayNum in 1..7) {
-                val calDay = if (dayNum == 7) Calendar.SUNDAY else Calendar.MONDAY + dayNum - 1
-                val cal = Calendar.getInstance().apply { set(Calendar.DAY_OF_WEEK, calDay) }
-                SimpleDateFormat("EEE", Locale.getDefault()).format(cal.time)
-            } else {
-                null
-            }
-        }.joinToString(", ")
-    }
-
-    /**
      * Format call duration in seconds to a human-readable string.
      * Examples: "45s", "5m 30s", "1h 15m".
      */

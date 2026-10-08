@@ -3,6 +3,8 @@ package org.llamenos.hotline.ui.admin
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +27,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,7 +49,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.AdminShiftDetail
+import org.llamenos.hotline.model.ShiftResponse
+import org.llamenos.hotline.model.dayIndices
+import org.llamenos.hotline.model.name
+import org.llamenos.hotline.model.volunteerCount
 import org.llamenos.hotline.util.DateFormatUtils
 
 /**
@@ -68,12 +74,12 @@ fun ShiftScheduleTab(
         ShiftDialog(
             existingShift = uiState.editingShift,
             onDismiss = { viewModel.dismissShiftDialog() },
-            onSave = { name, startTime, endTime ->
+            onSave = { name, startTime, endTime, days ->
                 val editing = uiState.editingShift
                 if (editing != null) {
-                    viewModel.updateShift(editing.id, name, startTime, endTime)
+                    viewModel.updateShift(editing.id, name, startTime, endTime, days)
                 } else {
-                    viewModel.createShift(name, startTime, endTime)
+                    viewModel.createShift(name, startTime, endTime, days)
                 }
             },
         )
@@ -181,7 +187,7 @@ fun ShiftScheduleTab(
 
 @Composable
 private fun ShiftCard(
-    shift: AdminShiftDetail,
+    shift: ShiftResponse,
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -219,12 +225,12 @@ private fun ShiftCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (shift.days.isNotEmpty()) {
+                    if (shift.dayIndices.isNotEmpty()) {
                         AssistChip(
                             onClick = {},
                             label = {
                                 Text(
-                                    text = formatDays(shift.days),
+                                    text = formatDays(shift.dayIndices),
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },
@@ -266,21 +272,42 @@ private fun ShiftCard(
 }
 
 /**
- * Format day-of-week integers (1=Mon, 7=Sun) into a compact display string.
+ * Format day-of-week integers (0=Sun..6=Sat, matching the wire format in
+ * `Shift.dayIndices`) into a compact display string.
  */
 private fun formatDays(days: List<Int>): String {
-    return DateFormatUtils.formatDayList(days)
+    return days.sorted().joinToString(", ") { DateFormatUtils.shortDayName(it) }
 }
 
+/** Default recurrence for a brand-new shift: Mon-Fri (0=Sun..6=Sat). */
+private val DEFAULT_SHIFT_DAYS = listOf(1, 2, 3, 4, 5)
+
+/** Day-of-week picker labels, 0=Sun..6=Sat — matches the wire format (`Shift.dayIndices`). */
+private val DAY_LABELS = listOf(
+    0 to R.string.shifts_days_sunday,
+    1 to R.string.shifts_days_monday,
+    2 to R.string.shifts_days_tuesday,
+    3 to R.string.shifts_days_wednesday,
+    4 to R.string.shifts_days_thursday,
+    5 to R.string.shifts_days_friday,
+    6 to R.string.shifts_days_saturday,
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShiftDialog(
-    existingShift: AdminShiftDetail?,
+    existingShift: ShiftResponse?,
     onDismiss: () -> Unit,
-    onSave: (name: String, startTime: String, endTime: String) -> Unit,
+    onSave: (name: String, startTime: String, endTime: String, days: List<Int>) -> Unit,
 ) {
     var name by remember { mutableStateOf(existingShift?.name ?: "") }
     var startTime by remember { mutableStateOf(existingShift?.startTime ?: "") }
     var endTime by remember { mutableStateOf(existingShift?.endTime ?: "") }
+    // Recurrence, pre-filled from the shift being edited so saving never silently
+    // rewrites it (issue #1149) — for a new shift, defaults to Mon-Fri.
+    var selectedDays by remember {
+        mutableStateOf((existingShift?.dayIndices?.takeIf { it.isNotEmpty() } ?: DEFAULT_SHIFT_DAYS).toSet())
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -327,12 +354,40 @@ private fun ShiftDialog(
                         .fillMaxWidth()
                         .testTag("shift-end-input"),
                 )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    text = stringResource(R.string.shifts_recurring),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Spacer(Modifier.height(4.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.testTag("shift-days-picker"),
+                ) {
+                    DAY_LABELS.forEach { (dayIndex, labelRes) ->
+                        FilterChip(
+                            selected = dayIndex in selectedDays,
+                            onClick = {
+                                selectedDays = if (dayIndex in selectedDays) {
+                                    selectedDays - dayIndex
+                                } else {
+                                    selectedDays + dayIndex
+                                }
+                            },
+                            label = { Text(stringResource(labelRes)) },
+                            modifier = Modifier.testTag("shift-day-chip-$dayIndex"),
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(name, startTime, endTime) },
-                enabled = name.isNotBlank() && startTime.isNotBlank() && endTime.isNotBlank(),
+                onClick = { onSave(name, startTime, endTime, selectedDays.sorted()) },
+                enabled = name.isNotBlank() && startTime.isNotBlank() && endTime.isNotBlank() &&
+                    selectedDays.isNotEmpty(),
                 modifier = Modifier.testTag("confirm-shift-save"),
             ) {
                 Text(stringResource(R.string.action_save))

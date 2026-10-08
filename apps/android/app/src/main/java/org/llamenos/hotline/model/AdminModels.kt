@@ -89,51 +89,15 @@ data class CreateUserResponse(
 )
 
 // ---- Shift Admin ----
-
-/**
- * Request body for creating/updating a shift.
- * Client-specific shape — uses volunteerIds and Int days.
- */
-@Serializable
-data class CreateShiftRequest(
-    val name: String,
-    val startTime: String,
-    val endTime: String,
-    val days: List<Int> = listOf(1, 2, 3, 4, 5),
-    val volunteerIds: List<String> = emptyList(),
-)
-
-/**
- * Detailed shift response including volunteer list (admin view).
- * Client-only type for the admin shift management UI.
- */
-@Serializable
-data class AdminShiftDetail(
-    val id: String,
-    val name: String,
-    val startTime: String,
-    val endTime: String,
-    val days: List<Int> = emptyList(),
-    val volunteers: List<org.llamenos.protocol.UserListResponseUser> = emptyList(),
-    val volunteerCount: Int = 0,
-)
-
-/**
- * Response from GET /api/admin/shifts listing all shifts (admin view).
- */
-@Serializable
-data class AdminShiftsListResponse(
-    val shifts: List<AdminShiftDetail>,
-)
-
-/**
- * Request to set the fallback ring group.
- * Client-specific shape — uses volunteerIds instead of userPubkeys.
- */
-@Serializable
-data class FallbackGroupRequest(
-    val volunteerIds: List<String>,
-)
+//
+// Admin shift CRUD (list/create/update/delete) uses the generated types directly —
+// org.llamenos.protocol.CreateShiftBody / UpdateShiftBody / FallbackGroup, plus the
+// ShiftResponse / ShiftsListResponse typealiases in ShiftModels.kt — rather than a
+// hand-written duplicate. The generated `Shift` has `encryptedName`/`userPubkeys`
+// where this file used to use `name`/`volunteerIds`; see the `Shift.name` and
+// `Shift.volunteerCount` extension properties in Extensions.kt for UI display.
+// (Previously diverged from the server schema entirely — same root cause as #1032
+// and #1046 — see issue #1149.)
 
 // ---- Custom Fields ----
 

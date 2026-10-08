@@ -9,16 +9,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
-import org.llamenos.hotline.model.AdminShiftDetail
-import org.llamenos.hotline.model.AdminShiftsListResponse
-import org.llamenos.hotline.model.CreateShiftRequest
+import org.llamenos.hotline.model.ShiftResponse
+import org.llamenos.hotline.model.ShiftsListResponse
 import org.llamenos.hotline.model.User
 import org.llamenos.hotline.model.UsersListResponse
-import org.llamenos.hotline.model.id
+import org.llamenos.protocol.UpdateShiftBody
 import javax.inject.Inject
 
 data class ShiftDetailUiState(
-    val shift: AdminShiftDetail? = null,
+    val shift: ShiftResponse? = null,
     val allVolunteers: List<User> = emptyList(),
     val assignedPubkeys: Set<String> = emptySet(),
     val isLoading: Boolean = false,
@@ -39,8 +38,8 @@ class ShiftDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val shiftsResponse = apiService.request<AdminShiftsListResponse>(
-                    "GET", "/api/admin/shifts",
+                val shiftsResponse = apiService.request<ShiftsListResponse>(
+                    "GET", apiService.hp("/api/shifts"),
                 )
                 val shift = shiftsResponse.shifts.find { it.id == shiftId }
 
@@ -48,7 +47,7 @@ class ShiftDetailViewModel @Inject constructor(
                     "GET", "/api/users",
                 )
 
-                val assignedPubkeys = shift?.volunteers?.map { it.pubkey }?.toSet() ?: emptySet()
+                val assignedPubkeys = shift?.userPubkeys?.toSet() ?: emptySet()
 
                 _uiState.update {
                     it.copy(
@@ -79,20 +78,14 @@ class ShiftDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true, error = null) }
             try {
-                // Map pubkeys to volunteer IDs for the API
-                val assignedPubkeys = _uiState.value.assignedPubkeys
-                val volunteerIds = _uiState.value.allVolunteers
-                    .filter { it.pubkey in assignedPubkeys }
-                    .map { it.id }
-
-                val request = CreateShiftRequest(
-                    name = shift.name,
-                    startTime = shift.startTime,
-                    endTime = shift.endTime,
-                    days = shift.days,
-                    volunteerIds = volunteerIds,
+                // Only the volunteer roster changes here — `days`, `encryptedName`,
+                // `startTime` and `endTime` are omitted so they are never touched by
+                // this screen (see issue #1149: a resend-everything update silently
+                // rewrote recurrence from this same code path before).
+                val request = UpdateShiftBody(
+                    userPubkeys = _uiState.value.assignedPubkeys.toList(),
                 )
-                apiService.requestNoContent("PUT", "/api/admin/shifts/${shift.id}", request)
+                apiService.requestNoContent("PUT", apiService.hp("/api/shifts/${shift.id}"), request)
                 _uiState.update { it.copy(isSaving = false, saveSuccess = true) }
             } catch (e: Exception) {
                 _uiState.update {
