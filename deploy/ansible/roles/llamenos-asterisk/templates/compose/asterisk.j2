@@ -4,8 +4,56 @@ services:
   asterisk:
     image: {{ llamenos_asterisk_image | default('andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015') }} # 22.x
     restart: unless-stopped
+    # Root for the entrypoint ONLY, so it can hand the fresh astdb volume to
+    # the asterisk user — Docker creates a mount point the image lacks as root.
+    # Asterisk itself drops to asterisk:asterisk (-U/-G) as it starts, which is
+    # what the image's own CMD does. Mirrors deploy/docker/docker-compose.yml.
+    user: root
+    # Without this entrypoint Asterisk DOES NOT START on this path at all.
+    # MEASURED on a deployed host: "Unable to open Asterisk database
+    # '/var/lib/asterisk/astdb/astdb.sqlite3': unable to open database file",
+    # then a restart loop. sorcery.conf backs every PJSIP object with astdb, so
+    # the directory has to exist and be owned by the asterisk user before the
+    # daemon opens it; the entrypoint also creates the recording and media-cache
+    # directories the image lacks, and writes the external-address include that
+    # stops Asterisk advertising its container address for media.
+    #
+    # It was simply absent from this role while present in
+    # deploy/docker/docker-compose.yml — this role's compose was a reduced copy
+    # of that service, and nothing exercised it because no deployment enabled it.
+    entrypoint: ["/bin/sh", "/usr/local/share/llamenos/asterisk-entrypoint.sh"]
+    # RTP, and only RTP. SIP SIGNALLING reaches the PBX through Kamailio (the
+    # edge); media does not, because Kamailio is a signalling proxy with no
+    # media relay — so RTP runs directly between the volunteer and this
+    # container. Published and firewall-opened (roles/llamenos-asterisk opens
+    # the same range), or a call connects and carries no audio. The range is
+    # bounded by asterisk-config/rtp.conf, because publishing Asterisk's
+    # 10,001-port default is not possible.
+    ports:
+      - "{{ asterisk_rtp_min_port | default(10000) }}-{{ asterisk_rtp_max_port | default(10199) }}:10000-10199/udp"
+    environment:
+      # The address Asterisk advertises for MEDIA. Unset, it advertises its
+      # container address, which no volunteer can route to: the call sets up and
+      # no audio arrives. See deploy/docker/asterisk-entrypoint.sh.
+      - SIP_EXTERNAL_ADDRESS={{ asterisk_external_address | default(kamailio_sip_domain | default(domain)) }}
+      - SIP_LOCAL_NETS={{ asterisk_local_nets | default('') }}
+      # Names the self-signed certificate must cover when the operator mounts
+      # none. Asterisk is not the client-facing SIP edge for signalling here
+      # (Kamailio is), so these matter for the internal hop and DTLS-SRTP.
+      - SIP_TLS_SANS={{ asterisk_tls_sans | default(kamailio_sip_domain | default(domain)) }}
     volumes:
       - ./asterisk-config:/etc/asterisk:ro
+      - ./asterisk-entrypoint.sh:/usr/local/share/llamenos/asterisk-entrypoint.sh:ro
+      - ./sip-tls-cert.sh:/usr/local/share/llamenos/sip-tls-cert.sh:ro
+      # sorcery.conf keeps every PJSIP object in astdb, so a volunteer endpoint
+      # provisioned by /api/telephony/sip-token survives a PBX restart —
+      # otherwise every client would have to re-fetch a token after one. The
+      # CONTACT a volunteer registers stays in memory either way, so which IP
+      # they registered from never reaches disk (#1207).
+      - asterisk-db:/var/lib/asterisk/astdb
+      # A stable keypair across restarts: an anchor a client pinned at its last
+      # /sip-token fetch must keep verifying after a PBX restart.
+      - asterisk-keys:/var/lib/asterisk/keys
     # ari.conf #includes this file for the ARI user's password — Asterisk
     # cannot read ARI_PASSWORD from its own environment. Mirrors the
     # `ari_credentials` config in deploy/docker/docker-compose.yml, just
@@ -70,6 +118,10 @@ configs:
   ari_credentials:
     content: |
       password = {{ ari_password }}
+
+volumes:
+  asterisk-db:
+  asterisk-keys:
 
 networks:
   llamenos-internal:

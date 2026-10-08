@@ -54,6 +54,20 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+# 0755, and holding ONLY the published anchor — see kamailio_tls_anchor_dir.
+# The app container has to traverse it, and under userns-remap its uid is
+# neither the owner nor in the deploy group. The private key is not in here.
+- name: Create the published trust anchor directory
+  ansible.builtin.file:
+    path: "{{ kamailio_tls_anchor_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0755"
+  when:
+    - kamailio_tls_enabled | default(true) | bool
+    - kamailio_tls_publish_anchor | default(true) | bool
+
 # 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
 # compose bind-mounts these configs into the kamailio container, which runs as
 # root — and `docker_userns_remap: true` maps that to host uid 100000, which
@@ -158,15 +172,25 @@
 # read. With a real certificate in place, point kamailio_tls_anchor_source at
 # its ISSUING ROOT instead: pinning a leaf breaks at every renewal.
 #
-# NOTE: this Ansible path does not yet render the registrar's own worker env
-# (SIP_REGISTRAR_SECRET / TURN_HOST / TURN_SECRET / SIP_TLS_CA_FILE) — the
-# per-volunteer registrar was wired for the compose deployment only. Until it
-# is, an operator on this path must add SIP_TLS_CA_FILE (pointing at the
-# mounted copy of the file below) to the app's environment by hand.
+# The app reads it at SIP_TLS_CA_FILE, which
+# deploy/ansible/templates/env/_worker-required-env.j2 now renders — gated on
+# this role being enabled and on kamailio_tls_publish_anchor — and the app's
+# compose file bind-mounts kamailio_tls_dir read-only so the container can
+# actually open it. Both halves are asserted by
+# deploy/ansible/scripts/check-required-env.py (check_calling_vars), because
+# the variable without the mount is worse than neither: readSipTlsTrustAnchor
+# would log "not readable" and return undefined.
+#
+# This replaces the note that used to sit here saying an operator had to add
+# SIP_TLS_CA_FILE "to the app's environment by hand" — along with
+# SIP_REGISTRAR_SECRET, TURN_HOST and TURN_SECRET. A comment is not a check,
+# nothing failed when the hand-step was skipped, and the result was a deployed
+# host serving STUN-only ICE with no trust anchor and a 200 from
+# /api/telephony/sip-token either way (#1657).
 - name: Publish the SIP edge TLS trust anchor for the app
   ansible.builtin.copy:
     src: "{{ kamailio_tls_anchor_source | default(kamailio_tls_dir ~ '/kamailio.crt') }}"
-    dest: "{{ kamailio_tls_dir }}/sip-edge-anchor.pem"
+    dest: "{{ kamailio_tls_anchor_dir }}/sip-edge-anchor.pem"
     remote_src: true
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
@@ -212,7 +236,14 @@
 # present). Both are in-process and drop no established call.
 - name: Install the SIP TLS reload script
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../docker/sip-tls-reload.sh"
+    # `role_path`, not `playbook_dir`: the only playbook that runs this role is
+    # playbooks/deploy.yml, so `{{ playbook_dir }}/../docker/` resolved to
+    # deploy/ansible/docker/ — a directory that does not exist — and the task
+    # failed with "Could not find or access". It went unnoticed because this
+    # role was on NO deploy path until #1657 put it on one, which is the same
+    # reason its trust anchor was never written on a deployed host. Same idiom
+    # as roles/llamenos-asterisk's asterisk-config copy.
+    src: "{{ role_path }}/../../../docker/sip-tls-reload.sh"
     dest: "{{ app_dir }}/services/kamailio/sip-tls-reload.sh"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"

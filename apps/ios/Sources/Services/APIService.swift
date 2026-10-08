@@ -176,8 +176,19 @@ final class APIService: @unchecked Sendable {
         self.encoder = JSONEncoder()
         self.encoder.keyEncodingStrategy = .convertToSnakeCase
 
-        self.decoder = JSONDecoder()
-        self.decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = Self.makeResponseDecoder()
+    }
+
+    /// The decoder every response body is read through.
+    ///
+    /// A factory rather than an inline construction so a test can decode a recorded
+    /// server payload through the PRODUCTION decoder. A response test that builds its own
+    /// decoder proves only that the test is self-consistent — and self-consistent tests
+    /// are precisely what let #1659 and #1633 ship.
+    static func makeResponseDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
     }
 
     /// Set or update the hub base URL.
@@ -480,10 +491,19 @@ final class APIService: @unchecked Sendable {
 
     // MARK: - Telephony / SIP
 
-    /// Fetch short-lived SIP credentials for the given hub.
-    /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
-        return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
+    /// Fetch the volunteer's per-volunteer SIP credential.
+    ///
+    /// NOT hub-scoped, and the path is not `/api/hubs/{hubId}/…` — that spelling was a
+    /// 404 on every deployed host (`webrtc.ts` is mounted at `/api/telephony`, and
+    /// `routes/hubs.ts` has no `sip-token`). The credential is issued per VOLUNTEER:
+    /// `vol_<pubkey16>` authorised by membership of *any* hub (`callerHasAnyHubAccess`),
+    /// which is why one credential serves every member hub — and why Android's
+    /// `ApiService.getSipConnectionParams()` takes no hub either.
+    ///
+    /// Called when the volunteer clocks in so a SIP account can be registered with
+    /// Linphone.
+    func getSipToken() async throws -> SipTokenResponse {
+        return try await request(method: "GET", path: "/api/telephony/sip-token")
     }
 
     // MARK: - Version Check

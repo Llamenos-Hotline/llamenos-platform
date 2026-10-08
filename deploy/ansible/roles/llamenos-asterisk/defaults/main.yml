@@ -14,3 +14,9 @@ sip_bridge_local_port: 3101
 # are PBX_TYPE values sip-bridge itself supports, but this role doesn't yet
 # deploy either backend.
 pbx_type: asterisk
+
+# RTP port range published for media. Bounded here and in
+# deploy/docker/asterisk-config/rtp.conf, because Asterisk's 10,001-port default
+# cannot be published. 200 ports is 100 concurrent calls at two streams each.
+asterisk_rtp_min_port: 10000
+asterisk_rtp_max_port: 10199

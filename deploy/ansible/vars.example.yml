@@ -75,6 +75,7 @@ llamenos_whisper_image: fedirz/faster-whisper-server:0.4.0-cpu@sha256:f77aaf85e2
 llamenos_asterisk_image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
 llamenos_signal_image: bbernhard/signal-cli-rest-api:0.92@sha256:702db336aa1a87611595e66755c9ccf65b24c25589857301eabef1d46056b3c5
 llamenos_ntfy_image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
+llamenos_coturn_image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3 # pinned 2026-05-18
 
 # ─── Application ─────────────────────────────────────────────────
 # Directory on the host where app files are stored
@@ -175,6 +176,64 @@ ari_password: ""
 bridge_secret: ""
 # pbx_type: asterisk              # roles/llamenos-asterisk/defaults/main.yml
 # sip_bridge_local_port: 3101     # roles/llamenos-asterisk/defaults/main.yml
+
+# ─── In-app calling (SIP edge + relay) ───────────────────────────
+# In-app audio needs three things on a deployed host, and before #1657 the
+# Ansible path supplied none of them: a PBX (llamenos_asterisk_enabled above),
+# a SIP edge clients can reach, and a TURN relay for volunteers behind a
+# symmetric NAT (common on mobile carriers). All default off — a phone-only
+# deployment wants none of them.
+
+# Kamailio, the SIP edge. It is what publishes 5060/5061 and what holds the TLS
+# certificate a volunteer's client verifies; roles/llamenos-asterisk publishes
+# no SIP port at all. It also writes the trust anchor the app publishes in
+# /api/telephony/sip-token (SIP_TLS_CA_FILE), which is the ONLY way a
+# self-signed PBX certificate becomes verifiable on iOS or Android —
+# liblinphone does not consult the platform trust store for its SIP socket.
+kamailio_enabled: false
+# Every hostname or IP a volunteer may dial for the SIP domain — these become
+# subjectAltName entries, and a name missing here fails the handshake however
+# the chain is anchored. See roles/kamailio/defaults/main.yml for the rest
+# (kamailio_tls_cert_source_dir for a real certificate, kamailio_sip_domain).
+# kamailio_tls_sans:
+#   - "sip.hotline.example.org"
+
+# Where the app container sees the SIP edge's trust anchor. The HOST path is
+# kamailio_tls_dir (roles/kamailio); the mount is in both app compose templates.
+# Only change this if something else already owns the path inside the container.
+sip_tls_anchor_container_path: /var/lib/llamenos/sip-tls
+
+# CoTURN, the STUN/TURN relay. Required for a volunteer behind a symmetric NAT:
+# the server-reflexive candidate STUN discovers is useless there (the mapping is
+# per-destination) and the relay candidate is what carries the call.
+llamenos_coturn_enabled: false
+# The hostname clients are told to reach the relay on. MUST resolve, from the
+# volunteer's network, to the host running coturn.
+turn_host: "{{ domain }}"
+# Shared secret the worker mints time-limited credentials under and coturn
+# verifies them against — one value, rendered into both, so they cannot drift.
+# REQUIRED when llamenos_coturn_enabled is true. >= 32 chars.
+# Generate with: openssl rand -hex 32
+turn_secret: ""
+# Only needed behind 1:1 NAT (a cloud VM whose public address is not on any of
+# its own interfaces): `public/private`, e.g. 203.0.113.4/10.0.0.4. Without it
+# coturn allocates a relay candidate naming the private address.
+# turn_external_ip: ""
+# coturn's listening port, and the relay port range (one port per allocation,
+# so this bounds concurrent relayed calls). Both are opened on the firewall by
+# roles/llamenos-coturn.
+turn_port: 3478
+turn_relay_min_port: 49160
+turn_relay_max_port: 49200
+# The realm coturn puts in its challenges — logged, and it belongs to this
+# deployment.
+turn_realm: "{{ domain }}"
+
+# Master secret every volunteer's PJSIP endpoint password is derived from.
+# REQUIRED when llamenos_asterisk_enabled is true. Rotating it rotates every
+# volunteer's SIP credential at once, which is why it is not HMAC_SECRET.
+# Generate with: openssl rand -hex 32
+sip_registrar_secret: ""
 
 # Signal bridge settings (only used if signal is enabled).
 # Must match the token configured in the signal-notifier sidecar.

@@ -57,14 +57,13 @@ struct ShiftViewModelLinphoneTests {
     @Test func shiftStartRegistersLinphoneAccountForHub() async throws {
         let mock = MockLinphoneService()
         let (vm, _) = makeViewModel(mock: mock)
-        await vm.onShiftStarted(
-            hubId: "hub-uuid-001",
-            sipParams: SipTokenResponse(
-                username: "testuser", domain: "sip.example.org",
-                password: "secret", transport: "tls", expiry: 3600
-            )
-        )
+        // From the server's recorded bytes. This test used to build
+        // `SipTokenResponse(username:domain:password:transport:expiry:)` in Swift and
+        // passed for the whole life of a model that could not decode a single real
+        // response (#1659) — see `SipTokenFixture`.
+        await vm.onShiftStarted(hubId: "hub-uuid-001", sipParams: try SipTokenFixture.token())
         #expect(mock.registeredHubIds == ["hub-uuid-001"])
+        #expect(vm.sipRegistrationError == nil)
     }
 
     @Test func shiftEndUnregistersLinphoneAccountForHub() {
@@ -77,10 +76,7 @@ struct ShiftViewModelLinphoneTests {
     @Test func multipleHubsRegisteredAndUnregisteredIndependently() async throws {
         let mock = MockLinphoneService()
         let (vm, _) = makeViewModel(mock: mock)
-        let params = SipTokenResponse(
-            username: "user", domain: "sip.example.org",
-            password: "pass", transport: "tls", expiry: 3600
-        )
+        let params = try SipTokenFixture.token()
         await vm.onShiftStarted(hubId: "hub-aaa", sipParams: params)
         await vm.onShiftStarted(hubId: "hub-bbb", sipParams: params)
         vm.onShiftEnded(hubId: "hub-aaa")
@@ -88,18 +84,32 @@ struct ShiftViewModelLinphoneTests {
         #expect(mock.unregisteredHubIds == ["hub-aaa"])
     }
 
-    @Test func shiftStartSilentlyHandlesLinphoneRegistrationError() async {
+    @Test func shiftStartRecordsARegistrationFailureInsteadOfDiscardingIt() async throws {
+        // This test used to assert the opposite — that the error is swallowed — and that
+        // is exactly how a volunteer ends up on shift, shown as clocked in, and
+        // unreachable. `registerHubAccount` now refuses an unencryptable media leg and an
+        // unverifiable TLS chain, so the refusal has to survive to somewhere observable.
         let mock = MockLinphoneService()
         mock.shouldThrowOnRegister = true
         let (vm, _) = makeViewModel(mock: mock)
-        // Should not throw — errors are logged, not surfaced to the caller
-        await vm.onShiftStarted(
-            hubId: "hub-uuid-001",
-            sipParams: SipTokenResponse(
-                username: "user", domain: "sip.example.org",
-                password: "pass", transport: "tls", expiry: 3600
-            )
-        )
+
+        // Still does not throw: clock-in itself succeeded, and the shift stands.
+        await vm.onShiftStarted(hubId: "hub-uuid-001", sipParams: try SipTokenFixture.token())
+
         #expect(mock.registeredHubIds.isEmpty)
+        #expect(vm.sipRegistrationError != nil, "a volunteer who cannot be rung must not look registered")
+    }
+
+    @Test func aSucceedingRegistrationClearsAPreviousFailure() async throws {
+        let mock = MockLinphoneService()
+        mock.shouldThrowOnRegister = true
+        let (vm, _) = makeViewModel(mock: mock)
+        let params = try SipTokenFixture.token()
+        await vm.onShiftStarted(hubId: "hub-uuid-001", sipParams: params)
+        #expect(vm.sipRegistrationError != nil)
+
+        mock.shouldThrowOnRegister = false
+        await vm.onShiftStarted(hubId: "hub-uuid-001", sipParams: params)
+        #expect(vm.sipRegistrationError == nil, "a stale failure would keep reporting a working shift as broken")
     }
 }

@@ -1,33 +1,22 @@
-import type { TelephonyProviderConfig, TelephonyProviderType } from '@shared/types'
+import type { SipTokenResponse } from '@protocol/schemas/webrtc'
+import type { TelephonyProviderConfig } from '@shared/types'
 
 /**
  * SIP connection parameters returned to mobile clients.
  * Provider-agnostic — Linphone SDK consumes these directly.
+ *
+ * `z.infer` of the response schema, NOT a hand-written mirror of it. The two
+ * were written independently and disagreed on every field: the schema
+ * published a flat shape with `iceServers[].urls` and `encryption` while this
+ * returned a nested `sip` object with `iceServers[].url` and
+ * `mediaEncryption` (#1190). The schema is what `describeRoute` publishes to
+ * OpenAPI and what every client model is written from, so a client written
+ * from it could not decode a single real response (#1659, iOS). Deriving
+ * makes that disagreement a type error instead of a runtime one.
+ *
+ * Field documentation lives on the schema — packages/protocol/schemas/webrtc.ts.
  */
-export interface SipConnectionParams {
-  provider: TelephonyProviderType
-  sip: {
-    domain: string
-    transport: 'tls' | 'tcp' | 'udp'
-    username: string
-    password: string
-    iceServers: Array<{ url: string; username?: string; credential?: string }>
-    mediaEncryption: 'srtp' | 'zrtp' | 'dtls-srtp' | 'none'
-    /**
-     * PEM trust anchor for the SIP edge's TLS certificate, when the
-     * deployment serves one that the device trust store cannot verify (a
-     * self-hoster's self-signed PBX certificate). Certificates only — see
-     * `readSipTlsTrustAnchor`.
-     *
-     * The client verifies the SIP chain against THIS and nothing else.
-     * Absent means "verify against the device trust store"; it never means
-     * "do not verify". Delivered here because this response already travels
-     * over the app's certificate-pinned HTTPS channel, so PBX trust derives
-     * from the API pin rather than from a public CA or a first-use prompt.
-     */
-    tlsTrustAnchorPem?: string
-  }
-}
+export type SipConnectionParams = SipTokenResponse
 
 /**
  * Whether SIP credentials may be issued to a volunteer at all.

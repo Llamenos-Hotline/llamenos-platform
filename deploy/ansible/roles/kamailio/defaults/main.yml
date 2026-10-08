@@ -43,6 +43,21 @@ kamailio_tls_enabled: true
 kamailio_tls_dir: "{{ app_dir }}/services/kamailio/tls"
 kamailio_tls_container_dir: /etc/kamailio/tls
 
+# HOST directory holding ONLY the published trust anchor, bind-mounted
+# read-only into the APP container (not kamailio's) so the app can publish it in
+# /api/telephony/sip-token.
+#
+# A directory of its own, deliberately, and not kamailio_tls_dir. That one is
+# 0750 and holds kamailio.key at 0600, and under `docker_userns_remap: true` the
+# app container's uid is neither its owner nor in the deploy group — so mounting
+# it gave the app "Permission denied" on the directory itself (MEASURED on a
+# hardened host: `ls` and `touch` both refused, and readSipTlsTrustAnchor
+# therefore logged "not readable" and returned undefined). Loosening that
+# directory is not the fix: the private key lives in it. Separating is — the
+# anchor is a PUBLIC certificate this deployment hands to every client, so it
+# can sit in a world-readable directory that contains nothing else.
+kamailio_tls_anchor_dir: "{{ app_dir }}/services/kamailio/anchor"
+
 # CONTAINER paths written into tls.cfg. Separate cert and key, because a real
 # certificate is two files: Let's Encrypt via Caddy gives `<domain>.crt` +
 # `<domain>.key`, certbot `fullchain.pem` + `privkey.pem`. The defaults name

@@ -1,0 +1,42 @@
+---
+# llamenos-coturn defaults — the STUN/TURN relay an in-app call needs when a
+# volunteer is behind a symmetric NAT.
+#
+# Mirrors the `coturn` service in deploy/docker/docker-compose.yml (the
+# `telephony` profile). Until this role existed, TURN was a compose-only
+# feature: an Ansible-deployed host rendered no TURN_HOST/TURN_SECRET, so
+# /api/telephony/sip-token handed every client STUN-only ICE and an in-app call
+# between two peers behind symmetric NAT had no media path at all (#1657).
+#
+# Off by default. In-app calling also needs a SIP edge (roles/kamailio) and a
+# PBX (roles/llamenos-asterisk); a host that enables none of them is a
+# phone-only deployment and wants no relay.
+llamenos_coturn_enabled: false
+
+llamenos_coturn_image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3 # pinned 2026-05-18
+
+# The hostname clients are told to reach the relay on, and the value rendered as
+# TURN_HOST. It must resolve, from the volunteer's network, to this host — a
+# relay candidate naming an address the client cannot reach is worse than no
+# relay, because ICE spends its connectivity-check budget on it.
+turn_host: "{{ domain }}"
+
+# coturn's listening port (UDP and TCP).
+turn_port: 3478
+
+# Relay port range. Every allocation takes one port from it, so this bounds
+# concurrent relayed calls (two ports per call in the worst case). Kept narrow
+# because the firewall has to open all of it.
+turn_relay_min_port: 49160
+turn_relay_max_port: 49200
+
+# Needed only behind 1:1 NAT — a cloud VM whose public address does not appear
+# on any of its own interfaces. Set to `public/private`, e.g. 203.0.113.4/10.0.0.4.
+# Without it, coturn on such a host allocates a relay candidate naming the
+# private address, which no client can reach.
+# turn_external_ip: ""
+
+# The realm coturn puts in its challenges. Cosmetic for the REST
+# (use-auth-secret) credential scheme the worker mints against, but it is logged
+# and it belongs to this deployment.
+turn_realm: "{{ domain }}"

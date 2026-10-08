@@ -169,15 +169,180 @@ struct LinphoneServiceCoreTests {
         #expect(try startedCore().enabledAudioCodecs == ["opus", "PCMU"])
     }
 
-    @Test func registerBeforeInitializeThrowsNotInitialized() {
+    @Test func registerBeforeInitializeThrowsNotInitialized() throws {
         // Before the SDK was linked this call compiled to a no-op and "succeeded".
         let svc = LinphoneService()
-        let params = SipTokenResponse(
-            username: "user", domain: "sip.example.org",
-            password: "pass", transport: "tls", expiry: 3600
-        )
+        // Decoded from the server's recorded bytes, not built here: a token constructed
+        // in Swift is what made this test pass against a model the server could never
+        // satisfy (#1659). See `SipTokenFixture`.
+        let params = try SipTokenFixture.token()
         #expect(throws: LinphoneError.self) {
             try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: params)
         }
+    }
+
+    @Test func registerAppliesTheIssuedCredentialToAStartedCore() throws {
+        // The decode fix is only half of #1659: `registerHubAccount` previously set the
+        // identity and server addresses and nothing else, so even a token that HAD
+        // decoded produced an account with no password (401 on the first REGISTER), no
+        // NAT policy (host candidates only), the SDK's bundled CA set instead of the
+        // published anchor, and a hardcoded media encryption the registrar's endpoint
+        // cannot negotiate. Assert it reaches liblinphone's own state.
+        let svc = LinphoneService()
+        try svc.initialize(hubContext: HubContext())
+        defer { svc.shutdown() }
+
+        let token = try SipTokenFixture.token()
+        try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: token)
+
+        let applied = try #require(svc.registrationForTesting(hubId: "hub-uuid-001"))
+        #expect(applied.identityAddress == "sip:\(token.sip.username)@\(token.sip.domain)")
+        #expect(applied.hasAuthInfo, "no AuthInfo means a 401 on the first REGISTER")
+        #expect(applied.registerEnabled)
+        #expect(applied.expires == LinphoneService.registerExpiresSeconds)
+        // DTLS-SRTP, because that is what the token names — not a client-side constant.
+        #expect(applied.mediaEncryption == LinphoneService.MediaEncryptionRawValue.dtls)
+        #expect(applied.mediaEncryptionMandatory)
+        // ICE with a relay, which is the whole point of #1657.
+        #expect(applied.iceEnabled)
+        #expect(applied.stunEnabled)
+        #expect(applied.turnEnabled)
+        #expect(applied.stunServer == "turn.hotline.example.org:3478")
+        #expect(applied.stunServerUsername == token.sip.iceServers.first { $0.isTurnRelay }?.username)
+        // EXACTLY ONE relay transport, UDP preferred — liblinphone supports no more than
+        // one and refuses the second. Asserting all the issued ones is what caught that.
+        #expect(applied.udpTurnTransportEnabled)
+        #expect(!applied.tcpTurnTransportEnabled)
+        #expect(!applied.tlsTurnTransportEnabled)
+
+        svc.unregisterHubAccount(hubId: "hub-uuid-001")
+        #expect(svc.registrationForTesting(hubId: "hub-uuid-001") == nil)
+    }
+
+    @Test func aStunOnlyTokenRegistersWithoutARelay() throws {
+        // What a host with no TURN_HOST/TURN_SECRET hands a client (#1657). It must still
+        // register: a volunteer reachable on a reflexive candidate is better than one who
+        // is not registered at all. The relay is simply absent, and visibly so.
+        let svc = LinphoneService()
+        try svc.initialize(hubContext: HubContext())
+        defer { svc.shutdown() }
+
+        try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: try SipTokenFixture.token("sipTokenStunOnly"))
+        let applied = try #require(svc.registrationForTesting(hubId: "hub-uuid-001"))
+        #expect(applied.iceEnabled)
+        #expect(applied.stunEnabled)
+        #expect(!applied.turnEnabled, "no credentials were issued, so no relay may be advertised")
+        #expect(applied.stunServer == "sip.hotline.example.org:3478")
+    }
+
+    @Test func aTcpOnlyRelayCannotBeCarriedByThisSdk() throws {
+        // A LIMITATION, pinned — not a behaviour anyone wants.
+        //
+        // MEASURED on linphone-sdk 5.5.23: `tcpTurnTransportEnabled = true` takes on a
+        // NatPolicy object, and is then LOST when the policy is assigned to
+        // AccountParams (`turnEnabled` survives, the transport flags do not). So a
+        // deployment whose relay is reachable only over TCP gets TURN enabled with no
+        // transport, and no relay candidate.
+        //
+        // It does not affect the real path: `buildVolunteerSipParams` always issues a UDP
+        // relay entry alongside the TCP one, and UDP is the one to prefer regardless. This
+        // test exists so an SDK upgrade that fixes it FAILS here and gets noticed, instead
+        // of the limitation living on as a comment nobody rechecks.
+        let svc = LinphoneService()
+        try svc.initialize(hubContext: HubContext())
+        defer { svc.shutdown() }
+
+        let good = try SipTokenFixture.token()
+        let relay = try #require(good.sip.iceServers.first { $0.isTurnRelay })
+        let tcpOnly = SipTokenResponse(
+            provider: good.provider,
+            sip: SipAccountParams(
+                domain: good.sip.domain,
+                transport: good.sip.transport,
+                username: good.sip.username,
+                password: good.sip.password,
+                mediaEncryption: good.sip.mediaEncryption,
+                iceServers: [
+                    SipIceServer(url: "stun:turn.hotline.example.org:3478"),
+                    SipIceServer(
+                        url: "turn:turn.hotline.example.org:3478?transport=tcp",
+                        username: relay.username,
+                        credential: relay.credential
+                    ),
+                ]
+            )
+        )
+        try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: tcpOnly)
+
+        let applied = try #require(svc.registrationForTesting(hubId: "hub-uuid-001"))
+        // The relay credential IS carried (the AuthInfo exists), and TURN is on...
+        #expect(applied.hasTurnAuthInfo)
+        #expect(applied.turnEnabled)
+        // ...but no transport survives, so no relay candidate is gathered.
+        #expect(!applied.tcpTurnTransportEnabled, "if this now passes, liblinphone carries TCP TURN — drop the UDP-only limitation")
+        #expect(!applied.udpTurnTransportEnabled, "and UDP must not be substituted: the operator said TCP")
+        // The reflexive candidate still stands, which is what makes this a degradation
+        // rather than a failure: registration succeeds and a cone-NAT volunteer connects.
+        #expect(applied.iceEnabled)
+        #expect(applied.stunEnabled)
+        #expect(applied.stunServer == "turn.hotline.example.org:3478")
+    }
+
+    @Test func relayTransportIsDerivedFromTheUriNotGuessed() {
+        // `turns:` is TLS by scheme (RFC 7065) whatever the hint says, and a bare `turn:`
+        // means UDP. A scheme that is not TURN at all has no relay transport.
+        #expect(SipIceServer(url: "turn:r:3478").relayTransport == .udp)
+        #expect(SipIceServer(url: "turn:r:3478?transport=udp").relayTransport == .udp)
+        #expect(SipIceServer(url: "turn:r:3478?transport=tcp").relayTransport == .tcp)
+        #expect(SipIceServer(url: "turn:r:3478?transport=tls").relayTransport == .tls)
+        #expect(SipIceServer(url: "turns:r:5349").relayTransport == .tls)
+        #expect(SipIceServer(url: "stun:r:3478").relayTransport == nil)
+        // An unrecognised hint is nil rather than silently UDP: a relay reached over the
+        // wrong transport allocates nothing, and guessing hides which it was.
+        #expect(SipIceServer(url: "turn:r:3478?transport=sctp").relayTransport == nil)
+    }
+
+    @Test func registerRefusesAMediaEncryptionThisClientWillNotCarry() throws {
+        // `none` is refused rather than honoured: a crisis hotline's volunteer leg does
+        // not carry unencrypted media. So is anything unrecognised.
+        let svc = LinphoneService()
+        try svc.initialize(hubContext: HubContext())
+        defer { svc.shutdown() }
+
+        for value in ["none", "", "aes"] {
+            #expect(LinphoneService.mediaEncryptionRawValueForTesting(value) == nil, "\(value) must be refused")
+        }
+        let raw = LinphoneService.MediaEncryptionRawValue.self
+        #expect(LinphoneService.mediaEncryptionRawValueForTesting("dtls-srtp") == raw.dtls)
+        #expect(LinphoneService.mediaEncryptionRawValueForTesting("DTLS") == raw.dtls)
+        #expect(LinphoneService.mediaEncryptionRawValueForTesting("srtp") == raw.srtp)
+        #expect(LinphoneService.mediaEncryptionRawValueForTesting("zrtp") == raw.zrtp)
+    }
+
+    @Test func registerRefusesATrustAnchorCarryingPrivateKeyMaterial() throws {
+        // The worker strips key material before publishing (`certificatesOnly`), so this
+        // is defence in depth — and the direction to fail in. A client that installs a
+        // keypair as a trust anchor is a client whose SIP trust decision is unexamined.
+        let svc = LinphoneService()
+        try svc.initialize(hubContext: HubContext())
+        defer { svc.shutdown() }
+
+        let good = try SipTokenFixture.token()
+        let poisoned = SipTokenResponse(
+            provider: good.provider,
+            sip: SipAccountParams(
+                domain: good.sip.domain,
+                transport: good.sip.transport,
+                username: good.sip.username,
+                password: good.sip.password,
+                mediaEncryption: good.sip.mediaEncryption,
+                iceServers: good.sip.iceServers,
+                tlsTrustAnchorPem: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
+            )
+        )
+        #expect(throws: LinphoneError.self) {
+            try svc.registerHubAccount(hubId: "hub-uuid-001", sipParams: poisoned)
+        }
+        #expect(svc.registrationForTesting(hubId: "hub-uuid-001") == nil)
     }
 }

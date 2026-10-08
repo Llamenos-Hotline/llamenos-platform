@@ -1,0 +1,94 @@
+---
+# CoTURN STUN/TURN relay role.
+#
+# Why this exists: TURN_HOST/TURN_SECRET were present in every compose path and
+# in NO Ansible path, so a deployed host silently served STUN-only ICE (#1657).
+# Rendering the two variables without running a relay would have been worse than
+# the gap it closed — the ICE set would then name a host that refuses every
+# allocation, and ICE would spend its connectivity-check budget on a candidate
+# that cannot work. So the render (templates/env/_worker-required-env.j2) and
+# this role are gated on the same variable.
+#
+# Skips if:
+#   - llamenos_coturn_enabled is false
+#   - This host is not in the llamenos_coturn group (when the group has members)
+
+- name: Skip if coturn not enabled
+  ansible.builtin.meta: end_role
+  when: not (llamenos_coturn_enabled | default(false) | bool)
+
+- name: Skip if not assigned to this host
+  ansible.builtin.meta: end_role
+  when: >
+    groups.get('llamenos_coturn', []) | length > 0 and
+    inventory_hostname not in groups.get('llamenos_coturn', [])
+
+# Asserted here as well as in preflight: this role can be invoked on its own
+# with `--tags coturn`, which never runs preflight.yml. An empty secret renders
+# `--static-auth-secret=` and coturn then honours a credential the worker cannot
+# have minted, i.e. nothing registers and nothing says why.
+- name: Assert the TURN shared secret and host are set
+  ansible.builtin.assert:
+    that:
+      - turn_secret is defined
+      - (turn_secret | trim) | length >= 32
+      - turn_host is defined
+      - (turn_host | trim) | length > 0
+    fail_msg: |
+      REQUIRED when llamenos_coturn_enabled is true:
+        turn_secret — the shared secret coturn verifies minted credentials
+                      against. Must be >= 32 chars. Generate with:
+                        openssl rand -hex 32
+                      The SAME value is rendered as TURN_SECRET in the app's
+                      environment; the worker mints credentials under it and
+                      coturn verifies them, so a mismatch means every relay
+                      allocation is refused.
+        turn_host   — the hostname clients are told to reach the relay on. It
+                      must resolve from a volunteer's network to THIS host.
+      Seen: turn_secret {{ (turn_secret | default('') | trim) | length }} chars,
+            turn_host '{{ turn_host | default('') }}'
+    success_msg: "turn_secret: [set, {{ (turn_secret | trim) | length }} chars], turn_host: {{ turn_host }}"
+
+- name: Create coturn service directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}/services/coturn"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "0750"
+
+- name: Template coturn compose file
+  ansible.builtin.template:
+    src: compose/coturn.j2
+    dest: "{{ app_dir }}/services/coturn/docker-compose.yml"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    # 0600, not 0640: the compose file carries --static-auth-secret on the
+    # command line. Every other service role's compose file is 0640 because it
+    # holds no secret.
+    mode: "0600"
+  notify: Restart coturn service
+
+# The relay is useless behind a closed firewall, and the ports it needs are not
+# in the default set (roles/firewall opens 80/443/ssh only). Opened here rather
+# than left to firewall_extra_ports by hand: a hand-step nothing checks is the
+# shape of defect this whole change is about.
+- name: Open the STUN/TURN listening port
+  community.general.ufw:
+    rule: allow
+    port: "{{ turn_port | string }}"
+    proto: "{{ item }}"
+    comment: "STUN/TURN (llamenos-coturn)"
+  loop: [udp, tcp]
+
+- name: Open the TURN relay port range
+  community.general.ufw:
+    rule: allow
+    port: "{{ turn_relay_min_port | string }}:{{ turn_relay_max_port | string }}"
+    proto: udp
+    comment: "TURN relay range (llamenos-coturn)"
+
+- name: Start coturn service
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}/services/coturn"
+    state: present

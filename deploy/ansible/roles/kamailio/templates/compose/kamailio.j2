@@ -15,9 +15,15 @@ services:
       - "5060:5060/tcp"
       - "5061:5061/tcp"
     volumes:
-      - ./kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
-      - ./dispatcher.list:/etc/kamailio/dispatcher.list:ro
-      - ./tls.cfg:/etc/kamailio/tls.cfg:ro
+      # `./config/`, not `./`: tasks/main.yml templates all three into
+      # {{ app_dir }}/services/kamailio/config/, so the old paths named files
+      # that do not exist — Docker then created each as an empty DIRECTORY and
+      # the container died with "Are you trying to mount a directory onto a
+      # file". Never seen because this role was on no deploy path until #1657
+      # put it on one.
+      - ./config/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      - ./config/dispatcher.list:/etc/kamailio/dispatcher.list:ro
+      - ./config/tls.cfg:/etc/kamailio/tls.cfg:ro
 {% if kamailio_tls_enabled | default(true) | bool %}
       # The TLS material tls.cfg names. WITHOUT this mount the certificate is
       # generated on the host and the container cannot see it, so the TLS
