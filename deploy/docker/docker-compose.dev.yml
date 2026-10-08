@@ -186,6 +186,17 @@ services:
   # bridge network it would advertise its 172.x container address. Host mode is
   # also coturn's own recommended deployment, and unlike published ports it
   # stays subject to the host firewall.
+  #
+  # --listening-ip/--relay-ip are pinned explicitly for the same reason as in
+  # the Ansible role: unset, coturn enumerates every interface (each docker
+  # bridge included), logs "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and
+  # can source RTCP from an address its relay candidate never named (#1689).
+  # Dev defaults to loopback; set TURN_LISTENING_IP/TURN_RELAY_IP to the
+  # workstation's LAN address when testing from a real phone on the same LAN.
+  #
+  # --log-file=stdout: coturn's default log target is a /var/tmp file the
+  # container's docker logging driver never sees — `docker compose logs`
+  # (and the smoke check that greps it) would read an empty log.
   coturn:
     image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd2872dcf74313b3bc6cf9b69cc81be6fb3  # pinned 2026-05-18
     profiles: ["telephony"]
@@ -198,9 +209,12 @@ services:
       --listening-port=${TURN_PORT:-3478}
       --min-port=${TURN_RELAY_MIN_PORT:-49160}
       --max-port=${TURN_RELAY_MAX_PORT:-49200}
+      --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
       --no-tls
       --no-dtls
       --no-cli
+      --log-file=stdout
     healthcheck:
       # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
       # --use-auth-secret mode (only TURN allocation needs the credential). So

@@ -21,6 +21,23 @@ llamenos_coturn_image: coturn/coturn:4@sha256:867607152c6ed9504a0b59a2546a9bd287
 # relay, because ICE spends its connectivity-check budget on it.
 turn_host: "{{ domain }}"
 
+# The address coturn listens on for STUN/TURN, and the address it names in
+# every relay candidate. BOTH must be set explicitly: with neither, coturn
+# enumerates every interface on the host — each docker bridge included — logs
+# "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and then treats them all as
+# relay addresses. Measured on the deployed host (#1689): 8 addresses
+# discovered, and in one run the advertised relay candidate named one address
+# while the RTCP component was sourced from another — which an ICE peer is
+# entitled to reject as an unknown source. The allocation still succeeds, so
+# the failure presents only as one-way or absent audio on a "connected" call.
+#
+# The default is the host's primary address (the source of its default route).
+# Override where that is wrong — e.g. a relay host with several public
+# interfaces where the address turn_host resolves to is not the primary one,
+# in which case turn_relay_ip MUST be the address turn_host resolves to.
+turn_listening_ip: "{{ ansible_default_ipv4.address | default('') }}"
+turn_relay_ip: "{{ turn_listening_ip }}"
+
 # coturn's listening port (UDP and TCP).
 turn_port: 3478
 

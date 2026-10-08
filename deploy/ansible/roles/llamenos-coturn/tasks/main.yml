@@ -49,6 +49,34 @@
             turn_host '{{ turn_host | default('') }}'
     success_msg: "turn_secret: [set, {{ (turn_secret | trim) | length }} chars], turn_host: {{ turn_host }}"
 
+# Asserted for the same reason as the secret above: an empty turn_listening_ip
+# or turn_relay_ip renders `--listening-ip=` / `--relay-ip=`, which coturn
+# parses as "no explicit address" — exactly the enumeration defect in #1689,
+# reintroduced through a variable instead of an omission. The default reads the
+# host's primary address, so an empty value means facts were not gathered
+# (deploy.yml always gathers them) or the operator overrode the var with "".
+- name: Assert the explicit relay/listening addresses are set
+  ansible.builtin.assert:
+    that:
+      - turn_listening_ip is defined
+      - (turn_listening_ip | trim) | length > 0
+      - turn_relay_ip is defined
+      - (turn_relay_ip | trim) | length > 0
+    fail_msg: |
+      REQUIRED when llamenos_coturn_enabled is true:
+        turn_listening_ip — the address coturn listens on. Defaults to the
+                            host's primary address; an empty value usually
+                            means Ansible facts were not gathered.
+        turn_relay_ip     — the address named in every relay candidate.
+                            Defaults to turn_listening_ip; where the host has
+                            several public interfaces it MUST be the address
+                            turn_host resolves to.
+      Without both, coturn enumerates every interface (each docker bridge
+      included) and can source RTCP from an address the peer rejects (#1689).
+      Seen: turn_listening_ip '{{ turn_listening_ip | default('') }}',
+            turn_relay_ip '{{ turn_relay_ip | default('') }}'
+    success_msg: "turn_listening_ip: {{ turn_listening_ip }}, turn_relay_ip: {{ turn_relay_ip }}"
+
 - name: Create coturn service directory
   ansible.builtin.file:
     path: "{{ app_dir }}/services/coturn"
