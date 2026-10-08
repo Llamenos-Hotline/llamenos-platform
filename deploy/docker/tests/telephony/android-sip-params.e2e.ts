@@ -64,7 +64,7 @@ async function configureAsteriskProvider(request: APIRequestContext): Promise<vo
       sipDomain: REGISTRAR_DOMAIN,
     },
   })
-  expect(res.status, JSON.stringify(res.data)).toBe(200)
+  expect(res.status, 'Asterisk provider configuration succeeds').toBe(200)
 }
 
 test('issues a TLS credential with a trust anchor, DTLS-SRTP and TURN ICE servers', async ({ request }) => {
@@ -74,7 +74,7 @@ test('issues a TLS credential with a trust anchor, DTLS-SRTP and TURN ICE server
   await updateUserViaApi(request, volunteer.pubkey, { callPreference: 'both' })
 
   const token = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', volunteer.seedHex)
-  expect(token.status, JSON.stringify(token.data)).toBe(200)
+  expect(token.status, 'the volunteer SIP token is issued').toBe(200)
   const { sip } = token.data
 
   expect(sip.username).toBe(`vol_${volunteer.pubkey.slice(0, 16)}`)

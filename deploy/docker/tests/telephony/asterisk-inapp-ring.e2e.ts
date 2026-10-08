@@ -1,8 +1,9 @@
 /**
  * End-to-end: a call RINGS a volunteer's registered in-app endpoint.
  *
- *   volunteer's app ──REGISTER──▶ Asterisk (credential from /sip-token)
- *   caller ──INVITE──▶ carrier ──trunk──▶ Asterisk ──▶ bridge ──▶ worker
+ *   volunteer's app ──REGISTER/TLS──▶ Kamailio ──UDP──▶ Asterisk
+ *   caller ──INVITE──▶ carrier ──▶ Kamailio ──dispatcher──▶ Asterisk
+ *     Asterisk ──▶ bridge ──▶ worker
  *     worker: scheduled ∩ clocked-in → available → reachable at the PBX
  *     worker ──/ring { volunteers, appTargets }──▶ bridge
  *     bridge ──originate PJSIP/vol_<pubkey16>──▶ Asterisk
@@ -25,9 +26,10 @@
  * ringing device sends) and declines; answering needs the DTLS-SRTP agreement
  * that is a separate item of #1188.
  *
- * Run with run-inapp-ring-e2e.sh (it starts the app and the PBX stack).
+ * Run with run-inapp-ring-e2e.sh (it starts the app, SIP edge and PBX stack).
  */
 import { execFileSync } from 'node:child_process'
+import { isIP } from 'node:net'
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import {
   apiGet,
@@ -51,9 +53,10 @@ const ARI_REST_URL = process.env.E2E_ARI_REST_URL ?? 'http://127.0.0.1:8088/ari'
 const ARI_USERNAME = process.env.ARI_USERNAME ?? 'llamenos'
 const ARI_PASSWORD = process.env.ARI_PASSWORD ?? ''
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? ''
-/** The PBX's SIP port and registrar domain as the host reaches them */
-const PBX_HOST = process.env.E2E_PBX_HOST ?? '127.0.0.1'
-const PBX_PORT = Number(process.env.E2E_PBX_PORT ?? 5060)
+/** The client-facing TLS listener owned by Kamailio. */
+const SIP_EDGE_HOST = process.env.E2E_SIP_EDGE_HOST ?? '127.0.0.1'
+const SIP_EDGE_TLS_PORT = Number(process.env.E2E_SIP_EDGE_TLS_PORT ?? 5061)
+const KAMAILIO_CONTAINER = process.env.E2E_KAMAILIO_CONTAINER ?? 'll-telephony-inapp-e2e-kamailio-1'
 const REGISTRAR_DOMAIN = process.env.E2E_REGISTRAR_DOMAIN ?? '127.0.0.1'
 
 /** Carrier numbers under this prefix ring forever (carrier/extensions.conf) */
@@ -91,6 +94,36 @@ function pbxCli(command: string): string {
 
 function carrierCli(command: string): string {
   return execFileSync('docker', ['exec', CARRIER, 'asterisk', '-rx', command], { encoding: 'utf8' })
+}
+
+async function configureKamailioIngressForTest(): Promise<void> {
+  const kamailioIp = execFileSync(
+    'docker',
+    ['inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', KAMAILIO_CONTAINER],
+    { encoding: 'utf8' },
+  ).trim()
+  if (isIP(kamailioIp) !== 4) throw new Error('Could not resolve the test Kamailio container address')
+
+  for (const [type, fields] of [
+    ['endpoint', {
+      context: 'from-trunk',
+      disallow: 'all',
+      allow: 'ulaw,alaw',
+      direct_media: 'no',
+      identify_by: 'ip',
+    }],
+    ['identify', { endpoint: 'kamailio-ingress', match: kamailioIp }],
+  ] as const) {
+    const response = await fetch(
+      `${ARI_REST_URL}/asterisk/config/dynamic/res_pjsip/${type}/kamailio-ingress`,
+      {
+        method: 'PUT',
+        headers: { ...ARI_AUTH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: Object.entries(fields).map(([attribute, value]) => ({ attribute, value })) }),
+      },
+    )
+    expect(response.ok, `Asterisk accepts the test ${type} configuration`).toBe(true)
+  }
 }
 
 /** The caller dials the hotline and stays on the line for `holdSeconds`. */
@@ -152,7 +185,7 @@ async function provisionHotline(request: APIRequestContext, volunteerPhone: stri
     name: `In-app ring E2E ${hotline}`,
     phoneNumber: hotline,
   })
-  expect(hub.status, JSON.stringify(hub.data)).toBe(201)
+  expect(hub.status, 'the test hotline hub is created').toBe(201)
   const hubId = hub.data.hub.id
   // One language: no spoken menu for the call to sit through.
   expect((await apiPatch(request, `/hubs/${hubId}/settings/ivr-languages`, { enabledLanguages: ['en'] })).status).toBe(200)
@@ -169,10 +202,10 @@ async function provisionHotline(request: APIRequestContext, volunteerPhone: stri
       sipDomain: REGISTRAR_DOMAIN,
     },
   })
-  expect(configured.status, JSON.stringify(configured.data)).toBe(200)
+  expect(configured.status, 'Asterisk provider configuration succeeds').toBe(200)
 
   const trunk = await apiPost(request, '/provider-setup/create-sip-trunk', { provider: 'asterisk', domain: CARRIER_HOST })
-  expect(trunk.status, JSON.stringify(trunk.data)).toBe(200)
+  expect(trunk.status, 'the test carrier trunk is configured').toBe(200)
 
   const volunteer = await createUserViaApi(request, { name: 'In-app E2E Volunteer', phone: volunteerPhone })
   await addHubMemberViaApi(request, hubId, volunteer.pubkey)
@@ -184,31 +217,44 @@ async function provisionHotline(request: APIRequestContext, volunteerPhone: stri
 }
 
 /**
- * The volunteer's app: fetch its SIP credential, REGISTER, and wait until the
- * PBX reports the endpoint `online` — the state the ringing path requires,
- * which depends on the UA answering the OPTIONS qualify.
+ * The volunteer's app: fetch its SIP credential, REGISTER over verified TLS
+ * through Kamailio, and wait until the PBX reports the endpoint `online` — the
+ * state the ringing path requires, which depends on the UA answering OPTIONS.
  */
 async function registerVolunteerApp(
   request: APIRequestContext,
   volunteer: { pubkey: string; seedHex: string },
 ): Promise<{ ua: SipUa; aor: string }> {
   const token = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', volunteer.seedHex)
-  expect(token.status, JSON.stringify(token.data)).toBe(200)
+  expect(token.status, 'the volunteer SIP token is issued').toBe(200)
   const aor = `vol_${volunteer.pubkey.slice(0, 16)}`
   expect(token.data.sip.username).toBe(aor)
 
   const ua = await SipUa.connect({
-    host: PBX_HOST,
-    port: PBX_PORT,
+    host: SIP_EDGE_HOST,
+    port: SIP_EDGE_TLS_PORT,
     domain: REGISTRAR_DOMAIN,
     username: token.data.sip.username,
     password: token.data.sip.password,
+    caPem: sipEdgeTrustAnchor(),
   })
   expect(await ua.register(), 'REGISTER with the issued credential').toBe(200)
   await expect
     .poll(() => endpointState(aor), { timeout: 60_000, message: 'the PBX reports the volunteer endpoint online' })
     .toBe('online')
   return { ua, aor }
+}
+
+function sipEdgeTrustAnchor(): string {
+  const pem = execFileSync(
+    'docker',
+    ['exec', KAMAILIO_CONTAINER, 'cat', '/var/lib/llamenos/sip-tls/kamailio.pem'],
+    { encoding: 'utf8' },
+  )
+  if (!pem.includes('-----BEGIN CERTIFICATE-----') || pem.includes('PRIVATE KEY')) {
+    throw new Error('Kamailio did not publish a certificate-only SIP TLS trust anchor')
+  }
+  return pem
 }
 
 /** A shift covering every hour of every day, so "scheduled now" is unambiguous. */
@@ -224,10 +270,11 @@ async function scheduleAlwaysOn(request: APIRequestContext, hubId: string, pubke
   })
 }
 
-test.beforeAll(() => {
+test.beforeAll(async () => {
   // Every SIP message the PBX sends and receives, in its container log: the
   // receiving end's own account of the INVITE.
   pbxCli('pjsip set logger on')
+  await configureKamailioIngressForTest()
 })
 
 test('a call INVITEs the volunteer\'s registered app, alongside their phone, and cancels the leg that loses', async ({ request }) => {

@@ -1,14 +1,15 @@
 /**
- * A minimal SIP REGISTER client over TCP — just enough of RFC 3261 to prove a
- * provisioned endpoint authenticates against the real PBX: challenge digest
- * (MD5, qop-auth when offered), one REGISTER, the final status. No dialogs,
- * no bodies, no retransmits: the TCP framing gives us message boundaries.
+ * A minimal SIP REGISTER client over TCP or verified TLS — just enough of RFC
+ * 3261 to prove a provisioned endpoint authenticates through the real SIP edge:
+ * challenge digest (MD5, qop-auth when offered), one REGISTER, final status.
+ * No dialogs, bodies or retransmits: the stream framing gives message boundaries.
  *
  * Used by asterisk-register.e2e.ts — the live proof that the credentials
- * /api/telephony/sip-token issues register against the self-hosted Asterisk.
+ * /api/telephony/sip-token issues register through Kamailio to Asterisk.
  */
-import { createConnection, type Socket } from 'node:net'
+import { createConnection, isIP, type Socket } from 'node:net'
 import { createHash, randomBytes } from 'node:crypto'
+import { connect as connectTls } from 'node:tls'
 
 export interface RegisterResult {
   status: number
@@ -106,6 +107,33 @@ export async function registerOverTcp(opts: {
   password: string
   expires?: number
 }): Promise<RegisterResult> {
+  return registerOverTransport(opts)
+}
+
+export async function registerOverTls(opts: {
+  host: string
+  port: number
+  domain: string
+  username: string
+  password: string
+  caPem: string
+  expires?: number
+}): Promise<RegisterResult> {
+  if (!opts.caPem.trim()) throw new Error('TLS REGISTER requires the published SIP edge trust anchor')
+  return registerOverTransport(opts, opts.caPem)
+}
+
+async function registerOverTransport(
+  opts: {
+    host: string
+    port: number
+    domain: string
+    username: string
+    password: string
+    expires?: number
+  },
+  caPem?: string,
+): Promise<RegisterResult> {
   const { host, port, domain, username, password } = opts
   const expires = opts.expires ?? 300
   const uri = `sip:${domain}`
@@ -114,9 +142,18 @@ export async function registerOverTcp(opts: {
   const fromTag = randomBytes(8).toString('hex')
   let cseq = 1
 
-  const socket = createConnection({ host, port })
+  const secure = caPem !== undefined
+  const socket: Socket = secure
+    ? connectTls({
+        host,
+        port,
+        ca: caPem,
+        rejectUnauthorized: true,
+        ...(isIP(host) ? {} : { servername: host }),
+      })
+    : createConnection({ host, port })
   await new Promise<void>((resolve, reject) => {
-    socket.once('connect', () => resolve())
+    socket.once(secure ? 'secureConnect' : 'connect', () => resolve())
     socket.once('error', reject)
   })
   socket.setNoDelay(true)
@@ -125,14 +162,15 @@ export async function registerOverTcp(opts: {
   try {
     const sendRegister = (authorization?: string) => {
       const viaBranch = `z9hG4bK${randomBytes(8).toString('hex')}`
+      const transport = secure ? 'TLS' : 'TCP'
       const lines = [
         `REGISTER ${uri} SIP/2.0`,
-        `Via: SIP/2.0/TCP ${socket.localAddress}:${socket.localPort};branch=${viaBranch};rport`,
+        `Via: SIP/2.0/${transport} ${socket.localAddress}:${socket.localPort};branch=${viaBranch};rport`,
         `From: <sip:${username}@${domain}>;tag=${fromTag}`,
         `To: <sip:${username}@${domain}>`,
         `Call-ID: ${callId}`,
         `CSeq: ${cseq} REGISTER`,
-        `Contact: <sip:${username}@${socket.localAddress}:${socket.localPort};transport=tcp>;expires=${expires}`,
+        `Contact: <sip:${username}@${socket.localAddress}:${socket.localPort};transport=${secure ? 'tls' : 'tcp'}>;expires=${expires}`,
         'Max-Forwards: 70',
         'Allow: INVITE, ACK, BYE, CANCEL, OPTIONS',
         'User-Agent: llamenos-register-e2e',
