@@ -12,7 +12,7 @@ import { checkDispatchDependency, type DependencyReport } from './dependency.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
-import { dispatch as dispatchWorker, type EffortLevel } from './engines.js'
+import { dispatch as dispatchWorker, doctorRegistryIdForOpencodeModel, modelResolutionProblem, type EffortLevel } from './engines.js'
 import { verifyMechanical } from './verify.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
@@ -157,6 +157,31 @@ export async function doctor(): Promise<number> {
       checks.push([`lane ${l.id} is live on opencode, opencode binary on PATH`, opencodeOk,
         'install opencode (https://opencode.ai), or set this lane\'s engine back to claude in ~/.llamenos-fleet/lanes.json'])
     }
+
+    // Issue #1738: the binary being on PATH says nothing about whether the
+    // lane's configured model id still resolves — provider ids vanish or get
+    // renamed (kimi-for-coding → kimi-code-plan-global) and the dispatch
+    // failure reads like a provider outage, so a doctor that stops at the
+    // binary check reports every lane ok over a fleet that is fully halted.
+    // Enumerate `opencode models` once and check each lane's effective
+    // registry id against it. Enumeration failing is fail-CLOSED here: "we
+    // could not verify the model" must never render identically to "the
+    // model resolves" — that conflation is the outage this check exists for.
+    if (opencodeOk) {
+      let availableModels: string[] | undefined
+      try {
+        availableModels = execFileSync('opencode', ['models'], { stdio: 'pipe', encoding: 'utf8', timeout: 30_000 })
+          .split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+      } catch { /* reported as a per-lane failure below */ }
+      for (const l of liveOpencode) {
+        const rawId = doctorRegistryIdForOpencodeModel(l.model ?? DEFAULT_OPENCODE_MODEL)
+        if (rawId === undefined) continue // dispatcher token whose target only dispatch-one.sh itself knows
+        const problem = availableModels === undefined
+          ? 'could not enumerate `opencode models` — cannot verify this lane\'s configured model resolves'
+          : modelResolutionProblem(rawId, availableModels)
+        checks.push([`lane ${l.id} is live on opencode, model "${rawId}" resolves`, problem === undefined, problem ?? ''])
+      }
+    }
   }
   checks.push(['not halted', !haltedLocally(),
     existsSync(HALT_REASON_FILE) ? `halted: ${readFileSync(HALT_REASON_FILE, 'utf8').trim()} — clear with: llamenos-fleet resume` : ''])
@@ -268,7 +293,7 @@ const DEFAULT_MODEL = 'sonnet'
 // An opencode lane with no model override must not fall back to the Claude
 // default — 'sonnet' would route the dispatch to the claude CLI, silently
 // defeating the engine selection. 'kimi' is dispatch-one.sh's maintained
-// opencode token (maps to kimi-for-coding/k3-256k inside the script).
+// opencode token (maps to kimi-code-plan-global/k3-256k inside the script).
 const DEFAULT_OPENCODE_MODEL = 'kimi'
 
 /** One name identifies a dispatched item everywhere: the tmux session

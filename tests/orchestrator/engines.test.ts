@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   statusToOutcome, parseStatusFile, buildArgs, isTerminalStatus, resolveDispatchModel,
+  doctorRegistryIdForOpencodeModel, modelResolutionProblem,
   parseWorkerLogSignal, detectQuotaFromLog, extractResetHint, parseResetAt, QUOTA_MESSAGE_RE,
   resolveLaunchOutcome,
 } from '../../orchestrator/src/engines.js'
@@ -132,6 +133,11 @@ describe('buildArgs with an opencode lane', () => {
   })
 
   it('maps the raw kimi registry model id to the dispatcher\'s kimi token', () => {
+    const a = buildArgs({ ...req, lane: ocLane, model: 'kimi-code-plan-global/k3-256k' })
+    expect(a[a.length - 1]).toBe('kimi')
+  })
+
+  it('still maps the RETIRED kimi provider id to the kimi token (lane files on disk may carry it)', () => {
     const a = buildArgs({ ...req, lane: ocLane, model: 'kimi-for-coding/k3-256k' })
     expect(a[a.length - 1]).toBe('kimi')
   })
@@ -156,6 +162,10 @@ describe('resolveDispatchModel', () => {
   })
 
   it('maps the kimi registry id to the kimi token for the opencode engine', () => {
+    expect(resolveDispatchModel('opencode', 'kimi-code-plan-global/k3-256k')).toBe('kimi')
+  })
+
+  it('maps the retired kimi-for-coding registry id to the kimi token (issue #1738)', () => {
     expect(resolveDispatchModel('opencode', 'kimi-for-coding/k3-256k')).toBe('kimi')
   })
 
@@ -166,6 +176,68 @@ describe('resolveDispatchModel', () => {
   it('does not double-wrap a model that is already a dispatcher token', () => {
     expect(resolveDispatchModel('opencode', 'opencode:some-provider/some-model')).toBe('opencode:some-provider/some-model')
     expect(resolveDispatchModel('opencode', 'kimi-thinking')).toBe('kimi-thinking')
+  })
+})
+
+// Issue #1738: doctor's model-resolution rail. A provider id that was renamed
+// (kimi-for-coding → kimi-code-plan-global) fails at dispatch time as a
+// generic "server error" while a binary-only doctor reports ok — these cover
+// the pure core of the check that closes that gap.
+describe('doctorRegistryIdForOpencodeModel', () => {
+  it('passes a raw provider/model id through for checking', () => {
+    expect(doctorRegistryIdForOpencodeModel('some-provider/some-model')).toBe('some-provider/some-model')
+  })
+
+  it('resolves the bare kimi token to the registry id dispatch-one.sh maps it to', () => {
+    expect(doctorRegistryIdForOpencodeModel('kimi')).toBe('kimi-code-plan-global/k3-256k')
+  })
+
+  it('resolves both the current and the retired raw kimi ids to the mirrored registry id', () => {
+    expect(doctorRegistryIdForOpencodeModel('kimi-code-plan-global/k3-256k')).toBe('kimi-code-plan-global/k3-256k')
+    expect(doctorRegistryIdForOpencodeModel('kimi-for-coding/k3-256k')).toBe('kimi-code-plan-global/k3-256k')
+  })
+
+  it('returns undefined for dispatcher tokens whose mapping only dispatch-one.sh knows', () => {
+    expect(doctorRegistryIdForOpencodeModel('glm')).toBeUndefined()
+    expect(doctorRegistryIdForOpencodeModel('copilot')).toBeUndefined()
+    expect(doctorRegistryIdForOpencodeModel('kimi-thinking')).toBeUndefined()
+  })
+})
+
+describe('modelResolutionProblem', () => {
+  const available = [
+    'kimi-code-plan-global/k3',
+    'kimi-code-plan-global/k3-256k',
+    'kimi-code-plan-global/kimi-for-coding',
+    'other-provider/other-model',
+  ]
+
+  it('returns undefined when the id resolves', () => {
+    expect(modelResolutionProblem('kimi-code-plan-global/k3-256k', available)).toBeUndefined()
+  })
+
+  it('names the dead id and calls it a misconfiguration, not an outage', () => {
+    const problem = modelResolutionProblem('kimi-for-coding/k3-256k', available)
+    expect(problem).toContain('"kimi-for-coding/k3-256k"')
+    expect(problem).toContain('misconfiguration, not an outage')
+  })
+
+  it('lists same-provider ids that DO resolve, not the whole registry', () => {
+    const problem = modelResolutionProblem('kimi-for-coding/k3-256k', available)
+    expect(problem).toContain('kimi-code-plan-global/k3-256k')
+    expect(problem).not.toContain('other-provider/other-model')
+  })
+
+  it('falls back to a name-substring match when no id shares the provider', () => {
+    const problem = modelResolutionProblem('gone-provider/k3-256k', available)
+    expect(problem).toContain('kimi-code-plan-global/k3-256k')
+  })
+
+  it('caps the suggestion list so a large registry stays readable', () => {
+    const many = Array.from({ length: 50 }, (_, i) => `p/m${i}`)
+    const problem = modelResolutionProblem('p/dead', many)
+    if (problem === undefined) throw new Error('expected a problem for a dead id')
+    expect(problem.split('p/m').length - 1).toBeLessThanOrEqual(10)
   })
 })
 

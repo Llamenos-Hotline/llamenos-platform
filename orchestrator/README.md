@@ -355,18 +355,24 @@ model for that lane, e.g. to run a lane on opencode/Kimi while the Anthropic
 account's quota is exhausted:
 
 ```json
-{"backend": {"mode": "live", "engine": "opencode", "model": "kimi-for-coding/k3-256k"}}
+{"backend": {"mode": "live", "engine": "opencode", "model": "kimi-code-plan-global/k3-256k"}}
 ```
 
 Allowed keys are exactly `mode`, `engine`, `model`; `engine` is `"claude"`
 (the default) or `"opencode"`. A raw opencode provider/model id is mapped to
-the dispatcher's token form (`kimi-for-coding/k3-256k` → `kimi`, anything
-else → `opencode:<id>`); dispatcher tokens pass through untouched. `--effort`
+the dispatcher's token form (`kimi-code-plan-global/k3-256k` → `kimi`, as is
+the retired `kimi-for-coding/k3-256k` id a lane file on disk may still carry,
+anything else → `opencode:<id>`); dispatcher tokens pass through untouched.
+`--effort`
 is omitted for opencode lanes (the dispatcher only supports it for Claude).
 Any malformed entry — unknown key, invalid mode or engine — fails CLOSED:
 that lane stays `off` and the rejection reason is written to the fleet log.
 `llamenos-fleet doctor` prints each lane's mode/engine/model and fails if a
-`live` opencode lane has no `opencode` binary on PATH.
+`live` opencode lane has no `opencode` binary on PATH **or its configured
+model id does not resolve** — doctor enumerates `opencode models` and
+compares, because a provider id that was renamed or removed fails at dispatch
+time with a generic server error that reads like an outage, not a config
+error (#1738).
 
 ## Where state lives
 
