@@ -119,37 +119,141 @@ final class AdminSettingsUITests: BaseUITest {
 
     // MARK: - Call Settings
 
-    func testCallSettingsOpens() {
-        navigateToAdminSettingsScreen("admin-call-settings")
+    /// Opening the screen is covered by the two tests below, which navigate to
+    /// it and then assert what it shows: a `testCallSettingsOpens` asserting
+    /// that `call-settings-view` exists added nothing, because that identifier
+    /// is on the Form and exists even while the Form is empty.
 
-        let view = find("call-settings-view")
-        XCTAssertTrue(
-            view.waitForExistence(timeout: 10),
-            "Call settings view should appear"
+    /// The screen must show the settings the server actually holds.
+    func testCallSettingsShowTheStoredValues() throws {
+        let stored = try callSettingsFromServer()
+        try openCallSettings()
+
+        XCTAssertEqual(
+            try displayedSeconds("queue-timeout-value"), stored.queueTimeout,
+            "The queue timeout slider should show what GET /api/settings/call returned"
+        )
+        XCTAssertEqual(
+            try displayedSeconds("voicemail-max-value"), stored.voicemailMax,
+            "The voicemail length slider should show what GET /api/settings/call returned"
         )
     }
 
-    func testCallSettingsHasSliders() {
-        navigateToAdminSettingsScreen("admin-call-settings")
+    /// Saving a call setting must change the stored setting.
+    ///
+    /// This replaces a `testCallSettingsHasSaveButton` that asserted only that
+    /// the button existed. It existed throughout the whole period in which
+    /// tapping it sent `PUT /api/settings/call` and got a 404 back, so the
+    /// assertion stayed green while the screen could not save anything at all
+    /// (#1717) — and it failed in the slowest possible way, timing out after
+    /// 42s and ejecting an unrelated PR from the merge queue.
+    func testCallSettingsSavePersists() throws {
+        let before = try callSettingsFromServer()
+        try openCallSettings()
 
-        let view = find("call-settings-view")
-        guard view.waitForExistence(timeout: 10) else { return }
+        // Drive the slider to whichever end of its range the server is NOT at,
+        // so a save that quietly does nothing cannot satisfy the assertion.
+        let slider = scrollToVisible("queue-timeout-slider")
+        XCTAssertTrue(slider.isHittable, "The queue timeout slider should be reachable on screen")
+        let midpoint = (AdminCallSettings.minSeconds + AdminCallSettings.maxSeconds) / 2
+        slider.adjust(toNormalizedSliderPosition: before.queueTimeout > midpoint ? 0 : 1)
 
-        let ringTimeout = scrollToFind("ring-timeout-slider")
-        XCTAssertTrue(ringTimeout.exists, "Ring timeout slider should exist")
+        let pending = try displayedSeconds("queue-timeout-value")
+        XCTAssertNotEqual(
+            pending, before.queueTimeout,
+            "The slider adjustment must change the pending value, or the save assertion below proves nothing"
+        )
 
-        let maxDuration = scrollToFind("max-duration-slider")
-        XCTAssertTrue(maxDuration.exists, "Max duration slider should exist")
+        let saveButton = scrollToVisible("call-settings-save-button")
+        XCTAssertTrue(saveButton.isHittable, "The Save button should be reachable on screen")
+        saveButton.tap()
 
-        let parallelRing = scrollToFind("parallel-ring-slider")
-        XCTAssertTrue(parallelRing.exists, "Parallel ring slider should exist")
+        let persisted = try waitForStoredQueueTimeout(pending)
+        XCTAssertEqual(
+            persisted, pending,
+            "Saving should store the queue timeout the screen shows; the server holds \(persisted)"
+        )
+        XCTAssertFalse(
+            find("call-settings-error").exists,
+            "A successful save should not leave an error on the screen"
+        )
     }
 
-    func testCallSettingsHasSaveButton() {
-        navigateToAdminSettingsScreen("admin-call-settings")
+    // MARK: - Call Settings Helpers
 
-        let saveButton = scrollToFind("call-settings-save-button")
-        XCTAssertTrue(saveButton.exists, "Save button should exist in call settings")
+    /// The server's two call settings — the whole of `callSettingsSchema`.
+    private struct AdminCallSettings {
+        /// The range the server clamps both values to (`callSettingsSchema`).
+        static let minSeconds = 30
+        static let maxSeconds = 300
+
+        let queueTimeout: Int
+        let voicemailMax: Int
+    }
+
+    private enum CallSettingsProbeError: Error {
+        /// Thrown, not skipped: an unreadable screen or response is a failure of
+        /// this test, and `XCTSkip` would report it as a test nobody ran.
+        case unreadable(String)
+    }
+
+    /// Open the screen and wait for its load to finish.
+    ///
+    /// `call-settings-view` is on the Form itself, so it exists while the Form
+    /// is showing only a ProgressView — waiting on it does not mean a single
+    /// control has rendered. The value label does: it is inside the section
+    /// that replaces the ProgressView when `GET /api/settings/call` returns.
+    private func openCallSettings(file: StaticString = #filePath, line: UInt = #line) throws {
+        navigateToAdminSettingsScreen("admin-call-settings")
+        guard find("queue-timeout-value").waitForExistence(timeout: 20) else {
+            XCTFail("Call settings should finish loading and render its controls", file: file, line: line)
+            throw CallSettingsProbeError.unreadable("call settings never rendered")
+        }
+    }
+
+    /// `GET /api/settings/call`, signed as the test admin.
+    private func callSettingsFromServer(
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> AdminCallSettings {
+        guard let data = TestAdminAPI.send("GET", "/api/settings/call", baseURL: testHubURL,
+                                          file: file, line: line),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let queueTimeout = json["queueTimeoutSeconds"] as? Int,
+              let voicemailMax = json["voicemailMaxSeconds"] as? Int else {
+            throw CallSettingsProbeError.unreadable("GET /api/settings/call returned no call settings")
+        }
+        return AdminCallSettings(queueTimeout: queueTimeout, voicemailMax: voicemailMax)
+    }
+
+    /// Poll `GET /api/settings/call` until the queue timeout reaches `expected`,
+    /// returning whatever it holds when the wait runs out. The Save button
+    /// fires its request without awaiting it, so a single read right after the
+    /// tap races the save.
+    private func waitForStoredQueueTimeout(
+        _ expected: Int, timeout: TimeInterval = 15,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> Int {
+        let deadline = Date().addingTimeInterval(timeout)
+        var seen = try callSettingsFromServer(file: file, line: line).queueTimeout
+        while seen != expected, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.5)
+            seen = try callSettingsFromServer(file: file, line: line).queueTimeout
+        }
+        return seen
+    }
+
+    /// The seconds the screen is showing for one slider, read off its value
+    /// label — `admin_seconds_unit` renders 90 as "90s".
+    private func displayedSeconds(
+        _ identifier: String, file: StaticString = #filePath, line: UInt = #line
+    ) throws -> Int {
+        let label = scrollToFind(identifier, timeout: 10)
+        guard label.exists, let seconds = Int(label.label.filter(\.isNumber)) else {
+            let shown = label.exists ? label.label : "<absent>"
+            XCTFail("\(identifier) should show a number of seconds, showed \(shown)", file: file, line: line)
+            throw CallSettingsProbeError.unreadable(identifier)
+        }
+        return seconds
     }
 
     // MARK: - IVR Languages

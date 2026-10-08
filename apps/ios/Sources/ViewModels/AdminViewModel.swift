@@ -181,10 +181,31 @@ final class AdminViewModel {
 
     // MARK: - Call Settings State
 
-    /// Current call routing configuration.
-    var callSettings: ClientCallSettings = ClientCallSettings(
-        ringTimeout: 30, maxDuration: 60, parallelRingCount: 5
-    )
+    /// The server's call settings are exactly two values, both in seconds and
+    /// both clamped to 30...300 server-side — `callSettingsSchema` in
+    /// `packages/protocol/schemas/settings.ts`, surfaced to Swift as the
+    /// generated `CallSettings`. They are held here as two `Int`s because the
+    /// generated struct's fields are `let` and optional: this is the screen's
+    /// editable state, converted to and from `CallSettings` at the wire
+    /// boundary and never a second description of the wire shape.
+    ///
+    /// They replace a hand-written `ClientCallSettings { ringTimeout,
+    /// maxDuration, parallelRingCount }`, which named three settings the server
+    /// has never had. `GET /api/settings/call` could not decode into it, so the
+    /// screen showed hardcoded defaults behind an error banner, and the save
+    /// went to `PUT /api/settings/call` — a route that does not exist, answering
+    /// 404 on every attempt. See #1717.
+    var queueTimeoutSeconds: Int = AdminViewModel.defaultQueueTimeoutSeconds
+    var voicemailMaxSeconds: Int = AdminViewModel.defaultVoicemailMaxSeconds
+
+    /// Shown when the server has not stored a value yet; the same defaults the
+    /// server's own settings service falls back to.
+    static let defaultQueueTimeoutSeconds = 90
+    static let defaultVoicemailMaxSeconds = 120
+
+    /// The range both sliders span, matching the server's clamp. A value
+    /// outside it is rejected by `callSettingsSchema` before it is stored.
+    static let callSecondsRange: ClosedRange<Double> = 30...300
 
     /// Whether call settings are loading.
     var isLoadingCallSettings: Bool = false
@@ -734,11 +755,11 @@ final class AdminViewModel {
         errorMessage = nil
 
         do {
-            let settings: ClientCallSettings = try await apiService.request(
+            let settings: CallSettings = try await apiService.request(
                 method: "GET",
                 path: "/api/settings/call"
             )
-            callSettings = settings
+            apply(settings)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -747,17 +768,29 @@ final class AdminViewModel {
     }
 
     /// Save call settings to the API.
+    ///
+    /// `PATCH`, which is the only write method the server mounts on this path
+    /// (`settings.patch('/call', ...)`); the `PUT` this used to send answered
+    /// 404, so no call setting entered from iOS was ever stored.
+    ///
+    /// The route answers with the stored settings after its own 30...300 clamp,
+    /// so the response is applied back onto the sliders: what the screen shows
+    /// afterwards is what the server actually holds, not what was requested.
     func saveCallSettings() async {
         isSavingCallSettings = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            try await apiService.request(
-                method: "PUT",
+            let stored: CallSettings = try await apiService.request(
+                method: "PATCH",
                 path: "/api/settings/call",
-                body: callSettings
+                body: CallSettings(
+                    queueTimeoutSeconds: queueTimeoutSeconds,
+                    voicemailMaxSeconds: voicemailMaxSeconds
+                )
             )
+            apply(stored)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
@@ -771,6 +804,13 @@ final class AdminViewModel {
         }
 
         isSavingCallSettings = false
+    }
+
+    /// Adopt a server copy of the call settings, keeping the current value for
+    /// any field the server has not stored.
+    private func apply(_ settings: CallSettings) {
+        queueTimeoutSeconds = settings.queueTimeoutSeconds ?? queueTimeoutSeconds
+        voicemailMaxSeconds = settings.voicemailMaxSeconds ?? voicemailMaxSeconds
     }
 
     // MARK: - IVR Languages
