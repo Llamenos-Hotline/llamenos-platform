@@ -357,19 +357,11 @@ struct ClientSpamSettings: Codable, Sendable {
 }
 
 // MARK: - System Health
-// Client-only: generated `HealthResponse` has different shape (checks array, not named services).
+// The API payload decodes into the protocol-generated `SystemHealthResponse`
+// (packages/protocol/schemas/system.ts → generated Types.swift). The types below
+// are display models that SystemHealthView maps each response section onto.
 
-/// System health dashboard data from the API.
-struct SystemHealth: Codable, Sendable {
-    let server: ServiceHealthStatus
-    let services: ServiceHealthStatus
-    let calls: ServiceHealthStatus
-    let storage: ServiceHealthStatus
-    let backup: ServiceHealthStatus
-    let volunteers: ServiceHealthStatus
-}
-
-/// Status of an individual service or subsystem.
+/// Status of an individual service or subsystem (display model for health cards).
 struct ServiceHealthStatus: Codable, Sendable {
     let name: String
     let status: String
