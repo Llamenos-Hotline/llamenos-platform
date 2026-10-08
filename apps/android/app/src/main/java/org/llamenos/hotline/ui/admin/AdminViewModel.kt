@@ -18,29 +18,29 @@ import org.llamenos.hotline.model.AuditLogResponse
 import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.BanListResponse
 import org.llamenos.hotline.model.BulkBanRequest
-import org.llamenos.hotline.model.CallSettingsRequest
-import org.llamenos.hotline.model.CallSettingsResponse
+import org.llamenos.hotline.model.CallSettings
 import org.llamenos.hotline.model.CreateInviteRequest
 import org.llamenos.hotline.model.CreateReportCategoryRequest
-import org.llamenos.hotline.model.CreateShiftRequest
 import org.llamenos.hotline.model.CreateUserRequest
 import org.llamenos.hotline.model.CreateUserResponse
 import org.llamenos.hotline.model.CustomFieldDef
 import org.llamenos.hotline.model.CustomFieldsResponse
-import org.llamenos.hotline.model.FallbackGroupRequest
 import org.llamenos.hotline.model.Invite
 import org.llamenos.hotline.model.InvitesListResponse
-import org.llamenos.hotline.model.IvrLanguagesRequest
-import org.llamenos.hotline.model.IvrLanguagesResponse
-import org.llamenos.hotline.model.AdminShiftDetail
-import org.llamenos.hotline.model.AdminShiftsListResponse
+import org.llamenos.hotline.model.IvrLanguages
+import org.llamenos.hotline.model.ShiftResponse
+import org.llamenos.hotline.model.ShiftsListResponse
+import org.llamenos.protocol.CreateShiftBody
+import org.llamenos.protocol.FallbackGroup
+import org.llamenos.protocol.UpdateShiftBody
 import org.llamenos.hotline.model.ReportCategory
 import org.llamenos.hotline.model.ReportTypesResponse
-import org.llamenos.hotline.model.SpamSettingsRequest
-import org.llamenos.hotline.model.SpamSettingsResponse
+import org.llamenos.hotline.model.SpamSettings
 import org.llamenos.hotline.model.SystemHealth
-import org.llamenos.hotline.model.TelephonySettingsRequest
-import org.llamenos.hotline.model.TelephonySettingsResponse
+import org.llamenos.hotline.model.ConfigureProviderRequest
+import org.llamenos.hotline.model.TelephonyProviderConfig
+import org.llamenos.hotline.model.TelephonyProviderType
+import org.llamenos.hotline.model.TranscriptionSettings
 import org.llamenos.hotline.model.UpdateCustomFieldsRequest
 import org.llamenos.hotline.model.User
 import org.llamenos.hotline.model.UsersListResponse
@@ -80,6 +80,26 @@ data class RetentionCategoryEntry(
     var retentionDays: Int?,
     val minRetentionDays: Int? = null,
 )
+
+/**
+ * Defaults and ranges for the settings the server really has, mirroring the
+ * fallbacks and the clamps in `packages/protocol/schemas/settings.ts` and
+ * `apps/worker/services/settings.ts`. A value outside one of these ranges is
+ * rejected by the validator before anything is stored.
+ */
+const val DEFAULT_QUEUE_TIMEOUT_SECONDS = 90
+const val DEFAULT_VOICEMAIL_MAX_SECONDS = 120
+const val DEFAULT_MAX_CALLS_PER_MINUTE = 3
+const val DEFAULT_BLOCK_DURATION_MINUTES = 30
+
+/** `callSettingsSchema`: both values are `.int().min(30).max(300)`. */
+val CALL_SECONDS_RANGE = 30..300
+
+/** `spamSettingsSchema`: `maxCallsPerMinute` is `.min(1).max(100)`. */
+val MAX_CALLS_PER_MINUTE_RANGE = 1..100
+
+/** `spamSettingsSchema`: `blockDurationMinutes` is `.min(1).max(1440)`. */
+val BLOCK_DURATION_MINUTES_RANGE = 1..1440
 
 data class AdminUiState(
     val selectedTab: AdminTab = AdminTab.VOLUNTEERS,
@@ -126,13 +146,14 @@ data class AdminUiState(
     val editingField: CustomFieldDef? = null,
 
     // Admin shifts
-    val adminShifts: List<AdminShiftDetail> = emptyList(),
+    val adminShifts: List<ShiftResponse> = emptyList(),
     val isLoadingAdminShifts: Boolean = false,
     val adminShiftsError: String? = null,
     val showCreateShiftDialog: Boolean = false,
-    val editingShift: AdminShiftDetail? = null,
+    val editingShift: ShiftResponse? = null,
 
-    // Admin settings (transcription)
+    // Admin settings (transcription) — `globalEnabled` / `allowUserOptOut` of
+    // `transcriptionSettingsSchema`, which is the whole of what the server has.
     val transcriptionEnabled: Boolean = false,
     val transcriptionOptOut: Boolean = false,
     val isLoadingSettings: Boolean = false,
@@ -144,30 +165,41 @@ data class AdminUiState(
     val categoriesError: String? = null,
     val showAddCategoryDialog: Boolean = false,
 
-    // Telephony settings
-    val telephonyProvider: String = "twilio",
+    // Telephony settings. The screen's editable state, converted to and from
+    // `TelephonyProviderConfig` (read) and `ConfigureProviderRequest` (write)
+    // at the wire boundary — two different shapes, so neither is re-described
+    // here. `telephonyProvider` is the generated enum, so the picker offers
+    // exactly the eight providers the server accepts rather than five.
+    val telephonyProvider: TelephonyProviderType = TelephonyProviderType.Twilio,
     val telephonyAccountSid: String = "",
     val telephonyAuthToken: String = "",
     val telephonyPhoneNumber: String = "",
     val isLoadingTelephony: Boolean = false,
     val telephonyError: String? = null,
 
-    // Call settings
-    val ringTimeout: Int = 30,
-    val maxCallDuration: Int = 60,
-    val parallelRingCount: Int = 3,
+    // Call settings — the two the server has (`callSettingsSchema`), both in
+    // seconds and both clamped to 30...300 server-side. They replace a ring
+    // timeout, a maximum call duration and a parallel ring count: three
+    // settings with no server field, no storage and no effect.
+    val queueTimeoutSeconds: Int = DEFAULT_QUEUE_TIMEOUT_SECONDS,
+    val voicemailMaxSeconds: Int = DEFAULT_VOICEMAIL_MAX_SECONDS,
     val isLoadingCallSettings: Boolean = false,
     val callSettingsError: String? = null,
 
-    // IVR languages
-    val ivrLanguages: Map<String, Boolean> = emptyMap(),
+    // IVR languages, in the order callers hear them — position decides the
+    // keypad digit, which a Map<String, Boolean> could not express.
+    val ivrEnabledLanguages: List<String> = emptyList(),
     val isLoadingIvrLanguages: Boolean = false,
     val ivrLanguagesError: String? = null,
 
-    // Spam settings
-    val maxCallsPerHour: Int = 10,
+    // Spam settings — the four of `spamSettingsSchema`. The rate limit is per
+    // MINUTE (it was labelled per hour), the block duration was never offered,
+    // and the known-number bypass the screen showed does not exist server-side:
+    // it promised to exempt repeat callers from the CAPTCHA and did nothing.
     val voiceCaptchaEnabled: Boolean = false,
-    val knownNumberBypass: Boolean = true,
+    val rateLimitEnabled: Boolean = true,
+    val maxCallsPerMinute: Int = DEFAULT_MAX_CALLS_PER_MINUTE,
+    val blockDurationMinutes: Int = DEFAULT_BLOCK_DURATION_MINUTES,
     val isLoadingSpamSettings: Boolean = false,
     val spamSettingsError: String? = null,
 
@@ -205,6 +237,43 @@ data class AdminUiState(
  * On an admin section screen the route carries [SECTION_ARG]; that section is
  * selected (and its data loaded) once, when the ViewModel is created.
  */
+// ══════════════════════════════════════════════════════════════════════════════
+// Applying a server copy of a settings group onto the screen state
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Every one of these routes answers with what it stored — after its own clamps
+// and, for telephony, after encrypting the credentials — so the control ends up
+// showing the stored value rather than the one that was dragged or typed. Each
+// field of the generated types is nullable (the schemas are all-optional input
+// shapes), and a field the server did not send keeps its current value rather
+// than resetting to a default.
+
+private fun AdminUiState.applying(settings: CallSettings): AdminUiState = copy(
+    queueTimeoutSeconds = settings.queueTimeoutSeconds ?: queueTimeoutSeconds,
+    voicemailMaxSeconds = settings.voicemailMaxSeconds ?: voicemailMaxSeconds,
+)
+
+private fun AdminUiState.applying(settings: TranscriptionSettings): AdminUiState = copy(
+    transcriptionEnabled = settings.globalEnabled ?: transcriptionEnabled,
+    transcriptionOptOut = settings.allowUserOptOut ?: transcriptionOptOut,
+)
+
+private fun AdminUiState.applying(settings: SpamSettings): AdminUiState = copy(
+    voiceCaptchaEnabled = settings.voiceCAPTCHAEnabled ?: voiceCaptchaEnabled,
+    rateLimitEnabled = settings.rateLimitEnabled ?: rateLimitEnabled,
+    maxCallsPerMinute = settings.maxCallsPerMinute ?: maxCallsPerMinute,
+    blockDurationMinutes = settings.blockDurationMinutes ?: blockDurationMinutes,
+)
+
+/** `null` means no provider is configured, which leaves the form empty. */
+private fun AdminUiState.applying(provider: TelephonyProviderConfig?): AdminUiState =
+    if (provider == null) this else copy(
+        telephonyProvider = provider.type,
+        telephonyAccountSid = provider.accountSid ?: "",
+        telephonyAuthToken = provider.authToken ?: "",
+        telephonyPhoneNumber = provider.phoneNumber ?: "",
+    )
+
 @HiltViewModel
 class AdminViewModel @Inject constructor(
     private val apiService: ApiService,
@@ -399,7 +468,7 @@ class AdminViewModel @Inject constructor(
             try {
                 val response = apiService.request<AuditLogResponse>(
                     "GET",
-                    "/api/admin/audit?page=$page&limit=50",
+                    apiService.hp("/api/audit") + "?page=$page&limit=50",
                 )
 
                 _uiState.update {
@@ -673,8 +742,8 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAdminShifts = true, adminShiftsError = null) }
             try {
-                val response = apiService.request<AdminShiftsListResponse>(
-                    "GET", "/api/admin/shifts",
+                val response = apiService.request<ShiftsListResponse>(
+                    "GET", apiService.hp("/api/shifts"),
                 )
                 _uiState.update {
                     it.copy(adminShifts = response.shifts, isLoadingAdminShifts = false)
@@ -694,7 +763,7 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showCreateShiftDialog = true, editingShift = null) }
     }
 
-    fun showEditShiftDialog(shift: AdminShiftDetail) {
+    fun showEditShiftDialog(shift: ShiftResponse) {
         _uiState.update { it.copy(showCreateShiftDialog = true, editingShift = shift) }
     }
 
@@ -702,14 +771,30 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null) }
     }
 
-    fun createShift(name: String, startTime: String, endTime: String, volunteerIds: List<String> = emptyList()) {
+    /**
+     * Create a new shift. [days] is the 0=Sun..6=Sat recurrence (see
+     * [org.llamenos.hotline.util.DateFormatUtils.shortDayName]) — always required,
+     * since the server has no default for a brand-new shift.
+     */
+    fun createShift(
+        name: String,
+        startTime: String,
+        endTime: String,
+        days: List<Int>,
+        volunteerIds: List<String> = emptyList(),
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null, adminShiftsError = null) }
             try {
-                val request = CreateShiftRequest(
-                    name = name, startTime = startTime, endTime = endTime, volunteerIds = volunteerIds,
+                val request = CreateShiftBody(
+                    id = java.util.UUID.randomUUID().toString(),
+                    encryptedName = name,
+                    startTime = startTime,
+                    endTime = endTime,
+                    days = days.map { it.toLong() },
+                    userPubkeys = volunteerIds,
                 )
-                apiService.requestNoContent("POST", "/api/admin/shifts", request)
+                apiService.requestNoContent("POST", apiService.hp("/api/shifts"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -719,14 +804,37 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun updateShift(shiftId: String, name: String, startTime: String, endTime: String, volunteerIds: List<String> = emptyList()) {
+    /**
+     * Update an existing shift. [days] is always sent explicitly (never defaulted) —
+     * the edit dialog pre-fills it from the shift being edited, so saving an unrelated
+     * field (name, time) never silently rewrites recurrence (issue #1149).
+     * [volunteerIds] defaults to null (omitted from the request) so that saving from
+     * this dialog — which doesn't surface volunteer assignment — never wipes the
+     * existing roster; volunteer assignment happens via [ShiftDetailViewModel].
+     */
+    fun updateShift(
+        shiftId: String,
+        name: String,
+        startTime: String,
+        endTime: String,
+        days: List<Int>,
+        volunteerIds: List<String>? = null,
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(showCreateShiftDialog = false, editingShift = null, adminShiftsError = null) }
             try {
-                val request = CreateShiftRequest(
-                    name = name, startTime = startTime, endTime = endTime, volunteerIds = volunteerIds,
+                val request = UpdateShiftBody(
+                    encryptedName = name,
+                    startTime = startTime,
+                    endTime = endTime,
+                    days = days.map { it.toLong() },
+                    userPubkeys = volunteerIds,
                 )
-                apiService.requestNoContent("PUT", "/api/admin/shifts/$shiftId", request)
+                // PATCH, the only update verb the server mounts on this path
+                // (`shifts.patch('/:id')`). The `PUT` sent here before answered
+                // 404, so no shift edit from Android was ever stored — the same
+                // defect as the nine admin settings screens in #1724.
+                apiService.requestNoContent("PATCH", apiService.hp("/api/shifts/$shiftId"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -740,7 +848,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
-                apiService.requestNoContent("DELETE", "/api/admin/shifts/$shiftId")
+                apiService.requestNoContent("DELETE", apiService.hp("/api/shifts/$shiftId"))
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -754,8 +862,8 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
-                val request = FallbackGroupRequest(volunteerIds = volunteerIds)
-                apiService.requestNoContent("PUT", "/api/admin/shifts/fallback", request)
+                val request = FallbackGroup(userPubkeys = volunteerIds)
+                apiService.requestNoContent("PUT", apiService.hp("/api/shifts/fallback"), request)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(adminShiftsError = e.message ?: "Failed to set fallback group")
@@ -776,21 +884,24 @@ class AdminViewModel @Inject constructor(
         loadSpamSettings()
     }
 
+    /**
+     * Load the hub's transcription settings.
+     *
+     * `GET /api/settings/transcription` — the path the server mounts. This used
+     * to read `/api/admin/settings`, which does not exist: the worker mounts
+     * only `/admin/security-events`, `/admin/devices` and `/admin/events` under
+     * that prefix, so the request 404'd and both switches sat at `false`
+     * whatever the hub actually had configured (#1724).
+     */
     private fun loadTranscriptionSettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSettings = true, settingsError = null) }
             try {
-                val response = apiService.request<Map<String, Any>>(
+                val stored = apiService.request<TranscriptionSettings>(
                     "GET",
-                    "/api/admin/settings",
+                    "/api/settings/transcription",
                 )
-                _uiState.update {
-                    it.copy(
-                        transcriptionEnabled = response["transcriptionEnabled"] as? Boolean ?: false,
-                        transcriptionOptOut = response["allowVolunteerOptOut"] as? Boolean ?: false,
-                        isLoadingSettings = false,
-                    )
-                }
+                _uiState.update { it.applying(stored).copy(isLoadingSettings = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoadingSettings = false, settingsError = e.message)
@@ -799,16 +910,23 @@ class AdminViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Turn transcription on or off for the whole hub.
+     *
+     * `PATCH /api/settings/transcription`, the only write method the server
+     * mounts, with the route's own response applied back onto the switch — so
+     * it ends up showing what was stored rather than what was tapped.
+     */
     fun toggleTranscription(enabled: Boolean) {
         viewModelScope.launch {
             _uiState.update { it.copy(settingsError = null) }
             try {
-                apiService.requestNoContent(
-                    "PUT",
-                    "/api/admin/settings/transcription",
-                    mapOf("enabled" to enabled),
+                val stored = apiService.request<TranscriptionSettings>(
+                    "PATCH",
+                    "/api/settings/transcription",
+                    TranscriptionSettings(globalEnabled = enabled),
                 )
-                _uiState.update { it.copy(transcriptionEnabled = enabled) }
+                _uiState.update { it.applying(stored) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(settingsError = e.message ?: "Failed to update transcription")
@@ -821,12 +939,12 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(settingsError = null) }
             try {
-                apiService.requestNoContent(
-                    "PUT",
-                    "/api/admin/settings/transcription",
-                    mapOf("allowVolunteerOptOut" to allowed),
+                val stored = apiService.request<TranscriptionSettings>(
+                    "PATCH",
+                    "/api/settings/transcription",
+                    TranscriptionSettings(allowUserOptOut = allowed),
                 )
-                _uiState.update { it.copy(transcriptionOptOut = allowed) }
+                _uiState.update { it.applying(stored) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(settingsError = e.message ?: "Failed to update opt-out setting")
@@ -897,22 +1015,25 @@ class AdminViewModel @Inject constructor(
 
     // ---- Telephony Settings ----
 
+    /**
+     * Load the configured telephony provider.
+     *
+     * `GET /api/settings/telephony-provider` — the path the server mounts and
+     * the one the desktop client reads. `/api/settings/telephony` has never
+     * existed and answers 404 on every verb, so this screen showed an empty
+     * form however the hub was configured (#1724).
+     *
+     * The route answers a bare `null` when no provider has been configured yet,
+     * which is the empty form and not an error.
+     */
     fun loadTelephonySettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingTelephony = true, telephonyError = null) }
             try {
-                val response = apiService.request<TelephonySettingsResponse>(
-                    "GET", "/api/settings/telephony",
+                val stored = apiService.request<TelephonyProviderConfig?>(
+                    "GET", "/api/settings/telephony-provider",
                 )
-                _uiState.update {
-                    it.copy(
-                        telephonyProvider = response.provider,
-                        telephonyAccountSid = response.accountSid,
-                        telephonyAuthToken = response.authToken,
-                        telephonyPhoneNumber = response.phoneNumber,
-                        isLoadingTelephony = false,
-                    )
-                }
+                _uiState.update { it.applying(stored).copy(isLoadingTelephony = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -924,7 +1045,7 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun updateTelephonyProvider(provider: String) {
+    fun updateTelephonyProvider(provider: TelephonyProviderType) {
         _uiState.update { it.copy(telephonyProvider = provider) }
     }
 
@@ -940,18 +1061,42 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(telephonyPhoneNumber = value) }
     }
 
+    /**
+     * Save the telephony provider.
+     *
+     * `POST /api/provider-setup/configure`, which is the only write path for a
+     * provider: `PATCH /api/settings/telephony-provider` is mounted but answers
+     * 400 "updateTelephonyProvider is deprecated — use POST
+     * /provider-setup/configure which encrypts credentials at rest". The
+     * credentials travel in the request's `credentials` map and the service
+     * encrypts them before storing.
+     *
+     * That route answers `{ ok: true }` rather than the stored provider, so the
+     * screen re-reads it — which, for this screen, is the only way to see that
+     * a credential was accepted.
+     */
     fun saveTelephonySettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(telephonyError = null) }
             try {
                 val state = _uiState.value
-                val request = TelephonySettingsRequest(
-                    provider = state.telephonyProvider,
-                    accountSid = state.telephonyAccountSid,
-                    authToken = state.telephonyAuthToken,
-                    phoneNumber = state.telephonyPhoneNumber,
+                val credentials = buildMap {
+                    if (state.telephonyAccountSid.isNotEmpty()) put("accountSid", state.telephonyAccountSid)
+                    if (state.telephonyAuthToken.isNotEmpty()) put("authToken", state.telephonyAuthToken)
+                }
+                apiService.requestNoContent(
+                    "POST",
+                    "/api/provider-setup/configure",
+                    ConfigureProviderRequest(
+                        provider = state.telephonyProvider,
+                        credentials = credentials.ifEmpty { null },
+                        phoneNumber = state.telephonyPhoneNumber.ifEmpty { null },
+                    ),
                 )
-                apiService.requestNoContent("PUT", "/api/settings/telephony", request)
+                val stored = apiService.request<TelephonyProviderConfig?>(
+                    "GET", "/api/settings/telephony-provider",
+                )
+                _uiState.update { it.applying(stored) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(telephonyError = e.message ?: "Failed to save telephony settings")
@@ -966,17 +1111,10 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingCallSettings = true, callSettingsError = null) }
             try {
-                val response = apiService.request<CallSettingsResponse>(
+                val stored = apiService.request<CallSettings>(
                     "GET", "/api/settings/call",
                 )
-                _uiState.update {
-                    it.copy(
-                        ringTimeout = response.ringTimeout,
-                        maxCallDuration = response.maxCallDuration,
-                        parallelRingCount = response.parallelRingCount,
-                        isLoadingCallSettings = false,
-                    )
-                }
+                _uiState.update { it.applying(stored).copy(isLoadingCallSettings = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -988,29 +1126,37 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun updateRingTimeout(value: Int) {
-        _uiState.update { it.copy(ringTimeout = value) }
+    fun updateQueueTimeout(value: Int) {
+        _uiState.update { it.copy(queueTimeoutSeconds = value) }
     }
 
-    fun updateMaxCallDuration(value: Int) {
-        _uiState.update { it.copy(maxCallDuration = value) }
+    fun updateVoicemailMax(value: Int) {
+        _uiState.update { it.copy(voicemailMaxSeconds = value) }
     }
 
-    fun updateParallelRingCount(value: Int) {
-        _uiState.update { it.copy(parallelRingCount = value) }
-    }
-
+    /**
+     * Save the hub's two call settings.
+     *
+     * `PATCH`, the only write method the server mounts on this path
+     * (`settings.patch('/call')`); the `PUT` sent here before answered 404, so
+     * no call setting entered on Android has ever been stored. The route
+     * answers with the settings after its own 30...300 clamp, so the response
+     * is applied back onto the sliders.
+     */
     fun saveCallSettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(callSettingsError = null) }
             try {
                 val state = _uiState.value
-                val request = CallSettingsRequest(
-                    ringTimeout = state.ringTimeout,
-                    maxCallDuration = state.maxCallDuration,
-                    parallelRingCount = state.parallelRingCount,
+                val stored = apiService.request<CallSettings>(
+                    "PATCH",
+                    "/api/settings/call",
+                    CallSettings(
+                        queueTimeoutSeconds = state.queueTimeoutSeconds,
+                        voicemailMaxSeconds = state.voicemailMaxSeconds,
+                    ),
                 )
-                apiService.requestNoContent("PUT", "/api/settings/call", request)
+                _uiState.update { it.applying(stored) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(callSettingsError = e.message ?: "Failed to save call settings")
@@ -1025,11 +1171,14 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingIvrLanguages = true, ivrLanguagesError = null) }
             try {
-                val response = apiService.request<IvrLanguagesResponse>(
+                val stored = apiService.request<IvrLanguages>(
                     "GET", "/api/settings/ivr-languages",
                 )
                 _uiState.update {
-                    it.copy(ivrLanguages = response.languages, isLoadingIvrLanguages = false)
+                    it.copy(
+                        ivrEnabledLanguages = stored.enabledLanguages,
+                        isLoadingIvrLanguages = false,
+                    )
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -1042,18 +1191,43 @@ class AdminViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Enable or disable one IVR language.
+     *
+     * Enabling appends, so a newly enabled language takes the last keypad
+     * position instead of displacing the ones callers already know.
+     */
     fun toggleIvrLanguage(code: String, enabled: Boolean) {
-        _uiState.update {
-            it.copy(ivrLanguages = it.ivrLanguages + (code to enabled))
+        _uiState.update { state ->
+            val next = when {
+                enabled && code !in state.ivrEnabledLanguages -> state.ivrEnabledLanguages + code
+                !enabled -> state.ivrEnabledLanguages - code
+                else -> state.ivrEnabledLanguages
+            }
+            state.copy(ivrEnabledLanguages = next)
         }
     }
 
+    /**
+     * Save the hub's IVR languages.
+     *
+     * `PATCH`, the only write method on this path; the `PUT` sent before
+     * answered 404. The body is the ordered `enabledLanguages` array the server
+     * stores — the `{"languages": {code: bool}}` map sent before is rejected
+     * with 400 "expected array, received undefined" even on the right verb. The
+     * route validates the list against the configured provider's voice catalog
+     * and answers with what it stored, so the response is applied back.
+     */
     fun saveIvrLanguages() {
         viewModelScope.launch {
             _uiState.update { it.copy(ivrLanguagesError = null) }
             try {
-                val request = IvrLanguagesRequest(languages = _uiState.value.ivrLanguages)
-                apiService.requestNoContent("PUT", "/api/settings/ivr-languages", request)
+                val stored = apiService.request<IvrLanguages>(
+                    "PATCH",
+                    "/api/settings/ivr-languages",
+                    IvrLanguages(enabledLanguages = _uiState.value.ivrEnabledLanguages),
+                )
+                _uiState.update { it.copy(ivrEnabledLanguages = stored.enabledLanguages) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(ivrLanguagesError = e.message ?: "Failed to save IVR languages")
@@ -1068,17 +1242,10 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSpamSettings = true, spamSettingsError = null) }
             try {
-                val response = apiService.request<SpamSettingsResponse>(
+                val stored = apiService.request<SpamSettings>(
                     "GET", "/api/settings/spam",
                 )
-                _uiState.update {
-                    it.copy(
-                        maxCallsPerHour = response.maxCallsPerHour,
-                        voiceCaptchaEnabled = response.voiceCaptchaEnabled,
-                        knownNumberBypass = response.knownNumberBypass,
-                        isLoadingSpamSettings = false,
-                    )
-                }
+                _uiState.update { it.applying(stored).copy(isLoadingSpamSettings = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -1090,29 +1257,45 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun updateMaxCallsPerHour(value: Int) {
-        _uiState.update { it.copy(maxCallsPerHour = value) }
+    fun updateMaxCallsPerMinute(value: Int) {
+        _uiState.update { it.copy(maxCallsPerMinute = value) }
+    }
+
+    fun updateBlockDuration(value: Int) {
+        _uiState.update { it.copy(blockDurationMinutes = value) }
     }
 
     fun toggleVoiceCaptcha(enabled: Boolean) {
         _uiState.update { it.copy(voiceCaptchaEnabled = enabled) }
     }
 
-    fun toggleKnownNumberBypass(enabled: Boolean) {
-        _uiState.update { it.copy(knownNumberBypass = enabled) }
+    fun toggleRateLimit(enabled: Boolean) {
+        _uiState.update { it.copy(rateLimitEnabled = enabled) }
     }
 
+    /**
+     * Save the hub's spam mitigation settings.
+     *
+     * `PATCH`, the only write method the server mounts on this path; the `PUT`
+     * sent before answered 404. The route answers with the stored settings and
+     * they are applied back onto the controls.
+     */
     fun saveSpamSettings() {
         viewModelScope.launch {
             _uiState.update { it.copy(spamSettingsError = null) }
             try {
                 val state = _uiState.value
-                val request = SpamSettingsRequest(
-                    maxCallsPerHour = state.maxCallsPerHour,
-                    voiceCaptchaEnabled = state.voiceCaptchaEnabled,
-                    knownNumberBypass = state.knownNumberBypass,
+                val stored = apiService.request<SpamSettings>(
+                    "PATCH",
+                    "/api/settings/spam",
+                    SpamSettings(
+                        blockDurationMinutes = state.blockDurationMinutes,
+                        maxCallsPerMinute = state.maxCallsPerMinute,
+                        rateLimitEnabled = state.rateLimitEnabled,
+                        voiceCAPTCHAEnabled = state.voiceCaptchaEnabled,
+                    ),
                 )
-                apiService.requestNoContent("PUT", "/api/settings/spam", request)
+                _uiState.update { it.applying(stored) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(spamSettingsError = e.message ?: "Failed to save spam settings")

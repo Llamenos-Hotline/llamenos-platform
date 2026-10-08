@@ -89,51 +89,15 @@ data class CreateUserResponse(
 )
 
 // ---- Shift Admin ----
-
-/**
- * Request body for creating/updating a shift.
- * Client-specific shape — uses volunteerIds and Int days.
- */
-@Serializable
-data class CreateShiftRequest(
-    val name: String,
-    val startTime: String,
-    val endTime: String,
-    val days: List<Int> = listOf(1, 2, 3, 4, 5),
-    val volunteerIds: List<String> = emptyList(),
-)
-
-/**
- * Detailed shift response including volunteer list (admin view).
- * Client-only type for the admin shift management UI.
- */
-@Serializable
-data class AdminShiftDetail(
-    val id: String,
-    val name: String,
-    val startTime: String,
-    val endTime: String,
-    val days: List<Int> = emptyList(),
-    val volunteers: List<org.llamenos.protocol.UserListResponseUser> = emptyList(),
-    val volunteerCount: Int = 0,
-)
-
-/**
- * Response from GET /api/admin/shifts listing all shifts (admin view).
- */
-@Serializable
-data class AdminShiftsListResponse(
-    val shifts: List<AdminShiftDetail>,
-)
-
-/**
- * Request to set the fallback ring group.
- * Client-specific shape — uses volunteerIds instead of userPubkeys.
- */
-@Serializable
-data class FallbackGroupRequest(
-    val volunteerIds: List<String>,
-)
+//
+// Admin shift CRUD (list/create/update/delete) uses the generated types directly —
+// org.llamenos.protocol.CreateShiftBody / UpdateShiftBody / FallbackGroup, plus the
+// ShiftResponse / ShiftsListResponse typealiases in ShiftModels.kt — rather than a
+// hand-written duplicate. The generated `Shift` has `encryptedName`/`userPubkeys`
+// where this file used to use `name`/`volunteerIds`; see the `Shift.name` and
+// `Shift.volunteerCount` extension properties in Extensions.kt for UI display.
+// (Previously diverged from the server schema entirely — same root cause as #1032
+// and #1046 — see issue #1149.)
 
 // ---- Custom Fields ----
 
@@ -182,86 +146,40 @@ data class CreateReportCategoryRequest(
     val name: String,
 )
 
-// ---- Telephony Settings ----
+// ---- Admin settings: telephony, call, IVR, transcription, spam ----
+//
+// All five screens are the generated types now. Each used to carry a
+// hand-written request/response pair here describing a shape the server does
+// not have, and each save went to a `PUT` the server does not mount (#1724):
+//
+//   TelephonySettingsRequest/Response{provider,accountSid,authToken,phoneNumber}
+//     GET/PUT /api/settings/telephony                    -> 404 on both verbs
+//     now: GET /api/settings/telephony-provider  (TelephonyProvider)
+//          POST /api/provider-setup/configure    (ConfigureProviderRequest)
+//   CallSettingsRequest/Response{ringTimeout,maxCallDuration,parallelRingCount}
+//     PUT /api/settings/call                             -> 404
+//     now: GET/PATCH /api/settings/call          (CallSettings)
+//     Those three settings do not exist server-side and never have; the two it
+//     does have are queueTimeoutSeconds and voicemailMaxSeconds.
+//   IvrLanguagesRequest/Response{languages:Map<String,Boolean>}
+//     PUT /api/settings/ivr-languages                    -> 404, and the map
+//     body is rejected 400 by the PATCH that is mounted: the server stores an
+//     ordered enabledLanguages array, where position picks the keypad digit.
+//     now: GET/PATCH /api/settings/ivr-languages (IvrLanguages)
+//   transcription, which had no model at all and used a path with no route:
+//     GET /api/admin/settings                            -> 404
+//     PUT /api/admin/settings/transcription               -> 404
+//     now: GET/PATCH /api/settings/transcription (TranscriptionSettings)
+//   SpamSettingsRequest/Response{maxCallsPerHour,voiceCaptchaEnabled,knownNumberBypass}
+//     PUT /api/settings/spam                             -> 404
+//     now: GET/PATCH /api/settings/spam          (SpamSettings), whose rate
+//     limit is per MINUTE, which also carries a block duration, and which has
+//     no known-number bypass at all.
 
-/**
- * Request body for PUT /api/settings/telephony.
- * Client-specific simplified shape.
- */
-@Serializable
-data class TelephonySettingsRequest(
-    val provider: String,
-    val accountSid: String,
-    val authToken: String,
-    val phoneNumber: String,
-)
-
-/**
- * Response from GET /api/settings/telephony.
- * Client-specific simplified shape.
- */
-@Serializable
-data class TelephonySettingsResponse(
-    val provider: String = "twilio",
-    val accountSid: String = "",
-    val authToken: String = "",
-    val phoneNumber: String = "",
-)
-
-// ---- Call Settings ----
-
-/**
- * Request body for PUT /api/settings/call.
- * Client-specific shape — the generated CallSettings has different field names.
- */
-@Serializable
-data class CallSettingsRequest(
-    val ringTimeout: Int,
-    val maxCallDuration: Int,
-    val parallelRingCount: Int,
-)
-
-/**
- * Response from GET /api/settings/call.
- * Client-specific shape.
- */
-@Serializable
-data class CallSettingsResponse(
-    val ringTimeout: Int = 30,
-    val maxCallDuration: Int = 60,
-    val parallelRingCount: Int = 3,
-)
-
-// ---- IVR Language Settings ----
-
-/**
- * IVR language settings — client uses Map<String, Boolean> toggle state.
- */
-@Serializable
-data class IvrLanguagesRequest(
-    val languages: Map<String, Boolean>,
-)
-
-@Serializable
-data class IvrLanguagesResponse(
-    val languages: Map<String, Boolean> = emptyMap(),
-)
-
-// ---- Spam Settings ----
-
-/**
- * Spam settings. Client-specific shape with non-nullable defaults.
- */
-@Serializable
-data class SpamSettingsRequest(
-    val maxCallsPerHour: Int,
-    val voiceCaptchaEnabled: Boolean,
-    val knownNumberBypass: Boolean,
-)
-
-@Serializable
-data class SpamSettingsResponse(
-    val maxCallsPerHour: Int = 10,
-    val voiceCaptchaEnabled: Boolean = false,
-    val knownNumberBypass: Boolean = true,
-)
+typealias TelephonyProviderConfig = org.llamenos.protocol.TelephonyProvider
+typealias ConfigureProviderRequest = org.llamenos.protocol.ConfigureProviderRequest
+typealias TelephonyProviderType = org.llamenos.protocol.SharedProviderType
+typealias CallSettings = org.llamenos.protocol.CallSettings
+typealias IvrLanguages = org.llamenos.protocol.IvrLanguages
+typealias TranscriptionSettings = org.llamenos.protocol.TranscriptionSettings
+typealias SpamSettings = org.llamenos.protocol.SpamSettings
