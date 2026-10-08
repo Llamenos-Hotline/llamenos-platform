@@ -739,7 +739,9 @@
     "keyUnavailable": "Ndudu ña nditaꞌvi nuu hub yóꞌo ta kúú koo nunaa nuu kaa yóꞌo.",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Couldn't load your hubs",
+    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again."
   },
   "ivr": {
     "selfAnnouncement": "Tu'un savi ndáto, chu̱ʼun [N].",

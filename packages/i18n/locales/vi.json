@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Không tải được các hub của bạn",
+    "membershipLoadFailedBody": "Máy chủ không cho biết bạn thuộc những hub nào, nên chưa thể hiển thị gì. Hãy kiểm tra kết nối và thử lại."
   },
   "identityLabel": "Identity",
   "import": {

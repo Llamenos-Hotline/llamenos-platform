@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "허브를 불러올 수 없습니다",
+    "membershipLoadFailedBody": "서버가 어느 허브에 소속되어 있는지 알려주지 않아 아직 아무것도 표시할 수 없습니다. 연결을 확인한 후 다시 시도하세요."
   },
   "identityLabel": "Identity",
   "import": {

@@ -13,7 +13,7 @@
 
 import { test, expect } from '@playwright/test'
 import {
-  loginAsAdmin,
+  useScenarioHub,
   TestIds,
   Timeouts,
   navigateAfterLogin,
@@ -29,17 +29,39 @@ import {
 } from './simulation-helpers'
 import { createUserViaApi } from './api-helpers'
 
-test.describe('Call Simulation', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page)
-  })
+/**
+ * Every simulation in this file targets ONE hub, explicitly.
+ *
+ * `/api/test-simulate/*` defaults `hubId` to `''` when none is given, which
+ * writes the call or conversation into the unscoped pseudo-hub. These specs
+ * used to rely on that matching the client, because the client had no active
+ * hub either: it chose one from `/api/config`'s roster, which on a
+ * freshly-reset backend is briefly empty, so `hp()` emitted unscoped paths and
+ * the two accidentally agreed. That is not a shape any deployment produces —
+ * real telephony resolves a hub from the dialled number — and once the active
+ * hub comes from the user's memberships (#1708) the client is always in a real
+ * hub, so the simulation has to name the same one.
+ *
+ * `useScenarioHub` creates a hub, grants the admin membership, pins the client
+ * to it and logs in; the returned id is what every simulate call below passes.
+ */
+async function simulationHub(
+  page: import('@playwright/test').Page,
+  request: import('@playwright/test').APIRequestContext,
+  name: string,
+): Promise<string> {
+  return useScenarioHub(page, request, name)
+}
 
+test.describe('Call Simulation', () => {
   test('simulated incoming call appears in call history', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-call-history')
     const callerNumber = uniqueCallerNumber()
 
     // Simulate an incoming call
     const { callId, status } = await simulateIncomingCall(request, {
       callerNumber,
+      hubId,
     })
     expect(callId).toBeTruthy()
     expect(status).toBe('ringing')
@@ -61,16 +83,20 @@ test.describe('Call Simulation', () => {
   })
 
   test('simulated incoming call can be answered and ended', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-answer-end')
     const callerNumber = uniqueCallerNumber()
 
-    // Create a volunteer to answer the call
+    // Create a volunteer to answer the call — IN the hub the call arrives in,
+    // which is what `simulateAnswerCall` checks hub access against.
     const volunteer = await createUserViaApi(request, {
       name: `SimVol ${Date.now()}`,
+      hubId,
     })
 
     // Simulate incoming call
     const { callId } = await simulateIncomingCall(request, {
       callerNumber,
+      hubId,
     })
     expect(callId).toBeTruthy()
 
@@ -95,10 +121,12 @@ test.describe('Call Simulation', () => {
   })
 
   test('simulated call goes to voicemail when unanswered', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-voicemail')
     const callerNumber = uniqueCallerNumber()
 
     const { callId } = await simulateIncomingCall(request, {
       callerNumber,
+      hubId,
     })
 
     // Send to voicemail directly
@@ -114,15 +142,19 @@ test.describe('Call Simulation', () => {
   })
 
   test('multiple simulated calls appear in call history', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-multi-call')
     // Create three calls with different outcomes
     const call1 = await simulateIncomingCall(request, {
       callerNumber: uniqueCallerNumber(),
+      hubId,
     })
     const call2 = await simulateIncomingCall(request, {
       callerNumber: uniqueCallerNumber(),
+      hubId,
     })
     const call3 = await simulateIncomingCall(request, {
       callerNumber: uniqueCallerNumber(),
+      hubId,
     })
 
     // Voicemail all three
@@ -145,11 +177,8 @@ test.describe('Call Simulation', () => {
 })
 
 test.describe('Message Simulation', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page)
-  })
-
   test('simulated incoming SMS creates a conversation', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-sms')
     const senderNumber = uniqueCallerNumber()
     const messageBody = `Test SMS ${Date.now()}`
 
@@ -158,6 +187,7 @@ test.describe('Message Simulation', () => {
       senderNumber,
       body: messageBody,
       channel: 'sms',
+      hubId,
     })
     expect(conversationId).toBeTruthy()
     expect(messageId).toBeTruthy()
@@ -175,6 +205,7 @@ test.describe('Message Simulation', () => {
   })
 
   test('simulated incoming WhatsApp message creates a conversation', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-whatsapp')
     const senderNumber = uniqueCallerNumber()
     const messageBody = `WhatsApp test ${Date.now()}`
 
@@ -182,6 +213,7 @@ test.describe('Message Simulation', () => {
       senderNumber,
       body: messageBody,
       channel: 'whatsapp',
+      hubId,
     })
     expect(conversationId).toBeTruthy()
     expect(messageId).toBeTruthy()
@@ -197,6 +229,7 @@ test.describe('Message Simulation', () => {
   })
 
   test('multiple messages from same sender appear in one conversation', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-multi-msg')
     const senderNumber = uniqueCallerNumber()
 
     // Send two messages from the same number
@@ -204,11 +237,13 @@ test.describe('Message Simulation', () => {
       senderNumber,
       body: `First message ${Date.now()}`,
       channel: 'sms',
+      hubId,
     })
     const msg2 = await simulateIncomingMessage(request, {
       senderNumber,
       body: `Second message ${Date.now()}`,
       channel: 'sms',
+      hubId,
     })
 
     // Both messages should be in the same conversation

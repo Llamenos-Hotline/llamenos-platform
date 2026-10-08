@@ -165,15 +165,42 @@ describe('hubs routes', () => {
       expect(json.hubs).toHaveLength(0)
     })
 
-    it('omits hubs where the caller lacks hubs:read', async () => {
+    // #1708: the list has to describe the caller's ACCESS, not one permission.
+    // `role-reporter` holds no `hubs:read` but is admitted to
+    // `/hubs/:hubId/reports`, so filtering on `hubs:read` hid the only hub such
+    // a member can use — and the desktop client, which resolves its active hub
+    // from this endpoint, then had nothing to browse.
+    it('lists a member hub even when the caller lacks hubs:read in it', async () => {
       const { app } = createTestApp({
-        permissions: ['other:read'],
+        permissions: ['reports:create', 'reports:read-own'],
+        userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
         serviceMock: { settings: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
       })
 
       const res = await app.request('/hubs')
       expect(res.status).toBe(200)
-      expect((await res.json()).hubs).toEqual([])
+      expect((await res.json()).hubs.map((h: { id: string }) => h.id)).toEqual(['hub-1'])
+    })
+
+    it('omits a hub the caller holds no permission in', async () => {
+      const { app } = createTestApp({
+        permissions: ['reports:create'],
+        userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
+        serviceMock: {
+          settings: {
+            getHubs: vi.fn().mockResolvedValue({
+              hubs: [
+                { id: 'hub-1', name: 'Hub 1', status: 'active' },
+                { id: 'hub-2', name: 'Hub 2', status: 'active' },
+              ],
+            }),
+          },
+        },
+      })
+
+      const res = await app.request('/hubs')
+      expect(res.status).toBe(200)
+      expect((await res.json()).hubs.map((h: { id: string }) => h.id)).toEqual(['hub-1'])
     })
 
     // #1037: a non-super-admin global role is not membership of every hub

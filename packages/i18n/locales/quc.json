@@ -739,7 +739,9 @@
     "keyUnavailable": "Ri tzꞌibꞌ awatalik pa we hub riꞌ majaꞌ kakwin katzijox pa we kꞌutbꞌal riꞌ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Couldn't load your hubs",
+    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again."
   },
   "ivr": {
     "selfAnnouncement": "Pa K'iche', tzukutij [N].",

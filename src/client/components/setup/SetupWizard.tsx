@@ -7,7 +7,7 @@ import {
   updateSetupState,
   completeSetup,
   seedDemoData,
-  getConfig,
+  listHubs,
   setActiveHub,
 } from '@/lib/api'
 import * as keyManager from '@/lib/key-manager'
@@ -191,13 +191,14 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
       await completeSetup(demoMode)
       sessionStorage.removeItem('bootstrapComplete')
       if (demoMode) {
-        // Re-fetch config to get the default hub ID (created during setup) — non-fatal
+        // Activate the hub `POST /api/setup/complete` just created, so the demo
+        // seed below writes into it. Read from the AUTHENTICATED hub list, which
+        // the server filters to this admin's memberships — `/api/config` no
+        // longer publishes a hub roster (#1710), and choosing from an
+        // instance-wide list is the defect in #1708. Non-fatal.
         try {
-          const config = await getConfig()
-          if (config.hubs?.length) {
-            const hubId = config.defaultHubId || config.hubs[0].id
-            setActiveHub(hubId)
-          }
+          const { hubs } = await listHubs()
+          if (hubs.length > 0) setActiveHub(hubs[0].id)
         } catch { /* ignore — hub switching is best-effort */ }
         // Seed demo volunteers — always attempt, regardless of config fetch
         try {

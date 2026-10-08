@@ -739,7 +739,9 @@
     "keyUnavailable": "Bu merkezdeki şifreli içerik bu cihazda henüz açılamıyor",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Merkezleriniz yüklenemedi",
+    "membershipLoadFailedBody": "Sunucu hangi merkezlere ait olduğunuzu bildirmedi, bu yüzden henüz hiçbir şey gösterilemiyor. Bağlantınızı kontrol edip tekrar deneyin."
   },
   "ivr": {
     "selfAnnouncement": "Türkçe için [N] tuşuna basın.",
