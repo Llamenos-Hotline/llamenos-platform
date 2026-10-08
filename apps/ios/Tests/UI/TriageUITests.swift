@@ -50,22 +50,27 @@ final class TriageUITests: BaseUITest {
         )
         typeCard.tap()
 
-        // `field-<name>` identifies the form row; the input inside it carries no
-        // identifier of its own. iOS renders the template's `location` field as
-        // text (ReportFieldType has no location case), so all three required
-        // fields are fillable as text.
-        let locationInput = find("field-location").textFields.firstMatch
-        XCTAssertTrue(locationInput.waitForExistence(timeout: 5), "Arrest report form should render the location field")
+        // `field-<name>` identifies the form row; SwiftUI may attach it to the row
+        // container or flatten it onto the input itself, so resolve whichever is
+        // editable. iOS renders the template's `location` field as text
+        // (ReportFieldType has no location case), so all three required fields
+        // are fillable as text.
+        func textInput(in rowId: String, textView: Bool = false) -> XCUIElement {
+            let row = find(rowId)
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "Arrest report form should render \(rowId)")
+            let inner = textView ? row.textViews.firstMatch : row.textFields.firstMatch
+            return inner.exists ? inner : row
+        }
+
+        let locationInput = textInput(in: "field-location")
         locationInput.tap()
         locationInput.typeText("5th and Main")
 
-        let timeInput = find("field-time").textFields.firstMatch
-        XCTAssertTrue(timeInput.waitForExistence(timeout: 5), "Arrest report form should render the time field")
+        let timeInput = textInput(in: "field-time")
         timeInput.tap()
         timeInput.typeText("14:30")
 
-        let detailsInput = find("field-arrestee_details").textViews.firstMatch
-        XCTAssertTrue(detailsInput.waitForExistence(timeout: 5), "Arrest report form should render the arrestee details field")
+        let detailsInput = textInput(in: "field-arrestee_details", textView: true)
         detailsInput.tap()
         detailsInput.typeText("Two arrestees, names unknown")
 
