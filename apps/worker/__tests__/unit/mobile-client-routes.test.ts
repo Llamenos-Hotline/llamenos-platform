@@ -234,12 +234,8 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     'POST /api/identity/invite': '#1701',
     'GET /api/recovery-group/shares/my': '#1701',
 
-    // Also #1701, found by this test rather than by reading the client. The
-    // first is the one to look at first: the server mounts
-    // `GET /api/telephony/sip-token` and NOT a hub-scoped copy of it, so the
-    // iOS call — which hub-prefixes the path — 404s, and the client cannot get
-    // the credential it registers for calls with.
-    [`GET /api/hubs/${PARAM}/telephony/sip-token`]: '#1701',
+    // Also #1701, found by this test rather than by reading the client. All
+    // three are live 404s on a real backend.
     [`PATCH /api/identity/${PARAM}/role`]: '#1701',
     [`POST /api/conversations/${PARAM}/read`]: '#1701',
     [`POST /api/shifts/${PARAM}/signup`]: '#1701',
