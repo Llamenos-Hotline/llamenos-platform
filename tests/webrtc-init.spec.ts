@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, uniquePhone, Timeouts } from './helpers'
+import { apiGet, createHubViaApi, deleteHubViaApi } from './api-helpers'
 
 // Issue #1147: `@twilio/voice-sdk` is not a dependency anywhere in this repo,
 // but the old `initTwilioWebRtc()` loaded it through a deliberately
@@ -15,8 +16,24 @@ import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDevic
 // Every provider is honestly reported `unsupported` until a real one ships —
 // never `error` (a failed load) and never `ready` (nothing to carry audio).
 test.describe('WebRTC init never claims a client SDK that is not installed (#1147)', () => {
-  test('browser call preference against an in-app-audio-capable provider reports unsupported, not error', async ({ page }) => {
-    await loginAsAdmin(page)
+  test('browser call preference against an in-app-audio-capable provider reports unsupported, not error', async ({ page, request }) => {
+    // A volunteer with no hub membership lands on "No Hubs" after login and
+    // the dashboard (with the WebRtcStatus badge) never renders. Since #1708
+    // the active hub comes from the authenticated GET /api/hubs, and a fresh
+    // test-reset leaves the admin with no hub at all — so acquire one (reuse
+    // the suite's if it exists, otherwise create and clean up) and pin the
+    // client to it before any login, exactly as messaging-decryption.spec.ts
+    // does. Without this pin the volunteer creation below is not scoped to a
+    // hub and the test fails at login, before any WebRTC assertion runs.
+    const { data } = await apiGet<{ hubs?: Array<{ id: string }> }>(request, '/hubs')
+    const existingHubId = data?.hubs?.[0]?.id
+    const hubId = existingHubId ?? await createHubViaApi(request, `webrtc-${Date.now()}`)
+    await page.addInitScript((id) => {
+      (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
+    }, hubId)
+
+    try {
+      await loginAsAdmin(page)
     const volunteerSeedHex = await createUserAndGetDeviceKey(page, `WebRTC-Vol-${Date.now()}`, uniquePhone())
     await dismissDeviceKeyCard(page)
 
@@ -56,5 +73,8 @@ test.describe('WebRTC init never claims a client SDK that is not installed (#114
     // The phone-rings path (#728) must actually render: the volunteer is told
     // the PSTN leg carries the audio, not left at a dead-end error badge.
     await expect(status).toContainText("Calls ring volunteers' phones")
+    } finally {
+      if (!existingHubId) await deleteHubViaApi(request, hubId)
+    }
   })
 })
