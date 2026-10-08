@@ -104,6 +104,8 @@ NTFY = "ntfy health endpoint"
 NTFY_PUBLIC = "ntfy public vhost"
 SIGNAL = "Signal Notifier sidecar"
 SIP = "SIP bridge health"
+ASTERISK_AGREE = "asterisk enablement agrees"
+ASTERISK_SERVICES = "every service the asterisk compose declares"
 UPDATES = "Update server health"
 CADDY = "Caddy HTTPS serving"
 HSTS = "HSTS header present"
@@ -167,6 +169,32 @@ case "$1" in
     [ "${FIXTURE_UNHEALTHY_CONTAINERS:-}" = "" ] || printf '%s\n' "${FIXTURE_UNHEALTHY_CONTAINERS}"
     ;;
   compose)
+    # Which compose subcommand? `-f <file>` and other flags may precede it.
+    sub=""
+    for a in "$@"; do
+      case "$a" in config|ps|exec) sub="$a"; break ;; esac
+    done
+    if [ -n "${FIXTURE_DOCKER_COMPOSE_BROKEN:-}" ] && [ "$sub" != "exec" ]; then
+      # A compose project the CLI cannot read at all. The probe must report
+      # that it could not measure, not an empty (and so vacuously clean) diff.
+      echo "error: no configuration file provided: not found" >&2
+      exit 14
+    fi
+    if [ "$sub" = "config" ]; then
+      # `docker compose config --format json` for the asterisk project. The
+      # sip-bridge image ref is what issue #1697's failure message must name.
+      cat <<JSON
+{"services": {"asterisk": {"image": "andrius/asterisk:22"},
+ "sip-bridge": {"image": "${FIXTURE_SIP_BRIDGE_IMAGE:-registry.invalid/llamenos-sip-bridge:1.0.0}"}}}
+JSON
+      exit 0
+    fi
+    if [ "$sub" = "ps" ]; then
+      # `docker compose ps --all --services` — the services that HAVE a
+      # container. Default: both. #1697 is the case where sip-bridge does not.
+      printf '%s\n' ${FIXTURE_ASTERISK_RUNNING-asterisk sip-bridge}
+      exit 0
+    fi
     svc=""
     while [ $# -gt 0 ]; do
       if [ "$1" = "-T" ]; then svc="$2"; break; fi
@@ -253,14 +281,33 @@ BODIES = {}
 if os.environ.get("FIXTURE_READY_BODY"):
     BODIES["/api/health/ready"] = os.environ["FIXTURE_READY_BODY"]
 
-def make(codes):
+# The SIP bridge's /health is JSON, and the field that matters is `connected`:
+# the bridge answers 200 with "status":"degraded","connected":false when it is
+# running but has no ARI session to the PBX, i.e. when no call can route. A
+# plain-text `ok` body would let that check pass on a bridge reaching nothing.
+SIP_BRIDGE_PORT = 3101
+
+def sip_bridge_body():
+    connected = os.environ.get("FIXTURE_SIP_CONNECTED", "true").lower() == "true"
+    return json.dumps({
+        "status": "ok" if connected else "degraded",
+        "pbxType": "asterisk",
+        "connected": connected,
+        "activeCalls": 0,
+    }).encode()
+
+def make(codes, port):
     class H(BaseHTTPRequestHandler):
         def respond(self):
             path = self.path.split("?")[0]
             code = codes.get(path, 404)
-            text = BODIES.get(path)
-            ctype = "application/json" if text is not None else "text/plain"
-            body = (text or "ok").encode()
+            if port == SIP_BRIDGE_PORT:
+                body = sip_bridge_body()
+                ctype = "application/json"
+            else:
+                text = BODIES.get(path)
+                ctype = "application/json" if text is not None else "text/plain"
+                body = (text or "ok").encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -277,7 +324,7 @@ def make(codes):
 servers = []
 for port, codes in spec.items():
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", port), make(codes))
+        srv = ThreadingHTTPServer(("127.0.0.1", port), make(codes, port))
     except OSError as exc:
         print(f"FIXTURE-PORT-BUSY {port}: {exc}", flush=True)
         continue
@@ -442,6 +489,7 @@ def cases() -> list[Case]:
         APP_HEALTH: "PASS", POSTGRES: "PASS", RUSTFS: "PASS", SIGNAL: "PASS",
         SIP: "PASS", DISK: "PASS",
         READY_SIP: "PASS", READY_DEPS: "PASS",
+        ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "PASS",
         # Off in BASE_VARS: these must be SKIPPED, not PASS.
         NTFY: "SKIPPED", NTFY_PUBLIC: "SKIPPED", UPDATES: "SKIPPED",
         CADDY: "SKIPPED", HSTS: "SKIPPED", XFO: "SKIPPED",
@@ -465,8 +513,58 @@ def cases() -> list[Case]:
              expect={RUSTFS: "SKIPPED", APP_LIVE: "PASS"}, expect_result="PASSED"),
         Case("skip_signal", extra_vars={"llamenos_signal_enabled": False},
              expect={SIGNAL: "SKIPPED"}, expect_result="PASSED"),
-        Case("skip_sip", extra_vars={"llamenos_asterisk_enabled": False},
-             expect={SIP: "SKIPPED"}, expect_result="PASSED"),
+        # `skip_sip` USED TO LIVE HERE, asserting that the SIP probe skips
+        # when llamenos_asterisk_enabled is false. That expectation was the
+        # defect, not a property worth keeping (issue #1697): the measured
+        # host had the flag false, the asterisk project deployed and the
+        # bridge dead, and this suite called the absent measurement correct.
+        # A probe is allowed to skip because the service IS NOT THERE, never
+        # because a variable says it should not be. The three cases below
+        # replace it — one per cell of (flag, on-disk) that matters.
+        Case("asterisk_deployed_but_flag_off",
+             extra_vars={"llamenos_asterisk_enabled": False},
+             expect={ASTERISK_AGREE: "FAIL", ASTERISK_SERVICES: "PASS", SIP: "PASS"},
+             expect_result="FAILED",
+             note="the measured #1697 state: flag false, project on disk. The "
+                  "flag no longer gates the probes, and the disagreement is "
+                  "itself fatal"),
+        Case("asterisk_not_deployed_at_all",
+             extra_vars={"llamenos_asterisk_enabled": False},
+             fixture_env={"FIXTURE_NO_ASTERISK_PROJECT": "1"},
+             expect={ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "SKIPPED",
+                     SIP: "SKIPPED"},
+             expect_result="PASSED",
+             note="no telephony anywhere: nothing declared, so skipping is "
+                  "honest and the agreement check passes"),
+        Case("asterisk_enabled_but_role_left_nothing",
+             fixture_env={"FIXTURE_NO_ASTERISK_PROJECT": "1"},
+             expect={ASTERISK_AGREE: "FAIL", ASTERISK_SERVICES: "SKIPPED",
+                     SIP: "SKIPPED"},
+             expect_result="FAILED",
+             note="flag on, nothing on disk — the role never ran where it was "
+                  "meant to, which no probe used to notice"),
+
+        # ── issue #1697 itself: declared, and no container ────────────────
+        # The sip-bridge image was derived by suffix and built by nothing, so
+        # `docker compose up` answered `manifest unknown`, the service stayed
+        # declared-and-absent, and the deploy reported success. Asterisk's own
+        # health probe passes throughout — which is why the check has to be
+        # about the PROJECT's services, not about Asterisk.
+        Case("sip_bridge_declared_but_no_container",
+             fixture_env={"FIXTURE_ASTERISK_RUNNING": "asterisk"},
+             expect={ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "FAIL"},
+             expect_result="FAILED",
+             note="#1697: sip-bridge declared, no container, image named in "
+                  "the detail"),
+        # An unreadable compose project is an UNMEASURED one. Without this,
+        # a `docker compose config` that errors would leave the comparison
+        # vacuously empty and the check green.
+        Case("asterisk_project_unreadable",
+             fixture_env={"FIXTURE_ASTERISK_RUNNING": "asterisk",
+                          "FIXTURE_DOCKER_COMPOSE_BROKEN": "1"},
+             expect={ASTERISK_SERVICES: "FAIL"},
+             expect_result="FAILED",
+             note="the probe could not measure, so it must not pass"),
         Case("skip_ntfy", extra_vars={"llamenos_ntfy_enabled": False},
              expect={NTFY: "SKIPPED", NTFY_PUBLIC: "SKIPPED"}, expect_result="PASSED"),
         # The whole host excluded from the app group: every app-placed probe
@@ -629,6 +727,21 @@ def cases() -> list[Case]:
         ports[port][path] = 500
         out.append(Case(name, ports=ports, expect={check: "FAIL"},
                         expect_result=result, expect_degraded=degraded))
+    # A service entirely absent (connection refused), not merely unhealthy.
+    ports = {p: dict(c) for p, c in all_up().items() if p != 3100}
+    out.append(Case("absent_signal_sidecar", ports=ports, expect={SIGNAL: "FAIL"},
+                    expect_result="PASSED", expect_degraded=1,
+                    note="nothing listening on 3100 at all — a real failure, "
+                         "reported under DEGRADED because the phone still rings"))
+    # A bridge that ANSWERS 200 and reaches no PBX. The container's own
+    # healthcheck is also only a 200 check, so docker reports it healthy while
+    # every call goes unanswered — measured on a deployed target alongside
+    # #1697, and the reason the probe reads `connected` rather than the status
+    # code alone.
+    out.append(Case("sip_bridge_up_but_not_connected",
+                    fixture_env={"FIXTURE_SIP_CONNECTED": "false"},
+                    expect={SIP: "FAIL"}, expect_result="FAILED",
+                    note="200 with connected=false is a dead call path, not a pass"))
     return out
 
 
@@ -643,7 +756,7 @@ class Harness:
             p.write_text(body)
             p.chmod(0o755)
         self.app_dir = tmp / "app"
-        for svc in ("postgres", "rustfs", "kamailio"):
+        for svc in ("postgres", "rustfs", "kamailio", "asterisk"):
             (self.app_dir / "services" / svc).mkdir(parents=True, exist_ok=True)
         self.tls_dir = self.app_dir / "services" / "kamailio" / "tls"
         self.tls_dir.mkdir(parents=True, exist_ok=True)
@@ -709,7 +822,8 @@ class Harness:
         return proc
 
     # ── fixtures ────────────────────────────────────────────────────────
-    def start_server(self, ports: dict[str, dict[str, int]], ready_body: str | None = None):
+    def start_server(self, ports: dict[str, dict[str, int]],
+                     ready_body: str | None = None, fixture_env=None):
         spec = ";".join(
             f"{port}:" + ",".join(f"{path}={code}" for path, code in codes.items())
             for port, codes in ports.items()
@@ -719,8 +833,12 @@ class Harness:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             # The readiness BODY is a fixture input in its own right: the
             # checks added for #1636 read `checks` out of it, and the status
-            # code cannot carry that report.
-            env={**os.environ, "FIXTURE_READY_BODY": ready_body or READY_HEALTHY},
+            # code cannot carry that report. The bridge fixture reads
+            # FIXTURE_SIP_CONNECTED, so the case's fixture_env has to reach
+            # the SERVER and not only the playbook.
+            env={**os.environ,
+                 "FIXTURE_READY_BODY": ready_body or READY_HEALTHY,
+                 **{k: str(v) for k, v in (fixture_env or {}).items()}},
         )
         busy = []
         while True:
@@ -770,6 +888,21 @@ class Harness:
         extra["deploy_user"] = getpass.getuser()
         extra["kamailio_tls_dir"] = str(self.tls_dir)
 
+        # The telephony checks derive placement from the host's own rendered
+        # compose file rather than from llamenos_asterisk_enabled (#1697), so
+        # the fixture has to be able to say "this project is on disk" and
+        # "it is not" independently of the flag. Those two axes crossed are
+        # exactly the state the defect hid in: flag false, project deployed.
+        asterisk_compose = self.app_dir / "services" / "asterisk" / "docker-compose.yml"
+        if case.fixture_env.get("FIXTURE_NO_ASTERISK_PROJECT"):
+            asterisk_compose.unlink(missing_ok=True)
+        else:
+            asterisk_compose.write_text(
+                "# fixture: contents are never parsed by the playbook, which\n"
+                "# asks the docker stub for the project's services instead.\n"
+                "services: {asterisk: {}, sip-bridge: {}}\n"
+            )
+
         inv = self.tmp / f"inv-{self.n}.json"
         inv.write_text(json.dumps(self.inventory(serves_app)))
         varsf = self.tmp / f"vars-{self.n}.json"
@@ -787,7 +920,7 @@ class Harness:
         }
         env.update({k: str(v) for k, v in case.fixture_env.items()})
 
-        server = self.start_server(case.ports, case.ready_body)
+        server = self.start_server(case.ports, case.ready_body, case.fixture_env)
         anchor = str(self.certs[case.sip_anchor][0]) if case.sip_anchor else None
         edge = self.start_sip_edge(case.sip_edge, anchor)
         try:

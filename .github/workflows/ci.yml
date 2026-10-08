@@ -149,19 +149,72 @@ jobs:
 
       - name: Detect changes
         id: filter
+        env:
+          # The queue's target branch ref (`refs/heads/main`), via env rather
+          # than inline `${{ }}`: it is the one value here that is a NAME
+          # flowing into a git command rather than a SHA, so it is quoted as
+          # data and never spliced into the script text.
+          TARGET_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           # Diff against the PR's actual base, not HEAD^ — HEAD^ only agrees
           # with the base by coincidence on `pull_request` (today's merge-ref
           # commit happens to have the base as its parent) and is flatly
           # wrong on `merge_group`, where HEAD is the queue's own synthetic
-          # merge commit. Mirrors the base/head resolution the `lint` job's
-          # "Determine changed files" step already uses.
+          # merge commit.
+          #
+          # On `merge_group` this deliberately does NOT mirror the `lint`
+          # job's base — see the merge_group branch below for why platform
+          # detection and lint want different bases (#1594).
+          FALLBACK_ALL=false
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE="${{ github.event.pull_request.base.sha }}"
             HEAD="${{ github.event.pull_request.head.sha }}"
           elif [[ "${{ github.event_name }}" == "merge_group" ]]; then
-            BASE="${{ github.event.merge_group.base_sha }}"
+            # NOT `merge_group.base_sha` (#1594). The queue stacks each entry
+            # on the PREVIOUS entry's group head, so for any entry but the
+            # first, base_sha already contains the earlier entries' files —
+            # and a diff against it therefore reports only THIS entry's
+            # files. The suites the earlier entry's own changes require then
+            # evaluate false and are filtered out, and the group reports
+            # `ci-status: success` having never run them. Measured: group
+            # `pr-1556-b1801eb8` (run 37467885061, base = main) saw
+            # `packages/crypto/src/labels.rs` and ran android-e2e + ios-e2e;
+            # group `pr-1482-35d61e96` (run 37467923375), whose base WAS that
+            # group's head, saw three backend files, skipped
+            # android-build-test, ios-build-test, android-e2e and ios-e2e,
+            # and went green — while its tree still carried #1556's Android
+            # and iOS changes. The suite was not bypassed by anyone's
+            # decision; it was filtered away by arithmetic.
+            #
+            # The right base is the branch the group will LAND on: the
+            # queue's target (`base_ref`, i.e. refs/heads/main). Everything a
+            # group is about to merge is new to `main`, which is the question
+            # the gate actually needs answered — and these suites validate
+            # the group's whole TREE, not a per-file verdict, so running one
+            # against an earlier, shorter prefix's tree is not evidence about
+            # this one. (`lint` is the opposite case and keeps `base_sha`
+            # on purpose: eslint's verdict is per file, every entry's own
+            # group lints exactly its own files, so the union across the
+            # chain already covers everything that lands.)
+            #
+            # actions/checkout only fetches the queue ref, so `main` is not
+            # present as a remote-tracking ref and has to be fetched here.
             HEAD="${{ github.event.merge_group.head_sha }}"
+            BASE=""
+            if [[ -n "$TARGET_REF" ]] && \
+               git fetch --no-tags --quiet origin "+${TARGET_REF}:refs/ci/queue-target"; then
+              BASE="$(git rev-parse refs/ci/queue-target)"
+            fi
+            if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
+              # Never silently narrow the gate: an unresolvable queue target
+              # falls back to "every file in the group's own tree changed",
+              # so every suite runs. HEAD^ would be exactly `base_sha` here
+              # (the queue stacks one commit per entry) — i.e. the bug above
+              # — and a hard failure would stall the queue on a transient
+              # fetch error rather than fail it loudly. Over-running costs
+              # minutes; under-running costs a regression nobody sees.
+              FALLBACK_ALL=true
+            fi
           else
             BASE="${{ github.event.before }}"
             HEAD="${{ github.event.after }}"
@@ -170,9 +223,12 @@ jobs:
           # Fall back to a single-commit diff if before/base is unavailable
           # (e.g. force-push, first commit on a branch, or workflow_dispatch
           # with no PR/push context at all).
-          if [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; then
+          if [[ "$FALLBACK_ALL" == "false" ]] \
+             && { [[ -z "$BASE" ]] || ! git cat-file -e "$BASE" 2>/dev/null; }; then
             BASE="HEAD^"
           fi
+          # Unconditional: the FALLBACK_ALL path enumerates $HEAD's tree, so
+          # it needs a resolvable HEAD too.
           if [[ -z "$HEAD" ]] || ! git cat-file -e "$HEAD" 2>/dev/null; then
             HEAD="HEAD"
           fi
@@ -180,14 +236,27 @@ jobs:
           # Three-dot on pull_request so only the PR's own changes pick
           # platforms, not everything the base moved since the fork — see
           # the `lint` job's "Determine changed files" step for why each
-          # event gets the diff it does (#1396).
+          # event gets the diff it does (#1396). Two-dot on `merge_group`
+          # even though the target is now a branch tip: `git diff A..B`
+          # compares the two TREES, so it stays correct even once `main`
+          # has moved on to squashed commits the group's history does not
+          # contain, and a `main` that moved by something NOT in the group
+          # only ever adds files (over-runs), never drops them.
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             RANGE="$BASE...$HEAD"
           else
             RANGE="$BASE..$HEAD"
           fi
 
-          CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          if [[ "$FALLBACK_ALL" == "true" ]]; then
+            echo "::warning title=Queue target unresolved::Could not resolve the merge queue's target branch (${TARGET_REF:-<empty>}); treating every file in the group's tree as changed so no suite is filtered away."
+            RANGE="every file in ${HEAD}"
+            # The group head's own tree, not `git ls-files` (the index of
+            # whatever happens to be checked out).
+            CHANGED=$(git ls-tree -r --name-only "$HEAD")
+          else
+            CHANGED=$(git diff --name-only "$RANGE" 2>/dev/null || git diff --name-only HEAD)
+          fi
           echo "Changed files ($RANGE):"
           echo "$CHANGED"
 

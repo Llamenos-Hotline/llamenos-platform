@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "He guardado mi clave de recuperación en un lugar seguro",
     "backupDescription": "Anota esta clave de recuperación y guárdala en un lugar seguro. Es la única forma de recuperar tu cuenta en un nuevo dispositivo.",
     "backupDownloaded": "Copia de seguridad descargada",
+    "backupFailed": "No se pudo crear tu copia de seguridad cifrada: {{reason}}",
     "backupTitle": "Guarda Tu Clave de Recuperación",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

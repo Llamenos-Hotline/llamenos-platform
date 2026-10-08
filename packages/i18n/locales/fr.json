@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "J'ai enregistré ma clé de récupération dans un endroit sécurisé",
     "backupDescription": "Notez cette clé de récupération et conservez-la en lieu sûr. C'est le seul moyen de récupérer votre compte sur un nouvel appareil.",
     "backupDownloaded": "Sauvegarde téléchargée",
+    "backupFailed": "Impossible de créer votre sauvegarde chiffrée : {{reason}}",
     "backupTitle": "Sauvegardez Votre Clé de Récupération",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

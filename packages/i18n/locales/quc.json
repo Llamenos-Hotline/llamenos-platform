@@ -879,6 +879,7 @@
     "backupAcknowledge": "Xyak ri nwetal rech koltajem pa jun chajin k'olib'al",
     "backupDescription": "Tatz'ib'aj re etal rech koltajem re' xuqujeʼ tayak pa jun chajin k'olib'al. Ri' xa re' ri b'eyal rech katzolij ri awetal winaq pa jun k'ak'a' k'uxlab'al.",
     "backupDownloaded": "Ri yakb'al xqasax",
+    "backupFailed": "Man xkowin taj uxik ri achajinik ri tzʼapital: {{reason}}",
     "backupTitle": "Tiyak ri Awetal rech Koltajem",
     "confirmPin": "Tijikib'ax ri PIN awech",
     "confirmPinDescription": "Tatz'ib'aj ri junam PIN chik rech tijikib'ax",

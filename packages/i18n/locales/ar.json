@@ -2757,6 +2757,7 @@
     "backupAcknowledge": "لقد حفظت مفتاح الاسترداد الخاص بي في مكان آمن",
     "backupDescription": "اكتب مفتاح الاسترداد هذا واحتفظ به في مكان آمن. إنه الطريقة الوحيدة لاستعادة حسابك على جهاز جديد.",
     "backupDownloaded": "تم تحميل النسخة الاحتياطية",
+    "backupFailed": "تعذّر إنشاء النسخة الاحتياطية المشفّرة: {{reason}}",
     "backupTitle": "احفظ مفتاح الاسترداد الخاص بك",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

@@ -87,7 +87,10 @@
     _smoke_serves_db: "{{ groups.get('llamenos_db', []) | length == 0 or inventory_hostname in groups.get('llamenos_db', []) }}"
     _smoke_serves_storage: "{{ groups.get('llamenos_storage', []) | length == 0 or inventory_hostname in groups.get('llamenos_storage', []) }}"
     _smoke_serves_ntfy: "{{ groups.get('llamenos_ntfy', []) | length == 0 or inventory_hostname in groups.get('llamenos_ntfy', []) }}"
-    _smoke_serves_asterisk: "{{ groups.get('llamenos_asterisk', []) | length == 0 or inventory_hostname in groups.get('llamenos_asterisk', []) }}"
+    # No _smoke_serves_asterisk: the telephony checks below derive placement
+    # from the host's own rendered compose file instead of from the inventory
+    # group, because a host that has the service DECLARED must serve it
+    # whatever the inventory and the enablement flag say (#1697).
     _smoke_serves_kamailio: "{{ groups.get('llamenos_kamailio', []) | length == 0 or inventory_hostname in groups.get('llamenos_kamailio', []) }}"
 
     # ── SIP TLS probe inputs ────────────────────────────────────────────────
@@ -654,6 +657,112 @@
         smoke_check_detail: "localhost:3100/health returned {{ signal_notifier_check.status | default('no response') }}"
       tags: always
 
+    # ─── Self-hosted telephony ───────────────────────────────────────────────
+    #
+    # WHAT IS DECLARED ON DISK IS WHAT MUST BE SERVING (issue #1697).
+    #
+    # The SIP bridge probe below used to be conditioned on
+    # `llamenos_asterisk_enabled`. On the measured host that flag was FALSE
+    # while roles/llamenos-asterisk had been applied anyway: the compose file
+    # was on disk declaring a `sip-bridge` service, Asterisk was up and
+    # healthy, and the bridge had no container at all because its image could
+    # not be pulled. The one check that would have noticed took no measurement,
+    # so the deploy reported success with a dead call path — the same defect as
+    # a probe that omits itself (#1636), arriving via a variable instead.
+    #
+    # So these checks read the HOST'S OWN FILESYSTEM AND DOCKER STATE, never
+    # the flag. A variable can no longer gate away the measurement, and the
+    # flag disagreeing with reality is itself one of the failures.
+    - name: Stat the rendered asterisk compose file
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/services/asterisk/docker-compose.yml"
+      register: asterisk_compose_stat
+      tags: always
+
+    # Neither direction is acceptable. Flag off + artifacts present is the
+    # measured case: an unmanaged service nothing deploys and nothing checks.
+    # Flag on + artifacts absent means the role never ran where it was meant to.
+    - name: Record asterisk flag-versus-reality result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: asterisk enablement agrees with what is on disk
+        smoke_check_severity: fatal
+        smoke_check_probe: "{{ asterisk_compose_stat | default({}) }}"
+        smoke_check_pass: >-
+          {{ (asterisk_compose_stat.stat.exists | default(false) | bool)
+             == (llamenos_asterisk_enabled | default(false) | bool) }}
+        smoke_check_detail: >-
+          llamenos_asterisk_enabled is {{ llamenos_asterisk_enabled | default(false) }}
+          but {{ app_dir }}/services/asterisk/docker-compose.yml
+          {{ 'EXISTS — a telephony stack is deployed that this deploy does not manage and no probe gated on the flag would ever check'
+             if (asterisk_compose_stat.stat.exists | default(false) | bool)
+             else 'is ABSENT — asterisk is enabled for this host but the role left nothing on disk, so no call can route' }}
+      tags: always
+
+    # The check #1697 is about. Every service the rendered compose DECLARES
+    # must have a container. An image that cannot be obtained leaves the
+    # service declared and absent, and `docker compose up` failing for one
+    # service neither undoes the others nor stops the play. Reports the service
+    # AND its image ref, because "sip-bridge has no container" sends a reader
+    # to the logs whereas "sip-bridge has no container, image <ref>" names the
+    # cause outright.
+    #
+    # The comparison is computed here, by the probe, rather than assembled in
+    # Jinja from two registered results — so `smoke_check_pass` reads one
+    # measured string and cannot be satisfied by a half-read compose project.
+    - name: Check every service the asterisk compose declares has a container
+      ansible.builtin.shell:
+        executable: /bin/bash
+        chdir: "{{ app_dir }}/services/asterisk"
+        cmd: |
+          set -euo pipefail
+          DECLARED="$(docker compose config --format json)" \
+          RUNNING="$(docker compose ps --all --services)" \
+          python3 -c '
+          import json, os
+          services = json.loads(os.environ["DECLARED"]).get("services", {})
+          running = set(os.environ["RUNNING"].split())
+          print(", ".join(
+              "%s (image %s)" % (name, cfg.get("image") or "no image: built from source")
+              for name, cfg in sorted(services.items())
+              if name not in running
+          ))
+          '
+      register: asterisk_absent_check
+      changed_when: false
+      failed_when: false
+      when: asterisk_compose_stat.stat.exists | default(false) | bool
+      tags: always
+
+    - name: Record declared-but-absent asterisk services result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: every service the asterisk compose declares has a container
+        smoke_check_severity: fatal
+        smoke_check_probe: "{{ asterisk_absent_check | default({}) }}"
+        # Both halves are required: the probe has to have RUN (rc 0, so the
+        # comparison actually happened) and the list it produced has to be
+        # empty. An unreadable compose project is an unmeasured one, not a
+        # healthy one.
+        smoke_check_pass: >-
+          {{ (asterisk_absent_check.rc | default(1)) == 0
+             and (asterisk_absent_check.stdout | default('') | trim | length) == 0 }}
+        smoke_check_detail: >-
+          {{ ('the probe could not read the compose project: '
+               ~ (asterisk_absent_check.stderr | default('(no stderr)') | trim))
+             if (asterisk_absent_check.rc | default(1)) != 0
+             else ('declared with no container: '
+                   ~ (asterisk_absent_check.stdout | default('') | trim)
+                   ~ ' — nothing built or pulled it, so no call can route') }}
+      tags: always
+
+    # Now gated on the compose file EXISTING, not on llamenos_asterisk_enabled.
     # Catches the class of bug in issue #1119: preflight could report
     # self-hosted telephony as configured while no call could ever actually
     # route (no sip-bridge service, no config on disk). A probe that only
@@ -671,9 +780,7 @@
       retries: 3
       delay: 3
       ignore_errors: true
-      when:
-        - llamenos_asterisk_enabled | default(false) | bool
-        - _smoke_serves_asterisk | bool
+      when: asterisk_compose_stat.stat.exists | default(false) | bool
       tags: always
 
     - name: Record SIP bridge result
@@ -685,8 +792,23 @@
         smoke_check_severity: fatal
         smoke_check_name: "SIP bridge health (self-hosted telephony, port {{ sip_bridge_local_port | default(3101) }})"
         smoke_check_probe: "{{ sip_bridge_check | default({}) }}"
-        smoke_check_pass: "{{ sip_bridge_check.status | default(0) | int == 200 }}"
-        smoke_check_detail: "the bridge returned {{ sip_bridge_check.status | default('no response') }} — no call can route"
+        # 200 ALONE IS NOT ENOUGH. The bridge answers 200 while reporting
+        # `"status":"degraded","connected":false` — a Bun process that is up
+        # and has no ARI session to the PBX. Measured on a deployed target:
+        # the bridge container was healthy by its own healthcheck (which also
+        # only checks for a 200) while Asterisk was in a restart loop, so
+        # every call would still have gone unanswered. The probe exists to
+        # tell us a call can route, so it reads the field that says so.
+        smoke_check_pass: >-
+          {{ (sip_bridge_check.status | default(0) | int == 200)
+             and (sip_bridge_check.json.connected | default(false) | bool) }}
+        smoke_check_detail: >-
+          the bridge returned {{ sip_bridge_check.status | default('no response') }}
+          {{ ('and reports connected=' ~ (sip_bridge_check.json.connected | default('(absent)') | string)
+              ~ ', status=' ~ (sip_bridge_check.json.status | default('(absent)') | string)
+              ~ ' — it is running but has no session to the PBX')
+             if (sip_bridge_check.status | default(0) | int == 200)
+             else '' }} — no call can route
       tags: always
 
     # ─── SIP edge: TLS listener and proxy ────────────────────────────────────

@@ -2693,6 +2693,7 @@
     "backupAcknowledge": "I have saved my recovery key in a secure location",
     "backupDescription": "Write this recovery key down and keep it safe. It's the only way to recover your account on a new device.",
     "backupDownloaded": "Backup downloaded",
+    "backupFailed": "Could not create your encrypted backup: {{reason}}",
     "backupTitle": "Save Your Recovery Key",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",

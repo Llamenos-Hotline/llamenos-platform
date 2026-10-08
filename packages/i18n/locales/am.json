@@ -879,6 +879,7 @@
     "backupAcknowledge": "የመልሶ ማግኛ ቁልፌን በደህንነቱ የተጠበቀ ቦታ አስቀምጫለሁ",
     "backupDescription": "ይህን የመልሶ ማግኛ ቁልፍ ይጻፉና በደህና ያስቀምጡ። በአዲስ መሣሪያ ላይ መለያዎን ለማገገም ብቸኛው መንገድ ነው።",
     "backupDownloaded": "መጠባበቂያ ወርዷል",
+    "backupFailed": "የእርስዎን የተመሰጠረ ምትኬ መፍጠር አልተቻለም፦ {{reason}}",
     "backupTitle": "የመልሶ ማግኛ ቁልፍዎን ያስቀምጡ",
     "confirmPin": "PIN ዎን ያረጋግጡ",
     "confirmPinDescription": "ለማረጋገጥ ተመሳሳይ PIN ዎን እንደገና ያስገቡ",

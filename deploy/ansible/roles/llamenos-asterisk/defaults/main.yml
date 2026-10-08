@@ -20,3 +20,36 @@ pbx_type: asterisk
 # cannot be published. 200 ports is 100 concurrent calls at two streams each.
 asterisk_rtp_min_port: 10000
 asterisk_rtp_max_port: 10199
+
+# Container image for the sip-bridge sidecar.
+#
+# WHY THIS IS A VARIABLE AND NOT A SUFFIX (issue #1697)
+#
+# The compose template used to derive this ref as `{{ llamenos_app_image
+# }}-sip-bridge`, appending to the WHOLE reference — tag included. For
+# `llamenos_app_image: user/llamenos:1.2.3` that yields
+#
+#     user/llamenos:1.2.3-sip-bridge
+#
+# i.e. a tag named `1.2.3-sip-bridge` on the APP repository. Nothing publishes
+# that, on any path. What .github/workflows/docker.yml actually pushes is a
+# separate REPOSITORY, `user/llamenos-sip-bridge`, tagged `1.2.3`. So the
+# derived ref matched no image anywhere — not even on the Docker Hub release
+# path it was presumably written for — and `docker compose up` answered
+# `manifest unknown` while the deploy reported success.
+#
+# The default below derives the ref the way docker.yml publishes it: the
+# `-sip-bridge` goes on the repository, before the tag. Set this variable
+# explicitly to override — you MUST set it when `llamenos_app_image` is
+# digest-pinned (`repo@sha256:...`), because a sibling image's digest cannot
+# be derived from another image's digest. The role fails loudly rather than
+# rendering a service it cannot start; see tasks/main.yml.
+#
+#   Docker Hub release path : derived automatically, nothing to set
+#   docker save | docker load: side-load BOTH images, then set this to the tag
+#                              you loaded (the app image's own documented path
+#                              — see vars.example.yml)
+#   private/local registry   : push both, or set this to the bridge's own ref
+#
+# Empty means "derive from llamenos_app_image".
+llamenos_sip_bridge_image: ""
