@@ -57,6 +57,17 @@ planned follow-up, once this command is proven on real PRs.
    uses: **ANY FAIL FAILS**, and an UNREADABLE is a failure too, so a profile's verdict can
    never be outranked by the general reviewer's PASS. A reviewer that throws is recorded as
    its own UNREADABLE rather than discarding the others' verdicts.
+   **What a FAIL may rest on (#1664).** Every reviewer — generalist and profile alike —
+   reads one shared `DIFF_SCOPE_CONTRACT` (`review.ts`): it may FAIL only for a defect
+   **this diff is responsible for**, including one whose broken line is itself unchanged
+   (a rename that leaves a call site stale, a guard the diff removed, a check it should
+   have added). A defect that is equally present at the base commit is **reported, not
+   rejected** — the author cannot fix it inside the PR's scope, so a red check there has
+   no in-scope remedy. Those findings go under `## Out-of-scope findings`, and
+   `composeReviewSet` hoists them to the top of the check summary, so a GREEN
+   `fleet/review` can still be carrying something a human must file as its own issue.
+   Nothing downgrades a FAIL: an out-of-scope section never makes a rejected diff pass.
+
 5. **Records the verdict.** Posts a real check-run named `fleet/review` on that head SHA —
    `success` only for a PASS verdict; `failure` for FAIL or an unreadable/ambiguous verdict.
    This is the one call that cannot use the operator's `gh` credentials: the Checks API

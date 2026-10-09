@@ -148,6 +148,18 @@ itself.** The general non-author review always runs. On top of it:
 They all run **concurrently, in one job**, and report **one check**:
 `fleet/review`. Any FAIL fails it; so does a reviewer that could not run.
 
+**A FAIL must be the diff's fault (#1664).** Every reviewer reads the same
+`DIFF_SCOPE_CONTRACT`: FAIL for a defect *this diff is responsible for* —
+including one whose broken line is unchanged, like a rename that leaves a call
+site stale or a guard the diff removed. A defect that is equally present at
+the base commit is **reported, not rejected**: the author cannot fix it inside
+this PR's scope, so a red check there has no in-scope remedy and is pure
+churn. The reviewer puts it under `## Out-of-scope findings` instead, and that
+section is hoisted to the top of the check's own summary — so a *green*
+`fleet/review` can still be carrying something for a human to file as its own
+issue. Nothing turns a FAIL green: the section is additive reporting, never a
+softened verdict.
+
 **The findings land on the PR.** Each reviewer's full text is posted as a PR
 comment — on a FAIL too, since that is the case whose reasoning you actually
 need. A comment, never a GitHub *review*: an approving review from the fleet
