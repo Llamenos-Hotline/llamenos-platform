@@ -32,13 +32,16 @@
       "path": "/api/notes",
       "module": "@protocol/schemas/notes",
       "schema": "createNoteBodySchema",
-      "swiftType": "CreateNoteRequest",
+      "swiftType": "CreateNoteBody",
       "callSite": "apps/ios/Sources/ViewModels/NotesViewModel.swift",
       "optionalKeys": [
         "callId",
         "conversationId",
+        "contactHash",
         "authorEnvelope",
-        "adminEnvelopes"
+        "adminEnvelopes",
+        "caseId",
+        "interactionTypeHash"
       ]
     },
     {
