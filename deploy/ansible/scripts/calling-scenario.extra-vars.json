@@ -1,5 +1,5 @@
 {
-  "_comment": "Checked-in fixture for the in-app-calling render scenario (#1657/#1659). Enables the PBX, the SIP edge and the TURN relay together, which is the only configuration in which SIP_REGISTRAR_SECRET / TURN_HOST / TURN_SECRET / SIP_TLS_CA_FILE are rendered and the trust-anchor bind mount appears in the app compose file. The base scenario has none of them enabled, so check-required-env.py can assert the opposite outcome from the same templates — the render guard is falsifiable in both directions. Values are dummy placeholders that only need to be non-empty and long enough; never real credentials.",
+  "_comment": "Checked-in fixture for the in-app-calling render scenario (#1657/#1659). Enables the PBX, the SIP edge and the TURN relay together, which is the only configuration in which SIP_REGISTRAR_SECRET / TURN_HOST / TURN_SECRET / SIP_TLS_CA_FILE are rendered and the trust-anchor bind mount appears in the app compose file. The base scenario has none of them enabled, so check-required-env.py can assert the opposite outcome from the same templates — the render guard is falsifiable in both directions. Values are dummy placeholders that only need to be non-empty and long enough; never real credentials. turn_listening_ip/turn_relay_ip are RFC 5737 documentation addresses and must be set HERE: the check playbook renders coturn.j2 without loading the coturn role, so the role default (the host's primary address, from gathered facts) never applies and an unset variable fails the render as undefined. The two differ so the --listening-ip and --relay-ip flags render distinguishably.",
   "env_check_suffix": "-calling",
   "app_environment": "staging",
   "llamenos_asterisk_enabled": true,
@@ -13,5 +13,7 @@
   "kamailio_tls_anchor_dir": "/opt/llamenos/services/kamailio/anchor",
   "llamenos_coturn_enabled": true,
   "turn_host": "turn.hotline.example.org",
-  "turn_secret": "checkfixture00000000000000000000000000000000000000000000000turn"
+  "turn_secret": "checkfixture00000000000000000000000000000000000000000000000turn",
+  "turn_listening_ip": "203.0.113.4",
+  "turn_relay_ip": "203.0.113.5"
 }
