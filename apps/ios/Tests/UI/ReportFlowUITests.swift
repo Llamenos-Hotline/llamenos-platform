@@ -4,20 +4,6 @@ import XCTest
 /// Tests the reports list, creation flow, detail view, and admin actions.
 final class ReportFlowUITests: BaseUITest {
 
-    // MARK: - Helper: Navigate to Reports
-
-    /// Navigate to the reports screen via the Dashboard quick action card.
-    /// The quick actions section is below identity, shift, and activity sections in the List,
-    /// so we must scroll down to find it.
-    private func navigateToReports() {
-        scrollAndTap("dashboard-reports-action")
-
-        // Wait for reports content to appear
-        _ = anyElementExists([
-            "reports-list", "reports-empty-state", "reports-loading", "reports-error",
-        ])
-    }
-
     // MARK: - Scenario: Reports list shows content or empty state
 
     func testReportsListShowsContent() {

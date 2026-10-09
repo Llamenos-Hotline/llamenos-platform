@@ -288,6 +288,7 @@ final class EventsViewModel {
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime]
 
+        let entityType = eventEntityTypes.first { $0.id == entityTypeId }
         let body = CreateEventRequest(
             entityTypeId: entityTypeId,
             startDate: isoFormatter.string(from: startDate),
@@ -295,6 +296,8 @@ final class EventsViewModel {
             parentEventId: nil,
             locationPrecision: location != nil ? "neighborhood" : "none",
             locationApproximate: location,
+            eventTypeHash: entityType?.name ?? entityTypeId,
+            statusHash: entityType?.defaultStatus ?? "active",
             encryptedDetails: encryptedContent,
             detailEnvelopes: envelopes,
             blindIndexes: [:]

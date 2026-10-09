@@ -20,6 +20,92 @@ final class TriageUITests: BaseUITest {
         ], timeout: 10)
     }
 
+    /// Given-step for the triage detail scenarios: the queue is
+    /// `GET /api/reports?conversionEnabled=true`, so the hub needs a report whose
+    /// type has `allowCaseConversion`. The jail-support template provides
+    /// `lo_arrest_report`; the scenario submits one through the app's own
+    /// Reports → typed report form (required fields: location, time,
+    /// arrestee_details) rather than opening whatever the hub happens to hold.
+    private func launchAsAdminWithTriageReport() {
+        enableCaseManagementWithTemplate()
+        launchAsAdminWithAPI()
+        navigateToReports()
+        submitArrestReport()
+    }
+
+    /// Submit an LO Arrest Report through the type picker and typed report form,
+    /// and wait for the form sheet to close on success.
+    private func submitArrestReport() {
+        let createButton = find("create-report-button")
+        XCTAssertTrue(
+            createButton.waitForExistence(timeout: 15),
+            "Reports screen should offer create once report types load"
+        )
+        createButton.tap()
+
+        let typeCard = find("report-type-lo_arrest_report")
+        XCTAssertTrue(
+            typeCard.waitForExistence(timeout: 10),
+            "The type picker should offer the jail-support LO Arrest Report"
+        )
+        typeCard.tap()
+
+        // `field-<name>` identifies the form row; SwiftUI may attach it to the row
+        // container or flatten it onto the input itself, so resolve whichever is
+        // editable. iOS renders the template's `location` field as text
+        // (ReportFieldType has no location case), so all three required fields
+        // are fillable as text.
+        func textInput(in rowId: String, textView: Bool = false) -> XCUIElement {
+            let row = find(rowId)
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "Arrest report form should render \(rowId)")
+            let inner = textView ? row.textViews.firstMatch : row.textFields.firstMatch
+            return inner.exists ? inner : row
+        }
+
+        let locationInput = textInput(in: "field-location")
+        locationInput.tap()
+        locationInput.typeText("5th and Main")
+
+        let timeInput = textInput(in: "field-time")
+        timeInput.tap()
+        timeInput.typeText("14:30")
+
+        let detailsInput = textInput(in: "field-arrestee_details", textView: true)
+        detailsInput.tap()
+        detailsInput.typeText("Two arrestees, names unknown")
+
+        let submit = find("typed-report-submit")
+        XCTAssertTrue(submit.waitForExistence(timeout: 5), "The typed report form should have a submit button")
+        XCTAssertTrue(submit.isEnabled, "Submit should be enabled once the required fields are filled")
+        submit.tap()
+
+        XCTAssertTrue(
+            submit.waitForNonExistence(timeout: 30),
+            "The typed report sheet should close once the report is submitted"
+        )
+        XCTAssertFalse(find("typed-report-error").exists, "Report submission should not report an error")
+    }
+
+    /// Open the first row of the triage queue. The scenario's Given submitted a
+    /// conversion-enabled report, so the list cannot be empty.
+    private func openFirstTriageRow() {
+        navigateToTriage()
+        let triageList = find("triage-list")
+        XCTAssertTrue(
+            triageList.waitForExistence(timeout: 10),
+            "Triage queue should render its list — this scenario submitted a conversion-enabled report"
+        )
+
+        let firstRow = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
+            .firstMatch
+        XCTAssertTrue(
+            firstRow.waitForExistence(timeout: 5),
+            "Triage queue should list the report this scenario submitted ('triage-row-*')"
+        )
+        firstRow.tap()
+    }
+
     // MARK: - Scenario: Triage list shows reports or empty state
 
     /// Verifies the triage queue renders with content or appropriate empty state.
@@ -91,44 +177,30 @@ final class TriageUITests: BaseUITest {
     /// Verifies tapping a triage report row opens the detail view
     /// with title, status, and metadata.
     func testTriageDetailShowsInfo() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        given("a conversion-enabled report exists, submitted through the app's report form") {
+            launchAsAdminWithTriageReport()
         }
-        when("I navigate to triage and tap a report") {
-            navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
+        when("I navigate to triage and tap the report") {
+            openFirstTriageRow()
         }
         then("I should see the triage detail view with report info") {
-            let found = anyElementExists([
-                "triage-detail-view",
-                "triage-report-title",
-                "triage-report-status",
-            ], timeout: 5)
+            XCTAssertTrue(
+                anyElementExists([
+                    "triage-detail-view",
+                    "triage-report-title",
+                    "triage-report-status",
+                ], timeout: 5),
+                "Triage detail should open after tapping a report row"
+            )
 
-            if found {
-                let title = find("triage-report-title")
-                if title.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(title.exists, "Triage detail should show report title")
-                }
+            let title = find("triage-report-title")
+            XCTAssertTrue(title.waitForExistence(timeout: 3), "Triage detail should show report title")
 
-                let status = find("triage-report-status")
-                if status.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(status.exists, "Triage detail should show report status")
-                }
+            let status = find("triage-report-status")
+            XCTAssertTrue(status.waitForExistence(timeout: 3), "Triage detail should show report status")
 
-                let metadata = find("triage-metadata")
-                if metadata.waitForExistence(timeout: 3) {
-                    XCTAssertTrue(metadata.exists, "Triage detail should show metadata section")
-                }
-            }
-            // If no triage reports exist, cannot test detail — pass gracefully
+            let metadata = find("triage-metadata")
+            XCTAssertTrue(metadata.waitForExistence(timeout: 3), "Triage detail should show metadata section")
         }
     }
 
@@ -136,31 +208,22 @@ final class TriageUITests: BaseUITest {
 
     /// Verifies the "Convert to Case" button is present on the triage detail view.
     func testConvertToCaseButtonVisible() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        given("a conversion-enabled report exists, submitted through the app's report form") {
+            launchAsAdminWithTriageReport()
         }
-        when("I open a triage report detail") {
-            navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
+        when("I open the triage report detail") {
+            openFirstTriageRow()
         }
         then("the convert to case button should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(
+                anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5),
+                "Triage detail should open after tapping a report row"
+            )
 
+            // The submitted report is pending (not closed), so the detail offers conversion.
             let convertButton = scrollToFind("triage-convert-button", maxSwipes: 3)
-            if convertButton.exists {
-                XCTAssertTrue(convertButton.exists, "Convert to case button should be visible")
-                XCTAssertTrue(convertButton.isEnabled, "Convert to case button should be enabled")
-            }
-            // Button may not appear if the report type doesn't support case conversion
+            XCTAssertTrue(convertButton.exists, "Convert to case button should be visible")
+            XCTAssertTrue(convertButton.isEnabled, "Convert to case button should be enabled")
         }
     }
 
@@ -168,30 +231,24 @@ final class TriageUITests: BaseUITest {
 
     /// Verifies the report type label is displayed on the triage detail.
     func testTriageReportTypeLabelVisible() {
-        given("I am authenticated as admin with API") {
-            launchAsAdminWithAPI()
+        given("a conversion-enabled report exists, submitted through the app's report form") {
+            launchAsAdminWithTriageReport()
         }
-        when("I open a triage report detail") {
-            navigateToTriage()
-            let triageList = find("triage-list")
-            guard triageList.waitForExistence(timeout: 10) else { return }
-
-            let firstRow = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'triage-row-'"))
-                .firstMatch
-            guard firstRow.waitForExistence(timeout: 5) else { return }
-            firstRow.tap()
+        when("I open the triage report detail") {
+            openFirstTriageRow()
         }
         then("the report type label should be visible") {
-            guard anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5) else {
-                return
-            }
+            XCTAssertTrue(
+                anyElementExists(["triage-detail-view", "triage-report-title"], timeout: 5),
+                "Triage detail should open after tapping a report row"
+            )
 
+            // The submitted report is typed (lo_arrest_report), so the type badge renders.
             let typeLabel = find("triage-report-type")
-            if typeLabel.waitForExistence(timeout: 3) {
-                XCTAssertTrue(typeLabel.exists, "Report type label should be visible in triage detail")
-            }
-            // Type label only shows for typed reports — absence is valid for legacy reports
+            XCTAssertTrue(
+                typeLabel.waitForExistence(timeout: 5),
+                "Report type label should be visible in triage detail"
+            )
         }
     }
 

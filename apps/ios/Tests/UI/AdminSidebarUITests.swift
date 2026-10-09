@@ -182,7 +182,7 @@ final class AdminSidebarUITests: BaseUITest {
 
         let item = scrollToFind("admin-sidebar-item-hubs")
         guard item.exists else {
-            // Platform items may not appear if test user lacks role-super-admin
+            XCTFail("Platform hubs nav item should exist for a super-admin")
             return
         }
         item.tap()

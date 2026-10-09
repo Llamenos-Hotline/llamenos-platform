@@ -203,6 +203,26 @@ class BaseUITest: XCTestCase {
         launchConnected(["--test-admin"])
     }
 
+    // MARK: - CMS Template Fixture
+
+    /// Hubs that already have case management on with the jail-support template.
+    private static var cmsTemplateHubIds: Set<String> = []
+
+    /// Enable case management and apply the jail-support template (Arrest Case,
+    /// Mass Arrest Event, and the LO Arrest Report type whose `allowCaseConversion`
+    /// feeds the triage queue) to this class's hub through the real API. Runs once
+    /// per hub: re-applying a template replaces its entity types with new ids,
+    /// orphaning the records earlier tests in the class created.
+    func enableCaseManagementWithTemplate() {
+        Self.hubLock.lock()
+        let alreadyApplied = Self.cmsTemplateHubIds.contains(testHubId)
+        if !alreadyApplied { Self.cmsTemplateHubIds.insert(testHubId) }
+        Self.hubLock.unlock()
+        guard !alreadyApplied else { return }
+        TestAdminAPI.setCaseManagement(enabled: true, hubId: testHubId, baseURL: testHubURL)
+        TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
+    }
+
     // MARK: - Server State (deprecated)
 
     /// Deprecated: hub isolation via class-level createClassHub() replaces this.
@@ -213,13 +233,16 @@ class BaseUITest: XCTestCase {
 
     // MARK: - Simulation Helpers
 
-    /// Simulate an incoming call via the test simulation API.
-    /// Returns (callId, status) on success, or nil values on failure.
+    /// Simulate an incoming call to this class's hub via the test simulation API.
+    /// Returns (callId, status) on success, or empty strings on failure.
+    ///
+    /// The hub must be named: the server files a call without one under hub "",
+    /// which no connected app is ever looking at.
     @discardableResult
     func simulateIncomingCall(callerNumber: String = "+15551234567") -> (callId: String, status: String) {
         return simulationRequest(
             endpoint: "incoming-call",
-            body: ["callerNumber": callerNumber],
+            body: ["callerNumber": callerNumber, "hubId": testHubId],
             extractKeys: ("callId", "status")
         )
     }
@@ -260,8 +283,9 @@ class BaseUITest: XCTestCase {
         return result.0
     }
 
-    /// Simulate an incoming message via the test simulation API.
-    /// Returns (conversationId, messageId) on success.
+    /// Simulate an incoming message to this class's hub via the test simulation API.
+    /// Returns (conversationId, messageId) on success, or empty strings on failure.
+    /// Like `simulateIncomingCall`, it must name the hub or the conversation lands in hub "".
     @discardableResult
     func simulateIncomingMessage(
         senderNumber: String = "+15559876543",
@@ -270,7 +294,7 @@ class BaseUITest: XCTestCase {
     ) -> (conversationId: String, messageId: String) {
         return simulationRequest(
             endpoint: "incoming-message",
-            body: ["senderNumber": senderNumber, "body": body, "channel": channel],
+            body: ["senderNumber": senderNumber, "body": body, "channel": channel, "hubId": testHubId],
             extractKeys: ("conversationId", "messageId")
         )
     }
@@ -410,6 +434,17 @@ class BaseUITest: XCTestCase {
     func navigateToShifts() { navigateToTab(index: 4) }
     func navigateToSettings() { navigateToTab(index: 5) }
 
+    /// Navigate to the reports screen via the Dashboard quick action card.
+    /// The quick actions section is below identity, shift, and activity sections
+    /// in the List, so we must scroll down to find it.
+    func navigateToReports() {
+        scrollAndTap("dashboard-reports-action")
+
+        _ = anyElementExists([
+            "reports-list", "reports-empty-state", "reports-loading", "reports-error",
+        ])
+    }
+
     /// Open the admin panel from Settings, failing the test if it does not open.
     func navigateToAdminPanel() {
         navigateToSettings()
@@ -493,56 +528,6 @@ class BaseUITest: XCTestCase {
             }
             button.tap()
         }
-    }
-
-    /// Navigate through full onboarding: create identity, set + confirm PIN, reach dashboard.
-    ///
-    /// V3 device key model: there is no backup-confirmation step and no digit
-    /// PIN pad here — PINSetView.swift uses a free-text SecureField
-    /// ("pin-input"/"pin-submit") so a PIN or passphrase (8+ characters) can
-    /// be entered, and device keys are generated atomically once the same
-    /// value is entered twice (PINViewModel.handleSetPIN). The digit
-    /// PINPadView ("pin-pad", `enterPIN`) is only used on the lock/unlock
-    /// screen — see PINUnlockView.swift.
-    func completeOnboarding(hubURL: String = "https://test.example.org", pin: String = "12345678") {
-        // Enter hub URL
-        let hubURLInput = find("hub-url-input")
-        if hubURLInput.waitForExistence(timeout: 5) {
-            hubURLInput.tap()
-            hubURLInput.typeText(hubURL)
-            dismissKeyboard()
-        }
-
-        // Create identity
-        let createButton = find("create-identity")
-        if createButton.waitForExistence(timeout: 3) {
-            createButton.tap()
-        }
-
-        // Enter PIN (first entry)
-        let pinInput = find("pin-input")
-        guard pinInput.waitForExistence(timeout: 10) else { return }
-        pinInput.tap()
-        pinInput.typeText(pin)
-
-        let submitButton = find("pin-submit")
-        if submitButton.waitForExistence(timeout: 3) {
-            submitButton.tap()
-        }
-
-        // Confirm PIN (second entry)
-        if pinInput.waitForExistence(timeout: 5) {
-            pinInput.tap()
-            pinInput.typeText(pin)
-
-            if submitButton.waitForExistence(timeout: 3) {
-                submitButton.tap()
-            }
-        }
-
-        // Wait for dashboard
-        let dashboardTitle = find("dashboard-title")
-        _ = dashboardTitle.waitForExistence(timeout: 10)
     }
 
     /// Dismiss the keyboard by tapping a neutral area of the screen.

@@ -92,6 +92,7 @@ struct EventListView: View {
                 comment: "Case management must be enabled to use events."
             )
         )
+        .accessibilityIdentifier("events-cms-disabled")
     }
 
     // MARK: - Empty State
@@ -108,6 +109,7 @@ struct EventListView: View {
             actionLabel: NSLocalizedString("events_new_event", comment: "New Event"),
             actionAccessibilityID: "events-empty-create-btn"
         )
+        .accessibilityIdentifier("events-empty-state")
     }
 
     // MARK: - Event List Content
