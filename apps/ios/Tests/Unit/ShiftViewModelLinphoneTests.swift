@@ -47,9 +47,9 @@ struct ShiftViewModelLinphoneTests {
         let api = APIService(cryptoService: crypto, hubContext: hubContext)
         let vm = ShiftsViewModel(
             apiService: api,
-            cryptoService: crypto,
             hubContext: hubContext,
-            linphoneService: mock
+            linphoneService: mock,
+            shiftClockService: ShiftClockService(apiService: api)
         )
         return (vm, hubContext)
     }
