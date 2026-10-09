@@ -92,6 +92,7 @@
     # group, because a host that has the service DECLARED must serve it
     # whatever the inventory and the enablement flag say (#1697).
     _smoke_serves_kamailio: "{{ groups.get('llamenos_kamailio', []) | length == 0 or inventory_hostname in groups.get('llamenos_kamailio', []) }}"
+    _smoke_serves_coturn: "{{ groups.get('llamenos_coturn', []) | length == 0 or inventory_hostname in groups.get('llamenos_coturn', []) }}"
 
     # ── SIP TLS probe inputs ────────────────────────────────────────────────
     # Role defaults are not visible to a playbook, so every kamailio_* default
@@ -1110,6 +1111,59 @@
         smoke_check_detail: >-
           LOW DISK SPACE: {{ disk_free_gb.stdout | default('(unreadable)') | trim }} GiB free on /.
           At least 2 GiB is required for log rotation, Docker image pulls, and backups.
+      tags: always
+
+    # ─── TURN relay ──────────────────────────────────────────────────────────
+
+    # Issue #1689: coturn started with no explicit relay address enumerates
+    # every host interface — each docker bridge included — and can source the
+    # RTCP component of an allocation from an address its relay candidate never
+    # named, which an ICE peer is entitled to reject as an unknown source. The
+    # allocation still succeeds, so the failure is invisible until a call has
+    # one-way or absent audio. coturn announces the condition itself, once, at
+    # startup ("NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED"); the measurement
+    # is whether that line is in the container's log. A dead or absent
+    # container makes `docker compose logs` exit non-zero, which must not read
+    # as "configured" — hence the rc half of the verdict.
+    - name: Check coturn came up with an explicit relay address
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f "{{ app_dir }}/services/coturn/docker-compose.yml" logs --no-color coturn 2>&1
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: coturn_relay_addr
+      ignore_errors: true
+      when:
+        - llamenos_coturn_enabled | default(false) | bool
+        - _smoke_serves_coturn | bool
+      tags: always
+
+    - name: Record coturn explicit relay address result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_name: coturn explicit relay address configured
+        smoke_check_severity: fatal
+        smoke_check_probe: "{{ coturn_relay_addr | default({}) }}"
+        # Three halves: the log was actually read (rc 0), it is NON-EMPTY (an
+        # empty log would "pass" while measuring nothing — coturn without
+        # --log-file=stdout writes to a tmpfs file the driver never sees), and
+        # the enumeration warning is absent. The default on stdout contains
+        # the warning string itself, so an absent measurement can never read
+        # as "no warning found".
+        smoke_check_pass: >-
+          {{ coturn_relay_addr.rc | default(1) | int == 0
+             and (coturn_relay_addr.stdout | default('') | trim | length) > 0
+             and 'NO EXPLICIT RELAY ADDRESS' not in (coturn_relay_addr.stdout | default('NO EXPLICIT RELAY ADDRESS')) }}
+        smoke_check_detail: >-
+          coturn logged NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED (or its log
+          could not be read). It is enumerating the host's interfaces — docker
+          bridges included — and can source RTCP from an address the ICE peer
+          rejects (#1689: one-way/absent audio on a connected call). Set
+          turn_relay_ip / turn_listening_ip (roles/llamenos-coturn).
       tags: always
 
     # ─── Summary ─────────────────────────────────────────────────────────────

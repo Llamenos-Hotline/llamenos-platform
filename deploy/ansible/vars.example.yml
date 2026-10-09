@@ -236,6 +236,16 @@ turn_secret: ""
 # its own interfaces): `public/private`, e.g. 203.0.113.4/10.0.0.4. Without it
 # coturn allocates a relay candidate naming the private address.
 # turn_external_ip: ""
+# The address coturn listens on, and the address named in every relay
+# candidate. Both default to the host's primary address (the source of its
+# default route) and rarely need setting — but they must NEVER be empty: unset,
+# coturn enumerates every interface (each docker bridge included), logs
+# "NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED", and can source RTCP from an
+# address its relay candidate never named, which an ICE peer rejects (#1689).
+# Where the host has several public interfaces, set turn_relay_ip to the
+# address turn_host resolves to.
+# turn_listening_ip: "203.0.113.4"
+# turn_relay_ip: "203.0.113.4"
 # coturn's listening port, and the relay port range (one port per allocation,
 # so this bounds concurrent relayed calls). Both are opened on the firewall by
 # roles/llamenos-coturn.

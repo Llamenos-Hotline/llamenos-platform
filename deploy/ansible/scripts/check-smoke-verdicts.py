@@ -115,6 +115,7 @@ SIP_TLS = "SIP TLS listener bound"
 KAMAILIO = "Kamailio SIP proxy answering on its management socket"
 READY_SIP = "App readiness reports the SIP bridge dependency ok"
 READY_DEPS = "App readiness reports no failing dependency"
+COTURN = "coturn explicit relay address"
 
 # Ports the loopback probes use, and the playbook paths served on each.
 FIXTURE_PORTS = {
@@ -172,7 +173,7 @@ case "$1" in
     # Which compose subcommand? `-f <file>` and other flags may precede it.
     sub=""
     for a in "$@"; do
-      case "$a" in config|ps|exec) sub="$a"; break ;; esac
+      case "$a" in config|ps|exec|logs) sub="$a"; break ;; esac
     done
     if [ -n "${FIXTURE_DOCKER_COMPOSE_BROKEN:-}" ] && [ "$sub" != "exec" ]; then
       # A compose project the CLI cannot read at all. The probe must report
@@ -193,6 +194,20 @@ JSON
       # `docker compose ps --all --services` — the services that HAVE a
       # container. Default: both. #1697 is the case where sip-bridge does not.
       printf '%s\n' ${FIXTURE_ASTERISK_RUNNING-asterisk sip-bridge}
+      exit 0
+    fi
+    # `docker compose -f <file> logs --no-color coturn`: the #1689 probe reads
+    # the relay's startup log for the enumeration warning. FIXTURE_COTURN_LOG
+    # carries the log body; FIXTURE_COTURN=down makes the read itself fail.
+    if [ "$sub" = "logs" ]; then
+      if [ "${FIXTURE_COTURN:-up}" = "up" ]; then
+        # `-` not `:-`: an explicitly EMPTY value must stay empty so the
+        # broken_coturn_log_empty case can reach it.
+        printf '%s\n' "${FIXTURE_COTURN_LOG-0: : Relay address to use: 203.0.113.4}"
+      else
+        echo "no configuration file provided: not found" >&2
+        exit 1
+      fi
       exit 0
     fi
     svc=""
@@ -418,6 +433,7 @@ BASE_VARS = {
     "kamailio_tls_publish_anchor": True,
     "kamailio_tls_port": SIP_TLS_PORT,
     "kamailio_sip_domain": "sip.smoke.example.invalid",
+    "llamenos_coturn_enabled": False,
 }
 
 # What /api/health/ready reports by default: every dependency present and ok.
@@ -493,7 +509,7 @@ def cases() -> list[Case]:
         # Off in BASE_VARS: these must be SKIPPED, not PASS.
         NTFY: "SKIPPED", NTFY_PUBLIC: "SKIPPED", UPDATES: "SKIPPED",
         CADDY: "SKIPPED", HSTS: "SKIPPED", XFO: "SKIPPED",
-        SIP_TLS: "SKIPPED", KAMAILIO: "SKIPPED",
+        SIP_TLS: "SKIPPED", KAMAILIO: "SKIPPED", COTURN: "SKIPPED",
     }
     # Turning the SIP edge on for a case. `kamailio_enabled` alone is what the
     # Kamailio probe keys off; the TLS probe needs kamailio_tls_enabled too.
@@ -742,6 +758,41 @@ def cases() -> list[Case]:
                     fixture_env={"FIXTURE_SIP_CONNECTED": "false"},
                     expect={SIP: "FAIL"}, expect_result="FAILED",
                     note="200 with connected=false is a dead call path, not a pass"))
+    # ── issue #1689: the coturn enumeration warning must fail the suite ──
+    # Enabled with a clean startup log: the warning string is absent, so PASS.
+    out.append(Case("healthy_coturn",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    expect={COTURN: "PASS"}, expect_result="PASSED",
+                    note="startup log names one relay address, no warning"))
+    # The defect itself, injected: the startup log carries the exact line the
+    # deployed host produced. The suite must FAIL — this is the verdict that
+    # used to be discoverable only by reading logs after the fact.
+    out.append(Case("broken_coturn_relay",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN_LOG":
+                                 "0: : NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED\n"
+                                 "0: : Relay address to use: 172.18.0.1\n"
+                                 "0: : Relay address to use: 172.19.0.1"},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED",
+                    note="issue #1689: coturn enumerated the docker bridges"))
+    # Enabled but the log cannot be read at all (container gone). rc != 0 must
+    # not read as "no warning found".
+    out.append(Case("broken_coturn_log_unreadable",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN": "down"},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED"))
+    # An EMPTY log carries no warning and still must not pass: coturn without
+    # --log-file=stdout writes to a tmpfs file, and `docker compose logs`
+    # returning nothing would otherwise read as "no warning found" while the
+    # check measured nothing.
+    out.append(Case("broken_coturn_log_empty",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN_LOG": ""},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED"))
+    # Disabled feature: the probe never runs and the verdict is SKIPPED.
+    out.append(Case("skip_coturn",
+                    extra_vars={"llamenos_coturn_enabled": False},
+                    expect={COTURN: "SKIPPED"}, expect_result="PASSED"))
     return out
 
 
@@ -756,7 +807,7 @@ class Harness:
             p.write_text(body)
             p.chmod(0o755)
         self.app_dir = tmp / "app"
-        for svc in ("postgres", "rustfs", "kamailio", "asterisk"):
+        for svc in ("postgres", "rustfs", "kamailio", "asterisk", "coturn"):
             (self.app_dir / "services" / svc).mkdir(parents=True, exist_ok=True)
         self.tls_dir = self.app_dir / "services" / "kamailio" / "tls"
         self.tls_dir.mkdir(parents=True, exist_ok=True)

@@ -104,6 +104,14 @@ services:
 
   coturn:
     # Keeps the base file's relay port range and --no-cli; adds --verbose.
+    # --listening-ip/--relay-ip pinned for the same reason as the base file
+    # (#1689): unset, coturn enumerates every runner interface and can source
+    # RTCP from an address the candidate never named. Loopback is correct here
+    # — no CI test allocates a relay (the telephony e2e suite drives SIP/RTP
+    # through Asterisk, not TURN); the service is up so the stack mirrors
+    # production topology and its healthcheck must pass.
+    # --log-file=stdout keeps the startup log where `docker compose logs`
+    # reads it (coturn's default is a /var/tmp file the driver never sees).
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
@@ -112,7 +120,10 @@ services:
       --listening-port=${TURN_PORT:-3478}
       --min-port=${TURN_RELAY_MIN_PORT:-49160}
       --max-port=${TURN_RELAY_MAX_PORT:-49200}
+      --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
       --no-tls
       --no-dtls
       --no-cli
+      --log-file=stdout
       --verbose
