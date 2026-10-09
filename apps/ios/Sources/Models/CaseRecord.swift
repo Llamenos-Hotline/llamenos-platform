@@ -221,8 +221,43 @@ struct EntityTypesResponse: Codable, Sendable {
 
 // InteractionsResponse and EvidenceListResponse are defined in generated Types.swift.
 
-struct RecordContactsResponse: Codable, Sendable {
+/// The contacts route serializes raw `case_contacts` rows: the record key is
+/// `caseId` rather than the `recordId` that `recordContactListResponseSchema`
+/// (and the generated `RecordContact`) declares, and the `role` column is
+/// nullable while the schema requires a string. Strict decoding of a non-empty
+/// list therefore throws and callers fall back to an empty list, so a case
+/// with linked contacts rendered the empty state (#1246). Accept both key
+/// spellings and a null role until the route is aligned with the schema.
+struct RecordContactsResponse: Decodable, Sendable {
     let contacts: [RecordContact]
+
+    private enum CodingKeys: String, CodingKey {
+        case contacts
+    }
+
+    private enum ContactRowKeys: String, CodingKey {
+        case recordId, caseId, contactId, role, addedAt, addedBy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        var rows = try container.nestedUnkeyedContainer(forKey: .contacts)
+        var decoded: [RecordContact] = []
+        while !rows.isAtEnd {
+            let row = try rows.nestedContainer(keyedBy: ContactRowKeys.self)
+            let recordId = try row.decodeIfPresent(String.self, forKey: .recordId)
+                ?? row.decodeIfPresent(String.self, forKey: .caseId)
+                ?? ""
+            decoded.append(RecordContact(
+                addedAt: try row.decode(String.self, forKey: .addedAt),
+                addedBy: try row.decode(String.self, forKey: .addedBy),
+                contactID: try row.decode(String.self, forKey: .contactId),
+                recordID: recordId,
+                role: try row.decodeIfPresent(String.self, forKey: .role) ?? ""
+            ))
+        }
+        contacts = decoded
+    }
 }
 
 struct CaseManagementEnabledResponse: Codable, Sendable {
