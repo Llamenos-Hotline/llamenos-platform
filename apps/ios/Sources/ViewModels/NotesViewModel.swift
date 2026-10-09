@@ -172,38 +172,31 @@ final class NotesViewModel {
     func decryptNote(_ encrypted: NoteResponse) -> DecryptedNote? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
-        // Find our envelope — check author envelope first (volunteer's own note)
-        var envelope: HpkeEnvelope?
-
-        if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-            envelope = HpkeEnvelope(
-                v: 3,
-                labelId: 0,
-                enc: authorEnv.enc,
-                ct: authorEnv.ct
-            )
+        // The server records `authorPubkey` as the author's SIGNING key, while every
+        // envelope wraps for an ENCRYPTION key — comparing the two can never select an
+        // envelope, and did silently drop every note the author wrote themselves. The
+        // author's copy opens only when we are the author; HPKE failing on it is the
+        // check, so try it and fall through to our admin copy.
+        var candidates: [HpkeEnvelope] = []
+        if let authorEnv = encrypted.authorEnvelope {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct))
+        }
+        if let adminEnvs = encrypted.adminEnvelopes,
+           let ourEnvelope = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: ourEnvelope.enc, ct: ourEnvelope.ct))
         }
 
-        // Then check admin envelopes
-        if envelope == nil, let adminEnvs = encrypted.adminEnvelopes {
-            if let ourEnvelope = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                envelope = HpkeEnvelope(
-                    v: 3,
-                    labelId: 0,
-                    enc: ourEnvelope.enc,
-                    ct: ourEnvelope.ct
-                )
-            }
+        for envelope in candidates {
+            if let note = decryptNote(encrypted, envelope: envelope) { return note }
         }
+        return nil
+    }
 
-        guard let hpkeEnvelope = envelope else {
-            return nil
-        }
-
+    private func decryptNote(_ encrypted: NoteResponse, envelope: HpkeEnvelope) -> DecryptedNote? {
         do {
             let decryptedJSON = try cryptoService.decryptNote(
                 ciphertextHex: encrypted.encryptedContent,
-                envelope: hpkeEnvelope
+                envelope: envelope
             )
 
             // Plain decoder, matching the plain encoder above.

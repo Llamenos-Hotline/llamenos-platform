@@ -116,10 +116,18 @@ final class NoteFlowUITests: BaseUITest {
         textEditor.typeText("Test note from UI test - \(Date().timeIntervalSince1970)")
 
         // A note belongs to a call: the server rejects one with neither a call nor a
-        // conversation (createNoteBodySchema), so text alone must not enable Save.
+        // conversation (createNoteBodySchema), so text alone must not save. XCUITest
+        // reports isEnabled=true for a navigation-bar button item regardless of
+        // .disabled, so assert the behavior — tapping Save keeps the sheet open and
+        // nothing reaches the server — not the control's state.
         let saveButton = find("save-note")
         XCTAssertTrue(saveButton.exists, "Save button should exist")
-        XCTAssertFalse(saveButton.isEnabled, "Save button should stay disabled until a call is entered")
+        saveButton.tap()
+        XCTAssertTrue(
+            textEditor.waitForExistence(timeout: 2),
+            "The sheet should stay open when saving without a call ID"
+        )
+        XCTAssertFalse(find("note-create-error").exists, "A blocked save should not reach the server")
 
         let callIdField = scrollToVisible("note-call-id-input")
         XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
