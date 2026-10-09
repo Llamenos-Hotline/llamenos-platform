@@ -54,15 +54,14 @@ struct NotesListResponse: Codable, Sendable {
     let total: Int
 }
 
-// MARK: - CreateNoteRequest
+// MARK: - NoteDetailResponse
 
-/// Request body for `POST /api/notes`.
-struct CreateNoteRequest: Encodable, Sendable {
-    let callId: String?
-    let conversationId: String?
-    let encryptedContent: String
-    let authorEnvelope: ProtocolKeyEnvelope?
-    let adminEnvelopes: [RecipientEnvelope]?
+/// Response wrapper for `POST /api/notes` and `PATCH /api/notes/:id` — both answer
+/// `201/200 { note }` (apps/worker/routes/notes.ts), not a bare note object. Local
+/// like `NotesListResponse` because the schema registry has no named schema for the
+/// single-note wrapper.
+struct NoteDetailResponse: Decodable, Sendable {
+    let note: NoteResponse
 }
 
 // MARK: - AnyCodableValue

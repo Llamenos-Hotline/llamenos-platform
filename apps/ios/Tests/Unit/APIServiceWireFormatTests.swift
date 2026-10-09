@@ -207,12 +207,15 @@ final class APIServiceWireFormatTests: XCTestCase {
         [
             // POST /api/notes — createNoteBodySchema. authorEnvelope and adminEnvelopes
             // are `.optional()`: snake_cased, they were dropped rather than rejected.
-            ("createNote", CreateNoteRequest(
-                callId: "11111111-1111-4111-8111-111111111111",
-                conversationId: nil,
+            ("createNote", CreateNoteBody(
+                adminEnvelopes: [Self.admin],
+                authorEnvelope: SharedAuthorEnvelope(ct: Self.ct, enc: Self.enc),
+                callID: "11111111-1111-4111-8111-111111111111",
+                caseID: nil,
+                contactHash: nil,
+                conversationID: nil,
                 encryptedContent: Self.ct,
-                authorEnvelope: ProtocolKeyEnvelope(ct: Self.ct, enc: Self.enc),
-                adminEnvelopes: [Self.recipient]
+                interactionTypeHash: nil
             )),
 
             // POST /api/conversations/:id/messages — sendMessageBodySchema. BOTH the
@@ -372,12 +375,15 @@ final class APIServiceWireFormatTests: XCTestCase {
     }
 
     func testEnvelopeAndCiphertextKeysSurviveEncoding() async throws {
-        let note = try await wireBytes(body: CreateNoteRequest(
-            callId: "11111111-1111-4111-8111-111111111111",
-            conversationId: nil,
+        let note = try await wireBytes(body: CreateNoteBody(
+            adminEnvelopes: [Self.admin],
+            authorEnvelope: SharedAuthorEnvelope(ct: Self.ct, enc: Self.enc),
+            callID: "11111111-1111-4111-8111-111111111111",
+            caseID: nil,
+            contactHash: nil,
+            conversationID: nil,
             encryptedContent: Self.ct,
-            authorEnvelope: ProtocolKeyEnvelope(ct: Self.ct, enc: Self.enc),
-            adminEnvelopes: [Self.recipient]
+            interactionTypeHash: nil
         ))
         let noteKeys = try allKeys(note)
         for key in ["encryptedContent", "authorEnvelope", "adminEnvelopes", "callId"] {
@@ -474,10 +480,15 @@ final class APIServiceWireFormatTests: XCTestCase {
         let legacy = JSONEncoder()
         legacy.keyEncodingStrategy = .convertToSnakeCase
 
-        let note = try legacy.encode(CreateNoteRequest(
-            callId: "c1", conversationId: nil, encryptedContent: Self.ct,
-            authorEnvelope: ProtocolKeyEnvelope(ct: Self.ct, enc: Self.enc),
-            adminEnvelopes: [Self.recipient]
+        let note = try legacy.encode(CreateNoteBody(
+            adminEnvelopes: [Self.admin],
+            authorEnvelope: SharedAuthorEnvelope(ct: Self.ct, enc: Self.enc),
+            callID: "c1",
+            caseID: nil,
+            contactHash: nil,
+            conversationID: nil,
+            encryptedContent: Self.ct,
+            interactionTypeHash: nil
         ))
         let noteKeys = try allKeys(note)
         XCTAssertTrue(noteKeys.contains("encrypted_content"))
