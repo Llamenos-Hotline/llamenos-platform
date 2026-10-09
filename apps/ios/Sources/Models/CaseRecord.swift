@@ -167,19 +167,13 @@ struct CaseFieldValidation: Codable, Sendable {
 }
 
 // MARK: - Generated type extensions
-// CaseInteraction, Interaction, Evidence, and RecordContact are defined
-// in the generated Types.swift (protocol codegen).
+// CaseInteraction, Interaction, and Evidence are defined in the generated
+// Types.swift (protocol codegen). Generated wire models are decode-only here:
+// nothing in the app constructs one memberwise.
 
 extension CaseInteraction: Identifiable {}
 extension Interaction: Identifiable {}
 extension Evidence: Identifiable {}
-
-extension RecordContact: Identifiable {
-    public var id: String { contactID }
-
-    /// Convenience alias matching the JSON key name used in view code.
-    var contactId: String { contactID }
-}
 
 // MARK: - EvidenceItem
 // Client-only: generated `Evidence` uses typed enums (`SharedClassification`,
@@ -226,38 +220,39 @@ struct EntityTypesResponse: Codable, Sendable {
 /// (and the generated `RecordContact`) declares, and the `role` column is
 /// nullable while the schema requires a string. Strict decoding of a non-empty
 /// list therefore throws and callers fall back to an empty list, so a case
-/// with linked contacts rendered the empty state (#1246). Accept both key
-/// spellings and a null role until the route is aligned with the schema.
-struct RecordContactsResponse: Decodable, Sendable {
-    let contacts: [RecordContact]
+/// with linked contacts rendered the empty state (#1246). This local wire
+/// model accepts both key spellings and a null role until the route is
+/// aligned with the schema, keeping the generated `RecordContact` decode-only.
+struct RecordContactLink: Decodable, Identifiable, Sendable {
+    let recordID: String
+    let contactID: String
+    let role: String
+    let addedAt: String
+    let addedBy: String
 
-    private enum CodingKeys: String, CodingKey {
-        case contacts
-    }
+    var id: String { contactID }
 
-    private enum ContactRowKeys: String, CodingKey {
+    /// Convenience alias matching the JSON key name used in view code.
+    var contactId: String { contactID }
+
+    private enum RowKeys: String, CodingKey {
         case recordId, caseId, contactId, role, addedAt, addedBy
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        var rows = try container.nestedUnkeyedContainer(forKey: .contacts)
-        var decoded: [RecordContact] = []
-        while !rows.isAtEnd {
-            let row = try rows.nestedContainer(keyedBy: ContactRowKeys.self)
-            let recordId = try row.decodeIfPresent(String.self, forKey: .recordId)
-                ?? row.decodeIfPresent(String.self, forKey: .caseId)
-                ?? ""
-            decoded.append(RecordContact(
-                addedAt: try row.decode(String.self, forKey: .addedAt),
-                addedBy: try row.decode(String.self, forKey: .addedBy),
-                contactID: try row.decode(String.self, forKey: .contactId),
-                recordID: recordId,
-                role: try row.decodeIfPresent(String.self, forKey: .role) ?? ""
-            ))
-        }
-        contacts = decoded
+        let row = try decoder.container(keyedBy: RowKeys.self)
+        recordID = try row.decodeIfPresent(String.self, forKey: .recordId)
+            ?? row.decodeIfPresent(String.self, forKey: .caseId)
+            ?? ""
+        contactID = try row.decode(String.self, forKey: .contactId)
+        role = try row.decodeIfPresent(String.self, forKey: .role) ?? ""
+        addedAt = try row.decode(String.self, forKey: .addedAt)
+        addedBy = try row.decode(String.self, forKey: .addedBy)
     }
+}
+
+struct RecordContactsResponse: Decodable, Sendable {
+    let contacts: [RecordContactLink]
 }
 
 struct CaseManagementEnabledResponse: Codable, Sendable {
