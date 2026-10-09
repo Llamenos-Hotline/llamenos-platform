@@ -2,8 +2,18 @@ import SwiftUI
 
 // MARK: - SpamSettingsView
 
-/// Admin view for configuring spam mitigation: rate limiting, voice CAPTCHA,
-/// and known-number bypass.
+/// Admin view for the hub's spam mitigation: the per-number rate limit, how
+/// long an offending number stays blocked, and the voice CAPTCHA.
+///
+/// Those four are the whole of `spamSettingsSchema`, surfaced to Swift as the
+/// generated `SpamSettings`. The screen used to offer a "max calls per hour"
+/// stepper and a "known number bypass" switch over a hand-written
+/// `{ maxCallsPerHour, voiceCaptchaEnabled, knownNumberBypass }`: the rate
+/// limit is per *minute*, the block duration was not offered at all, and the
+/// server has no known-number bypass — so that switch promised to exempt
+/// repeat callers from the CAPTCHA and controlled nothing. The load could not
+/// decode and the Save button sent `PUT /api/settings/spam`, which answers 404
+/// (#1724).
 struct SpamSettingsView: View {
     @Bindable var viewModel: AdminViewModel
 
@@ -20,7 +30,6 @@ struct SpamSettingsView: View {
             } else {
                 rateLimitSection
                 captchaSection
-                bypassSection
                 saveSection
 
                 if let error = viewModel.errorMessage {
@@ -28,6 +37,7 @@ struct SpamSettingsView: View {
                         Text(error)
                             .font(.brand(.footnote))
                             .foregroundStyle(Color.brandDestructive)
+                            .accessibilityIdentifier("spam-settings-error")
                     }
                 }
 
@@ -36,6 +46,7 @@ struct SpamSettingsView: View {
                         Text(success)
                             .font(.brand(.footnote))
                             .foregroundStyle(.green)
+                            .accessibilityIdentifier("spam-settings-success")
                     }
                 }
             }
@@ -52,39 +63,45 @@ struct SpamSettingsView: View {
 
     private var rateLimitSection: some View {
         Section {
-            Stepper(
-                value: Binding(
-                    get: { viewModel.spamSettings.maxCallsPerHour },
-                    set: { viewModel.spamSettings.maxCallsPerHour = $0 }
-                ),
-                in: 1...100
-            ) {
+            Toggle(isOn: $viewModel.spamRateLimitEnabled) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString(
-                        "admin_spam_max_calls",
-                        comment: "Max Calls Per Hour"
-                    ))
-                    .font(.brand(.body))
+                    Text(NSLocalizedString("spam_rate_limiting", comment: "Rate Limiting"))
+                        .font(.brand(.body))
 
-                    Text(L10n.format(
-                        "admin_spam_max_calls_value",
-                        comment: "%d calls per number per hour",
-                        viewModel.spamSettings.maxCallsPerHour
+                    Text(NSLocalizedString(
+                        "spam_rate_limiting_description",
+                        comment: "Limit repeated calls from the same number"
                     ))
-                    .font(.brand(.subheadline))
-                    .foregroundStyle(Color.brandPrimary)
-                    .fontWeight(.medium)
+                    .font(.brand(.caption))
+                    .foregroundStyle(Color.brandMutedForeground)
                 }
             }
-            .accessibilityIdentifier("spam-max-calls-stepper")
+            .tint(Color.brandPrimary)
+            .accessibilityIdentifier("spam-rate-limit-toggle")
+
+            countSlider(
+                title: NSLocalizedString(
+                    "spam_max_calls_per_minute",
+                    comment: "Max calls per minute per number"
+                ),
+                identifier: "spam-max-calls",
+                range: AdminViewModel.maxCallsPerMinuteRange,
+                step: 1,
+                value: $viewModel.spamMaxCallsPerMinute
+            )
+
+            countSlider(
+                title: NSLocalizedString(
+                    "spam_block_duration",
+                    comment: "Block duration (minutes)"
+                ),
+                identifier: "spam-block-duration",
+                range: AdminViewModel.blockDurationMinutesRange,
+                step: 15,
+                value: $viewModel.spamBlockDurationMinutes
+            )
         } header: {
             Text(NSLocalizedString("admin_spam_rate_limit_header", comment: "Rate Limiting"))
-        } footer: {
-            Text(NSLocalizedString(
-                "admin_spam_rate_limit_footer",
-                comment: "Limit how many times the same number can call within one hour. Excess calls are rejected."
-            ))
-            .font(.brand(.caption))
         }
     }
 
@@ -92,20 +109,14 @@ struct SpamSettingsView: View {
 
     private var captchaSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.spamSettings.voiceCaptchaEnabled },
-                set: { viewModel.spamSettings.voiceCaptchaEnabled = $0 }
-            )) {
+            Toggle(isOn: $viewModel.spamVoiceCaptchaEnabled) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString(
-                        "admin_spam_voice_captcha",
-                        comment: "Voice CAPTCHA"
-                    ))
-                    .font(.brand(.body))
+                    Text(NSLocalizedString("spam_voice_captcha", comment: "Voice CAPTCHA"))
+                        .font(.brand(.body))
 
                     Text(NSLocalizedString(
-                        "admin_spam_voice_captcha_description",
-                        comment: "Require callers to press randomized digits before connecting to a volunteer."
+                        "spam_voice_captcha_description",
+                        comment: "Require callers to enter a random number before connecting"
                     ))
                     .font(.brand(.caption))
                     .foregroundStyle(Color.brandMutedForeground)
@@ -118,33 +129,50 @@ struct SpamSettingsView: View {
         }
     }
 
-    // MARK: - Bypass Section
-
-    private var bypassSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.spamSettings.knownNumberBypass },
-                set: { viewModel.spamSettings.knownNumberBypass = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString(
-                        "admin_spam_known_bypass",
-                        comment: "Known Number Bypass"
-                    ))
+    /// One labelled slider over a whole-number setting, matching the shape the
+    /// call settings screen uses.
+    ///
+    /// The current value carries its own identifier (`<identifier>-value`), and
+    /// sits outside the slider, so a test can read what the screen is about to
+    /// save and compare it with what the server stored. The number itself is
+    /// formatted by Foundation rather than through a localized format string:
+    /// it is a bare count, and the unit is already in the label.
+    ///
+    /// A slider rather than a `Stepper` on purpose. Putting the value label
+    /// inside a `Stepper`'s own label displaces the stepper's accessibility
+    /// element, so neither the value nor its Increment button is reliably
+    /// addressable — and a control a test cannot drive is how the four
+    /// `…HasSaveButton` assertions this screen used to carry became the only
+    /// thing anyone checked.
+    private func countSlider(
+        title: String,
+        identifier: String,
+        range: ClosedRange<Int>,
+        step: Int,
+        value: Binding<Int>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
                     .font(.brand(.body))
-
-                    Text(NSLocalizedString(
-                        "admin_spam_known_bypass_description",
-                        comment: "Skip CAPTCHA and rate limits for numbers that have called before without issues."
-                    ))
-                    .font(.brand(.caption))
-                    .foregroundStyle(Color.brandMutedForeground)
-                }
+                Spacer()
+                Text(value.wrappedValue.formatted())
+                    .font(.brand(.body))
+                    .foregroundStyle(Color.brandPrimary)
+                    .fontWeight(.medium)
+                    .accessibilityIdentifier("\(identifier)-value")
             }
+
+            Slider(
+                value: Binding(
+                    get: { Double(value.wrappedValue) },
+                    set: { value.wrappedValue = Int($0) }
+                ),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Double(step)
+            )
             .tint(Color.brandPrimary)
-            .accessibilityIdentifier("spam-bypass-toggle")
-        } header: {
-            Text(NSLocalizedString("admin_spam_bypass_header", comment: "Exemptions"))
+            .accessibilityIdentifier("\(identifier)-slider")
         }
     }
 

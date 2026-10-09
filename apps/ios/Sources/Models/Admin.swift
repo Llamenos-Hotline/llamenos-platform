@@ -279,42 +279,21 @@ struct CreateReportCategoryRequest: Encodable, Sendable {
     let name: String
 }
 
-// MARK: - Client Telephony Provider
-// Client-only: UI display properties (displayName) for provider selection.
-
-/// Supported telephony providers (client-side enum with UI properties).
-/// Named `ClientTelephonyProvider` to avoid conflict with generated `TelephonyProvider`.
-enum ClientTelephonyProvider: String, Codable, Sendable, CaseIterable {
-    case twilio
-    case signalwire
-    case vonage
-    case plivo
-    case asterisk
-
-    var displayName: String {
-        switch self {
-        case .twilio: return "Twilio"
-        case .signalwire: return "SignalWire"
-        case .vonage: return "Vonage"
-        case .plivo: return "Plivo"
-        case .asterisk: return "Asterisk"
-        }
-    }
-}
-
-/// Telephony provider configuration from the API.
-struct TelephonySettings: Codable, Sendable {
-    var provider: String
-    var accountSid: String
-    var authToken: String
-    var phoneNumber: String
-
-    /// Parsed provider enum.
-    var telephonyProvider: ClientTelephonyProvider {
-        get { ClientTelephonyProvider(rawValue: provider) ?? .twilio }
-        set { provider = newValue.rawValue }
-    }
-}
+// MARK: - Telephony Provider Selection
+//
+// The telephony screen used to hold a hand-written `ClientTelephonyProvider`
+// enum listing five providers, with its own `displayName`, and a hand-written
+// `TelephonySettings { provider, accountSid, authToken, phoneNumber }` that
+// described neither the read shape (`telephonyProviderSchema`, surfaced as
+// `TelephonyProvider`) nor the write shape (`configureProviderRequestSchema`,
+// as `ConfigureProviderRequest`). An operator on Telnyx, Bandwidth or
+// FreeSWITCH could not select their own provider at all.
+//
+// Both are gone. The screen uses the generated `SharedProviderType`, whose
+// eight cases are exactly the eight `telephonyProviderTypeSchema` accepts, and
+// `ProviderInfo.all` (ViewModels/ProviderSetup/ProviderSetupViewModel.swift) —
+// which already listed all eight, in picker order, with the `displayName` the
+// provider-setup screens show. See #1724.
 
 // MARK: - Client Call Settings
 // Client-only: generated `CallSettings` has different fields (maxDuration: Double, etc.).
@@ -327,34 +306,16 @@ struct ClientCallSettings: Codable, Sendable {
     var parallelRingCount: Int
 }
 
-// MARK: - Client IVR Languages
-// Client-only: generated `IvrLanguages` has `languages: [String]?` while
-// the client uses `[String: Bool]` (language code → enabled/disabled map).
-
-/// IVR language configuration from the API (client-side model).
-/// Named `ClientIvrLanguages` to avoid conflict with generated `IvrLanguages`.
-struct ClientIvrLanguages: Codable, Sendable {
-    var languages: [String: Bool]
-}
-
-// MARK: - Client Transcription Settings
-// Client-only: no matching generated type.
-
-/// Transcription configuration from the API (client-side model).
-struct ClientTranscriptionSettings: Codable, Sendable {
-    var enabled: Bool
-    var allowVolunteerOptOut: Bool
-}
-
-// MARK: - Client Spam Settings
-// Client-only: no matching generated type.
-
-/// Spam mitigation configuration from the API (client-side model).
-struct ClientSpamSettings: Codable, Sendable {
-    var maxCallsPerHour: Int
-    var voiceCaptchaEnabled: Bool
-    var knownNumberBypass: Bool
-}
+// The IVR, transcription and spam screens used to each carry a hand-written
+// `Client*` struct here. Every one of them named fields the server does not
+// have — `ClientIvrLanguages.languages` as a `[String: Bool]` map against the
+// ordered `enabledLanguages` array, `ClientTranscriptionSettings.enabled /
+// allowVolunteerOptOut` against `globalEnabled / allowUserOptOut`, and
+// `ClientSpamSettings.maxCallsPerHour / knownNumberBypass` against
+// `maxCallsPerMinute / rateLimitEnabled / blockDurationMinutes` — so every GET
+// failed to decode and every screen showed hardcoded defaults behind an error
+// banner. They are gone; the screens use the generated `IvrLanguages`,
+// `TranscriptionSettings` and `SpamSettings`. See #1724.
 
 // MARK: - System Health
 // Client-only: generated `HealthResponse` has different shape (checks array, not named services).

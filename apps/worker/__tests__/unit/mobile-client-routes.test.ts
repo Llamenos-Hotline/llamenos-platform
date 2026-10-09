@@ -217,16 +217,6 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     // #1723 — the iOS call settings screen, fixed in its own pull request.
     'PUT /api/settings/call': '#1723',
 
-    // #1724 — the four iOS admin settings screens, fixed in the iOS half of
-    // this issue. Listed because that is a separate pull request: whichever of
-    // the two lands second deletes these, and the "still reached by a client"
-    // test below names them rather than leaving them to rot.
-    'GET /api/settings/telephony': '#1724 (iOS)',
-    'PUT /api/settings/telephony': '#1724 (iOS)',
-    'PUT /api/settings/spam': '#1724 (iOS)',
-    'PUT /api/settings/transcription': '#1724 (iOS)',
-    'PUT /api/settings/ivr-languages': '#1724 (iOS)',
-
     // #1701 — iOS admin screens against routes that do not exist. The members
     // and invite endpoints live under /api/users and /api/invites.
     'GET /api/identity/members': '#1701',

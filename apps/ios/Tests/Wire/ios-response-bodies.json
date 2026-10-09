@@ -57,6 +57,60 @@
         "unreadCount",
         "assignedVolunteerPubkey"
       ]
+    },
+    {
+      "id": "telephonyProvider",
+      "endpoint": "GET /api/settings/telephony-provider",
+      "module": "@protocol/schemas/settings",
+      "schema": "telephonyProviderSchema",
+      "swiftType": "TelephonyProvider",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "type"
+      ],
+      "absentFromServer": [
+        "provider"
+      ]
+    },
+    {
+      "id": "transcriptionSettings",
+      "endpoint": "GET /api/settings/transcription and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "transcriptionSettingsSchema",
+      "swiftType": "TranscriptionSettings",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [],
+      "absentFromServer": [
+        "enabled",
+        "allowVolunteerOptOut"
+      ]
+    },
+    {
+      "id": "spamSettings",
+      "endpoint": "GET /api/settings/spam and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "spamSettingsSchema",
+      "swiftType": "SpamSettings",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [],
+      "absentFromServer": [
+        "maxCallsPerHour",
+        "knownNumberBypass"
+      ]
+    },
+    {
+      "id": "ivrLanguages",
+      "endpoint": "GET /api/settings/ivr-languages and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "ivrLanguagesSchema",
+      "swiftType": "IvrLanguages",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "enabledLanguages"
+      ],
+      "absentFromServer": [
+        "languages"
+      ]
     }
   ],
   "responses": {
@@ -93,6 +147,29 @@
       "updatedAt": "2026-10-07T12:00:00.000Z",
       "lastMessageAt": "2026-10-07T12:00:00.000Z",
       "messageCount": 3
+    },
+    "telephonyProvider": {
+      "type": "twilio",
+      "phoneNumber": "+15550001111",
+      "accountSid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "transcriptionSettings": {
+      "globalEnabled": true,
+      "allowUserOptOut": false
+    },
+    "spamSettings": {
+      "voiceCaptchaEnabled": false,
+      "rateLimitEnabled": true,
+      "maxCallsPerMinute": 3,
+      "blockDurationMinutes": 30
+    },
+    "ivrLanguages": {
+      "enabledLanguages": [
+        "es",
+        "en",
+        "zh"
+      ]
     }
   }
 }

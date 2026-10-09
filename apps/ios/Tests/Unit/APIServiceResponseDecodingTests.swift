@@ -172,6 +172,112 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         }
     }
 
+    // MARK: - #1724: the four admin settings screens
+
+    /// Each of these screens decoded its route's answer into a hand-written
+    /// `Client*` struct naming fields the server does not have, so the GET threw
+    /// and the screen fell back to hardcoded defaults behind an error banner.
+    /// The generated types must decode the real payload, and — asserted
+    /// directly, so "it decodes" cannot be satisfied by a model that accepts
+    /// either spelling — the hand-written ones must not.
+
+    func testTheStoredTelephonyProviderDecodes() throws {
+        let provider = try decoder.decode(TelephonyProvider.self, from: try payload("telephonyProvider"))
+        XCTAssertEqual(provider.type, .twilio)
+        XCTAssertEqual(provider.phoneNumber, "+15550001111")
+        XCTAssertEqual(provider.accountSid, "AC" + String(repeating: "a", count: 32))
+    }
+
+    /// `GET /api/settings/telephony-provider` answers a bare `null` until a
+    /// provider has been configured. The screen's empty state depends on that
+    /// decoding to nil rather than throwing.
+    func testAnUnconfiguredTelephonyProviderDecodesAsNil() throws {
+        let value = try decoder.decode(TelephonyProvider?.self, from: Data("null".utf8))
+        XCTAssertNil(value)
+    }
+
+    func testTheStoredTranscriptionSettingsDecode() throws {
+        let settings = try decoder.decode(
+            TranscriptionSettings.self, from: try payload("transcriptionSettings")
+        )
+        XCTAssertEqual(settings.globalEnabled, true)
+        XCTAssertEqual(settings.allowUserOptOut, false)
+    }
+
+    func testTheStoredSpamSettingsDecode() throws {
+        let settings = try decoder.decode(SpamSettings.self, from: try payload("spamSettings"))
+        XCTAssertEqual(settings.maxCallsPerMinute, 3)
+        XCTAssertEqual(settings.blockDurationMinutes, 30)
+        XCTAssertEqual(settings.rateLimitEnabled, true)
+        XCTAssertEqual(settings.voiceCAPTCHAEnabled, false)
+    }
+
+    func testTheStoredIvrLanguagesDecodeInOrder() throws {
+        let languages = try decoder.decode(IvrLanguages.self, from: try payload("ivrLanguages"))
+        XCTAssertEqual(
+            languages.enabledLanguages, ["es", "en", "zh"],
+            "position decides the keypad digit, so the order is part of the value"
+        )
+    }
+
+    /// The models these screens used to use, against the payloads the server
+    /// really sends.
+    ///
+    /// Three of the four throw `keyNotFound` — the whole response is lost, not
+    /// just a field. The fourth is worse: `ClientSpamSettings` would have read a
+    /// per-minute limit as a per-hour one had its key matched, and the bypass it
+    /// offered does not exist server-side at all.
+    func testTheHandWrittenModelsCannotDecodeTheServersPayloads() throws {
+        struct LegacyTelephonySettings: Decodable {
+            let provider: String
+            let accountSid: String
+            let authToken: String
+            let phoneNumber: String
+        }
+        struct LegacyTranscriptionSettings: Decodable {
+            let enabled: Bool
+            let allowVolunteerOptOut: Bool
+        }
+        struct LegacySpamSettings: Decodable {
+            let maxCallsPerHour: Int
+            let voiceCaptchaEnabled: Bool
+            let knownNumberBypass: Bool
+        }
+        struct LegacyIvrLanguages: Decodable {
+            let languages: [String: Bool]
+        }
+
+        try assertKeyNotFound(
+            LegacyTelephonySettings.self, in: try payload("telephonyProvider"), expecting: "provider",
+            "the provider's own key is `type`; `provider` was never sent"
+        )
+        try assertKeyNotFound(
+            LegacyTranscriptionSettings.self, in: try payload("transcriptionSettings"),
+            expecting: "enabled",
+            "the server's keys are globalEnabled / allowUserOptOut"
+        )
+        try assertKeyNotFound(
+            LegacySpamSettings.self, in: try payload("spamSettings"), expecting: "maxCallsPerHour",
+            "the server's rate limit is maxCallsPerMinute, and it has no knownNumberBypass"
+        )
+        try assertKeyNotFound(
+            LegacyIvrLanguages.self, in: try payload("ivrLanguages"), expecting: "languages",
+            "the server sends an ordered enabledLanguages array, not a code->bool map"
+        )
+    }
+
+    private func assertKeyNotFound<T: Decodable>(
+        _ type: T.Type, in data: Data, expecting key: String, _ why: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        XCTAssertThrowsError(try decoder.decode(type, from: data), why, file: file, line: line) { error in
+            guard case DecodingError.keyNotFound(let missing, _) = error else {
+                return XCTFail("expected keyNotFound, got \(error)", file: file, line: line)
+            }
+            XCTAssertEqual(missing.stringValue, key, why, file: file, line: line)
+        }
+    }
+
     /// `.convertFromSnakeCase` is retained on the response decoder, and it is routinely
     /// mistaken for a safety net. It is not: it cannot rename anything, it only splits
     /// on underscores. Pinned so nobody argues a model/schema disagreement is covered.

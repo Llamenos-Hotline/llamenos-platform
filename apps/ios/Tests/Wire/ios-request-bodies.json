@@ -148,6 +148,56 @@
       "swiftType": "[String: String]",
       "callSite": "apps/ios/Sources/Services/APIService.swift",
       "optionalKeys": []
+    },
+    {
+      "id": "patchTranscriptionSettings",
+      "method": "PATCH",
+      "path": "/api/settings/transcription",
+      "module": "@protocol/schemas/settings",
+      "schema": "transcriptionSettingsSchema",
+      "swiftType": "TranscriptionSettings",
+      "callSite": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "optionalKeys": [
+        "allowUserOptOut",
+        "globalEnabled"
+      ]
+    },
+    {
+      "id": "patchSpamSettings",
+      "method": "PATCH",
+      "path": "/api/settings/spam",
+      "module": "@protocol/schemas/settings",
+      "schema": "spamSettingsSchema",
+      "swiftType": "SpamSettings",
+      "callSite": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "optionalKeys": [
+        "blockDurationMinutes",
+        "maxCallsPerMinute",
+        "rateLimitEnabled",
+        "voiceCaptchaEnabled"
+      ]
+    },
+    {
+      "id": "patchIvrLanguages",
+      "method": "PATCH",
+      "path": "/api/settings/ivr-languages",
+      "module": "@protocol/schemas/settings",
+      "schema": "ivrLanguagesSchema",
+      "swiftType": "IvrLanguages",
+      "callSite": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "optionalKeys": []
+    },
+    {
+      "id": "configureTelephonyProvider",
+      "method": "POST",
+      "path": "/api/provider-setup/configure",
+      "module": "@protocol/schemas/provider-setup/api",
+      "schema": "configureProviderRequestSchema",
+      "swiftType": "ConfigureProviderRequest",
+      "callSite": "apps/ios/Sources/ViewModels/AdminViewModel.swift",
+      "optionalKeys": [
+        "phoneNumber"
+      ]
     }
   ],
   "bodies": {
@@ -391,6 +441,64 @@
       "wire": {
         "envelope": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "hubId": "22222222-2222-4222-8222-222222222222"
+      }
+    },
+    "patchTranscriptionSettings": {
+      "legacySnakeCase": {
+        "allow_user_opt_out": false,
+        "global_enabled": true
+      },
+      "wire": {
+        "allowUserOptOut": false,
+        "globalEnabled": true
+      }
+    },
+    "patchSpamSettings": {
+      "legacySnakeCase": {
+        "block_duration_minutes": 45,
+        "max_calls_per_minute": 7,
+        "rate_limit_enabled": true,
+        "voice_captcha_enabled": true
+      },
+      "wire": {
+        "blockDurationMinutes": 45,
+        "maxCallsPerMinute": 7,
+        "rateLimitEnabled": true,
+        "voiceCaptchaEnabled": true
+      }
+    },
+    "patchIvrLanguages": {
+      "legacySnakeCase": {
+        "enabled_languages": [
+          "es",
+          "en",
+          "de"
+        ]
+      },
+      "wire": {
+        "enabledLanguages": [
+          "es",
+          "en",
+          "de"
+        ]
+      }
+    },
+    "configureTelephonyProvider": {
+      "legacySnakeCase": {
+        "credentials": {
+          "accountSid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "phone_number": "+15550001111",
+        "provider": "twilio"
+      },
+      "wire": {
+        "credentials": {
+          "accountSid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "phoneNumber": "+15550001111",
+        "provider": "twilio"
       }
     }
   }
