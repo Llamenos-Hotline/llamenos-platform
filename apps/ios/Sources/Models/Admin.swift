@@ -317,16 +317,6 @@ struct TelephonySettings: Codable, Sendable {
 }
 
 // MARK: - Client Call Settings
-// Client-only: generated `CallSettings` has different fields (maxDuration: Double, etc.).
-
-/// Call routing configuration from the API (client-side model).
-/// Named `ClientCallSettings` to avoid conflict with generated `CallSettings`.
-struct ClientCallSettings: Codable, Sendable {
-    var ringTimeout: Int
-    var maxDuration: Int
-    var parallelRingCount: Int
-}
-
 // MARK: - Client IVR Languages
 // Client-only: generated `IvrLanguages` has `languages: [String]?` while
 // the client uses `[String: Bool]` (language code → enabled/disabled map).

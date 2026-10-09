@@ -2,8 +2,16 @@ import SwiftUI
 
 // MARK: - CallSettingsView
 
-/// Admin view for configuring call routing parameters: ring timeout, max call
-/// duration, and parallel ring count.
+/// Admin view for the hub's two call settings: how long a caller waits in the
+/// queue before being sent to voicemail, and how long a voicemail recording may
+/// run.
+///
+/// Those are the only call settings the server has — `callSettingsSchema` in
+/// `packages/protocol/schemas/settings.ts`, which the desktop client edits as
+/// `queueTimeoutSeconds` / `voicemailMaxSeconds`. This screen used to show
+/// sliders for a ring timeout, a maximum call duration and a parallel ring
+/// count: three settings with no server field, no storage and no effect, whose
+/// Save button posted to a route that answered 404 (#1717).
 struct CallSettingsView: View {
     @Bindable var viewModel: AdminViewModel
 
@@ -18,9 +26,8 @@ struct CallSettingsView: View {
                     }
                 }
             } else {
-                ringTimeoutSection
-                maxDurationSection
-                parallelRingSection
+                queueTimeoutSection
+                voicemailMaxSection
                 saveSection
 
                 if let error = viewModel.errorMessage {
@@ -28,6 +35,7 @@ struct CallSettingsView: View {
                         Text(error)
                             .font(.brand(.footnote))
                             .foregroundStyle(Color.brandDestructive)
+                            .accessibilityIdentifier("call-settings-error")
                     }
                 }
 
@@ -36,6 +44,7 @@ struct CallSettingsView: View {
                         Text(success)
                             .font(.brand(.footnote))
                             .foregroundStyle(.green)
+                            .accessibilityIdentifier("call-settings-success")
                     }
                 }
             }
@@ -48,120 +57,73 @@ struct CallSettingsView: View {
         .accessibilityIdentifier("call-settings-view")
     }
 
-    // MARK: - Ring Timeout
+    // MARK: - Queue Timeout
 
-    private var ringTimeoutSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(NSLocalizedString("admin_call_ring_timeout", comment: "Ring Timeout"))
-                        .font(.brand(.body))
-                    Spacer()
-                    Text(L10n.format(
-                        "admin_call_seconds_format",
-                        comment: "%d seconds",
-                        viewModel.callSettings.ringTimeout
-                    ))
-                    .font(.brand(.body))
-                    .foregroundStyle(Color.brandPrimary)
-                    .fontWeight(.medium)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { Double(viewModel.callSettings.ringTimeout) },
-                        set: { viewModel.callSettings.ringTimeout = Int($0) }
-                    ),
-                    in: 15...60,
-                    step: 5
-                )
-                .tint(Color.brandPrimary)
-                .accessibilityIdentifier("ring-timeout-slider")
-            }
-        } footer: {
-            Text(NSLocalizedString(
-                "admin_call_ring_timeout_footer",
-                comment: "How long each volunteer's phone rings before moving on (15-60 seconds)."
-            ))
-            .font(.brand(.caption))
-        }
+    private var queueTimeoutSection: some View {
+        secondsSection(
+            title: NSLocalizedString("call_settings_queue_timeout", comment: "Queue Timeout"),
+            footer: NSLocalizedString(
+                "call_settings_queue_timeout_description",
+                comment: "How long callers wait before being sent to voicemail (seconds)."
+            ),
+            identifier: "queue-timeout",
+            value: $viewModel.queueTimeoutSeconds
+        )
     }
 
-    // MARK: - Max Duration
+    // MARK: - Voicemail Length
 
-    private var maxDurationSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(NSLocalizedString("admin_call_max_duration", comment: "Max Call Duration"))
-                        .font(.brand(.body))
-                    Spacer()
-                    Text(L10n.format(
-                        "admin_call_minutes_format",
-                        comment: "%d minutes",
-                        viewModel.callSettings.maxDuration
-                    ))
-                    .font(.brand(.body))
-                    .foregroundStyle(Color.brandPrimary)
-                    .fontWeight(.medium)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { Double(viewModel.callSettings.maxDuration) },
-                        set: { viewModel.callSettings.maxDuration = Int($0) }
-                    ),
-                    in: 5...120,
-                    step: 5
-                )
-                .tint(Color.brandPrimary)
-                .accessibilityIdentifier("max-duration-slider")
-            }
-        } footer: {
-            Text(NSLocalizedString(
-                "admin_call_max_duration_footer",
-                comment: "Maximum allowed call length before automatic disconnect (5-120 minutes)."
-            ))
-            .font(.brand(.caption))
-        }
+    private var voicemailMaxSection: some View {
+        secondsSection(
+            title: NSLocalizedString("call_settings_voicemail_max", comment: "Max Voicemail Length"),
+            footer: NSLocalizedString(
+                "call_settings_voicemail_max_description",
+                comment: "Maximum recording length for voicemail messages (seconds)."
+            ),
+            identifier: "voicemail-max",
+            value: $viewModel.voicemailMaxSeconds
+        )
     }
 
-    // MARK: - Parallel Ring Count
-
-    private var parallelRingSection: some View {
+    /// One labelled slider over the server's 30...300 second range.
+    ///
+    /// The current value carries its own identifier (`<identifier>-value`) so a
+    /// test can read what the screen is about to save and compare it against
+    /// what the server stored — an assertion that the button merely *exists*
+    /// passed throughout the entire period in which saving was impossible.
+    private func secondsSection(
+        title: String,
+        footer: String,
+        identifier: String,
+        value: Binding<Int>
+    ) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text(NSLocalizedString("admin_call_parallel_ring", comment: "Parallel Ring Count"))
+                    Text(title)
                         .font(.brand(.body))
                     Spacer()
-                    Text(L10n.format(
-                        "admin_call_volunteers_format",
-                        comment: "%d volunteers",
-                        viewModel.callSettings.parallelRingCount
-                    ))
-                    .font(.brand(.body))
-                    .foregroundStyle(Color.brandPrimary)
-                    .fontWeight(.medium)
+                    Text(L10n.format("admin_seconds_unit", comment: "%ds", value.wrappedValue))
+                        .font(.brand(.body))
+                        .foregroundStyle(Color.brandPrimary)
+                        .fontWeight(.medium)
+                        .accessibilityIdentifier("\(identifier)-value")
                 }
 
                 Slider(
                     value: Binding(
-                        get: { Double(viewModel.callSettings.parallelRingCount) },
-                        set: { viewModel.callSettings.parallelRingCount = Int($0) }
+                        get: { Double(value.wrappedValue) },
+                        set: { value.wrappedValue = Int($0) }
                     ),
-                    in: 1...10,
-                    step: 1
+                    in: AdminViewModel.callSecondsRange,
+                    step: 15
                 )
                 .tint(Color.brandPrimary)
-                .accessibilityIdentifier("parallel-ring-slider")
+                .accessibilityIdentifier("\(identifier)-slider")
             }
         } footer: {
-            Text(NSLocalizedString(
-                "admin_call_parallel_ring_footer",
-                comment: "Number of on-shift volunteers to ring simultaneously (1-10)."
-            ))
-            .font(.brand(.caption))
+            Text(footer)
+                .font(.brand(.caption))
         }
     }
 
