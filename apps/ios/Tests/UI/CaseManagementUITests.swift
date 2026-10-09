@@ -166,16 +166,28 @@ final class CaseManagementUITests: BaseUITest {
 
     /// Create a case through the create-case sheet and wait for the sheet to close.
     private func createCase(title: String, typeLabel: String) {
+        // `case-new-btn` is a toolbar Button — query the button itself, not its
+        // container, and wait for it: it only renders once CMS state and entity
+        // types have loaded over the API.
         let newCase = app.buttons["case-new-btn"]
+        XCTAssertTrue(newCase.waitForExistence(timeout: 15), "New Case should be offered once case management is on")
         newCase.tap()
 
         let sheet = find("create-case-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "The create-case sheet should open")
+
+        // `case-type-picker` is a SwiftUI Picker row inside the sheet's Form —
+        // it only enters the accessibility tree once the sheet has finished
+        // presenting, so the query must wait, not tap immediately.
         let picker = find("case-type-picker")
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "A case type picker should be shown for two entity types")
         picker.tap()
         let option = app.buttons[typeLabel]
+        XCTAssertTrue(option.waitForExistence(timeout: 10), "Case type '\(typeLabel)' should be selectable")
         option.tap()
 
         let titleInput = find("case-title-input")
+        XCTAssertTrue(titleInput.waitForExistence(timeout: 5))
         titleInput.tap()
         titleInput.typeText(title)
 
