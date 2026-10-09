@@ -193,7 +193,13 @@ check_backup_staleness() {
     detail="Backup directory ${BACKUP_DIR} does not exist"
   else
     local latest_file
-    latest_file="$(find "${BACKUP_DIR}" -maxdepth 2 -type f \( -name "*.sql.gz.age" -o -name "*.tar.gz.age" -o -name "*.jsonl.gz.age" \) -printf '%T@ %p\n' 2>/dev/null \
+    # Real backup files live 3 levels down: {postgres,rustfs,config}/{daily,weekly,monthly}/<file>.
+    # Encryption is mandatory (see preflight.yml / backup.yml), so every file
+    # ends in .age; still match the unencrypted names too, in case this runs
+    # against an older backup directory that predates that requirement.
+    latest_file="$(find "${BACKUP_DIR}" -maxdepth 3 -type f \
+      \( -name "*.dump.age" -o -name "*.dump" -o -name "*.tar.gz.age" -o -name "*.tar.gz" \) \
+      -printf '%T@ %p\n' 2>/dev/null \
       | sort -rn \
       | head -1 \
       | cut -d' ' -f2-)"

@@ -53,6 +53,18 @@
         - deploy
       when: kamailio_enabled | default(false) | bool
 
+# A deployed host with no backup scripts and no cron is not launchable — see
+# issue #1125. This import is what makes `backup_age_public_key` (required by
+# preflight above, whenever backup_enabled is true) actually take effect on
+# every fresh deploy, not just when an operator remembers to run
+# `playbooks/backup.yml` by hand.
+- name: Configure automated backups
+  ansible.builtin.import_playbook: playbooks/backup.yml
+  when: backup_enabled | default(true) | bool
+  tags:
+    - backup
+    - deploy
+
 - name: Deploy Observability Stack
   ansible.builtin.import_playbook: playbooks/observability.yml
   when: observability_enabled | default(false) | bool

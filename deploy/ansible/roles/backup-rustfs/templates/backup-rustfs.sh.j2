@@ -2,8 +2,13 @@
 #
 # Llamenos RustFS Backup Script — managed by Ansible
 #
-# Mirrors all objects from the RustFS bucket using rclone or aws s3 sync,
-# then tars and optionally encrypts the result.
+# Tars the RustFS data volume directly (via a throwaway container that mounts
+# it read-only), then optionally encrypts the result. This does NOT depend on
+# an S3 CLI (rclone/aws) being present anywhere — the rustfs/rustfs image ships
+# neither, so shelling out to one inside it always silently produced an empty
+# backup. Tarring the volume's bytes is also strictly more correct: it backs
+# up every object RustFS actually wrote to disk, not just what an S3 list
+# call happened to enumerate.
 #
 # Usage:
 #   ./backup-rustfs.sh              # Run a daily backup
@@ -16,7 +21,9 @@ BACKUP_DIR="{{ backup_rustfs_dir }}"
 COMPOSE_FILE="{{ backup_compose_file }}"
 AGE_RECIPIENT="{{ backup_age_public_key }}"
 RCLONE_REMOTE="{{ backup_rclone_remote }}"
-RUSTFS_BUCKET="{{ backup_rustfs_bucket }}"
+MIN_FREE_MB={{ backup_min_free_mb | default(1024) }}
+RUSTFS_SERVICE="rustfs"
+RUSTFS_VOLUME_DEST="/data"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 DAY_OF_WEEK="$(date -u +%u)"
 DAY_OF_MONTH="$(date -u +%d)"
@@ -37,60 +44,59 @@ log() {
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
 
-SYNC_DIR="${TMPDIR}/rustfs-sync"
-mkdir -p "${SYNC_DIR}"
-
 log "Starting ${BACKUP_TYPE} RustFS backup..."
 
-# Step 1: Sync bucket contents using rclone or aws CLI
-# Prefer rclone if available, fall back to aws s3 sync
-if command -v rclone &>/dev/null; then
-  rclone sync \
-    "s3:{{ backup_rustfs_bucket }}" \
-    "${SYNC_DIR}/" \
-    --s3-provider=Minio \
-    --s3-endpoint="http://localhost:9000" \
-    {% if backup_rustfs_remove_deleted %}--delete{% endif %} \
-    2>&1 || true
-elif command -v aws &>/dev/null; then
-  aws s3 sync \
-    "s3://{{ backup_rustfs_bucket }}/" \
-    "${SYNC_DIR}/" \
-    --endpoint-url="http://localhost:9000" \
-    {% if backup_rustfs_remove_deleted %}--delete{% endif %} \
-    2>&1 || true
-else
-  log "WARNING: Neither rclone nor aws CLI available. Attempting docker-based sync..."
-  CONTAINER_NAME="$(docker compose -f "${COMPOSE_FILE}" ps -q rustfs)"
-  docker compose -f "${COMPOSE_FILE}" exec -T rustfs \
-    sh -c "aws s3 sync s3://${RUSTFS_BUCKET}/ /tmp/rustfs-sync/ --endpoint-url http://localhost:9000 {% if backup_rustfs_remove_deleted %}--delete{% endif %} 2>&1" || true
-  docker cp "${CONTAINER_NAME}:/tmp/rustfs-sync/." "${SYNC_DIR}/" 2>/dev/null || true
+# Step 0: Refuse to start if the backup volume is nearly full.
+AVAILABLE_MB="$(df -Pm "${BACKUP_DIR}" | tail -1 | awk '{print $4}')"
+if [ "${AVAILABLE_MB}" -lt "${MIN_FREE_MB}" ]; then
+  log "ERROR: only ${AVAILABLE_MB}MB free at ${BACKUP_DIR} (minimum: ${MIN_FREE_MB}MB). Refusing to start a backup."
+  exit 1
 fi
 
-OBJECT_COUNT="$(find "${SYNC_DIR}" -type f | wc -l)"
-log "Synced ${OBJECT_COUNT} objects"
+# Step 1: Resolve the actual Docker volume backing RustFS's /data. Derived
+# from the running container's own mounts rather than assumed from the
+# compose project name, so this keeps working if the project is renamed.
+CONTAINER_ID="$(docker compose -f "${COMPOSE_FILE}" ps -q "${RUSTFS_SERVICE}")"
+if [ -z "${CONTAINER_ID}" ]; then
+  log "ERROR: the ${RUSTFS_SERVICE} container is not running — cannot resolve its data volume."
+  exit 1
+fi
 
-# Step 2: Tar and compress
+VOLUME_NAME="$(docker inspect "${CONTAINER_ID}" --format \
+  '{% raw %}{{ range .Mounts }}{{ if eq .Destination "/data" }}{{ .Name }}{{ end }}{{ end }}{% endraw %}')"
+if [ -z "${VOLUME_NAME}" ]; then
+  log "ERROR: could not resolve the Docker volume mounted at ${RUSTFS_VOLUME_DEST} in the ${RUSTFS_SERVICE} container."
+  exit 1
+fi
+log "Backing up Docker volume: ${VOLUME_NAME}"
+
+# Step 2: Tar the volume directly via a throwaway container (read-only mount).
+# No reliance on rclone/aws being installed anywhere.
 TAR_FILE="${TMPDIR}/llamenos-rustfs-${TIMESTAMP}.tar.gz"
-tar -czf "${TAR_FILE}" -C "${SYNC_DIR}" .
-rm -rf "${SYNC_DIR}"
+docker run --rm \
+  -v "${VOLUME_NAME}:${RUSTFS_VOLUME_DEST}:ro" \
+  -v "${TMPDIR}:/backup" \
+  alpine:3 \
+  tar -czf "/backup/$(basename "${TAR_FILE}")" -C "${RUSTFS_VOLUME_DEST}" .
 
+OBJECT_COUNT="$(tar -tzf "${TAR_FILE}" | grep -vc '/$' || true)"
 DUMP_SIZE="$(stat -c%s "${TAR_FILE}")"
-log "Compressed archive: ${DUMP_SIZE} bytes"
+log "Archived ${OBJECT_COUNT} objects, ${DUMP_SIZE} bytes"
 
 # Step 3: Compute checksum
 DUMP_SHA256="$(sha256sum "${TAR_FILE}" | cut -d' ' -f1)"
 
-# Step 4: Encrypt with age (if configured)
+# Step 4: Encrypt with age (required — a RustFS archive can contain caller-
+# submitted attachments, which must never land on disk, local or remote,
+# unencrypted)
 if [ -n "${AGE_RECIPIENT}" ]; then
   FILENAME="llamenos-rustfs-${TIMESTAMP}.tar.gz.age"
   log "Encrypting backup with age..."
   age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${TAR_FILE}"
   rm -f "${TAR_FILE}"
 else
-  FILENAME="llamenos-rustfs-${TIMESTAMP}.tar.gz"
-  mv "${TAR_FILE}" "${TMPDIR}/${FILENAME}"
-  log "WARNING: No age public key configured. Backup is NOT encrypted."
+  log "ERROR: No age public key configured (AGE_RECIPIENT empty). Refusing to write an unencrypted RustFS backup."
+  exit 1
 fi
 
 FINAL_SIZE="$(stat -c%s "${TMPDIR}/${FILENAME}")"

@@ -17,6 +17,7 @@ BACKUP_DIR="{{ backup_postgres_dir }}"
 COMPOSE_FILE="{{ backup_compose_file }}"
 AGE_RECIPIENT="{{ backup_age_public_key }}"
 RCLONE_REMOTE="{{ backup_rclone_remote }}"
+MIN_FREE_MB={{ backup_min_free_mb | default(1024) }}
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 DAY_OF_WEEK="$(date -u +%u)"
 DAY_OF_MONTH="$(date -u +%d)"
@@ -40,6 +41,15 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
 
 log "Starting ${BACKUP_TYPE} PostgreSQL backup..."
+
+# Step 0: Refuse to start a dump that would fill the disk. Retention pruning
+# (step 7) runs AFTER the write, so it cannot save a dump that already took
+# PostgreSQL down with it.
+AVAILABLE_MB="$(df -Pm "${BACKUP_DIR}" | tail -1 | awk '{print $4}')"
+if [ "${AVAILABLE_MB}" -lt "${MIN_FREE_MB}" ]; then
+  log "ERROR: only ${AVAILABLE_MB}MB free at ${BACKUP_DIR} (minimum: ${MIN_FREE_MB}MB). Refusing to start a backup."
+  exit 1
+fi
 
 # Step 1: Dump PostgreSQL using custom format (compressed, restorable)
 DUMP_FILE="${TMPDIR}/llamenos-postgres-${TIMESTAMP}.dump"
@@ -73,8 +83,8 @@ if [ -n "${AGE_RECIPIENT}" ]; then
   age -r "${AGE_RECIPIENT}" -o "${TMPDIR}/${FILENAME}" "${DUMP_FILE}"
   rm -f "${DUMP_FILE}"
 else
-  FILENAME="llamenos-postgres-${TIMESTAMP}.dump"
-  log "WARNING: No age public key configured. Backup is NOT encrypted."
+  log "ERROR: No age public key configured (AGE_RECIPIENT empty). Refusing to write an unencrypted PostgreSQL backup."
+  exit 1
 fi
 
 FINAL_SIZE="$(stat -c%s "${TMPDIR}/${FILENAME}")"

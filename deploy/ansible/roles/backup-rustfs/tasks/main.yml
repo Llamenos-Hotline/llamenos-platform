@@ -37,8 +37,7 @@
   ansible.builtin.command: "{{ app_dir }}/scripts/backup-rustfs.sh --manifest"
   become_user: "{{ deploy_user }}"
   register: initial_rustfs_backup
-  changed_when: "'Backup complete' in initial_rustfs_backup.stdout"
-  ignore_errors: true
+  changed_when: "'RustFS backup complete' in initial_rustfs_backup.stdout"
 
 - name: Display initial backup result
   ansible.builtin.debug:
