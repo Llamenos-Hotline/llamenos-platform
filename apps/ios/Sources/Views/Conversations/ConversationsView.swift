@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - ConversationsView
 
 /// Main conversations list view showing all messaging conversations (SMS/WhatsApp/Signal)
-/// with channel badges, unread counts, status filtering, and pull-to-refresh.
+/// with channel badges, status filtering, and pull-to-refresh.
 struct ConversationsView: View {
     @Environment(AppState.self) private var appState
     @Environment(HubContext.self) private var hubContext
@@ -172,16 +172,16 @@ struct ConversationsView: View {
 // MARK: - ConversationRowView
 
 /// A single conversation row in the list, showing channel badge, contact hash,
-/// unread count, status, and last message time.
+/// status, and last message time.
 struct ConversationRowView: View {
-    let conversation: AppConversation
+    let conversation: ConversationResponse
     @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
         HStack(spacing: 12) {
             // Avatar with channel overlay
             ZStack(alignment: .bottomTrailing) {
-                GeneratedAvatar(hash: conversation.contactHash, size: 36)
+                GeneratedAvatar(hash: conversation.contactIdentifierHash, size: 36)
 
                 Image(systemName: conversation.channel.iconName)
                     .font(.system(size: 10, weight: .bold))
@@ -197,7 +197,6 @@ struct ConversationRowView: View {
                 HStack {
                     Text(conversation.contactDisplayHash)
                         .font(.brandMono(.body))
-                        .fontWeight(conversation.unreadCount > 0 ? .semibold : .regular)
                         .foregroundStyle(Color.brandForeground)
                         .lineLimit(1)
 
@@ -212,10 +211,6 @@ struct ConversationRowView: View {
                     statusBadge
 
                     Spacer()
-
-                    if conversation.unreadCount > 0 {
-                        unreadBadge
-                    }
                 }
             }
         }
@@ -254,26 +249,6 @@ struct ConversationRowView: View {
         case .waiting: return .orange
         case .closed: return .brandMutedForeground
         }
-    }
-
-    // MARK: - Unread Badge
-
-    private var unreadBadge: some View {
-        Text("\(conversation.unreadCount)")
-            .font(.brand(.caption))
-            .fontWeight(.bold)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(Color.brandDestructive)
-            )
-            .accessibilityLabel(L10n.format(
-                "conversations_unread_count",
-                comment: "%d unread messages",
-                conversation.unreadCount
-            ))
     }
 }
 

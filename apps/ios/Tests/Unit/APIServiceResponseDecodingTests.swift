@@ -94,26 +94,35 @@ final class APIServiceResponseDecodingTests: XCTestCase {
 
     func testAConversationFromTheServerDecodes() throws {
         let data = try payload("conversation")
-        let conversation = try decoder.decode(AppConversation.self, from: data)
+        let conversation = try decoder.decode(ConversationResponse.self, from: data)
 
         XCTAssertEqual(conversation.channelType, "sms")
-        // The server's key is `contactIdentifierHash`; `contactHash` was never sent.
-        XCTAssertEqual(conversation.contactHash, "deadbeefdeadbeef")
-        // The server's key is `assignedTo`; as `assignedVolunteerPubkey` this silently
-        // read nil, so every conversation looked unassigned.
-        XCTAssertEqual(conversation.assignedVolunteerPubkey, String(repeating: "ab", count: 32))
-        XCTAssertEqual(conversation.status, "active")
+        // #1294: the generated type IS the wire shape — no CodingKeys rename layer.
+        XCTAssertEqual(conversation.contactIdentifierHash, "deadbeefdeadbeef")
+        XCTAssertEqual(conversation.assignedTo, String(repeating: "ab", count: 32))
+        XCTAssertEqual(conversation.status, SharedReportResponseStatus.active)
+        XCTAssertEqual(conversation.messageCount, 3)
+        XCTAssertEqual(conversation.updatedAt, "2026-10-07T12:00:00.000Z")
     }
 
-    /// The server has no per-user unread count, so its absence must be tolerated —
-    /// but as a required `Int` it was `keyNotFound`, losing the whole conversation list.
-    func testAConversationDecodesWithoutAnUnreadCountAndReportsZero() throws {
-        let data = try payload("conversation")
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        XCTAssertNil(json["unreadCount"], "the fixture must not supply a key the server lacks")
-
-        let conversation = try decoder.decode(AppConversation.self, from: data)
-        XCTAssertEqual(conversation.unreadCount, 0)
+    /// #1294: the Messages tab decodes the LIST envelope, and that is where the drift
+    /// surfaced — every conversation made the whole tab an error state. Pin both
+    /// envelopes the route emits (read-all adds `total`; the claimable view adds
+    /// assigned/waiting counts and channels) so neither loses the list again.
+    func testTheConversationListEnvelopeDecodes() throws {
+        let conversation = try JSONSerialization.jsonObject(with: payload("conversation"))
+        let envelopes: [[String: Any]] = [
+            ["total": 1],
+            ["assignedCount": 0, "waitingCount": 1, "claimableChannels": ["sms"]],
+        ]
+        for envelope in envelopes {
+            var body: [String: Any] = ["conversations": [conversation]]
+            body.merge(envelope) { _, new in new }
+            let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+            let list = try decoder.decode(ConversationsListResponse.self, from: data)
+            XCTAssertEqual(list.conversations.count, 1)
+            XCTAssertEqual(list.conversations[0].id, "33333333-3333-4333-8333-333333333333")
+        }
     }
 
     // MARK: - The inverse: these models must fail on the keys they used to want
@@ -133,7 +142,8 @@ final class APIServiceResponseDecodingTests: XCTestCase {
             let createdAt: String
             let readAt: String?
         }
-        /// `AppConversation` as it was before this change.
+        /// The hand-written `AppConversation` removed by #1294 — the model whose
+        /// required `contactHash`/`unreadCount` made the Messages tab undecodable.
         struct LegacyAppConversation: Decodable {
             let id: String
             let channelType: String

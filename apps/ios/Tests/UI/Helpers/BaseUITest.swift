@@ -268,9 +268,11 @@ class BaseUITest: XCTestCase {
         body: String = "Test message",
         channel: String = "sms"
     ) -> (conversationId: String, messageId: String) {
+        // hubId is required: without it the conversation is created with hub_id NULL,
+        // which the app's hub-scoped (hp()) conversations fetch can never see (#1294).
         return simulationRequest(
             endpoint: "incoming-message",
-            body: ["senderNumber": senderNumber, "body": body, "channel": channel],
+            body: ["senderNumber": senderNumber, "body": body, "channel": channel, "hubId": testHubId],
             extractKeys: ("conversationId", "messageId")
         )
     }

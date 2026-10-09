@@ -16,15 +16,10 @@ final class ConversationsViewModel {
     // MARK: - Public State
 
     /// All conversations from the server, filtered by current status filter.
-    var filteredConversations: [AppConversation] = []
+    var filteredConversations: [ConversationResponse] = []
 
-    /// All conversations (unfiltered), used for badge count calculations.
-    var allConversations: [AppConversation] = []
-
-    /// Total unread message count across all conversations.
-    var totalUnreadCount: Int {
-        allConversations.reduce(0) { $0 + $1.unreadCount }
-    }
+    /// All conversations (unfiltered), used by the detail view for channel/status display.
+    var allConversations: [ConversationResponse] = []
 
     /// Current status filter.
     var statusFilter: ConversationStatusFilter = .active {
@@ -77,7 +72,7 @@ final class ConversationsViewModel {
         do {
             let response: ConversationsListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/conversations"
+                path: apiService.hp("/api/conversations")
             )
             allConversations = response.conversations.sorted { lhs, rhs in
                 // Sort by last message time, newest first
@@ -150,7 +145,7 @@ final class ConversationsViewModel {
             }
 
             // Include assigned volunteer (may be us or someone else)
-            if let assignedPubkey = conversation?.assignedVolunteerPubkey,
+            if let assignedPubkey = conversation?.assignedTo,
                !readerPubkeys.contains(assignedPubkey) {
                 readerPubkeys.append(assignedPubkey)
             }
