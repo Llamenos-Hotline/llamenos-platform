@@ -80,3 +80,21 @@ Feature: WebRTC & Call Preference Settings
     And I navigate to the "Hub Settings" page
     And I expand the "Telephony Provider" section
     Then the WebRTC API key fields should be populated
+
+  # --- initWebRtc honesty (issue #1741) ---
+
+  # No browser audio client SDK is installed anywhere in this repo, so
+  # initWebRtc() must never land in `error` (a failed load of an undeclared
+  # dependency) or `ready` (nothing to carry the audio). A browser/both
+  # volunteer must be told calls ring their phone — the PSTN leg carries
+  # real audio — instead of a dead-end error badge. This scenario exists
+  # because the ones above only check the settings panel: nothing asserted
+  # that initWebRtc() reaches an honest state, which is how the unresolvable
+  # `@twilio/voice-sdk` import shipped.
+  Scenario: Browser-preference volunteer is told calls ring their phone, never an error
+    Given a volunteer with call preference "browser" is logged in
+    And the configured provider claims in-app audio
+    Then the WebRTC status badge should be "unsupported"
+    And the WebRTC status badge should not be "error"
+    And the WebRTC status badge should not be "ready"
+    And the WebRTC status badge should say that calls ring the phone
