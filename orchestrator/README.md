@@ -99,6 +99,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
+| `llamenos-fleet request-review <pr>` | Starts a PR's non-author review by REQUESTING one, from whichever login this PR's author allows (`reviewTriggerLogins`, ci.ts). Exits non-zero unless the PR's own `review_requested` event count actually rose — see "Starting a review" below. |
 
 ### `attempted` vs `failed` vs `shadowed`
 
@@ -129,6 +130,69 @@ ships in the follow-on plan. Until then:
   is what an operator will actually see.
 - **`shadow` is the only mode with real content today.** `off` does nothing;
   `live` is refused.
+
+## Starting a review (#1158)
+
+`fleet-review.yml` triggers on `pull_request: types: [review_requested,
+synchronize]`, and only the first of those can START a review — `synchronize`
+may republish a verdict the PR already earned and nothing more
+(`isRepublishOnlyEvent`, ci.ts). `fleet/review` is also a REQUIRED context.
+Together those two facts mean a PR nobody requests a review on is not merely
+unreviewed, it is **unmergeable, permanently**, with no route out but a human
+requesting one by hand.
+
+Nothing in the fleet did that until this. Measured on #1722
+(`fleet/android/1149`), the first PR the lanes opened after their modes were
+corrected: `review_requested events: 0`, `fleet/review` absent from the head,
+blocked forever. Requesting one by hand took the count 0 -> 1 and started a
+run immediately — the mechanism worked; nothing invoked it.
+
+**Where the request is made.** `requestReviewAtOpen` (request-review.ts), from
+`realDispatch` (cli.ts), in the same step the PR is discovered — the same site
+and the same reasoning as `armStandardAutoMergeAtOpen`. `llamenos-fleet
+request-review <pr>` does it by hand for a PR the fleet did not open, and is
+what executes the board's `REQUEST_REVIEW` action.
+
+**Who is asked.** `reviewTriggerLogins` (ci.ts) is the one statement of that
+rule, and it is keyed on the PR's AUTHOR, because GitHub refuses a review
+request naming a PR's own author with a 422 (#1232). `llamenos-auto` reviews
+everything it did not write; the operator (`rhonda-rodododo`) stands in on a
+PR `llamenos-auto` authored, and is additionally accepted on the knope
+`release` PR. Nothing here picks a third login: `fleet-review.yml` recognises
+only those two as "the fleet asked for a review", so a request routed anywhere
+else would look sent and start nothing.
+
+**Why it does NOT apply the `review` label.** It used to, for the length of
+the #1158 -> #1164 migration, while the deployed workflow still triggered on
+`labeled`. #1164 has merged, and `.github/labels.yml` has since deleted the
+label outright ("The retired `review` label is deliberately absent: nothing
+fires on it"). Applying it now would be an API call that reports success and
+starts nothing (#1169).
+
+**Why it does NOT remove-then-re-add the reviewer.** That was the other half
+of the retired design, and two measured behaviours kill it:
+
+- re-requesting a login already on the request list emits **no**
+  `review_requested` event (#1471), so the POST is a silent no-op; and
+- when the login is a CODEOWNER of a path the PR touches, GitHub **pins** the
+  request — `DELETE .../requested_reviewers` answers 200 with the login still
+  listed and emits no `review_request_removed` (#1611) — so the DELETE is a
+  silent no-op too.
+
+Every command in that sequence reports success while nothing happens, which is
+how eight PRs once sat red being told to run the one loop that cannot
+terminate. So the live request list is read FIRST and only a genuinely absent
+login is POSTed, where GitHub's semantics make the POST a true add. When every
+candidate is already pending, the command says so and prints the recovery that
+does work (a **comment** review submitted by that reviewer clears the list,
+after which a fresh POST is a true add) rather than looping.
+
+**Why the outcome is checked against the EVENT.** A 201 from
+`POST .../requested_reviewers` is not evidence a review started — the no-op
+above returns 201 as well. So the command counts this PR's `review_requested`
+timeline events before and after, and reports `requested` only when that count
+went up. `already-pending`, `unconfirmed` and `failed` all exit non-zero: a
+review that did not start is never reported as one that did.
 
 ## Review (#1158)
 
