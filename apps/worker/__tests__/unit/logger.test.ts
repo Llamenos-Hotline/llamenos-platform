@@ -6,7 +6,6 @@ import {
   withCorrelation,
   getCorrelation,
   redact,
-  type LogLevel,
 } from '@worker/lib/logger'
 
 describe('logger', () => {
@@ -301,6 +300,68 @@ describe('logger', () => {
       expect(entry?.firstName).toBe('[REDACTED]')
       expect(entry?.lastName).toBe('[REDACTED]')
       expect(entry?.fullName).toBe('[REDACTED]')
+    })
+
+    it('redacts organisational-structure name keys (volunteerName, hubName)', () => {
+      const log = createLogger('test')
+      log.info('hub event', { volunteerName: 'Alice', hubName: 'Downtown Crisis Line' })
+      const entry = lastStdout()
+      expect(entry?.volunteerName).toBe('[REDACTED]')
+      expect(entry?.hubName).toBe('[REDACTED]')
+    })
+
+    it('redacts telephony/messaging field names (from, to, caller, callerNumber, calledNumber, msisdn, recipient)', () => {
+      const log = createLogger('test')
+      log.info('webhook', {
+        from: '+15551234567',
+        to: '+15559876543',
+        caller: '+15551234567',
+        callerNumber: '+15551234567',
+        calledNumber: '+15559876543',
+        msisdn: '+447911123456',
+        recipient: '+15551234567',
+      })
+      const entry = lastStdout()
+      expect(entry?.from).toBe('[REDACTED]')
+      expect(entry?.to).toBe('[REDACTED]')
+      expect(entry?.caller).toBe('[REDACTED]')
+      expect(entry?.callerNumber).toBe('[REDACTED]')
+      expect(entry?.calledNumber).toBe('[REDACTED]')
+      expect(entry?.msisdn).toBe('[REDACTED]')
+      expect(entry?.recipient).toBe('[REDACTED]')
+    })
+
+    it('does not redact unrelated fields that merely contain "to"/"from" as a substring', () => {
+      const log = createLogger('test')
+      log.info('range', { total: 42, fromage: 'cheese' })
+      const entry = lastStdout()
+      expect(entry?.total).toBe(42)
+      expect(entry?.fromage).toBe('cheese')
+    })
+
+    it('redacts E.164 phone numbers of various lengths in non-key-flagged string values (non-NANP included)', () => {
+      const log = createLogger('test')
+      // 11-digit NANP E.164
+      log.info('note', { note: 'call +15551234567 back' })
+      expect(lastStdout()?.note).toBe('call [REDACTED:PHONE] back')
+
+      // 12-digit E.164 (previously NOT redacted)
+      log.info('note', { note: 'call +155512345678 back' })
+      expect(lastStdout()?.note).toBe('call [REDACTED:PHONE] back')
+
+      // 13-digit E.164 (previously NOT redacted)
+      log.info('note', { note: 'call +1555123456789 back' })
+      expect(lastStdout()?.note).toBe('call [REDACTED:PHONE] back')
+
+      // 11-digit non-NANP E.164, e.g. a UK mobile (previously NOT redacted)
+      log.info('note', { note: 'call +447911123456 back' })
+      expect(lastStdout()?.note).toBe('call [REDACTED:PHONE] back')
+    })
+
+    it('redacts bare unformatted 10-digit phone numbers in non-key-flagged string values', () => {
+      const log = createLogger('test')
+      log.info('note', { note: 'left a voicemail from 5551234567 today' })
+      expect(lastStdout()?.note).toBe('left a voicemail from [REDACTED:PHONE] today')
     })
   })
 
