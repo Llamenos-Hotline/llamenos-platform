@@ -185,4 +185,51 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         let renamed = Data(#"{"recipientEnvelopes":[{"ct":"a","enc":"b","pubkey":"c"}]}"#.utf8)
         XCTAssertThrowsError(try decoder.decode(TwoWords.self, from: renamed))
     }
+
+    // MARK: - #1246 — record contacts
+
+    /// GET /api/hubs/:hubId/records/:id/contacts serializes raw `case_contacts` rows:
+    /// the record key is `caseId` (the schema says `recordId`) and `role` is nullable
+    /// (the schema requires a string). Until the route is aligned with
+    /// `recordContactListResponseSchema`, a strict `RecordContact` decode throws
+    /// `keyNotFound` on every non-empty list and the Contacts tab shows its empty
+    /// state for a case that has contacts. These bodies stay inline rather than in
+    /// the shared fixture file because the worker-side schema test holds that file
+    /// to the Zod schema — and the schema is right; it is the route that deviates.
+    func testRecordContactsDecodeFromTheRowShapeTheRouteActuallySends() throws {
+        let body = Data(#"""
+        {"contacts": [{
+            "caseId": "11111111-1111-4111-8111-111111111111",
+            "contactId": "22222222-2222-4222-8222-222222222222",
+            "role": null,
+            "addedAt": "2026-10-09T12:00:00.000Z",
+            "addedBy": "deadbeef"
+        }]}
+        """#.utf8)
+        let response = try decoder.decode(RecordContactsResponse.self, from: body)
+
+        XCTAssertEqual(response.contacts.count, 1)
+        XCTAssertEqual(response.contacts[0].recordID, "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(response.contacts[0].contactID, "22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(response.contacts[0].role, "")
+    }
+
+    /// The schema shape must keep decoding — once the route is aligned with
+    /// `recordContactListResponseSchema` this is the body that arrives.
+    func testRecordContactsDecodeFromTheSchemaShape() throws {
+        let body = Data(#"""
+        {"contacts": [{
+            "recordId": "11111111-1111-4111-8111-111111111111",
+            "contactId": "22222222-2222-4222-8222-222222222222",
+            "role": "legal_observer",
+            "addedAt": "2026-10-09T12:00:00.000Z",
+            "addedBy": "deadbeef"
+        }]}
+        """#.utf8)
+        let response = try decoder.decode(RecordContactsResponse.self, from: body)
+
+        XCTAssertEqual(response.contacts.count, 1)
+        XCTAssertEqual(response.contacts[0].recordID, "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(response.contacts[0].role, "legal_observer")
+    }
 }
