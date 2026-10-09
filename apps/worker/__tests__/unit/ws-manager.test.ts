@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ConnectionManager } from '../../lib/ws-manager'
+import {
+  ConnectionManager,
+  WS_CLOSE_REASON_SERVER_SHUTDOWN,
+  WS_CLOSE_SERVER_SHUTDOWN,
+} from '../../lib/ws-manager'
 import type { ConnectionState } from '../../lib/ws-manager'
 
 // Mock server key (32 bytes)
@@ -18,6 +22,45 @@ function makeConn(pubkey: string, hubs: string[]): ConnectionState {
     lastReplayAt: 0,
   }
 }
+
+describe('ConnectionManager.closeAll', () => {
+  it('closes every connection of every user with the given code and reason', () => {
+    const manager = new ConnectionManager(SERVER_KEY)
+    const a1 = makeConn('pubkey-a', ['hub-1'])
+    const a2 = makeConn('pubkey-a', ['hub-1'])
+    const b = makeConn('pubkey-b', ['hub-1'])
+    for (const c of [a1, a2, b]) manager.register(c)
+    manager.subscribe(a1, 'hub-1', [1000])
+
+    const closed = manager.closeAll(WS_CLOSE_SERVER_SHUTDOWN, WS_CLOSE_REASON_SERVER_SHUTDOWN)
+
+    expect(closed).toBe(3)
+    for (const c of [a1, a2, b]) {
+      expect(c.ws.close).toHaveBeenCalledWith(1001, 'server_shutting_down')
+    }
+  })
+
+  it('keeps closing the remaining connections when one socket throws', () => {
+    const manager = new ConnectionManager(SERVER_KEY)
+    const dead = makeConn('pubkey-a', ['hub-1'])
+    ;(dead.ws.close as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('already closed')
+    })
+    const live = makeConn('pubkey-b', ['hub-1'])
+    manager.register(dead)
+    manager.register(live)
+
+    expect(manager.closeAll(1001, 'x')).toBe(1)
+    expect(live.ws.close).toHaveBeenCalledWith(1001, 'x')
+  })
+
+  it('leaves no registered connections behind, so new registrations start clean', () => {
+    const manager = new ConnectionManager(SERVER_KEY)
+    manager.register(makeConn('pubkey-a', ['hub-1']))
+    manager.closeAll(1001, 'x')
+    expect(manager.closeAll(1001, 'x')).toBe(0)
+  })
+})
 
 describe('ConnectionManager.unsubscribe', () => {
   let manager: ConnectionManager

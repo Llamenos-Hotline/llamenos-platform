@@ -189,6 +189,24 @@ describe('AriClient', () => {
   describe('reconnecting', () => {
     beforeEach(() => {
       vi.useFakeTimers()
+      // The scheduled delay carries +/-20% jitter so a fleet of bridges does not
+      // reconnect in lockstep. Pinning random to the midpoint makes the factor
+      // exactly 1.0, so the backoff PROGRESSION below is still asserted exactly.
+      vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    })
+
+    it('announces every (re)connect so the handler reconciles with the PBX', async () => {
+      const first = await connected(client)
+      expect(events).toEqual([{ type: 'connection_reset', timestamp: expect.any(String) }])
+
+      first.drop()
+      await vi.advanceTimersByTimeAsync(1000)
+      lastSocket().open()
+
+      expect(events).toEqual([
+        { type: 'connection_reset', timestamp: expect.any(String) },
+        { type: 'connection_reset', timestamp: expect.any(String) },
+      ])
     })
 
     it('schedules exactly one retry per failed attempt, backing off', async () => {
@@ -268,6 +286,11 @@ describe('AriClient', () => {
 
     beforeEach(async () => {
       ws = await connected(client)
+      // Connecting itself announces a connection_reset (asserted in its own test
+      // above). Consume it here so each assertion below is exactly the events the
+      // socket frame under test produced.
+      expect(events).toEqual([{ type: 'connection_reset', timestamp: expect.any(String) }])
+      events.length = 0
     })
 
     it('StasisStart → channel_create with caller, dialled number and app args', () => {

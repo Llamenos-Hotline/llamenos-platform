@@ -17,6 +17,14 @@ import { createLogger } from './logger'
 
 const log = createLogger('ws-manager')
 
+/**
+ * Close code sent to every client when the server is shutting down for a deploy/restart.
+ * 1001 = "Going Away" (RFC 6455) — distinct from the 4001 auth-failure code, so clients
+ * know to reconnect with backoff instead of treating it as a credentials problem.
+ */
+export const WS_CLOSE_SERVER_SHUTDOWN = 1001
+export const WS_CLOSE_REASON_SERVER_SHUTDOWN = 'server_shutting_down'
+
 /** Maximum concurrent WebSocket connections per user (B-M11) */
 const MAX_CONNECTIONS_PER_USER = 5
 
@@ -325,6 +333,28 @@ export class ConnectionManager {
       }
     }
     this.connections.delete(pubkey)
+  }
+
+  /**
+   * Close every authenticated connection with an explicit code + reason.
+   * Used on graceful shutdown so clients can tell a deploy from network loss.
+   * Returns the number of connections closed.
+   */
+  closeAll(code: number, reason: string): number {
+    let closed = 0
+    for (const conns of this.connections.values()) {
+      for (const conn of conns) {
+        try {
+          conn.ws.close(code, reason)
+          closed++
+        } catch {
+          // Already closed
+        }
+      }
+    }
+    this.connections.clear()
+    this.hubSubscriptions.clear()
+    return closed
   }
 
   private removeSubscription(pubkey: string, hubId: string): void {
