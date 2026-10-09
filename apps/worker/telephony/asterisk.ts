@@ -192,9 +192,7 @@ export class AsteriskAdapter extends SipBridgeAdapter {
       return this.ariJson([
         greeting,
         this.ariPrompt('captchaPrompt', lang, audioUrls, speechUrl),
-        // A clip per digit: ten clips a language, where a clip per CAPTCHA
-        // would add a PBX media-cache entry (never evicted) for every call.
-        ...digits.split('').map((digit) => this.ariSpeech(() => digit, lang, speechUrl)),
+        ...this.captchaDigitUrls(digits, lang, speechUrl).map((url) => this.play(url)),
         {
           action: 'gather',
           numDigits: 4,
