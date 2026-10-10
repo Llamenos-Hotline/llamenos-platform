@@ -1,0 +1,45 @@
+# Values used ONLY by .github/workflows/helm-validate.yml to exercise every
+# `required` guard and every `enabled` branch in this chart. Every value here
+# is a non-secret placeholder — never use this file for a real install.
+#
+# This file exists because `helm lint` and `helm template` render exactly the
+# templates their input values reach: the default values.yaml leaves several
+# fields (app.image.repository, the webhook URL, every password/secret) empty
+# on purpose so a real install fails loudly instead of deploying something
+# broken. CI has to supply all of them to get a meaningful render at all, and
+# has to flip every `enabled: false` default to `true` to actually render the
+# optional components (rustfs, whisper, metrics) instead of silently skipping
+# their templates.
+
+app:
+  image:
+    repository: example.invalid/llamenos
+    tag: "ci-test"
+  env:
+    WEBHOOK_BASE_URL: "https://hotline.example.invalid"
+
+postgres:
+  host: postgres.example.invalid
+
+secrets:
+  adminPubkey: "0000000000000000000000000000000000000000000000000000000000000000"
+  adminDecryptionPubkey: "1111111111111111111111111111111111111111111111111111111111111111"
+  postgresPassword: "ci-placeholder-postgres-password"
+  hmacSecret: "0000000000000000000000000000000000000000000000000000000000000000"
+  serverSecret: "1111111111111111111111111111111111111111111111111111111111111111"
+
+rustfs:
+  enabled: true
+  credentials:
+    accessKey: "ci-placeholder-access-key"
+    secretKey: "ci-placeholder-secret-key"
+
+whisper:
+  enabled: true
+
+sipBridge:
+  enabled: true
+  bridgeSecret: "ci-placeholder-bridge-secret"
+
+metrics:
+  enabled: true

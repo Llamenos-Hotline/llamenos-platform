@@ -1,0 +1,97 @@
+# Lints and renders deploy/helm/llamenos on every change, so the chart can
+# never again drift into a state nothing catches (#1120): before this
+# workflow existed, `git grep helm .github/` returned nothing — no CI job
+# touched the chart at all, which is how it ended up pointing at a
+# nonexistent image registry 16 releases behind main with nothing to warn an
+# operator who tried to actually use it.
+#
+# Deliberately a standalone workflow, not a job folded into ci.yml's shared
+# `changes`/path-filter machinery (.github/scripts/detect-changed-platforms.sh):
+# this check has zero dependency on app code, build output, or any other
+# platform's toolchain, so giving it its own trigger keeps it fast and keeps
+# the shared path-filter script focused on the platforms it already covers.
+name: Helm Chart Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/helm-validate.yml"
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/helm-validate.yml"
+  workflow_dispatch:
+
+permissions: {}  # deny-all; per-job permissions below
+
+jobs:
+  helm-validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    env:
+      CHART: deploy/helm/llamenos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Helm
+        uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: "v3.18.4"
+
+      # The chart's own values.yaml deliberately leaves secrets, the webhook
+      # URL and the image repository empty so a real `helm install` fails
+      # loudly rather than deploy something broken (see the `required`
+      # guards in templates/). `ci-values.yaml` fills every one of them with
+      # a non-secret placeholder and flips every `enabled: false` default to
+      # `true`, so lint/template actually render rustfs, whisper, the
+      # ServiceMonitor and the sipBridge secret — not just the templates that
+      # happen to be reachable with everything left at its default.
+      - name: helm lint (every optional component enabled)
+        run: helm lint "$CHART" -f "$CHART/ci-values.yaml"
+
+      - name: helm template (every optional component enabled)
+        run: helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" > /dev/null
+
+      - name: helm template (defaults only — rustfs/whisper/metrics stay disabled)
+        run: |
+          helm template llamenos-ci "$CHART" \
+            --set app.image.repository=example.invalid/llamenos \
+            --set app.env.WEBHOOK_BASE_URL=https://hotline.example.invalid \
+            --set secrets.postgresPassword=ci-placeholder \
+            --set secrets.hmacSecret=0000000000000000000000000000000000000000000000000000000000000000 \
+            --set secrets.serverSecret=1111111111111111111111111111111111111111111111111111111111111111 \
+            --set rustfs.credentials.accessKey=ci-placeholder \
+            --set rustfs.credentials.secretKey=ci-placeholder \
+            > /dev/null
+
+      # Verify-by-breaking: these two guards exist specifically to stop a
+      # `helm install` from ever again starting more than one app replica
+      # (deployment-app.yaml) or a bare, misleading image reference
+      # (app.image.repository's `required`). A CI check that only ever
+      # exercises the happy path would not notice either guard silently
+      # regressing — so assert the render actually fails when it should.
+      - name: Verify the chart refuses app.replicas != 1
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set app.replicas=2 > /tmp/should-have-failed.yaml 2>/tmp/should-have-failed.log; then
+            echo "::error::helm template succeeded with app.replicas=2 — the single-instance guard in templates/deployment-app.yaml regressed (#1120)."
+            cat /tmp/should-have-failed.log
+            exit 1
+          fi
+          grep -q "only supports 1" /tmp/should-have-failed.log
+
+      - name: Verify the chart refuses a blank app.image.repository
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set app.image.repository= > /tmp/should-have-failed-2.yaml 2>/tmp/should-have-failed-2.log; then
+            echo "::error::helm template succeeded with an empty app.image.repository — the required-image guard in templates/deployment-app.yaml regressed (#1120)."
+            cat /tmp/should-have-failed-2.log
+            exit 1
+          fi
+          grep -q "app.image.repository is required" /tmp/should-have-failed-2.log

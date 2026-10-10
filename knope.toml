@@ -12,6 +12,12 @@ versioned_files = [
     "apps/desktop/Cargo.lock",
     { path = "apps/android/app/build.gradle.kts", regex = 'versionName = "(?<version>[0-9]+[.][0-9]+[.][0-9]+)"' },
     { path = "apps/ios/Sources/App/Info.plist", regex = "<key>CFBundleShortVersionString</key>\n\t<string>(?<version>[0-9]+[.][0-9]+[.][0-9]+)</string>" },
+    # The Helm chart's `appVersion` (NOT `version` — that's the chart's own
+    # package version, which knope does not own) drives the default image tag
+    # a `helm install` requests (see _helpers.tpl's `llamenos.appImageTag`).
+    # Left out of this list once, it silently drifted 16 releases behind and
+    # pointed every default install at an unpublished tag (#1120).
+    { path = "deploy/helm/llamenos/Chart.yaml", regex = 'appVersion: "(?<version>[0-9]+[.][0-9]+[.][0-9]+)"' },
 ]
 changelog = "CHANGELOG.md"
 extra_changelog_sections = [
