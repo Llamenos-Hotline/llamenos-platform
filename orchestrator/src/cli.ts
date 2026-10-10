@@ -58,6 +58,7 @@ import {
 import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { armStandardAutoMergeAtOpen } from './automerge.js'
+import { requestReviewAtOpen, defaultReviewRequestAtOpenDeps } from './review-request.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -478,6 +479,17 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
   await armStandardAutoMergeAtOpen(
     { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
     { enableAutoMerge, log },
+  )
+
+  // The review the `fleet/review` gate waits on, requested in the same step
+  // the PR is discovered — #1760: before this, nothing in the PR-open path
+  // ever made the request, and every fleet PR was born BLOCKED at
+  // NO-VERDICT:unreviewed with no way to self-clear. See review-request.ts's
+  // module comment for the three rules this honours (event-count
+  // confirmation, pending-is-success at open, never ask the author).
+  await requestReviewAtOpen(
+    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
+    defaultReviewRequestAtOpenDeps(log),
   )
 
   return resolved

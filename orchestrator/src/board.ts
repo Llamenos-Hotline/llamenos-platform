@@ -3,7 +3,7 @@ import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
 import { isReviewerLabel } from './specialist.js'
-import { REVIEW_JOB } from './ci.js'
+import { REVIEW_JOB, reviewOutcomeToken } from './ci.js'
 
 /**
  * `llamenos-fleet board` — the deterministic gate decision table.
@@ -64,10 +64,18 @@ export interface PrCheckContext {
   state: CheckState
   /** CheckRun only. The workflow run's own `run_attempt` — used to tell "an
    *  infra-failed fleet/review that has not been retried yet" from "already
-   *  retried once and still infra-failing" without any state file (see
+   *   retried once and still infra-failing" without any state file (see
    *  `classifyReviewFailure`'s own comment). `undefined` for a
    *  `StatusContext`, or when the run could not be resolved. */
   runAttempt?: number
+  /** CheckRun only: the check-run's own TITLE — where `fleet/review`
+   *  publishes its outcome token (`PASS:reviewed`, `NO-VERDICT:unreviewed`,
+   *  … — ci.ts's `REVIEW_OUTCOME_TOKENS`). `classifyPr` reads it to tell a
+   *  red check whose remedy is "request a review" (`NO-VERDICT:unreviewed`
+   *  / `NO-VERDICT:not-requested` — a push never starts one, #1760) from
+   *  one whose remedy is a rerun or a fix; without it both looked like the
+   *  same infra-failure-shaped FAIL. */
+  title?: string
   /** Populated ONLY for a FAILed `fleet/review` CheckRun — the job's own
    *  step list, already classified by `classifyReviewFailure`. Every other
    *  context (passing, pending, or not `fleet/review`) leaves this
@@ -109,6 +117,12 @@ export interface PrFact {
   /** Every context off `commits(last:1)`'s rollup — CheckRun and
    *  StatusContext both, unfiltered by SHA (see `PrCheckContext.sha`). */
   checks: PrCheckContext[]
+  /** The PR's live `requested_reviewers` logins (user logins; team slugs).
+   *  What makes the #1760 dead state decidable from facts alone: a PR whose
+   *  `fleet/review` is ABSENT or `NO-VERDICT:unreviewed` and whose list is
+   *  EMPTY has never had a review requested, and a push never starts one —
+   *  it stays BLOCKED until somebody asks. */
+  reviewRequests: string[]
 }
 
 export interface PrReview { login: string; state: string }
@@ -177,13 +191,23 @@ export interface BoardFacts {
  * approval (including the case where the author is the only owner, and
  * self-approval is impossible), too few approvals, or changes requested.
  *
+ * `REQUEST_REVIEW` (#1760): the PR is in the born-dead state — `fleet/review`
+ * is ABSENT or red with `NO-VERDICT:unreviewed`/`NO-VERDICT:not-requested`
+ * AND `requested_reviewers` is empty. No review has ever been requested, a
+ * push never starts one, and re-running the job only republishes the same
+ * no-verdict — so the one remedy is requesting a review. NOT capped the way
+ * `LABEL_FOR_REVIEW` is: every dead PR is named, because the whole point is
+ * that these used to sit unnoticed (seven of them on 2026-10-09, four for
+ * over 24 hours, one of which then merged with no changes once a review was
+ * requested by hand).
+ *
  * `CANNOT_DECIDE`: the facts the decision needs (the ruleset, or CODEOWNERS
  * when the ruleset requires code-owner review) could not be read. Never
  * collapsed into a guess: a decision table that guesses is worse than one
  * that says it cannot decide.
  */
 export type BoardAction =
-  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'LABEL_FOR_REVIEW' | 'RERUN_REVIEW'
+  | 'MERGE' | 'APPROVE_THEN_MERGE' | 'LABEL_FOR_REVIEW' | 'RERUN_REVIEW' | 'REQUEST_REVIEW'
   | 'NEEDS_FIX' | 'REVIEW_BLOCKED' | 'WAITING' | 'STALE_LABEL' | 'OPERATOR' | 'CANNOT_DECIDE'
 
 export interface BoardRow {
@@ -556,6 +580,21 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
   const review = onHead.find((c) => c.name === REVIEW_JOB)
 
   if (review === undefined) {
+    // #1760: no verdict AND nobody to fire one — the born-dead state. Named
+    // BEFORE the stale-label branch: a `-reviewer` label with an empty
+    // `requested_reviewers` list was never asked for either, and the remedy
+    // is the same request. This is what LABEL_FOR_REVIEW's reason used to
+    // wave at as "no review requested yet" — except a dead PR reads as a
+    // routine one there, and the one-per-invocation cap hid six of every
+    // seven dead PRs behind the oldest.
+    if (pr.reviewRequests.length === 0) {
+      return {
+        action: 'REQUEST_REVIEW',
+        reason: 'no review has ever been requested and fleet/review has never run — a push never starts ' +
+          'one, so this PR stays BLOCKED until a review is requested (#1760)',
+        failingContexts: [],
+      }
+    }
     // A PR whose reviewer labels are still on it has an outstanding review:
     // the job clears each label only once that review has PASSED (#1158), so
     // a surviving `-reviewer` label with no verdict on this head means the
@@ -612,6 +651,30 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
   }
 
   // review.state === 'FAIL'
+  //
+  // #1760's dead state on a red check: the gate already TOLD us nothing has
+  // ever reviewed this PR (`NO-VERDICT:unreviewed`) or that the event that
+  // fired it was not a review request (`NO-VERDICT:not-requested`), and
+  // nobody is currently asked. Re-running the job reaches the same gate over
+  // the same event and republishes the same no-verdict, so the
+  // RERUN_REVIEW/NEEDS_FIX tree below is a dead end for exactly these two
+  // tokens — the one remedy is the request. A NON-empty `requested_reviewers`
+  // means somebody HAS asked (the request may simply be younger than this
+  // run), so only the empty list routes here.
+  const reviewToken = reviewOutcomeToken(review.title)
+  if (
+    (reviewToken === 'NO-VERDICT:unreviewed' || reviewToken === 'NO-VERDICT:not-requested') &&
+    pr.reviewRequests.length === 0
+  ) {
+    return {
+      action: 'REQUEST_REVIEW',
+      reason: `fleet/review is ${reviewToken} and no review has ever been requested (requested_reviewers ` +
+        'is empty) — re-running the job only republishes the same no-verdict; request a review to start ' +
+        'one (#1760)',
+      failingContexts: [REVIEW_JOB],
+    }
+  }
+
   if (review.reviewFailureKind === 'substantive') {
     return {
       action: 'NEEDS_FIX',
@@ -636,7 +699,7 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
 /** Most-actionable first — see `renderBoard`'s own comment for why this
  *  ordering, not alphabetical or PR-number order, is the default grouping. */
 const ACTION_ORDER: readonly BoardAction[] = [
-  'CANNOT_DECIDE', 'MERGE', 'APPROVE_THEN_MERGE', 'RERUN_REVIEW', 'NEEDS_FIX',
+  'CANNOT_DECIDE', 'MERGE', 'APPROVE_THEN_MERGE', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'NEEDS_FIX',
   'REVIEW_BLOCKED', 'LABEL_FOR_REVIEW', 'STALE_LABEL', 'WAITING', 'OPERATOR',
 ]
 
@@ -778,6 +841,7 @@ query($owner: String!, $repo: String!, $count: Int!) {
         changedFiles
         files(first: 100) { nodes { path } }
         latestOpinionatedReviews(first: 50, writersOnly: true) { nodes { author { login } state } }
+        reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
         commits(last: 1) {
           nodes {
             commit {
@@ -788,6 +852,7 @@ query($owner: String!, $repo: String!, $count: Int!) {
                     __typename
                     ... on CheckRun {
                       name
+                      title
                       status
                       conclusion
                       checkSuite { workflowRun { databaseId } }
@@ -811,6 +876,7 @@ query($owner: String!, $repo: String!, $count: Int!) {
 interface GqlCheckRunNode {
   __typename: 'CheckRun'
   name: string
+  title?: string | null
   status: string
   conclusion: string | null
   checkSuite?: { workflowRun?: { databaseId: number } | null } | null
@@ -835,6 +901,7 @@ interface GqlPrNode {
   changedFiles: number
   files: { nodes: { path: string }[] } | null
   latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] } | null
+  reviewRequests: { nodes: { requestedReviewer: { __typename: string; login?: string; slug?: string } | null }[] } | null
   commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { nodes: GqlContextNode[] } } | null } }[] }
 }
 
@@ -884,13 +951,14 @@ export interface BoardFetchDeps {
   fetchCodeOwners(branch: string): Promise<string | null>
 }
 
-function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; workflowRunId?: number } {
+function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; workflowRunId?: number; title?: string } {
   if (node.__typename === 'CheckRun') {
     return {
       name: node.name,
       kind: 'CheckRun',
       state: normalizeCheckRunState(node.status, node.conclusion),
       workflowRunId: node.checkSuite?.workflowRun?.databaseId ?? undefined,
+      title: node.title ?? undefined,
     }
   }
   return { name: node.context, kind: 'StatusContext', state: normalizeStatusContextState(node.state) }
@@ -937,7 +1005,7 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
 
     const checks = await Promise.all(contextNodes.map(async (n): Promise<PrCheckContext> => {
       const base = toCheckState(n)
-      const check: PrCheckContext = { name: base.name, kind: base.kind, sha, state: base.state }
+      const check: PrCheckContext = { name: base.name, kind: base.kind, sha, state: base.state, title: base.title }
 
       // Only a FAILed fleet/review CheckRun ever needs the infra-vs-
       // substantive split — every other context is inert past this point.
@@ -973,6 +1041,13 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
       files: (node.files?.nodes ?? []).map((f) => f.path),
       changedFiles: node.changedFiles,
       checks,
+      reviewRequests: (node.reviewRequests?.nodes ?? [])
+        .flatMap((r) => {
+          const reviewer = r.requestedReviewer
+          if (reviewer === null) return []
+          const login = reviewer.__typename === 'Team' ? reviewer.slug : reviewer.login
+          return login === undefined || login.length === 0 ? [] : [login]
+        }),
     }
   }))
 

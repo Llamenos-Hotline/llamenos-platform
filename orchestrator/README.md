@@ -137,6 +137,25 @@ Request one from `llamenos-auto` (or from `rhonda-rodododo` on the `release`
 PR) and `fleet/review` runs. Nothing else fires it — no label, and never a
 push.
 
+**The orchestrator makes that request itself when a worker's PR appears
+(#1760).** `realDispatch` calls `requestReviewAtOpen`
+(`orchestrator/src/review-request.ts`) in the same step it links the issue
+and arms standard auto-merge, so a fleet PR is never born with an empty
+`requested_reviewers` list — before this, every one was, and `fleet/review`
+could only ever republish `NO-VERDICT:unreviewed` on it: permanently
+BLOCKED, since a push never starts a review. The request is confirmed by
+the `review_requested` EVENT COUNT advancing, never by the POST response
+(a POST naming an already-pending reviewer succeeds and emits no event);
+when the count does not advance the reviewer is DELETEd and re-POSTed. An
+already-pending trigger reviewer at PR open (the CODEOWNERS auto-request)
+is success, not a retry — re-firing a CODEOWNER's request is the
+non-terminating loop #1471 measured. Whom to ask is `reviewTriggerLogins`
+over the PR's live author, so the author is never asked (GitHub's 422).
+A PR that still ends up with `fleet/review` ABSENT or
+`NO-VERDICT:unreviewed` **and** an empty `requested_reviewers` list is
+named `REQUEST_REVIEW` on `llamenos-fleet board` — uncapped, so every dead
+PR shows, not just the oldest.
+
 **The agent decides which reviews to run from the labels and from the PR
 itself.** The general non-author review always runs. On top of it:
 
