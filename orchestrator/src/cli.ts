@@ -9,6 +9,7 @@ import { readAll, append, since, type RunRecord } from './ledger.js'
 import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt } from './circuit.js'
 import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
+import { checkoutProvenance, ensureRuntimeCurrent, fleetRuntimeRoot, provenanceProblems } from './provenance.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
@@ -64,7 +65,7 @@ import { requestReviewAtOpen, defaultReviewRequestAtOpenDeps } from './review-re
 
 const execFileAsync = promisify(execFile)
 
-const REPO_ROOT = process.env['FLEET_REPO_ROOT'] ?? process.cwd()
+const REPO_ROOT = fleetRuntimeRoot()
 
 function log(msg: string): void {
   mkdirSync(FLEET_DIR, { recursive: true })
@@ -199,18 +200,36 @@ export async function doctor(): Promise<number> {
   checks.push(['last tick pass did not error', last?.aborted !== 'error',
     last?.aborted === 'error' ? `${last.errorMessage ?? '(no message)'} — see ${LOG_FILE}` : ''])
 
+  // Issue #1801: the fleet's OWN runtime checkout is a provenance input, and
+  // until this check existed doctor validated configuration and liveness but
+  // never provenance — it reported every lane ok for hours while the runtime
+  // sat 35 commits behind origin/main on a detached HEAD, so merged fixes
+  // (#1771) were reviewed, merged, and not running. This is a hard FAIL, not
+  // a WARN: doctor's standing warnings train the reader to skim, and this
+  // condition silently disables merged code. Behind-ness names the commit
+  // count AND the drifted orchestrator files, because "35 behind" does not
+  // tell an operator that review-requesting is off.
+  const rt = checkoutProvenance(REPO_ROOT)
+  const rtProblems = provenanceProblems(rt)
+  checks.push([
+    `fleet runtime current with origin/main (${rt.commit?.slice(0, 12) ?? '(unknown)'}${rt.branch !== undefined ? ` on ${rt.branch}` : ', detached'})`,
+    rtProblems.length === 0,
+    rtProblems.join('; '),
+  ])
+
   // The dispatch dependency lives outside this repo (a symlink into the
   // claude-skills git repo, see paths.ts) and cannot be pinned by a llamenos
-  // commit, so doctor is the only place its state is ever surfaced. A dirty
-  // dependency repo is reported as a WARNING below, not a hard check here —
-  // it is normal while iterating on the skill — but every other problem
-  // (missing/non-executable script, not a git repo, dead-command rules) is a
-  // hard failure: those make dispatch behave in a way this repo cannot trace
-  // or trust.
+  // commit, so doctor is the only place its state is ever surfaced.
+  // Issue #1801: a DIRTY dependency repo is now a hard failure like every
+  // other problem here, no longer a warning — an uncommitted edit to
+  // dispatch-one.sh is the identical provenance hole as a stale runtime
+  // (code runs that no reviewed commit describes), and treating the two as
+  // one class is the point of that fix. Iterating on the skill means
+  // committing in ITS repo, which keeps this check green; working
+  // tree edits that are never committed are exactly what must not dispatch.
   const dep = checkDispatchDependency()
-  const depHardProblems = dep.problems.filter((p) => !/uncommitted/i.test(p))
-  checks.push([`dispatch dependency ok (${DISPATCH_SCRIPT})`, depHardProblems.length === 0,
-    depHardProblems.join('; ')])
+  checks.push([`dispatch dependency ok (${DISPATCH_SCRIPT})`, dep.problems.length === 0,
+    dep.problems.join('; ')])
 
   // #773: the fleet's GitHub identity. `absent` is the expected state until
   // the bot account's token is placed here, so it is a WARNING, printed
@@ -262,12 +281,23 @@ export async function doctor(): Promise<number> {
 
   process.stdout.write(`\ndispatch dependency: ${DISPATCH_SCRIPT}\n`)
   process.stdout.write(`dispatch dependency commit: ${dep.commit ?? '(unknown — not a readable git repo)'}\n`)
+  // Every dependency problem is a FAIL since #1801 — including uncommitted
+  // changes, which used to be the one WARN here (see the check above).
   if (dep.problems.length > 0) {
     for (const p of dep.problems) {
-      const isWarning = /uncommitted/i.test(p)
-      process.stdout.write(`${isWarning ? ' WARN ' : ' FAIL '} dispatch dependency: ${p}\n`)
+      process.stdout.write(` FAIL  dispatch dependency: ${p}\n`)
     }
   }
+
+  // Issue #1801: the runtime's own revision is printed unconditionally, the
+  // same way the dependency's is — an operator reading doctor output should
+  // never have to wonder which checkout they are looking at.
+  process.stdout.write(`\nfleet runtime: ${REPO_ROOT}\n`)
+  process.stdout.write(
+    `fleet runtime commit: ${rt.commit ?? '(unknown — not a readable git repo)'}` +
+    `${rt.branch !== undefined ? ` on ${rt.branch}` : ' (detached HEAD)'}` +
+    `${rt.behindBy !== undefined ? `, ${rt.behindBy} behind origin/main` : ''}\n`,
+  )
 
   // Issue #1755: the salvage inventory. 39 `salvage/*` branches accrued on
   // the dispatch host with no signal at all — 32 held nothing but a staged
@@ -708,6 +738,18 @@ function defaultIssueLinkDeps(): IssueLinkDeps {
 }
 
 async function runTick(): Promise<number> {
+  // Issue #1801: never dispatch yesterday's rails. The runtime checkout is
+  // fast-forwarded to origin/main when that is safe (on main, clean,
+  // verifiably behind); when it is not safe the pass is REFUSED outright —
+  // a fleet that stops and says so beats a fleet silently running code that
+  // was never reviewed into place. Runs before loadLanes so the pass reads
+  // lane fragments from the fresh tree when a fast-forward happened.
+  const currency = ensureRuntimeCurrent(REPO_ROOT, log)
+  if (!currency.ok) {
+    process.stderr.write(`ERROR: ${currency.reason ?? 'fleet runtime is not current'}\n`)
+    return 1
+  }
+
   const lanes = await loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger)
 
   const deps: TickDeps = {
