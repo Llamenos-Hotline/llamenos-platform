@@ -9,9 +9,9 @@ struct RecoveryRequestsView: View {
     @Environment(HubContext.self) private var hubContext
     @Environment(AppState.self) private var appState
 
-    @State private var sessions: [RecoverySessionStatus] = []
+    @State private var sessions: [RecoverySessionSummary] = []
     @State private var isLoading = true
-    @State private var selectedSession: RecoverySessionStatus?
+    @State private var selectedSession: RecoverySessionSummary?
     @State private var showUrgentSheet = false
     @State private var isApproving = false
     @State private var errorMessage: String?
@@ -30,7 +30,8 @@ struct RecoveryRequestsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedSession) { session in
             RecoveryRequestDetailSheet(
-                request: session,
+                summary: session,
+                loadSession: { try await appState.apiService.getRecoverySession(sessionId: session.sessionId) },
                 isApproving: $isApproving,
                 errorMessage: $errorMessage,
                 onApprove: { await approveRecovery(sessionId: session.sessionId) },
@@ -110,8 +111,12 @@ struct RecoveryRequestsView: View {
     // MARK: - Actions
 
     private func loadRecoveryRequests() async {
+        guard let hubId = hubContext.activeHubId else {
+            isLoading = false
+            return
+        }
         do {
-            let fetched = try await appState.apiService.listRecoverySessions()
+            let fetched = try await appState.apiService.listRecoverySessions(hubId: hubId)
             sessions = fetched
         } catch {
             // Non-fatal: show empty state rather than blocking the UI
@@ -126,12 +131,6 @@ struct RecoveryRequestsView: View {
         isApproving = true
         errorMessage = nil
         do {
-            guard let session = sessions.first(where: { $0.sessionId == sessionId }) else {
-                errorMessage = NSLocalizedString("recovery_group_error_session_not_found", comment: "Session not found")
-                isApproving = false
-                return
-            }
-
             let cryptoService = appState.cryptoService
             guard cryptoService.isUnlocked,
                   let signingPubkey = cryptoService.signingPubkeyHex else {
@@ -140,9 +139,12 @@ struct RecoveryRequestsView: View {
                 return
             }
 
+            // The summary row omits contributions; the approve flow needs the
+            // full session record.
+            let session = try await appState.apiService.getRecoverySession(sessionId: sessionId)
+
             // Check if we already contributed
-            if let contributions = session.contributions,
-               contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
+            if session.contributions.contains(where: { $0.contributorPubkey == signingPubkey }) {
                 errorMessage = NSLocalizedString("recovery_group_error_already_approved", comment: "Already approved")
                 isApproving = false
                 return
@@ -228,7 +230,7 @@ struct RecoveryRequestsView: View {
 // MARK: - RecoveryRequestRow
 
 struct RecoveryRequestRow: View {
-    let request: RecoverySessionStatus
+    let request: RecoverySessionSummary
     let onTap: () -> Void
 
     var body: some View {
@@ -244,36 +246,29 @@ struct RecoveryRequestRow: View {
 
                 HStack(spacing: 16) {
                     Label {
-                        Text("\(request.contributionCount) / \(request.threshold)")
+                        Text(request.expiresAt.prefix(10))
                     } icon: {
-                        Image(systemName: "person.fill.checkmark")
+                        Image(systemName: "clock")
                             .font(.caption)
                     }
                     .font(.brand(.caption))
                     .foregroundStyle(Color.brandMutedForeground)
 
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
+                    if request.signalVerified {
                         Label {
-                            Text(formatDelay(ms: remaining))
+                            Text(NSLocalizedString("recovery_group_requests_status_verified", comment: ""))
                         } icon: {
-                            Image(systemName: "clock")
+                            Image(systemName: "checkmark.badge.fill")
                                 .font(.caption)
                         }
                         .font(.brand(.caption))
-                        .foregroundStyle(Color.brandMutedForeground)
+                        .foregroundStyle(.green)
                     }
                 }
             }
             .padding(.vertical, 4)
         }
         .accessibilityIdentifier("recovery-request-\(request.sessionId.prefix(8))")
-    }
-
-    private func formatDelay(ms: Int) -> String {
-        let hours = ms / 3_600_000
-        let minutes = (ms % 3_600_000) / 60_000
-        if hours > 0 { return "\(hours)h \(minutes)m" }
-        return "\(minutes)m"
     }
 }
 
@@ -321,7 +316,8 @@ struct RecoveryStatusBadge: View {
 // MARK: - RecoveryRequestDetailSheet
 
 struct RecoveryRequestDetailSheet: View {
-    let request: RecoverySessionStatus
+    let summary: RecoverySessionSummary
+    let loadSession: () async throws -> RecoverySessionStatusResponse
     @Binding var isApproving: Bool
     @Binding var errorMessage: String?
     let onApprove: () async -> Void
@@ -329,87 +325,18 @@ struct RecoveryRequestDetailSheet: View {
     let onCancel: () async -> Void
     let onDismiss: () -> Void
 
+    @State private var session: RecoverySessionStatusResponse?
+
     var body: some View {
         NavigationStack {
-            List {
-                // Status
-                Section {
-                    LabeledContent("Status") {
-                        RecoveryStatusBadge(status: request.status)
-                    }
-                    LabeledContent(
-                        NSLocalizedString("recovery_group_requests_approval_progress", comment: ""),
-                        value: "\(request.contributionCount) / \(request.threshold)"
-                    )
-                    if let remaining = request.delayRemainingMs, remaining > 0 {
-                        let hours = remaining / 3_600_000
-                        let minutes = (remaining % 3_600_000) / 60_000
-                        LabeledContent(
-                            NSLocalizedString("recovery_group_requests_time_remaining", comment: ""),
-                            value: hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
-                        )
-                    }
-                }
-
-                // User info
-                Section {
-                    LabeledContent("User", value: String(request.userPubkey.prefix(24)) + "...")
-                    LabeledContent("New Device", value: String(request.newDevicePubkey.prefix(24)) + "...")
-                    LabeledContent("Session", value: request.sessionId)
-                }
-
-                // Actions
-                if ["verified", "active"].contains(request.status) {
-                    Section {
-                        Button {
-                            Task { await onApprove() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "checkmark.shield.fill")
-                                if isApproving {
-                                    Text(NSLocalizedString("recovery_group_requests_approving", comment: ""))
-                                    ProgressView()
-                                } else {
-                                    Text(NSLocalizedString("recovery_group_requests_approve", comment: "Approve recovery"))
-                                }
-                            }
-                        }
-                        .disabled(isApproving)
-                        .accessibilityIdentifier("approve-recovery-button")
-
-                        Button {
-                            onUrgent()
-                        } label: {
-                            HStack {
-                                Image(systemName: "bolt.fill")
-                                Text(NSLocalizedString("recovery_group_urgent_enable", comment: "Enable urgent recovery"))
-                            }
-                        }
-                        .foregroundStyle(.orange)
-                        .accessibilityIdentifier("urgent-recovery-button")
-
-                        Button(role: .destructive) {
-                            Task { await onCancel() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "xmark.circle.fill")
-                                Text(NSLocalizedString("recovery_group_requests_cancel", comment: "Cancel request"))
-                            }
-                        }
-                        .accessibilityIdentifier("cancel-recovery-button")
-                    }
-                }
-
-                // Error
-                if let error = errorMessage {
-                    Section {
-                        Text(error)
-                            .font(.brand(.footnote))
-                            .foregroundStyle(Color.brandDestructive)
-                    }
+            Group {
+                if let session {
+                    detailList(session)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle(NSLocalizedString("recovery_group_requests_title", comment: ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -419,6 +346,92 @@ struct RecoveryRequestDetailSheet: View {
                     }
                 }
             }
+            .task {
+                session = try? await loadSession()
+            }
         }
+    }
+
+    private func detailList(_ session: RecoverySessionStatusResponse) -> some View {
+        List {
+            // Status
+            Section {
+                LabeledContent("Status") {
+                    RecoveryStatusBadge(status: session.status.rawValue)
+                }
+                LabeledContent(
+                    NSLocalizedString("recovery_group_requests_approval_progress", comment: ""),
+                    value: "\(Int(session.contributionCount)) / \(Int(session.threshold))"
+                )
+                let remaining = Int(session.delayRemainingMS)
+                if remaining > 0 {
+                    let hours = remaining / 3_600_000
+                    let minutes = (remaining % 3_600_000) / 60_000
+                    LabeledContent(
+                        NSLocalizedString("recovery_group_requests_time_remaining", comment: ""),
+                        value: hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+                    )
+                }
+            }
+
+            // User info
+            Section {
+                LabeledContent("User", value: String(session.userPubkey.prefix(24)) + "...")
+                LabeledContent("New Device", value: String(session.newDevicePubkey.prefix(24)) + "...")
+                LabeledContent("Session", value: session.sessionID)
+            }
+
+            // Actions
+            if [.verified, .active].contains(session.status) {
+                Section {
+                    Button {
+                        Task { await onApprove() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "checkmark.shield.fill")
+                            if isApproving {
+                                Text(NSLocalizedString("recovery_group_requests_approving", comment: ""))
+                                ProgressView()
+                            } else {
+                                Text(NSLocalizedString("recovery_group_requests_approve", comment: "Approve recovery"))
+                            }
+                        }
+                    }
+                    .disabled(isApproving)
+                    .accessibilityIdentifier("approve-recovery-button")
+
+                    Button {
+                        onUrgent()
+                    } label: {
+                        HStack {
+                            Image(systemName: "bolt.fill")
+                            Text(NSLocalizedString("recovery_group_urgent_enable", comment: "Enable urgent recovery"))
+                        }
+                    }
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("urgent-recovery-button")
+
+                    Button(role: .destructive) {
+                        Task { await onCancel() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "xmark.circle.fill")
+                            Text(NSLocalizedString("recovery_group_requests_cancel", comment: "Cancel request"))
+                        }
+                    }
+                    .accessibilityIdentifier("cancel-recovery-button")
+                }
+            }
+
+            // Error
+            if let error = errorMessage {
+                Section {
+                    Text(error)
+                        .font(.brand(.footnote))
+                        .foregroundStyle(Color.brandDestructive)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
     }
 }

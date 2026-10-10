@@ -192,6 +192,10 @@ private func ffiMobileRecoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
     mobileRecoveryGroupGenerateKeypair()
 }
 
+private func ffiMobileRecoveryGroupSplitPrivateKey(handle: UInt64, total: UInt8, threshold: UInt8) throws -> [ShamirShare] {
+    try mobileRecoveryGroupSplitPrivateKey(handle: handle, total: total, threshold: threshold)
+}
+
 // V3 Draft encryption (hub-key-based, secrets stay in Rust)
 private func ffiMobileEncryptDraft(plaintext: String, hubId: String) throws -> String {
     try mobileEncryptDraft(plaintext: plaintext, hubId: hubId)
@@ -651,6 +655,13 @@ final class CryptoService: @unchecked Sendable {
 
     func recoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
         ffiMobileRecoveryGroupGenerateKeypair()
+    }
+
+    /// Shamir-split the recovery group private key held under `handle` in Rust.
+    /// One-shot: the stored key is zeroized on split, so a second call with the
+    /// same handle throws.
+    func recoveryGroupSplitPrivateKey(handle: UInt64, total: UInt8, threshold: UInt8) throws -> [ShamirShare] {
+        try ffiMobileRecoveryGroupSplitPrivateKey(handle: handle, total: total, threshold: threshold)
     }
 
     // MARK: - Call Metadata Decryption (HPKE)

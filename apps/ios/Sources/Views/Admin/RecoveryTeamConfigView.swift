@@ -1,5 +1,20 @@
 import SwiftUI
 
+// MARK: - RecoveryHolderCandidate
+
+/// A hub member eligible to hold a recovery share: their account pubkey plus
+/// the X25519 encryption pubkey of their most recently seen registered device,
+/// mapped from the admin device overview.
+struct RecoveryHolderCandidate: Identifiable {
+    let pubkey: String
+    let displayName: String?
+    let encryptionPubkey: String
+    let deviceVerified: Bool
+    let lastSeen: String?
+
+    var id: String { pubkey }
+}
+
 // MARK: - RecoveryTeamConfigView
 
 /// Admin view for configuring the hub's recovery team.
@@ -17,8 +32,10 @@ struct RecoveryTeamConfigView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var groupInfo: AppRecoveryGroupInfo?
+    @State private var groupInfo: RecoveryGroupInfo?
     @State private var showRotateConfirmation = false
+    @State private var candidates: [RecoveryHolderCandidate] = []
+    @State private var selectedHolders: Set<String> = []
 
     var body: some View {
         ZStack {
@@ -41,7 +58,7 @@ struct RecoveryTeamConfigView: View {
         ) {
             Button(NSLocalizedString("cancel", comment: "Cancel"), role: .cancel) {}
             Button(NSLocalizedString("recovery_group_rotate", comment: "Rotate"), role: .destructive) {
-                Task { await rotateRecoveryGroup() }
+                rotateRecoveryGroup()
             }
         } message: {
             Text(NSLocalizedString("recovery_group_requests_cancel_confirm", comment: ""))
@@ -64,6 +81,8 @@ struct RecoveryTeamConfigView: View {
 
     // MARK: - Setup State
 
+    private var holderCountValid: Bool { selectedHolders.count == totalShares }
+
     private var setupState: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -85,6 +104,9 @@ struct RecoveryTeamConfigView: View {
                 // Configuration form
                 recoveryConfigForm
 
+                // Share holder picker
+                holderPicker
+
                 // Setup button
                 Button {
                     Task { await setupRecoveryGroup() }
@@ -100,7 +122,7 @@ struct RecoveryTeamConfigView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isSaving || threshold > totalShares)
+                .disabled(isSaving || threshold > totalShares || !holderCountValid)
                 .accessibilityIdentifier("setup-recovery-team-button")
 
                 if let errorMessage {
@@ -115,32 +137,112 @@ struct RecoveryTeamConfigView: View {
         .accessibilityIdentifier("recovery-team-setup")
     }
 
+    // MARK: - Holder Picker
+
+    private var holderPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(NSLocalizedString("recovery_group_contacts", comment: "Recovery contacts"))
+                .font(.brand(.caption))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            if !holderCountValid {
+                Text(L10n.format("recovery_group_select_exactly", comment: "", totalShares))
+                    .font(.brand(.caption))
+                    .foregroundStyle(Color.brandMutedForeground)
+            }
+
+            if candidates.isEmpty {
+                Text(NSLocalizedString("recovery_group_no_contacts", comment: ""))
+                    .font(.brand(.footnote))
+                    .foregroundStyle(Color.brandMutedForeground)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(candidates) { candidate in
+                    let isSelected = selectedHolders.contains(candidate.pubkey)
+                    Button {
+                        toggleHolder(candidate.pubkey)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "person.fill")
+                                .foregroundStyle(Color.brandMutedForeground)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.displayName ?? String(candidate.pubkey.prefix(16)) + "…")
+                                    .font(.brand(.body))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text(String(candidate.pubkey.prefix(16)) + "…")
+                                    .font(.brandMono(.caption))
+                                    .foregroundStyle(Color.brandMutedForeground)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: candidate.deviceVerified ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(candidate.deviceVerified ? .green : .orange)
+                                .accessibilityLabel(NSLocalizedString(
+                                    candidate.deviceVerified ? "recovery_group_device_verified" : "recovery_group_device_unverified",
+                                    comment: ""
+                                ))
+                            if isSelected {
+                                Text(NSLocalizedString("recovery_group_selected", comment: "Selected"))
+                                    .font(.brand(.caption))
+                                    .fontWeight(.medium)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.brandPrimary.opacity(0.15))
+                                    .foregroundStyle(Color.brandPrimary)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .padding(10)
+                        .background(isSelected ? Color.brandPrimary.opacity(0.08) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("recovery-holder-\(candidate.pubkey.prefix(8))")
+                }
+            }
+        }
+        .padding()
+        .background(Color.brandCard)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("recovery-holder-picker")
+    }
+
+    private func toggleHolder(_ pubkey: String) {
+        if selectedHolders.contains(pubkey) {
+            selectedHolders.remove(pubkey)
+        } else if selectedHolders.count < totalShares {
+            selectedHolders.insert(pubkey)
+        }
+    }
+
     // MARK: - Configured State
 
-    private func configuredState(info: AppRecoveryGroupInfo) -> some View {
+    private func configuredState(info: RecoveryGroupInfo) -> some View {
         List {
             // Status section
             Section {
                 LabeledContent(
                     NSLocalizedString("recovery_group_required_approvals", comment: ""),
-                    value: "\(info.threshold)"
+                    value: "\(Int(info.threshold))"
                 )
                 .accessibilityIdentifier("recovery-threshold")
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_total_contacts", comment: ""),
-                    value: "\(info.totalShares)"
+                    value: "\(Int(info.totalShares))"
                 )
                 .accessibilityIdentifier("recovery-total-shares")
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_delay_config", comment: ""),
-                    value: "\(info.delayHours)h"
+                    value: "\(Int(info.delayHours))h"
                 )
 
                 LabeledContent(
                     NSLocalizedString("recovery_group_emergency_floor_config", comment: ""),
-                    value: "\(info.emergencyFloorHours)h"
+                    value: "\(Int(info.emergencyFloorHours))h"
                 )
 
                 if let rotated = info.rotatedAt {
@@ -308,32 +410,60 @@ struct RecoveryTeamConfigView: View {
             return
         }
         isLoading = true
+        async let candidatesFetch = loadCandidates(hubId: hubId)
         do {
             let info = try await appState.apiService.getRecoveryGroup(hubId: hubId)
             self.groupInfo = info
             self.isConfigured = true
+        } catch APIError.requestFailed(let statusCode, _) where statusCode == 404 {
+            self.isConfigured = false
+            self.groupInfo = nil
         } catch {
             self.isConfigured = false
             self.groupInfo = nil
+            self.errorMessage = error.localizedDescription
         }
+        await candidatesFetch
         isLoading = false
+    }
+
+    private func loadCandidates(hubId: String) async {
+        do {
+            let overview = try await appState.apiService.getRecoveryGroupCandidates(hubId: hubId)
+            self.candidates = overview.entries.compactMap { entry in
+                // Wrap each share to the holder's most recently seen device that
+                // registered an X25519 encryption key.
+                let device = entry.devices
+                    .filter { $0.x25519Pubkey != nil }
+                    .sorted { ($0.lastSeenAt ?? $0.registeredAt) > ($1.lastSeenAt ?? $1.registeredAt) }
+                    .first
+                guard let encryptionPubkey = device?.x25519Pubkey else { return nil }
+                return RecoveryHolderCandidate(
+                    pubkey: entry.userPubkey,
+                    displayName: entry.displayName,
+                    encryptionPubkey: encryptionPubkey,
+                    deviceVerified: entry.verified,
+                    lastSeen: entry.lastSeenAt
+                )
+            }
+        } catch {
+            // Candidates are required for enrolment but not for viewing the
+            // configured state — an admin without users:manage-devices still
+            // gets the status screen.
+            self.candidates = []
+        }
     }
 
     private func setupRecoveryGroup() async {
         guard let hubId = hubContext.activeHubId else { return }
+        let holders = candidates.filter { selectedHolders.contains($0.pubkey) }
+        guard holders.count == totalShares else { return }
         isSaving = true
         errorMessage = nil
         do {
-            let keypair = try appState.cryptoService.recoveryGroupGenerateKeypair()
-            let body: [String: Any] = [
-                "hubId": hubId,
-                "publicKey": keypair.publicKeyHex,
-                "threshold": threshold,
-                "totalShares": totalShares,
-                "delayHours": delayHours,
-                "emergencyFloorHours": emergencyFloorHours,
-            ]
+            let body = try buildEnrollBody(hubId: hubId, holders: holders)
             _ = try await appState.apiService.enrollRecoveryGroup(body)
+            selectedHolders = []
             await loadRecoveryGroup()
         } catch {
             errorMessage = error.localizedDescription
@@ -341,12 +471,78 @@ struct RecoveryTeamConfigView: View {
         isSaving = false
     }
 
-    private func rotateRecoveryGroup() async {
+    /// Build the enrol body exactly as desktop's recovery-group-section.tsx does:
+    /// generate the group keypair in Rust, Shamir-split the private key (it never
+    /// enters Swift), commit each share, HPKE-wrap one share per holder under
+    /// LABEL_RECOVERY_GROUP_SHARE_WRAP, and anchor the enrolment in a sigchain
+    /// link whose hash the server stores.
+    private func buildEnrollBody(hubId: String, holders: [RecoveryHolderCandidate]) throws -> RecoveryGroupEnroll {
+        let crypto = appState.cryptoService
+        let isRotation = groupInfo != nil
+
+        let keypair = crypto.recoveryGroupGenerateKeypair()
+        let shares = try crypto.recoveryGroupSplitPrivateKey(
+            handle: keypair.handle,
+            total: UInt8(totalShares),
+            threshold: UInt8(threshold)
+        )
+        let commitments = try shares.map { try crypto.shamirCommit(share: $0) }
+
+        let shareEnvelopes = try zip(shares, holders).map { share, holder in
+            let shareHex = String(format: "%02x", share.x) + share.yHex
+            let envelope = try crypto.hpkeSeal(
+                plaintextHex: shareHex,
+                recipientPubkeyHex: holder.encryptionPubkey,
+                label: CryptoLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                aadHex: ""
+            )
+            let envelopeJSON = String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
+            return ShareEnvelope(holderPubkey: holder.pubkey, shareEnvelope: envelopeJSON)
+        }
+
+        let sigchainPayload: [String: Any] = [
+            "type": isRotation ? "recovery-group-rotate" : "recovery-group-enroll",
+            "groupPublicKey": keypair.publicKeyHex,
+            "shareHolderPubkeys": holders.map(\.pubkey),
+            "threshold": threshold,
+            "totalShares": totalShares,
+        ]
+        let payloadJSON = String(
+            decoding: try JSONSerialization.data(withJSONObject: sigchainPayload),
+            as: UTF8.self
+        )
+        let link = try crypto.createSigchainLink(
+            id: UUID().uuidString,
+            seq: 1,
+            prevHash: nil,
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            payloadJson: payloadJSON
+        )
+
+        return RecoveryGroupEnroll(
+            delayHours: delayHours,
+            duressCommitments: nil,
+            emergencyFloorHours: emergencyFloorHours,
+            groupPublicKey: keypair.publicKeyHex,
+            hubID: hubId,
+            shareCommitments: commitments,
+            shareEnvelopes: shareEnvelopes,
+            sigchainLinkHash: link.entryHash,
+            threshold: threshold,
+            totalShares: totalShares
+        )
+    }
+
+    /// Rotation replaces the group through the same enrol endpoint (as desktop
+    /// does): prefill the form from the current group and let the admin confirm
+    /// the holder set before the split/re-wrap runs.
+    private func rotateRecoveryGroup() {
         guard let info = groupInfo else { return }
-        threshold = info.threshold
-        totalShares = info.totalShares
-        delayHours = info.delayHours
-        emergencyFloorHours = info.emergencyFloorHours
-        await setupRecoveryGroup()
+        threshold = Int(info.threshold)
+        totalShares = Int(info.totalShares)
+        delayHours = Int(info.delayHours)
+        emergencyFloorHours = Int(info.emergencyFloorHours)
+        selectedHolders = Set(info.shareHolderLiveness.map(\.holderPubkey))
+        isConfigured = false
     }
 }

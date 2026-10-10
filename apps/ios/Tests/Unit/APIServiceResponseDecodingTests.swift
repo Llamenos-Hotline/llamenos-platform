@@ -278,6 +278,37 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         }
     }
 
+    // MARK: - #1032: recovery group info
+
+    /// The hand-written `AppRecoveryGroupInfo` required `publicKey` and `commitments`,
+    /// keys `recoveryGroupInfoSchema` has never sent, so the config screen decoded
+    /// nothing and always showed "not configured". The generated type must decode the
+    /// real payload — and, asserted directly, the old shape must not.
+    func testTheRecoveryGroupInfoDecodes() throws {
+        let info = try decoder.decode(RecoveryGroupInfo.self, from: try payload("recoveryGroupInfo"))
+        XCTAssertEqual(info.groupPublicKey, String(repeating: "ab", count: 32))
+        XCTAssertEqual(info.hubID, "22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(Int(info.threshold), 2)
+        XCTAssertEqual(Int(info.totalShares), 3)
+        XCTAssertEqual(info.shareCommitments.count, 3)
+        XCTAssertEqual(info.shareHolderLiveness.count, 3)
+        XCTAssertEqual(info.rotatedAt, "2026-01-03T00:00:00.000Z")
+        XCTAssertEqual(info.duressCommitments?.compactMap { $0 }.count, 1)
+    }
+
+    func testTheHandWrittenRecoveryGroupInfoCannotDecodeTheServersPayload() throws {
+        /// `AppRecoveryGroupInfo` as it was before this change (`publicKey` first, so
+        /// it is the key decode fails on).
+        struct LegacyRecoveryGroupInfo: Decodable {
+            let publicKey: String
+            let commitments: [String]
+        }
+        try assertKeyNotFound(
+            LegacyRecoveryGroupInfo.self, in: try payload("recoveryGroupInfo"), expecting: "publicKey",
+            "the server's key is groupPublicKey; publicKey was never sent"
+        )
+    }
+
     /// `.convertFromSnakeCase` is retained on the response decoder, and it is routinely
     /// mistaken for a safety net. It is not: it cannot rename anything, it only splits
     /// on underscores. Pinned so nobody argues a model/schema disagreement is covered.

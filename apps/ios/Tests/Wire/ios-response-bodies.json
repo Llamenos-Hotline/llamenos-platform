@@ -111,6 +111,30 @@
       "absentFromServer": [
         "languages"
       ]
+    },
+    {
+      "id": "recoveryGroupInfo",
+      "endpoint": "GET /api/recovery-group/:hubId (200)",
+      "module": "@protocol/schemas/recovery-group",
+      "schema": "recoveryGroupInfoSchema",
+      "swiftType": "RecoveryGroupInfo",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "createdAt",
+        "delayHours",
+        "emergencyFloorHours",
+        "groupPublicKey",
+        "hubId",
+        "shareCommitments",
+        "shareHolderLiveness",
+        "sigchainLinkHash",
+        "threshold",
+        "totalShares"
+      ],
+      "absentFromServer": [
+        "publicKey",
+        "commitments"
+      ]
     }
   ],
   "responses": {
@@ -169,6 +193,44 @@
         "es",
         "en",
         "zh"
+      ]
+    },
+    "recoveryGroupInfo": {
+      "hubId": "22222222-2222-4222-8222-222222222222",
+      "groupPublicKey": "abababababababababababababababababababababababababababababababab",
+      "threshold": 2,
+      "totalShares": 3,
+      "shareCommitments": [
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+      ],
+      "duressCommitments": [
+        null,
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        null
+      ],
+      "sigchainLinkHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "delayHours": 24,
+      "emergencyFloorHours": 4,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "rotatedAt": "2026-01-03T00:00:00.000Z",
+      "shareHolderLiveness": [
+        {
+          "holderPubkey": "abababababababababababababababababababababababababababababababab",
+          "lastLivenessProof": null,
+          "createdAt": "2026-01-01T00:00:00.000Z"
+        },
+        {
+          "holderPubkey": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac",
+          "lastLivenessProof": "2026-01-02T00:00:00.000Z",
+          "createdAt": "2026-01-01T00:00:00.000Z"
+        },
+        {
+          "holderPubkey": "adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad",
+          "lastLivenessProof": null,
+          "createdAt": "2026-01-01T00:00:00.000Z"
+        }
       ]
     }
   }

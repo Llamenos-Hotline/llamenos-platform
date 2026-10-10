@@ -199,6 +199,10 @@ final class APIServiceWireFormatTests: XCTestCase {
     private static let ct = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
     private static let pubkey = String(repeating: "ab", count: 32)
 
+    /// The HPKE envelope as an opaque JSON string, the shape enrol puts inside
+    /// `shareEnvelopes[].shareEnvelope` (desktop's `JSON.stringify` of the same object).
+    private static let shareEnvelopeJSON = "{\"v\":1,\"labelId\":1,\"enc\":\"\(enc)\",\"ct\":\"\(ct)\"}"
+
     private static let recipient = RecipientEnvelope(ct: ct, enc: enc, pubkey: pubkey)
     private static let admin = SharedAdminEnvelope(ct: ct, enc: enc, pubkey: pubkey)
 
@@ -350,6 +354,31 @@ final class APIServiceWireFormatTests: XCTestCase {
                 "hubId": "22222222-2222-4222-8222-222222222222",
                 "envelope": Self.ct,
             ] as [String: String]),
+
+            // POST /api/recovery-group/enroll — recoveryGroupEnrollSchema. #1032's
+            // enrol half: the screen builds this generated type after Shamir-splitting
+            // the group key and HPKE-wrapping one share per holder. Every multi-word
+            // key is required, so the historic strategy turned enrol into a 400.
+            ("enrollRecoveryGroup", RecoveryGroupEnroll(
+                delayHours: 24,
+                duressCommitments: [nil, String(repeating: "dd", count: 32), nil],
+                emergencyFloorHours: 4,
+                groupPublicKey: Self.pubkey,
+                hubID: "22222222-2222-4222-8222-222222222222",
+                shareCommitments: [
+                    String(repeating: "ee", count: 32),
+                    String(repeating: "ef", count: 32),
+                    String(repeating: "f0", count: 32),
+                ],
+                shareEnvelopes: [
+                    ShareEnvelope(holderPubkey: String(repeating: "ab", count: 32), shareEnvelope: Self.shareEnvelopeJSON),
+                    ShareEnvelope(holderPubkey: String(repeating: "ac", count: 32), shareEnvelope: Self.shareEnvelopeJSON),
+                    ShareEnvelope(holderPubkey: String(repeating: "ad", count: 32), shareEnvelope: Self.shareEnvelopeJSON),
+                ],
+                sigchainLinkHash: String(repeating: "ff", count: 32),
+                threshold: 2,
+                totalShares: 3
+            )),
         ]
     }
 

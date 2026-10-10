@@ -61,63 +61,45 @@ struct AppConfig: Decodable {
 }
 
 // MARK: - Recovery Group Response Types
+//
+// The recovery-group wire models are the generated protocol types
+// (`RecoveryGroupInfo`, `RecoveryGroupEnroll`, `RecoverySessionStatusResponse`,
+// `RecoveryInitiateResponse`, `RecoveryInitiateVerifyResponse`,
+// `RecoveryContributeResponse` from packages/protocol/generated/swift/Types.swift).
+// #1032: the hand-written copies had drifted from `recoveryGroupInfoSchema`
+// (`publicKey`/`commitments` vs the server's `groupPublicKey`/`shareCommitments`),
+// so every group decode threw `keyNotFound` and the Recovery Team screen showed
+// "not configured" forever.
 
-struct AppRecoveryGroupInfo: Decodable {
-    let publicKey: String
-    let threshold: Int
-    let totalShares: Int
-    let commitments: [String]
-    let sigchainLinkHash: String
-    let delayHours: Int
-    let emergencyFloorHours: Int
-    let createdAt: String
-    let rotatedAt: String?
-    let shareHolderLiveness: [ShareHolderLiveness]
-}
-
-
-struct RecoverySessionStatus: Decodable, Identifiable {
+/// One row of `GET /api/recovery-group/sessions?hubId=`.
+///
+/// Hand-written on purpose: the route's list schema is declared inline in
+/// `apps/worker/routes/recovery-group.ts` (backend-owned), so codegen emits no
+/// type for it. It is a strict subset of `RecoverySessionStatusResponse`
+/// (`GET /api/recovery-group/session/:id`) — the list deliberately omits
+/// `contributionCount`, `threshold`, `delayRemainingMs`, `contributions` and
+/// `emergencyOverride`; decode the full session for those.
+struct RecoverySessionSummary: Decodable, Identifiable {
     let sessionId: String
     let hubId: String
     let userPubkey: String
     let newDevicePubkey: String
     let status: String
-    let contributionCount: Int
-    let threshold: Int
-    let delayRemainingMs: Int?
+    let signalVerified: Bool
     let expiresAt: String
     let createdAt: String
-    let contributions: [RecoveryContribution]?
-    let emergencyOverride: AppRecoveryEmergencyOverride?
+    let completedAt: String?
+    let cancelledAt: String?
+    let cancelledBy: String?
 
     var id: String { sessionId }
 }
 
-struct RecoveryContribution: Decodable {
-    let contributorPubkey: String
-    let encryptedShare: String
-    let contributorSignature: String
-    let contributedAt: String
-}
+// ShareHolderLiveness is provided by protocol codegen (Types.swift)
 
-struct AppRecoveryEmergencyOverride: Decodable {
-    let justification: String
-    let approverPubkey: String
-    let approverSignature: String
-}
-
-struct AppRecoveryInitiateResponse: Decodable {
-    let sessionId: String
-    let verificationSent: Bool
-}
-
-struct RecoveryVerifyResponse: Decodable {
-    let ok: Bool
-    let expiresAt: String
-}
-
-// ShareHolderLiveness is now provided by protocol codegen (Types.swift)
-
+/// Response of `GET /api/recovery-group/shares/my`. No protocol schema covers
+/// this endpoint yet (it is not mounted server-side — #1701); keep the local
+/// model until the route and its schema exist.
 struct ShareEnvelopeResponse: Decodable {
     let shareEnvelope: String
     let shareCommitment: String?
@@ -125,12 +107,6 @@ struct ShareEnvelopeResponse: Decodable {
 
 struct OkResponse: Decodable {
     let ok: Bool
-}
-
-struct ContributeResponse: Decodable {
-    let ok: Bool
-    let status: String
-    let contributionCount: Int
 }
 
 // MARK: - APIService
@@ -648,58 +624,60 @@ final class APIService: @unchecked Sendable {
     }
 
     // MARK: - Recovery Group API
+    //
+    // These paths are NOT wrapped with hp(): the server mounts recovery-group
+    // only at `/api/recovery-group/*` (never hub-scoped), and every call names
+    // its hub explicitly in the path or body, so the multi-hub axiom holds
+    // without the active-hub prefix (which produced `/api/hubs/{id}/recovery-group/…`
+    // — a 404 on every call).
 
-    func enrollRecoveryGroup(_ body: [String: Any]) async throws -> OkResponse {
-        let jsonData = try JSONSerialization.data(withJSONObject: body)
-        return try await request(method: "POST", path: hp("/api/recovery-group/enroll"), rawBody: jsonData)
+    func enrollRecoveryGroup(_ body: RecoveryGroupEnroll) async throws -> OkResponse {
+        try await request(method: "POST", path: "/api/recovery-group/enroll", body: body)
     }
 
-    func getRecoveryGroup(hubId: String) async throws -> AppRecoveryGroupInfo {
-        try await request(method: "GET", path: hp("/api/recovery-group/\(hubId)"))
+    func getRecoveryGroup(hubId: String) async throws -> RecoveryGroupInfo {
+        try await request(method: "GET", path: "/api/recovery-group/\(hubId)")
     }
 
-    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> AppRecoveryInitiateResponse {
-        let body: [String: String] = [
-            "hubId": hubId,
-            "userIdentifier": userIdentifier,
-            "newDevicePubkey": newDevicePubkey,
-        ]
+    /// Share-holder candidates for enrolment: hub members with their registered
+    /// devices' X25519 encryption pubkeys, from the mounted admin device overview.
+    /// (Desktop calls a dedicated `/recovery-group/candidates` route the server
+    /// does not mount; this endpoint carries the same fields and exists.)
+    func getRecoveryGroupCandidates(hubId: String) async throws -> AdminDeviceOverviewResponse {
+        try await request(method: "GET", path: "/api/admin/devices/overview?hubId=\(hubId)&limit=200")
+    }
+
+    func initiateRecovery(hubId: String, userIdentifier: String, newDevicePubkey: String) async throws -> RecoveryInitiateResponse {
+        let body = RecoveryInitiate(hubID: hubId, newDevicePubkey: newDevicePubkey, userIdentifier: userIdentifier)
         return try await request(method: "POST", path: "/api/recovery-group/initiate", body: body)
     }
 
-    func verifyRecoveryCode(sessionId: String, verificationCode: String) async throws -> RecoveryVerifyResponse {
-        let body: [String: String] = [
-            "sessionId": sessionId,
-            "verificationCode": verificationCode,
-        ]
+    func verifyRecoveryCode(sessionId: String, verificationCode: String) async throws -> RecoveryInitiateVerifyResponse {
+        let body = RecoveryInitiateVerify(sessionID: sessionId, verificationCode: verificationCode)
         return try await request(method: "POST", path: "/api/recovery-group/initiate/verify", body: body)
     }
 
-    func listRecoverySessions() async throws -> [RecoverySessionStatus] {
-        guard let hubId = hubContext.activeHubId else { throw APIError.noBaseURL }
-        return try await request(method: "GET", path: hp("/api/recovery-group/sessions?hubId=\(hubId)"))
+    func listRecoverySessions(hubId: String) async throws -> [RecoverySessionSummary] {
+        try await request(method: "GET", path: "/api/recovery-group/sessions?hubId=\(hubId)")
     }
 
     /// Fetch the current user's share envelope from the recovery group.
     /// Returns the HPKE-encrypted Shamir share and its commitment.
     func getMyShareEnvelope(hubId: String) async throws -> ShareEnvelopeResponse {
-        try await request(method: "GET", path: hp("/api/recovery-group/shares/my"))
+        try await request(method: "GET", path: "/api/recovery-group/shares/my")
     }
 
-    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatus {
-        try await request(method: "GET", path: hp("/api/recovery-group/session/\(sessionId)"))
+    func getRecoverySession(sessionId: String) async throws -> RecoverySessionStatusResponse {
+        try await request(method: "GET", path: "/api/recovery-group/session/\(sessionId)")
     }
 
-    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> ContributeResponse {
-        let body: [String: String] = [
-            "encryptedShare": encryptedShare,
-            "contributorSignature": contributorSignature,
-        ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/contribute"), body: body)
+    func contributeRecoveryShare(sessionId: String, encryptedShare: String, contributorSignature: String) async throws -> RecoveryContributeResponse {
+        let body = RecoveryContribute(contributorSignature: contributorSignature, encryptedShare: encryptedShare)
+        return try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/contribute", body: body)
     }
 
     func cancelRecoverySession(sessionId: String) async throws -> OkResponse {
-        try await request(method: "POST", path: hp("/api/recovery-group/session/\(sessionId)/cancel"))
+        try await request(method: "POST", path: "/api/recovery-group/session/\(sessionId)/cancel")
     }
 
     func storeUserRecoveryEnvelope(hubId: String, envelope: String) async throws -> OkResponse {
@@ -707,7 +685,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "envelope": envelope,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/user-envelope"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/user-envelope", body: body)
     }
 
     func submitShareLivenessProof(hubId: String, proof: String) async throws -> OkResponse {
@@ -715,7 +693,7 @@ final class APIService: @unchecked Sendable {
             "hubId": hubId,
             "proof": proof,
         ]
-        return try await request(method: "POST", path: hp("/api/recovery-group/shares/liveness"), body: body)
+        return try await request(method: "POST", path: "/api/recovery-group/shares/liveness", body: body)
     }
 }
 

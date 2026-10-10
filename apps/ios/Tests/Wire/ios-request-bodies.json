@@ -201,6 +201,20 @@
       "optionalKeys": [
         "phoneNumber"
       ]
+    },
+    {
+      "id": "enrollRecoveryGroup",
+      "method": "POST",
+      "path": "/api/recovery-group/enroll",
+      "module": "@protocol/schemas/recovery-group",
+      "schema": "recoveryGroupEnrollSchema",
+      "swiftType": "RecoveryGroupEnroll",
+      "callSite": "apps/ios/Sources/Views/Admin/RecoveryTeamConfigView.swift",
+      "optionalKeys": [
+        "duressCommitments",
+        "delayHours",
+        "emergencyFloorHours"
+      ]
     }
   ],
   "bodies": {
@@ -502,6 +516,74 @@
         },
         "phoneNumber": "+15550001111",
         "provider": "twilio"
+      }
+    },
+    "enrollRecoveryGroup": {
+      "legacySnakeCase": {
+        "hub_id": "22222222-2222-4222-8222-222222222222",
+        "threshold": 2,
+        "total_shares": 3,
+        "group_public_key": "abababababababababababababababababababababababababababababababab",
+        "share_envelopes": [
+          {
+            "holder_pubkey": "abababababababababababababababababababababababababababababababab",
+            "share_envelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          },
+          {
+            "holder_pubkey": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac",
+            "share_envelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          },
+          {
+            "holder_pubkey": "adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad",
+            "share_envelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          }
+        ],
+        "share_commitments": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+        ],
+        "duress_commitments": [
+          null,
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          null
+        ],
+        "sigchain_link_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "delay_hours": 24,
+        "emergency_floor_hours": 4
+      },
+      "wire": {
+        "hubId": "22222222-2222-4222-8222-222222222222",
+        "threshold": 2,
+        "totalShares": 3,
+        "groupPublicKey": "abababababababababababababababababababababababababababababababab",
+        "shareEnvelopes": [
+          {
+            "holderPubkey": "abababababababababababababababababababababababababababababababab",
+            "shareEnvelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          },
+          {
+            "holderPubkey": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac",
+            "shareEnvelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          },
+          {
+            "holderPubkey": "adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad",
+            "shareEnvelope": "{\"v\":1,\"labelId\":1,\"enc\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"ct\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90\"}"
+          }
+        ],
+        "shareCommitments": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+        ],
+        "duressCommitments": [
+          null,
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          null
+        ],
+        "sigchainLinkHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "delayHours": 24,
+        "emergencyFloorHours": 4
       }
     }
   }

@@ -3185,6 +3185,7 @@
     "rotating": "Rotating…",
     "rotateSuccess": "Recovery team rotated successfully.",
     "contacts": "Recovery contacts",
+    "selectExactly": "Select exactly {{count}} recovery contacts",
     "noTeam": "No recovery team configured",
     "lastRotated": "Last rotated",
     "contactHealth": "Contact status",

@@ -309,7 +309,7 @@ struct AccountRecoveryView: View {
                 userIdentifier: userIdentifier,
                 newDevicePubkey: pubkey
             )
-            sessionId = response.sessionId
+            sessionId = response.sessionID
             step = .signalVerification
         } catch {
             errorMessage = error.localizedDescription
@@ -342,14 +342,14 @@ struct AccountRecoveryView: View {
         do {
             let status = try await apiService.getRecoverySession(sessionId: sessionId)
             await MainActor.run {
-                contributionCount = status.contributionCount
-                requiredApprovals = status.threshold
-                delayRemainingMs = status.delayRemainingMs ?? 0
-                sessionStatus = status.status
-                if status.status == "completed" {
+                contributionCount = Int(status.contributionCount)
+                requiredApprovals = Int(status.threshold)
+                delayRemainingMs = Int(status.delayRemainingMS)
+                sessionStatus = status.status.rawValue
+                if status.status == .completed {
                     pollTimer?.invalidate()
                     step = .complete
-                } else if ["expired", "cancelled"].contains(status.status) {
+                } else if [.expired, .cancelled].contains(status.status) {
                     pollTimer?.invalidate()
                     errorMessage = NSLocalizedString("recovery_group_error_session_expired", comment: "")
                 }
