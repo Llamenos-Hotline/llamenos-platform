@@ -28,6 +28,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -82,8 +83,12 @@ fun InvitesTab(
         CreateInviteDialog(
             createdCode = uiState.createdInviteCode,
             onDismiss = { viewModel.dismissCreateInviteDialog() },
-            onCreateVolunteer = { viewModel.createInvite("volunteer") },
-            onCreateAdmin = { viewModel.createInvite("admin") },
+            onCreateVolunteer = { name, phone ->
+                viewModel.createInvite(name, phone, listOf("role-volunteer"))
+            },
+            onCreateAdmin = { name, phone ->
+                viewModel.createInvite(name, phone, listOf("role-hub-admin"))
+            },
             onCopyCode = { code ->
                 clipboardManager.setText(AnnotatedString(code))
                 scope.launch {
@@ -242,6 +247,17 @@ private fun InviteCard(
             Column(
                 modifier = Modifier.weight(1f),
             ) {
+                // Invitee name — the pending list is meaningless without it
+                Text(
+                    text = invite.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("invite-name-${invite.id}"),
+                )
+
+                Spacer(Modifier.height(2.dp))
+
                 // Invite code
                 Text(
                     text = invite.code,
@@ -325,10 +341,13 @@ private fun InviteCard(
 private fun CreateInviteDialog(
     createdCode: String?,
     onDismiss: () -> Unit,
-    onCreateVolunteer: () -> Unit,
-    onCreateAdmin: () -> Unit,
+    onCreateVolunteer: (name: String, phone: String) -> Unit,
+    onCreateAdmin: (name: String, phone: String) -> Unit,
     onCopyCode: (String) -> Unit,
 ) {
+    var inviteName by remember { mutableStateOf("") }
+    var invitePhone by remember { mutableStateOf("") }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.invite_create)) },
@@ -375,7 +394,26 @@ private fun CreateInviteDialog(
                         }
                     }
                 } else {
-                    // Role selection
+                    OutlinedTextField(
+                        value = inviteName,
+                        onValueChange = { inviteName = it },
+                        label = { Text(stringResource(R.string.invite_name_label)) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("invite-name-input"),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = invitePhone,
+                        onValueChange = { invitePhone = it },
+                        label = { Text(stringResource(R.string.invite_phone_label)) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("invite-phone-input"),
+                    )
+                    Spacer(Modifier.height(16.dp))
                     Text(
                         text = stringResource(R.string.invite_select_role),
                         style = MaterialTheme.typography.bodyMedium,
@@ -386,7 +424,8 @@ private fun CreateInviteDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         TextButton(
-                            onClick = onCreateVolunteer,
+                            onClick = { onCreateVolunteer(inviteName.trim(), invitePhone.trim()) },
+                            enabled = inviteName.isNotBlank(),
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("create-volunteer-invite"),
@@ -394,7 +433,8 @@ private fun CreateInviteDialog(
                             Text(stringResource(R.string.role_volunteer))
                         }
                         TextButton(
-                            onClick = onCreateAdmin,
+                            onClick = { onCreateAdmin(inviteName.trim(), invitePhone.trim()) },
+                            enabled = inviteName.isNotBlank(),
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("create-admin-invite"),

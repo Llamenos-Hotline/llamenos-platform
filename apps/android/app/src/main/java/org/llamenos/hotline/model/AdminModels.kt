@@ -55,13 +55,15 @@ data class AddBanRequest(
 )
 
 /**
- * Request body for creating an invite.
- * Client-specific simplified shape — the generated CreateInviteBody requires
- * name, phone, and roleIDS (List<String>) while this only needs role.
+ * Response wrapper from POST /api/invites.
+ * The server answers 201 with `{"invite": {...}}` (identity.createInvite
+ * returns the invite wrapped), matching the desktop client's `res.invite`.
+ * The request body is the generated org.llamenos.protocol.CreateInviteBody —
+ * name, phone, roleIDS, hubID — never a hand-written shape (#1047).
  */
 @Serializable
-data class CreateInviteRequest(
-    val role: String,
+data class CreateInviteResponse(
+    val invite: Invite,
 )
 
 // ---- User CRUD ----

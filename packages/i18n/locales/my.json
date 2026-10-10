@@ -4302,6 +4302,8 @@
     "inbound": "Received"
   },
   "inviteCreate": "ဖိတ်ကြားချက် ဖန်တီးမည်",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "methodVoice": "အသံ",
   "status": {
     "suspended": "ဆိုင်းငံ့ထားသည်",

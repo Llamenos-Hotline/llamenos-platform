@@ -2909,6 +2909,8 @@
     "cases": "Cases"
   },
   "inviteCreate": "Samee Martiqaad",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "select": {
     "placeholder": "Dooro..."
   },

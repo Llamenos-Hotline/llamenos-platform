@@ -4101,6 +4101,8 @@
   },
   "no": "አይ",
   "inviteCreate": "ግብዣ ፍጠር",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "offline": {
     "banner": "ከመስመር ውጭ ነዎት። ግንኙነት እስኪመለስ ድረስ ጥሪዎችና መልዕክቶች አይሰሩም።",
     "operationQueued": "Saved offline — will sync when connected",

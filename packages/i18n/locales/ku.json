@@ -4421,6 +4421,8 @@
     "voiceStatusWebhook": "Voice Status Webhook"
   },
   "inviteCreate": "Vexwendin Biafirîne",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "incomingCall": "Banga Hatinî",
   "notification": {
     "incomingCall": "Banga Hatinî",

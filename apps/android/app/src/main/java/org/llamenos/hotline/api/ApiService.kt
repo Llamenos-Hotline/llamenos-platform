@@ -325,6 +325,13 @@ class ApiService @Inject constructor(
     }
 
     /**
+     * The currently active hub ID, or null when none is selected. For request
+     * bodies on non-hub-scoped routes (e.g. POST /api/invites) that still name
+     * a hub — paths use [hp] instead.
+     */
+    fun activeHubIdOrNull(): String? = activeHubState.activeHubId.value
+
+    /**
      * Returns the path prefixed with /hubs/{activeHubId}.
      * Falls back to the bare path if no hub is currently active.
      */
