@@ -902,14 +902,18 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
   // operator dial is off, never without the other engine's binary on PATH
   // (no half-run). Removing any guard makes this rail fail — the arms are
   // what keep one engine's outage from stopping the merge train AND what
-  // keep it from becoming a silent pass.
+  // keep it from becoming a silent pass. Since #1767 the operator dial
+  // also gates the both-engine smoke blocks (a healthy primary no longer
+  // excuses an untested fallback), so the dial appears four times; the
+  // binary checks now name the RESOLVED binaries ($rev_binary / $fb_binary
+  // — #1767 ask 2: one shared resolution place), never literals.
   it('the smoke step\'s fallback arms are gated on not-auth, the operator dial, and the other engine being on PATH — both directions', () => {
     const text = fleetReviewJobText()
     const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
     expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
-    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(2)
-    expect(text).toContain('command -v claude >/dev/null 2>&1')
-    expect(text).toContain('command -v kimi >/dev/null 2>&1')
+    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(4)
+    expect(text.match(/command -v "\$rev_binary" >\/dev\/null 2>&1/g)?.length).toBe(2)
+    expect(text.match(/command -v "\$fb_binary" >\/dev\/null 2>&1/g)?.length).toBe(4)
     // And the primary branch is selected from the RESOLVED engine — never
     // from an env var read directly — so the smoke test and the real review
     // smoke the same engine by construction (including the bootstrap

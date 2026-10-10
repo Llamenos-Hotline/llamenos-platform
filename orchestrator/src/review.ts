@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
 import { chmod, copyFile, link, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
-import { accessSync, constants as fsConstants } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -428,6 +428,85 @@ export function kimiReviewModel(): string {
 }
 
 /**
+ * What kimi will ACTUALLY run as its model, resolved from the one place the
+ * kimi binary itself resolves it — never from a second hardcoded copy.
+ * `kimi --help` states `-m/--model` "Defaults to default_model in
+ * config.toml", so with no `FLEET_REVIEW_KIMI_MODEL` override the effective
+ * id is the runner's `~/.kimi-code/config.toml` `default_model`, and the
+ * registry it must exist in is that same file's `[models."<id>"]` sections.
+ *
+ * This is the review-path answer to #1767's `model=unresolved` and to the
+ * four stale/hardcoded engine ids this repo has shipped (#1738/#1740 and the
+ * dispatcher's own mirror): the gate can now NAME the id kimi will use, and
+ * a default that references a model the config no longer defines — the
+ * provider-rename failure shape, which kimi otherwise surfaces as a generic
+ * runtime error indistinguishable from an outage — is positively identified
+ * as a MISCONFIGURATION before the engine is ever invoked.
+ *
+ * `configDir` is the directory holding `config.toml` (the caller passes the
+ * reviewer environment's `$HOME/.kimi-code`, so the file read is the one the
+ * engine process will itself read). Returns `undefined` when the override is
+ * unset and the config cannot be read — an unPROVABLE resolution, which is
+ * not a defect: kimi speaks for itself at invocation time and the failure is
+ * classified from its own error text, exactly as before. Only POSITIVE
+ * evidence (a resolvable default naming a model the config does not define)
+ * is a misconfiguration.
+ */
+export interface KimiModelResolution {
+  /** The id kimi will run — the override, or the config's `default_model`. */
+  readonly model: string
+  readonly source: 'override' | 'config-default'
+  /** The model aliases the config defines (`[models."<id>"]` sections). */
+  readonly known: readonly string[]
+}
+
+const KIMI_DEFAULT_MODEL_RE = /^[ \t]*default_model[ \t]*=[ \t]*"([^"]+)"/m
+const KIMI_MODEL_SECTION_RE = /^[ \t]*\[models\."([^"]+)"\]/gm
+
+export function resolveKimiReviewerModel(configDir: string): KimiModelResolution | undefined {
+  const override = kimiReviewModel()
+  const configPath = join(configDir, 'config.toml')
+  if (!existsSync(configPath)) {
+    // No config to read: the override (if any) is all that is known, and
+    // with no registry to check it against there is nothing to validate.
+    return override !== '' ? { model: override, source: 'override', known: [] } : undefined
+  }
+  let text: string
+  try {
+    text = readFileSync(configPath, 'utf8')
+  } catch {
+    return override !== '' ? { model: override, source: 'override', known: [] } : undefined
+  }
+  const known = [...text.matchAll(KIMI_MODEL_SECTION_RE)].map((m) => m[1] ?? '')
+  if (override !== '') return { model: override, source: 'override', known }
+  const defaultModel = KIMI_DEFAULT_MODEL_RE.exec(text)?.[1]
+  if (defaultModel === undefined) return undefined
+  return { model: defaultModel, source: 'config-default', known }
+}
+
+/**
+ * The pure decision over `resolveKimiReviewerModel`'s parse: `undefined` when
+ * kimi's effective model id resolves against its own configured registry;
+ * otherwise a failure message that names the dead id, says plainly that it
+ * is a MISCONFIGURATION (not an outage — the `kimi-for-coding` rename failed
+ * as a generic server error and cost real debugging time, #1738), and lists
+ * the ids the config DOES define. An empty `known` list means the registry
+ * could not be enumerated, which is not positive evidence of staleness — the
+ * engine gets to speak for itself.
+ */
+export function kimiReviewerModelProblem(resolution: KimiModelResolution | undefined): string | undefined {
+  if (resolution === undefined) return undefined
+  const { model, source, known } = resolution
+  if (known.length === 0 || known.includes(model)) return undefined
+  const where = source === 'override' ? 'FLEET_REVIEW_KIMI_MODEL' : 'kimi config.toml default_model'
+  return (
+    `kimi model "${model}" (from ${where}) is not defined in kimi's own configured model registry — ` +
+    `this is a misconfiguration, not an outage. Configured ids: ${known.join(', ')}. ` +
+    `Fix the id (or the runner's ~/.kimi-code/config.toml) — the provider has renamed model ids out from under this gate before (#1738).`
+  )
+}
+
+/**
  * Auth-failure-shaped text, aligned with the smoke step's `classify()`
  * (fleet-review.yml) — the one family of engine-unavailable failures that
  * must NOT cross to the other engine, on EITHER arm. The reasoning is
@@ -687,11 +766,50 @@ export function reviewerBinaryFor(engine: ReviewRunEngine): string {
  * from both places is what removes the expiry date.
  */
 export function reviewerInvocationFor(authorEngine: EngineId): ReviewerInvocation {
-  const engine = verifierFor(authorEngine)
+  return reviewerInvocationForEngine(verifierFor(authorEngine))
+}
+
+/**
+ * The binary AND model ONE SPECIFIC reviewer engine runs as — the primitive
+ * `reviewerInvocationFor` delegates to, exported so a caller holding a
+ * POSITION ("the fallback", whichever engine that is today) can resolve the
+ * other engine's invocation from the same place instead of re-deriving half
+ * of it by hand.
+ *
+ * #1767 is what happens without this: the smoke step resolved only the
+ * PRIMARY engine's invocation, then handed the claude fallback the resolved
+ * KIMI model — empty by default (`kimiReviewModel`), meaning "kimi's own
+ * configured default" — as a literal `--model ""`. `claude` rejects an empty
+ * model id outright (`[claude-code:unrecognized_model]`, exit 1), so the
+ * fallback was decoration: every kimi-primary run's fallback arm failed for
+ * a reason that had nothing to do with claude's health, and the only
+ * evidence was one log line. Each engine's model is its own dial — claude's
+ * `FLEET_REVIEW_MODEL` tier, kimi's `FLEET_REVIEW_KIMI_MODEL`-or-own-default
+ * — and neither may ever be passed to the other engine.
+ */
+export function reviewerInvocationForEngine(engine: ReviewRunEngine): ReviewerInvocation {
   return {
     engine,
     binary: reviewerBinaryFor(engine),
     model: engine === 'claude' ? REVIEWER_MODEL : kimiReviewModel(),
+  }
+}
+
+/**
+ * The OTHER reviewer engine than the one given — the fallback position,
+ * resolved structurally so no caller re-derives "if primary is kimi the
+ * fallback is claude" as its own literal. There are exactly two reviewer
+ * engines; a third one arriving is a compile error here (`never`), not a
+ * silently wrong fallback choice at runtime.
+ */
+export function otherReviewerEngine(engine: ReviewRunEngine): ReviewRunEngine {
+  switch (engine) {
+    case 'kimi': return 'claude'
+    case 'claude': return 'kimi'
+    default: {
+      const exhaustive: never = engine
+      throw new Error(`otherReviewerEngine: unknown reviewer engine "${String(exhaustive)}"`)
+    }
   }
 }
 
@@ -1871,17 +1989,17 @@ export async function invokeVerifierEngine(input: {
   pr?: string
   changedFiles?: readonly string[]
 }): Promise<EngineRun> {
-  // `reviewerInvocationFor` — never a literal engine/model pair inlined here
-  // — is what ties this call to the exact same resolution the smoke test
-  // proves works (see that function's doc comment for why the two hardcoded
-  // literals this replaced were never actually a fix). Only the claude
-  // fields are consumed: `input.model`, when given, overrides the resolved
-  // claude default — see the doc comment above this function for why
-  // `review-and-merge.ts` needs that. The primary/fallback positions come
-  // from `reviewPrimaryEngine()` (the same source `verifierFor` resolves),
-  // so this function and the smoke step cannot disagree about the order.
-  const inv = reviewerInvocationFor(input.authorEngine)
-  const claudeModel = input.model ?? (inv.engine === 'claude' ? inv.model : REVIEWER_MODEL)
+  // `reviewerInvocationForEngine` — never a literal engine/model pair
+  // inlined here, and never a value borrowed from the OTHER engine's
+  // resolution (#1767: kimi's empty-by-default model handed to claude's
+  // `--model`) — is what ties this call to the exact same resolution the
+  // smoke test proves works. `input.model`, when given, overrides the
+  // resolved claude default — see the doc comment above this function for
+  // why `review-and-merge.ts` needs that. The primary/fallback positions
+  // come from `reviewPrimaryEngine()` (the same source `verifierFor`
+  // resolves), so this function and the smoke step cannot disagree about
+  // the order.
+  const claudeModel = input.model ?? reviewerInvocationForEngine('claude').model
   const primary = reviewPrimaryEngine()
   const projectRoot = await mkdtemp(join(tmpdir(), 'llamenos-fleet-reviewer-root-'))
   // The claude reviewer's HOME is this gate's, never the runner's — see
@@ -2123,6 +2241,26 @@ async function runKimiOnce(input: {
       reached: false, engine: 'kimi', assistantText: '',
       failureKind: 'engine-unavailable',
       diagnostics: 'kimi CLI is not on PATH for the reviewer environment — cannot run',
+    }
+  }
+  // Pre-flight the model id kimi will actually run (#1767): with no
+  // `FLEET_REVIEW_KIMI_MODEL` override that id is the runner's
+  // `config.toml` `default_model`, and a default that names a model the
+  // config no longer defines (the provider-rename shape, #1738) fails inside
+  // kimi as a generic error indistinguishable from an outage. Identified
+  // HERE it is `engine-misconfigured` — named, fallback-eligible
+  // (`canFallbackAfterFailure` crosses on it: the other engine resolves its
+  // own model, so a stale kimi id says nothing about claude), and never
+  // confused with kimi being down.
+  const kimiHome = input.env['HOME']
+  if (kimiHome !== undefined && kimiHome !== '') {
+    const problem = kimiReviewerModelProblem(resolveKimiReviewerModel(join(kimiHome, '.kimi-code')))
+    if (problem !== undefined) {
+      return {
+        reached: false, engine: 'kimi', assistantText: '',
+        failureKind: 'engine-misconfigured',
+        diagnostics: `kimi invocation skipped: ${problem}`,
+      }
     }
   }
   // The brief rides a FILE, not an argv element: kimi supports `-p @<file>`
