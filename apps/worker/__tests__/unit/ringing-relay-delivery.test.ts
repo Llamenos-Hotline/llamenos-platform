@@ -51,7 +51,6 @@ function connect(
     pubkey,
     ws: { send: (m: string) => frames.push(m) } as unknown as WebSocket,
     hubs: new Set(memberHubs),
-    subscribedHubs: new Set(),
     lastReplayAt: 0,
   }
   expect(mgr.register(state)).toBe(true)

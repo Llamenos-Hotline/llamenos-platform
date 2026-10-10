@@ -58,7 +58,6 @@ describe('periodic membership revalidation', () => {
       pubkey: 'pubkey-x',
       ws: mockWs as unknown as WebSocket,
       hubs: new Set(['hub-1']),
-      subscribedHubs: new Set(['hub-1']),
       lastReplayAt: 0,
     }
 
@@ -83,7 +82,6 @@ describe('periodic membership revalidation', () => {
       pubkey: 'pubkey-y',
       ws: {} as WebSocket,
       hubs: new Set(['hub-1', 'global']),
-      subscribedHubs: new Set(['hub-1']),
       lastReplayAt: 0,
     }
 
@@ -116,7 +114,6 @@ describe('periodic membership revalidation', () => {
       pubkey: 'pubkey-z',
       ws: {} as WebSocket,
       hubs: new Set(['hub-1', 'hub-2']),
-      subscribedHubs: new Set(),
       lastReplayAt: 0,
     }
 
