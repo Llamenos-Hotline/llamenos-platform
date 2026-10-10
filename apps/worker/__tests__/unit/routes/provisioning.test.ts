@@ -15,6 +15,7 @@ vi.mock('@worker/middleware/rate-limit', () => ({
 }))
 
 import provisioningRoutes from '@worker/routes/provisioning'
+import { ServiceError } from '@worker/services/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,6 +25,7 @@ function makeSettingsMock(overrides: Record<string, unknown> = {}) {
   return {
     checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
     checkApiRateLimit: vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 }),
+    peekApiRateLimit: vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 }),
     ...overrides,
   }
 }
@@ -41,6 +43,14 @@ function createTestApp(opts: {
   } = opts
 
   const app = new Hono<AppEnv>()
+
+  // Mirrors app.ts: ServiceError maps to its status; anything else is a 500.
+  app.onError((err, c) => {
+    if (err instanceof ServiceError) {
+      return c.json({ error: err.message }, err.status as 400 | 401 | 403 | 404 | 409 | 410 | 429 | 500)
+    }
+    return c.json({ error: 'Internal server error' }, 500)
+  })
 
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
@@ -178,12 +188,13 @@ describe('provisioning routes', () => {
       expect(json.error).toMatch(/missing token/i)
     })
 
-    it('returns 429 when per-room attempt limit is exceeded', async () => {
+    it('returns 429 when the per-room failure limit is exceeded', async () => {
+      const getProvisionRoomSpy = vi.fn()
       const { app } = createTestApp({
         serviceMock: {
-          identity: { getProvisionRoom: vi.fn() },
+          identity: { getProvisionRoom: getProvisionRoomSpy },
           settings: makeSettingsMock({
-            checkApiRateLimit: vi.fn().mockResolvedValue({ limited: true, retryAfterSeconds: 600 }),
+            peekApiRateLimit: vi.fn().mockResolvedValue({ limited: true, retryAfterSeconds: 600 }),
           }),
         },
       })
@@ -193,9 +204,30 @@ describe('provisioning routes', () => {
       const json = await res.json()
       expect(json.error).toMatch(/rate limited/i)
       expect(res.headers.get('Retry-After')).toBe('600')
+      // A limited room short-circuits before any room lookup.
+      expect(getProvisionRoomSpy).not.toHaveBeenCalled()
     })
 
-    it('keys per-room limit by room id', async () => {
+    it('keys the per-room failure limit by room id', async () => {
+      const peekApiRateLimit = vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 })
+      const getProvisionRoomSpy = vi.fn().mockResolvedValue({ status: 'waiting' })
+      const { app } = createTestApp({
+        serviceMock: {
+          identity: { getProvisionRoom: getProvisionRoomSpy },
+          settings: makeSettingsMock({ peekApiRateLimit }),
+        },
+      })
+
+      await app.request('/provision/rooms/room-xyz?token=tok-abc')
+
+      expect(peekApiRateLimit).toHaveBeenCalledWith(
+        'provision:room-failures:room-xyz',
+        3,
+        10 * 60 * 1000,
+      )
+    })
+
+    it('does not count a correct token presentation against the room budget', async () => {
       const checkApiRateLimit = vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 })
       const getProvisionRoomSpy = vi.fn().mockResolvedValue({ status: 'waiting' })
       const { app } = createTestApp({
@@ -205,13 +237,43 @@ describe('provisioning routes', () => {
         },
       })
 
-      await app.request('/provision/rooms/room-xyz?token=tok-abc')
+      const res = await app.request('/provision/rooms/room-1?token=tok-abc')
+      expect(res.status).toBe(200)
+      expect(checkApiRateLimit).not.toHaveBeenCalled()
+    })
 
+    it('counts a wrong token presentation against the room budget', async () => {
+      const checkApiRateLimit = vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 })
+      const getProvisionRoomSpy = vi.fn().mockRejectedValue(new ServiceError(403, 'Invalid token'))
+      const { app } = createTestApp({
+        serviceMock: {
+          identity: { getProvisionRoom: getProvisionRoomSpy },
+          settings: makeSettingsMock({ checkApiRateLimit }),
+        },
+      })
+
+      const res = await app.request('/provision/rooms/room-1?token=wrong-token')
+      expect(res.status).toBe(403)
       expect(checkApiRateLimit).toHaveBeenCalledWith(
-        'provision:room:room-xyz',
+        'provision:room-failures:room-1',
         3,
         10 * 60 * 1000,
       )
+    })
+
+    it('does not count a missing room (404) against the room budget', async () => {
+      const checkApiRateLimit = vi.fn().mockResolvedValue({ limited: false, retryAfterSeconds: 0 })
+      const getProvisionRoomSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Room not found'))
+      const { app } = createTestApp({
+        serviceMock: {
+          identity: { getProvisionRoom: getProvisionRoomSpy },
+          settings: makeSettingsMock({ checkApiRateLimit }),
+        },
+      })
+
+      const res = await app.request('/provision/rooms/room-gone?token=tok-abc')
+      expect(res.status).toBe(404)
+      expect(checkApiRateLimit).not.toHaveBeenCalled()
     })
 
     it('returns ready status with encrypted nsec when payload is delivered', async () => {

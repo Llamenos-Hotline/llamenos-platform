@@ -16,19 +16,25 @@ import { devSurfaceRequestAuthorized } from '../lib/dev-surfaces'
 
 const log = createLogger('rate-limit')
 
-export type RateLimitTier = 'strict' | 'write' | 'read' | 'webhook' | 'unlimited'
+export type RateLimitTier = 'strict' | 'write' | 'read' | 'webhook' | 'poll' | 'unlimited'
 
 export const RATE_LIMIT_TIERS: Record<Exclude<RateLimitTier, 'unlimited'>, { maxRequests: number; windowMs: number }> = {
   strict:  { maxRequests: 5,   windowMs: 60_000 },
   write:   { maxRequests: 30,  windowMs: 60_000 },
   read:    { maxRequests: 120, windowMs: 60_000 },
   webhook: { maxRequests: 300, windowMs: 60_000 },
+  // Polling tier: unauthenticated poll-until-ready endpoints (device-link room
+  // polling). Sized for a 1–2s poll interval with headroom for the two devices
+  // of a link flow sharing one NAT IP (#1789). Brute-force protection for the
+  // polled resource belongs per-room and failure-counted (routes/provisioning.ts),
+  // not on this shared per-IP budget.
+  poll:    { maxRequests: 120, windowMs: 60_000 },
 }
 
 /**
  * Create a rate limiting middleware for the given tier.
  *
- * - `strict` and `webhook` tiers key by IP (no auth required)
+ * - `strict`, `webhook` and `poll` tiers key by IP (no auth required)
  * - `write` and `read` tiers key by authenticated pubkey
  * - `unlimited` returns a no-op middleware
  */
@@ -72,7 +78,7 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
       return next()
     }
 
-    // Determine key: IP-based for strict/webhook, pubkey-based for write/read.
+    // Determine key: IP-based for strict/webhook/poll, pubkey-based for write/read.
     // getClientIp() only honors X-Forwarded-For/X-Real-IP when
     // TRUST_PROXY_HEADERS=true (operator confirms a reverse proxy sets
     // them, and strips the ones it does not set); otherwise it falls back
@@ -84,7 +90,7 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
     // write unbounded api_rate_limits rows AND dodge the limit it's
     // supposed to be subject to (issue #1127).
     let identifier: string | undefined
-    if (tier === 'strict' || tier === 'webhook') {
+    if (tier === 'strict' || tier === 'webhook' || tier === 'poll') {
       identifier = getClientIp(c.req.raw)
     } else {
       identifier = c.get('pubkey')
