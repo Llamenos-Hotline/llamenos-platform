@@ -1,13 +1,18 @@
 package org.llamenos.hotline.steps.admin
 
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import io.cucumber.datatable.DataTable
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import kotlin.math.abs
+import org.llamenos.hotline.helpers.SimulationClient
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
@@ -15,6 +20,11 @@ import org.llamenos.hotline.steps.BaseSteps
  *
  * The drawer opens from the admin panel's top bar and from every admin section
  * screen; picking an item opens that section.
+ *
+ * Section-content steps assert BEHAVIOUR, not rendering: they drive a control,
+ * save, and read the setting back through the API (#1743). A failure names the
+ * setting that did not persist; a slow emulator cannot produce one, because the
+ * server state either changed or it did not.
  */
 class AdminSidebarSteps : BaseSteps() {
 
@@ -24,6 +34,16 @@ class AdminSidebarSteps : BaseSteps() {
             "admin-sidebar-item-custom-fields",
             "admin-sidebar-item-bans",
         )
+
+        // Call settings sliders span 30..300s with 17 steps, i.e. a 15-second
+        // grid; both probe values sit on it so SetProgress lands exactly.
+        const val CALL_GRID_SECONDS = 15
+        const val CALL_PROBE_A = 120
+        const val CALL_PROBE_B = 135
+
+        // Spam rate-limit slider spans 1..100/min with 98 steps — every integer.
+        const val SPAM_PROBE_A = 20
+        const val SPAM_PROBE_B = 25
     }
 
     // ---- Given ----
@@ -125,32 +145,110 @@ class AdminSidebarSteps : BaseSteps() {
         assertAnyTagDisplayed("admin-sidebar-toggle")
     }
 
-    // The section's controls render only once its settings have loaded; the
-    // card around them shows while loading, so it is not evidence of content.
+    // ---- Then (settings persistence — behaviour assertions, #1743) ----
 
-    @Then("I should see the call settings section content")
-    fun iShouldSeeTheCallSettingsSectionContent() {
-        assertAnyTagDisplayed(
-            "queue-timeout-slider",
-            "voicemail-max-slider",
-            "call-settings-save-button",
-        )
+    @Then("a call setting saved through that section is persisted by the server")
+    fun callSettingSavedThroughSectionPersists() {
+        val before = SimulationClient.getCallSettings()
+        val target = if (before.queueTimeoutSeconds != CALL_PROBE_A) CALL_PROBE_A else CALL_PROBE_B
+        try {
+            setSliderSeconds("queue-timeout-slider", target)
+            clickSave("call-settings-save-button")
+            SimulationClient.awaitServerState(
+                what = "queueTimeoutSeconds=$target saved through the call settings section",
+                fetch = { SimulationClient.getCallSettings() },
+            ) { it.queueTimeoutSeconds == target }
+        } finally {
+            // Platform-wide setting: put back what the scenario found, or the
+            // next scenario's starting state is whatever this one probed.
+            SimulationClient.authorizedPatch(
+                "/api/settings/call",
+                """{"queueTimeoutSeconds":${before.queueTimeoutSeconds},"voicemailMaxSeconds":${before.voicemailMaxSeconds}}""",
+            )
+        }
     }
 
-    @Then("I should see spam protection section content")
-    fun iShouldSeeSpamProtectionSectionContent() {
-        assertAnyTagDisplayed(
-            "rate-limit-toggle",
-            "max-calls-per-minute-slider",
-            "block-duration-slider",
-        )
+    @Then("a spam setting saved through that section is persisted by the server")
+    fun spamSettingSavedThroughSectionPersists() {
+        val before = SimulationClient.getSpamSettings()
+        val target = if (before.maxCallsPerMinute != SPAM_PROBE_A) SPAM_PROBE_A else SPAM_PROBE_B
+        try {
+            setSliderValue(
+                tag = "max-calls-per-minute-slider",
+                fraction = (target - 1).toFloat() / 99f,
+                expectedValue = target.toFloat(),
+            )
+            clickSave("spam-settings-save-button")
+            SimulationClient.awaitServerState(
+                what = "maxCallsPerMinute=$target saved through the spam protection section",
+                fetch = { SimulationClient.getSpamSettings() },
+            ) { it.maxCallsPerMinute == target }
+        } finally {
+            SimulationClient.authorizedPatch(
+                "/api/settings/spam",
+                """{"voiceCaptchaEnabled":${before.voiceCaptchaEnabled},"rateLimitEnabled":${before.rateLimitEnabled},"maxCallsPerMinute":${before.maxCallsPerMinute},"blockDurationMinutes":${before.blockDurationMinutes}}""",
+            )
+        }
     }
 
-    @Then("I should see transcription section content")
-    fun iShouldSeeTranscriptionSectionContent() {
-        assertAnyTagDisplayed(
-            "transcription-enabled-toggle",
-            "transcription-optout-toggle",
-        )
+    @Then("a transcription setting saved through that section is persisted by the server")
+    fun transcriptionSettingSavedThroughSectionPersists() {
+        // Transcription toggles PATCH on flip — there is no save button.
+        val before = SimulationClient.getTranscriptionSettings()
+        try {
+            flipSwitch("transcription-enabled-toggle", expectCheckedBefore = before.globalEnabled)
+            SimulationClient.awaitServerState(
+                what = "globalEnabled=${!before.globalEnabled} toggled through the transcription section",
+                fetch = { SimulationClient.getTranscriptionSettings() },
+            ) { it.globalEnabled == !before.globalEnabled }
+        } finally {
+            SimulationClient.authorizedPatch(
+                "/api/settings/transcription",
+                """{"globalEnabled":${before.globalEnabled},"allowUserOptOut":${before.allowUserOptOut}}""",
+            )
+        }
+    }
+
+    // ---- Settings control drivers ----
+
+    /**
+     * Drive a seconds-grid slider (30..300, 15s steps) to [seconds] and prove
+     * the slider's own value followed — so a section that never loaded its
+     * settings fails here ("slider at X after setting Y") rather than at a
+     * tag-existence timeout.
+     */
+    private fun setSliderSeconds(tag: String, seconds: Int) {
+        require((seconds - 30) % CALL_GRID_SECONDS == 0) { "$seconds is off the 15s grid" }
+        setSliderValue(tag, (seconds - 30).toFloat() / 270f, seconds.toFloat())
+    }
+
+    private fun setSliderValue(tag: String, fraction: Float, expectedValue: Float) {
+        waitForNode(tag, timeoutMillis = 10_000)
+        onNodeWithTag(tag).performScrollTo()
+        onNodeWithTag(tag).performSemanticsAction(SemanticsActions.SetProgress) { it(fraction) }
+        composeRule.waitForIdle()
+        val info = onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+        check(abs(info.current - expectedValue) < 0.5f) {
+            "'$tag' sits at ${info.current} after being driven to $expectedValue — " +
+                "the section's controls are not taking input"
+        }
+    }
+
+    private fun clickSave(tag: String) {
+        waitForNode(tag, timeoutMillis = 10_000)
+        onNodeWithTag(tag).performScrollTo()
+        onNodeWithTag(tag).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * Flip the Switch inside a tagged SettingsToggleRow, first waiting until
+     * it shows the value the server reported — so a section whose GET failed
+     * (the #1732 defect: toggles frozen at defaults) fails saying the control
+     * never showed the server's state, not with a flipped-the-wrong-way timeout.
+     */
+    private fun flipSwitch(rowTag: String, expectCheckedBefore: Boolean) {
+        awaitSwitchState(rowTag, expectCheckedBefore)
+        clickSwitchInRow(rowTag)
     }
 }

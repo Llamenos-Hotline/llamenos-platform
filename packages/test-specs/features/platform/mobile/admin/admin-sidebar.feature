@@ -33,7 +33,7 @@ Feature: Admin Sidebar Navigation
     When I tap the sidebar toggle button
     And I tap the "call-settings" sidebar item
     Then the sidebar drawer should close
-    And I should see the call settings section content
+    And a call setting saved through that section is persisted by the server
 
   @android @regression
   Scenario: Sidebar shows all expected hub-level items
@@ -57,7 +57,7 @@ Feature: Admin Sidebar Navigation
     And I navigate to admin settings with sidebar
     When I tap the sidebar toggle button
     And I tap the "spam-protection" sidebar item
-    Then I should see spam protection section content
+    Then a spam setting saved through that section is persisted by the server
     When I tap the sidebar toggle button
     And I tap the "transcription" sidebar item
-    Then I should see transcription section content
+    Then a transcription setting saved through that section is persisted by the server
