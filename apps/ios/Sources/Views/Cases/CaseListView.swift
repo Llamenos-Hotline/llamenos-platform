@@ -667,11 +667,15 @@ private struct CreateCaseSheet: View {
             let summaryJSON = String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8)!
 
             // Encrypt summary with HPKE envelopes for each reader
-            let encrypted = try cryptoService.encryptNote(payload: summaryJSON, recipientPubkeys: readerPubkeys)
+            let encrypted = try cryptoService.encryptRecordData(
+                jsonPayload: summaryJSON,
+                readerPubkeys: readerPubkeys,
+                label: CryptoLabels.LABEL_CASE_SUMMARY
+            )
 
             // Build envelopes in the format the API expects
             let summaryEnvelopes: [[String: String]] = encrypted.envelopes.map { env in
-                ["pubkey": env.pubkey, "enc": env.envelope.enc, "ct": env.envelope.ct]
+                ["pubkey": env.pubkey, "enc": env.enc, "ct": env.ct]
             }
 
             // Build the request body
