@@ -86,6 +86,21 @@ extension Shift: Identifiable {
 
 typealias ShiftsListResponse = ShiftListResponse
 
+// MARK: - Generated shift-admin types: Identifiable
+// These structs come from protocol codegen (Types.swift) and are plain
+// Codable+Sendable. Identifiable conformance is added here so SwiftUI lists
+// can diff them; nothing about the wire shape changes.
+
+extension RingGroup: Identifiable {}
+extension Override: Identifiable {}
+extension Block: Identifiable {}
+extension Request: Identifiable {}
+
+/// Members of a ring group are keyed by their user pubkey (unique within a group).
+extension RingGroupDetailResponseMember: Identifiable {
+    var id: String { pubkey }
+}
+
 // MARK: - ShiftDay
 
 /// Helper for grouping shifts by day in the calendar view.

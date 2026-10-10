@@ -22,11 +22,35 @@ struct ShiftsView: View {
             }
             .navigationTitle(NSLocalizedString("shifts_title", comment: "Shifts"))
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                if canManageShifts {
+                    ToolbarItem(placement: .primaryAction) {
+                        NavigationLink {
+                            ShiftAdminView()
+                        } label: {
+                            Label(
+                                NSLocalizedString("shifts_manage", comment: "Manage"),
+                                systemImage: "gearshape.fill"
+                            )
+                        }
+                        .accessibilityIdentifier("shifts-admin-link")
+                    }
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { vm.showAvailabilitySheet },
+                set: { vm.showAvailabilitySheet = $0 }
+            )) {
+                AvailabilityBlockSheet(viewModel: vm)
+            }
             .refreshable {
                 await vm.refresh()
             }
             .task(id: hubContext.activeHubId) {
                 await vm.loadShifts()
+                if appState.hasPermission("shifts:set-availability") {
+                    await vm.loadAvailabilityBlocks()
+                }
             }
             .alert(
                 NSLocalizedString("shifts_clock_out_title", comment: "End Shift?"),
@@ -230,8 +254,69 @@ struct ShiftsView: View {
                     .accessibilityIdentifier("shift-day-\(shiftDay.id)")
                 }
             }
+
+            // My availability blocks (volunteer self-service). Blocked dates are
+            // excluded from routing, so volunteers manage them where they manage
+            // their shift. Desktop shows this as the Availability tab.
+            if appState.hasPermission("shifts:set-availability") {
+                availabilitySection(vm: vm)
+            }
         }
         .listStyle(.insetGrouped)
+    }
+
+    // MARK: - Availability Section
+
+    @ViewBuilder
+    private func availabilitySection(vm: ShiftsViewModel) -> some View {
+        Section {
+            if vm.myAvailabilityBlocks.isEmpty && !vm.isLoadingAvailability {
+                Text(NSLocalizedString("shifts_availability_empty", comment: "No availability blocks"))
+                    .font(.brand(.caption))
+                    .foregroundStyle(Color.brandMutedForeground)
+                    .accessibilityIdentifier("availability-empty-state")
+            } else {
+                ForEach(vm.myAvailabilityBlocks) { block in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(block.startDate) – \(block.endDate)")
+                                .font(.brand(.body))
+                                .foregroundStyle(Color.brandForeground)
+                            if let reason = block.encryptedReason, !reason.isEmpty {
+                                Text(reason)
+                                    .font(.brand(.caption))
+                                    .foregroundStyle(Color.brandMutedForeground)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            Task { await vm.deleteAvailabilityBlock(id: block.id) }
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(Color.brandDestructive)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("availability-delete-\(block.id)")
+                    }
+                    .accessibilityIdentifier("availability-block-row-\(block.id)")
+                }
+            }
+
+            Button {
+                vm.showAvailabilitySheet = true
+            } label: {
+                Label(
+                    NSLocalizedString("shifts_availability_create", comment: "Add Availability Block"),
+                    systemImage: "calendar.badge.plus"
+                )
+                .font(.brand(.subheadline))
+                .foregroundStyle(Color.brandPrimary)
+            }
+            .accessibilityIdentifier("availability-add-button")
+        } header: {
+            Text(NSLocalizedString("shifts_availability_title", comment: "Availability"))
+        }
+        .accessibilityIdentifier("availability-section")
     }
 
     // MARK: - Shift Row
@@ -286,6 +371,16 @@ struct ShiftsView: View {
     }
 
     // MARK: - Loading State
+
+    /// Whether any shift-admin surface is reachable. The Manage entry mirrors
+    /// desktop's admin-only tabs: visible when the user holds at least one of
+    /// the shift administration permissions for the active hub.
+    private var canManageShifts: Bool {
+        appState.hasPermission("shifts:manage-ring-groups")
+            || appState.hasPermission("shifts:manage-overrides")
+            || appState.hasPermission("shifts:approve-requests")
+            || appState.hasPermission("shifts:manage-fallback")
+    }
 
     private var loadingState: some View {
         VStack(spacing: 16) {

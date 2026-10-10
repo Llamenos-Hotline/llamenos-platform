@@ -44,6 +44,15 @@ final class ShiftsViewModel {
     /// Shifts with a join/leave request awaiting admin review, submitted from this screen.
     private(set) var pendingRequestShiftIds: Set<String> = []
 
+    /// My availability blocks (dates I cannot take calls), from `GET /shifts/availability/my`.
+    var myAvailabilityBlocks: [Block] = []
+
+    /// Whether the availability blocks are loading.
+    var isLoadingAvailability: Bool = false
+
+    /// Whether the "mark unavailable" sheet is shown.
+    var showAvailabilitySheet: Bool = false
+
     /// Whether the initial load is in progress.
     var isLoading: Bool = false
 
@@ -242,6 +251,79 @@ final class ShiftsViewModel {
         } catch APIError.requestFailed(let statusCode, _) where statusCode == 409 {
             // A request for this shift is already awaiting review.
             pendingRequestShiftIds.insert(shift.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Availability Blocks
+
+    /// Load my availability blocks for the active hub.
+    func loadAvailabilityBlocks() async {
+        isLoadingAvailability = true
+        do {
+            let response: AvailabilityBlockListResponse = try await apiService.request(
+                method: "GET",
+                path: apiService.hp("/api/shifts/availability/my")
+            )
+            myAvailabilityBlocks = response.blocks.sorted { $0.startDate < $1.startDate }
+        } catch {
+            if case APIError.noBaseURL = error {
+                // Hub not configured — no blocks to show
+            } else if errorMessage == nil {
+                errorMessage = error.localizedDescription
+            }
+            myAvailabilityBlocks = []
+        }
+        isLoadingAvailability = false
+    }
+
+    /// Mark myself unavailable for a date range (inclusive), with an optional
+    /// reason. The routing pipeline excludes blocked volunteers from that day's
+    /// ring set, so a created block takes effect on the next call.
+    func createAvailabilityBlock(startDate: Date, endDate: Date, reason: String) async -> Bool {
+        guard endDate >= startDate else {
+            errorMessage = NSLocalizedString("shifts_availability_invalid_range", comment: "End date must be on or after the start date")
+            return false
+        }
+
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = CreateAvailabilityBlockBody(
+                encryptedReason: trimmedReason.isEmpty ? nil : trimmedReason,
+                endDate: DateFormatting.wireDateString(from: endDate),
+                id: UUID().uuidString,
+                startDate: DateFormatting.wireDateString(from: startDate)
+            )
+            let _: Block = try await apiService.request(
+                method: "POST",
+                path: apiService.hp("/api/shifts/availability"),
+                body: body
+            )
+
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+
+            await loadAvailabilityBlocks()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteAvailabilityBlock(id: String) async {
+        errorMessage = nil
+        successMessage = nil
+        do {
+            let _: OkResponse = try await apiService.request(
+                method: "DELETE",
+                path: apiService.hp("/api/shifts/availability/\(id)")
+            )
+            await loadAvailabilityBlocks()
         } catch {
             errorMessage = error.localizedDescription
         }
