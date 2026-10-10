@@ -4,7 +4,7 @@
  * Tests: permission enforcement, contact CRUD, lookup, search,
  * relationship management, affinity group management.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'

@@ -1,5 +1,4 @@
 import { timingSafeEqual } from 'node:crypto'
-import { HMAC_PHONE_PREFIX } from '@shared/crypto-labels'
 import type { TelegramConfig } from '@shared/types'
 import { hashPhone } from '../../lib/crypto'
 import { createLogger } from '../../lib/logger'
