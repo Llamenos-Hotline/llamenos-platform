@@ -369,15 +369,46 @@ export interface WedgedWorktree {
 }
 
 /**
- * The branch prefixes a salvage of `fleetBranch` could have been created
- * under. Current salvage names branches `salvage/<fleet branch>-<epoch>`
- * (slash form); an older dispatch flow named them after the worker NAME
- * (`fleet-<lane>-<item>`, dash form). Both wedge a later dispatch for the
- * item the same way — the worktree is on a branch other than the requested
- * one — so both forms are found.
+ * The fleet branch a salvage branch was created FROM, recovered by parsing
+ * the name structurally — or `undefined` when `branch` is not a salvage
+ * branch in either known form. Salvage names are
+ * `salvage/<fleet branch>-<epoch>` (slash form, current) and
+ * `salvage/<fleet branch with / → ->-<epoch>` (dash form, the older
+ * worker-name flow); in both, `<epoch>` is the `Date.now()` that
+ * `salvageUncommittedWork` appends — a trailing run of digits. The parse is
+ * therefore: strip `salvage/`, strip the ONE trailing `-<digits>` segment.
+ *
+ * Matching is EQUALITY on the recovered fleet branch, never a prefix test:
+ * item ids are issue numbers, and issue numbers prefix each other —
+ * `salvage/fleet/ios/1` is a prefix of `salvage/fleet/ios/12-…` and of
+ * `salvage/fleet/ios/1755-…`. A `startsWith` match (what this replaced)
+ * wedges item 1 behind item 1755's leftover worktree and posts the
+ * reconcile-comment/`needs-human` label on the WRONG issue — the review
+ * rejection on PR #1772. An epoch-less `salvage/<name>` matches NOTHING: it
+ * is not a name this fleet writes, and failing to recognise one fails toward
+ * a human looking at it (the worktree's branch-mismatch guard still refuses
+ * the dispatch), never toward touching another item's state.
  */
-function salvageBranchPrefixesFor(fleetBranch: string): string[] {
-  return [`salvage/${fleetBranch}`, `salvage/${fleetBranch.replaceAll('/', '-')}`]
+export function salvagedFleetBranch(branch: string): string | undefined {
+  if (!branch.startsWith('salvage/')) return undefined
+  const body = branch.slice('salvage/'.length)
+  // Leftmost-successful `-\d+$`: `.*`-less anchoring means the match is the
+  // LAST `-<digits>` run, so `fleet-ios-7-1790000000000` strips only the
+  // epoch and yields `fleet-ios-7`.
+  const epoch = /-\d+$/.exec(body)
+  if (epoch === null) return undefined
+  const fleetBranch = body.slice(0, epoch.index)
+  return fleetBranch.length > 0 ? fleetBranch : undefined
+}
+
+/**
+ * Whether `branch` is a salvage branch OF `fleetBranch` — slash form or dash
+ * form, compared by equality on the parsed item, so one item's wedge can
+ * never match a sibling item whose id merely extends it (`1` vs `1755`).
+ */
+function isSalvageBranchFor(branch: string, fleetBranch: string): boolean {
+  const salvaged = salvagedFleetBranch(branch)
+  return salvaged === fleetBranch || salvaged === fleetBranch.replaceAll('/', '-')
 }
 
 /**
@@ -389,7 +420,6 @@ function salvageBranchPrefixesFor(fleetBranch: string): string[] {
  * the item.
  */
 export async function findWedgedWorktrees(repoRoot: string, fleetBranch: string): Promise<WedgedWorktree[]> {
-  const prefixes = salvageBranchPrefixesFor(fleetBranch)
   const out = await run('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'])
   const found: WedgedWorktree[] = []
   let current: string | undefined
@@ -398,7 +428,7 @@ export async function findWedgedWorktrees(repoRoot: string, fleetBranch: string)
       current = line.slice('worktree '.length).trim()
     } else if (line.startsWith('branch ') && current !== undefined) {
       const branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '')
-      if (prefixes.some((p) => branch.startsWith(p))) {
+      if (isSalvageBranchFor(branch, fleetBranch)) {
         found.push({ worktree: current, salvageBranch: branch })
       }
     } else if (line.trim().length === 0) {

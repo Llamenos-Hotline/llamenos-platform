@@ -28,7 +28,7 @@ import { execFile } from 'node:child_process'
 import {
   stopSession, killWorktreeProcesses, salvageUncommittedWork, destroyWorktree, labelIssue, settle,
   classifyWorktreeChanges, parsePorcelainPaths, findWedgedWorktrees, resolveWedgeForDispatch,
-  salvageInventory,
+  salvageInventory, salvagedFleetBranch,
 } from '../../orchestrator/src/worktree.js'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
@@ -240,6 +240,30 @@ describe('salvageUncommittedWork with ignored artifacts (issue #1755)', () => {
   })
 })
 
+describe('salvagedFleetBranch (PR #1772 review: structural parse, never prefix)', () => {
+  it('recovers the fleet branch from the slash form', () => {
+    expect(salvagedFleetBranch('salvage/fleet/ios/1755-1790000000000')).toBe('fleet/ios/1755')
+  })
+
+  it('recovers the dash form (older worker-name flow) by stripping only the trailing epoch', () => {
+    expect(salvagedFleetBranch('salvage/fleet-ios-7-1790000000000')).toBe('fleet-ios-7')
+  })
+
+  it('does NOT confuse an item id with the epoch when the ids prefix each other', () => {
+    // The whole defect: item 1's prefix also matches items 12 and 1755. The
+    // parse must keep the item-id segment intact for comparison.
+    expect(salvagedFleetBranch('salvage/fleet/ios/1-1790000000000')).toBe('fleet/ios/1')
+    expect(salvagedFleetBranch('salvage/fleet/ios/1755-1790000000000')).toBe('fleet/ios/1755')
+    expect(salvagedFleetBranch('salvage/fleet/ios/12-1790000000000')).toBe('fleet/ios/12')
+  })
+
+  it('rejects non-salvage branches and epoch-less salvage names', () => {
+    expect(salvagedFleetBranch('fleet/ios/1')).toBeUndefined()
+    expect(salvagedFleetBranch('main')).toBeUndefined()
+    expect(salvagedFleetBranch('salvage/fleet/ios/1')).toBeUndefined()
+  })
+})
+
 describe('resolveWedgeForDispatch (issue #1755)', () => {
   /**
    * Builds the wedge: the worktree is checked out onto
@@ -314,6 +338,32 @@ describe('resolveWedgeForDispatch (issue #1755)', () => {
     expect(found).toEqual([{ worktree: f.worktree, salvageBranch }])
     const result = await resolveWedgeForDispatch(f.mainRepo, 'fleet/ios/7')
     expect(result.kind).toBe('cleared')
+  })
+
+  it('does NOT wedge item 1 behind item 1755\'s salvage branch — issue ids prefix each other (PR #1772 review)', async () => {
+    const f = makeFixture()
+    // The genuine prefix pair the original suite never exercised (it used
+    // items 1 and 7): `salvage/fleet/ios/1` is a string prefix of
+    // `salvage/fleet/ios/1755-…`, so an undelimited startsWith matched one
+    // item's wedge against a sibling item whose id merely extends it. Wedge
+    // the worktree on item 1755's salvage branch, then resolve for item 1.
+    wedgeFixture(f, { artifact: true, salvageBranch: 'salvage/fleet/ios/1755-1790000000000' })
+
+    // Item 1 sees NO wedge: the parse compares the recovered fleet branch by
+    // equality, and 'fleet/ios/1755' !== 'fleet/ios/1'.
+    expect(await findWedgedWorktrees(f.mainRepo, 'fleet/ios/1')).toEqual([])
+    expect(await resolveWedgeForDispatch(f.mainRepo, 'fleet/ios/1')).toEqual({ kind: 'none' })
+
+    // Item 1's dispatch therefore proceeds — and because WEDGED is the only
+    // outcome that posts the reconcile comment and applies `needs-human`
+    // (tick.ts), no comment or label lands on item 1 for item 1755's state.
+    // resolveWedgeForDispatch itself never calls gh; assert the precondition
+    // directly: nothing was cleared or destroyed for item 1 either.
+    expect(existsSync(f.worktree)).toBe(true)
+
+    // …and the wedge still belongs to item 1755, found intact.
+    expect(await findWedgedWorktrees(f.mainRepo, 'fleet/ios/1755'))
+      .toEqual([{ worktree: f.worktree, salvageBranch: 'salvage/fleet/ios/1755-1790000000000' }])
   })
 })
 
