@@ -13,6 +13,8 @@ data class AppConfigResponse(
     val hotlineName: String = "",
     val apiVersion: Int = 1,
     val minApiVersion: Int = 1,
+    /** Server-advertised WebSocket relay endpoint (e.g. `/ws`); null when no relay is configured. */
+    val wsRelayUrl: String? = null,
 )
 
 /**

@@ -1,10 +1,10 @@
 package org.llamenos.hotline.model
 
 /**
- * Typed application events parsed from Nostr relay messages.
+ * Typed application events parsed from relay messages.
  *
- * Raw Nostr events arrive as encrypted blobs via [WebSocketService].
- * After hub-key decryption, the plaintext JSON is parsed into one of
+ * Server events arrive as encrypted envelopes via [WebSocketService].
+ * After server-event-key decryption, the plaintext JSON is parsed into one of
  * these sealed subtypes based on the "type" field.
  *
  * The [Unknown] variant captures event types this client version does

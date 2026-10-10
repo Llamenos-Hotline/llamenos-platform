@@ -450,6 +450,22 @@ class CryptoService @Inject constructor() {
             }
         }
 
+    /**
+     * Sign an arbitrary message with the device's Ed25519 signing key.
+     *
+     * Used for the WebSocket relay challenge-response handshake, where the
+     * signed message is `LABEL_WS_CHALLENGE:{pubkey}:{nonce}:{ts}`.
+     * Returns null when the native library is unavailable or the device is locked.
+     */
+    fun ed25519Sign(messageHex: String): String? {
+        if (!nativeLibLoaded || !isUnlocked) return null
+        return try {
+            org.llamenos.core.mobileSign(messageHex)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // ---- Note Encryption (HPKE) ----
 
     // ---- The wire <-> FFI boundary ----
