@@ -18,6 +18,7 @@ import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
   exportReviewSnapshot,
   HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
+  type PrClaim,
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
@@ -1622,6 +1623,11 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
 interface ReviewPrFacts {
   labels: string[]
   description: string
+  /** The PR's title and body kept SEPARATE — what every reviewer's prompt
+   *  needs (`prClaimSection`, review.ts), as against `description`'s
+   *  concatenation, which exists for the review set's keyword scan and would
+   *  reach a prompt as one unlabelled blob (#1696). One read serves both. */
+  claim: PrClaim
   /** The PR's author login. The gate needs it on every event, and only a
    *  `pull_request` payload carries one — `workflow_dispatch` has no payload
    *  at all, so this read is where a dispatch learns who wrote the PR
@@ -1671,6 +1677,7 @@ async function readPrFacts(
   return {
     labels: data.labels.map((l) => l.name),
     description: `${data.title ?? ''}\n\n${data.body ?? ''}`,
+    claim: { title: data.title ?? '', body: data.body ?? '' },
     author: data.user?.login ?? undefined,
     requestedReviewers: (data.requested_reviewers ?? []).flatMap((r) => (r.login == null ? [] : [r.login])),
   }
@@ -1757,6 +1764,17 @@ const HANDLERS: Record<string, CommandHandler> = {
     prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     prDiff: () => ciDiff(ctx),
     secondOpinion,
+    // The PR's own stated intent, for the `## Pull request` section of every
+    // reviewer's prompt (#1696). The SAME live read the review set already
+    // makes — `readPrFacts` fetches `title,body` and `decideReviewSet` used
+    // the concatenation to pick the crypto reviewer and then discarded it,
+    // so the reviewer was asked whether the diff does what the PR claims and
+    // shown only the PR NUMBER. An unreadable PR yields `undefined`, which
+    // the prompt states as "no claim" rather than inventing one.
+    prClaim: async () => (await readPrFacts(
+      ctx.pr,
+      'no reviewer can be shown what this PR claims to do, so each is told plainly that no claim was stated',
+    ))?.claim,
     // Decided HERE, from a live read of the PR — never handed in by the
     // workflow step that started this process, which on a `pull_request`
     // event is the PR's own copy of the workflow file.
@@ -1778,10 +1796,10 @@ const HANDLERS: Record<string, CommandHandler> = {
     exportBase: (repoDir, sha) => exportReviewSnapshot(repoDir, sha),
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.
-    profileReview: async (profile, diff, changedFiles) => toSecondOpinion(await invokeVerifierEngine({
+    profileReview: async (profile, diff, changedFiles, claim) => toSecondOpinion(await invokeVerifierEngine({
       authorEngine: 'claude',
       exportDir: ctx.headDir,
-      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir),
+      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir, claim),
       maxTurns: HIGH_IMPACT_MAX_TURNS,
       timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
     })),

@@ -19,6 +19,7 @@ import { classifyImpact } from './impact.js'
 import type { VerifyReport } from './verify.js'
 import {
   buildReviewPrompt, exportReviewSnapshot, invokeVerifierEngine, reviewPrimaryEngine, toSecondOpinion,
+  type PrClaim,
   DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS,
   type ReviewRunEngine, type SecondOpinionResult, type ReviewSnapshot,
 } from './review.js'
@@ -211,6 +212,12 @@ export interface PrSnapshotFacts {
   /** The head branch — with the author, it decides whom a review may be
    *  requested from (`reviewTriggerLogins`). */
   headBranch: string
+  /** The PR's own stated intent — title and body — for the `## Pull request`
+   *  section of every reviewer's prompt (`prClaimSection`, review.ts). Read
+   *  in the SAME `gh pr view` as every other fact here, so the claim can
+   *  never describe a different revision of the PR than the diff does
+   *  (#1696). */
+  claim: PrClaim
 }
 
 interface GhPrViewForReview {
@@ -219,10 +226,14 @@ interface GhPrViewForReview {
   headRefName: string
   files: { path: string; additions: number; deletions: number }[]
   author: { login: string; is_bot?: boolean }
+  title?: string
+  body?: string | null
 }
 
 async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefined> {
-  const view = await ghJson<GhPrViewForReview>(['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,headRefName,files,author'])
+  const view = await ghJson<GhPrViewForReview>(
+    ['pr', 'view', pr, '--json', 'headRefOid,baseRefOid,headRefName,files,author,title,body'],
+  )
   if (view === undefined) return undefined
   return {
     headSha: view.headRefOid,
@@ -232,6 +243,7 @@ async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefi
     authorLogin: view.author.login,
     authorIsBot: view.author.is_bot === true,
     headBranch: view.headRefName,
+    claim: { title: view.title ?? '', body: view.body ?? '' },
   }
 }
 
@@ -317,7 +329,10 @@ async function runNonAuthorReview(
   exportDir: string,
 ): Promise<SecondOpinionResult> {
   const report = reportForPrompt(facts)
-  return invokeOneReviewer(pr, buildReviewPrompt(pr, diff, report, exportDir), report, exportDir, report.impact === 'high')
+  return invokeOneReviewer(
+    pr, buildReviewPrompt(pr, diff, report, exportDir, undefined, facts.claim),
+    report, exportDir, report.impact === 'high',
+  )
 }
 
 /**
@@ -342,7 +357,7 @@ async function runProfileReview(
   exportDir: string,
 ): Promise<SecondOpinionResult> {
   const report = reportForPrompt(facts)
-  const prompt = buildProfileReviewPrompt(profile, pr, diff, report.changedFiles, exportDir)
+  const prompt = buildProfileReviewPrompt(profile, pr, diff, report.changedFiles, exportDir, facts.claim)
   return invokeOneReviewer(pr, prompt, report, exportDir, true)
 }
 

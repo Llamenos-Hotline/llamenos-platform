@@ -38,8 +38,8 @@ printf '%s\\n' "$*" >> "$GH_STUB_LOG"
 for a in "$@"; do
   case "$a" in
     state) echo '{"state":"OPEN"}'; exit 0;;
-    headRefOid,baseRefOid,headRefName,files,author)
-      echo '{"headRefOid":"head111","baseRefOid":"base000","headRefName":"fleet/infra/9","files":[{"path":"README.md","additions":1,"deletions":0}],"author":{"login":"rhonda-rodododo","is_bot":false}}'
+    headRefOid,baseRefOid,headRefName,files,author,title,body)
+      echo '{"headRefOid":"head111","baseRefOid":"base000","headRefName":"fleet/infra/9","files":[{"path":"README.md","additions":1,"deletions":0}],"author":{"login":"rhonda-rodododo","is_bot":false},"title":"fix(infra): a thing","body":"because of a reason"}'
       exit 0;;
     labels,title,body) echo '{"labels":[],"title":"t","body":"b"}'; exit 0;;
     headRefOid) echo '{"headRefOid":"head111"}'; exit 0;;
