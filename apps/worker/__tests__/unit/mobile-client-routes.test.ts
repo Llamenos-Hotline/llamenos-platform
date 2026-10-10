@@ -224,8 +224,8 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     'POST /api/identity/invite': '#1701',
     'GET /api/recovery-group/shares/my': '#1701',
 
-    // Also #1701, found by this test rather than by reading the client. All
-    // three are live 404s on a real backend.
+    // Also #1701, found by this test rather than by reading the client. Both
+    // are live 404s on a real backend.
     [`PATCH /api/identity/${PARAM}/role`]: '#1701',
     [`POST /api/conversations/${PARAM}/read`]: '#1701',
   },
