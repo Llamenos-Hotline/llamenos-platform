@@ -191,7 +191,11 @@
     "selectBackupFile": "Pelê hilanînê hilbijêre",
     "passkeyLoginFailed": "Têketina bi kilîda derbasbûnê bi ser neket",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Koda min a vexwendinê heye",
+    "redeemInviteCodeLabel": "Koda vexwendinê",
+    "redeemInviteCodePlaceholder": "Koda vexwendina xwe pêve bike",
+    "redeemInviteSubmit": "Bidomîne"
   },
   "banList": {
     "add": "Qedexekirin Lê Zêde Bike",

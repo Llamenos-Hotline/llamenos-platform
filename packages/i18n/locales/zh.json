@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "我有邀请码",
+    "redeemInviteCodeLabel": "邀请码",
+    "redeemInviteCodePlaceholder": "粘贴您的邀请码",
+    "redeemInviteSubmit": "继续"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

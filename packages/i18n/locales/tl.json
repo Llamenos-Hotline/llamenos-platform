@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Mayroon akong invite code",
+    "redeemInviteCodeLabel": "Invite code",
+    "redeemInviteCodePlaceholder": "I-paste ang iyong invite code",
+    "redeemInviteSubmit": "Magpatuloy"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

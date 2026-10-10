@@ -191,7 +191,11 @@
     "selectBackupFile": "انتخاب فایل پشتیبان",
     "passkeyLoginFailed": "ورود با کلید عبور ناموفق بود",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "کد دعوت دارم",
+    "redeemInviteCodeLabel": "کد دعوت",
+    "redeemInviteCodePlaceholder": "کد دعوت خود را جای‌گذاری کنید",
+    "redeemInviteSubmit": "ادامه"
   },
   "banList": {
     "add": "افزودن مسدودیت",

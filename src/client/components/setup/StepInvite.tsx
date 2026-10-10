@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { createInvite, type InviteCode } from '@/lib/api'
+import { getOnboardingUrl } from '@/lib/api-config'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -46,7 +47,7 @@ export function StepInvite({ headingRef }: Props = {}) {
   }
 
   function copyInviteLink(code: string) {
-    const url = `${window.location.origin}/onboarding?code=${code}`
+    const url = getOnboardingUrl(code)
     navigator.clipboard.writeText(url)
     setCopiedCode(code)
     toast(t('setup.inviteCopied'), 'success')

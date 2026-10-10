@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "초대 코드가 있어요",
+    "redeemInviteCodeLabel": "초대 코드",
+    "redeemInviteCodePlaceholder": "초대 코드를 붙여넣으세요",
+    "redeemInviteSubmit": "계속"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

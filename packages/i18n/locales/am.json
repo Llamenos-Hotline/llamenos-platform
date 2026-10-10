@@ -191,7 +191,11 @@
     "selectBackupFile": "የመጠባበቂያ ፋይል ምረጥ",
     "passkeyLoginFailed": "በመለያ ቁልፍ መግባት አልተሳካም",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "የግብዣ ኮድ አለኝ",
+    "redeemInviteCodeLabel": "የግብዣ ኮድ",
+    "redeemInviteCodePlaceholder": "የግብዣ ኮድዎን ይለጥፉ",
+    "redeemInviteSubmit": "ቀጥል"
   },
   "banList": {
     "add": "እገዳ ጨምር",

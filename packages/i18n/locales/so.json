@@ -191,7 +191,11 @@
     "selectBackupFile": "Dooro faylka kaydka",
     "passkeyLoginFailed": "Soo galitaanka furaha amniga waa la guul dareystay",
     "loginFailed": "Login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "Waxaan hayaa koodh martiqaad",
+    "redeemInviteCodeLabel": "Koodhka martiqaadka",
+    "redeemInviteCodePlaceholder": "Ku dheji koodhkaaga martiqaadka",
+    "redeemInviteSubmit": "Sii wad"
   },
   "banList": {
     "add": "Mamnuucid Kudar",

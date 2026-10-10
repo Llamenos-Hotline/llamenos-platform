@@ -163,6 +163,29 @@ export function getApiPath(path: string): string {
 }
 
 /**
+ * Build the invite redemption URL an admin shares with a volunteer (#1128).
+ *
+ * MUST use the configured hub base URL, never `window.location.origin`: in a
+ * packaged Tauri build the webview loads from the `tauri://`/`http://tauri.localhost`
+ * asset protocol, which resolves to nothing on any machine but this one — a
+ * copied link built from it is meaningless off-device. `cachedApiBase` is the
+ * same absolute `https://` address `needsServerAddress()` requires before a
+ * packaged app can do anything else, so once setup is complete it is the one
+ * address a volunteer's own device can actually reach.
+ *
+ * Falls back to `window.location.origin` only when no absolute base is
+ * configured — the dev (`tauri:dev`) and Playwright test builds, where the
+ * webview's own origin genuinely is a reachable dev server and existing
+ * desktop E2E coverage depends on that being the link's host.
+ */
+export function getOnboardingUrl(code: string): string {
+  const base = isAbsoluteUrl(cachedApiBase)
+    ? cachedApiBase
+    : (typeof window !== 'undefined' ? window.location.origin : '')
+  return `${base}/onboarding?code=${encodeURIComponent(code)}`
+}
+
+/**
  * True when the app needs to show the first-run "Server address" screen before
  * anything else — a packaged/dev Tauri runtime with no absolute backend address
  * configured yet. Deliberately gated on `isPackagedTauri()`, NOT the broader

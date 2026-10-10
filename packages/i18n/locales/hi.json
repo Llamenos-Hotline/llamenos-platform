@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "मेरे पास आमंत्रण कोड है",
+    "redeemInviteCodeLabel": "आमंत्रण कोड",
+    "redeemInviteCodePlaceholder": "अपना आमंत्रण कोड पेस्ट करें",
+    "redeemInviteSubmit": "जारी रखें"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",

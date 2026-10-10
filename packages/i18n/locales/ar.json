@@ -505,7 +505,11 @@
     "selectBackupFile": "Select backup file",
     "loginFailed": "Login failed",
     "passkeyLoginFailed": "Passkey login failed",
-    "failedUpdateAvailability": "Failed to update availability"
+    "failedUpdateAvailability": "Failed to update availability",
+    "redeemInvite": "لدي رمز دعوة",
+    "redeemInviteCodeLabel": "رمز الدعوة",
+    "redeemInviteCodePlaceholder": "الصق رمز الدعوة الخاص بك",
+    "redeemInviteSubmit": "متابعة"
   },
   "authTokenLabel": "Auth Token",
   "back": "Back",
