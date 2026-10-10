@@ -58,6 +58,16 @@ final class PINViewModel {
     private let keychainService: KeychainService
     private let onSuccess: () -> Void
 
+    /// Invite redemption wiring (#1046). Present only in set mode when the
+    /// user entered an invite code on the login screen: after the device keys
+    /// are generated (they must exist to sign the redeem token), the code is
+    /// redeemed and the outcome surfaced as `isEnrolling` / `enrollmentError`.
+    private let inviteService: InviteService?
+    private let inviteCode: String?
+    /// Clears the stashed code (AppState.pendingInviteCode) once it has been
+    /// consumed — redeemed, or deliberately skipped.
+    private let onInviteConsumed: () -> Void
+
     /// Current mode (set or unlock).
     let mode: PINMode
 
@@ -75,6 +85,12 @@ final class PINViewModel {
 
     /// Error message to display.
     var errorMessage: String?
+
+    /// Whether an invite redemption is in flight (post-PIN-set enrollment).
+    var isEnrolling: Bool = false
+
+    /// Why enrollment failed, when it did. Drives the retry/skip UI.
+    var enrollmentError: EnrollmentError?
 
     /// Whether an async operation is in progress (PIN verification).
     var isLoading: Bool = false
@@ -154,12 +170,18 @@ final class PINViewModel {
         authService: AuthService,
         keychainService: KeychainService? = nil,
         maxLength: Int = 8,
+        inviteService: InviteService? = nil,
+        inviteCode: String? = nil,
+        onInviteConsumed: @escaping () -> Void = {},
         onSuccess: @escaping () -> Void
     ) {
         self.mode = mode
         self.authService = authService
         self.keychainService = keychainService ?? authService.keychainService
         self.maxLength = maxLength
+        self.inviteService = inviteService
+        self.inviteCode = inviteCode
+        self.onInviteConsumed = onInviteConsumed
         self.onSuccess = onSuccess
     }
 
@@ -234,13 +256,59 @@ final class PINViewModel {
                 _ = try authService.createNewIdentity(pin: enteredPIN, enableBiometric: enableBiometric)
 
                 isLoading = false
-                onSuccess()
+
+                // Keys exist now — redeem the stashed invite code, if any,
+                // before reporting success (#1046).
+                if let inviteCode, let inviteService {
+                    Task { @MainActor in
+                        await self.enroll(code: inviteCode, via: inviteService)
+                    }
+                } else {
+                    onSuccess()
+                }
             } catch {
                 isLoading = false
                 errorMessage = error.localizedDescription
                 resetToEnter()
             }
         }
+    }
+
+    // MARK: - Invite Enrollment (#1046)
+
+    /// Redeem the invite code against the freshly generated device identity.
+    /// Success completes onboarding; failure stays on this screen with a
+    /// retry/skip choice — the identity itself is already created, so a failed
+    /// redemption must not strand the user or force a PIN re-entry.
+    private func enroll(code: String, via inviteService: InviteService) async {
+        isEnrolling = true
+        enrollmentError = nil
+        do {
+            try await inviteService.redeem(code: code)
+            onInviteConsumed()
+            isEnrolling = false
+            onSuccess()
+        } catch {
+            isEnrolling = false
+            enrollmentError = InviteService.mapError(error)
+        }
+    }
+
+    /// Re-attempt redemption after a failure (e.g. a transient network error).
+    func retryEnrollment() {
+        guard let inviteCode, let inviteService, !isEnrolling else { return }
+        Task { @MainActor in
+            await self.enroll(code: inviteCode, via: inviteService)
+        }
+    }
+
+    /// Continue without enrolling — the identity is valid, it simply is not a
+    /// hub member yet; an admin can add the pubkey later. Mirrors Android's
+    /// `enroll_continue_without` escape hatch.
+    func skipEnrollment() {
+        onInviteConsumed()
+        enrollmentError = nil
+        onSuccess()
     }
 
     // MARK: - Unlock PIN Flow

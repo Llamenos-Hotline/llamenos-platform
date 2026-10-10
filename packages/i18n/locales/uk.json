@@ -2132,6 +2132,7 @@
     "telephonySettings": "Провайдер телефонії",
     "tabFields": "Поля",
     "inviteRole": "Роль",
+    "inviteRoleFooter": "Choose the role for the person being invited. Admins have full management access.",
     "spamRateLimitHeader": "Обмеження частоти",
     "geocoding": {
       "apiKey": "API Key",
@@ -2232,6 +2233,9 @@
     "inviteClaimed": "Claimed",
     "inviteCreated": "Invite code created",
     "inviteExpired": "Expired",
+    "inviteNameRequired": "Name is required",
+    "inviteRecipientFooter": "The invitee's name becomes their display name when they redeem the invite.",
+    "inviteRecipientHeader": "Invitee",
     "inviteRoleHeader": "Invite Role",
     "invites": "Invites",
     "ivrLanguagesHeader": "Supported Languages",

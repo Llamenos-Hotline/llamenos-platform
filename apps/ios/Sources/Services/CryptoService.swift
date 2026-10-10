@@ -35,6 +35,13 @@ private func ffiMobileCreateAuthToken(timestamp: UInt64, method: String, path: S
     try mobileCreateAuthToken(timestamp: timestamp, method: method, path: path)
 }
 
+// V3 auth, nonce-less variant — ONLY valid on routes whose wire schema has no
+// `nonce` field (today: `POST /api/invites/redeem`). The Rust side signs under
+// `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the server accepts nowhere else.
+private func ffiMobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String, path: String) throws -> AuthToken {
+    try mobileCreateAuthTokenWithoutNonce(timestamp: timestamp, method: method, path: path)
+}
+
 // V3 HPKE (stateless seal, stateful open)
 private func ffiMobileHpkeSeal(plaintextHex: String, recipientPubkeyHex: String, label: String, aadHex: String) throws -> HpkeEnvelope {
     try mobileHpkeSeal(plaintextHex: plaintextHex, recipientPubkeyHex: recipientPubkeyHex, label: label, aadHex: aadHex)
@@ -308,6 +315,16 @@ final class CryptoService: @unchecked Sendable {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
         let timestamp = UInt64(Date().timeIntervalSince1970 * 1000)
         return try ffiMobileCreateAuthToken(timestamp: timestamp, method: method, path: path)
+    }
+
+    /// Nonce-less auth token — ONLY for `POST /api/invites/redeem`, whose
+    /// `redeemInviteBodySchema` has no `nonce` field. Every other route must
+    /// use `createAuthToken(method:path:)`; the server rejects the nonce-less
+    /// domain anywhere else.
+    func createAuthTokenWithoutNonce(method: String, path: String) throws -> AuthToken {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        let timestamp = UInt64(Date().timeIntervalSince1970 * 1000)
+        return try ffiMobileCreateAuthTokenWithoutNonce(timestamp: timestamp, method: method, path: path)
     }
 
     // MARK: - Note Encryption (HPKE)

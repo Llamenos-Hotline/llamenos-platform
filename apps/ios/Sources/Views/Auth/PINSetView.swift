@@ -80,6 +80,45 @@ struct PINSetView: View {
             .disabled(vm.pin.count < 8)
             .accessibilityIdentifier("pin-submit")
 
+            // Invite-code enrollment status (#1046). Shown after key generation
+            // while the server registers this identity against the invite code;
+            // on failure the user can retry or continue without enrolling
+            // (mirrors Android's PINSetScreen enrollment states).
+            if vm.isEnrolling {
+                ProgressView()
+                    .controlSize(.regular)
+                    .accessibilityIdentifier("enroll-redeeming")
+                Text(NSLocalizedString("enroll_redeeming", comment: "Joining the hub…"))
+                    .font(.brand(.footnote))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("enroll-redeeming-label")
+            } else if let enrollmentError = vm.enrollmentError {
+                Text(NSLocalizedString("enroll_failed_title", comment: "Couldn't enroll"))
+                    .font(.brand(.subheadline))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.brandDestructive)
+                Text(enrollmentError.localizedMessage)
+                    .font(.brand(.footnote))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("enroll-error")
+                HStack(spacing: 16) {
+                    Button(NSLocalizedString("enroll_retry", comment: "Retry")) {
+                        vm.retryEnrollment()
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("enroll-retry")
+
+                    Button(NSLocalizedString("enroll_continue_without", comment: "Continue without enrolling")) {
+                        vm.skipEnrollment()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("enroll-skip")
+                }
+            }
+
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)
@@ -121,6 +160,11 @@ struct PINSetView: View {
             mode: .set,
             authService: appState.authService,
             maxLength: 128,
+            inviteService: appState.inviteService,
+            inviteCode: appState.pendingInviteCode,
+            onInviteConsumed: {
+                appState.pendingInviteCode = nil
+            },
             onSuccess: {
                 appState.didCompleteOnboarding()
             }
