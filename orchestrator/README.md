@@ -94,7 +94,7 @@ from the repo root: `bun run fleet <command>`.
 
 | Command | What it does |
 |---------|--------------|
-| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error) and prints current lane modes. Exits non-zero if any check fails. |
+| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error), prints current lane modes, and reports the salvage-branch inventory (count of local `salvage/*` branches, naming the ones holding real work — see "Salvage wedges" below). Exits non-zero if any check fails. |
 | `llamenos-fleet status` | Prints halted state, dispatch outcome counts from the last 24h of the ledger, the configured limits, and whether the last recorded tick pass errored. Exits non-zero if the last tick pass ended in `aborted: 'error'`. |
 | `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
@@ -391,6 +391,45 @@ deliberate exception:
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
 | `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
 | `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
+
+## Salvage wedges (#1755)
+
+`settle()` salvages uncommitted work onto a pushed `salvage/<branch>-<epoch>`
+branch before destroying a worktree. The failure mode this section exists
+for: a gitignored test artifact (`.test-encrypted-seed.sqlite`, copied into
+every worktree by dispatch-one.sh's seed cache) ended up **staged** in a
+worktree — `.gitignore` does not apply to a path already in the index, so
+the tree read dirty forever, salvage kept firing on a worthless file, and
+every later dispatch for that item refused on the branch mismatch. Three
+refusals tripped the consecutive-failure breaker and halted the fleet.
+
+The rules now:
+
+- **Ignored artifacts are never work.** `salvageUncommittedWork` classifies
+  a worktree's changes by the repo's own ignore rules (`git check-ignore
+  --no-index`, which matches even staged paths): a tree whose only changes
+  are ignored artifacts is CLEAN — the artifacts are unstaged in place, no
+  salvage branch is created, and the worktree stays on its original branch.
+  One genuinely modified source file still triggers a full commit+push
+  salvage; when real work and artifacts coexist, the salvage commit carries
+  only the work.
+- **A wedged lane is resolved BEFORE a worker is spent.** `realDispatch`
+  checks for a leftover worktree on this item's `salvage/<branch>-*`
+  (slash or dash form). An artifact-only wedge is removed on the spot (the
+  salvage BRANCH is always kept — deleting one is an operator decision) and
+  the lane dispatches fresh. A wedge holding real work — committed on the
+  salvage branch or uncommitted in the worktree — refuses WITHOUT launching
+  a worker and is recorded as the distinct `WEDGED` ledger outcome, naming
+  the worktree and salvage branch, with `needs-human` applied.
+- **`WEDGED` never feeds the consecutive-failure breaker.** Three identical
+  refusals are one stuck condition, not three failures. It does count toward
+  the per-item attempt limit (the wedge is the item's own lane state), and
+  the failure breaker's halt reason now names the latest failing
+  lane/item/note — `halt-reason.txt` carries the cause, not just a count.
+- **`doctor` reports the inventory**: how many `salvage/*` branches exist,
+  which hold real work (a diff against `origin/main` with artifact paths
+  filtered out), and which have a worktree attached. Branches that cannot be
+  diffed are named as unreadable, never silently counted as empty.
 
 ## systemd timer
 

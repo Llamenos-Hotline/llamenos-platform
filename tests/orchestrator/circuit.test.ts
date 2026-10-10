@@ -100,6 +100,40 @@ describe('failureBreaker', () => {
     const rows = [r('FAILED', 1), r('FAILED', 2), r('UNVERIFIED', 3), r('FAILED', 4)]
     expect(failureBreaker(rows, LIMITS, 0)).toMatch(/consecutive/i)
   })
+
+  // Issue #1755: three identical salvage-wedge refusals for the same
+  // lane+item are ONE stuck condition, not three failures — this exact shape
+  // (a staged `.test-encrypted-seed.sqlite` wedging 32 lanes) halted the
+  // whole fleet for 25 hours when refusals were recorded as plain FAILEDs.
+  it('does not count WEDGED toward the failure streak — one stuck condition is not three failures', () => {
+    const rows = [
+      r('WEDGED', 1, 'backend', { note: 'wedged: worktree /x is on salvage branch salvage/fleet/backend/1-2' }),
+      r('WEDGED', 2, 'backend', { note: 'wedged: worktree /x is on salvage branch salvage/fleet/backend/1-2' }),
+      r('WEDGED', 3, 'backend', { note: 'wedged: worktree /x is on salvage branch salvage/fleet/backend/1-2' }),
+    ]
+    expect(failureBreaker(rows, LIMITS, 0)).toBeUndefined()
+  })
+
+  it('a WEDGED row does not reset the streak either — invisible to it, like QUOTA and UNVERIFIED', () => {
+    const rows = [r('FAILED', 1), r('FAILED', 2), r('WEDGED', 3), r('FAILED', 4)]
+    expect(failureBreaker(rows, LIMITS, 0)).toMatch(/consecutive/i)
+  })
+
+  // Issue #1755: the halt reason must carry the cause, not just a count —
+  // "3 consecutive failures" alone took a manual audit of 39 salvage
+  // branches to diagnose. The newest failing row's lane/item/note travels
+  // into halt-reason.txt.
+  it('names the latest failure (lane, item, note) in the halt reason, not just the count', () => {
+    const rows = [
+      r('FAILED', 1, 'ios', { itemId: '41' }),
+      r('FAILED', 2, 'backend', { itemId: '42' }),
+      r('FAILED', 3, 'desktop', { itemId: '43', note: 'worker died on turn 1' }),
+    ]
+    const reason = failureBreaker(rows, LIMITS, 0)
+    expect(reason).toMatch(/3 consecutive failures since last success/)
+    expect(reason).toContain('desktop/43')
+    expect(reason).toContain('worker died on turn 1')
+  })
 })
 
 describe('inQuotaCooldown', () => {

@@ -358,6 +358,52 @@ describe('tick: branch mismatch (issue #812)', () => {
   })
 })
 
+// Issue #1755: a dispatch refused BEFORE any worker launched (the lane's
+// worktree is wedged on a salvage branch holding real work) is recorded as
+// the distinct WEDGED outcome — handed to a human, never verified or armed,
+// and never fed to the consecutive-failure breaker as if a worker had run
+// and failed three times.
+describe('tick: salvage-wedge refusal (issue #1755)', () => {
+  const wedged = (): TickDeps['dispatch'] =>
+    vi.fn(async (): Promise<DispatchOutcome> => ({
+      outcome: 'WEDGED',
+      worktree: '/wt/llamenos-fleet-ios-1',
+      branch: 'salvage/fleet/ios/1-1790000000000',
+      note: 'wedged: worktree /wt/llamenos-fleet-ios-1 is on salvage branch salvage/fleet/ios/1-1790000000000 — salvage branch holds real work (2 file(s): a.ts)',
+    }))
+
+  it('records WEDGED, hands the item to a human, and never runs the verify/review/arm pipeline', async () => {
+    const d = baseDeps({ dispatch: wedged() })
+    const r = await tick(d)
+    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'WEDGED', branch: 'salvage/fleet/ios/1-1790000000000',
+    }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'WEDGED', needsHuman: true }))
+    expect(d.verifyMechanical).not.toHaveBeenCalled()
+    expect(d.secondOpinion).not.toHaveBeenCalled()
+    expect(d.enableAutoMerge).not.toHaveBeenCalled()
+    // The refusal was detected, not thrown — it must not count in `failed`.
+    expect(r.attempted).toBe(1)
+    expect(r.failed).toBe(0)
+  })
+
+  it('comments on the issue naming the worktree and salvage branch a human must reconcile', async () => {
+    const d = baseDeps({ dispatch: wedged() })
+    await tick(d)
+    expect(d.commentOnIssue).toHaveBeenCalledWith('1', expect.stringContaining('salvage/fleet/ios/1-1790000000000'))
+    expect(d.commentOnIssue).toHaveBeenCalledWith('1', expect.stringContaining('/wt/llamenos-fleet-ios-1'))
+  })
+
+  it('three consecutive WEDGED rows do not trip the consecutive-failure breaker', async () => {
+    const rows: RunRecord[] = [
+      { ts: 1, runId: 'a', lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'WEDGED' },
+      { ts: 2, runId: 'b', lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'WEDGED' },
+      { ts: 3, runId: 'c', lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'WEDGED' },
+    ]
+    expect(failureBreaker(rows, LIMITS, 0)).toBeUndefined()
+  })
+})
+
 describe('tick: G1 needs-human handoff and G2 gate-trace observability', () => {
   it('a verified, reviewed, auto-merge-armed SUCCESS does NOT get needs-human — GitHub holds it, not a label', async () => {
     const d = baseDeps()

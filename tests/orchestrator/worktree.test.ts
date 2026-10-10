@@ -27,6 +27,8 @@ vi.mock('node:child_process', async (importOriginal) => {
 import { execFile } from 'node:child_process'
 import {
   stopSession, killWorktreeProcesses, salvageUncommittedWork, destroyWorktree, labelIssue, settle,
+  classifyWorktreeChanges, parsePorcelainPaths, findWedgedWorktrees, resolveWedgeForDispatch,
+  salvageInventory,
 } from '../../orchestrator/src/worktree.js'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
@@ -57,7 +59,10 @@ function makeFixture(): Fixture {
   execSync('git config user.email test@example.com', { cwd: mainRepo })
   execSync('git config user.name Test', { cwd: mainRepo })
   writeFileSync(join(mainRepo, 'file.txt'), 'hello\n')
-  execSync('git add file.txt', { cwd: mainRepo })
+  // The ignore rules the #1755 artifact classification is exercised against —
+  // same shape as the real repo's `.gitignore:98-99`.
+  writeFileSync(join(mainRepo, '.gitignore'), '/.test-encrypted-seed.sqlite\n/*.sqlite\n')
+  execSync('git add file.txt .gitignore', { cwd: mainRepo })
   execSync('git commit -q -m init', { cwd: mainRepo })
   execSync(`git remote add origin ${bareOrigin}`, { cwd: mainRepo })
   execSync('git push -q -u origin main', { cwd: mainRepo })
@@ -69,6 +74,15 @@ function makeFixture(): Fixture {
   execSync('git config user.name Test', { cwd: worktree })
 
   return { bareOrigin, mainRepo, worktree, branch }
+}
+
+/** The exact #1755 wedge state: a gitignored test artifact force-staged into
+ *  the index (`git status` reports `A`), which a bare dirty-tree check cannot
+ *  tell apart from real work. */
+function stageIgnoredArtifact(dir: string, name = '.test-encrypted-seed.sqlite'): string {
+  writeFileSync(join(dir, name), 'fake sqlite seed\n')
+  execSync(`git add -f ${name}`, { cwd: dir })
+  return name
 }
 
 afterEach(() => {
@@ -130,6 +144,210 @@ describe('salvageUncommittedWork', () => {
     const result = await salvageUncommittedWork(f.worktree, f.branch)
     const showOutput = execSync(`git show ${result.branch}:uncommitted.txt`, { cwd: f.bareOrigin }).toString()
     expect(showOutput).toBe('the 1070 correct lines\n')
+  })
+})
+
+describe('parsePorcelainPaths', () => {
+  it('parses NUL-terminated entries and skips truncated tails', () => {
+    expect(parsePorcelainPaths('A  .test-encrypted-seed.sqlite\0 M src/a.ts\0?? b.txt\0x')).toEqual([
+      '.test-encrypted-seed.sqlite', 'src/a.ts', 'b.txt',
+    ])
+  })
+
+  it('parses nothing from an empty status', () => {
+    expect(parsePorcelainPaths('')).toEqual([])
+  })
+})
+
+describe('classifyWorktreeChanges (issue #1755)', () => {
+  it('reports a clean tree as neither real nor artifact', async () => {
+    const f = makeFixture()
+    expect(await classifyWorktreeChanges(f.worktree)).toEqual({ real: [], artifacts: [] })
+  })
+
+  it('classifies a staged gitignored artifact as an artifact, NOT as work — the wedge shape', async () => {
+    const f = makeFixture()
+    const name = stageIgnoredArtifact(f.worktree)
+    const result = await classifyWorktreeChanges(f.worktree)
+    expect(result.real).toEqual([])
+    expect(result.artifacts).toEqual([name])
+  })
+
+  it('classifies any root-level *.sqlite as an artifact, not just the one known filename', async () => {
+    const f = makeFixture()
+    const name = stageIgnoredArtifact(f.worktree, 'other.sqlite')
+    const result = await classifyWorktreeChanges(f.worktree)
+    expect(result.artifacts).toEqual([name])
+  })
+
+  it('classifies one genuinely modified source file as real work — the guard that must never weaken', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.worktree, 'file.txt'), 'changed\n')
+    const result = await classifyWorktreeChanges(f.worktree)
+    expect(result.real).toEqual(['file.txt'])
+    expect(result.artifacts).toEqual([])
+  })
+
+  it('classifies an untracked, non-ignored file as real work', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.worktree, 'new-feature.ts'), 'export {}\n')
+    const result = await classifyWorktreeChanges(f.worktree)
+    expect(result.real).toEqual(['new-feature.ts'])
+  })
+
+  it('separates real work from artifacts in a mixed tree', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.worktree, 'file.txt'), 'changed\n')
+    const name = stageIgnoredArtifact(f.worktree)
+    const result = await classifyWorktreeChanges(f.worktree)
+    expect(result.real).toEqual(['file.txt'])
+    expect(result.artifacts).toEqual([name])
+  })
+})
+
+describe('salvageUncommittedWork with ignored artifacts (issue #1755)', () => {
+  it('treats an artifact-only tree as having no work: unstages the artifact, creates no salvage branch, leaves the file on disk', async () => {
+    const f = makeFixture()
+    const name = stageIgnoredArtifact(f.worktree)
+    const result = await salvageUncommittedWork(f.worktree, f.branch)
+    expect(result).toEqual({ salvaged: false, clearedArtifacts: 1 })
+
+    // The tree now reads genuinely clean to a porcelain-based check — the
+    // artifact is back to untracked-and-ignored — and the file itself is
+    // untouched on disk (a dispatcher seed cache can reuse it).
+    const status = execSync('git status --porcelain', { cwd: f.worktree }).toString()
+    expect(status.trim()).toBe('')
+    expect(existsSync(join(f.worktree, name))).toBe(true)
+
+    // No salvage branch was created, locally or on the remote.
+    const branches = execSync('git branch --list', { cwd: f.mainRepo }).toString()
+    expect(branches).not.toContain('salvage/')
+    // And the worktree is still on its ORIGINAL branch — the wedge was that
+    // salvage left it checked out somewhere else.
+    const onBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: f.worktree }).toString().trim()
+    expect(onBranch).toBe(f.branch)
+  })
+
+  it('still salvages real work, and the salvage commit does NOT carry the artifact', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.worktree, 'uncommitted.txt'), 'rescue me\n')
+    stageIgnoredArtifact(f.worktree)
+    const result = await salvageUncommittedWork(f.worktree, f.branch)
+    expect(result.salvaged).toBe(true)
+    const files = execSync(`git show --name-only --format= ${result.branch}`, { cwd: f.bareOrigin }).toString()
+    expect(files).toContain('uncommitted.txt')
+    expect(files).not.toContain('.test-encrypted-seed.sqlite')
+  })
+})
+
+describe('resolveWedgeForDispatch (issue #1755)', () => {
+  /**
+   * Builds the wedge: the worktree is checked out onto
+   * `salvage/<branch>-<epoch>` with the given files committed there.
+   * `artifact` commits the ignored seed via `git add -f`; `realFile` commits
+   * a genuine source change.
+   */
+  function wedgeFixture(f: Fixture, opts: { artifact?: boolean; realFile?: boolean; salvageBranch?: string }): string {
+    const salvageBranch = opts.salvageBranch ?? `salvage/${f.branch}-1790000000000`
+    execSync(`git checkout -q -b ${salvageBranch}`, { cwd: f.worktree })
+    if (opts.artifact === true) {
+      stageIgnoredArtifact(f.worktree)
+    }
+    if (opts.realFile === true) {
+      writeFileSync(join(f.worktree, 'real-work.ts'), 'export const finished = true\n')
+      execSync('git add real-work.ts', { cwd: f.worktree })
+    }
+    execSync('git commit -q -m salvage', { cwd: f.worktree })
+    return salvageBranch
+  }
+
+  it('reports none when no salvage worktree exists for the branch', async () => {
+    const f = makeFixture()
+    expect(await resolveWedgeForDispatch(f.mainRepo, f.branch)).toEqual({ kind: 'none' })
+  })
+
+  it('clears an artifact-only wedge — the lane dispatches — and KEEPS the salvage branch', async () => {
+    const f = makeFixture()
+    const salvageBranch = wedgeFixture(f, { artifact: true })
+    const result = await resolveWedgeForDispatch(f.mainRepo, f.branch)
+    expect(result).toEqual({ kind: 'cleared', worktree: f.worktree, salvageBranch })
+    // The worktree is gone, so the next dispatch cuts a fresh one...
+    expect(existsSync(f.worktree)).toBe(false)
+    // ...but the salvage BRANCH is never this function's to delete.
+    const branches = execSync('git branch --list', { cwd: f.mainRepo }).toString()
+    expect(branches).toContain(salvageBranch)
+  })
+
+  it('refuses a wedge whose salvage branch holds real work, and preserves everything', async () => {
+    const f = makeFixture()
+    const salvageBranch = wedgeFixture(f, { artifact: true, realFile: true })
+    const result = await resolveWedgeForDispatch(f.mainRepo, f.branch)
+    expect(result.kind).toBe('blocked')
+    if (result.kind !== 'blocked') throw new Error('unreachable')
+    expect(result.worktree).toBe(f.worktree)
+    expect(result.salvageBranch).toBe(salvageBranch)
+    expect(result.reason).toContain('real-work.ts')
+    // Nothing was destroyed: the work is exactly where the guard found it.
+    expect(existsSync(f.worktree)).toBe(true)
+    expect(existsSync(join(f.worktree, 'real-work.ts'))).toBe(true)
+    const branches = execSync('git branch --list', { cwd: f.mainRepo }).toString()
+    expect(branches).toContain(salvageBranch)
+  })
+
+  it('refuses a wedge whose worktree holds uncommitted real changes even when the salvage branch is artifact-only', async () => {
+    const f = makeFixture()
+    wedgeFixture(f, { artifact: true })
+    writeFileSync(join(f.worktree, 'file.txt'), 'real modification\n')
+    const result = await resolveWedgeForDispatch(f.mainRepo, f.branch)
+    expect(result.kind).toBe('blocked')
+    if (result.kind !== 'blocked') throw new Error('unreachable')
+    expect(result.reason).toContain('file.txt')
+    expect(existsSync(f.worktree)).toBe(true)
+  })
+
+  it('finds the dash-form salvage branch name (older flow named branches after the worker, not the fleet branch)', async () => {
+    const f = makeFixture()
+    // fleetBranch 'fleet/ios/7' wedges under BOTH `salvage/fleet/ios/7-*` and
+    // `salvage/fleet-ios-7-*`; exercise the dash form explicitly.
+    const salvageBranch = wedgeFixture(f, { artifact: true, salvageBranch: 'salvage/fleet-ios-7-1790000000000' })
+    const found = await findWedgedWorktrees(f.mainRepo, 'fleet/ios/7')
+    expect(found).toEqual([{ worktree: f.worktree, salvageBranch }])
+    const result = await resolveWedgeForDispatch(f.mainRepo, 'fleet/ios/7')
+    expect(result.kind).toBe('cleared')
+  })
+})
+
+describe('salvageInventory (issue #1755 doctor report)', () => {
+  it('reports nothing when no salvage branches exist', async () => {
+    const f = makeFixture()
+    expect(await salvageInventory(f.mainRepo)).toEqual([])
+  })
+
+  it('counts salvage branches and names the ones holding real work', async () => {
+    const f = makeFixture()
+
+    // Artifact-only salvage branch, no worktree attached.
+    execSync('git branch salvage/old-artifact-1 main', { cwd: f.mainRepo })
+
+    // Real-work salvage branch attached to the fixture worktree.
+    execSync('git checkout -q -b salvage/work-1-1790000000000', { cwd: f.worktree })
+    writeFileSync(join(f.worktree, 'real-work.ts'), 'export const finished = true\n')
+    execSync('git add real-work.ts', { cwd: f.worktree })
+    stageIgnoredArtifact(f.worktree)
+    execSync('git commit -q -m salvage', { cwd: f.worktree })
+
+    const inventory = await salvageInventory(f.mainRepo)
+    const byBranch = new Map(inventory.map((e) => [e.branch, e]))
+    expect(inventory.length).toBe(2)
+
+    const artifactOnly = byBranch.get('salvage/old-artifact-1')
+    expect(artifactOnly?.realFiles).toBe(0)
+    expect(artifactOnly?.hasWorktree).toBe(false)
+
+    const withWork = byBranch.get('salvage/work-1-1790000000000')
+    expect(withWork?.realFiles).toBe(1)
+    expect(withWork?.artifactFiles).toBe(1)
+    expect(withWork?.hasWorktree).toBe(true)
   })
 })
 
