@@ -25,54 +25,33 @@ enum UserRole: String, Codable, Sendable, CaseIterable {
     }
 }
 
-// MARK: - ClientUserStatus
-// Client-only: UI display properties. Generated `UserListResponseUser` uses
-// `active: Bool` — different representation.
+// MARK: - UserListResponseUser display helpers
+//
+// The admin user list decodes the generated `UserListResponse`
+// (`GET /api/users`, `userListResponseSchema`). The hand-written `ClientUser`
+// this replaced (`displayName: String?`, `role: String`, `status: String`,
+// `id`) described no route the server has ever mounted — it was the decoding
+// half of the `/api/identity/members` 404s in #1046. UI display helpers live
+// here as an extension so the view works on the wire type directly.
 
-/// User account status (client-side enum with UI properties).
-/// Named `ClientUserStatus` to avoid conflict with generated `UserStatus`.
-enum ClientUserStatus: String, Codable, Sendable, CaseIterable {
-    case active
-    case inactive
-    case suspended
+extension UserListResponseUser: Identifiable {
+    /// Stable identity for SwiftUI lists — the user's pubkey.
+    var id: String { pubkey }
 
-    var displayName: String {
-        switch self {
-        case .active: return NSLocalizedString("status_active", comment: "Active")
-        case .inactive: return NSLocalizedString("status_inactive", comment: "Inactive")
-        case .suspended: return NSLocalizedString("status_suspended", comment: "Suspended")
-        }
-    }
-}
-
-// MARK: - ClientUser
-// Client-only: different shape from generated `UserListResponseUser` which has
-// `active: Bool`, `roles: [String]`, `name: String` (non-optional) — our client
-// model uses `displayName: String?`, `role: String` (single), `status: String`.
-
-/// A user/admin member from the API (client-side model with UI properties).
-/// Named `ClientUser` to avoid conflict with generated `User`.
-struct ClientUser: Codable, Identifiable, Sendable {
-    let id: String
-    let pubkey: String
-    let displayName: String?
-    let role: String
-    let status: String
-    let createdAt: String
-
-    /// Parsed role enum.
-    var userRole: UserRole {
-        UserRole(rawValue: role) ?? .volunteer
+    /// Whether the user holds any admin role (super-admin or hub admin).
+    /// Same heuristic `AppState.fetchUserRole` applies to `GET /api/auth/me`.
+    var isAdmin: Bool {
+        roles.contains { $0.contains("admin") }
     }
 
-    /// Parsed status enum.
-    var userStatus: ClientUserStatus {
-        ClientUserStatus(rawValue: status) ?? .active
-    }
+    /// The user's current single role ID, for the role menu's checkmark.
+    /// The server keeps `roles` as a list; the iOS menu assigns one at a time,
+    /// like the desktop user row (`user.roles[0]`).
+    var primaryRoleId: String? { roles.first }
 
     /// Display name or truncated pubkey.
     var displayLabel: String {
-        if let name = displayName, !name.isEmpty {
+        if !name.isEmpty {
             return name
         }
         return truncatedPubkey
@@ -162,23 +141,21 @@ struct AppAuditEntry: Codable, Identifiable, Sendable {
     }
 }
 
-// MARK: - AppInvite
-// Client-only: generated `Invite` has different fields (name, phone, roleIDs)
-// vs our (code, role, createdBy, claimedBy, expiresAt).
+// MARK: - Invite display helpers
+//
+// The admin invite list decodes the generated `InviteListResponse`
+// (`GET /api/invites`, `inviteListResponseSchema`). The hand-written
+// `AppInvite` this replaced (`role: String`, `claimedBy`, `id`) matched no
+// server response — `usedBy`/`roleIds` are the wire fields — so every invite
+// list decode against the real route would have failed even had the path been
+// right (#1046).
 
-/// An invite code from the API (client-side model with UI properties).
-/// Named `AppInvite` to avoid conflict with generated `Invite` from protocol codegen.
-struct AppInvite: Codable, Identifiable, Sendable {
-    let id: String
-    let code: String
-    let role: String
-    let createdBy: String
-    let claimedBy: String?
-    let expiresAt: String
-    let createdAt: String
+extension Invite: Identifiable {
+    /// Stable identity for SwiftUI lists — the invite code (a UUID).
+    var id: String { code }
 
     /// Whether this invite has been claimed.
-    var isClaimed: Bool { claimedBy != nil }
+    var isClaimed: Bool { usedBy != nil || usedAt != nil }
 
     /// Whether this invite has expired.
     var isExpired: Bool {
@@ -189,9 +166,9 @@ struct AppInvite: Codable, Identifiable, Sendable {
     /// Whether this invite is currently usable (not claimed and not expired).
     var isActive: Bool { !isClaimed && !isExpired }
 
-    /// Parsed role enum.
-    var inviteRole: UserRole {
-        UserRole(rawValue: role) ?? .volunteer
+    /// Whether the invite grants an admin role.
+    var grantsAdminRole: Bool {
+        roleIDS.contains { $0.contains("admin") }
     }
 
     /// Parsed expiry date.
@@ -213,11 +190,6 @@ struct AppInvite: Codable, Identifiable, Sendable {
 
 // MARK: - API Response Types
 
-/// API response for the users list.
-struct UsersListResponse: Codable, Sendable {
-    let members: [ClientUser]
-}
-
 /// API response for the ban list (client-side).
 /// Named `AppBanListResponse` to avoid conflict with generated `BanListResponse`.
 struct AppBanListResponse: Codable, Sendable {
@@ -230,27 +202,19 @@ struct AuditLogResponse: Codable, Sendable {
     let total: Int
 }
 
-/// API response for the invites list.
-struct InvitesListResponse: Codable, Sendable {
-    let invites: [AppInvite]
+/// Response envelope of `POST /api/invites` (`{ "invite": {…} }`, 201). The
+/// invite itself is the generated `Invite` (`inviteResponseSchema`); only the
+/// wrapper is local — the schema registry has no named schema for it.
+struct CreateInviteResponse: Decodable, Sendable {
+    let invite: Invite
 }
 
 // MARK: - Request Types
-
-/// Request body for `POST /api/identity/invite`.
-struct CreateInviteRequest: Encodable, Sendable {
-    let role: String
-}
 
 /// Request body for `POST /api/bans`.
 struct CreateBanRequest: Encodable, Sendable {
     let identifierHash: String
     let reason: String?
-}
-
-/// Request body for `PATCH /api/identity/:pubkey/role`.
-struct UpdateRoleRequest: Encodable, Sendable {
-    let role: String
 }
 
 // MARK: - Report Category
