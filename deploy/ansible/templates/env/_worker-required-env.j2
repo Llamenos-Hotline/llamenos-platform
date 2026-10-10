@@ -63,6 +63,112 @@ ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey | trim }}
 NTFY_ALLOWED_ORIGINS={{ ntfy_allowed_origins }}
 {% endif %}
 HOTLINE_NAME={{ hotline_name | default('Hotline') }}
+{#
+  CORS_ALLOWED_ORIGINS — the deployed host's actual browser origins.
+
+  Before #1624 this was rendered nowhere, so every deployed host ran with NO
+  configured CORS policy and fell through to the two hardcoded origins in
+  apps/worker/middleware/cors.ts — app.llamenos-hotline.org and
+  demo.llamenos-platform.com, which belong to this project's own hosts and to
+  no self-hoster. A self-hosted deployment's own SPA origin was not on its own
+  allowlist.
+
+  Note what SETTING it does, and why the list below must stay complete:
+  cors.ts and lib/redirect-guard.ts both take their localhost-development
+  branch only when ENVIRONMENT=development *and* this var is unset. Rendering
+  it turns that escape hatch off — which is correct for a deployed host (an
+  Ansible deploy is app_environment=production unless overridden), but it
+  means anything the browser actually loads from has to appear here.
+
+  Tauri's two origins are added by the app itself and are never listed here.
+
+  The default is derived the same way every other consumer of the vhost
+  layout derives it -- `api_subdomain` + `domain`, matching
+  roles/llamenos-caddy/templates/caddy.j2's vhost blocks,
+  playbooks/smoke-check.yml's `_api_host` and vars-production.example.yml's
+  webhook_base_url. NOT app_domain/api_domain: those appear only in
+  vars.example.yml, no role resolves api_domain at all, and on the production
+  path both are undefined -- a default built on them would have produced an
+  allowlist naming hosts this deployment does not serve.
+
+  - api_subdomain set   -> https://api.<domain> (the API vhost) and
+                           https://<domain> (which Caddy 301s to it)
+  - api_subdomain empty -> https://<domain> alone (single-domain mode)
+  - app_domain set      -> added too; templates/caddy.j2's updater vhost
+                           already treats it as the app origin
+#}
+CORS_ALLOWED_ORIGINS={{ cors_allowed_origins | default(
+  (['https://' ~ api_subdomain ~ '.' ~ domain, 'https://' ~ domain]
+     if (api_subdomain | default('')) | length > 0
+     else ['https://' ~ domain])
+  + (['https://' ~ app_domain] if (app_domain | default('')) | length > 0 else [])
+  + (cors_allowed_origins_extra | default([]))) | unique | join(',') }}
+{#
+  METRICS_SCRAPE_TOKEN — the bearer token Prometheus presents to
+  /api/metrics/prometheus. Unset, apps/worker/routes/metrics.ts falls through
+  to requiring an authenticated admin holding `metrics:read`, which a scrape
+  never is, so every scrape got a 401. Measured against a live deployment for
+  #1624: roles/llamenos-prometheus also had the PATH wrong (/api/metrics is
+  the admin-only JSON summary; only /api/metrics/prometheus has a scrape-token
+  branch), so the app job collected nothing for two independent reasons. The
+  same value is rendered into that scrape config — change it in one place.
+#}
+{% if (metrics_scrape_token | default('')) | length > 0 %}
+METRICS_SCRAPE_TOKEN={{ metrics_scrape_token }}
+{% endif %}
+{#
+  SIP_BRIDGE_URL — the sip-bridge sidecar as seen from inside the app
+  container, i.e. the compose service name on llamenos-internal, NOT the
+  loopback publish port (roles/llamenos-asterisk publishes it on
+  127.0.0.1:<sip_bridge_local_port>, 3101 by default, for the host-side smoke
+  probe only). The bridge's own listener always binds 3000.
+
+  Unset, apps/worker/routes/health.ts's checkSipBridge returned null and the
+  probe was omitted from /health/ready entirely — "not configured" scored
+  exactly like "healthy", on a sidecar no call can route without (#1119).
+#}
+{% if llamenos_asterisk_enabled | default(false) | bool %}
+SIP_BRIDGE_URL=http://sip-bridge:3000
+{% endif %}
+{#
+  The per-volunteer SIP registrar and its TURN relay
+  (apps/worker/telephony/registrar.ts, apps/worker/routes/webrtc.ts). Both
+  TURN values must be present or /sip-token hands clients STUN-only ICE
+  servers and an in-app call behind a symmetric NAT has no media path.
+  SIP_REGISTRAR_SECRET falls back to HMAC_SECRET; set it only to rotate every
+  volunteer's derived PJSIP secret independently of HMAC_SECRET.
+
+  SIP_TLS_CA_FILE is deliberately NOT rendered here — see
+  scripts/check-consumed-env.py's UNRENDERED_BY_DESIGN entry for it: the app
+  container has no mount for the anchor roles/kamailio publishes, so a path
+  would point at nothing inside the container.
+#}
+{% if (sip_registrar_secret | default('')) | length > 0 %}
+SIP_REGISTRAR_SECRET={{ sip_registrar_secret }}
+{% endif %}
+{% if (turn_host | default('')) | length > 0 and (turn_secret | default('')) | length > 0 %}
+TURN_HOST={{ turn_host }}
+TURN_SECRET={{ turn_secret }}
+{% endif %}
+{#
+  <PROVIDER>_WEBHOOK_IPS — the webhook IP allowlist (#1622). The var name is
+  built at runtime from the provider name in middleware/webhook-auth.ts,
+  middleware/webhook-ip-allowlist.ts and messaging/router.ts, so there is no
+  fixed list of them; `webhook_ip_allowlists` is an operator map of
+  provider -> CIDR list and each entry renders one line.
+
+  Empty by default, and that is a deliberate limit on this change: #1609
+  fixed this control's left-most-X-Forwarded-For bypass, but switching the
+  control ON means pinning provider-published IP ranges in a template, and a
+  range the provider later rotates away from silently rejects real webhooks —
+  worse than the signature-only posture it replaces. #1622 owns that decision
+  (fail closed, or an explicit opt-out so "unset" and "off" differ). What
+  belongs here is the plumbing, so turning it on is an operator variable and
+  not a template patch.
+#}
+{% for provider, cidrs in (webhook_ip_allowlists | default({})) | dictsort %}
+{{ provider | upper }}_WEBHOOK_IPS={{ cidrs | join(',') if cidrs is not string else cidrs }}
+{% endfor %}
 ENVIRONMENT={{ app_environment | default('production') }}
 HMAC_SECRET={{ hmac_secret }}
 STORAGE_ENDPOINT=http://rustfs:9000
