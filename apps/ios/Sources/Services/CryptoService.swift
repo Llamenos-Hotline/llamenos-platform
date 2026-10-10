@@ -37,7 +37,7 @@ private func ffiMobileCreateAuthToken(timestamp: UInt64, method: String, path: S
 
 // V3 auth, nonce-less variant — ONLY valid on routes whose wire schema has no
 // `nonce` field (today: `POST /api/invites/redeem`). The Rust side signs under
-// `LABEL_DEVICE_AUTH_NO_NONCE`, a domain the server accepts nowhere else.
+// the nonce-less device-auth domain, which the server accepts nowhere else.
 private func ffiMobileCreateAuthTokenWithoutNonce(timestamp: UInt64, method: String, path: String) throws -> AuthToken {
     try mobileCreateAuthTokenWithoutNonce(timestamp: timestamp, method: method, path: path)
 }
