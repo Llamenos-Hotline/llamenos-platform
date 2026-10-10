@@ -46,7 +46,7 @@ struct SystemHealthView: View {
 
     // MARK: - Health Grid
 
-    private func healthGrid(_ health: SystemHealth) -> some View {
+    private func healthGrid(_ health: SystemHealthResponse) -> some View {
         LazyVGrid(
             columns: [
                 GridItem(.flexible(), spacing: 12),
@@ -55,48 +55,112 @@ struct SystemHealthView: View {
             spacing: 12
         ) {
             HealthCardView(
-                status: health.server,
+                status: Self.serverStatus(health.server),
                 icon: "server.rack",
                 label: NSLocalizedString("admin_health_server", comment: "Server")
             )
             .accessibilityIdentifier("health-card-server")
 
             HealthCardView(
-                status: health.services,
+                status: Self.servicesStatus(health.services),
                 icon: "gearshape.2.fill",
                 label: NSLocalizedString("admin_health_services", comment: "Services")
             )
             .accessibilityIdentifier("health-card-services")
 
             HealthCardView(
-                status: health.calls,
+                status: Self.callsStatus(health.calls),
                 icon: "phone.fill",
                 label: NSLocalizedString("admin_health_calls", comment: "Calls")
             )
             .accessibilityIdentifier("health-card-calls")
 
             HealthCardView(
-                status: health.storage,
+                status: Self.storageStatus(health.storage),
                 icon: "internaldrive.fill",
                 label: NSLocalizedString("admin_health_storage", comment: "Storage")
             )
             .accessibilityIdentifier("health-card-storage")
 
             HealthCardView(
-                status: health.backup,
+                status: Self.backupStatus(health.backup),
                 icon: "arrow.triangle.2.circlepath",
                 label: NSLocalizedString("admin_health_backup", comment: "Backup")
             )
             .accessibilityIdentifier("health-card-backup")
 
             HealthCardView(
-                status: health.volunteers,
+                status: Self.volunteersStatus(health.users),
                 icon: "person.3.fill",
                 label: NSLocalizedString("admin_health_users", comment: "Volunteers")
             )
             .accessibilityIdentifier("health-card-volunteers")
         }
         .padding()
+    }
+
+    // MARK: - Response Mapping
+
+    static func serverStatus(_ server: Server) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Server",
+            status: server.status.rawValue,
+            details: "v\(server.version) · up \(formatUptime(server.uptime))"
+        )
+    }
+
+    static func servicesStatus(_ services: [SystemHealthResponseService]) -> ServiceHealthStatus {
+        let worst = services.contains(where: { $0.status == .down }) ? "down"
+            : services.contains(where: { $0.status == .degraded }) ? "degraded"
+            : "ok"
+        let healthy = services.filter { $0.status == .ok }.count
+        let degradedNames = services.filter { $0.status != .ok }.map(\.name)
+        let details = degradedNames.isEmpty
+            ? "\(healthy)/\(services.count) healthy"
+            : degradedNames.joined(separator: ", ")
+        return ServiceHealthStatus(name: "Services", status: worst, details: details)
+    }
+
+    static func callsStatus(_ calls: Calls) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Calls",
+            status: "ok",
+            details: "\(Int(calls.today)) today · \(Int(calls.active)) active · \(Int(calls.missed)) missed"
+        )
+    }
+
+    static func storageStatus(_ storage: Storage) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Storage",
+            status: "ok",
+            details: "DB \(storage.dbSize) · Blob \(storage.blobStorage)"
+        )
+    }
+
+    static func backupStatus(_ backup: Backup) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Backup",
+            status: backup.lastBackup == nil ? "degraded" : "ok",
+            details: backup.lastBackup.map { "Last: \($0)" } ?? "No backup yet"
+        )
+    }
+
+    static func volunteersStatus(_ users: Users) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Volunteers",
+            status: "ok",
+            details: "\(Int(users.onShift)) on shift · \(Int(users.totalActive)) active · \(Int(users.onlineNow)) online"
+        )
+    }
+
+    static func formatUptime(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let days = total / 86400
+        let hours = (total % 86400) / 3600
+        let minutes = (total % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
     }
 
     // MARK: - Loading State

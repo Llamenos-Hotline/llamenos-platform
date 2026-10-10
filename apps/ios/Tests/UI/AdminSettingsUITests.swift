@@ -654,14 +654,13 @@ final class AdminSettingsUITests: BaseUITest {
         let errorState = find("health-error-state")
         let firstCard = find("health-card-server")
 
-        // Wait for either health cards or error state to appear
+        // This class launches connected to the live backend, so the health
+        // endpoint must decode and render — the error state is a failure.
         let loaded = firstCard.waitForExistence(timeout: 10)
-            || errorState.waitForExistence(timeout: 5)
-
-        if errorState.exists {
-            // No API connection — error state is acceptable for mock-only tests
-            return
-        }
+        XCTAssertFalse(
+            errorState.exists,
+            "System health should load from the connected backend, not show its error state"
+        )
 
         guard loaded else {
             // Neither cards nor error appeared — check loading state
