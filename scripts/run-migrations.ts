@@ -39,7 +39,12 @@ if (!databaseUrl) {
   process.exit(1)
 }
 
-const migrationsDir = join(import.meta.dir, '..', 'drizzle', 'migrations')
+// LLAMENOS_MIGRATIONS_DIR exists for the runner's own integration tests
+// (apps/worker/__tests__/integration/migration-ledger.test.ts), which point the
+// runner at a scratch copy of drizzle/migrations/ containing an intentionally
+// broken file. Nothing in the deploy path sets it.
+const migrationsDir =
+  process.env.LLAMENOS_MIGRATIONS_DIR ?? join(import.meta.dir, '..', 'drizzle', 'migrations')
 
 /** Ledger of applied migrations. Keyed by filename, the same key used to sort. */
 const LEDGER_TABLE = 'llamenos_schema_migrations'
@@ -70,6 +75,16 @@ if (files.length === 0) {
 /**
  * Make DDL statements idempotent by injecting IF NOT EXISTS / IF EXISTS guards.
  * Drizzle generates bare CREATE/DROP without these guards.
+ *
+ * ADD COLUMN is the one that bit #791: 0030, 0032 and 0036 all add
+ * system_settings.platform_settings and audit_log.erased_at verbatim, so on a
+ * fresh database 0032 and 0036 each raised "column already exists" and had to
+ * be swallowed by error tolerance. With the guard injected, exactly one file
+ * (0030) effectively adds each column and the later duplicates are clean
+ * no-ops — no error is raised, so there is nothing to tolerate.
+ *
+ * Postgres has no IF NOT EXISTS for ADD CONSTRAINT, so constraint adds cannot
+ * be guarded here; see CATCH_UP_REPLAY_ERRORS.
  */
 function makeIdempotent(stmt: string): string {
   let s = stmt
@@ -97,6 +112,21 @@ function makeIdempotent(stmt: string): string {
   s = s.replace(
     /\bDROP INDEX\b(?!\s+IF\s+EXISTS)/gi,
     'DROP INDEX IF EXISTS',
+  )
+  // ADD COLUMN → ADD COLUMN IF NOT EXISTS
+  s = s.replace(
+    /\bADD\s+COLUMN\b(?!\s+IF\s+NOT\s+EXISTS)/gi,
+    'ADD COLUMN IF NOT EXISTS',
+  )
+  // DROP COLUMN → DROP COLUMN IF EXISTS
+  s = s.replace(
+    /\bDROP\s+COLUMN\b(?!\s+IF\s+EXISTS)/gi,
+    'DROP COLUMN IF EXISTS',
+  )
+  // DROP CONSTRAINT → DROP CONSTRAINT IF EXISTS
+  s = s.replace(
+    /\bDROP\s+CONSTRAINT\b(?!\s+IF\s+EXISTS)/gi,
+    'DROP CONSTRAINT IF EXISTS',
   )
   return s
 }
@@ -174,61 +204,97 @@ async function catchUpWouldDestroyData(sql: SQL, chunk: string): Promise<boolean
 }
 
 /**
- * Should this error be tolerated as "this statement's effect is already in
- * place"?
+ * The ONLY errors a run may tolerate, and only during the one-time catch-up
+ * reconciliation of a pre-ledger database (#791, AC2).
  *
- * Two different questions, depending on which is the source of truth:
+ * Catch-up replays files that already ran on a ledgerless database, and old
+ * DDL routinely references objects that later migrations removed — 0000
+ * indexes `bans.phone`, which 0008 drops. Each entry below pairs one statement
+ * shape with the single error that shape legitimately produces on replay, so
+ * a tolerated line in the log names its rule. Anything else — any shape, in
+ * catch-up; every error, in a first-time application — fails the run.
  *
- *  - Applying a file for the first time (`lenient: false`): the FILES are the
- *    source of truth and any surprise is real. Tolerance is paired with the
- *    statement shape that can legitimately produce it, so a "does not exist"
- *    from a CREATE, INSERT or UPDATE is a hard failure. That closes the hole
- *    the ledger alone does not: under the old blanket message match, a
- *    genuinely failed CREATE TABLE made every later statement against that
- *    table report "relation ... does not exist", each was logged as skipped,
- *    and the run exited 0 onto a half-applied schema.
- *
- *  - Reconciling an already-migrated database (`lenient: true`): the SCHEMA is
- *    the source of truth. These files ran once already, and old DDL routinely
- *    references objects that later migrations removed — 0000 indexes
- *    `bans.phone`, which 0008 drops — so "does not exist" here is expected,
- *    not a defect. Failing hard would refuse to boot every database that
- *    predates the ledger.
+ * There is deliberately no strict-mode list: a file being applied for the
+ * first time must either succeed or fail. makeIdempotent() already guards
+ * every shape that can legitimately collide on a first application (CREATE
+ * TABLE/INDEX, DROP TABLE/INDEX/COLUMN/CONSTRAINT, ADD COLUMN), so a
+ * remaining error is always real. The blanket "already exists" match this
+ * replaces is what let a genuinely failed CREATE TABLE cascade — every later
+ * statement against the missing table reported "does not exist", each was
+ * logged as skipped, and the run exited 0 onto a half-applied schema.
  */
-function isAlreadyApplied(
-  stmt: string,
-  msg: string,
-  code: unknown,
-  lenient: boolean,
-): boolean {
+const CATCH_UP_REPLAY_ERRORS: ReadonlyArray<{
+  /** Stable identifier printed in the log, so a tolerated line names its rule. */
+  name: string
+  shape: RegExp
+  matches: (msg: string, code: unknown) => boolean
+}> = [
+  {
+    // Postgres has no ADD CONSTRAINT IF NOT EXISTS, so a replayed constraint
+    // add (0000's FKs, 0011's, …) is the one replay collision no guard can
+    // prevent.
+    name: 'add-constraint-replay',
+    shape: /\bADD\s+CONSTRAINT\b/i,
+    matches: (msg) => msg.includes('already exists'),
+  },
+  {
+    // 0002 replaces case_number_sequences' PK; on replay the recreated table
+    // already has its original one.
+    name: 'add-primary-key-replay',
+    shape: /\bADD\s+CONSTRAINT\b[^;]*\bPRIMARY\s+KEY\b/i,
+    matches: (msg) => msg.includes('multiple primary keys'),
+  },
+  {
+    // foreign_key_violation on ADD CONSTRAINT: re-adding an old FK after a
+    // later migration re-pointed it fails because existing rows reference the
+    // new table. The correct constraint is installed by that later migration.
+    name: 'superseded-foreign-key',
+    shape: /\bADD\s+CONSTRAINT\b/i,
+    matches: (_msg, code) => code === '23503',
+  },
+  {
+    // 0001 renames volunteers→users. The replay's CREATE TABLE IF NOT EXISTS
+    // already recreated `volunteers` empty, so the rename's target exists.
+    // Recorded for cleanup by noteResurrectedRenameSource.
+    name: 'rename-table-replay',
+    shape: /\bRENAME\s+TO\b/i,
+    matches: (msg) => msg.includes('already exists'),
+  },
+  {
+    // Replayed RENAME COLUMN (0001×4, 0008×2, 0014, 0030_ep07) finds the
+    // source column gone — the rename already happened.
+    name: 'rename-column-replay',
+    shape: /\bRENAME\s+COLUMN\b/i,
+    matches: (msg) => /column "[^"]+" does not exist/.test(msg),
+  },
+  {
+    // Replayed RENAME CONSTRAINT (0001×3) fails on the NEW name being taken —
+    // the constraint was already renamed.
+    name: 'rename-constraint-replay',
+    shape: /\bRENAME\s+CONSTRAINT\b/i,
+    matches: (msg) => msg.includes('already exists'),
+  },
+  {
+    // 0000's index on bans.phone: 0008 dropped the column (and the index with
+    // it), so the replayed CREATE INDEX cannot run. Only a missing COLUMN is
+    // tolerated — a missing table means a CREATE failed upstream, which is
+    // exactly the cascade this list exists to fail on.
+    name: 'index-on-since-dropped-column',
+    shape: /\bCREATE\s+(UNIQUE\s+)?INDEX\b/i,
+    matches: (msg) => /column "[^"]+"( of relation "[^"]+")? does not exist/.test(msg),
+  },
+]
+
+/**
+ * The name of the CATCH_UP_REPLAY_ERRORS rule this error matches, or null if
+ * the error is unexpected — unexpected errors are always fatal, in both modes.
+ */
+function catchUpReplayError(stmt: string, msg: string, code: unknown): string | null {
   const s = stmt.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim()
-  const isDrop = /\bDROP\s+(COLUMN|CONSTRAINT|INDEX|TABLE|TYPE|SEQUENCE|VIEW)\b/i.test(s)
-  const isAdd = /\b(CREATE|ADD\s+(COLUMN|CONSTRAINT|PRIMARY\s+KEY))\b/i.test(s)
-  const isInsert = /^\s*INSERT\s+INTO\b/i.test(s)
-
-  // foreign_key_violation on ADD CONSTRAINT: re-adding an old FK after a later
-  // migration re-pointed it fails because existing rows reference the new
-  // table. The correct constraint is installed by that later migration.
-  if (/\bADD\s+CONSTRAINT\b/i.test(s) && code === '23503') return true
-
-  if (lenient) {
-    return (
-      msg.includes('already exists') ||
-      msg.includes('does not exist') ||
-      msg.includes('duplicate key') ||
-      msg.includes('duplicate column') ||
-      msg.includes('multiple primary keys')
-    )
+  for (const rule of CATCH_UP_REPLAY_ERRORS) {
+    if (rule.shape.test(s) && rule.matches(msg, code)) return rule.name
   }
-
-  // The object a DROP targets is already gone.
-  if (isDrop && msg.includes('does not exist')) return true
-  // The object a CREATE/ADD would introduce is already there.
-  if (isAdd && (msg.includes('already exists') || msg.includes('duplicate column'))) return true
-  if (isAdd && msg.includes('multiple primary keys')) return true
-  if (isInsert && msg.includes('duplicate key')) return true
-
-  return false
+  return null
 }
 
 /**
@@ -430,9 +496,10 @@ try {
         const msg = err instanceof Error ? err.message : String(err)
         const code =
           (err as Record<string, unknown>)?.errno ?? (err as Record<string, unknown>)?.code
-        if (isAlreadyApplied(stmt, msg, code, catchUp)) {
-          console.log(`[migrate] ${file}: already in place (${msg.slice(0, 80)})`)
-          if (catchUp) noteResurrectedRenameSource(stmt, msg, resurrected)
+        const replayRule = catchUp ? catchUpReplayError(stmt, msg, code) : null
+        if (replayRule) {
+          console.log(`[migrate] ${file}: replay no-op [${replayRule}] (${msg.slice(0, 80)})`)
+          noteResurrectedRenameSource(stmt, msg, resurrected)
         } else {
           console.error(`[migrate] ${file}: FAILED — ${msg}`)
           console.error(`[migrate]   statement: ${stmt.replace(/\s+/g, ' ').slice(0, 200)}`)

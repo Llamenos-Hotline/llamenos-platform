@@ -3,19 +3,42 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import { getTranslation } from '../i18n/utils';
 import { download } from '../i18n/translations/download';
 import { siteConfig } from '../config';
+import { fetchLatestReleases } from '../utils/releases';
 
 const t = getTranslation(download, 'en');
 
-const {
-  downloadServerUrl,
-  updateServerUrl,
-  minisignPublicKey,
-  gpgFingerprint,
-  auditRepoUrl,
-} = siteConfig.distribution;
-
-const LATEST_JSON = `${updateServerUrl}/latest.json`;
+const { minisignPublicKey, minisignKeyId, auditRepoUrl } = siteConfig.distribution;
 const GITHUB_RELEASES = siteConfig.github.releasesUrl;
+const macosIssueUrl = `${siteConfig.github.issuesUrl}/741`;
+
+// Build-time lookup of the releases that actually carry artifacts
+// (desktop-v* / android-v* — never the integrity-only v* release).
+const { desktop, android } = await fetchLatestReleases();
+
+// A lookup failure must degrade to the Releases index, never to an invented URL.
+const winExeUrl = desktop?.windowsExe ?? desktop?.url ?? GITHUB_RELEASES;
+const winMsiUrl = desktop?.windowsMsi ?? desktop?.url ?? GITHUB_RELEASES;
+const appImageUrl = desktop?.linuxAppImage ?? desktop?.url ?? GITHUB_RELEASES;
+const debUrl = desktop?.linuxDeb ?? desktop?.url ?? GITHUB_RELEASES;
+const rpmUrl = desktop?.linuxRpm ?? desktop?.url ?? GITHUB_RELEASES;
+
+// Example artifact named in the verification commands: the real filename when
+// the lookup succeeded, a visible placeholder otherwise.
+const exampleInstaller = desktop ? `Hotline_${desktop.version}_amd64.AppImage` : '<installer>';
+const minisignCmd = `base64 -d ${exampleInstaller}.sig > ${exampleInstaller}.minisig\nminisign -V -m ${exampleInstaller} -x ${exampleInstaller}.minisig -P ${minisignPublicKey}`;
+const checksumsFetchCmd = desktop?.checksumsUrl ? `curl -O ${desktop.checksumsUrl}` : null;
+const checksumsVerifyCmd = 'sha256sum -c CHECKSUMS.txt --ignore-missing';
+const attestationCmd = `gh attestation verify ${exampleInstaller} --repo ${siteConfig.github.org}/${siteConfig.github.repo}`;
+
+// Consumed by the client-side OS picker below. All URLs come from the GitHub
+// API response, never constructed by string interpolation.
+const picker = desktop
+  ? {
+      version: desktop.version,
+      windows: desktop.windowsExe ?? desktop.windowsMsi,
+      linux: desktop.linuxAppImage ?? desktop.linuxDeb ?? desktop.linuxRpm,
+    }
+  : null;
 ---
 
 <BaseLayout title={t.title} description={t.subtitle}>
@@ -50,12 +73,12 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
             </a>
           </div>
 
-          <!-- Fallback when no OS detected or fetch fails -->
+          <!-- Fallback when no OS detected, no artifact for it, or lookup failed -->
           <div id="fallback-section" class="rounded-2xl border border-border bg-bg-card p-6">
             <h2 class="text-sm font-medium text-fg-muted uppercase tracking-wider mb-4">{t.allPlatforms}</h2>
-            <p class="text-fg-muted text-sm mb-4">Choose your platform below or download from GitHub Releases.</p>
+            <p class="text-fg-muted text-sm mb-4">{desktop ? 'Choose your platform below or download from GitHub Releases.' : t.loadError}</p>
             <a
-              href={GITHUB_RELEASES}
+              href={desktop?.url ?? GITHUB_RELEASES}
               class="inline-flex items-center justify-center w-full rounded-lg border border-border bg-bg-soft px-6 py-3 text-sm font-medium text-fg transition-colors hover:bg-bg-card"
               target="_blank"
               rel="noopener noreferrer"
@@ -80,13 +103,13 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
           <div class="flex gap-2 mb-4 border-b border-border pb-1">
             <button class="verify-tab active text-sm font-medium px-3 py-1.5 rounded-t-lg text-accent-bright border-b-2 border-accent-bright" data-tab="minisign">{t.verifyMinisign}</button>
             <button class="verify-tab text-sm font-medium px-3 py-1.5 rounded-t-lg text-fg-muted hover:text-fg transition-colors" data-tab="sha256">{t.verifySha256}</button>
-            <button class="verify-tab text-sm font-medium px-3 py-1.5 rounded-t-lg text-fg-muted hover:text-fg transition-colors" data-tab="cosign">{t.verifyCosign}</button>
+            <button class="verify-tab text-sm font-medium px-3 py-1.5 rounded-t-lg text-fg-muted hover:text-fg transition-colors" data-tab="attestation">{t.verifyAttestation}</button>
           </div>
 
           <!-- Minisign tab -->
           <div id="tab-minisign" class="verify-panel">
             <div class="mb-3">
-              <p class="text-xs text-fg-dim mb-1.5 font-mono">Public key</p>
+              <p class="text-xs text-fg-dim mb-1.5 font-mono">Public key (ID {minisignKeyId})</p>
               <div class="flex items-center gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
                 <code class="text-sm font-mono text-fg-muted truncate flex-1">{minisignPublicKey}</code>
                 <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors" data-text={minisignPublicKey} aria-label={t.copyCommand}>
@@ -97,8 +120,8 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
             <div class="mb-3">
               <p class="text-xs text-fg-dim mb-1.5 font-mono">Command</p>
               <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-                <code class="text-sm font-mono text-fg-muted break-all flex-1" id="minisign-cmd">minisign -Vm llamenos-desktop_0.0.0_amd64.AppImage -P {minisignPublicKey}</code>
-                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text="" id="minisign-copy" aria-label={t.copyCommand}>
+                <code class="text-sm font-mono text-fg-muted break-all flex-1 whitespace-pre-line">{minisignCmd}</code>
+                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={minisignCmd} aria-label={t.copyCommand}>
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                 </button>
               </div>
@@ -110,30 +133,34 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
             <div class="mb-3">
               <p class="text-xs text-fg-dim mb-1.5 font-mono">Download CHECKSUMS.txt</p>
               <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-                <code class="text-sm font-mono text-fg-muted break-all flex-1" id="sha256-cmd">curl -O {downloadServerUrl}/v0.0.0/CHECKSUMS.txt</code>
-                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text="" id="sha256-copy" aria-label={t.copyCommand}>
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                </button>
+                {checksumsFetchCmd ? (
+                  <code class="text-sm font-mono text-fg-muted break-all flex-1">{checksumsFetchCmd}</code>
+                  <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={checksumsFetchCmd} aria-label={t.copyCommand}>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                  </button>
+                ) : (
+                  <a href={GITHUB_RELEASES} class="text-sm text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">Download CHECKSUMS.txt from the latest desktop release &rarr;</a>
+                )}
               </div>
             </div>
             <div class="mb-3">
               <p class="text-xs text-fg-dim mb-1.5 font-mono">Verify</p>
               <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-                <code class="text-sm font-mono text-fg-muted break-all flex-1">sha256sum -c CHECKSUMS.txt</code>
-                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text="sha256sum -c CHECKSUMS.txt" aria-label={t.copyCommand}>
+                <code class="text-sm font-mono text-fg-muted break-all flex-1">{checksumsVerifyCmd}</code>
+                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={checksumsVerifyCmd} aria-label={t.copyCommand}>
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                 </button>
               </div>
             </div>
           </div>
 
-          <!-- Cosign tab -->
-          <div id="tab-cosign" class="verify-panel hidden">
+          <!-- Attestation tab -->
+          <div id="tab-attestation" class="verify-panel hidden">
             <div class="mb-3">
-              <p class="text-xs text-fg-dim mb-1.5 font-mono">Verify SBOM attestation</p>
+              <p class="text-xs text-fg-dim mb-1.5 font-mono">Verify build provenance</p>
               <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-                <code class="text-sm font-mono text-fg-muted break-all flex-1" id="cosign-cmd">cosign verify-blob --signature CHECKSUMS.txt.sig --certificate-identity-regexp '.*' --certificate-oidc-issuer-regexp '.*' CHECKSUMS.txt</code>
-                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text="" id="cosign-copy" aria-label={t.copyCommand}>
+                <code class="text-sm font-mono text-fg-muted break-all flex-1">{attestationCmd}</code>
+                <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={attestationCmd} aria-label={t.copyCommand}>
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                 </button>
               </div>
@@ -165,12 +192,17 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
               <p class="text-xs text-fg-muted">{t.platforms.windows.description}</p>
             </div>
           </div>
-          <a id="dl-windows" href={GITHUB_RELEASES} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
-            Download .exe
-          </a>
+          <div class="mt-auto flex flex-col gap-2">
+            <a href={winExeUrl} class="inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
+              Download .exe
+            </a>
+            <a href={winMsiUrl} class="inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
+              Download .msi
+            </a>
+          </div>
         </div>
 
-        <!-- macOS -->
+        <!-- macOS — no signed build yet (#741); never link a missing .dmg -->
         <div class="rounded-xl border border-border bg-bg-card p-5 flex flex-col" data-platform="macos">
           <div class="flex items-center gap-3 mb-3">
             <svg class="h-8 w-8 text-fg-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
@@ -179,9 +211,10 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
               <p class="text-xs text-fg-muted">{t.platforms.macos.description}</p>
             </div>
           </div>
-          <a id="dl-macos" href={GITHUB_RELEASES} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
-            Download .dmg
-          </a>
+          <p class="mt-auto text-xs text-fg-muted">
+            {t.macosUnsigned}
+            <a href={macosIssueUrl} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">#741</a>
+          </p>
         </div>
 
         <!-- Linux AppImage -->
@@ -193,7 +226,7 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
               <p class="text-xs text-fg-muted">{t.platforms.linuxAppImage.description}</p>
             </div>
           </div>
-          <a id="dl-linux-appimage" href={GITHUB_RELEASES} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
+          <a href={appImageUrl} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
             Download .AppImage
           </a>
         </div>
@@ -207,22 +240,22 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
               <p class="text-xs text-fg-muted">{t.platforms.linuxDeb.description}</p>
             </div>
           </div>
-          <a id="dl-linux-deb" href={GITHUB_RELEASES} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
+          <a href={debUrl} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
             Download .deb
           </a>
         </div>
 
-        <!-- Linux Flatpak -->
-        <div class="rounded-xl border border-border bg-bg-card p-5 flex flex-col" data-platform="linux-flatpak">
+        <!-- Linux .rpm -->
+        <div class="rounded-xl border border-border bg-bg-card p-5 flex flex-col" data-platform="linux-rpm">
           <div class="flex items-center gap-3 mb-3">
-            <svg class="h-8 w-8 text-fg-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            <svg class="h-8 w-8 text-fg-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.368 1.884 1.368.39 0 .739-.134 1.107-.465 1.196-.676 1.167-1.677.745-2.553-.224-.47-.396-.845-.406-1.081-.018-.291.05-.527.136-.822.04-.099.094-.196.149-.295l.048-.09c.326-.652.478-1.202.39-1.75a1.6 1.6 0 00-.093-.286c.146-.234.308-.47.479-.744.574-.87 1.07-2.105 1.182-3.67.042-.533.006-1.071-.094-1.581 0-.006-.001-.012-.001-.018-.005-.032-.012-.065-.02-.099a3.97 3.97 0 00-.12-.505c-.29-.984-.78-1.84-1.35-2.526-.57-.685-1.22-1.2-1.82-1.487-.6-.29-1.18-.395-1.58-.395h-.046c-.576.016-.755.093-1.04.272-.33-.036-.66-.048-.99-.036z"/></svg>
             <div>
-              <h3 class="font-semibold text-fg">{t.platforms.linuxFlatpak.name}</h3>
-              <p class="text-xs text-fg-muted">{t.platforms.linuxFlatpak.description}</p>
+              <h3 class="font-semibold text-fg">{t.platforms.linuxRpm.name}</h3>
+              <p class="text-xs text-fg-muted">{t.platforms.linuxRpm.description}</p>
             </div>
           </div>
-          <a id="dl-linux-flatpak" href={GITHUB_RELEASES} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
-            Download .flatpak
+          <a href={rpmUrl} class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
+            Download .rpm
           </a>
         </div>
 
@@ -235,59 +268,16 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
               <p class="text-xs text-fg-muted">{t.platforms.mobile.description}</p>
             </div>
           </div>
-          <a href="/docs/mobile-guide" class="mt-auto inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
-            Mobile Guide
-          </a>
-        </div>
-      </div>
-
-      <!-- Flatpak / Flathub section -->
-      <div class="rounded-xl border border-border bg-bg-card p-6 mb-12 max-w-2xl">
-        <h3 class="font-semibold text-fg mb-3">{t.flatpakTitle}</h3>
-        <div class="space-y-3">
-          <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-            <code class="text-sm font-mono text-fg-muted break-all flex-1">{t.flatpakInstall}</code>
-            <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={t.flatpakInstall} aria-label={t.copyCommand}>
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-            </button>
+          <div class="mt-auto flex flex-col gap-2">
+            {android?.apkUrl && (
+              <a href={android.apkUrl} class="inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card" target="_blank" rel="noopener noreferrer">
+                {t.downloadApk}
+              </a>
+            )}
+            <a href="/docs/mobile-guide" class="inline-flex items-center justify-center rounded-lg border border-border bg-bg-soft px-4 py-2 text-sm font-medium text-fg transition-colors hover:bg-bg-card">
+              Mobile Guide
+            </a>
           </div>
-          <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-            <code class="text-sm font-mono text-fg-muted break-all flex-1">{t.flatpakRun}</code>
-            <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={t.flatpakRun} aria-label={t.copyCommand}>
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-            </button>
-          </div>
-        </div>
-        <a
-          href="https://flathub.org/apps/org.llamenos.hotline"
-          class="inline-flex items-center gap-2 text-sm text-accent-bright hover:text-accent transition-colors mt-4"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t.flatpakFlathub} &rarr;
-        </a>
-      </div>
-
-      <!-- GPG fingerprint section -->
-      <div class="rounded-xl border border-border bg-bg-card p-6 mb-12 max-w-2xl">
-        <h3 class="font-semibold text-fg mb-3">{t.gpgTitle}</h3>
-        <p class="text-sm text-fg-muted mb-3">
-          Optionally verify CHECKSUMS.txt with GPG. The fingerprint should match the one published in the audit repository.
-        </p>
-        <div class="mb-3">
-          <p class="text-xs text-fg-dim mb-1.5 font-mono">{t.gpgFingerprint}</p>
-          <div class="flex items-center gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-            <code class="text-sm font-mono text-fg-muted truncate flex-1">{gpgFingerprint}</code>
-            <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors" data-text={gpgFingerprint} aria-label={t.copyCommand}>
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-            </button>
-          </div>
-        </div>
-        <div class="flex items-start gap-2 rounded-lg border border-border bg-bg-soft px-3 py-2">
-          <code class="text-sm font-mono text-fg-muted break-all flex-1">{t.gpgVerify}</code>
-          <button class="copy-btn shrink-0 text-fg-muted hover:text-accent-bright transition-colors mt-0.5" data-text={t.gpgVerify} aria-label={t.copyCommand}>
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-          </button>
         </div>
       </div>
 
@@ -306,10 +296,10 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
 
       <!-- Links -->
       <div class="flex flex-wrap gap-6 mt-8 text-sm">
-        <a href={GITHUB_RELEASES} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">
+        <a href={desktop?.url ?? GITHUB_RELEASES} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">
           {t.releaseNotes} &rarr;
         </a>
-        <a href={`${GITHUB_RELEASES}/download/CHECKSUMS.txt`} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">
+        <a href={desktop?.checksumsUrl ?? GITHUB_RELEASES} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">
           {t.checksum} &rarr;
         </a>
         <a href={auditRepoUrl} class="text-accent-bright hover:text-accent transition-colors" target="_blank" rel="noopener noreferrer">
@@ -320,7 +310,7 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
   </section>
 </BaseLayout>
 
-<script define:vars={{ LATEST_JSON, GITHUB_RELEASES, downloadServerUrl, minisignPublicKey }}>
+<script define:vars={{ picker }}>
   // OS detection
   const ua = navigator.userAgent.toLowerCase();
   let detectedOS = 'linux';
@@ -349,104 +339,24 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
     }
   });
 
-  // Fetch latest.json for dynamic version + URLs
-  fetch(LATEST_JSON)
-    .then(r => r.ok ? r.json() : Promise.reject('No releases'))
-    .then(data => {
-      const version = data.version;
-      const dlBase = `${downloadServerUrl}/v${version}`;
-
-      // Artifact filename map
-      const artifacts = {
-        windows: `llamenos-desktop_${version}_x64-setup.exe`,
-        macos: `llamenos-desktop_${version}_universal.dmg`,
-        'linux-appimage': `llamenos-desktop_${version}_amd64.AppImage`,
-        'linux-deb': `llamenos-desktop_${version}_amd64.deb`,
-        'linux-flatpak': `llamenos-desktop_${version}_amd64.flatpak`,
-      };
-
-      // Map platform keys to download links and buttons
-      const platformMap = {
-        'windows': { jsonKey: 'windows-x86_64', btn: 'dl-windows' },
-        'macos': { jsonKey: 'darwin-universal', btn: 'dl-macos', fallbackKey: 'darwin-x86_64' },
-        'linux-appimage': { jsonKey: 'linux-x86_64', btn: 'dl-linux-appimage' },
-      };
-
-      // Update grid download buttons with self-hosted URLs
-      for (const [platform, info] of Object.entries(platformMap)) {
-        const platformData = data.platforms[info.jsonKey] || (info.fallbackKey && data.platforms[info.fallbackKey]);
-        if (platformData?.url) {
-          const btn = document.getElementById(info.btn);
-          if (btn) btn.href = platformData.url;
-        } else if (artifacts[platform]) {
-          const btn = document.getElementById(info.btn);
-          if (btn) btn.href = `${dlBase}/${artifacts[platform]}`;
-        }
-      }
-
-      // Update .deb and .flatpak buttons (not in Tauri updater manifest)
-      if (artifacts['linux-deb']) {
-        const btn = document.getElementById('dl-linux-deb');
-        if (btn) btn.href = `${dlBase}/${artifacts['linux-deb']}`;
-      }
-      if (artifacts['linux-flatpak']) {
-        const btn = document.getElementById('dl-linux-flatpak');
-        if (btn) btn.href = `${dlBase}/${artifacts['linux-flatpak']}`;
-      }
-
-      // Set recommended section
-      if (section && nameEl && descEl && linkEl && iconEl) {
-        const recMap = {
-          windows: { name: 'Windows', desc: `v${version} — 64-bit installer`, key: 'windows-x86_64', artifact: artifacts.windows },
-          macos: { name: 'macOS', desc: `v${version} — Universal (Intel + Apple Silicon)`, key: 'darwin-universal', fallback: 'darwin-x86_64', artifact: artifacts.macos },
-          linux: { name: 'Linux AppImage', desc: `v${version} — Portable, runs on most distributions`, key: 'linux-x86_64', artifact: artifacts['linux-appimage'] },
-        };
-        const rec = recMap[detectedOS];
-        if (rec) {
-          const platformData = data.platforms[rec.key] || (rec.fallback && data.platforms[rec.fallback]);
-          nameEl.textContent = rec.name;
-          descEl.textContent = rec.desc;
-          iconEl.innerHTML = platformIcons[detectedOS] || platformIcons.linux;
-          if (platformData?.url) {
-            linkEl.href = platformData.url;
-          } else if (rec.artifact) {
-            linkEl.href = `${dlBase}/${rec.artifact}`;
-          }
-          section.classList.remove('hidden');
-          if (fallback) fallback.classList.add('hidden');
-        }
-      }
-
-      // Update verification command placeholders with version
-      const minisignCmd = document.getElementById('minisign-cmd');
-      const minisignCopy = document.getElementById('minisign-copy');
-      if (minisignCmd && minisignCopy) {
-        const cmd = `minisign -Vm llamenos-desktop_${version}_amd64.AppImage -P ${minisignPublicKey}`;
-        minisignCmd.textContent = cmd;
-        minisignCopy.dataset.text = cmd;
-      }
-
-      const sha256Cmd = document.getElementById('sha256-cmd');
-      const sha256Copy = document.getElementById('sha256-copy');
-      if (sha256Cmd && sha256Copy) {
-        const cmd = `curl -O ${downloadServerUrl}/v${version}/CHECKSUMS.txt`;
-        sha256Cmd.textContent = cmd;
-        sha256Copy.dataset.text = cmd;
-      }
-
-      const cosignCmd = document.getElementById('cosign-cmd');
-      const cosignCopy = document.getElementById('cosign-copy');
-      if (cosignCmd && cosignCopy) {
-        const cmd = `cosign verify-blob --signature ${downloadServerUrl}/v${version}/CHECKSUMS.txt.sig --certificate-identity-regexp '.*' --certificate-oidc-issuer-regexp '.*' CHECKSUMS.txt`;
-        cosignCmd.textContent = cmd;
-        cosignCopy.dataset.text = cmd;
-      }
-    })
-    .catch(() => {
-      // No releases yet — show fallback, all grid links point to GitHub releases
-      if (section) section.classList.add('hidden');
-      if (fallback) fallback.classList.remove('hidden');
-    });
+  // Recommended card: only when the build-time lookup produced a real asset
+  // URL for the detected OS. macOS is never recommended — no signed build
+  // exists yet (#741), and this page never links an artifact CI did not ship.
+  if (picker && section && nameEl && descEl && linkEl && iconEl) {
+    const rec = detectedOS === 'windows'
+      ? { name: 'Windows', desc: `v${picker.version} — 64-bit installer`, url: picker.windows, icon: 'windows' }
+      : detectedOS === 'linux'
+        ? { name: 'Linux AppImage', desc: `v${picker.version} — Portable, runs on most distributions`, url: picker.linux, icon: 'linux' }
+        : null;
+    if (rec && rec.url) {
+      nameEl.textContent = rec.name;
+      descEl.textContent = rec.desc;
+      iconEl.innerHTML = platformIcons[rec.icon];
+      linkEl.href = rec.url;
+      section.classList.remove('hidden');
+      if (fallback) fallback.classList.add('hidden');
+    }
+  }
 
   // Verification tab switching
   document.querySelectorAll('.verify-tab').forEach(tab => {
