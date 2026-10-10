@@ -82,14 +82,11 @@ private func keyWrapAad(_ label: String) throws -> String {
     try mobileKeyWrapAadHex(label: label)
 }
 
-/// No AAD. Only hub-key envelopes still carry an empty AAD: every writer and
-/// reader of that envelope (desktop `hub-key-manager.ts`, iOS, Android) passes
-/// empty consistently, so the pair interoperates. Any envelope that crosses to
-/// the server, the desktop, or another mobile client binds `contentAad` /
-/// `keyWrapAad` instead — an empty AAD there made the implementations mutually
-/// unreadable. Named rather than defaulted so an empty AAD is always a
-/// decision, never an omission.
-private let noAad = ""
+// There is deliberately no `noAad` constant here any more. It existed for the
+// hub-key envelope alone, whose empty AAD was a defect rather than an
+// exemption (#1631) — every iOS envelope now binds `contentAad` / `keyWrapAad`.
+// The empty AAD of a *stored record* (a message or call metadata the server
+// sealed) is bound inside Rust, not chosen here.
 
 /// Wire (`enc` and `ct` both hex, per §2.3/§2.4) -> the UniFFI record, which
 /// carries base64url. iOS handed the server's hex straight to a base64url
@@ -525,6 +522,10 @@ final class CryptoService: @unchecked Sendable {
 
     /// Unwrap a hub key envelope using HPKE and store in Rust CryptoState.
     /// Hub key never enters Swift memory — goes directly from HPKE open to Rust storage.
+    ///
+    /// Binds `keyWrapAad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, matching the
+    /// desktop wrap (`src/client/lib/hub-key-manager.ts`) and Android's
+    /// (`mobile_load_hub_key`). iOS passed an empty AAD until #1631.
     func loadHubKey(hubId: String, envelope: HubKeyEnvelopeResponse) throws {
         guard !hasHubKey(hubId: hubId) else { return }
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
@@ -533,7 +534,11 @@ final class CryptoService: @unchecked Sendable {
             enc: envelope.envelope.enc,
             ct: envelope.envelope.ct
         )
-        let keyHex = try ffiMobileHpkeOpenKey(envelope: hpkeEnvelope, expectedLabel: CryptoLabels.LABEL_HUB_KEY_WRAP, aadHex: noAad)
+        let keyHex = try ffiMobileHpkeOpenKey(
+            envelope: hpkeEnvelope,
+            expectedLabel: CryptoLabels.LABEL_HUB_KEY_WRAP,
+            aadHex: try keyWrapAad(CryptoLabels.LABEL_HUB_KEY_WRAP)
+        )
         try ffiMobileSetHubKey(hubId: hubId, keyHex: keyHex)
     }
 
