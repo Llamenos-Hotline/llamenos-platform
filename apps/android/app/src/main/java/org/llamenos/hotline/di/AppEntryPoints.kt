@@ -6,6 +6,8 @@ import dagger.hilt.components.SingletonComponent
 import org.llamenos.hotline.api.HubOnboardApi
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.service.PushRegistrationManager
+import org.llamenos.hotline.service.UnifiedPushGateway
 import org.llamenos.hotline.telephony.LinphoneService
 
 /**
@@ -49,4 +51,15 @@ interface HubOnboardApiEntryPoint {
 @InstallIn(SingletonComponent::class)
 interface LinphoneEntryPoint {
     fun linphoneService(): LinphoneService
+}
+
+/**
+ * Push registration state for instrumentation tests — lets step definitions
+ * assert the real distributor state the app settled on after login (#955).
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface PushRegistrationEntryPoint {
+    fun pushRegistrationManager(): PushRegistrationManager
+    fun unifiedPushGateway(): UnifiedPushGateway
 }

@@ -11,12 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
-import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.crypto.CryptoService
-import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.crypto.WakeKeyService
-import org.llamenos.hotline.hub.ActiveHubState
-import org.llamenos.hotline.model.RegisterDeviceRequest
 import org.llamenos.hotline.telephony.LinphoneService
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.MessagingReceiver
@@ -52,22 +48,16 @@ import javax.inject.Inject
 class PushService : MessagingReceiver() {
 
     @Inject
-    lateinit var keystoreService: KeystoreService
-
-    @Inject
     lateinit var cryptoService: CryptoService
 
     @Inject
     lateinit var wakeKeyService: WakeKeyService
 
     @Inject
-    lateinit var activeHubState: ActiveHubState
-
-    @Inject
     lateinit var linphoneService: LinphoneService
 
     @Inject
-    lateinit var apiService: ApiService
+    lateinit var pushRegistrationManager: PushRegistrationManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -75,54 +65,25 @@ class PushService : MessagingReceiver() {
      * Called when a new UnifiedPush endpoint is assigned.
      *
      * This occurs when:
-     * - The user selects a UnifiedPush distributor (ntfy)
+     * - The app registers with a UnifiedPush distributor (ntfy)
      * - The distributor assigns or rotates the endpoint URL
      *
      * The endpoint URL is stored locally and sent to the llamenos backend
      * so the server can target this device for push delivery via ntfy.
+     * Backend mirroring (pushToken + voipToken) is owned by
+     * [PushRegistrationManager].
      */
     override fun onNewEndpoint(context: Context, endpoint: PushEndpoint, instance: String) {
-        keystoreService.store(KEY_PUSH_ENDPOINT, endpoint.url)
-
-        serviceScope.launch {
-            try {
-                val wakePublicKey = wakeKeyService.getOrCreateWakePublicKey()
-                apiService.registerPushEndpoint(
-                    RegisterDeviceRequest(
-                        pushToken = endpoint.url,
-                        wakeKeyPublic = wakePublicKey,
-                        ed25519Pubkey = cryptoService.signingPubkeyHex,
-                        x25519Pubkey = cryptoService.encryptionPubkeyHex,
-                        deviceModel = Build.MODEL,
-                        osVersion = Build.VERSION.RELEASE,
-                    ),
-                )
-            } catch (_: Exception) {
-                // Registration will be retried on next endpoint assignment.
-                // The backend will also re-request registration via WebSocket
-                // challenge if no device record is found.
-            }
-        }
+        pushRegistrationManager.onNewEndpoint(endpoint.url)
     }
 
     /**
      * Called when this instance is unregistered from UnifiedPush.
-     * Clean up the stored endpoint and notify the backend.
+     * Clean up the stored endpoint, notify the backend, and attempt
+     * re-registration (a replacement or default distributor may exist).
      */
     override fun onUnregistered(context: Context, instance: String) {
-        val storedEndpoint = keystoreService.retrieve(KEY_PUSH_ENDPOINT)
-        keystoreService.delete(KEY_PUSH_ENDPOINT)
-
-        if (storedEndpoint != null) {
-            serviceScope.launch {
-                try {
-                    apiService.clearPushEndpoint(storedEndpoint)
-                } catch (_: Exception) {
-                    // Best-effort: the backend will eventually detect stale endpoints
-                    // when push delivery fails to the old ntfy topic URL.
-                }
-            }
-        }
+        pushRegistrationManager.onUnregistered()
     }
 
     /**
@@ -161,7 +122,9 @@ class PushService : MessagingReceiver() {
     }
 
     override fun onRegistrationFailed(context: Context, reason: FailedReason, instance: String) {
-        // Registration failure is silent — the backend will retry on next auth
+        // Surfaced through PushRegistrationManager.distributorState; the next
+        // login/unlock or distributor announcement retries registration.
+        pushRegistrationManager.onRegistrationFailed()
     }
 
     /**
@@ -424,8 +387,6 @@ class PushService : MessagingReceiver() {
     }
 
     companion object {
-        private const val KEY_PUSH_ENDPOINT = "push-endpoint"
-
         private const val CHANNEL_CALLS = "llamenos_calls"
         private const val CHANNEL_SHIFTS = "llamenos_shifts"
         private const val CHANNEL_GENERAL = "llamenos_general"

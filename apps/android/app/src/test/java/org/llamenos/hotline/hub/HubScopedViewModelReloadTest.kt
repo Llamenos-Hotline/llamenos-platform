@@ -26,6 +26,7 @@ import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeyValueStore
+import org.llamenos.hotline.mockPushRegistrationManager
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
 import org.llamenos.hotline.ui.calls.CallHistoryViewModel
@@ -329,6 +330,7 @@ class HubScopedViewModelReloadTest {
                 ShiftClockRepository(mockk(relaxed = true)),
                 mockk(relaxed = true),
                 mockk<HubRepository>(relaxed = true),
+                mockPushRegistrationManager(),
             )
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "DashboardViewModel")
