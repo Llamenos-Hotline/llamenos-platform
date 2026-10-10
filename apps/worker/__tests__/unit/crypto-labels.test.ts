@@ -5,14 +5,14 @@ describe('Crypto domain separation labels', () => {
   const allLabels = Object.entries(labels).filter(([, v]) => typeof v === 'string')
 
   it('all labels are non-empty strings', () => {
-    for (const [name, value] of allLabels) {
+    for (const [, value] of allLabels) {
       expect(typeof value).toBe('string')
       expect((value as string).length).toBeGreaterThan(0)
     }
   })
 
   it('all labels start with "llamenos:" prefix', () => {
-    for (const [name, value] of allLabels) {
+    for (const [, value] of allLabels) {
       expect(value as string).toMatch(/^llamenos:/)
     }
   })

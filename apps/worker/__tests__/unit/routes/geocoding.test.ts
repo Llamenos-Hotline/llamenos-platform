@@ -4,7 +4,7 @@
  * Tests: permission enforcement (notes:read-own gate), rate limiting,
  * autocomplete, forward geocode, reverse geocode.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import geocodingRoutes from '@worker/routes/geocoding'

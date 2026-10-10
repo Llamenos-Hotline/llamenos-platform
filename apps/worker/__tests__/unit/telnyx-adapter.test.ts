@@ -5,7 +5,6 @@ describe('TelnyxAdapter', () => {
   let adapter: TelnyxAdapter
   let fetchSpy: ReturnType<typeof vi.spyOn>
   let subtleVerifySpy: ReturnType<typeof vi.spyOn>
-  let subtleImportKeySpy: ReturnType<typeof vi.spyOn>
 
   const API_KEY = 'test-api-key'
   const CONNECTION_ID = 'conn-123'
@@ -17,7 +16,7 @@ describe('TelnyxAdapter', () => {
       new Response('{}', { status: 200 }),
     )
     subtleVerifySpy = vi.spyOn(crypto.subtle, 'verify').mockResolvedValue(true)
-    subtleImportKeySpy = vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({} as CryptoKey)
+    vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({} as CryptoKey)
   })
 
   afterEach(() => {

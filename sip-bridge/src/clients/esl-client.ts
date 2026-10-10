@@ -105,34 +105,32 @@ export class EslClient implements BridgeClient {
     return new Promise((resolve, reject) => {
       logger.info('[esl]', `Connecting to ${this.config.host}:${this.config.port}...`)
 
-      const self = this
-
       Bun.connect({
         hostname: this.config.host,
         port: this.config.port,
         socket: {
-          open(socket) {
+          open: (socket) => {
             logger.info('[esl]', 'TCP connected')
-            self.socket = socket as unknown as ReturnType<typeof Bun.connect>
+            this.socket = socket as unknown as ReturnType<typeof Bun.connect>
           },
-          data(_socket, data) {
-            self.buffer += new TextDecoder().decode(data)
-            self.processBuffer(resolve, reject)
+          data: (_socket, data) => {
+            this.buffer += new TextDecoder().decode(data)
+            this.processBuffer(resolve, reject)
           },
-          close() {
+          close: () => {
             logger.info('[esl]', 'TCP disconnected')
-            self.connected = false
-            self.socket = null
-            if (self.shouldReconnect) {
-              self.scheduleReconnect()
+            this.connected = false
+            this.socket = null
+            if (this.shouldReconnect) {
+              this.scheduleReconnect()
             }
           },
-          error(_socket, error) {
+          error: (_socket, error) => {
             logger.error('[esl]', 'TCP error', error)
-            self.connected = false
-            if (!self.hasConnected) reject(error)
+            this.connected = false
+            if (!this.hasConnected) reject(error)
           },
-          connectError(_socket, error) {
+          connectError: (_socket, error) => {
             logger.error('[esl]', 'TCP connect error', error)
             reject(error)
           },

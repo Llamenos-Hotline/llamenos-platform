@@ -8,7 +8,7 @@
 import { createLogger } from '../lib/logger'
 import type { Database } from '../db'
 import { userSecurityPrefs } from '../db/schema/signal-notifications'
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import type { UserNotificationsService } from './user-notifications'
 import type { SecurityPrefsService } from './security-prefs'
 import { auditLog } from '../db/schema'
