@@ -474,6 +474,24 @@ async function runLiveDispatch(
       }
       final = { ...base, outcome: 'SUCCESS', branch, pr, note: truncateNote(`${result.note ?? ''} | ${trace}`.trim()) }
       needsHuman = true
+    } else if (result.outcome === 'WEDGED') {
+      // Issue #1755: the dispatch was refused BEFORE any worker launched —
+      // the lane's worktree sits on a salvage branch holding real work
+      // (cli.ts's `resolveWedgeForDispatch`). No verify/review pipeline runs
+      // (there is no new diff to judge), `needs-human` stops the item being
+      // re-claimed into the same refusal every pass, and the issue is told
+      // exactly which worktree and salvage branch a human must reconcile.
+      // The outcome never feeds circuit.ts's consecutive-failure breaker:
+      // three identical refusals are one stuck condition, not three failures.
+      needsHuman = true
+      deps.log(`dispatch: item ${item.id} WEDGED — ${result.note ?? 'no detail'}`)
+      await deps.commentOnIssue(
+        item.id,
+        `Dispatch refused: ${result.note ?? 'the lane\'s worktree is wedged on a salvage branch'}. ` +
+        'No worker was launched. A human must reconcile the salvage branch ' +
+        '(rebase and PR it, or discard it) — the fleet will not retry on its own.',
+      )
+      final = { ...base, ...result }
     } else {
       // The worker itself did not reach a mergeable state (BLOCKED, FAILED,
       // TIMEOUT, QUOTA), recorded as-is.

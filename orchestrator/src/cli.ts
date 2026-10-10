@@ -37,6 +37,8 @@ import {
   findWorktreeForBranch,
   currentBranch,
   deleteLocalBranch,
+  resolveWedgeForDispatch,
+  salvageInventory,
   type SettleTarget,
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
@@ -267,6 +269,34 @@ export async function doctor(): Promise<number> {
     }
   }
 
+  // Issue #1755: the salvage inventory. 39 `salvage/*` branches accrued on
+  // the dispatch host with no signal at all — 32 held nothing but a staged
+  // test artifact, 7 held completed work that cost more to rebase with every
+  // week it sat unreported. Reported as WARN lines (never FAIL): salvage
+  // branches existing is a state to reconcile, not a misconfiguration, and
+  // doctor must stay usable while an operator works through them. Branches
+  // whose diff against origin/main cannot be read are named as unreadable —
+  // "could not look" must never render identically to "holds nothing".
+  const salvage = await salvageInventory(REPO_ROOT)
+  if (salvage.length > 0) {
+    const withWork = salvage.filter((s) => s.realFiles !== undefined && s.realFiles > 0)
+    const unreadable = salvage.filter((s) => s.realFiles === undefined)
+    warnings++
+    process.stdout.write(
+      ` WARN  ${salvage.length} salvage branch(es) present — ` +
+      `${withWork.length} holding real work, ${unreadable.length} unreadable\n`,
+    )
+    for (const s of withWork) {
+      process.stdout.write(
+        `        ${s.branch}: ${s.realFiles} real file(s) beyond origin/main` +
+        `${s.hasWorktree ? ' (worktree attached)' : ''} — rebase and PR it, or discard it\n`,
+      )
+    }
+    for (const s of unreadable) {
+      process.stdout.write(`        ${s.branch}: could not diff against origin/main — inspect by hand\n`)
+    }
+  }
+
   // Informational only. #773's bot account isn't live yet, so today this is
   // normally the operator's own login — that's expected, not a problem, and
   // this print is not wired into any check, `bad`, or `warnings` above. It
@@ -432,6 +462,23 @@ async function findOpenPr(lane: Lane, item: WorkItem): Promise<string | undefine
 
 async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome> {
   const branch = fleetBranchFor(lane.id, item.id)
+
+  // Issue #1755: before spending a worker, resolve a salvage wedge for this
+  // exact branch — a leftover worktree checked out on `salvage/<branch>-*`.
+  // An artifact-only wedge (a staged/committed `.test-encrypted-seed.sqlite`
+  // and nothing else) is cleared here and the lane dispatches fresh; a wedge
+  // holding real work refuses WITHOUT launching a worker and is recorded as
+  // the distinct WEDGED outcome (tick.ts) — one stuck condition, never three
+  // breaker-consuming failures, and the salvage branch is always kept.
+  const wedge = await resolveWedgeForDispatch(REPO_ROOT, branch)
+  if (wedge.kind === 'cleared') {
+    log(`dispatch: cleared artifact-only salvage wedge for ${branch} (worktree ${wedge.worktree}, branch ${wedge.salvageBranch} kept)`)
+  } else if (wedge.kind === 'blocked') {
+    const note = `wedged: worktree ${wedge.worktree} is on salvage branch ${wedge.salvageBranch} — ${wedge.reason}`
+    log(`dispatch: item ${item.id} REFUSED — ${note}`)
+    return { outcome: 'WEDGED', worktree: wedge.worktree, branch: wedge.salvageBranch, note }
+  }
+
   const baseBrief = buildBrief(item, lane, branch)
   // Prior-attempt history and governing contracts are memory.ts's sole
   // concern (see brief.ts's own comment on why: a caller rendering both
