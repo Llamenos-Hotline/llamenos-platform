@@ -2271,15 +2271,30 @@ export class SettingsService {
     // concurrent writers touching disjoint (or even the same) keys are
     // serialised by the row lock instead of clobbering each other.
     //
-    // Pass `sanitized` as a raw object, not JSON.stringify'd: Bun's native
-    // SQL driver (what production and `bun run dev:server` use) already
-    // JSON.stringifies a JS value bound to a jsonb-typed parameter
-    // position. Pre-stringifying it here double-encodes — Postgres then
-    // sees a quoted JSON *string scalar* instead of an object, and `||`
-    // between an object and a scalar boxes both into a 2-element array
-    // instead of merging keys (confirmed live via #1144's own BDD
-    // coverage: "Shift and fallback group are independent" silently lost
-    // the fallback group). Mirrors the existing `metadata` merge in
+    // The merge parameter is bound through the COLUMN's own jsonb type
+    // (`sql.param(value, column)`), not interpolated as a bare value.
+    //
+    // Pre-stringifying it here would double-encode under Bun's native SQL
+    // driver — what production and `bun run dev:server` use — which already
+    // serializes a JS value bound to a jsonb-typed parameter position.
+    // Postgres would then see a quoted JSON *string scalar* instead of an
+    // object, and `||` between an object and a scalar boxes both into a
+    // 2-element array instead of merging keys (confirmed live via #1144's
+    // own BDD coverage: "Shift and fallback group are independent" silently
+    // lost the fallback group).
+    //
+    // But interpolating the bare object instead (`${sanitized}::jsonb`) only
+    // worked because Bun's driver coerces it implicitly: a bare value in a
+    // raw `sql` template carries no column type, so drizzle hands the driver
+    // an unencoded object. Under postgres-js — the driver the
+    // `apps/worker/__tests__/integration/` tier substitutes — that object
+    // reaches the byte encoder and throws ERR_INVALID_ARG_TYPE. Naming the
+    // column as the parameter's encoder makes drizzle apply that column's
+    // declared `mapToDriverValue` in both drivers: a passthrough under
+    // db/bun-jsonb.ts (production), JSON.stringify under
+    // __tests__/helpers/test-jsonb.ts (the integration tier). Identical
+    // production behaviour, and the bind no longer depends on which driver
+    // happens to be underneath. Mirrors the `metadata` merge in
     // conversations.ts#update.
     const [row] = await this.db
       .insert(hubSettingsTable)
@@ -2287,7 +2302,7 @@ export class SettingsService {
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sanitized}::jsonb`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sql.param(sanitized, hubSettingsTable.settings)}::jsonb`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
@@ -2335,8 +2350,9 @@ export class SettingsService {
     hubId: string,
     usage: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
-    // Atomic — see updateHubSettings (#1144). Raw value, not
-    // JSON.stringify'd — see the comment in updateHubSettings for why.
+    // Atomic — see updateHubSettings (#1144), including why the merge
+    // parameter is bound through the column's own jsonb type rather than
+    // interpolated bare.
     //
     // `usage` is wrapped in an object rather than bound on its own. Bun SQL
     // serializes a JS *object* into a jsonb parameter correctly, but expands a
@@ -2352,7 +2368,7 @@ export class SettingsService {
       .onConflictDoUpdate({
         target: hubSettingsTable.hubId,
         set: {
-          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${{ usage }}::jsonb`,
+          settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${sql.param({ usage }, hubSettingsTable.settings)}::jsonb`,
         },
       })
       .returning({ settings: hubSettingsTable.settings })
