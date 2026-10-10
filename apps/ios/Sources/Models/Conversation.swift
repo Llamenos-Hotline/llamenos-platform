@@ -39,14 +39,14 @@ enum ClientChannelType: String, Codable, Sendable, CaseIterable {
     }
 }
 
-// MARK: - SharedConversationListResponseStatus UI Extensions
-// Generated `SharedConversationListResponseStatus` has: active, closed, waiting.
+// MARK: - SharedReportResponseStatus UI Extensions
+// Generated `SharedReportResponseStatus` has: active, closed, waiting.
 // We add displayName as an extension instead of maintaining a separate enum.
 
-typealias ConversationStatus = SharedConversationListResponseStatus
+typealias ConversationStatus = SharedReportResponseStatus
 
-extension SharedConversationListResponseStatus: CaseIterable {
-    public static var allCases: [SharedConversationListResponseStatus] {
+extension SharedReportResponseStatus: CaseIterable {
+    public static var allCases: [SharedReportResponseStatus] {
         [.active, .closed, .waiting]
     }
 
@@ -76,7 +76,9 @@ extension ConversationResponse {
         ClientChannelType(rawValue: channelType) ?? .sms
     }
 
-    /// Status with the schema-optional field defaulted for display.
+    /// Maps the generated schema-optional `status` (`SharedReportResponseStatus?`)
+    /// to the non-optional `ConversationStatus` the views switch on, defaulting a
+    /// missing value to `.active` for display.
     var conversationStatus: ConversationStatus {
         status ?? .active
     }

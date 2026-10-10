@@ -100,7 +100,7 @@ final class APIServiceResponseDecodingTests: XCTestCase {
         // #1294: the generated type IS the wire shape — no CodingKeys rename layer.
         XCTAssertEqual(conversation.contactIdentifierHash, "deadbeefdeadbeef")
         XCTAssertEqual(conversation.assignedTo, String(repeating: "ab", count: 32))
-        XCTAssertEqual(conversation.status, SharedConversationListResponseStatus.active)
+        XCTAssertEqual(conversation.status, SharedReportResponseStatus.active)
         XCTAssertEqual(conversation.messageCount, 3)
         XCTAssertEqual(conversation.updatedAt, "2026-10-07T12:00:00.000Z")
     }

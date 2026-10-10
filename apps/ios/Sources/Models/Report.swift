@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - ReportStatus
 // Client-only: UI display properties (displayName, color, icon).
-// Generated `SharedConversationListResponseStatus` has same cases (active/closed/waiting)
+// Generated `SharedReportResponseStatus` has same cases (active/closed/waiting)
 // but without UI properties.
 
 /// Status of a report in its lifecycle.
@@ -74,7 +74,7 @@ struct ReportMetadata: Codable, Sendable {
 // MARK: - ClientReportResponse
 // Client-only: generated `ReportResponse` has `encryptedContent`, `readerEnvelopes`,
 // `createdBy` fields that this client model doesn't have. Also uses
-// `SharedConversationListResponseStatus` enum instead of raw string.
+// `SharedReportResponseStatus` enum instead of raw string.
 
 /// Server response for a single report from `GET /api/reports`.
 /// Named `ClientReportResponse` to avoid conflict with generated `ReportResponse`.

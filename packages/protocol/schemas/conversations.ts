@@ -9,7 +9,7 @@ export const conversationResponseSchema = z.object({
   contactIdentifierHash: z.string(),
   contactLast4: z.string().optional(),
   assignedTo: z.string().optional(),
-  status: z.enum(['waiting', 'active', 'closed']).optional(),
+  status: z.enum(['active', 'waiting', 'closed']).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   lastMessageAt: z.string().optional(),
