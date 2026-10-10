@@ -95,27 +95,6 @@ struct MainTabView: View {
         }
         .tint(.brandPrimary)
         .accessibilityIdentifier("main-tab-view")
-        .task {
-            await fetchUnreadCount()
-        }
-    }
-
-    // MARK: - Unread Count
-
-    /// Fetch the total unread conversation count for the tab badge.
-    private func fetchUnreadCount() async {
-        do {
-            let response: ConversationsListResponse = try await appState.apiService.request(
-                method: "GET",
-                path: "/api/conversations"
-            )
-            let total = response.conversations.reduce(0) { $0 + $1.unreadCount }
-            await MainActor.run {
-                appState.unreadConversationCount = total
-            }
-        } catch {
-            // Non-critical — leave badge count as-is
-        }
     }
 }
 

@@ -44,13 +44,15 @@
       "endpoint": "GET /api/conversations",
       "module": "@protocol/schemas/conversations",
       "schema": "conversationResponseSchema",
-      "swiftType": "AppConversation",
-      "swiftFile": "apps/ios/Sources/Models/Conversation.swift",
+      "swiftType": "ConversationResponse",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
       "requiredSwiftKeys": [
         "id",
         "channelType",
         "contactIdentifierHash",
-        "createdAt"
+        "createdAt",
+        "updatedAt",
+        "messageCount"
       ],
       "absentFromServer": [
         "contactHash",

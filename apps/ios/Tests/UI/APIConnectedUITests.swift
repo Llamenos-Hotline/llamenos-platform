@@ -981,6 +981,7 @@ final class APIConnectedUITests: BaseUITest {
     // MARK: - Message Simulation Tests
 
     func testSimulateIncomingMessageAppearsInConversations() {
+        var conversationId = ""
         given("I am connected to the API as a volunteer") {
             launchWithAPI()
             let dashboard = find("dashboard-title")
@@ -992,6 +993,7 @@ final class APIConnectedUITests: BaseUITest {
                 body: "Help, I need assistance",
                 channel: "sms"
             )
+            conversationId = result.conversationId
             XCTAssertFalse(result.conversationId.isEmpty, "Should return a conversationId")
             XCTAssertFalse(result.messageId.isEmpty, "Should return a messageId")
         }
@@ -1005,18 +1007,31 @@ final class APIConnectedUITests: BaseUITest {
             ], timeout: 15)
             XCTAssertTrue(found, "Conversations tab should load after message simulation")
 
-            // If error state appeared, the API call failed — log but don't block
+            // The error state is this suite's regression: #1294 soft-passed it here
+            // while every conversation made the tab undecodable. Fail loudly.
             let errorState = find("conversations-error")
-            if errorState.exists {
-                print("⚠️ Conversations loaded with error state — API may not be fully ready")
-                return
-            }
+            XCTAssertFalse(
+                errorState.exists,
+                "Conversations tab showed its error state after a successful simulation"
+            )
 
-            // The conversations list should now have at least one item
-            let list = find("conversations-list")
-            if list.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "Conversations list appeared with simulated message")
-            }
+            // A freshly simulated conversation is 'waiting', and the default filter
+            // shows only active ones — switch to All so the row can appear at all.
+            let filterButton = find("conversations-filter-button")
+            XCTAssertTrue(
+                filterButton.waitForExistence(timeout: 5),
+                "Filter button should exist in the toolbar"
+            )
+            filterButton.tap()
+            let allFilter = find("filter-all")
+            XCTAssertTrue(allFilter.waitForExistence(timeout: 3), "All filter should be offered")
+            allFilter.tap()
+
+            let row = find("conversation-row-\(conversationId)")
+            XCTAssertTrue(
+                row.waitForExistence(timeout: 10),
+                "Messages tab should list the conversation simulated in this scenario (\(conversationId))"
+            )
         }
     }
 

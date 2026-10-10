@@ -59,64 +59,40 @@ extension SharedReportResponseStatus: CaseIterable {
     }
 }
 
-// MARK: - AppConversation
-// Client-only: generated `ConversationListResponseConversation` has different fields
-// (contactIdentifierHash, messageCount, metadata, etc.) and uses Double for counts.
+// MARK: - ConversationResponse UI Extensions
+// The generated `ConversationResponse` (from `conversationResponseSchema`) IS the
+// wire shape — the conversations drizzle row returned verbatim. #1294: the
+// hand-written `AppConversation` that used to sit here required `contactHash`
+// (renamed via CodingKeys) and tolerated an `unreadCount` the server has never
+// sent; every rename layer is a drift opportunity, so the model is the generated
+// type and only UI conveniences live in this extension. There is no per-user
+// unread count on the wire at all, so nothing here invents one.
 
-/// A messaging conversation (SMS/WhatsApp/Signal) from the API.
-/// Named `AppConversation` to avoid conflict with generated `Conversation` from protocol codegen.
-///
-/// #1633 audit: like `ConversationMessage`, this is decoded straight from the
-/// `conversations` drizzle row (`conversationResponseSchema` describes it), and
-/// three of its keys did not exist on the wire. `contactHash` and `unreadCount`
-/// were required and absent — `keyNotFound`, so the conversation list could not
-/// decode at all — and `assignedVolunteerPubkey` was optional and absent, so
-/// every conversation silently read as unassigned. The server's names are
-/// `contactIdentifierHash` and `assignedTo`; it has no per-user unread count at
-/// all, so that one is tolerated as absent rather than invented.
-struct AppConversation: Codable, Identifiable, Sendable {
-    let id: String
-    let channelType: String
-    let contactHash: String
-    let assignedVolunteerPubkey: String?
-    let status: String
-    let lastMessageAt: String?
-    let createdAt: String
+extension ConversationResponse: Identifiable {}
 
-    /// Absent from every server response today; `nil` means "not reported",
-    /// which the UI shows as zero rather than as a decode failure.
-    private let unreadCountRaw: Int?
-
-    /// Unread messages in this conversation, 0 when the server does not say.
-    var unreadCount: Int { unreadCountRaw ?? 0 }
-
-    enum CodingKeys: String, CodingKey {
-        case id, channelType, status, lastMessageAt, createdAt
-        case contactHash = "contactIdentifierHash"
-        case assignedVolunteerPubkey = "assignedTo"
-        case unreadCountRaw = "unreadCount"
-    }
-
+extension ConversationResponse {
     /// Parsed channel type enum.
     var channel: ClientChannelType {
         ClientChannelType(rawValue: channelType) ?? .sms
     }
 
-    /// Parsed conversation status enum.
+    /// Maps the generated schema-optional `status` (`SharedReportResponseStatus?`)
+    /// to the non-optional `ConversationStatus` the views switch on, defaulting a
+    /// missing value to `.active` for display.
     var conversationStatus: ConversationStatus {
-        ConversationStatus(rawValue: status) ?? .active
+        status ?? .active
     }
 
     /// Truncated contact hash for display.
     var contactDisplayHash: String {
-        guard contactHash.count > 12 else { return contactHash }
-        return "\(contactHash.prefix(6))...\(contactHash.suffix(4))"
+        guard contactIdentifierHash.count > 12 else { return contactIdentifierHash }
+        return "\(contactIdentifierHash.prefix(6))...\(contactIdentifierHash.suffix(4))"
     }
 
     /// Parsed last message date.
     var lastMessageDate: Date? {
-        guard let str = lastMessageAt else { return nil }
-        return DateFormatting.parseISO(str)
+        guard let lastMessageAt else { return nil }
+        return DateFormatting.parseISO(lastMessageAt)
     }
 
     /// Parsed creation date.
@@ -131,7 +107,6 @@ struct AppConversation: Codable, Identifiable, Sendable {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
-
 }
 
 // MARK: - ConversationMessage
@@ -173,14 +148,22 @@ struct ConversationMessage: Codable, Identifiable, Sendable {
     var isInbound: Bool { direction == "inbound" }
 
     // No `channel` accessor: a message row carries no channel. The channel belongs to
-    // the conversation (`AppConversation.channel`), which is what the views already use.
+    // the conversation (`ConversationResponse.channel`), which is what the views already use.
 }
 
 // MARK: - ConversationsListResponse
 
 /// API response wrapper for the conversations list.
+///
+/// Hand-written envelope around the GENERATED element type, because the server's
+/// list envelope is not the generated `ConversationListResponse`:
+/// `GET /api/conversations` returns `{conversations, total}` for read-all users
+/// and `{conversations, assignedCount, waitingCount, claimableChannels}` for
+/// everyone else (apps/worker/routes/conversations.ts) — neither carries the
+/// `page`/`limit`/`total` triple `conversationListResponseSchema` requires.
+/// Only the element type was the drifted half, so only the element type is generated.
 struct ConversationsListResponse: Codable, Sendable {
-    let conversations: [AppConversation]
+    let conversations: [ConversationResponse]
 }
 
 // MARK: - ConversationMessagesResponse
