@@ -2457,6 +2457,7 @@
       "greeting": "Greeting",
       "pleaseHold": "Please Hold",
       "rateLimited": "High Volume Message",
+      "recordingNotice": "Recording Notice",
       "voicemailPrompt": "Voicemail Prompt",
       "waitMessage": "Wait Message"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "Thank you for calling {name}.",
+    "recordingNotice": "Please note: this call will be recorded.",
     "rateLimited": "We are currently experiencing high call volume. Please try again later.",
     "captchaPrompt": "Please enter the following digits:",
     "captchaTimeout": "We did not receive your input. Goodbye.",

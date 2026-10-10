@@ -763,6 +763,7 @@
       "greeting": "ሰላምታ",
       "pleaseHold": "እባክዎ ይጠብቁ",
       "rateLimited": "የከፍተኛ ጫና መልዕክት",
+      "recordingNotice": "የቅጂ ማስታወቂያ",
       "voicemailPrompt": "የድምጽ መልዕክት ማሳሰቢያ",
       "waitMessage": "የመጠበቂያ መልዕክት"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "{name} ስለደወሉ እናመሰግናለን።",
+    "recordingNotice": "እባክዎ ያስተውሉ፦ ይህ ጥሪ ይቀረጻል።",
     "rateLimited": "በአሁኑ ጊዜ ብዙ ጥሪዎች እየመጡ ናቸው። እባክዎ ቆየት ብለው ይሞክሩ።",
     "captchaPrompt": "እባክዎ የሚከተሉትን ቁጥሮች ያስገቡ:",
     "captchaTimeout": "ያስገቡትን አልተቀበልንም። ቸር ይግጠምዎ።",

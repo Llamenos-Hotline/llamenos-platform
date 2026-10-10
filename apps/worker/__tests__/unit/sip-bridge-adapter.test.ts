@@ -548,6 +548,7 @@ describe('AsteriskAdapter', () => {
 
     it('uses custom audio URLs in incoming call when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -569,6 +570,7 @@ describe('AsteriskAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited response when rateLimited=true', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -585,6 +587,7 @@ describe('AsteriskAdapter', () => {
 
     it('returns CAPTCHA gather when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -610,6 +613,7 @@ describe('AsteriskAdapter', () => {
 
     it('returns queue command for normal call', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -630,6 +634,7 @@ describe('AsteriskAdapter', () => {
       // Tagalog has no offline voice: its prompts fall back to English — and
       // an English recording still beats English generated speech.
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+639170000000',
         voiceCaptchaEnabled: false,
@@ -647,6 +652,7 @@ describe('AsteriskAdapter', () => {
 
     it("plays the caller's own-language upload over everything else", async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+639170000000',
         voiceCaptchaEnabled: false,
@@ -663,6 +669,7 @@ describe('AsteriskAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -709,16 +716,32 @@ describe('AsteriskAdapter', () => {
     })
   })
 
+  // #1505 — `record` is the SIP bridge's per-bridge opt-in, not a constant.
   describe('handleCallAnswered', () => {
-    it('returns bridge command with recording enabled', async () => {
+    const bridgeCommands = async (recordCall: boolean) => {
       const res = await adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'CA-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pk123',
       })
-      const body = JSON.parse(res.body)
-      expect(body.commands).toHaveLength(1)
-      expect(body.commands[0]).toEqual({
+      return JSON.parse(res.body).commands
+    }
+
+    it('bridges without recording when recording is off', async () => {
+      const commands = await bridgeCommands(false)
+      expect(commands).toHaveLength(1)
+      expect(commands[0]).toEqual({
+        action: 'bridge',
+        queueName: 'CA-parent',
+        record: false,
+      })
+    })
+
+    it('bridges with recording when recording is on', async () => {
+      const commands = await bridgeCommands(true)
+      expect(commands).toHaveLength(1)
+      expect(commands[0]).toEqual({
         action: 'bridge',
         queueName: 'CA-parent',
         record: true,
@@ -883,6 +906,7 @@ describe('FreeSwitchAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited response when rateLimited=true', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -897,6 +921,7 @@ describe('FreeSwitchAdapter', () => {
 
     it('returns CAPTCHA bind when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -914,6 +939,7 @@ describe('FreeSwitchAdapter', () => {
 
     it('returns park for normal call', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -930,6 +956,7 @@ describe('FreeSwitchAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const res = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'CA123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -975,6 +1002,7 @@ describe('FreeSwitchAdapter', () => {
   describe('handleCallAnswered', () => {
     it('returns intercept command', async () => {
       const res = await adapter.handleCallAnswered({
+        recordCall: false,
         parentCallSid: 'CA-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pk123',
@@ -982,6 +1010,23 @@ describe('FreeSwitchAdapter', () => {
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<execute application="intercept"')
       expect(res.body).toContain('CA-parent')
+    })
+
+    // #1505 — this is the one adapter that never recorded. Pin that: it must not
+    // record even when the hub setting is on, so turning the setting on can never
+    // start writing audio on a FreeSWITCH deployment by surprise.
+    it('never records, even when the hub has recording enabled', async () => {
+      for (const recordCall of [false, true]) {
+        const res = await adapter.handleCallAnswered({
+          recordCall,
+          parentCallSid: 'CA-parent',
+          callbackUrl: 'https://example.com',
+          userPubkey: 'pk123',
+        })
+        expect(res.body).toContain('<execute application="intercept"')
+        expect(res.body).not.toContain('<record')
+        expect(res.body).not.toContain('/api/telephony/call-recording')
+      }
     })
   })
 

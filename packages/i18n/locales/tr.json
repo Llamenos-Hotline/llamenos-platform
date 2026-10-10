@@ -763,6 +763,7 @@
       "greeting": "Karşılama",
       "pleaseHold": "Lütfen Bekleyin",
       "rateLimited": "Yoğunluk Mesajı",
+      "recordingNotice": "Kayıt Bildirimi",
       "voicemailPrompt": "Sesli Mesaj Yönlendirmesi",
       "waitMessage": "Bekleme Mesajı"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "{name} aramanız için teşekkür ederiz.",
+    "recordingNotice": "Lütfen dikkat: bu görüşme kaydedilecektir.",
     "rateLimited": "Şu anda yoğun çağrı hacmi yaşıyoruz. Lütfen daha sonra tekrar deneyin.",
     "captchaPrompt": "Lütfen aşağıdaki rakamları girin:",
     "captchaTimeout": "Girişinizi alamadık. Hoşça kalın.",

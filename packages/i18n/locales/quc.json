@@ -763,6 +763,7 @@
       "greeting": "Rutzil Apetik",
       "pleaseHold": "Tak'iy na",
       "rateLimited": "Tzij rech Nim Samaj",
+      "recordingNotice": "Ch'ab'äl re yakoj",
       "voicemailPrompt": "Tzij rech Ruch'ab'al Taqonem",
       "waitMessage": "Tzij rech K'iyik"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "Maltiox rech ri ach'ab'al pa {name}.",
+    "recordingNotice": "Tab'ana' chawetamaj: ri oyonem ri' kayak na uwäch.",
     "rateLimited": "K'o k'ïy taq oyonem kamik. Tab'ana' chi'l achajij jun chik mul.",
     "captchaPrompt": "Tab'ana' tatz'ib'aj ri ajilab'äl re':",
     "captchaTimeout": "Man xqak'ül ta ri atz'ib'anïk. Chawila'.",

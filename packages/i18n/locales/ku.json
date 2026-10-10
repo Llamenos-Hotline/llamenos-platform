@@ -763,6 +763,7 @@
       "greeting": "Silav",
       "pleaseHold": "Ji Kerema Xwe Li Bendê Bimîne",
       "rateLimited": "Peyama Qerebalixiyê",
+      "recordingNotice": "Agahdariya Tomarkirinê",
       "voicemailPrompt": "Daxwaza Peyama Dengî",
       "waitMessage": "Peyama Bendê"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "Spas ji bo ku we li {name} telefon kir.",
+    "recordingNotice": "Ji kerema xwe bizanibin: ev telefon dê bê tomarkirin.",
     "rateLimited": "Niha em gelek bangên telefon distînin. Ji kerema xwe paşê dîsa biceribînin.",
     "captchaPrompt": "Ji kerema xwe jimareyên jêr binivîsin:",
     "captchaTimeout": "Me têketina we wernegirt. Bi xatirê te.",

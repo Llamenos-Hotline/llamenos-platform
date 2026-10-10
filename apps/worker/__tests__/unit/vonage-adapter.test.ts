@@ -154,6 +154,7 @@ describe('VonageAdapter', () => {
   describe('handleIncomingCall', () => {
     it('returns rate-limited NCCO when rateLimited is true', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -171,6 +172,7 @@ describe('VonageAdapter', () => {
 
     it('returns captcha NCCO when voiceCaptchaEnabled and captchaDigits provided', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: true,
@@ -192,6 +194,7 @@ describe('VonageAdapter', () => {
 
     it('returns hold/conversation NCCO for normal call flow', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -212,6 +215,7 @@ describe('VonageAdapter', () => {
 
     it('uses custom audio URLs when provided', async () => {
       const response = await adapter.handleIncomingCall({
+        callRecordingEnabled: false,
         callSid: 'call-123',
         callerNumber: '+15559876543',
         voiceCaptchaEnabled: false,
@@ -258,15 +262,31 @@ describe('VonageAdapter', () => {
     })
   })
 
+  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    it('returns conversation NCCO with recording enabled', async () => {
-      const response = await adapter.handleCallAnswered({
+    const answer = (recordCall: boolean) =>
+      adapter.handleCallAnswered({
+        recordCall,
         parentCallSid: 'call-parent',
         callbackUrl: 'https://example.com',
         userPubkey: 'pubkey-123',
       })
 
-      const ncco = parseNcco(response)
+    it('emits no record flag or recording callback when recording is off', async () => {
+      const ncco = parseNcco(await answer(false))
+      expect(ncco).toHaveLength(1)
+      expect(ncco[0].action).toBe('conversation')
+      expect(ncco[0].name).toBe('call-parent')
+      expect(ncco[0].startOnEnter).toBe(true)
+      expect(ncco[0].endOnExit).toBe(true)
+      // Absent, not merely false: Vonage must never be asked to record.
+      expect(ncco[0]).not.toHaveProperty('record')
+      expect(ncco[0]).not.toHaveProperty('eventUrl')
+      expect(JSON.stringify(ncco)).not.toContain('/api/telephony/call-recording')
+    })
+
+    it('records and posts the recording callback when recording is on', async () => {
+      const ncco = parseNcco(await answer(true))
       expect(ncco).toHaveLength(1)
       expect(ncco[0].action).toBe('conversation')
       expect(ncco[0].name).toBe('call-parent')

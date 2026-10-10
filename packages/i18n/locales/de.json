@@ -2530,6 +2530,7 @@
       "greeting": "Begrüßung",
       "pleaseHold": "Bitte warten",
       "rateLimited": "Hohes Anrufaufkommen",
+      "recordingNotice": "Aufzeichnungshinweis",
       "voicemailPrompt": "Sprachnachricht-Ansage",
       "waitMessage": "Wartenachricht"
     },
@@ -4655,6 +4656,7 @@
   },
   "voice": {
     "greeting": "Vielen Dank für Ihren Anruf bei {name}.",
+    "recordingNotice": "Bitte beachten Sie: Dieses Gespräch wird aufgezeichnet.",
     "rateLimited": "Wir haben derzeit ein hohes Anrufaufkommen. Bitte versuchen Sie es später erneut.",
     "captchaPrompt": "Bitte geben Sie die folgenden Ziffern ein:",
     "captchaTimeout": "Wir haben Ihre Eingabe nicht erhalten. Auf Wiederhören.",

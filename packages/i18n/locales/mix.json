@@ -763,6 +763,7 @@
       "greeting": "Saludo",
       "pleaseHold": "Ndátu̱ Tá Kúni",
       "rateLimited": "Mensaje Kuáꞌa̱ Llamada",
+      "recordingNotice": "Tu̱ʼun nakundaá",
       "voicemailPrompt": "Tu̱ꞌun Voicemail",
       "waitMessage": "Mensaje de Espera"
     },
@@ -4660,6 +4661,7 @@
   },
   "voice": {
     "greeting": "Tàsi̱kó nuu̱ ni̱ ni̱ka̱ʼa̱n nuu̱ {name}.",
+    "recordingNotice": "Koto kunini: tu̱ʼun ni̱ka̱ʼa̱n yóʼo kundaá saá.",
     "rateLimited": "Vi̱ʼi̱ kua̱ʼa̱ nuu̱ ni̱ka̱ʼa̱n. Koto naní inka̱ʼa̱n inka tuku.",
     "captchaPrompt": "Koto chu̱ʼun número yóʼo:",
     "captchaTimeout": "Ña kúu ni̱kiʼin nuu̱ ni̱chu̱ʼun. Saá va̱ʼa.",

@@ -2530,6 +2530,7 @@
       "greeting": "인사말",
       "pleaseHold": "잠시만 기다려주세요",
       "rateLimited": "통화량 초과",
+      "recordingNotice": "녹음 안내",
       "voicemailPrompt": "음성 사서함 안내",
       "waitMessage": "대기 메시지"
     },
@@ -4655,6 +4656,7 @@
   },
   "voice": {
     "greeting": "{name}에 전화해 주셔서 감사합니다.",
+    "recordingNotice": "안내 말씀드립니다. 이 통화는 녹음됩니다.",
     "rateLimited": "현재 통화량이 많습니다. 나중에 다시 시도해 주세요.",
     "captchaPrompt": "다음 숫자를 입력해 주세요:",
     "captchaTimeout": "입력을 받지 못했습니다. 안녕히 계세요.",

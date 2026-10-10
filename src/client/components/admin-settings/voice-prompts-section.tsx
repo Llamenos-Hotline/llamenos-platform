@@ -17,7 +17,10 @@ interface Props {
   statusSummary?: string
 }
 
-const PROMPT_TYPES = ['greeting', 'pleaseHold', 'waitMessage', 'rateLimited', 'captchaPrompt'] as const
+// 'recordingNotice' is the caller-facing "this call will be recorded" disclosure
+// (#1505). Uploadable like any other prompt so a hub can record the legal notice
+// in a human voice; falls back to generated speech when not uploaded.
+const PROMPT_TYPES = ['greeting', 'recordingNotice', 'pleaseHold', 'waitMessage', 'rateLimited', 'captchaPrompt'] as const
 
 export function VoicePromptsSection({ ivrEnabled, recordings, onRecordingsChange, expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()

@@ -2530,6 +2530,7 @@
       "greeting": "Pagbati",
       "pleaseHold": "Maghintay",
       "rateLimited": "Mataas na dami ng tawag",
+      "recordingNotice": "Paunawa sa Pag-record",
       "voicemailPrompt": "Prompt ng Voicemail",
       "waitMessage": "Mensahe sa paghihintay"
     },
@@ -4655,6 +4656,7 @@
   },
   "voice": {
     "greeting": "Salamat sa pagtawag sa {name}.",
+    "recordingNotice": "Tandaan po: ang tawag na ito ay ire-rekord.",
     "rateLimited": "Maraming tumatawag sa ngayon. Pakisubukan muli mamaya.",
     "captchaPrompt": "Pakilagay ang mga sumusunod na numero:",
     "captchaTimeout": "Hindi namin natanggap ang iyong input. Paalam.",
