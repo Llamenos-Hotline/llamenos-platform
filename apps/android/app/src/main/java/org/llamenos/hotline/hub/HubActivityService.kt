@@ -14,7 +14,7 @@ data class HubActivityState(
 )
 
 /**
- * Tracks per-hub activity state derived from attributed Nostr relay events.
+ * Tracks per-hub activity state derived from hub-attributed relay events.
  *
  * State is maintained in-memory as a [ConcurrentHashMap] keyed by hub ID.
  * Callers feed events via [handle]; UI reads current state via [state].
