@@ -163,8 +163,12 @@ struct RecoveryRequestsView: View {
             let envelopeData = shareData.shareEnvelope.data(using: .utf8) ?? Data()
             let envelope = try JSONDecoder().decode(HpkeEnvelope.self, from: envelopeData)
 
-            // Decrypt our stored Shamir share using HPKE
-            let shareHex = try cryptoService.hpkeOpenKey(
+            // Decrypt our stored Shamir share using HPKE.
+            // The sealed payload is the 33-byte share (x byte || 32-byte y) —
+            // NOT a 32-byte key — so this is hpkeOpen, not hpkeOpenKey: the
+            // key variant rejects anything that is not exactly 32 bytes, which
+            // would fail every envelope enrolment writes (#1032).
+            let shareHex = try cryptoService.hpkeOpen(
                 envelope: envelope,
                 expectedLabel: CryptoLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP,
                 aadHex: ""
