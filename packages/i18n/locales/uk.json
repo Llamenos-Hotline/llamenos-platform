@@ -4265,6 +4265,8 @@
     "reconnecting": "Reconnecting ({{attempt}})..."
   },
   "inviteCreate": "Створити запрошення",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "incomingCall": "Вхідний дзвінок",
   "notification": {
     "incomingCall": "Вхідний дзвінок",

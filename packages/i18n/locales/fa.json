@@ -4144,6 +4144,8 @@
     "active": "فعال"
   },
   "inviteCreate": "ایجاد دعوتنامه",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "contactNotifications": {
     "sendNotification": "ارسال اعلان",
     "channelPreference": "Preferred channel",
