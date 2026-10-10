@@ -1,7 +1,7 @@
 /**
  * SAS verification step definitions.
  * Matches steps from: packages/test-specs/features/security/network-security.feature
- * (SAS-related @wip scenarios)
+ * (SAS device-key import scenarios)
  *
  * These test the SAS (Short Authentication String) verification gate
  * during device linking. A Playwright test event ('test:provisioning-complete')
@@ -125,7 +125,7 @@ Then('I should see instructions to compare with the other device', async ({ page
   await expect(instruction.or(pageText).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('an encrypted nsec is received from the other device', ({ sasWorld }) => {
+Given('an encrypted device key is received from the other device', ({ sasWorld }) => {
   // Already set in 'a valid provisioning room is established'
   expect(sasWorld.encryptedNsec).toBeTruthy()
 })
@@ -137,11 +137,16 @@ When('I have not yet confirmed the SAS code', async ({ page }) => {
   await expect(page.getByTestId('sas-mismatch')).toBeVisible({ timeout: 3000 })
 })
 
-Then('the nsec should not be imported', async ({ page }) => {
-  // Before confirmation the flow is still on verify-sas and the pin-create
-  // step has not rendered. Anchor on the SAS step first, so the absence check
-  // is made against a settled page rather than a one-off 500 ms sample.
-  await expect(page.getByTestId('sas-match')).toBeVisible({ timeout: Timeouts.ELEMENT })
+Then('the device key should not be imported', async ({ page }) => {
+  // This step is shared by two scenarios in different states when it runs:
+  // before SAS confirmation (still on verify-sas, sas-match visible) and
+  // after SAS rejection (verify-sas has already been torn down in favor of
+  // a cancelled/error state). Neither prior step in either scenario needs
+  // re-anchoring here — "I have not yet confirmed the SAS code" and "the
+  // provisioning room should be closed" already settled the page for their
+  // own scenario. The one invariant true in both cases, and the one this
+  // step actually exists to check, is that the import never reached the
+  // decrypt step: pin-input never renders.
   await expect(page.getByTestId('pin-input')).toHaveCount(0)
 })
 
@@ -154,7 +159,7 @@ When('I confirm the SAS code matches', async ({ page }) => {
   await page.getByTestId('sas-match').click()
 })
 
-Then('the nsec should be imported', async ({ page }) => {
+Then('the device key should be imported', async ({ page }) => {
   // After SAS confirmation, the component advances to pin-create (nsec is NOT
   // decrypted here — it happens when the user enters a PIN in handlePinConfirm).
   // Both pin-create and done states indicate successful SAS verification.
