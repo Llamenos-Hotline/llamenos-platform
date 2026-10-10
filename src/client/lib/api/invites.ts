@@ -1,6 +1,8 @@
+import { z } from 'zod'
 import { request, getActiveHub, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
+import { inviteValidationResponseSchema } from '@protocol/schemas'
 import type { CreateInviteBody, InviteCode, User } from '@protocol/schemas'
 
 export type { InviteCode }
@@ -29,15 +31,53 @@ export async function revokeInvite(code: string) {
   return request<{ ok: true }>(`/invites/${code}`, { method: 'DELETE' })
 }
 
-export async function validateInvite(code: string) {
+/**
+ * The outcome of asking the server about an invite.
+ *
+ * Three cases, not two. The server only renders a *verdict* on the invite when
+ * it answers 2xx; a 429 from the rate limiter, a 5xx, a proxy error page or a
+ * dropped connection say nothing whatsoever about the code the user was given.
+ * Collapsing those into `valid: false` told an invitee with a perfectly good
+ * invite that it was invalid, on a screen whose only control was "Go to Login"
+ * (#1712) — measured against a deployed server, where the limiter is live:
+ *
+ *     GET /api/invites/validate/<code> -> 429 {"error":"Rate limit exceeded","retryAfterSeconds":27}
+ *
+ * `retryable` exists so the caller can offer a retry instead of a dead end.
+ */
+type ValidationResponse = z.infer<typeof inviteValidationResponseSchema>
+
+export type InviteValidation =
+  | { outcome: 'valid'; name: string; roleIds?: string[] }
+  | { outcome: 'invalid'; reason?: ValidationResponse['error'] }
+  | { outcome: 'retryable'; status?: number; retryAfterSeconds?: number }
+
+export async function validateInvite(code: string): Promise<InviteValidation> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
     const res = await netFetch(getApiUrl(`/invites/validate/${code}`), { signal: controller.signal })
-    return res.json() as Promise<
-      | { valid: true; name: string; roleIds?: string[] }
-      | { valid: false; error?: string }
-    >
+    // A non-2xx is never evidence about the invite — only about the request.
+    if (!res.ok) {
+      const body = await res.json().catch(() => null) as { retryAfterSeconds?: unknown } | null
+      const retryAfterSeconds = typeof body?.retryAfterSeconds === 'number'
+        ? body.retryAfterSeconds
+        : undefined
+      return { outcome: 'retryable', status: res.status, retryAfterSeconds }
+    }
+    // The server's verdict is only a verdict if it is actually shaped like one.
+    // `inviteValidationResponseSchema` is the route's own declared response
+    // schema (apps/worker/routes/invites.ts), so a body that fails it means the
+    // two have drifted — which is not a statement about this invite either.
+    const parsed = inviteValidationResponseSchema.safeParse(await res.json())
+    if (!parsed.success) return { outcome: 'retryable', status: res.status }
+    const body = parsed.data
+    return body.valid
+      ? { outcome: 'valid', name: body.name ?? '', roleIds: body.roleIds }
+      : { outcome: 'invalid', reason: body.error }
+  } catch {
+    // Network failure or the REQUEST_TIMEOUT_MS abort. Also not a verdict.
+    return { outcome: 'retryable' }
   } finally {
     clearTimeout(timeout)
   }
