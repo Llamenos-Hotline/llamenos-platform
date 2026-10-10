@@ -12,9 +12,9 @@ import UIKit
 @Observable
 final class ShiftsViewModel {
     private let apiService: APIService
-    private let cryptoService: CryptoService
     private let hubContext: HubContext
     private let linphoneService: any LinphoneServiceProtocol
+    private let shiftClockService: ShiftClockService
 
     // MARK: - Public State
 
@@ -24,17 +24,25 @@ final class ShiftsViewModel {
     /// Shifts grouped by day of week for the calendar view.
     var shiftDays: [ShiftDay] = []
 
-    /// Current shift status from the server.
-    var isOnShift: Bool = false
+    /// Whether this device is clocked in to the active hub.
+    ///
+    /// Sourced from `ShiftClockService`, not `GET /shifts/my-status`: that endpoint's
+    /// `onShift` means "a scheduled shift containing this volunteer is active right
+    /// now", which is true whether or not the volunteer ever clocked in — exactly the
+    /// conflation #1216 removed on Android.
+    var isOnShift: Bool {
+        guard let hubId = hubContext.activeHubId else { return false }
+        return shiftClockService.isClockedIn(to: hubId)
+    }
 
-    /// The ID of the current active shift, if any.
-    var activeShiftId: String?
+    /// When this device clocked in to the active hub, for the elapsed timer.
+    var shiftStartedAt: Date? {
+        guard let hubId = hubContext.activeHubId else { return nil }
+        return shiftClockService.clockedInAt(for: hubId)
+    }
 
-    /// When the current shift started, for the elapsed timer.
-    var shiftStartedAt: Date?
-
-    /// Number of active calls during the current shift.
-    var activeCallCount: Int = 0
+    /// Shifts with a join/leave request awaiting admin review, submitted from this screen.
+    private(set) var pendingRequestShiftIds: Set<String> = []
 
     /// Whether the initial load is in progress.
     var isLoading: Bool = false
@@ -53,6 +61,8 @@ final class ShiftsViewModel {
 
     /// Elapsed time string for the active shift timer.
     var elapsedTimeDisplay: String {
+        // Reading `tick` subscribes the view to the once-a-second timer invalidations.
+        _ = tick
         guard let startedAt = shiftStartedAt else { return "--:--:--" }
         let elapsed = Date().timeIntervalSince(startedAt)
         let hours = Int(elapsed) / 3600
@@ -65,18 +75,21 @@ final class ShiftsViewModel {
 
     private var timerTask: Task<Void, Never>?
 
+    /// Bumped once a second while clocked in so the elapsed-time display re-evaluates.
+    private var tick: Int = 0
+
     // MARK: - Initialization
 
     init(
         apiService: APIService,
-        cryptoService: CryptoService,
         hubContext: HubContext,
-        linphoneService: any LinphoneServiceProtocol
+        linphoneService: any LinphoneServiceProtocol,
+        shiftClockService: ShiftClockService
     ) {
         self.apiService = apiService
-        self.cryptoService = cryptoService
         self.hubContext = hubContext
         self.linphoneService = linphoneService
+        self.shiftClockService = shiftClockService
     }
 
     // MARK: - SIP Account Lifecycle
@@ -114,11 +127,8 @@ final class ShiftsViewModel {
         isLoading = true
         errorMessage = nil
 
-        async let statusResult: Void = fetchShiftStatus()
-        async let shiftsResult: Void = fetchShifts()
-
-        await statusResult
-        await shiftsResult
+        await fetchShifts()
+        syncTimer()
 
         isLoading = false
     }
@@ -133,19 +143,17 @@ final class ShiftsViewModel {
 
     /// Clock in to start a shift.
     func clockIn() async {
+        guard let hubId = hubContext.activeHubId else {
+            errorMessage = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
+            return
+        }
+
         isTogglingShift = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            let response: ClockInResponse = try await apiService.request(
-                method: "POST",
-                path: "/api/shifts/clock-in"
-            )
-
-            isOnShift = true
-            activeShiftId = response.shiftId
-            shiftStartedAt = Date()
+            try await shiftClockService.clockIn(hubId: hubId)
             startTimer()
 
             // Register a SIP account so the volunteer receives VoIP calls for this hub.
@@ -157,12 +165,10 @@ final class ShiftsViewModel {
             // observable state (`sipRegistrationError`) that the unit tests pin; putting
             // it on screen needs a localized string in packages/i18n and is follow-up —
             // but it can no longer be lost.
-            if let hubId = hubContext.activeHubId {
-                do {
-                    await onShiftStarted(hubId: hubId, sipParams: try await apiService.getSipToken())
-                } catch {
-                    sipRegistrationError = error.localizedDescription
-                }
+            do {
+                await onShiftStarted(hubId: hubId, sipParams: try await apiService.getSipToken())
+            } catch {
+                sipRegistrationError = error.localizedDescription
             }
 
             let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -178,25 +184,21 @@ final class ShiftsViewModel {
 
     /// Clock out to end the current shift.
     func clockOut() async {
+        guard let hubId = hubContext.activeHubId else {
+            errorMessage = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
+            return
+        }
+
         isTogglingShift = true
         errorMessage = nil
         successMessage = nil
 
         do {
-            let _: ClockOutResponse = try await apiService.request(
-                method: "POST",
-                path: "/api/shifts/clock-out"
-            )
-
-            isOnShift = false
-            activeShiftId = nil
-            shiftStartedAt = nil
+            try await shiftClockService.clockOut(hubId: hubId)
             stopTimer()
 
             // Unregister the SIP account so the volunteer stops receiving VoIP calls.
-            if let hubId = hubContext.activeHubId {
-                onShiftEnded(hubId: hubId)
-            }
+            onShiftEnded(hubId: hubId)
 
             let generator = UIImpactFeedbackGenerator(style: .light)
             generator.impactOccurred()
@@ -209,10 +211,14 @@ final class ShiftsViewModel {
         isTogglingShift = false
     }
 
-    /// Sign up for a specific shift.
+    /// Sign up for a shift by submitting a join request for admin review.
+    ///
+    /// There is no `POST /shifts/{id}/signup` on the server — volunteers never edit a
+    /// shift's roster directly. The volunteer path is a join/leave request
+    /// (`POST /hubs/{hubId}/shifts/requests`), which an admin approves or rejects.
     func signUp(for shift: Shift) async {
-        guard let pubkey = cryptoService.pubkey else {
-            errorMessage = NSLocalizedString("error_no_key_loaded", comment: "No key loaded")
+        guard let hubId = hubContext.activeHubId else {
+            errorMessage = NSLocalizedString("error_no_hub_selected", comment: "No hub selected")
             return
         }
 
@@ -220,20 +226,22 @@ final class ShiftsViewModel {
         successMessage = nil
 
         do {
-            let request = ShiftSignupRequest(pubkey: pubkey)
-            try await apiService.request(
+            let body = CreateShiftJoinRequestBody(shiftID: shift.id, type: .join)
+            let _: ShiftJoinRequestResponse = try await apiService.request(
                 method: "POST",
-                path: "/api/shifts/\(shift.id)/signup",
-                body: request
+                path: APIService.hubPath(hubId, "/api/shifts/requests"),
+                body: body
             )
+
+            pendingRequestShiftIds.insert(shift.id)
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
             successMessage = L10n.format("shifts_signed_up", comment: "Signed up for %@", shift.encryptedName.isEmpty ? shift.timeRangeDisplay : shift.encryptedName)
-
-            // Reload to show updated volunteer count
-            await fetchShifts()
+        } catch APIError.requestFailed(let statusCode, _) where statusCode == 409 {
+            // A request for this shift is already awaiting review.
+            pendingRequestShiftIds.insert(shift.id)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -246,9 +254,7 @@ final class ShiftsViewModel {
         stopTimer()
         timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                // The @Observable property `elapsedTimeDisplay` is computed,
-                // so we trigger observation by touching shiftStartedAt
-                self?.objectWillChange()
+                self?.tick &+= 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -260,46 +266,25 @@ final class ShiftsViewModel {
         timerTask = nil
     }
 
-    /// Manually trigger observation for computed properties.
-    private func objectWillChange() {
-        // Touch a stored property to trigger @Observable change tracking
-        let _ = isOnShift
+    /// Match the timer's lifecycle to the clock state of the hub now being browsed.
+    private func syncTimer() {
+        if isOnShift {
+            startTimer()
+        } else {
+            stopTimer()
+        }
     }
 
     // MARK: - Private Helpers
 
-    private func fetchShiftStatus() async {
-        do {
-            let status: ShiftStatusResponse = try await apiService.request(
-                method: "GET",
-                path: "/api/shifts/my-status"
-            )
-            isOnShift = status.onShift
-            activeShiftId = status.shiftId
-            activeCallCount = status.activeCallCount ?? 0
-
-            if status.onShift, let startedAtString = status.startedAt {
-                shiftStartedAt = DateFormatting.parseISO(startedAtString)
-                startTimer()
-            } else {
-                shiftStartedAt = nil
-                stopTimer()
-            }
-        } catch {
-            if case APIError.noBaseURL = error {
-                // Hub not configured — show off-shift, no error
-            } else {
-                errorMessage = error.localizedDescription
-            }
-            isOnShift = false
-        }
-    }
-
     private func fetchShifts() async {
         do {
+            // Browsing data, so `hp` is right here (unlike the clock paths): the
+            // schedule shown is the active hub's. Unscoped, the server resolves the
+            // hub to "" and the list comes back empty for every real hub.
             let response: ShiftsListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/shifts"
+                path: apiService.hp("/api/shifts")
             )
             shifts = response.shifts
             groupShiftsByDay()

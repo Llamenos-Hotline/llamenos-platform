@@ -16,8 +16,6 @@ struct ShiftsView: View {
             Group {
                 if vm.isLoading && vm.shifts.isEmpty {
                     loadingState
-                } else if vm.shiftDays.isEmpty && !vm.isLoading {
-                    emptyState
                 } else {
                     shiftList(vm: vm)
                 }
@@ -55,7 +53,9 @@ struct ShiftsView: View {
     @ViewBuilder
     private func shiftList(vm: ShiftsViewModel) -> some View {
         List {
-            // Clock in/out section (prominent)
+            // Clock in/out section (prominent). Rendered whenever the screen is up —
+            // clock-in is not tied to a scheduled shift, so this card must not depend
+            // on the hub having a schedule or on the schedule loading (#1241).
             Section {
                 VStack(spacing: 16) {
                     HStack(spacing: 10) {
@@ -86,14 +86,17 @@ struct ShiftsView: View {
                     }
 
                     // Active call count when on shift
-                    if vm.isOnShift, vm.activeCallCount > 0 {
-                        HStack(spacing: 8) {
-                            Image(systemName: "phone.fill")
-                                .foregroundStyle(Color.brandPrimary)
-                            Text(L10n.format("shifts_active_calls", comment: "%d active call(s)", vm.activeCallCount))
-                            .font(.brand(.subheadline))
-                            .foregroundStyle(Color.brandMutedForeground)
-                            Spacer()
+                    if vm.isOnShift, let hubId = hubContext.activeHubId {
+                        let callCount = appState.hubActivityService.state(for: hubId).activeCallCount
+                        if callCount > 0 {
+                            HStack(spacing: 8) {
+                                Image(systemName: "phone.fill")
+                                    .foregroundStyle(Color.brandPrimary)
+                                Text(L10n.format("shifts_active_calls", comment: "%d active call(s)", callCount))
+                                .font(.brand(.subheadline))
+                                .foregroundStyle(Color.brandMutedForeground)
+                                Spacer()
+                            }
                         }
                     }
 
@@ -165,8 +168,19 @@ struct ShiftsView: View {
                 .accessibilityIdentifier("shifts-success")
             }
 
-            // Weekly schedule sections
-            if !vm.shiftDays.isEmpty {
+            // Weekly schedule sections, or the empty state inline — replacing the
+            // schedule area only, never the clock card above it.
+            if vm.shiftDays.isEmpty {
+                Section {
+                    BrandEmptyState(
+                        icon: "calendar",
+                        title: NSLocalizedString("shifts_empty_title", comment: "No Shifts"),
+                        message: NSLocalizedString("shifts_empty_message", comment: "No shifts have been configured yet. Contact your administrator.")
+                    )
+                    .accessibilityIdentifier("shifts-empty-state")
+                    .listRowBackground(Color.clear)
+                }
+            } else {
                 ForEach(vm.shiftDays) { shiftDay in
                     Section {
                         if shiftDay.shifts.isEmpty {
@@ -247,31 +261,28 @@ struct ShiftsView: View {
                 style: .subtle
             )
 
-            Button {
-                Haptics.impact(.light)
-                Task { await vm.signUp(for: shift) }
-            } label: {
-                Text(NSLocalizedString("shifts_sign_up", comment: "Sign Up"))
+            if vm.pendingRequestShiftIds.contains(shift.id) {
+                Text(NSLocalizedString("shifts_requests_status_pending", comment: "Pending"))
                     .font(.brand(.caption))
                     .fontWeight(.semibold)
+                    .foregroundStyle(Color.brandMutedForeground)
+                    .accessibilityIdentifier("signup-shift-\(shift.id)")
+            } else {
+                Button {
+                    Haptics.impact(.light)
+                    Task { await vm.signUp(for: shift) }
+                } label: {
+                    Text(NSLocalizedString("shifts_sign_up", comment: "Sign Up"))
+                        .font(.brand(.caption))
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.brandPrimary)
+                .controlSize(.small)
+                .accessibilityIdentifier("signup-shift-\(shift.id)")
             }
-            .buttonStyle(.bordered)
-            .tint(Color.brandPrimary)
-            .controlSize(.small)
-            .accessibilityIdentifier("signup-shift-\(shift.id)")
         }
         .accessibilityIdentifier("shift-card-\(shift.id)")
-    }
-
-    // MARK: - Empty State
-
-    private var emptyState: some View {
-        BrandEmptyState(
-            icon: "calendar",
-            title: NSLocalizedString("shifts_empty_title", comment: "No Shifts"),
-            message: NSLocalizedString("shifts_empty_message", comment: "No shifts have been configured yet. Contact your administrator.")
-        )
-        .accessibilityIdentifier("shifts-empty-state")
     }
 
     // MARK: - Loading State
@@ -298,9 +309,9 @@ struct ShiftsView: View {
         }
         let vm = ShiftsViewModel(
             apiService: appState.apiService,
-            cryptoService: appState.cryptoService,
             hubContext: hubContext,
-            linphoneService: appState.linphoneService
+            linphoneService: appState.linphoneService,
+            shiftClockService: appState.shiftClockService
         )
         viewModelBox.value = vm
         return vm

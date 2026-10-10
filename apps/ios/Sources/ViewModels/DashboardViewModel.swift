@@ -307,7 +307,7 @@ final class DashboardViewModel {
         do {
             let status: DashboardShiftStatusResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/shifts/my-status"
+                path: apiService.hp("/api/shifts/my-status")
             )
             shiftStatus = status.onShift ? .onShift : .offShift
             activeCallCount = status.activeCallCount ?? 0
