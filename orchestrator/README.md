@@ -94,9 +94,9 @@ from the repo root: `bun run fleet <command>`.
 
 | Command | What it does |
 |---------|--------------|
-| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error), prints current lane modes, and reports the salvage-branch inventory (count of local `salvage/*` branches, naming the ones holding real work — see "Salvage wedges" below). Exits non-zero if any check fails. |
+| `llamenos-fleet doctor` | Runs every health check (`gh` auth, repo readable, exactly one git remote, every lane has a non-empty parsed scope, not halted, command on `PATH`, last tick pass did not error), **fails when the fleet runtime checkout itself is not current with `origin/main`** — behind, dirty, detached, or unverifiable (see "Runtime provenance" below) — **fails when the dispatch dependency repo has uncommitted changes**, prints current lane modes, and reports the salvage-branch inventory (count of local `salvage/*` branches, naming the ones holding real work — see "Salvage wedges" below). Exits non-zero if any check fails. |
 | `llamenos-fleet status` | Prints halted state, dispatch outcome counts from the last 24h of the ledger, the configured limits, and whether the last recorded tick pass errored. Exits non-zero if the last tick pass ended in `aborted: 'error'`. |
-| `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
+| `llamenos-fleet tick` | Runs one dispatch pass. First fast-forwards the runtime checkout to `origin/main` when that is safe (on `main`, clean, verifiably behind) and **refuses the pass outright when it is not** — see "Runtime provenance" below. Then it checks the kill switches and circuit breakers, lists candidate work per lane, judges each candidate against that lane's rules, claims exclusively (an item labelled for two lanes goes to the higher-priority one, never both), and — per lane mode — either records what it *would* dispatch (`shadow`) or dispatches for real (`live`). Logs the JSON result to `~/.llamenos-fleet/fleet.log` and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`) or was refused on staleness. |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 
@@ -410,6 +410,46 @@ deliberate exception:
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
 | `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
 | `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
+
+## Runtime provenance (#1801)
+
+The fleet executes from a checkout (`llamenos-fleet-runtime`), not from the
+GitHub `main` its PRs merge into — so "the fix is merged" and "the fleet is
+running the fix" are different facts, and on 2026-10-10 they diverged for
+hours: the runtime sat 35 commits behind `main` on a detached HEAD while
+`doctor` reported every lane ok. Three mechanisms close that hole, all built
+on `orchestrator/src/provenance.ts`:
+
+- **`doctor` FAILS on drift — it does not warn.** The check fetches
+  `origin/main` (best-effort, bounded) and compares the runtime's HEAD: any
+  behind count, a dirty tree, a detached HEAD, or an unverifiable
+  measurement (fetch failed, refs unreadable) is a hard failure naming the
+  commit count and the drifted `orchestrator/` files, because "35 behind"
+  does not tell an operator *which* merged fixes are not running. Severity
+  is the point: doctor's standing warnings train a reader to skim, and this
+  condition silently disables reviewed code. The dispatch dependency's
+  uncommitted-changes state — the identical provenance hole in a second
+  repo — moved from WARN to FAIL at the same time; both are one class.
+- **Every dispatch records the runtime's revision.** `runs.jsonl` notes now
+  carry `rt:<sha>` alongside the existing `dep:<sha>`, so a worker's
+  behaviour can be attributed to the exact orchestrator code that dispatched
+  it after the fact.
+- **Currency is the default.** `tick` begins every pass with
+  `ensureRuntimeCurrent`: if the checkout is on `main`, clean, and simply
+  behind, it is fast-forwarded (`git merge --ff-only origin/main`) and the
+  update is logged — the already-running pass finishes on its in-memory
+  code, and everything it spawns (worker worktrees, briefs) comes from the
+  fresh tree. If a fast-forward is not safe (dirty, detached, diverged,
+  unverifiable), the pass is **refused** with the remedy printed — a fleet
+  that stops and says so beats a fleet silently running yesterday's rails.
+
+The runtime checkout must be on `main` tracking `origin/main` for the
+auto-update half to apply. If doctor FAILs this check, the remedy is:
+
+```bash
+git -C /path/to/llamenos-fleet-runtime checkout main
+git -C /path/to/llamenos-fleet-runtime pull --ff-only   # commit/discard/clean local changes first
+```
 
 ## Salvage wedges (#1755)
 

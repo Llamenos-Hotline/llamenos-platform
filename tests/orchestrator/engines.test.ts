@@ -426,7 +426,7 @@ describe('resolveLaunchOutcome (issue #870)', () => {
       launchError: FLEET_BACKEND_705_LAUNCH_ERROR,
       status,
       seed: undefined,
-      depCommit: 'abc123',
+      depCommit: 'abc123', rtCommit: 'def456',
       workerLog: undefined,
     })
     // This is the assertion a regression would flip: a launch-call error
@@ -444,7 +444,7 @@ describe('resolveLaunchOutcome (issue #870)', () => {
       launchError: FLEET_BACKEND_705_LAUNCH_ERROR,
       status: undefined,
       seed: undefined,
-      depCommit: 'abc123',
+      depCommit: 'abc123', rtCommit: 'def456',
       workerLog: undefined,
     })
     expect(result.outcome).toBe('FAILED')
@@ -453,7 +453,7 @@ describe('resolveLaunchOutcome (issue #870)', () => {
   it('keeps the launch-call error visible in the note for a human, without it driving the outcome', () => {
     const status = parseStatusFile(FLEET_BACKEND_705_STATUS_TEXT)
     const result = resolveLaunchOutcome({
-      launchError: FLEET_BACKEND_705_LAUNCH_ERROR, status, seed: undefined, depCommit: 'abc123', workerLog: undefined,
+      launchError: FLEET_BACKEND_705_LAUNCH_ERROR, status, seed: undefined, depCommit: 'abc123', rtCommit: 'def456', workerLog: undefined,
     })
     expect(result.note).toContain('launch-call warning')
     expect(result.note).toContain('Command failed')
@@ -462,15 +462,34 @@ describe('resolveLaunchOutcome (issue #870)', () => {
   it('a launch error never overrides a real terminal BLOCKED either', () => {
     const status = parseStatusFile('status: BLOCKED\nnotes: scope conflict, needs a human\n')
     const result = resolveLaunchOutcome({
-      launchError: 'Command failed: dispatch-one.sh timed out', status, seed: undefined, depCommit: 'abc', workerLog: undefined,
+      launchError: 'Command failed: dispatch-one.sh timed out', status, seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined,
     })
     expect(result.outcome).toBe('BLOCKED')
   })
 
   it('with no launchError at all, behaves exactly as before (pure pass-through of the status file)', () => {
     const status = parseStatusFile(FLEET_BACKEND_705_STATUS_TEXT)
-    const result = resolveLaunchOutcome({ launchError: undefined, status, seed: undefined, depCommit: 'abc', workerLog: undefined })
+    const result = resolveLaunchOutcome({ launchError: undefined, status, seed: undefined, depCommit: 'abc', rtCommit: 'def', workerLog: undefined })
     expect(result.outcome).toBe('SUCCESS')
     expect(result.note).not.toContain('launch-call warning')
+  })
+
+  // Issue #1801: the ledger note carries BOTH provenance revisions — the
+  // dispatch dependency's (dep:) and the fleet runtime's own (rt:) — so a
+  // run's behaviour is attributable to exact code after the fact. The drift
+  // incident's forensics failed precisely because the runtime half was
+  // missing.
+  it('the note records the fleet runtime commit alongside the dispatch dependency commit', () => {
+    const status = parseStatusFile(FLEET_BACKEND_705_STATUS_TEXT)
+    const result = resolveLaunchOutcome({ launchError: undefined, status, seed: undefined, depCommit: 'abc123', rtCommit: 'def456', workerLog: undefined })
+    expect(result.note).toContain('dep:abc123')
+    expect(result.note).toContain('rt:def456')
+  })
+
+  it('unknown revisions degrade to an explicit marker, never a silent omission', () => {
+    const status = parseStatusFile(FLEET_BACKEND_705_STATUS_TEXT)
+    const result = resolveLaunchOutcome({ launchError: undefined, status, seed: undefined, depCommit: undefined, rtCommit: undefined, workerLog: undefined })
+    expect(result.note).toContain('dep:unknown')
+    expect(result.note).toContain('rt:unknown')
   })
 })
