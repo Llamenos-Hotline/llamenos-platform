@@ -37,6 +37,7 @@ import { publishEvent } from '../lib/ws-events'
 import { resolveHubRoleIds, resolvePermissions } from '@shared/permissions'
 import { determineEnvelopeRecipients } from '../lib/envelope-recipients'
 import type { HubMemberInfo } from '../lib/envelope-recipients'
+import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { Services } from '../services'
 
 const records = new Hono<AppEnv>()
@@ -66,7 +67,7 @@ async function resolveHubMembers(services: Services, hubId: string): Promise<Hub
   const { roles: roleDefs } = await services.settings.getRoles()
   const { users: allUsers } = await services.identity.getUsers()
 
-  return allUsers
+  const members = allUsers
     .filter(v => v.active)
     .map(v => {
       const roleIds = hubId
@@ -81,6 +82,24 @@ async function resolveHubMembers(services: Services, hubId: string): Promise<Hub
       }
     })
     .filter(m => m.permissions.length > 0)
+
+  // `users.pubkey` is an Ed25519 identity, not something HPKE can seal to. The
+  // client wraps each record tier for exactly the keys this route names, and
+  // DHKEM(X25519) accepts any 32 bytes, so naming identity keys here produced
+  // envelopes no secret key can open — stored successfully and unreadable
+  // forever (#1021, #1283, #1466). Resolve every member to their registered
+  // device encryption keys instead; a member with none is simply not
+  // addressable and contributes no recipient.
+  const byUser = await services.identity.resolveDeviceEncryptionPubkeys(
+    members.map(m => m.pubkey),
+  )
+
+  return members.map(m => ({
+    ...m,
+    recipients: (byUser.get(m.pubkey) ?? [])
+      .map(key => hpkeRecipientPubkey(key))
+      .filter((key): key is HpkeRecipientPubkey => !!key),
+  }))
 }
 
 // First path segments of the literal (non-record-id) routes below.
