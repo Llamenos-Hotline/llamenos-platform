@@ -507,6 +507,11 @@ jobs:
       # one that says which head it judged is visibly stale once the PR
       # moves on, rather than merely old.
       head_sha: ${{ steps.ctx.outputs.head_sha }}
+      # Written by the smoke step's fail() (#1767): WHICH engine class turned
+      # the run red, so `fleet-review/publish` can say on the PR itself that
+      # an engine outage is the fleet's own problem, not a rejection of the
+      # diff. Empty on every successful path.
+      engine_failure: ${{ steps.smoke.outputs.engine_failure }}
     permissions:
       # contents: read — the reviewer runs inside this job, so the
       # containment that matters is that NOTHING from the commit under
@@ -1187,10 +1192,32 @@ jobs:
           # named `NO-VERDICT:engine-quota` on the check itself and is never
           # again confused with a reviewer rejecting the diff — or the reverse.
           fail() {
-            echo "fleet/review FAILED: review engine smoke test FAILED: $1 (engine=${rev_binary:-unresolved} model=${rev_model:-unresolved})"
+            echo "fleet/review FAILED: review engine smoke test FAILED: $1 (engine=${fail_binary:-${rev_binary:-unresolved}} model=${fail_model:-${rev_model_disp:-${rev_model:-unresolved}}})"
             printf '%s\n' "$2"
             printf '%s\n' "$1" > "$RUNNER_TEMP/fleet-review-engine-failure"
+            # The class also crosses the job boundary (#1767): a PR red on
+            # the fleet's OWN engine outage reads identically to a rejection
+            # on the PR surface, so `fleet-review/publish` posts what a
+            # NO-VERDICT means. Guarded: outside Actions (the test harness)
+            # GITHUB_OUTPUT is unset.
+            if [ -n "${GITHUB_OUTPUT:-}" ]; then
+              printf 'engine_failure=%s\n' "$1" >> "$GITHUB_OUTPUT"
+            fi
             exit 1
+          }
+
+          # degraded() — the fallback engine is unhealthy but the PRIMARY
+          # answered, so the review runs and the PR is not failed (#1767
+          # ask 3: an unhealthy fallback is the gate's own problem, not this
+          # diff's). Loud on its own terms: a warning here, plus the marker
+          # file the "Name this run's outcome" step turns into an annotation
+          # on the check and a paragraph on the run summary. $1: the failure
+          # class; $2: the raw detail for the log.
+          degraded() {
+            printf '%s\n' "$1" > "$RUNNER_TEMP/fleet-review-fallback-degraded"
+            fb_health="DEGRADED ($1)"
+            echo "::warning::fleet/review DEGRADED: the fallback review engine is unhealthy ($1) — this review runs on the primary engine alone until it is fixed"
+            printf '%s\n' "$2"
           }
 
           # Best-effort classification of the engine's own error text —
@@ -1286,9 +1313,88 @@ jobs:
             fail "engine-misconfigured" "FLEET_REVIEWER_TOOLS resolved to nothing — the reviewer would run with the full default tool set, Bash included"
           fi
 
-          if ! command -v "$rev_binary" >/dev/null 2>&1; then
-            fail "engine-unavailable" "the $rev_binary CLI is not on PATH on this runner"
+          # The FALLBACK engine's invocation, resolved from the SAME function
+          # and the SAME base checkout as the primary. reviewerInvocationFor
+          # resolves through reviewPrimaryEngine(), so forcing
+          # FLEET_REVIEW_PRIMARY to the other engine yields the other
+          # engine's binary+model with NO second literal anywhere (#1767 ask
+          # 2: one shared resolution place — the claude fallback used to
+          # inherit the PRIMARY's resolved model, kimi's empty-by-default
+          # value, as a literal `--model ""`, which claude rejects outright;
+          # the fallback never worked and only one log line said so).
+          fb_engine=""
+          fb_binary=""
+          fb_model=""
+          case "$rev_engine" in
+            kimi) fb_want="claude" ;;
+            *) fb_want="kimi" ;;
+          esac
+          fb_json="$(FLEET_REVIEW_PRIMARY="$fb_want" bun -e '
+            import { reviewerInvocationFor } from "./orchestrator/src/review.ts"
+            const inv = reviewerInvocationFor("claude")
+            console.log(JSON.stringify({ engine: inv.engine, binary: inv.binary, model: inv.model }))
+          ' 2>"$RUNNER_TEMP/engine-resolve-fb-stderr.log")"
+          fb_status=$?
+          fb_err="$(cat "$RUNNER_TEMP/engine-resolve-fb-stderr.log" 2>/dev/null || true)"
+          if [ "$fb_status" -ne 0 ]; then
+            fail "engine-misconfigured" "$fb_json"$'\n'"$fb_err"
           fi
+          fb_engine="$(printf '%s' "$fb_json" | jq -r '.engine')"
+          fb_binary="$(printf '%s' "$fb_json" | jq -r '.binary')"
+          fb_model="$(printf '%s' "$fb_json" | jq -r '.model')"
+          if [ "$fb_model" = "null" ]; then fb_model=""; fi
+          if [ "$fb_engine" != "$fb_want" ] || [ -z "$fb_binary" ] || [ "$fb_binary" = "null" ]; then
+            fail "engine-misconfigured" "reviewerInvocationFor resolved the fallback ($fb_want) to something else: $fb_json"$'\n'"$fb_err"
+          fi
+          # claude requires a tier and the shared function always provides
+          # one; an empty model here is the #1767 bug shape itself, so refuse
+          # it loudly rather than repeat the incident.
+          if [ "$fb_engine" = "claude" ] && [ -z "$fb_model" ]; then
+            fail "engine-misconfigured" "the claude fallback resolved without a model tier: $fb_json"$'\n'"$fb_err"
+          fi
+          # kimi's empty model is meaningful on the fallback exactly as on
+          # the primary — it defers to kimi's own configured default.
+          fb_kimi_model_suffix=""
+          if [ "$fb_engine" = "kimi" ] && [ -n "$fb_model" ]; then
+            fb_kimi_model_suffix="--model $fb_model"
+          fi
+
+          # What kimi will ACTUALLY run as its model, for display AND
+          # pre-flight validation: the FLEET_REVIEW_KIMI_MODEL override when
+          # set, else the runner's kimi config.toml default_model — the one
+          # place the kimi binary itself resolves it (`kimi --help`:
+          # "Defaults to default_model in config.toml"), so this can never
+          # disagree with the engine the way a hardcoded id can (#1738/1740).
+          # This parse, not a new review.ts symbol, because the smoke step's
+          # bun -e resolves imports from the BASE checkout and the new symbol
+          # does not exist there until the PR that adds it merges — the same
+          # version boundary FLEET_REVIEWER_TOOLS observes. review.ts's
+          # resolveKimiReviewerModel is the twin parse for the real review;
+          # tests pin both against the same config.toml fixtures.
+          kimi_cfg="$HOME/.kimi-code/config.toml"
+          kimi_model_eff=""
+          kimi_model_src=""
+          if [ -n "${FLEET_REVIEW_KIMI_MODEL:-}" ]; then
+            kimi_model_eff="$FLEET_REVIEW_KIMI_MODEL"
+            kimi_model_src="FLEET_REVIEW_KIMI_MODEL"
+          elif [ -f "$kimi_cfg" ]; then
+            kimi_model_eff="$(sed -n 's/^[[:space:]]*default_model[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$kimi_cfg" | head -1)"
+            kimi_model_src="kimi config.toml default_model"
+          fi
+          kimi_known=""
+          if [ -f "$kimi_cfg" ]; then
+            kimi_known="$(sed -n 's/^[[:space:]]*\[models\."\([^"]*\)"\].*/\1/p' "$kimi_cfg" | paste -sd', ' -)"
+          fi
+          kimi_model_stale=""
+          if [ -n "$kimi_model_eff" ] && [ -n "$kimi_known" ] && ! grep -qF "[models.\"$kimi_model_eff\"]" "$kimi_cfg"; then
+            kimi_model_stale="kimi model \"$kimi_model_eff\" (from $kimi_model_src) is not defined in kimi's own configured model registry — this is a misconfiguration, not an outage. Configured ids: $kimi_known. Fix the id (or the runner's ~/.kimi-code/config.toml) — the provider has renamed model ids out from under this gate before (#1738)."
+          fi
+          if [ -n "$kimi_model_eff" ]; then
+            kimi_model_disp="$kimi_model_eff"
+          else
+            kimi_model_disp="(config-unreadable)"
+          fi
+          if [ "$rev_engine" = "kimi" ]; then rev_model_disp="$kimi_model_disp"; else rev_model_disp="$rev_model"; fi
 
           # GATE-OWNED HOME (#1460, #1511) — the shell twin of
           # `prepareReviewerHome` in review.ts; read that function's doc
@@ -1466,11 +1572,34 @@ jobs:
             # gate-owned HOME does not provision (file header, "ONE
             # containment difference"). The read-only agent profile — not
             # HOME isolation — is what bounds the kimi reviewer's tool set.
-            run_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
-            run_status=$?
-            run_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+            #
+            # Two CANNOT-RUN pre-flights fold into the SAME failure handling
+            # as the invocation itself, so all three take the fallback arm:
+            # a configured model id kimi's own config does not define (named
+            # engine-misconfigured — a provider rename, never an outage), and
+            # a missing binary (the file header's "a runner without kimi
+            # degrades to the claude-only gate" — a cannot-run like any
+            # other, which used to fail this step OUTRIGHT before the primary
+            # was even attempted, contradicting that header).
+            if [ -n "$kimi_model_stale" ]; then
+              run_status=1
+              run_out=""
+              run_err="$kimi_model_stale"
+              engine_class="engine-misconfigured"
+            elif ! command -v "$rev_binary" >/dev/null 2>&1; then
+              run_status=1
+              run_out=""
+              run_err="the $rev_binary CLI is not on PATH on this runner"
+              engine_class="engine-unavailable"
+            else
+              run_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              run_status=$?
+              run_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+              if [ "$run_status" -ne 0 ]; then
+                engine_class="$(classify "$run_out"$'\n'"$run_err")"
+              fi
+            fi
             if [ "$run_status" -ne 0 ]; then
-              engine_class="$(classify "$run_out"$'\n'"$run_err")"
               # CLAUDE FALLBACK TOLERANCE. A kimi failure in the CANNOT-RUN
               # family is exactly the state the fallback exists for (file
               # header): failing the smoke on a kimi outage would stop the
@@ -1478,7 +1607,12 @@ jobs:
               # when, the class is a fallback-eligible cannot-run, the
               # fallback is not disabled, and a claude binary is on PATH,
               # the smoke holds the fallback to the SAME health question and
-              # the SAME verdict contract before the step fails.
+              # the SAME verdict contract before the step fails — with the
+              # FALLBACK's OWN resolved binary and model, never the
+              # primary's (#1767: this arm used to hand claude `--model
+              # "$rev_model"`, kimi's empty-by-default value, as a literal
+              # `--model ""`, so the fallback exited 1 every time and only
+              # one log line said so).
               # `engine-auth` NEVER tolerates: an expired runner login must
               # stay loud (see the file header and `canFallbackAfterFailure`
               # in review.ts — the real review applies the identical rule,
@@ -1486,22 +1620,22 @@ jobs:
               # guards).
               if [ "$engine_class" != "engine-auth" ] \
                   && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
-                  && command -v claude >/dev/null 2>&1; then
+                  && command -v "$fb_binary" >/dev/null 2>&1; then
                 fb_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
-                  | env HOME="$rev_home" claude --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+                  | env HOME="$rev_home" "$fb_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$fb_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
                 fb_status=$?
                 fb_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
                 if [ "$fb_status" -ne 0 ]; then
-                  fail "engine-unavailable" "kimi failed ($engine_class) and the claude fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+                  fail "engine-unavailable" "kimi failed ($engine_class) and the $fb_binary fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
                 fi
-                verdict_out="$(claude_verdict "$fb_out" "claude fallback")"
+                verdict_out="$(claude_verdict "$fb_out" "$fb_binary fallback")"
                 verdict_status=$?
                 if [ "$verdict_status" -ne 0 ]; then
                   excerpt="$(scrub_excerpt "$fb_out")"
-                  fail "engine-unavailable" "kimi failed ($engine_class) and the claude fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
+                  fail "engine-unavailable" "kimi failed ($engine_class) and the $fb_binary fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
                 fi
                 printf '%s\n' "$verdict_out"
-                echo "review engine smoke test OK (engine=claude fallback; kimi unavailable: $engine_class)"
+                echo "review engine smoke test OK (engine=$fb_binary fallback; kimi unavailable: $engine_class)"
                 # The primary verdict check below must not run: kimi's output
                 # is its failure text, and the step has already concluded.
                 exit 0
@@ -1522,7 +1656,42 @@ jobs:
               fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
             fi
             printf '%s\n' "$verdict_out"
-            echo "review engine smoke test OK (engine=kimi)"
+            # BOTH-ENGINE SMOKE (#1767 ask 3): the primary answering says
+            # NOTHING about the fallback's health — the fallback spent weeks
+            # broken (handed kimi's empty model as a literal `--model ""`)
+            # while every kimi smoke passed, and the only evidence was one
+            # log line on a run where the primary ALSO failed. So the
+            # fallback is held to the SAME health question and the SAME
+            # verdict contract on every healthy-primary run too, but judged
+            # on its OWN terms: an unhealthy fallback DEGRADES the gate —
+            # loudly, via degraded() — it never fails a PR whose review the
+            # primary can still carry.
+            fb_health="off"
+            if [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ]; then
+              fb_health="healthy"
+              if ! command -v "$fb_binary" >/dev/null 2>&1; then
+                degraded "engine-unavailable" "the $fb_binary CLI is not on PATH on this runner — there is NO fallback until it is installed"
+              else
+                fb_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+                  | env HOME="$rev_home" "$fb_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$fb_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+                fb_status=$?
+                fb_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
+                if [ "$fb_status" -ne 0 ]; then
+                  degraded "$(classify "$fb_out"$'\n'"$fb_err")" "the $fb_binary fallback failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+                else
+                  fb_verdict_out="$(claude_verdict "$fb_out" "$fb_binary fallback")"
+                  fb_verdict_status=$?
+                  if [ "$fb_verdict_status" -ne 0 ]; then
+                    excerpt="$(scrub_excerpt "$fb_out")"
+                    printf '%s\n' "$fb_verdict_out"
+                    degraded "engine-unavailable" "the $fb_binary fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"
+                  else
+                    printf '%s\n' "$fb_verdict_out"
+                  fi
+                fi
+              fi
+            fi
+            echo "review engine smoke test OK (engine=kimi model=$kimi_model_disp; fallback=$fb_binary $fb_health)"
             exit 0
           fi
 
@@ -1531,12 +1700,24 @@ jobs:
           # engine during the bootstrap window — see the comment on the
           # branch above).
           # ──────────────────────────────────────────────────────────────
-          run_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
-            | env HOME="$rev_home" "$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
-          run_status=$?
-          run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
+          # A missing claude binary is a cannot-run like any other (the kimi
+          # arm's mirror — see its pre-flight comment), not a step failure
+          # before the primary is even attempted.
+          if ! command -v "$rev_binary" >/dev/null 2>&1; then
+            run_status=1
+            run_out=""
+            run_err="the $rev_binary CLI is not on PATH on this runner"
+            engine_class="engine-unavailable"
+          else
+            run_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+              | env HOME="$rev_home" "$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+            run_status=$?
+            run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
+            if [ "$run_status" -ne 0 ]; then
+              engine_class="$(classify "$run_out"$'\n'"$run_err")"
+            fi
+          fi
           if [ "$run_status" -ne 0 ]; then
-            engine_class="$(classify "$run_out"$'\n'"$run_err")"
             # KIMI FALLBACK TOLERANCE — the mirror of the claude arm above:
             # a claude failure in the CANNOT-RUN family (quota, overload,
             # timeout, crash, a model-id rejection — the measured 2026-10-04
@@ -1546,30 +1727,36 @@ jobs:
             # PATH. `engine-auth` NEVER tolerates, either direction.
             if [ "$engine_class" != "engine-auth" ] \
                 && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
-                && command -v kimi >/dev/null 2>&1; then
+                && command -v "$fb_binary" >/dev/null 2>&1; then
               if [ ! -f "$fallback_agent" ]; then
                 fail "engine-misconfigured" "the kimi fallback is needed (claude failed: $engine_class) but the read-only agent profile $fallback_agent is missing from this checkout — refusing to run a fallback reviewer with its full default tool set (shell included)"
               fi
+              # A configured kimi model id kimi's own config does not define
+              # is a cannot-run named engine-misconfigured (a provider
+              # rename, never an outage — see the pre-flight above).
+              if [ -n "$kimi_model_stale" ]; then
+                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (engine-misconfigured): $kimi_model_stale"
+              fi
               # The fallback runs under the RUNNER'S OWN HOME, NOT the
               # gate-owned claude HOME built above: kimi authenticates from
-              # its own login state under its own config directory, which
-              # the gate-owned HOME does not provision (file header, "ONE
+              # its own login state under its own config directory, which the
+              # gate-owned HOME does not provision (file header, "ONE
               # containment difference"). The read-only agent profile — not
               # HOME isolation — is what bounds the fallback's tool set.
-              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $fb_kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
               fb_status=$?
               fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
               if [ "$fb_status" -ne 0 ]; then
                 fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
               fi
-              verdict_out="$(kimi_verdict "$fb_out" "kimi fallback")"
+              verdict_out="$(kimi_verdict "$fb_out" "$fb_binary fallback")"
               verdict_status=$?
               if [ "$verdict_status" -ne 0 ]; then
                 excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
                 fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
               fi
               printf '%s\n' "$verdict_out"
-              echo "review engine smoke test OK (engine=kimi fallback; claude unavailable: $engine_class)"
+              echo "review engine smoke test OK (engine=$fb_binary fallback; claude unavailable: $engine_class)"
               # The claude verdict check below must not run: claude's output
               # is its failure text, and the step has already concluded.
               exit 0
@@ -1596,7 +1783,41 @@ jobs:
             fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
           fi
           printf '%s\n' "$verdict_out"
-          echo "review engine smoke test OK (engine=$rev_binary model=$rev_model)"
+          # BOTH-ENGINE SMOKE, kimi side — the mirror of the kimi-primary
+          # arm's fallback health check (see it for the full #1767 rationale:
+          # a healthy primary proves nothing about the fallback, so the
+          # fallback answers the SAME question under the SAME contract on
+          # every run and degrades loudly instead of failing the PR).
+          fb_health="off"
+          if [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ]; then
+            fb_health="healthy"
+            if ! command -v "$fb_binary" >/dev/null 2>&1; then
+              degraded "engine-unavailable" "the $fb_binary CLI is not on PATH on this runner — there is NO fallback until it is installed"
+            elif [ ! -f "$fallback_agent" ]; then
+              degraded "engine-misconfigured" "the read-only agent profile $fallback_agent is missing from this checkout — refusing to smoke the kimi fallback with its full default tool set (shell included)"
+            elif [ -n "$kimi_model_stale" ]; then
+              degraded "engine-misconfigured" "$kimi_model_stale"
+            else
+              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $fb_kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              fb_status=$?
+              fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+              if [ "$fb_status" -ne 0 ]; then
+                degraded "$(classify "$fb_out"$'\n'"$fb_err")" "the kimi fallback failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
+              else
+                fb_verdict_out="$(kimi_verdict "$fb_out" "kimi fallback")"
+                fb_verdict_status=$?
+                if [ "$fb_verdict_status" -ne 0 ]; then
+                  excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
+                  printf '%s\n' "$fb_verdict_out"
+                  degraded "engine-unavailable" "the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"
+                else
+                  printf '%s\n' "$fb_verdict_out"
+                fi
+              fi
+            fi
+          fi
+          echo "review engine smoke test OK (engine=$rev_binary model=$rev_model; fallback=$fb_binary $fb_health)"
+
 
       # Bootstrap guard. The gate runs from the BASE checkout by design, so
       # the FIRST pull request that introduces the gate cannot be judged by
@@ -2034,6 +2255,22 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # #1767: a degraded FALLBACK never fails the check (the primary
+          # reviewed — the smoke step's degraded() writes this marker), but
+          # it must stay visible: a silently broken fallback is how one kimi
+          # quota blip became a total merge freeze with nobody warned.
+          # A second annotation, distinct from the outcome title above, so
+          # the rails pinning this step's shape (one outcome line per run)
+          # still hold.
+          if [ -f "$RUNNER_TEMP/fleet-review-fallback-degraded" ]; then
+            degraded_class="$(cat "$RUNNER_TEMP/fleet-review-fallback-degraded")"
+            echo "::warning title=fleet/review fallback degraded::the fallback review engine is unhealthy ($degraded_class) — this verdict came from the primary engine alone; fix the fallback before the primary's next outage"
+            {
+              echo
+              echo "> **Fallback engine degraded** ($degraded_class): this verdict came from the primary engine alone. Fix the fallback before the primary's next outage."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           # The fail-closed half of the inverted default above (#1588). The
           # job reached this step GREEN on an outcome nothing here can name,
           # so nothing in this run claims the diff was judged — and the only
@@ -2151,6 +2388,7 @@ jobs:
           REVIEW_RESULT: ${{ needs.fleet-review.result }}
           CLEAR_LABELS: ${{ needs.fleet-review.outputs.clear_labels }}
           HEAD_SHA: ${{ needs.fleet-review.outputs.head_sha }}
+          ENGINE_FAILURE: ${{ needs.fleet-review.outputs.engine_failure }}
         run: |
           set -euo pipefail
           if [[ ! "$PR" =~ ^[0-9]+$ ]]; then
@@ -2246,6 +2484,36 @@ jobs:
             posted=$((posted + 1))
           done
           echo "posted $posted comment(s)"
+
+          # #1767: a PR blocked by the fleet's OWN review-engine outage reads
+          # identically to a rejection on the PR surface — a red required
+          # check. It is not one: NOTHING judged this diff. When the run
+          # failed on an engine class and no review text was posted (an
+          # engine failure produces no report artifact, so $posted is 0), say
+          # so on the PR itself, once per class, so nobody "fixes" code under
+          # an infrastructure outage. A synchronize re-run is republish-only
+          # (the gate step's outcome !== run-engine skips the smoke step), so
+          # ENGINE_FAILURE is empty there and this stays a no-op; the dedup
+          # marker keeps even a repeated failure from posting twice.
+          if [ "$REVIEW_RESULT" = "failure" ] && [ "$posted" -eq 0 ] && [ -n "${ENGINE_FAILURE:-}" ]; then
+            case "$ENGINE_FAILURE" in
+              engine-quota|engine-auth|engine-misconfigured|engine-unavailable)
+                nv_marker="<!-- fleet-review:no-verdict:$ENGINE_FAILURE -->"
+                if grep -qF -- "$nv_marker" "$RUNNER_TEMP/existing.txt"; then
+                  echo "already posted: no-verdict notice ($ENGINE_FAILURE)"
+                else
+                  {
+                    printf '%s\n\n' "$nv_marker"
+                    printf '### `fleet/review` — **NO VERDICT**: the review engine could not run (`%s`)\n\n' "$ENGINE_FAILURE"
+                    printf 'This red check is the fleet'\''s own review infrastructure failing closed, **not a reviewer rejecting this diff** — no reviewer read this code. Do not change the code on review grounds. When the engine is healthy again, request a review (or re-run this workflow) to have the diff actually judged.\n\n'
+                    printf 'The check log names the failing engine, its model, and why it failed.\n'
+                  } > "$RUNNER_TEMP/no-verdict-comment.md"
+                  post_comment "$RUNNER_TEMP/no-verdict-comment.md" "$nv_marker"
+                  echo "posted: no-verdict notice ($ENGINE_FAILURE)"
+                fi
+                ;;
+            esac
+          fi
 
           # Only AFTER the reviews are on the PR, and only on a PASS.
           if [ "$REVIEW_RESULT" != "success" ] || [ -z "$CLEAR_LABELS" ]; then
