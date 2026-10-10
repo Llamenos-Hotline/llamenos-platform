@@ -4431,6 +4431,8 @@
     "options": "Recovery options"
   },
   "inviteCreate": "Tib'an Sik'ixik",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "apiSecretLabel": "API Secret",
   "logout": {
     "confirmAction": "Tel",

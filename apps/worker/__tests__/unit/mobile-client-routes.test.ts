@@ -231,16 +231,14 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
   },
   Android: {
     // #1149 — Android admin screens against the /api/admin/* prefix, which
-    // carries only security-events and devices/overview. The shift and audit
-    // half is fixed here; bans, blasts, invites and custom fields are not.
+    // carries only security-events and devices/overview. The shift, audit and
+    // invite (#1047) halves are fixed; bans, blasts and custom fields are not.
     'GET /api/admin/bans': '#1149',
     'POST /api/admin/bans': '#1149',
     'POST /api/admin/bans/bulk': '#1149',
     [`DELETE /api/admin/bans/${PARAM}`]: '#1149',
     'GET /api/admin/blasts': '#1149',
     'POST /api/admin/blasts': '#1149',
-    'GET /api/admin/invites': '#1149',
-    'POST /api/admin/invites': '#1149',
     'GET /api/admin/custom-fields': '#1149',
     'PUT /api/admin/custom-fields': '#1149',
 

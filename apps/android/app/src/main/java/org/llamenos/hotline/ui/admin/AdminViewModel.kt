@@ -19,7 +19,7 @@ import org.llamenos.hotline.model.BanEntry
 import org.llamenos.hotline.model.BanListResponse
 import org.llamenos.hotline.model.BulkBanRequest
 import org.llamenos.hotline.model.CallSettings
-import org.llamenos.hotline.model.CreateInviteRequest
+import org.llamenos.hotline.model.CreateInviteResponse
 import org.llamenos.hotline.model.CreateReportCategoryRequest
 import org.llamenos.hotline.model.CreateUserRequest
 import org.llamenos.hotline.model.CreateUserResponse
@@ -30,6 +30,7 @@ import org.llamenos.hotline.model.InvitesListResponse
 import org.llamenos.hotline.model.IvrLanguages
 import org.llamenos.hotline.model.ShiftResponse
 import org.llamenos.hotline.model.ShiftsListResponse
+import org.llamenos.protocol.CreateInviteBody
 import org.llamenos.protocol.CreateShiftBody
 import org.llamenos.protocol.FallbackGroup
 import org.llamenos.protocol.UpdateShiftBody
@@ -528,9 +529,11 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingInvites = true, invitesError = null) }
 
             try {
+                // Not hp(): the server mounts invites at /api/invites, unscoped —
+                // /api/admin/invites never existed and always answered 404 (#1047).
                 val response = apiService.request<InvitesListResponse>(
                     "GET",
-                    "/api/admin/invites",
+                    "/api/invites",
                 )
                 _uiState.update {
                     it.copy(
@@ -557,19 +560,29 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showCreateInviteDialog = false, createdInviteCode = null) }
     }
 
-    fun createInvite(role: String) {
+    fun createInvite(name: String, phone: String, roleIds: List<String>) {
         viewModelScope.launch {
             _uiState.update { it.copy(invitesError = null) }
 
             try {
-                val request = CreateInviteRequest(role = role)
-                val invite = apiService.request<Invite>(
+                // The server requires name + phone and takes role IDs, not a
+                // role name. hubId travels in the body because /api/invites is
+                // not hub-scoped — omitting it is a 400 once the server has
+                // several active hubs (the admin's membership does not imply
+                // one), so send the hub being browsed as the desktop does.
+                val request = CreateInviteBody(
+                    name = name,
+                    phone = phone,
+                    hubID = apiService.activeHubIdOrNull(),
+                    roleIDS = roleIds,
+                )
+                val response = apiService.request<CreateInviteResponse>(
                     "POST",
-                    "/api/admin/invites",
+                    "/api/invites",
                     request,
                 )
                 _uiState.update {
-                    it.copy(createdInviteCode = invite.code)
+                    it.copy(createdInviteCode = response.invite.code)
                 }
                 loadInvites()
             } catch (e: Exception) {

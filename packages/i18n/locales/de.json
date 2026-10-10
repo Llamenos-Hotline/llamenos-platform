@@ -2504,6 +2504,8 @@
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
+  "inviteNameLabel": "Volunteer name",
+  "invitePhoneLabel": "Phone number",
   "inviteSelectRole": "Select Role",
   "inviteShare": "Share Invite",
   "inviteStatusActive": "Active",
