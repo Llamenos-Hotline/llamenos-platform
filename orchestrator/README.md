@@ -99,6 +99,111 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet tick` | Runs one dispatch pass. Refuses outright (exit 1, no pass run) if any lane's mode is `live` — see "Live dispatch is not implemented" below. Otherwise runs `tick()`, logs the JSON result to `~/.llamenos-fleet/fleet.log`, and prints a human-readable summary: `ran`, `attempted`, `failed`, `shadowed`, and the rejection count. Exits non-zero if the pass itself errored (`aborted: 'error'`). |
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
+| `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
+
+### `missing-checks`: the blockage no other command can see (#1662)
+
+A required status check has three states on a head, not two: pass, fail, and
+**never created**. The third is invisible to everything that enumerates what
+is on the commit. `gh pr checks --required` lists the contexts it *finds*, so
+a context nothing ever posted produces no row and no complaint — while the
+ruleset still refuses the merge. The PR reads `mergeStateStatus: BLOCKED`
+with every visible check green and nothing to click.
+
+This is not hypothetical. Measured 2026-10-07: `ci.yml`'s `ci-status` rollup
+job (`needs:` all twenty other jobs, `if: always()`) and `codeql.yml`'s
+`CodeQL` rollup were both observed **never created at all** — the run
+concluded `failure` with not one failing job, and the required context was
+absent instead of red. Five runs that day; two PRs silently dropped out of
+the merge train.
+
+`if: always()` cannot defend against this, because it is evaluated when a job
+is *created* and says nothing about a job that is never created. Nor can a
+`needs:` entry: one affected run lost `e2e`, a member of `ci-status`'s own
+`needs:` list, the same way.
+
+**The cause is GitHub-side, and the evidence is in the scheduling times, not
+in our YAML.** Every dropped job's schedulable moment — the completion of the
+last dependency it was waiting on — fell inside one of two GitHub Actions
+availability incidents published on githubstatus.com for that day (15:06–15:16
+UTC and 16:52–17:01 UTC). The control case: one run whose last dependency
+finished at 15:06:15Z had its `ci-status` start at 15:06:18Z, three seconds
+ahead of the window — it was created and it reported. And the disproof of any
+`needs:`/`if:` explanation: in two runs, `docker-canary` — a job whose ONLY
+`needs:` is `ci-status` — was created (as `skipped`) while `ci-status` itself
+never existed. No evaluation of our workflow files can produce that ordering.
+
+So there is nothing to fix in the YAML, and the deliverable is detection plus
+a known recovery (re-run the run). What the command adds over `board`:
+
+- **`ABSENT_PENDING` vs `ABSENT_SETTLED`.** An absent context is only a defect
+  once nothing can still post it. While any workflow run on the head is queued
+  or in progress, an absent context is simply early. Once *every* run on the
+  head has completed, an absent required context will never arrive. `board`
+  collapses both into one `WAITING` row, which is why this was undiagnosable.
+- **The dropped-job fingerprint.** A run that concluded `failure` with no
+  failing job did not fail — it lost a job. The command names the run and the
+  `gh run rerun` that recreates it.
+- **Worst ACROSS apps, latest WITHIN an app.** `CodeQL` is satisfied by a
+  `github-actions` rollup *and* by GHAS's `github-advanced-security` alert
+  gate, and both count — so carriers are collected across the Checks API and
+  the legacy commit statuses and the verdict is the WORST across apps. Within
+  one app it is the opposite: a re-run leaves the superseded conclusion on the
+  commit, and GitHub counts only the later one. Measured on #1671, where
+  `fleet/verify` carried `cancelled` (19:32:57Z) and `success` (19:33:43Z),
+  both `github-actions`, and GitHub read the PR `CLEAN`. Note what is *not* a
+  usable signal: GraphQL reports `isRequired: true` on **both**. It answers
+  "does this name gate the merge", not "is this the run that counts".
+  Superseded carriers are still printed — dropping a red signal without a
+  trace is the failure class this command exists to correct — they just do not
+  decide the verdict. Every carrier on both sides of the line carries its
+  `startedAt`, and the parenthetical describes what its contents ARE ("not
+  counted — an earlier run of the same app") rather than what superseded them.
+  Both of those are scars: the first wording named the discarded carrier in
+  the slot where it had just promised the superseder, so on #1718 it asserted
+  that the *failure* was the later run when the counted `success` was, and a
+  reader nearly took it as evidence the PR's review of record was a rejection.
+  An inverted explanation is worse than none — it defeats the only reason to
+  print the discarded carrier. The timestamps are load-bearing too: when both
+  carriers share a conclusion (live on #1653, two `github-actions` failures
+  2m46s apart) they are the only thing that distinguishes them. Getting this backwards is worse than
+  the bug the command detects: re-runs are routine, so a tool taking the worst
+  within an app cries wolf on nearly every PR, gets ignored, and is then
+  ignored on the day it is right.
+- **`neutral` is reported as what it is.** GitHub accepts `neutral` and
+  `skipped` as satisfying a required check, so the command scores them PASS —
+  it has to agree with GitHub about whether a merge is blocked. But `neutral`
+  is also exactly how GHAS reports "I could not judge" (a refused SARIF
+  upload, "configurations not found"), so a context whose only carriers are
+  neutral/skipped is flagged `neutral-only`. Passing and having-been-judged
+  are different facts.
+
+```
+$ llamenos-fleet missing-checks --pr 1642
+#1642 (fix/1633-ios-wire-keys) head 92d2f27e base main — mergeStateStatus=BLOCKED
+  9 workflow run(s) on the head, 0 still in flight
+  ABSENT_SETTLED ci-status      no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
+  PASS           gitleaks       github-actions=success@2026-10-07T16:50:29Z
+  ABSENT_SETTLED CodeQL         no carrier on this head  <-- ABSENT AND SETTLED: nothing can post it any more
+  PASS           fleet/verify   github-actions=success@2026-10-07T18:38:02Z  (not counted — an earlier run of the same app: github-actions=success@2026-10-07T16:50:30Z)
+  PASS           fleet/review   github-actions=success@2026-10-07T18:37:38Z  (not counted — an earlier run of the same app: github-actions=failure@2026-10-07T16:50:29Z)
+  run 37655183555 (CI, pull_request, attempt 1) concluded failure with 20 jobs and none of them failing
+    -> a job was never created. Re-run the run to recreate it: gh run rerun 37655183555
+  BLOCKED FOREVER on: ci-status, CodeQL — a re-run of the owning workflow is the only recovery
+```
+
+Naming one PR with `--pr N` always prints its full table, including a context
+that is merely red; the sweep across every open PR stays quiet unless a head is
+actually notable, so forty healthy heads cannot bury the one that matters.
+
+An unreadable ruleset is reported `CANNOT DECIDE` and exits `2`, never as a
+clean head: a tool that reports nothing wrong when it could not read the
+requirements is the same class of defect as the one it exists to catch.
+
+`tests/orchestrator/missing-checks.test.ts` drives every case from payloads
+captured verbatim off the live API (`fixtures/missing-checks/`), including the
+head that was really blocked — a detector verified from its own configuration
+is not verified.
 
 ### `attempted` vs `failed` vs `shadowed`
 

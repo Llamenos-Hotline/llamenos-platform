@@ -383,6 +383,44 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
   })
 
   /**
+   * Tokens that make a request a WRITE. Three families, because three things
+   * in this repo can issue one and they look nothing alike:
+   *
+   *  - `method: 'POST'|'PATCH'|'PUT'` — the `fetch`-shaped call
+   *    `review-and-merge.ts` actually uses.
+   *  - `-X POST` / `--method POST` — an explicit method on `gh api`.
+   *  - `-f` / `--raw-field` / `-F` / `--field` / `--input` — the trap. `gh
+   *    api` switches from GET to POST **automatically** the moment any field
+   *    parameter is present, with no method token anywhere in the argv. A
+   *    rail that looked only for a method would wave
+   *    `gh api repos/R/check-runs -f name=... -f conclusion=success`
+   *    straight through, which is a complete check-run forgery.
+   */
+  const WRITE_TOKEN = /method:\s*'(?:POST|PATCH|PUT)'|(?:--method|-X)[ =]'?(?:POST|PATCH|PUT)|(?:^|[\s[(,])(?:'-f'|'-F'|'--raw-field'|'--field'|'--input')/
+
+  /** Characters either side of a `check-runs` mention that count as "within
+   *  reach of" it. Wide enough to span an argv array or a fetch options
+   *  object written across several lines. */
+  const WRITE_RADIUS = 400
+
+  /** Every `check-runs` mention in `text`, each with its surrounding window —
+   *  what the two clauses below test, rather than the whole file, so one
+   *  read endpoint in a large module cannot be alibi'd by an unrelated
+   *  `-f` five hundred lines away. */
+  function checkRunsOccurrences(text: string): string[] {
+    const out: string[] = []
+    for (const match of text.matchAll(/check-runs/g)) {
+      const at = match.index
+      out.push(text.slice(Math.max(0, at - WRITE_RADIUS), at + WRITE_RADIUS))
+    }
+    return out
+  }
+
+  function mentionsCheckRunsNearAWrite(text: string): boolean {
+    return checkRunsOccurrences(text).some((w) => WRITE_TOKEN.test(w))
+  }
+
+  /**
    * The Checks API's `POST /repos/{R}/check-runs` is a write path with real
    * consequences: whatever it posts becomes a required-status verdict on a
    * commit, exactly as authoritative as an Actions job's own result. Only
@@ -396,18 +434,36 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
    * ungoverned place this process can post a verdict nothing here reviewed.
    */
   it('creates a check-run from exactly one file (review-and-merge.ts)', () => {
-    const CHECK_RUNS_CREATE = /check-runs/
     const REVIEW_AND_MERGE_FILE = join(process.cwd(), 'orchestrator', 'src', 'review-and-merge.ts')
-    const hits = orchestratorSources().filter(({ text }) => CHECK_RUNS_CREATE.test(text))
-    expect(hits.map((h) => h.file)).toEqual([REVIEW_AND_MERGE_FILE])
+
+    const named = orchestratorSources().filter(({ text }) => /check-runs/.test(text))
+    const writers = named.filter(({ text }) => mentionsCheckRunsNearAWrite(text))
+    expect(writers.map((h) => h.file), 'a file other than review-and-merge.ts can write a check-run').toEqual([REVIEW_AND_MERGE_FILE])
 
     // And that one file must ACTUALLY post there. Deleting the request and
     // leaving the module comment behind kept this rail green when it was
     // deliberately sabotaged — the same false-green shape as a check once
     // satisfied by a YAML *comment* naming a config file. The endpoint in
     // prose is not the endpoint in a request.
-    expect(hits[0]?.text, 'the one permitted file mentions the endpoint but does not POST to it')
+    const permitted = named.find((h) => h.file === REVIEW_AND_MERGE_FILE)
+    expect(permitted?.text, 'the one permitted file mentions the endpoint but does not POST to it')
       .toMatch(/method:\s*'POST'[\s\S]{0,200}check-runs`/)
+
+    // Every OTHER file naming the endpoint must name it only as the READ
+    // `commits/{sha}/check-runs`. Narrowing this rail from "mentions the
+    // string" to "can write" is what lets `missing-checks.ts` read the
+    // head's check-runs at all (#1662), and this clause is the price of the
+    // narrowing: a reader may appear, but only in that one shape. A
+    // `check-runs` usage of any other shape — a new endpoint, a different
+    // resource — is a thing nobody here has examined, and it fails this rail
+    // rather than arriving unnoticed under the reader exemption.
+    for (const { file, text } of named) {
+      if (file === REVIEW_AND_MERGE_FILE) continue
+      for (const occurrence of checkRunsOccurrences(text)) {
+        expect(occurrence, `${file}: a check-runs usage that is not the commits/{sha}/check-runs read`)
+          .toMatch(/commits\/\$\{[^}]*\}\/check-runs/)
+      }
+    }
   })
 
   /**

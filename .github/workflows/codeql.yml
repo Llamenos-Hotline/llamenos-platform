@@ -18,9 +18,14 @@
 #     "No new alerts in code changed by this pull request"), created once the
 #     legs below upload. The legs feed it; they are not it.
 # Same-named check-runs from different check suites stand side by side: the
-# check-runs API's default `filter=latest` returns both, GraphQL marks both
-# `isRequired` (both observed on #1244), and GitHub documents that a required
-# name shared by a check-run and a commit status needs both to pass. So the
+# check-runs API's default `filter=latest` returns both, and GitHub documents
+# that a required name shared by a check-run and a commit status needs both to
+# pass. (One qualification on #1244's evidence: GraphQL marking both
+# `isRequired` does NOT by itself mean both count. Two same-app carriers of
+# one name are both `isRequired` too, and there GitHub counts only the later
+# one — measured on #1671. The rule is worst across APPS, latest within an
+# app, so the conclusion above holds for these two because they are two
+# different apps, not because both are `isRequired`.) So the
 # rollup adds a requirement; it cannot stand in for the alert gate. (#1244
 # records the one case not demonstrated live: a green rollup beside a red
 # gate.)
@@ -33,6 +38,30 @@
 # under default setup). Under a separate name, `CodeQL` stayed satisfied by
 # that neutral while the analysis itself had failed. Under `CodeQL`, a failed,
 # refused or missing leg is a red required check.
+#
+# ─── The one case this does NOT cover: the rollup is never created (#1662) ──
+# `if: always()` is evaluated when a job is CREATED. It says nothing about a
+# job that is never created, and on 2026-10-07 this rollup was observed not
+# created at all: run 37641803757's `rust` leg failed at `Perform CodeQL
+# analysis`, the run concluded `failure`, and the rollup was simply absent —
+# seven jobs, no eighth. `ci.yml`'s `ci-status` lost the same way in the same
+# window. The required `CodeQL` context was then ABSENT on the head rather
+# than red, which blocks the merge just as hard but reports nothing: the PR
+# reads BLOCKED with every visible check green.
+#
+# The cause is GitHub-side, not in this file. Every job lost that day had its
+# schedulable moment inside one of two GitHub Actions availability incidents
+# published on githubstatus.com (15:06-15:16 UTC and 16:52-17:01 UTC), and a
+# control run whose rollup was scheduled three seconds before the window was
+# created and reported normally. So do not try to harden this against it from
+# the YAML — there is no condition that survives a job that is never created.
+#
+# Recovery is `gh run rerun --failed <run>`, which recreates the rollup
+# (verified: 7 jobs before, 8 after, rollup passing). Detection is
+# `llamenos-fleet missing-checks`, which diffs the live ruleset against the
+# head and distinguishes "absent and nothing can still post it" from "not yet"
+# — see orchestrator/README.md. Never clear this blockage by making `CodeQL`
+# optional or removing it from the ruleset.
 #
 # The legs are `Analyze advanced (<lang>)`, never default setup's
 # `Analyze (<lang>)`: one check name, one source.

@@ -48,6 +48,7 @@ import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
 import { runBoard } from './board.js'
+import { runMissingChecks } from './missing-checks.js'
 import { notify } from './notify.js'
 import { FLEET_DIR, LOG_FILE, HALT_REASON_FILE, DISPATCH_SCRIPT, FLEET_ENV_FILE } from './paths.js'
 import { REPO, gh, ghJson } from './gh.js'
@@ -1817,6 +1818,17 @@ const HANDLERS: Record<string, CommandHandler> = {
   // labels/approves/merges/re-runs anything. `--porcelain` anywhere in argv
   // selects the machine-readable form.
   board: (rest) => runBoard(rest),
+  // #1662: the one blockage no other command can report — a required
+  // context that is ABSENT on the head rather than red. `gh pr checks
+  // --required` enumerates what exists, so it stays silent on a context
+  // nothing ever posted; `board` has the required set but collapses
+  // "absent" into the same WAITING row as "still running". This derives the
+  // required set from the live ruleset and diffs it against both kinds of
+  // context on the head (the Checks API's and the legacy commit statuses),
+  // and separates "nothing can post it any more" from "not yet". Read-only;
+  // exits 1 when a head is blocked forever, 2 when a required set could not
+  // be read.
+  'missing-checks': (rest) => runMissingChecks(rest),
 }
 
 /** Every subcommand name this CLI actually implements — see `HANDLERS`. */
