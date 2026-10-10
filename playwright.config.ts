@@ -68,7 +68,27 @@ export default defineConfig({
       // before all parallel tests to avoid corrupting shared DB state.
       // The last bootstrap test restores normal state via resetTestState().
       name: "bootstrap",
-      use: { ...devices["Desktop Chrome"] },
+      // #1792: resolve the SAME host as the backend-bdd projects that declare
+      // `dependencies: ["bootstrap"]`. bootstrap.spec.ts issues RELATIVE
+      // requests — including `POST /api/test-reset-no-admin`, which wipes every
+      // table — so inheriting the top-level :8788 baseURL pointed the
+      // destructive reset at localhost on a deployed-target run while the
+      // assertions ran remotely.
+      //
+      // scripts/test-backend-bdd.sh passes `--no-deps` and does the reset
+      // itself against ${HUB_URL}, so the documented path was never affected.
+      // That made the safety a flag at four call sites rather than a property
+      // of this config: anyone invoking these projects directly — from an IDE,
+      // or a future entry point that forgets the flag — got the wipe aimed at
+      // the wrong host. Resolving the target here makes `--no-deps` an
+      // optimisation instead of a safety requirement.
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL:
+          process.env.TEST_HUB_URL ||
+          process.env.PLAYWRIGHT_BASE_URL ||
+          `http://localhost:${process.env.PLAYWRIGHT_PORT || "8788"}`,
+      },
       testMatch: ["**/bootstrap.spec.ts"],
     },
     {
