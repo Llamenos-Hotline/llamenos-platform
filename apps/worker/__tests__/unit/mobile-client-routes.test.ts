@@ -228,7 +228,6 @@ const KNOWN_UNMOUNTED: Record<Platform, Record<string, string>> = {
     // three are live 404s on a real backend.
     [`PATCH /api/identity/${PARAM}/role`]: '#1701',
     [`POST /api/conversations/${PARAM}/read`]: '#1701',
-    [`POST /api/shifts/${PARAM}/signup`]: '#1701',
   },
   Android: {
     // #1149 — Android admin screens against the /api/admin/* prefix, which
