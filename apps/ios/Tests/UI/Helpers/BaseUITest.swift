@@ -421,7 +421,11 @@ class BaseUITest: XCTestCase {
         }
         adminLink.tap()
 
-        guard anyElementExists(["admin-sidebar-list", "admin-tab-view"]) else {
+        // The app presents AdminTabView here. (AdminSidebarView — the
+        // "admin-sidebar-list" this used to probe for first, at the cost of a
+        // full 10s timeout on every admin navigation — was dead code presented
+        // by nothing, and is deleted: #1776.)
+        guard find("admin-tab-view").waitForExistence(timeout: 10) else {
             XCTFail("Admin panel should appear after tapping the admin link")
             return
         }
