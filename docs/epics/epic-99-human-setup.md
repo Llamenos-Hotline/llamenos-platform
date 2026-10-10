@@ -1,5 +1,16 @@
 # Epic 99: Human Setup Guide
 
+> **SUPERSEDED — 2026-10-09**
+>
+> This epic is retained as history. The setup-guide work it describes no longer
+> matches what ships: the current deployment index is
+> [`docs/deployment/README.md`](../deployment/README.md), and the backend this
+> epic assumed (Cloudflare Workers, DO bindings, `wrangler` deploys) is not the
+> backend that exists — see CLAUDE.md's backend description (`apps/worker/` is
+> a Bun HTTP server on Hono + PostgreSQL, self-hosted; only the marketing site
+> uses Cloudflare). The `**Status**` line below records authoring-time state
+> and is not authoritative.
+
 **Status**: In Progress
 **Created**: 2026-02-26
 **Depends on**: Epic 95 (Deployment Architecture), Epic 97 (Desktop Release Pipeline)
