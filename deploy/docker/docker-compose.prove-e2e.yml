@@ -1,0 +1,62 @@
+# Docker Compose override: a DEPLOYED-SHAPED local target for the backend BDD
+# suite, per docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
+#
+# Unlike docker-compose.test.yml (ENVIRONMENT=development — the localhost path
+# the suite already exercises), this overlay sets the three deliberate opt-ins a
+# real staging deploy carries, so running the suite against it exercises the
+# same dev-surface gating the VM-pointed run will hit:
+#
+#   ENVIRONMENT=staging            (allowlisted, non-development)
+#   DEV_ROUTES_ENABLED=true        (explicit flag)
+#   DEV_RESET_SECRET=<64 hex>      (mandatory outside development, min 32 chars)
+#
+# plus the fourth requirement from the doc: ADMIN_PUBKEY /
+# ADMIN_DECRYPTION_PUBKEY must be the public halves of the seed hardcoded in
+# tests/global-setup.ts — supply them via --env-file (see .env.example for the
+# one-liner that prints the pair).
+#
+# Usage (from deploy/docker/):
+#   docker compose -p prove-e2e \
+#     -f docker-compose.yml -f docker-compose.prove-e2e.yml \
+#     --env-file .env.prove-e2e up -d --build --wait app
+#
+# Then, from the repo root:
+#   TEST_HUB_URL=http://localhost:13000 \
+#   E2E_TEST_SECRET=<same as DEV_RESET_SECRET> \
+#   DATABASE_URL=postgresql://llamenos:<pg_password>@127.0.0.1:15432/llamenos \
+#   bun run test:backend:bdd
+#
+# Isolation from other stacks on the same host: always pass `-p prove-e2e` (the
+# base file pins `name: llamenos`, which the dev stack already uses) and keep
+# the published ports below away from the dev stack's 3000/5432.
+
+services:
+  postgres:
+    # The suite asserts persisted state straight from PostgreSQL
+    # (tests/db-helpers.ts), so the runner needs a host port. On a real deploy
+    # this is loopback-only + SSH-forwarded; here it is a plain high port.
+    ports:
+      - "127.0.0.1:${E2E_PG_PORT:-15432}:5432"
+    # Base compose puts postgres on `internal` only, and Docker installs no
+    # DNAT rule for a port published on an internal: true network — the
+    # binding is recorded and nothing ever listens. Attach `web` too, exactly
+    # as docker-compose.test.yml does.
+    networks:
+      - internal
+      - web
+
+  app:
+    build:
+      # Same registry buildcache import as docker-compose.test.yml (#902).
+      cache_from:
+        - type=registry,ref=ghcr.io/llamenos-hotline/llamenos-platform:buildcache
+    ports:
+      - "127.0.0.1:${E2E_APP_PORT:-13000}:3000"
+    environment:
+      - ENVIRONMENT=staging
+      - DEV_ROUTES_ENABLED=true
+      - "DEV_RESET_SECRET=${DEV_RESET_SECRET:?DEV_RESET_SECRET is required — generate with openssl rand -hex 32}"
+      # No reverse proxy in front of the app in this topology (Caddy is not
+      # started), so the app must not trust client-supplied forwarding headers.
+      - TRUST_PROXY_HEADERS=false
+      - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:-http://localhost:13000}"
