@@ -23,7 +23,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes } from '@noble/hashes/utils.js'
-import { apiGet, apiPost, ADMIN_SEED, seedHexToPubkey } from './api-helpers'
+import { apiGet, apiPost, ADMIN_SEED, createHubViaApi, seedHexToPubkey } from './api-helpers'
 import { enterPin, TEST_PIN } from './helpers'
 
 interface SigchainLinkWire {
@@ -44,10 +44,15 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
   let inviteCode: string
 
   test.beforeAll(async ({ request }) => {
+    // The suite runs fullyParallel alongside 200+ specs that create hubs, so
+    // there is no "sole active hub" (and the admin has many memberships) for
+    // the server to resolve an omitted hubId to — it would answer 400. Create
+    // a dedicated hub and pass its id explicitly.
+    const hubId = await createHubViaApi(request, `sigchain-gate-hub-${Date.now()}`)
     const { status, data } = await apiPost<{ invite?: { code: string } }>(
       request,
       '/invites',
-      { name: `sigchain-gate-${Date.now()}`, phone: '+10000000000', roleIds: ['role-volunteer'] },
+      { name: `sigchain-gate-${Date.now()}`, phone: '+10000000000', roleIds: ['role-volunteer'], hubId },
       ADMIN_SEED,
     )
     expect(status, 'POST /api/invites').toBe(201)
