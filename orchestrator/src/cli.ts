@@ -615,9 +615,16 @@ async function commentOnPr(pr: string, body: string): Promise<void> {
  * Reached only after mechanical verification AND the non-author review have
  * both passed — see tick.ts. No bypass flag is passed here and none may ever
  * be added: see the rail in tests/orchestrator/guards.test.ts.
+ *
+ * No `--delete-branch`: `gh` REFUSES it outright when the target branch has a
+ * merge queue ("Cannot use `-d` or `--delete-branch` when merge queue
+ * enabled"), and `main` has one — so passing it made this call fail for every
+ * PR the fleet opened, which is #1804. Branch deletion is not lost: the
+ * repository sets `delete_branch_on_merge`, so GitHub deletes the head branch
+ * itself once the queue merges.
  */
 async function enableAutoMerge(pr: string): Promise<void> {
-  await gh(['pr', 'merge', pr, '--auto', '--squash', '--delete-branch'])
+  await gh(['pr', 'merge', pr, '--auto', '--squash'])
 }
 
 /** Clears an auto-merge armed by an EARLIER attempt on the same PR before
