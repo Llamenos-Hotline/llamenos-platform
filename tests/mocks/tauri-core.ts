@@ -164,6 +164,24 @@ function requireDeviceState(): MockDeviceKeyState {
   return mockDeviceState
 }
 
+/**
+ * Recursive lexicographic key sort — mirrors serde_json's BTreeMap-backed
+ * serialization. Used for the sigchain canonical entry hash; see
+ * compute_entry_hash in packages/crypto/src/sigchain.rs.
+ */
+function canonicalizeForSigchain(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (Array.isArray(value)) return value.map(canonicalizeForSigchain)
+  if (typeof value === 'object') {
+    const sorted: Record<string, unknown> = {}
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = canonicalizeForSigchain((value as Record<string, unknown>)[key])
+    }
+    return sorted
+  }
+  return value
+}
+
 // ── Argon2id + AES-256-GCM for PIN/passphrase encryption ────────────
 // Parameters match packages/crypto/src/device_keys.rs (KDF_VERSION=2).
 // For test builds we use reduced memory (4 MiB) to keep Playwright fast.
@@ -607,6 +625,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockDeviceState = state
     mockEncryptedKeys = result
 
+    // Test-only hook: onboarding generates the seed inside this mock, so a
+    // spec that needs to act as the same user from a SECOND client (e.g. the
+    // sigchain read-back gate in #1050) cannot otherwise reach it. Mirrors
+    // window.__last_vol_seed_hex in users.tsx. Never present outside
+    // PLAYWRIGHT_TEST builds (this module throws at load otherwise).
+    ;(window as unknown as Record<string, unknown>).__TEST_LAST_DEVICE_SEED_HEX = bytesToHex(signingSeed)
+
     return result
   },
 
@@ -752,12 +777,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
     }
 
-    // HPKE seal the seed to the device's encryption pubkey
+    // HPKE seal the seed to the device's encryption pubkey. The AAD matches
+    // puk::create_initial_puk in the crate: `${LABEL_PUK_WRAP_TO_DEVICE}:${deviceId}`.
     const envelope = await hpkeSealMock(
       seed,
       ds.encryptionPubkeyHex,
       'llamenos:puk:wrap:device:v1',
-      new Uint8Array(0),
+      utf8ToBytes(`llamenos:puk:wrap:device:v1:${ds.deviceId}`),
     )
 
     return {
@@ -792,7 +818,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       dhPubkeyHex: bytesToHex(deriveX25519Pubkey(dhSubkey)),
     }
 
-    // HPKE seal new seed to each remaining device
+    // HPKE seal new seed to each remaining device (AAD matches puk::rotate_puk)
     const deviceEnvelopes = await Promise.all(
       remainingDevices.map(async ([deviceId, encPubkeyHex]) => ({
         deviceId,
@@ -800,7 +826,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
           newSeed,
           encPubkeyHex,
           'llamenos:puk:wrap:device:v1',
-          new Uint8Array(0),
+          utf8ToBytes(`llamenos:puk:wrap:device:v1:${deviceId}`),
         ),
       })),
     )
@@ -843,16 +869,21 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const timestamp = a.timestamp as string
     const payloadJson = a.payloadJson as string
 
-    // Canonical hash: JSON with sorted keys
-    const canonical: Record<string, unknown> = {
-      payload: payloadJson,
+    // Canonical hash — must match packages/crypto/src/sigchain.rs
+    // compute_entry_hash and the worker's computeEntryHash byte-for-byte:
+    // the payload is a parsed, recursively key-sorted JSON OBJECT (never the
+    // raw string), and keys are sorted at every nesting level. The previous
+    // version passed payloadJson as a string and relied on a top-level-only
+    // replacer array, so the mock's hash diverged from what the server
+    // recomputes and any append through this mock failed verification (#1050).
+    const canonicalJson = JSON.stringify(canonicalizeForSigchain({
+      payload: JSON.parse(payloadJson),
       prevHash: prevHash ?? null,
       seq,
       signerDeviceId: ds.deviceId,
       signerPubkey: ds.signingPubkeyHex,
       timestamp,
-    }
-    const canonicalJson = JSON.stringify(canonical, Object.keys(canonical).sort())
+    }))
     const entryHash = bytesToHex(sha256(utf8ToBytes(canonicalJson)))
 
     // Ed25519 sign the entry hash
