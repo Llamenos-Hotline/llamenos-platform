@@ -11,9 +11,6 @@
 # MainTabView has six tabs; an iPhone tab bar shows four plus More (a product decision).
 DashboardUITests/testAllTabsExist  # six main tabs, iPhone shows four plus More — #1240
 
-# Recovery-group calls are hub-scoped with hp() but the server mounts them unscoped (404).
-RecoveryGroupUITests/testAdminCanConfigureRecoveryTeam  # recovery-group paths 404 — #1032
-
 # AdminSidebarView is referenced only by its own #Preview; the app shows AdminTabView.
 AdminSidebarUITests/testAdminSidebarListExists  # tests a view the app never presents — #1245
 AdminSidebarUITests/testThisHubScopeHeaderVisible  # tests a view the app never presents — #1245
