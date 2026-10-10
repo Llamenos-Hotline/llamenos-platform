@@ -23,6 +23,12 @@ Then('the response status should not be {int}', async ({ world }, unexpectedStat
   expect(getSharedState(world).lastResponse!.status).not.toBe(unexpectedStatus)
 })
 
+Then('the response body should contain {string}', async ({ world }, expected: string) => {
+  expect(getSharedState(world).lastResponse).toBeDefined()
+  const data = getSharedState(world).lastResponse!.data
+  expect(JSON.stringify(data)).toContain(expected)
+})
+
 Then('the response should indicate the role is protected', async ({ world }) => {
   expect(getSharedState(world).lastResponse).toBeDefined()
   // System roles return 400 or 403 when deletion is attempted
