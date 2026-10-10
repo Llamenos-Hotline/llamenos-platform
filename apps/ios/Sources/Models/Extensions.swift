@@ -121,6 +121,31 @@ enum AnyCodableValue: Codable, Equatable, Sendable {
 
 extension NoteResponse: Identifiable {}
 
+extension NoteResponse {
+    /// HPKE envelopes to try when decrypting this note, in trial order.
+    ///
+    /// #1024: the server records `authorPubkey` as the author's Ed25519 SIGNING key
+    /// (`apps/worker/routes/notes.ts` sets it from the auth identity), while every
+    /// envelope wraps for an X25519 ENCRYPTION key. Signing and encryption keys come
+    /// from independent random seeds, so comparing `authorPubkey` against our
+    /// encryption pubkey can never select the author envelope — the comparison is
+    /// structurally unsatisfiable, and while it gated the author envelope, every note
+    /// you wrote yourself decrypted to nothing. Authorship is proven by HPKE
+    /// succeeding on the author envelope, so it is always tried first; our admin copy
+    /// (selected by encryption pubkey, which IS comparable) is the fallback.
+    func decryptionCandidates(encryptionPubkey: String) -> [HpkeEnvelope] {
+        var candidates: [HpkeEnvelope] = []
+        if let authorEnv = authorEnvelope {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct))
+        }
+        if let adminEnvs = adminEnvelopes,
+           let ourEnvelope = adminEnvs.first(where: { $0.pubkey == encryptionPubkey }) {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: ourEnvelope.enc, ct: ourEnvelope.ct))
+        }
+        return candidates
+    }
+}
+
 // MARK: - DecryptedMessage
 
 /// A fully decrypted message ready for display in the conversation detail view.
