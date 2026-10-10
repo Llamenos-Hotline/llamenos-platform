@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { recipientEnvelopeSchema, paginationSchema } from './common'
+import { forPatch } from './patch'
 
 // --- Contact record (stored in ContactDirectoryDO) ---
 
@@ -48,7 +49,7 @@ export type CreateContactBody = z.infer<typeof createContactBodySchema>
 
 // --- Update contact body (partial) ---
 
-export const updateContactBodySchema = createContactBodySchema.partial()
+export const updateContactBodySchema = forPatch(createContactBodySchema)
 
 export type UpdateContactBody = z.infer<typeof updateContactBodySchema>
 

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { recipientEnvelopeSchema, paginationSchema } from './common'
 import { locationPrecisionSchema } from './geocoding'
+import { forPatch } from './patch'
 
 /**
  * @deprecated Events are now records whose entity type has category='event'.
@@ -70,7 +71,7 @@ export type CreateEventBody = z.infer<typeof createEventBodySchema>
 
 // --- Update event body (partial) ---
 
-export const updateEventBodySchema = createEventBodySchema.partial()
+export const updateEventBodySchema = forPatch(createEventBodySchema)
 
 export type UpdateEventBody = z.infer<typeof updateEventBodySchema>
 
