@@ -17,9 +17,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.ui.notes.noteRecipientPubkeys
 import org.llamenos.hotline.model.AssignRecordRequest
 import org.llamenos.hotline.model.AssignResponse
 import org.llamenos.hotline.model.CaseRecord
@@ -446,7 +448,12 @@ class CaseManagementViewModel @Inject constructor(
             _uiState.update { it.copy(isAddingComment = true, actionError = null) }
             try {
                 sessionState.ensureAdminPubkeyLoaded(apiService)
-                val encrypted = cryptoService.encryptNote(comment, sessionState.adminPubkeys)
+                val authorPubkey = cryptoService.encryptionPubkeyHex
+                    ?: throw CryptoException("No encryption key loaded")
+                val encrypted = cryptoService.encryptNote(
+                    comment,
+                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                )
                 val envelopes = encrypted.envelopes.map { env ->
                     CreateInteractionBodyContentEnvelope(
                         pubkey = env.recipientPubkey,
