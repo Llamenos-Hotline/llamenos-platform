@@ -761,6 +761,43 @@ export class SettingsService {
     return { limited: false, retryAfterSeconds: 0 }
   }
 
+  /**
+   * Read-only rate limit check — reports whether a key is currently limited
+   * WITHOUT consuming budget. Pair with checkApiRateLimit() on the failure
+   * path to build failure-only counting (#1789): peek before doing the work,
+   * increment only once an attempt has proven to be a failure, so conforming
+   * callers are never charged against a brute-force budget.
+   */
+  async peekApiRateLimit(
+    key: string,
+    maxRequests: number,
+    windowMs: number,
+  ): Promise<{ limited: boolean; retryAfterSeconds: number }> {
+    const rows = await this.db
+      .select({ count: apiRateLimits.count, windowStart: apiRateLimits.windowStart })
+      .from(apiRateLimits)
+      .where(eq(apiRateLimits.key, key))
+      .limit(1)
+
+    const row = rows[0]
+    if (!row) return { limited: false, retryAfterSeconds: 0 }
+
+    const windowStartMs = row.windowStart instanceof Date
+      ? row.windowStart.getTime()
+      : new Date(String(row.windowStart)).getTime()
+    const windowEndMs = windowStartMs + windowMs
+
+    // Window expired — the next increment resets the counter, so not limited.
+    if (windowEndMs <= Date.now()) return { limited: false, retryAfterSeconds: 0 }
+
+    if (row.count >= maxRequests) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - Date.now()) / 1000))
+      return { limited: true, retryAfterSeconds }
+    }
+
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
   /** Clear API rate limit counters (new fixed-window table). */
   async clearApiRateLimits(prefix?: string): Promise<void> {
     if (prefix) {

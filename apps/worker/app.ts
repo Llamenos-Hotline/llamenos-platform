@@ -166,11 +166,15 @@ api.use('/test-*', devGuard)
 api.use('/test-*', rateLimit('webhook'))
 
 // --- Rate limiting (H03) — applied per-tier before route handlers ---
-// Strict tier: auth/provisioning endpoints (by IP, 5 req/min)
+// Strict tier: auth endpoints (by IP, 5 req/min). Provisioning is deliberately
+// NOT mounted here: its routes carry their own tiers (create: strict, poll:
+// poll, payload: write) because a link flow's two devices usually share one
+// NAT IP, and a second strict mount here also double-counted every provision
+// request against the same `strict:<ip>` bucket as the route-level limiter
+// (#1789).
 api.use('/auth/*', rateLimit('strict'))
 api.use('/webauthn/*', rateLimit('strict'))
 api.use('/invites/*', rateLimit('strict'))
-api.use('/provision/*', rateLimit('strict'))
 api.use('/recovery-group/*', rateLimit('strict'))
 
 // Webhook tier: provider callbacks (by IP, 300 req/min)
