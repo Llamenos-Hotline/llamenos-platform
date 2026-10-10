@@ -20,6 +20,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CustomFieldDef
@@ -284,12 +285,17 @@ class NotesViewModel @Inject constructor(
                 val payloadJson = json.encodeToString(NotePayload.serializer(), payload)
 
                 ensureAdminPubkeyLoaded()
-                val encrypted = cryptoService.encryptNote(payloadJson, sessionState.adminPubkeys)
+                val authorPubkey = cryptoService.encryptionPubkeyHex
+                    ?: throw CryptoException("No encryption key loaded")
+                val encrypted = cryptoService.encryptNote(
+                    payloadJson,
+                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                )
 
-                // Map HPKE envelopes to wire format.
-                // The first envelope is always for the author (our encryption pubkey).
-                val authorEnv = encrypted.envelopes.first()
-                val adminEnvs = encrypted.envelopes.drop(1)
+                val (authorEnv, adminEnvs) = splitAuthorAndAdminEnvelopes(
+                    encrypted.envelopes,
+                    authorPubkey,
+                )
 
                 val request = CreateNoteBody(
                     encryptedContent = encrypted.ciphertextHex,
@@ -411,10 +417,17 @@ class NotesViewModel @Inject constructor(
                 val payloadJson = json.encodeToString(NotePayload.serializer(), payload)
 
                 ensureAdminPubkeyLoaded()
-                val encrypted = cryptoService.encryptNote(payloadJson, sessionState.adminPubkeys)
+                val authorPubkey = cryptoService.encryptionPubkeyHex
+                    ?: throw CryptoException("No encryption key loaded")
+                val encrypted = cryptoService.encryptNote(
+                    payloadJson,
+                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                )
 
-                val authorEnv = encrypted.envelopes.first()
-                val adminEnvs = encrypted.envelopes.drop(1)
+                val (authorEnv, adminEnvs) = splitAuthorAndAdminEnvelopes(
+                    encrypted.envelopes,
+                    authorPubkey,
+                )
 
                 val request = CreateNoteBody(
                     encryptedContent = encrypted.ciphertextHex,
@@ -490,7 +503,12 @@ class NotesViewModel @Inject constructor(
             _uiState.update { it.copy(isSendingReply = true) }
             try {
                 ensureAdminPubkeyLoaded()
-                val encrypted = cryptoService.encryptNote(text, sessionState.adminPubkeys)
+                val authorPubkey = cryptoService.encryptionPubkeyHex
+                    ?: throw CryptoException("No encryption key loaded")
+                val encrypted = cryptoService.encryptNote(
+                    text,
+                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                )
 
                 val readerEnvelopes = encrypted.envelopes.map { env ->
                     CreateReplyBodyReaderEnvelope(
@@ -539,40 +557,22 @@ class NotesViewModel @Inject constructor(
     private suspend fun decryptReply(reply: NoteReply): DecryptedReply? {
         val ourPubkey = cryptoService.encryptionPubkeyHex ?: return null
 
-        val hpkeEnvelope: org.llamenos.hotline.crypto.HpkeEnvelope =
-            if (reply.authorPubkey == ourPubkey && reply.authorEnvelope != null) {
-                org.llamenos.hotline.crypto.HpkeEnvelope(
-                    v = org.llamenos.hotline.crypto.HpkeEnvelope.CURRENT_VERSION,
-                    labelId = org.llamenos.hotline.crypto.HpkeEnvelope.LABEL_ID_NOTE_KEY,
-                    enc = reply.authorEnvelope!!.enc,
-                    ct = reply.authorEnvelope!!.ct,
-                )
-            } else {
-                reply.adminEnvelopes?.find { it.pubkey == ourPubkey }?.let { adminEnv ->
-                    org.llamenos.hotline.crypto.HpkeEnvelope(
-                        v = org.llamenos.hotline.crypto.HpkeEnvelope.CURRENT_VERSION,
-                        labelId = org.llamenos.hotline.crypto.HpkeEnvelope.LABEL_ID_NOTE_KEY,
-                        enc = adminEnv.enc,
-                        ct = adminEnv.ct,
-                    )
-                } ?: return null
+        for (hpkeEnvelope in noteReadCandidates(reply, ourPubkey)) {
+            val payload = try {
+                cryptoService.decryptNote(reply.encryptedContent, hpkeEnvelope)
+            } catch (_: Exception) {
+                null
             }
-
-        return try {
-            val payload = cryptoService.decryptNote(reply.encryptedContent, hpkeEnvelope)
             if (payload != null) {
-                DecryptedReply(
+                return DecryptedReply(
                     id = reply.id,
                     authorPubkey = reply.authorPubkey,
                     text = payload.text,
                     createdAt = reply.createdAt,
                 )
-            } else {
-                null
             }
-        } catch (_: Exception) {
-            null
         }
+        return null
     }
 
     /**
@@ -581,31 +581,14 @@ class NotesViewModel @Inject constructor(
     private suspend fun decryptNote(note: Note): DecryptedNote? {
         val ourPubkey = cryptoService.encryptionPubkeyHex ?: return null
 
-        // Build HPKE envelope from wire format: check authorEnvelope first (if we're
-        // the author), then adminEnvelopes (if we're an admin reader).
-        val hpkeEnvelope: org.llamenos.hotline.crypto.HpkeEnvelope =
-            if (note.authorPubkey == ourPubkey && note.authorEnvelope != null) {
-                org.llamenos.hotline.crypto.HpkeEnvelope(
-                    v = org.llamenos.hotline.crypto.HpkeEnvelope.CURRENT_VERSION,
-                    labelId = org.llamenos.hotline.crypto.HpkeEnvelope.LABEL_ID_NOTE_KEY,
-                    enc = note.authorEnvelope!!.enc,
-                    ct = note.authorEnvelope!!.ct,
-                )
-            } else {
-                note.adminEnvelopes?.find { it.pubkey == ourPubkey }?.let { adminEnv ->
-                    org.llamenos.hotline.crypto.HpkeEnvelope(
-                        v = org.llamenos.hotline.crypto.HpkeEnvelope.CURRENT_VERSION,
-                        labelId = org.llamenos.hotline.crypto.HpkeEnvelope.LABEL_ID_NOTE_KEY,
-                        enc = adminEnv.enc,
-                        ct = adminEnv.ct,
-                    )
-                } ?: return null
+        for (hpkeEnvelope in noteReadCandidates(note, ourPubkey)) {
+            val payload = try {
+                cryptoService.decryptNote(note.encryptedContent, hpkeEnvelope)
+            } catch (_: Exception) {
+                null
             }
-
-        return try {
-            val payload = cryptoService.decryptNote(note.encryptedContent, hpkeEnvelope)
             if (payload != null) {
-                DecryptedNote(
+                return DecryptedNote(
                     id = note.id,
                     text = payload.text,
                     fields = payload.fields,
@@ -616,12 +599,9 @@ class NotesViewModel @Inject constructor(
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
                 )
-            } else {
-                null
             }
-        } catch (_: Exception) {
-            null
         }
+        return null
     }
 }
 
