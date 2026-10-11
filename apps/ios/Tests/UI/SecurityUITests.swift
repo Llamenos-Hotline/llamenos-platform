@@ -204,8 +204,11 @@ final class SecurityUITests: BaseUITest {
                 "PIN pad should always be available as fallback"
             )
             // Biometric button is optional — depends on device capabilities
+            // (most simulators have no enrolled biometrics). When it IS
+            // present, verify it is actually usable rather than restating
+            // the existence check the `if` already performed.
             if biometricButton.waitForExistence(timeout: 2) {
-                XCTAssertTrue(true, "Biometric unlock button is displayed")
+                XCTAssertTrue(biometricButton.isEnabled, "Biometric unlock button should be tappable when shown")
             }
         }
     }
@@ -232,18 +235,11 @@ final class SecurityUITests: BaseUITest {
             // "auth-error" was a stale identifier — LoginView surfaces
             // AuthViewModel.errorMessage under "login-error" (see LoginView.swift).
             let errorElement = find("login-error")
-            if errorElement.waitForExistence(timeout: 5) {
-                XCTAssertTrue(true, "HTTP rejection error is displayed")
-            } else {
-                // Check for any error text on screen
-                let errorText = app.staticTexts.matching(
-                    NSPredicate(format: "label CONTAINS[c] 'HTTP' OR label CONTAINS[c] 'HTTPS'")
-                ).firstMatch
-                XCTAssertTrue(
-                    errorText.waitForExistence(timeout: 3),
-                    "An error about HTTP/HTTPS should be displayed"
-                )
-            }
+            let errorText = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] 'HTTP' OR label CONTAINS[c] 'HTTPS'")
+            ).firstMatch
+            let found = errorElement.waitForExistence(timeout: 5) || errorText.waitForExistence(timeout: 3)
+            XCTAssertTrue(found, "An error about the insecure HTTP connection should be displayed")
         }
     }
 

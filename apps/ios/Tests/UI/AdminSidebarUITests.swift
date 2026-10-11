@@ -140,14 +140,14 @@ final class AdminSidebarUITests: BaseUITest {
         }
         item.tap()
 
-        // After tapping, the detail view or a navigation transition should occur.
-        // Verify the sidebar item was tappable (no crash) and the app state changed.
-        // The exact detail view depends on NavigationSplitView wiring; at minimum
-        // the tap should not crash and we should still be in the admin area.
+        // AdminSidebarView wires no navigation destination (#1245) — the most
+        // concrete thing this test can check today is that tapping didn't
+        // crash the app and the sidebar list is still queryable.
         let sidebarList = find("admin-sidebar-list")
-        // On iPad the sidebar stays visible; on iPhone it may push.
-        // Either way the app should not crash.
-        XCTAssertTrue(true, "Tapping location lookup nav item should not crash")
+        XCTAssertTrue(
+            sidebarList.waitForExistence(timeout: 5),
+            "Admin sidebar list should remain visible after tapping a nav item"
+        )
     }
 
     func testTapCallSettingsNavigates() {
@@ -160,8 +160,12 @@ final class AdminSidebarUITests: BaseUITest {
         }
         item.tap()
 
-        // Verify the app is responsive after tapping
-        XCTAssertTrue(true, "Tapping call settings nav item should not crash")
+        // AdminSidebarView wires no navigation destination (#1245) — verify
+        // the sidebar is still queryable rather than asserting a tautology.
+        XCTAssertTrue(
+            find("admin-sidebar-list").waitForExistence(timeout: 5),
+            "Admin sidebar list should remain visible after tapping a nav item"
+        )
     }
 
     func testTapBansNavigates() {
@@ -174,19 +178,31 @@ final class AdminSidebarUITests: BaseUITest {
         }
         item.tap()
 
-        XCTAssertTrue(true, "Tapping bans nav item should not crash")
+        // AdminSidebarView wires no navigation destination (#1245) — verify
+        // the sidebar is still queryable rather than asserting a tautology.
+        XCTAssertTrue(
+            find("admin-sidebar-list").waitForExistence(timeout: 5),
+            "Admin sidebar list should remain visible after tapping a nav item"
+        )
     }
 
     func testTapPlatformHubsNavigates() {
         navigateToAdminPanel()
 
+        // The launched identity is a super-admin (class doc above), so the
+        // Platform section's items should always be present.
         let item = scrollToFind("admin-sidebar-item-hubs")
         guard item.exists else {
-            // Platform items may not appear if test user lacks role-super-admin
+            XCTFail("Platform hubs nav item should exist for a super-admin")
             return
         }
         item.tap()
 
-        XCTAssertTrue(true, "Tapping platform hubs nav item should not crash")
+        // AdminSidebarView wires no navigation destination (#1245) — verify
+        // the sidebar is still queryable rather than asserting a tautology.
+        XCTAssertTrue(
+            find("admin-sidebar-list").waitForExistence(timeout: 5),
+            "Admin sidebar list should remain visible after tapping a nav item"
+        )
     }
 }
