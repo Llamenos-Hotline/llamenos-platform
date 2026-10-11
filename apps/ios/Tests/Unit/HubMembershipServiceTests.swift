@@ -275,7 +275,8 @@ final class HubMembershipServiceTests: XCTestCase {
             apiService: api, cryptoService: RecordingHubCrypto(), hubContext: HubContext()
         )
 
-        XCTAssertTrue(await service.loadMembership())
+        let loaded = await service.loadMembership()
+        XCTAssertTrue(loaded)
         XCTAssertTrue(service.hasLoaded)
 
         service.reset()
