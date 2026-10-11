@@ -124,11 +124,29 @@ jobs:
       # on `pull_request` (it is deliberately NOT gated here), unit suites still
       # run everywhere, and `lint`/`build`/`typecheck` are untouched.
       #
+      # As of #1762 the mobile platforms are not blind on PR heads either:
+      # `ios-compile-check` / `android-compile-check` gate on `pr_gate` (the
+      # pull_request arm below) plus the platform flag, and compile EVERY
+      # source set — including the test bundles, where the two 2026-10-09
+      # defects (#1754, #1758) lived — on every PR whose diff can change
+      # those binaries. The full suites stay queue-only; what changed is
+      # that a COMPILE error no longer first surfaces as a queue ejection
+      # that discards the whole batch.
+      #
       # Unit suites (backend-unit, desktop-unit, crypto-tests) and
       # migration-drift are deliberately NOT gated on this: they are cheap, they
       # contend for nothing scarce, and they keep `ci-status` a real signal on
       # main for `docker-canary` rather than a near-vacuous one.
       revalidate: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
+      # The `pull_request` arm of the same event question — true exactly when
+      # a PR head is being checked. The PR-head compile gates (#1762) read
+      # this output rather than naming the event in their own `if:`, for the
+      # same reason `revalidate` exists as an output: which EVENT pays for
+      # which suite is answered once, here. It also keeps the gates' `if:`
+      # free of any event name, which the "every job ci-status depends on can
+      # report on merge_group" rail in tests/orchestrator/guards.test.ts
+      # requires of everything in ci-status's `needs`.
+      pr_gate: ${{ github.event_name == 'pull_request' }}
       app: ${{ steps.filter.outputs.app }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
       ansible: ${{ steps.filter.outputs.ansible }}
@@ -1180,6 +1198,53 @@ jobs:
           path: apps/android/app/build/test-results/
           retention-days: 7
 
+  # ─── PR-head Android compile gate (#1762) ────────────────────
+  # `android-build-test` above is queue-gated (`revalidate`, #1426), and the
+  # generated Kotlin types (quicktype, gitignored) are exactly as invisible
+  # in a diff as the Swift ones — on #1744's head this suite was `skipped`
+  # while `ci-status` reported success. A compile error against those types
+  # must surface on the PR head, not as a queue ejection that discards the
+  # whole batch. Unlike the macOS runners, ubuntu runners contend for
+  # nothing scarce, so this runs on every Android-touching PR head.
+  #
+  # Compile-only by construction: `assembleDebug` covers the app sources,
+  # `compileDebugUnitTestKotlin` the unit test sources (assemble never
+  # compiles them), `assembleDebugAndroidTest` the instrumented test
+  # sources. No test executes, no emulator boots, no lint — the full
+  # android-build-test verdict still gates in the merge queue.
+  android-compile-check:
+    needs: changes
+    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      - name: Setup Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Compile every Kotlin source set (no tests run)
+        working-directory: apps/android
+        run: ./gradlew assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
+
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
     needs: [changes]
@@ -1680,6 +1745,138 @@ jobs:
           name: ios-test-results
           path: test-results/
           retention-days: 7
+
+  # ─── PR-head iOS compile gate (#1762) ────────────────────────
+  #
+  # WHY THIS JOB EXISTS. `ios-build-test` above is deliberately queue-gated
+  # (`revalidate`, #1426) — but it is the only suite that COMPILES the Swift
+  # sources, and the types most likely to break a compile are
+  # quicktype-generated into gitignored `Types.swift`, invisible in the
+  # diff. Two PRs on 2026-10-09 (#1754, #1758) reached the merge queue with
+  # build-breaking compile errors against generated types, green `ci-status`
+  # and passing unit tests, and were caught only by a reviewer reasoning
+  # through codegen by hand. A queue ejection discards the whole batch,
+  # including unrelated healthy PRs; a compile check is cheap next to that.
+  #
+  # WHAT IT IS: `xcodebuild build-for-testing` and nothing else. Compiles
+  # the app AND both test bundles — #1758's failure was in a UNIT TEST
+  # source, which a plain `build` never compiles. No simulator is created
+  # or booted (generic destination), no test runs. The full verdict (unit
+  # tests, then UI tests) still gates in the merge queue.
+  #
+  # WHERE IT RUNS — the recorded runner-cost decision:
+  #   - GitHub-hosted `macos-15`: free on this public repo, capped at 5
+  #     concurrent macOS jobs repo-wide. ios-e2e.yml's hosted build leg does
+  #     the same build-for-testing in ~4 minutes; this job takes ONE slot
+  #     for roughly that per iOS-touching PR push (XCFramework cache hit;
+  #     ~15-20 min only when packages/crypto changes and the Rust build
+  #     re-runs). PR runs are cancel-in-progress, so a re-pushed PR does
+  #     not stack slots.
+  #   - The self-hosted Mac mini was REJECTED for this job: its two runners
+  #     are the merge queue's gating capacity (#1225, #1407), and #1761's
+  #     disk guard would refuse PR checks en masse whenever the shared
+  #     volume fills — turning a cheap gate into a flaky one.
+  # The merge queue still runs the FULL ios-build-test on the Mac mini;
+  # this job changes nothing about that.
+  ios-compile-check:
+    needs: changes
+    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios == 'true'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun (for codegen)
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies and run codegen
+        run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
+
+      # Same cache, same key as ios-build-test: the XCFramework is a Rust
+      # artifact (cargo, not Xcode), so sharing it between this hosted
+      # runner and the Mac mini is safe — ios-e2e.yml already shares it
+      # across both runner classes.
+      - name: Cache crypto XCFramework + bindings
+        id: xcframework-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/ios/LlamenosCoreFFI.xcframework
+            packages/crypto/dist/ios/LlamenosCore.swift
+          key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
+
+      - name: Install Rust stable (for crypto xcframework)
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Rust cache
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        uses: swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: packages/crypto
+
+      - name: Build crypto XCFramework
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/crypto
+          ./scripts/build-mobile.sh ios
+          cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
+
+      - name: Copy UniFFI bindings (from build or cache)
+        run: |
+          cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+
+      - name: Install xcodegen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      # No DerivedData cache, deliberately: the key ios-build-test uses is
+      # written by the Mac mini on Xcode 27 while this image is on Xcode 26,
+      # and restoring module caches across compiler versions fails the
+      # build for reasons that have nothing to do with the PR. A cold
+      # compile here costs the same ~4 minutes ios-e2e.yml's hosted build
+      # leg already pays.
+      - name: Compile app and every test bundle (nothing runs)
+        working-directory: apps/ios
+        run: |
+          if ! xcodebuild build-for-testing \
+              -project Llamenos.xcodeproj \
+              -scheme Llamenos \
+              -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath "$RUNNER_TEMP/llamenos-build" \
+              -parallelizeTargets \
+              EAGER_LINKING=YES \
+              DEBUG_INFORMATION_FORMAT=dwarf \
+              >"$RUNNER_TEMP/compile-check.log" 2>&1; then
+            grep -E "error:" "$RUNNER_TEMP/compile-check.log" | head -50
+            tail -40 "$RUNNER_TEMP/compile-check.log"
+            exit 1
+          fi
+          grep -E "\*\* TEST BUILD" "$RUNNER_TEMP/compile-check.log"
+
+      # A build that "succeeds" while producing no test bundles is the #168
+      # scheme regression in a new coat — this gate would then pass having
+      # compiled none of the sources the #1754/#1758 defects lived in. The
+      # .xctestrun plist names every bundle the scheme's test action built.
+      - name: Assert both test bundles were compiled
+        run: |
+          XCTESTRUN=$(find "$RUNNER_TEMP/llamenos-build" -name "*.xctestrun" -print -quit)
+          test -n "$XCTESTRUN" || { echo "::error::build-for-testing produced no .xctestrun — the scheme's test action is empty"; exit 1; }
+          grep -q "LlamenosTests" "$XCTESTRUN" || { echo "::error::LlamenosTests bundle missing from $XCTESTRUN"; exit 1; }
+          grep -q "LlamenosUITests" "$XCTESTRUN" || { echo "::error::LlamenosUITests bundle missing from $XCTESTRUN — the #168 scheme shape"; exit 1; }
+          echo "both test bundles present in $XCTESTRUN"
 
   # iOS UI tests (LlamenosUITests) against a native backend — see
   # ios-e2e.yml's header for why this was dark from May to September 2026.
@@ -2254,8 +2451,113 @@ jobs:
   # repo's own CI verdict, these are the fleet's, so a reader can tell which
   # one refused.
 
+  # ─── Platform-suite coverage audit (#1762) ───────────────────
+  # `ci-status` treats `skipped` as success — it has to, or every push to
+  # main would fail on the queue-only suites (#1426). The price of that is
+  # the gap #1762 was filed for: on a PR head the mobile suites were
+  # skipped, `ci-status` reported plain success, and "green" meant "never
+  # compiled". This job makes a skip LEGIBLE instead:
+  #
+  #   pull_request — for each platform whose paths changed, the PR-head
+  #     compile gate MUST have run (a skip means the gate's `if:` drifted
+  #     from the path map: fail loudly, never paper over it), and every
+  #     heavy suite whose full verdict is deferred to the merge queue is
+  #     NAMED in a warning annotation and the job summary. A green
+  #     `ci-status` on a PR now means "compiled", and says so.
+  #
+  #   merge_group / workflow_dispatch — `revalidate` is true there by
+  #     construction, so every changed-path suite must have RUN. A skip on
+  #     the queue ref is the invisible-gap bug itself (the #1594 shape)
+  #     and fails here.
+  #
+  # A separate job rather than a ci-status step because ci-status cannot
+  # read these flags: adding `changes` to its `needs` trips the
+  # required-context rail in tests/orchestrator/guards.test.ts (`changes`'s
+  # own `if:` names `event_name` without `merge_group`), and that rail is
+  # load-bearing. This job's `if:` names no event, so the rail passes.
+  platform-suite-coverage:
+    needs: [changes, ios-compile-check, android-compile-check, ios-build-test, android-build-test, ios-e2e, android-e2e, e2e, backend-bdd]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 2
+
+    steps:
+      - name: Audit suite coverage for the changed paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IOS: ${{ needs.changes.outputs.ios }}
+          ANDROID: ${{ needs.changes.outputs.android }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+          BACKEND: ${{ needs.changes.outputs.backend }}
+          R_IOS_COMPILE: ${{ needs.ios-compile-check.result }}
+          R_ANDROID_COMPILE: ${{ needs.android-compile-check.result }}
+          R_IOS_BUILD: ${{ needs.ios-build-test.result }}
+          R_ANDROID_BUILD: ${{ needs.android-build-test.result }}
+          R_IOS_E2E: ${{ needs.ios-e2e.result }}
+          R_ANDROID_E2E: ${{ needs.android-e2e.result }}
+          R_E2E: ${{ needs.e2e.result }}
+          R_BACKEND_BDD: ${{ needs.backend-bdd.result }}
+        run: |
+          set -euo pipefail
+          gap=""
+          deferred=""
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # The compile gates must never be skipped when their platform's
+            # paths changed — a skip here is wiring drift between the gate's
+            # `if:` and the path map, and ci-status would otherwise report
+            # plain success for a platform nothing verified.
+            if [ "$IOS" = "true" ]; then
+              if [ "$R_IOS_COMPILE" = "skipped" ]; then gap="$gap ios-compile-check"; fi
+              if [ "$R_IOS_BUILD" = "skipped" ]; then deferred="$deferred ios-build-test(full)"; fi
+              if [ "$R_IOS_E2E" = "skipped" ]; then deferred="$deferred ios-e2e"; fi
+            fi
+            if [ "$ANDROID" = "true" ]; then
+              if [ "$R_ANDROID_COMPILE" = "skipped" ]; then gap="$gap android-compile-check"; fi
+              if [ "$R_ANDROID_BUILD" = "skipped" ]; then deferred="$deferred android-build-test(full)"; fi
+              if [ "$R_ANDROID_E2E" = "skipped" ]; then deferred="$deferred android-e2e"; fi
+            fi
+            if [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; then
+              if [ "$R_E2E" = "skipped" ]; then deferred="$deferred e2e"; fi
+            fi
+            if [ "$BACKEND" = "true" ]; then
+              if [ "$R_BACKEND_BDD" = "skipped" ]; then deferred="$deferred backend-bdd"; fi
+            fi
+          fi
+
+          if [ "$EVENT_NAME" = "merge_group" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # revalidate is true on these events by construction; a skip here
+            # is the invisible-gap bug itself (#1594's shape), not a deferral.
+            if [ "$IOS" = "true" ] && [ "$R_IOS_BUILD" = "skipped" ]; then gap="$gap ios-build-test"; fi
+            if [ "$IOS" = "true" ] && [ "$R_IOS_E2E" = "skipped" ]; then gap="$gap ios-e2e"; fi
+            if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_BUILD" = "skipped" ]; then gap="$gap android-build-test"; fi
+            if [ "$ANDROID" = "true" ] && [ "$R_ANDROID_E2E" = "skipped" ]; then gap="$gap android-e2e"; fi
+            if { [ "$DESKTOP" = "true" ] || [ "$BACKEND" = "true" ]; } && [ "$R_E2E" = "skipped" ]; then gap="$gap e2e"; fi
+            if [ "$BACKEND" = "true" ] && [ "$R_BACKEND_BDD" = "skipped" ]; then gap="$gap backend-bdd"; fi
+          fi
+
+          if [ -n "$gap" ]; then
+            echo "::error::Platform suites for the changed paths were SKIPPED on $EVENT_NAME:$gap — ci-status must not report success for a platform nothing verified (#1762). This is a CI wiring defect, not a code failure; check the gate's if: against detect-changed-platforms.sh."
+            exit 1
+          fi
+
+          if [ -n "$deferred" ]; then
+            echo "::warning title=Platform suites deferred to the merge queue::This diff touches paths these suites cover, but their full verdicts only run in the merge queue (#1426's recorded trade):$deferred. The PR-head compile gates DID run, so green here means compiled, not fully tested."
+            {
+              echo "### Platform suites deferred to the merge queue"
+              echo ""
+              echo "This run's green \`ci-status\` covers PR-head compilation for the changed paths; the full verdicts of:$deferred"
+              echo ""
+              echo "only run when the PR enters the merge queue (#1426). If the queue ejects, read those suites' logs first."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "coverage audit: event=$EVENT_NAME gap='${gap:-none}' deferred='${deferred:-none}'"
+
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-e2e, e2e, ios-build-test, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-unit, backend-integration-bun, desktop-unit, android-build-test, android-compile-check, android-e2e, e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, docs-guard, production-smoke, platform-suite-coverage]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -2283,14 +2585,17 @@ jobs:
           check_job "backend-integration-bun" "${{ needs.backend-integration-bun.result }}"
           check_job "desktop-unit" "${{ needs.desktop-unit.result }}"
           check_job "android-build-test" "${{ needs.android-build-test.result }}"
+          check_job "android-compile-check" "${{ needs.android-compile-check.result }}"
           check_job "android-e2e" "${{ needs.android-e2e.result }}"
           check_job "ios-build-test" "${{ needs.ios-build-test.result }}"
+          check_job "ios-compile-check" "${{ needs.ios-compile-check.result }}"
           check_job "ios-e2e" "${{ needs.ios-e2e.result }}"
           check_job "crypto-guardrails" "${{ needs.crypto-guardrails.result }}"
           check_job "migration-drift" "${{ needs.migration-drift.result }}"
           check_job "ansible-validate" "${{ needs.ansible-validate.result }}"
           check_job "production-smoke" "${{ needs.production-smoke.result }}"
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
+          check_job "platform-suite-coverage" "${{ needs.platform-suite-coverage.result }}"
 
           if [[ -n "$FAILED" ]]; then
             echo "Failed jobs:$FAILED"
