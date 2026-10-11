@@ -7,6 +7,8 @@ import dagger.hilt.components.SingletonComponent
 import org.llamenos.hotline.crypto.BiometricKeyStore
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.service.AndroidUnifiedPushGateway
+import org.llamenos.hotline.service.UnifiedPushGateway
 import javax.inject.Singleton
 
 /**
@@ -38,4 +40,8 @@ abstract class AppModule {
     @Binds
     @Singleton
     abstract fun bindBiometricKeyStore(keystoreService: KeystoreService): BiometricKeyStore
+
+    @Binds
+    @Singleton
+    abstract fun bindUnifiedPushGateway(gateway: AndroidUnifiedPushGateway): UnifiedPushGateway
 }

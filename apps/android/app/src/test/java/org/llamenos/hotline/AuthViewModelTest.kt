@@ -3,12 +3,15 @@ package org.llamenos.hotline
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,11 +23,14 @@ import org.junit.Test
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.ui.auth.AuthUiState
 import org.llamenos.hotline.ui.auth.AuthViewModel
 import org.llamenos.hotline.ui.auth.EnrollmentError
 import org.llamenos.hotline.ui.auth.EnrollmentState
+import org.llamenos.hotline.ui.auth.StoredKeyData
 import org.llamenos.hotline.ui.auth.resetForLock
 import java.io.IOException
 
@@ -53,6 +59,7 @@ class AuthViewModelTest {
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var biometricKeyStore: FakeBiometricKeyStore
     private lateinit var inviteRepository: InviteRepository
+    private lateinit var pushRegistrationManager: PushRegistrationManager
 
     @Before
     fun setup() {
@@ -62,6 +69,7 @@ class AuthViewModelTest {
         keyValueStore = InMemoryKeyValueStore()
         biometricKeyStore = FakeBiometricKeyStore()
         inviteRepository = mockk()
+        pushRegistrationManager = mockPushRegistrationManager()
     }
 
     @After
@@ -70,7 +78,13 @@ class AuthViewModelTest {
     }
 
     private fun createViewModel(): AuthViewModel {
-        return AuthViewModel(cryptoService, keyValueStore, biometricKeyStore, inviteRepository)
+        return AuthViewModel(
+            cryptoService,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
     }
 
     /**
@@ -454,6 +468,117 @@ class AuthViewModelTest {
 
         assertTrue(vm.uiState.value.enrollment is EnrollmentState.Redeemed)
         assertTrue(vm.uiState.value.isAuthenticated)
+    }
+
+    // ---- UnifiedPush registration on authentication (#955) ----
+
+    @Test
+    fun `successful invite redemption triggers UnifiedPush registration`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns Result.success(Unit)
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `failed invite redemption does not trigger UnifiedPush registration`() = runTest {
+        coEvery { inviteRepository.redeemInvite(inviteCode) } returns
+            Result.failure(ApiException(404, "Invite not found"))
+        val vm = createViewModel()
+
+        vm.redeemInvite(inviteCode)
+
+        assertFalse(vm.uiState.value.isAuthenticated)
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `skip enrollment triggers UnifiedPush registration`() = runTest {
+        val vm = createViewModel()
+
+        vm.skipEnrollment()
+
+        assertTrue(vm.uiState.value.isAuthenticated)
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `successful PIN unlock triggers UnifiedPush registration`() = runTest {
+        // CryptoService is mocked here (not the real no-native-lib instance) so
+        // the unlock path can complete in a JVM test; the assertion is on the
+        // ViewModel → PushRegistrationManager wiring, not on crypto.
+        val mockCrypto = mockk<CryptoService>()
+        coEvery { mockCrypto.unlockWithPin(any(), any()) } returns
+            DeviceKeyState(
+                deviceId = "device-1",
+                signingPubkeyHex = "a".repeat(64),
+                encryptionPubkeyHex = "b".repeat(64),
+            )
+        keyValueStore.store(
+            KeystoreService.KEY_ENCRYPTED_KEYS,
+            Json.encodeToString(
+                StoredKeyData(
+                    salt = "c2FsdA==",
+                    nonce = "bm9uY2U=",
+                    ciphertext = "Y2lwaGVydGV4dA==",
+                    signingPubkeyHex = "a".repeat(64),
+                    encryptionPubkeyHex = "b".repeat(64),
+                    deviceId = "device-1",
+                ),
+            ),
+        )
+        val vm = AuthViewModel(
+            mockCrypto,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("123456")
+
+        assertTrue(vm.uiState.value.isAuthenticated)
+        verify(exactly = 1) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `failed PIN unlock does not trigger UnifiedPush registration`() = runTest {
+        val mockCrypto = mockk<CryptoService>()
+        coEvery { mockCrypto.unlockWithPin(any(), any()) } throws IllegalStateException("bad PIN")
+        keyValueStore.store(
+            KeystoreService.KEY_ENCRYPTED_KEYS,
+            Json.encodeToString(
+                StoredKeyData(
+                    salt = "c2FsdA==",
+                    nonce = "bm9uY2U=",
+                    ciphertext = "Y2lwaGVydGV4dA==",
+                    signingPubkeyHex = "a".repeat(64),
+                    encryptionPubkeyHex = "b".repeat(64),
+                    deviceId = "device-1",
+                ),
+            ),
+        )
+        val vm = AuthViewModel(
+            mockCrypto,
+            keyValueStore,
+            biometricKeyStore,
+            inviteRepository,
+            pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("000000")
+
+        assertFalse(vm.uiState.value.isAuthenticated)
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
+    }
+
+    @Test
+    fun `initial login screen does not trigger UnifiedPush registration`() {
+        createViewModel()
+
+        verify(exactly = 0) { pushRegistrationManager.ensureRegistered() }
     }
 
     @Test

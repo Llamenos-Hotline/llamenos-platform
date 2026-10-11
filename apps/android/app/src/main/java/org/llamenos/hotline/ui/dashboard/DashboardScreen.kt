@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.filled.Close
@@ -194,6 +195,52 @@ fun DashboardScreen(
                         isReportingSpam = uiState.isReportingSpam,
                         isBanning = uiState.isBanning,
                     )
+                }
+
+                // Missing UnifiedPush distributor — calls can never wake this device.
+                // Explicit, localized state instead of silent registration failure (#955).
+                if (uiState.pushDistributorMissing) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("push-distributor-warning"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.push_setup_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                                Text(
+                                    text = stringResource(R.string.push_setup_distributor_not_found),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.retryPushRegistration() },
+                                modifier = Modifier.testTag("push-distributor-retry"),
+                            ) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
                 }
 
                 // Connection status card
