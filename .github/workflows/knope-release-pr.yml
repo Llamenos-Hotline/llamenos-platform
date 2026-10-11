@@ -135,3 +135,50 @@ jobs:
           fi
           echo "::error::knope prepare-release failed (exit ${status}) for a reason other than 'nothing to release'. See the log above."
           exit "${status}"
+
+      # #1817 / #1114: the release PR can never earn `fleet/review` on its
+      # own. It is authored by llamenos-auto, and GitHub refuses to request a
+      # PR's own author as a reviewer (422), so the ONLY login whose request
+      # the gate accepts on this PR is the operator's — `reviewTriggerLogins`
+      # (orchestrator/src/ci.ts) returns [RELEASE_REVIEW_REQUEST_LOGIN] for
+      # an llamenos-auto-authored PR. Without this step the PR carried no
+      # labels and no review request, so every `synchronize` (each merge to
+      # main force-updates the branch) republished `NO-VERDICT:unreviewed`
+      # and the required context stayed red forever — the release PR could
+      # never merge.
+      #
+      # Requested ONCE per PR, via the timeline check below: GitHub consumes
+      # a pending request when the review lands, so an unconditional POST
+      # would emit a fresh `review_requested` event after every earned
+      # verdict — a full model review on EVERY merge to main. After the
+      # first earned verdict the gate's own `carried` semantics (#1284)
+      # republish it onto each regenerated head with no model call; if the
+      # operator wants a fresh look at a changed diff they re-request by
+      # hand. This also runs on the `no_release` path above (the step exits
+      # 0, not the job), deliberately: a release PR opened BEFORE this step
+      # existed gets its one request here too.
+      - name: Request fleet review on the release PR (once per PR)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          REPO: ${{ github.repository }}
+          # RELEASE_REVIEW_REQUEST_LOGIN in orchestrator/src/ci.ts. A literal
+          # here for the same reason FLEET_REVIEWER_TOOLS is one in
+          # fleet-review.yml: this YAML and that module version independently,
+          # and a workflow cannot import a symbol.
+          REVIEWER: rhonda-rodododo
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --repo "$REPO" --head release --base main --state open --json number --jq '.[0].number // empty')
+          if [[ -z "$pr" ]]; then
+            echo "::notice::No open release PR on branch 'release' — nothing to request."
+            exit 0
+          fi
+          echo "Release PR: #${pr}"
+          already=$(gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" \
+            --jq "[.[] | select(.event == \"review_requested\" and .requested_reviewer.login == \"$REVIEWER\")] | length")
+          if [[ "$already" != "0" ]]; then
+            echo "A review from $REVIEWER was already requested on #${pr} — not re-requesting. A consumed request re-POSTed would emit a fresh event and spend a full model review on every merge to main."
+            exit 0
+          fi
+          gh api -X POST "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$REVIEWER" --silent
+          echo "Requested review from $REVIEWER on #${pr} — fires fleet/review's run-engine arm, which is the only route this PR has to the required context."
