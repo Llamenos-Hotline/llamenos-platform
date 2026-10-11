@@ -2,6 +2,21 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import * as schema from './db/schema'
 
+/**
+ * This suite runs under `bunx vitest run` (see package.json) — NOT
+ * `bun --bun vitest run`. signal-notifier is not a root workspace member, so
+ * it has no node_modules of its own and resolves every dependency upward.
+ * Under the bun runtime, vite's CJS interop handed `import { z } from 'zod'`
+ * back as undefined, and routes.ts died at `z.object` during collection; the
+ * same files collect and pass under node. The whole package's tests ran in no
+ * workflow until #1641, so nothing reported it.
+ *
+ * The database named by TEST_DATABASE_URL (default `llamenos_test` on the dev
+ * instance) must already exist — these helpers create a SCHEMA per suite, not
+ * a database. Locally:
+ *   docker exec llamenos-dev-postgres-1 psql -U llamenos -d llamenos \
+ *     -c 'CREATE DATABASE llamenos_test'
+ */
 const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? 'postgres://llamenos:dev@localhost:5432/llamenos_test'
 
 /**

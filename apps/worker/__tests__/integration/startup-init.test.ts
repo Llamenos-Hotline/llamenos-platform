@@ -28,6 +28,13 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const ADMIN_PUBKEY = 'c'.repeat(64)
+// ADMIN_PUBKEY (Ed25519, signature verification) and ADMIN_DECRYPTION_PUBKEY
+// (X25519, the HPKE recipient admin envelopes are sealed to) are two different
+// keys, and apps/worker/lib/config.ts refuses to start when one is set without
+// the other — see #1283. These must differ: an identical pair is its own
+// startup error. A deployment missing the X25519 key cannot be a recipient of
+// anything, so there is no boot path to assert against without it.
+const ADMIN_DECRYPTION_PUBKEY = 'd'.repeat(64)
 const BOOT_TIMEOUT_MS = 60_000
 
 const createdDatabases: string[] = []
@@ -107,7 +114,10 @@ async function bootServer(
     STORAGE_ACCESS_KEY: 'boot-test',
     STORAGE_SECRET_KEY: 'boot-test',
   }
-  if (adminPubkey) env.ADMIN_PUBKEY = adminPubkey
+  if (adminPubkey) {
+    env.ADMIN_PUBKEY = adminPubkey
+    env.ADMIN_DECRYPTION_PUBKEY = ADMIN_DECRYPTION_PUBKEY
+  }
   Object.assign(env, opts.extraEnv)
   if (process.env.LLAMENOS_CRYPTO_LIB) env.LLAMENOS_CRYPTO_LIB = process.env.LLAMENOS_CRYPTO_LIB
 
@@ -292,7 +302,12 @@ describe('server startup initialisation', () => {
  * generated, revealed or registered.
  */
 describe('demo identities on the shipped entry point', () => {
-  const RESET_SECRET = 'boot-test-reset-secret'
+  // apps/worker/lib/config.ts refuses DEV_ROUTES_ENABLED on a deployed
+  // ENVIRONMENT unless DEV_RESET_SECRET is at least 32 characters. The point
+  // of this test is that the dev surface stays closed on a demo host even
+  // when every flag is set, so the secret has to be strong enough for the
+  // server to boot and actually serve the 404s being asserted.
+  const RESET_SECRET = 'boot-test-reset-secret-0123456789abcdef'
   const adminSecret = ed25519.utils.randomSecretKey()
   const adminPubkey = bytesToHex(ed25519.getPublicKey(adminSecret))
 
