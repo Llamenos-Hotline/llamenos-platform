@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { tick, type TickDeps, type DispatchOutcome } from '../../orchestrator/src/tick.js'
+import { tick, MAX_PASS_LIVE_DISPATCH_START_MS, type TickDeps, type DispatchOutcome } from '../../orchestrator/src/tick.js'
 import { failureBreaker, type Limits } from '../../orchestrator/src/circuit.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { WorkItem } from '../../orchestrator/src/source.js'
@@ -553,6 +553,37 @@ describe('tick: labels re-read at dispatch time (task 9, issue #639)', () => {
 
   it('still dispatches on the happy path where labels are unchanged at dispatch time', async () => {
     const d = baseDeps()
+    await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('tick: pass live-dispatch start gate (MAX_PASS_LIVE_DISPATCH_START_MS)', () => {
+  // A pass that keeps STARTING live dispatches never finishes inside its
+  // systemd unit's TimeoutStartSec — 2026-10-11: two consecutive 2h kills,
+  // each orphaning an in-flight worker. Past the gate the item is DEFERRED:
+  // no dispatch, no ledger row, so the next pass reconsiders it cleanly.
+  it('defers a live dispatch once the pass is older than the gate, recording nothing', async () => {
+    const logs: string[] = []
+    const d = baseDeps({
+      now: vi.fn()
+        .mockReturnValueOnce(1000) // passStart
+        .mockReturnValue(1000 + MAX_PASS_LIVE_DISPATCH_START_MS + 1),
+      log: (msg) => logs.push(msg),
+    })
+    const r = await tick(d)
+    expect(d.dispatch).not.toHaveBeenCalled()
+    expect(d.record).not.toHaveBeenCalled()
+    expect(r.attempted).toBe(0)
+    expect(logs.some((l) => l.includes('deferring item 1'))).toBe(true)
+  })
+
+  it('still dispatches at exactly the gate boundary (the check is strictly-greater)', async () => {
+    const d = baseDeps({
+      now: vi.fn()
+        .mockReturnValueOnce(1000) // passStart
+        .mockReturnValue(1000 + MAX_PASS_LIVE_DISPATCH_START_MS),
+    })
     await tick(d)
     expect(d.dispatch).toHaveBeenCalledTimes(1)
   })

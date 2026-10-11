@@ -30,6 +30,28 @@ export interface DispatchOutcome {
 }
 
 /**
+ * How far into a pass a NEW live dispatch may still be started. A live
+ * dispatch is fully synchronous: the worker session (up to
+ * `DEFAULT_TIMEOUT_SEC` = 90 min in cli.ts, plus engines.ts's poll grace),
+ * then mechanical verification, then up to `MAX_REVIEW_ROUNDS` of
+ * second-opinion review — all inside the one systemd unit's
+ * `TimeoutStartSec`. Before this gate, a pass started every queued dispatch
+ * back-to-back, so any pass with two live items overran the unit timeout;
+ * systemd then SIGKILLed the pass MID-pipeline (fleet.log 2026-10-11: two
+ * consecutive 2h kills, each leaving an orphaned worker whose half-finished
+ * work had to be salvaged). The timer does not re-fire while the service is
+ * active, so every overrun also silently skipped the 30-minute passes in
+ * between.
+ *
+ * Sized against the unit's `TimeoutStartSec` (orchestrator/systemd/
+ * llamenos-fleet-tick.service): gate + one worst-case item (90-min worker +
+ * grace + two verify/review rounds) must fit with comfortable headroom. If
+ * either bound changes, re-check that arithmetic — they are one invariant
+ * expressed in two files.
+ */
+export const MAX_PASS_LIVE_DISPATCH_START_MS = 60 * 60_000
+
+/**
  * The single exit for a dispatched item, whatever happened to it. Runs on
  * every outcome — success, a rejection at any gate, a thrown exception — and
  * must not itself throw (callers wrap it defensively regardless, but a real
@@ -589,6 +611,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
 
     const rows = deps.readLedger()
     const now = deps.now()
+    const passStart = now
     const tripped = await checkBreakers(rows, LIMITS, now, deps.resumedAt())
     if (tripped) {
       // checkBreakers() itself writes the halt file — see circuit.ts — so by
@@ -695,6 +718,19 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
         if (!verdict.ok) {
           deps.log(`item ${item.id} rejected at dispatch time: ${verdict.reason}`)
           allRejections.push({ id: item.id, reason: verdict.reason })
+          continue
+        }
+
+        // See MAX_PASS_LIVE_DISPATCH_START_MS: a pass that keeps STARTING
+        // live dispatches never finishes inside its systemd unit. Deferred,
+        // not rejected — nothing is recorded, so the item is reconsidered on
+        // the next pass exactly as if this one had ended one item earlier.
+        const passAgeMs = deps.now() - passStart
+        if (passAgeMs > MAX_PASS_LIVE_DISPATCH_START_MS) {
+          deps.log(
+            `pass is ${Math.round(passAgeMs / 60_000)}min old — deferring item ${item.id} to a later pass ` +
+            `(no new live dispatch starts after ${Math.round(MAX_PASS_LIVE_DISPATCH_START_MS / 60_000)}min)`,
+          )
           continue
         }
 
