@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://llamenos.org/schemas/crypto-labels.json",
   "title": "Cryptographic Domain Separation Labels",
-  "description": "All domain separation constants used across llamenos crypto operations. Index order matches LABEL_REGISTRY in packages/crypto/src/labels.rs.",
+  "description": "All domain separation constants used across llamenos crypto operations. This file is the source of truth for the label STRINGS and is the input to codegen (TypeScript, Swift, Kotlin). It is NOT the source of truth for the numeric labelId: that is the LABEL_REGISTRY array in packages/crypto/src/labels.rs, whose array index IS the labelId byte in the HPKE envelope wire format. `labels` below is a JSON object, so its member order is incidental and carries no meaning — it does not match LABEL_REGISTRY and must never be used to derive a labelId. Membership and count are kept in sync by label_registry_matches_json and label_count_matches_json; the registry's indices are pinned append-only by label_registry_indices_are_append_only against packages/crypto/label-registry.wire.snapshot.",
   "labels": {
     "LABEL_NOTE_KEY": "llamenos:note-key",
     "LABEL_FILE_KEY": "llamenos:file-key",
