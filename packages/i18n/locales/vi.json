@@ -2772,6 +2772,8 @@
     "getStarted": "Bắt đầu",
     "goToLogin": "Đến trang Đăng nhập",
     "invalidCode": "Mã mời không hợp lệ",
+    "rateLimitedRetry": "Quá nhiều lần thử. Vui lòng đợi {{seconds}} giây rồi thử lại.",
+    "validationUnavailable": "Không thể xác thực lời mời của bạn ngay bây giờ. Kiểm tra kết nối rồi thử lại.",
     "noCode": "Không có mã mời",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

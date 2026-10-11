@@ -894,6 +894,8 @@
     "getStarted": "Titikirisax",
     "goToLogin": "Tib'e pa Tok",
     "invalidCode": "Man okel ta ri etal rech okem",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "Majun etal rech okem ya'on",
     "npubLabel": "Ri Awetal K'utunïq",
     "deviceKeyLabel": "Ri Awewan Etal",

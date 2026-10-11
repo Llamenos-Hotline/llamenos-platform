@@ -2772,6 +2772,8 @@
     "getStarted": "Kòmanse",
     "goToLogin": "Ale nan Koneksyon",
     "invalidCode": "Kòd envitasyon envalid",
+    "rateLimitedRetry": "Twòp tantativ. Tanpri tann {{seconds}} segonn, epi eseye ankò.",
+    "validationUnavailable": "Nou pa t ka verifye envitasyon ou kounye a. Tcheke koneksyon ou epi eseye ankò.",
     "noCode": "Pa gen kòd envitasyon",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

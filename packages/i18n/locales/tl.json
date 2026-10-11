@@ -2772,6 +2772,8 @@
     "getStarted": "Magsimula",
     "goToLogin": "Pumunta sa Login",
     "invalidCode": "Hindi valid ang invite code",
+    "rateLimitedRetry": "Masyadong maraming pagtatangka. Maghintay ng {{seconds}} segundo, pagkatapos ay subukan muli.",
+    "validationUnavailable": "Hindi mapatunayan ang iyong imbitasyon sa ngayon. Suriin ang iyong koneksyon at subukan muli.",
     "noCode": "Walang ibinigay na invite code",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

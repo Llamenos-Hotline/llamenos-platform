@@ -2772,6 +2772,8 @@
     "getStarted": "시작하기",
     "goToLogin": "로그인으로 이동",
     "invalidCode": "유효하지 않은 초대 코드",
+    "rateLimitedRetry": "시도 횟수가 너무 많습니다. {{seconds}}초 기다린 후 다시 시도하세요.",
+    "validationUnavailable": "지금은 초대를 확인할 수 없습니다. 연결을 확인하고 다시 시도하세요.",
     "noCode": "초대 코드가 없습니다",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
