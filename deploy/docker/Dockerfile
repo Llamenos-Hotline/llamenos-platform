@@ -209,7 +209,7 @@ RUN bun run build
 # Digest bump (issue #650, 2026-09-20): refreshes the Alpine package layer
 # (curl/c-ares/libcrypto3/libssl3 CVEs) under the same 2.11.4 tag — same Caddy
 # version, no behavior change. See the `static` stage below for the matching bump.
-FROM caddy:2.11.4-builder-alpine@sha256:0aa610043dab5da82ad0a0268e46bb852785e6f5160f12f1c6fe3f42903d7e1b AS caddy-builder
+FROM caddy:2.11.7-builder-alpine@sha256:aa705b1e8e4bce41a7a30de934c1e00f6821667c1d1206424465065c92cb7674 AS caddy-builder
 RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 
 # Stage 7 (`static`): Caddy image serving the built SPA. Matches the
@@ -222,7 +222,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # this bump — they come from the Caddy 2.11.4 release's resolved dependency set,
 # not the Alpine base, and need a Caddy version bump to clear (follow-up, needs
 # Caddyfile.production + caddy-ratelimit plugin compat validation first).
-FROM caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b AS static
+FROM caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f AS static
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
 # NOTE: /srv/crypto (the Tier-4 sandboxed-crypto-iframe origin referenced by
