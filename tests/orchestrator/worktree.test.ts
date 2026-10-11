@@ -145,6 +145,22 @@ describe('salvageUncommittedWork', () => {
     const showOutput = execSync(`git show ${result.branch}:uncommitted.txt`, { cwd: f.bareOrigin }).toString()
     expect(showOutput).toBe('the 1070 correct lines\n')
   })
+
+  // 2026-10-11, issue #1684: the runtime worktree's lefthook hooks could not
+  // even start (system node predates `util.styleText`), every salvage commit
+  // failed, and the lane stayed wedged on real work pass after pass. The
+  // salvage commit is data preservation, not a quality gate — it must commit
+  // with `--no-verify`, past a hook that always fails.
+  it('commits past a failing pre-commit hook — salvage is data preservation, not a quality gate', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.mainRepo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n')
+    execSync('chmod +x .git/hooks/pre-commit', { cwd: f.mainRepo })
+    writeFileSync(join(f.worktree, 'uncommitted.txt'), 'rescue me\n')
+    const result = await salvageUncommittedWork(f.worktree, f.branch)
+    expect(result.salvaged).toBe(true)
+    const showOutput = execSync(`git show ${result.branch}:uncommitted.txt`, { cwd: f.bareOrigin }).toString()
+    expect(showOutput).toBe('rescue me\n')
+  })
 })
 
 describe('parsePorcelainPaths', () => {
