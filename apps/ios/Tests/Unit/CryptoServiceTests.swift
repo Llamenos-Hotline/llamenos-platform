@@ -225,6 +225,15 @@ final class CryptoServiceTests: XCTestCase {
         let sealed = try author.encryptMessage(plaintext: plaintext, readerPubkeys: [secondPubkey])
         XCTAssertEqual(Set(sealed.envelopes.map(\.pubkey)), [authorPubkey, secondPubkey])
 
+        let authorEnvelope = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == authorPubkey })
+        XCTAssertEqual(
+            try author.decryptMessage(
+                encryptedContent: sealed.encryptedContent,
+                enc: authorEnvelope.enc,
+                ct: authorEnvelope.ct
+            ),
+            plaintext
+        )
         XCTAssertEqual(
             try author.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: sealed.envelopes),
             plaintext
@@ -232,6 +241,15 @@ final class CryptoServiceTests: XCTestCase {
 
         // Switch the (process-global) Rust state to the second reader's device key.
         _ = try second.unlockWithPin(data: secondKeys, pin: "22222222")
+        let secondEnvelope = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == secondPubkey })
+        XCTAssertEqual(
+            try second.decryptMessage(
+                encryptedContent: sealed.encryptedContent,
+                enc: secondEnvelope.enc,
+                ct: secondEnvelope.ct
+            ),
+            plaintext
+        )
         XCTAssertEqual(
             try second.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: sealed.envelopes),
             plaintext
@@ -258,6 +276,13 @@ final class CryptoServiceTests: XCTestCase {
 
         let note = try service.encryptNote(payload: "{\"text\":\"n\"}", recipientPubkeys: [me])
         let noteEnv = try XCTUnwrap(note.envelopes.first).envelope
+        XCTAssertThrowsError(
+            try service.decryptMessage(
+                encryptedContent: note.ciphertextHex,
+                enc: noteEnv.enc,
+                ct: noteEnv.ct
+            )
+        )
         let noteReaderEnvelope = RecipientEnvelope(ct: noteEnv.ct, enc: noteEnv.enc, pubkey: me)
         XCTAssertThrowsError(
             try service.decryptMessage(encryptedContent: note.ciphertextHex, readerEnvelopes: [noteReaderEnvelope])

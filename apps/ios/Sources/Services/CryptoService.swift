@@ -379,17 +379,24 @@ final class CryptoService: @unchecked Sendable {
     // MARK: - Message Decryption (HPKE)
 
     func decryptMessage(encryptedContent: String, envelope: HpkeEnvelope) throws -> String {
+        try decryptMessage(encryptedContent: encryptedContent, enc: envelope.enc, ct: envelope.ct)
+    }
+
+    /// Decrypt a message-pattern payload (`LABEL_MESSAGE`) from its ciphertext and
+    /// this reader's wire envelope `{enc, ct}`.
+    func decryptMessage(encryptedContent: String, enc: String, ct: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let ffiEnvelope = try toFfiEnvelope(label: CryptoLabels.LABEL_MESSAGE, enc: envelope.enc, ct: envelope.ct)
+        let label = CryptoLabels.LABEL_MESSAGE
+        let ffiEnvelope = try toFfiEnvelope(label: label, enc: enc, ct: ct)
         let keyHex = try ffiMobileHpkeOpenKey(
             envelope: ffiEnvelope,
-            expectedLabel: CryptoLabels.LABEL_MESSAGE,
-            aadHex: try keyWrapAad(CryptoLabels.LABEL_MESSAGE)
+            expectedLabel: label,
+            aadHex: try keyWrapAad(label)
         )
         let plaintextHex = try ffiMobileSymmetricDecrypt(
             ciphertextHex: encryptedContent,
             keyHex: keyHex,
-            aadHex: try contentAad(CryptoLabels.LABEL_MESSAGE)
+            aadHex: try contentAad(label)
         )
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted message")
