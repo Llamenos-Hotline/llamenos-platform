@@ -894,6 +894,8 @@
     "getStarted": "Kíxáꞌá",
     "goToLogin": "Kuaꞌan nu̱ú Kivi",
     "invalidCode": "Código de invitación ña va̱ꞌa",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "Ñá ni̱ chikaa código de invitación",
     "npubLabel": "Llave Pública Miíún",
     "deviceKeyLabel": "Llave Secreta Miíún",

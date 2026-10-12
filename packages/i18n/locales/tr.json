@@ -894,6 +894,8 @@
     "getStarted": "Başlayın",
     "goToLogin": "Giriş Sayfasına Git",
     "invalidCode": "Geçersiz davet kodu",
+    "rateLimitedRetry": "Çok fazla deneme. Lütfen {{seconds}} saniye bekleyip yeniden deneyin.",
+    "validationUnavailable": "Davetiniz şu anda doğrulanamadı. Bağlantınızı kontrol edip yeniden deneyin.",
     "noCode": "Davet kodu sağlanmadı",
     "npubLabel": "Genel Anahtarınız",
     "deviceKeyLabel": "Gizli Anahtarınız",

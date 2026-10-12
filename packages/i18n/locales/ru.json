@@ -2772,6 +2772,8 @@
     "getStarted": "Начать",
     "goToLogin": "Перейти к входу",
     "invalidCode": "Недействительный код приглашения",
+    "rateLimitedRetry": "Слишком много попыток. Подождите {{seconds}} секунд и повторите попытку.",
+    "validationUnavailable": "Не удалось проверить приглашение. Проверьте подключение и повторите попытку.",
     "noCode": "Код приглашения не указан",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

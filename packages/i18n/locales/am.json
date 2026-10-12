@@ -894,6 +894,8 @@
     "getStarted": "ጀምር",
     "goToLogin": "ወደ መግቢያ ሂድ",
     "invalidCode": "ልክ ያልሆነ የግብዣ ኮድ",
+    "rateLimitedRetry": "በጣም ብዙ ሙከራዎች። እባክዎ {{seconds}} ሰከንዶች ይጠብቁ እና እንደገና ይሞክሩ።",
+    "validationUnavailable": "ወዲያው ግብዣዎን ማረጋገጥ አልተቻለም። ግንኙነትዎን ያረጋግጡ እና እንደገና ይሞክሩ።",
     "noCode": "ምንም የግብዣ ኮድ አልቀረበም",
     "npubLabel": "የእርስዎ ይፋ ቁልፍ",
     "deviceKeyLabel": "የእርስዎ ሚስጥራዊ ቁልፍ",

@@ -894,6 +894,8 @@
     "getStarted": "Dest Pê Bike",
     "goToLogin": "Biçe Têketinê",
     "invalidCode": "Koda vexwendinê ne derbasdar e",
+    "rateLimitedRetry": "Hewldan pir zêde ne. Ji kerema xwe {{seconds}} saniyeyan bisekinin û dîsa biceribînin.",
+    "validationUnavailable": "Vedaweta we niha nehat piştrast kirin. Girêdana xwe kontrol bikin û dîsa biceribînin.",
     "noCode": "Tu koda vexwendinê nehatiye dayîn",
     "npubLabel": "Kilîda Te ya Giştî",
     "deviceKeyLabel": "Kilîda Te ya Nepenî",
