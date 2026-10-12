@@ -50,13 +50,11 @@ struct HubFieldCryptoTests {
             label: CryptoLabels.LABEL_TAG_ENCRYPT,
             hubKey: Self.hubKey
         )
-        #expect(throws: (any Error).self) {
-            try HubFieldCrypto.decrypt(
-                ciphertextHex: encrypted,
-                label: "llamenos:wrong-label:v1",
-                hubKey: Self.hubKey
-            )
-        }
+        #expect(HubFieldCrypto.decrypt(
+            ciphertextHex: encrypted,
+            label: "llamenos:wrong-label:v1",
+            hubKey: Self.hubKey
+        ) == nil)
     }
 
     @Test func wrongKeyFailsDecryption() throws {
@@ -66,13 +64,11 @@ struct HubFieldCryptoTests {
             hubKey: Self.hubKey
         )
         let wrongKey = Data(repeating: 0xFF, count: 32)
-        #expect(throws: (any Error).self) {
-            try HubFieldCrypto.decrypt(
-                ciphertextHex: encrypted,
-                label: CryptoLabels.LABEL_TAG_ENCRYPT,
-                hubKey: wrongKey
-            )
-        }
+        #expect(HubFieldCrypto.decrypt(
+            ciphertextHex: encrypted,
+            label: CryptoLabels.LABEL_TAG_ENCRYPT,
+            hubKey: wrongKey
+        ) == nil)
     }
 
     @Test func hexStringRoundTrips() {
