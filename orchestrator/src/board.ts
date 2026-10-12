@@ -825,9 +825,10 @@ export function renderBoardPorcelain(view: BoardView): string {
 // ---------------------------------------------------------------------------
 
 const PR_QUERY = `
-query($owner: String!, $repo: String!, $count: Int!) {
+query($owner: String!, $repo: String!, $count: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
-    pullRequests(states: OPEN, first: $count, orderBy: {field: CREATED_AT, direction: ASC}) {
+    pullRequests(states: OPEN, first: $count, after: $after, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         number
         author { login }
@@ -905,8 +906,15 @@ interface GqlPrNode {
   commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { nodes: GqlContextNode[] } } | null } }[] }
 }
 
+interface GqlPrConnection {
+  nodes: GqlPrNode[]
+  pageInfo: { hasNextPage: boolean; endCursor: string | null }
+}
+
 interface GqlResponse {
-  data?: { repository?: { pullRequests?: { nodes: GqlPrNode[] } } | null } | null
+  data?: { repository?: { pullRequests?: GqlPrConnection } | null } | null
+  errors?: unknown
+  stderr?: string
 }
 
 /** `CheckRun.status !== 'COMPLETED'` is still running or queued — never
@@ -927,12 +935,12 @@ export function normalizeStatusContextState(state: string): CheckState {
   return 'FAIL'
 }
 
-const BOARD_PR_LIMIT = 50
+const BOARD_PAGE_SIZE = 20
+const BOARD_PAGE_ATTEMPTS = 3
 
 export interface BoardFetchDeps {
-  /** `gh api graphql` for the query above — returns the raw response, or
-   *  `undefined` on any failure (matching `ghJson`'s own contract). */
-  queryOpenPrs(): Promise<GqlResponse | undefined>
+  /** `gh api graphql` for one page of the query above. */
+  queryOpenPrs(after?: string): Promise<GqlResponse | string | undefined>
   /** `gh api repos/{REPO}/actions/runs/{runId}/jobs` — only ever called for
    *  a `fleet/review` CheckRun whose conclusion is FAILURE, to classify why.
    *  `undefined` on any failure, which `fetchBoardFacts` treats as
@@ -965,11 +973,9 @@ function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 
 }
 
 /**
- * Turns one `gh api graphql` response plus, for any FAILed `fleet/review`
- * CheckRun found in it, one `gh api .../actions/runs/{id}/jobs` lookup each,
- * into `BoardFacts`. The GraphQL call is the ONE query for all open PRs the
- * brief asks for; the per-run jobs lookup only ever fires for a PR whose
- * `fleet/review` is red, which is expected to be rare.
+ * Turns every page of `gh api graphql` open-PR results plus, for any FAILed
+ * `fleet/review` CheckRun found in them, one
+ * `gh api .../actions/runs/{id}/jobs` lookup each, into `BoardFacts`.
  */
 async function gatherGate(deps: BoardFetchDeps, branch: string): Promise<BranchGate> {
   let ruleset: RulesetFact
@@ -991,12 +997,78 @@ function describeError(e: unknown): string {
   return e instanceof Error && !('stderr' in e) ? e.message : describeGhFailure(e)
 }
 
+function pullRequestsFromResponse(response: GqlResponse | string | undefined): GqlPrConnection {
+  if (typeof response === 'string') {
+    throw new Error(`Open PR query returned no data.repository.pullRequests (response body: ${response.slice(0, 500)})`)
+  }
+  if (Array.isArray(response?.errors) && response.errors.length > 0) {
+    const details = [`GraphQL errors: ${JSON.stringify(response.errors)}`]
+    if (typeof response.stderr === 'string' && response.stderr.length > 0) details.push(`gh stderr: ${response.stderr}`)
+    throw new Error(`Open PR query failed (${details.join('; ')})`)
+  }
+  const connection = response?.data?.repository?.pullRequests
+  if (connection === undefined || connection === null) {
+    const details: string[] = []
+    if (typeof response?.stderr === 'string' && response.stderr.length > 0) details.push(`gh stderr: ${response.stderr}`)
+    if (response?.errors !== undefined) details.push(`GraphQL errors: ${JSON.stringify(response.errors)}`)
+    if (response === undefined) details.push('no response; gh stderr unavailable')
+    if (details.length === 0) details.push('gh stderr unavailable')
+    throw new Error(`Open PR query returned no data.repository.pullRequests (${details.join('; ')})`)
+  }
+  if (!Array.isArray(connection.nodes) || connection.pageInfo === undefined
+    || typeof connection.pageInfo.hasNextPage !== 'boolean'
+    || !(typeof connection.pageInfo.endCursor === 'string' || connection.pageInfo.endCursor === null)) {
+    throw new Error('Open PR query returned malformed pullRequests nodes or pageInfo')
+  }
+  return connection
+}
+
+function isRetryablePrQueryError(error: unknown): boolean {
+  const candidate = error as { message?: unknown; stderr?: unknown; stdout?: unknown }
+  const detail = [candidate?.message, candidate?.stderr, candidate?.stdout]
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n')
+  return /\b5\d\d\b|HTTP\s+5\d\d|not valid JSON|not JSON|<html|unicorn/i.test(detail)
+}
+
+function formatPrQueryFailure(error: unknown): string {
+  const candidate = error as { stdout?: unknown }
+  const stdout = typeof candidate?.stdout === 'string' && candidate.stdout.length > 0
+    ? `; response body: ${candidate.stdout.slice(0, 500)}`
+    : ''
+  return `Open PR query failed: ${describeError(error)}${stdout}`
+}
+
+async function queryOpenPrPage(deps: BoardFetchDeps, after?: string): Promise<GqlPrConnection> {
+  for (let attempt = 0; attempt < BOARD_PAGE_ATTEMPTS; attempt++) {
+    try {
+      return pullRequestsFromResponse(await deps.queryOpenPrs(after))
+    } catch (error) {
+      if (attempt + 1 < BOARD_PAGE_ATTEMPTS && isRetryablePrQueryError(error)) continue
+      throw new Error(formatPrQueryFailure(error), { cause: error })
+    }
+  }
+  throw new Error('Open PR query retry loop ended unexpectedly')
+}
+
 export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFacts> {
   const halt = await deps.checkFleetHalt()
   const fleet: FleetStateFact = { halted: halt.halted, haltReason: halt.reason, isQuotaHalt: isQuotaHaltReason(halt.reason) }
 
-  const response = await deps.queryOpenPrs()
-  const nodes = response?.data?.repository?.pullRequests?.nodes ?? []
+  const nodes: GqlPrNode[] = []
+  const seenCursors = new Set<string>()
+  let cursor: string | undefined
+  while (true) {
+    const pullRequests = await queryOpenPrPage(deps, cursor)
+    nodes.push(...pullRequests.nodes)
+    if (!pullRequests.pageInfo.hasNextPage) break
+    const nextCursor = pullRequests.pageInfo.endCursor
+    if (nextCursor === null || nextCursor.length === 0 || seenCursors.has(nextCursor)) {
+      throw new Error(`Open PR query pagination returned an invalid or repeated cursor: ${String(nextCursor)}`)
+    }
+    seenCursors.add(nextCursor)
+    cursor = nextCursor
+  }
 
   const prs = await Promise.all(nodes.map(async (node): Promise<PrFact> => {
     const commit = node.commits.nodes[0]?.commit
@@ -1068,15 +1140,30 @@ interface ActionsJobsResponse { jobs: ActionsRunJob[] }
 
 function defaultBoardFetchDeps(): BoardFetchDeps {
   return {
-    queryOpenPrs: async () => {
+    queryOpenPrs: async (after) => {
       const [owner, repoName] = REPO.split('/')
-      return ghJson<GqlResponse>([
+      const args = [
         'api', 'graphql',
         '-f', `query=${PR_QUERY}`,
         '-f', `owner=${owner ?? ''}`,
         '-f', `repo=${repoName ?? ''}`,
-        '-F', `count=${BOARD_PR_LIMIT}`,
-      ])
+        '-F', `count=${BOARD_PAGE_SIZE}`,
+      ]
+      if (after !== undefined) args.push('-f', `after=${after}`)
+      let raw: string
+      try {
+        raw = await gh(args)
+      } catch (error) {
+        throw new Error(formatPrQueryFailure(error), { cause: error })
+      }
+      let response: GqlResponse
+      try {
+        response = JSON.parse(raw) as GqlResponse
+      } catch (error) {
+        throw new Error(`Open PR GraphQL response was not valid JSON: ${raw.slice(0, 500)}`, { cause: error })
+      }
+      pullRequestsFromResponse(response)
+      return response
     },
     fetchRunJobs: async (runId) => {
       const data = await ghJson<ActionsJobsResponse>(['api', `repos/${REPO}/actions/runs/${runId}/jobs`])
@@ -1134,8 +1221,8 @@ export async function fetchBoardFacts(): Promise<BoardFacts> {
 
 /** Wired into `cli.ts`'s `HANDLERS`. `--porcelain` anywhere in argv selects
  *  the machine-readable form; everything else prints the grouped table. */
-export async function runBoard(args: string[]): Promise<number> {
-  const facts = await fetchBoardFacts()
+export async function runBoard(args: string[], deps: BoardFetchDeps = defaultBoardFetchDeps()): Promise<number> {
+  const facts = await fetchBoardFactsWith(deps)
   const view = buildBoard(facts)
   const porcelain = args.includes('--porcelain')
   process.stdout.write((porcelain ? renderBoardPorcelain(view) : renderBoard(view)) + '\n')
