@@ -52,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
+import org.llamenos.hotline.telephony.rememberMicrophoneRequest
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.util.DateFormatUtils
 import org.llamenos.hotline.ui.notes.DecryptedNote
@@ -90,10 +91,13 @@ fun DashboardScreen(
     onNavigateToHubs: () -> Unit = {},
     onNavigateToEvents: () -> Unit = {},
     onNavigateToTriage: () -> Unit = {},
+    /** Extra work for pull-to-refresh beyond this screen's own view models (hub selection). */
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val notesUiState by notesViewModel.uiState.collectAsState()
+    val requestMicrophone = rememberMicrophoneRequest()
 
     Scaffold(
         topBar = {
@@ -163,6 +167,7 @@ fun DashboardScreen(
             onRefresh = {
                 viewModel.refresh()
                 notesViewModel.refresh()
+                onRefresh()
             },
             modifier = Modifier
                 .fillMaxSize()
@@ -333,7 +338,12 @@ fun DashboardScreen(
                                     if (uiState.isOnShift) {
                                         viewModel.clockOut()
                                     } else {
-                                        viewModel.clockIn()
+                                        // Same RECORD_AUDIO gate as the Shifts screen: ask while
+                                        // an activity is foreground and unlocked, not when a
+                                        // call is already ringing.
+                                        requestMicrophone { granted ->
+                                            viewModel.clockIn(microphoneGranted = granted)
+                                        }
                                     }
                                 },
                                 enabled = !uiState.isClockingInOut,

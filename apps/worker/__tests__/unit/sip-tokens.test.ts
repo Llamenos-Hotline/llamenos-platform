@@ -153,7 +153,10 @@ describe('isSipConfigured', () => {
   })
 
   describe('asterisk', () => {
-    it('returns true when SIP fields are present', () => {
+    // Per-volunteer issuance needs the registrar's public SIP domain plus ARI
+    // access to provision the endpoint — not the hub-scoped sipUsername/
+    // sipPassword, which the per-volunteer path exists to avoid.
+    it('returns true when the registrar domain and ARI credentials are present', () => {
       expect(isSipConfigured(asteriskConfig())).toBe(true)
     })
 
@@ -161,12 +164,20 @@ describe('isSipConfigured', () => {
       expect(isSipConfigured(asteriskConfig({ sipDomain: undefined }))).toBe(false)
     })
 
-    it('returns false when sipUsername is missing', () => {
-      expect(isSipConfigured(asteriskConfig({ sipUsername: undefined }))).toBe(false)
+    it('returns false when ariUrl is missing', () => {
+      expect(isSipConfigured(asteriskConfig({ ariUrl: undefined }))).toBe(false)
     })
 
-    it('returns false when sipPassword is missing', () => {
-      expect(isSipConfigured(asteriskConfig({ sipPassword: undefined }))).toBe(false)
+    it('returns false when ariUsername is missing', () => {
+      expect(isSipConfigured(asteriskConfig({ ariUsername: undefined }))).toBe(false)
+    })
+
+    it('returns false when ariPassword is missing', () => {
+      expect(isSipConfigured(asteriskConfig({ ariPassword: undefined }))).toBe(false)
+    })
+
+    it('ignores the hub-scoped sipUsername/sipPassword — they are the shared credential', () => {
+      expect(isSipConfigured(asteriskConfig({ sipUsername: undefined, sipPassword: undefined }))).toBe(true)
     })
   })
 
@@ -350,34 +361,11 @@ describe('generateSipParams', () => {
   })
 
   describe('asterisk', () => {
-    it('generates correct SIP params', () => {
-      const result = generateSipParams(asteriskConfig(), identity)
-      expect(result.provider).toBe('asterisk')
-      expect(result.sip.domain).toBe('sip.asterisk.test')
-      expect(result.sip.transport).toBe('tls')
-      expect(result.sip.username).toBe('sip_user')
-      expect(result.sip.password).toBe('sip_pass')
-      expect(result.sip.mediaEncryption).toBe('zrtp')
-      expect(result.sip.iceServers).toEqual([
-        { url: 'stun:sip.asterisk.test:3478' },
-      ])
-    })
-
-    it('throws when sipDomain is missing', () => {
-      expect(() => generateSipParams(asteriskConfig({ sipDomain: undefined }), identity)).toThrow(
-        'Missing Asterisk SIP config',
-      )
-    })
-
-    it('throws when sipUsername is missing', () => {
-      expect(() => generateSipParams(asteriskConfig({ sipUsername: undefined }), identity)).toThrow(
-        'Missing Asterisk SIP config',
-      )
-    })
-
-    it('throws when sipPassword is missing', () => {
-      expect(() => generateSipParams(asteriskConfig({ sipPassword: undefined }), identity)).toThrow(
-        'Missing Asterisk SIP config',
+    // No shared-credential branch: the only issuable asterisk credential is
+    // the per-volunteer identity built by telephony/registrar.ts.
+    it('throws — the per-volunteer path is the only asterisk credential', () => {
+      expect(() => generateSipParams(asteriskConfig(), identity)).toThrow(
+        'SIP not supported for provider: asterisk',
       )
     })
   })

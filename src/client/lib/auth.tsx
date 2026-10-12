@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { ensureDeviceRegistered, resetDeviceRegistrationCache } from '@/lib/device-registration'
 import { useTranslation } from 'react-i18next'
 import {
   deviceImportAndLoad,
@@ -10,6 +11,10 @@ import * as keyManager from './key-manager'
 import { getMe, login, logout as apiLogout, updateMyAvailability, setOnAuthExpired, setOnApiActivity } from './api'
 import { permissionGranted } from '@shared/permissions'
 import { loginWithPasskey as webauthnLogin } from './webauthn'
+import { useConfig, forgetHubPreference } from './config'
+
+/** Hub membership changes rarely; a slow refresh avoids needing a relaunch. */
+const HUB_MEMBERSHIP_REFRESH_MS = 5 * 60_000
 
 interface AuthState {
   isKeyUnlocked: boolean
@@ -90,11 +95,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const lastApiActivity = useRef(Date.now())
 
+  // Read on every render (not state): a passkey login writes the token to
+  // sessionStorage directly, and `isAuthenticated` has always been derived
+  // from it this way.
+  const hasSessionToken = typeof window !== 'undefined' && !!sessionStorage.getItem('llamenos-session-token')
+
   // Track API activity — called after each successful request
   const markActivity = useCallback(() => {
     lastApiActivity.current = Date.now()
     setState(s => s.sessionExpiring ? { ...s, sessionExpiring: false } : s)
   }, [])
+
+  // --- Hub memberships ---------------------------------------------------
+  // The active hub is BROWSING CONTEXT, and it has to come from the signed-in
+  // user's own memberships. Before #1708 `ConfigProvider` chose it on mount
+  // from the public `/api/config` hub list — before login, with no reference to
+  // the user — so on a multi-hub deployment it was an arbitrary hub the user
+  // was usually not in, and the note write, the notes list and the shift poll
+  // all 403'd into empty states that looked like "no notes" and "Off Shift".
+  //
+  // AuthProvider owns the trigger because it is the only place that knows when
+  // a session exists; ConfigProvider sits above it and cannot read auth state.
+  const { refreshMemberHubs, clearMemberHubs } = useConfig()
 
   // Listen for key manager lock/unlock events
   useEffect(() => {
@@ -130,6 +152,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setOnApiActivity(null)
   }, [markActivity])
 
+  // Register this device's X25519 encryption key with the server.
+  //
+  // Nothing can HPKE-wrap a message, transcription or call record to a user
+  // whose devices carry no X25519 key, and before this the desktop registered
+  // no device at all — so every server-written envelope reached the client with
+  // no envelope addressed to it and rendered as `[Encrypted]`.
+  //
+  // Runs once authenticated AND unlocked, because the key lives in Rust
+  // CryptoState and `getDevicePubkeys()` returns null while locked.
+  useEffect(() => {
+    if (!state.publicKey || !state.isKeyUnlocked) return
+    let cancelled = false
+    ensureDeviceRegistered().catch((err) => {
+      if (cancelled) return
+      // Loud, not fatal: the session is usable, but E2EE content written while
+      // this is failing will not be readable on this device.
+      console.error('[auth] device encryption key registration failed', err)
+    })
+    return () => { cancelled = true }
+  }, [state.publicKey, state.isKeyUnlocked])
+
   // Session expiry warning — check every 60s if idle > 30 min.
   // Server uses sliding expiry (extends 8h on each validated request), so only truly
   // idle sessions expire. The 30-min client threshold gives ample warning.
@@ -144,6 +187,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 60_000)
     return () => clearInterval(interval)
   }, [state.isKeyUnlocked, state.sessionExpired])
+
+  // Membership is keyed on "a usable session exists", the same predicate
+  // `isAuthenticated` exposes, so it reloads after a sign-in, a session
+  // restore and a PIN unlock alike. The slow refresh picks up a hub the user
+  // was added to or removed from without a relaunch.
+  const sessionUsable = (state.isKeyUnlocked || hasSessionToken) && state.roles.length > 0
+  useEffect(() => {
+    if (!sessionUsable) {
+      clearMemberHubs()
+      return
+    }
+    void refreshMemberHubs()
+    const interval = setInterval(() => { void refreshMemberHubs() }, HUB_MEMBERSHIP_REFRESH_MS)
+    return () => clearInterval(interval)
+  }, [sessionUsable, refreshMemberHubs, clearMemberHubs])
 
   // Restore session on mount
   useEffect(() => {
@@ -509,7 +567,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Revoke server-side session token before clearing local state
     apiLogout()
     keyManager.lock()
+    resetDeviceRegistrationCache()
     sessionStorage.removeItem('llamenos-session-token')
+    // The next user of this device must not inherit this volunteer's hub.
+    forgetHubPreference()
     // Clean up encrypted drafts from localStorage
     const draftKeys = Object.keys(localStorage).filter(k => k.startsWith('llamenos-draft:'))
     draftKeys.forEach(k => localStorage.removeItem(k))
@@ -541,8 +602,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const hasSessionToken = typeof window !== 'undefined' && !!sessionStorage.getItem('llamenos-session-token')
-
   const value: AuthContextValue = {
     ...state,
     signIn,
@@ -556,7 +615,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     lockKey,
     hasPermission: (permission: string) => permissionGranted(state.permissions, permission),
     isAdmin: permissionGranted(state.permissions, 'settings:manage'),
-    isAuthenticated: (state.isKeyUnlocked || hasSessionToken) && state.roles.length > 0,
+    isAuthenticated: sessionUsable,
     hasDeviceKey: state.isKeyUnlocked,
     webauthnEnrollmentRequired: state.webauthnRequired && !state.webauthnRegistered,
   }

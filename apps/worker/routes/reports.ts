@@ -76,7 +76,7 @@ reports.get('/',
       if (!canReadAll) {
         return c.json({ error: 'Forbidden', required: 'reports:read-all' }, 403)
       }
-      const { reportTypes } = await services.settings.getCmsReportTypes()
+      const { reportTypes } = await services.settings.getCmsReportTypes(hubId)
       const conversionTypeIds = new Set(
         reportTypes.filter(rt => rt.allowCaseConversion).map(rt => rt.id),
       )
@@ -142,6 +142,9 @@ reports.post('/',
         reportTitle: body.title,
         reportCategory: body.category,
         reportTypeId: body.reportTypeId,
+        // New reports start in the 'pending' triage bucket so they appear in the
+        // default conversionStatus=pending triage queue.
+        conversionStatus: 'pending',
       },
     })
 

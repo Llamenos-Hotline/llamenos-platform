@@ -17,7 +17,7 @@ const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 interface WebhookSecurityState {
   /** Content-Type header to send */
   contentType?: string
-  /** Simulated source IP (via X-Forwarded-For or CF-Connecting-IP) */
+  /** Simulated source IP (via X-Forwarded-For) */
   sourceIp?: string
   /** Provider name for IP allowlist tests */
   provider?: string
@@ -84,7 +84,7 @@ When('the webhook is delivered', async ({ request, world }) => {
   // Content-Type is wrong, the adapter's parseIncomingWebhook or
   // validateWebhook will fail.
   //
-  // For IP allowlist tests: the middleware checks CF-Connecting-IP against
+  // For IP allowlist tests: the middleware checks the client address against
   // the provider's known IP ranges.
   const webhookPath = `${BASE_URL}/api/telephony/incoming`
 
@@ -98,9 +98,9 @@ When('the webhook is delivered', async ({ request, world }) => {
     headers['Content-Type'] = 'application/x-www-form-urlencoded'
   }
 
-  // Simulate source IP via CF-Connecting-IP (the header the server trusts)
+  // Simulate source IP via X-Forwarded-For (the only forwarded-for header the server trusts)
   if (state.sourceIp) {
-    headers['CF-Connecting-IP'] = state.sourceIp
+    headers['X-Forwarded-For'] = state.sourceIp
   }
 
   // Send a minimal POST body with a unique nonce to avoid replay-detection

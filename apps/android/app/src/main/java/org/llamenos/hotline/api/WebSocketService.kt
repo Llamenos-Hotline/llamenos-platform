@@ -79,6 +79,11 @@ class WebSocketService @Inject constructor(
      */
     val typedEvents: SharedFlow<AttributedHubEvent<LlamenosEvent>> = _typedEvents.asSharedFlow()
 
+    /** Cache the current account-wide relay event keys in Rust memory. */
+    fun setServerEventKeys(currentHex: String, previousHex: String = "") {
+        cryptoService.setServerEventKeys(currentHex, previousHex.takeIf { it.isNotEmpty() })
+    }
+
     private val deduplicator = RelayEventDeduplicator()
     private val eventKeyMutex = Mutex()
 
@@ -132,9 +137,8 @@ class WebSocketService @Inject constructor(
             return
         }
         if (endpoint == null) {
-            // The server has no relay (no SERVER_SECRET) or the hub URL is not allowed.
-            // Nothing to retry until the configuration changes.
-            _connectionState.value = ConnectionState.DISCONNECTED
+            // Retry in case relay configuration is temporarily unavailable.
+            onConnectionLost(null)
             return
         }
 

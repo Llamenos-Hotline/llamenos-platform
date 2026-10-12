@@ -46,7 +46,12 @@ class AttributedHubEventTest {
         assertEquals(LlamenosEvent.CallRing("c1"), general.event)
     }
 
-    // ---- Part 2: Subscriber destructuring ----
+    // ---- Part 2: Envelope hubId is the source of truth ----
+
+    // The hub ID is taken from the server event envelope, never from the active hub.
+    // RelaySessionTest and DashboardViewModel tests cover that behavior end to end.
+
+    // ---- Part 3: Subscriber destructuring ----
 
     /**
      * Verifies that a subscriber can collect [AttributedHubEvent] from a SharedFlow

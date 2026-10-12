@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Turno iniciado, mas este dispositivo não pode receber chamadas no app. Tente iniciar o turno novamente.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Fazer uma Pausa",
     "help": "Help",
@@ -2455,6 +2456,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "O conteúdo encriptado deste hub ainda não pode ser aberto neste dispositivo",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,11 +2469,14 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "Toque num hub para mudar o seu contexto ativo. O hub ativo determina quais dados você vê.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Não foi possível carregar os seus hubs",
+    "membershipLoadFailedBody": "O servidor não informou a que hubs você pertence, por isso nada pode ser exibido ainda. Verifique a sua conexão e tente novamente."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2493,6 +2498,9 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "É necessário acesso ao microfone para atender chamadas no app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2553,7 +2561,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -2747,6 +2757,7 @@
     "backupAcknowledge": "Salvei minha chave de recuperação em um local seguro",
     "backupDescription": "Anote esta chave de recuperação e guarde-a em local seguro. É a única forma de recuperar sua conta em um novo dispositivo.",
     "backupDownloaded": "Backup baixado",
+    "backupFailed": "Não foi possível criar a sua cópia de segurança cifrada: {{reason}}",
     "backupTitle": "Salve Sua Chave de Recuperação",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2761,6 +2772,8 @@
     "getStarted": "Começar",
     "goToLogin": "Ir para Login",
     "invalidCode": "Código de convite inválido",
+    "rateLimitedRetry": "Demasiadas tentativas. Aguarde {{seconds}} segundos e tente novamente.",
+    "validationUnavailable": "Não foi possível validar o seu convite neste momento. Verifique a sua ligação e tente novamente.",
     "noCode": "Nenhum código de convite fornecido",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
@@ -4662,5 +4675,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

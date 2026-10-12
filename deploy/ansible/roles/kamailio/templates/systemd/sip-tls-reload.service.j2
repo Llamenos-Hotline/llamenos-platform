@@ -1,0 +1,22 @@
+[Unit]
+Description=Llamenos SIP edge TLS certificate reload (post-ACME-renewal)
+Documentation=file://{{ app_dir }}/services/kamailio/sip-tls-reload.sh
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Reloads only when the certificate on disk has actually changed, so this is a
+# no-op on almost every tick. Without it an ACME renewal never reaches the
+# running daemon: Kamailio parses the certificate once at module init, so the
+# edge keeps serving the old one and starts failing every TLS handshake about
+# 60 days after deploy — clients verify the chain, so they fail closed.
+Environment=SIP_TLS_WATCH_FILE={{ (kamailio_tls_cert_source_dir | default(kamailio_tls_dir)) }}/{{ kamailio_tls_cert_file | basename }}
+Environment=SIP_TLS_STAMP_FILE={{ app_dir }}/services/kamailio/sip-tls-reload.stamp
+ExecStart=/bin/sh {{ app_dir }}/services/kamailio/sip-tls-reload.sh {{ app_dir }}/services/kamailio
+User=root
+Group=root
+
+ProtectSystem=full
+PrivateTmp=true

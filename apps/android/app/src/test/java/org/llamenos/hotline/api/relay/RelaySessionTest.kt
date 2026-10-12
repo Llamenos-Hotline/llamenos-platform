@@ -175,6 +175,14 @@ class RelaySessionTest {
     }
 
     @Test
+    fun `authenticated does not subscribe to the global pseudo hub`() = runTest {
+        val frames = session().authenticate("hub-a", "global", "hub-b").sentFrames()
+        val subscribes = frames.filter { it["type"]!!.jsonPrimitive.content == "subscribe" }
+
+        assertEquals(listOf("hub-a", "hub-b"), subscribes.map { it["hubId"]!!.jsonPrimitive.content })
+    }
+
+    @Test
     fun `reconnect requests a replay per hub`() = runTest {
         val since = now - 60_000L
         val frames = session(replaySinceMs = since).authenticate("hub-a", "hub-b").sentFrames()

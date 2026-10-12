@@ -19,6 +19,8 @@ import {
   generateContentKey,
   encryptContent,
   wrapKeyForRecipient,
+  adminHpkeRecipient,
+  hpkeRecipientForSeed,
 } from '../../crypto-helpers'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { TestDB } from '../../db-helpers'
@@ -83,13 +85,15 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
       })
       expect([200, 201]).toContain(regResult.status)
 
-      const adminSeedHex = ADMIN_SEED
-      const adminPubkey = seedHexToPubkey(adminSeedHex)
+      // HPKE recipients, not identity pubkeys: an envelope sealed to an
+      // Ed25519 signing key is well-formed and permanently unopenable (#1283).
+      const admin = adminHpkeRecipient()
+      const vol = hpkeRecipientForSeed(volKp.seedHex)
 
       const contentKey = generateContentKey()
       const ciphertextHex = encryptContent('Storage test note', contentKey, LABEL_NOTE_KEY)
-      const volEnv = await wrapKeyForRecipient(contentKey, volKp.pubkey, volKp.seedHex, LABEL_NOTE_KEY)
-      const adminEnv = await wrapKeyForRecipient(contentKey, adminPubkey, adminSeedHex, LABEL_NOTE_KEY)
+      const volEnv = await wrapKeyForRecipient(contentKey, vol.pubkeyHex, vol.skHex, LABEL_NOTE_KEY)
+      const adminEnv = await wrapKeyForRecipient(contentKey, admin.pubkeyHex, admin.skHex, LABEL_NOTE_KEY)
 
       const { status, data } = await apiPost<Record<string, unknown>>(
         request,
@@ -98,7 +102,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
           encryptedContent: ciphertextHex,
           callId: `storage-note-${Date.now()}`,
           authorEnvelope: volEnv,
-          adminEnvelopes: [{ pubkey: adminPubkey, ...adminEnv }],
+          adminEnvelopes: [{ pubkey: admin.pubkeyHex, ...adminEnv }],
         },
         volKp.seedHex,
       )
@@ -309,11 +313,13 @@ When('the volunteer creates a note with real HPKE envelopes', async ({ request, 
   const contentKey = generateContentKey()
   const ciphertextHex = encryptContent('Envelope accuracy test', contentKey, LABEL_NOTE_KEY)
 
-  const authorEnv = await wrapKeyForRecipient(contentKey, getStorageIntegrityState(world).volunteerKp!.pubkey, getStorageIntegrityState(world).volunteerKp!.seedHex, LABEL_NOTE_KEY)
-  const adminEnv = await wrapKeyForRecipient(contentKey, getStorageIntegrityState(world).adminPubkey!, getStorageIntegrityState(world).adminSeedHex!, LABEL_NOTE_KEY)
+  const author = hpkeRecipientForSeed(getStorageIntegrityState(world).volunteerKp!.seedHex)
+  const admin = adminHpkeRecipient()
+  const authorEnv = await wrapKeyForRecipient(contentKey, author.pubkeyHex, author.skHex, LABEL_NOTE_KEY)
+  const adminEnv = await wrapKeyForRecipient(contentKey, admin.pubkeyHex, admin.skHex, LABEL_NOTE_KEY)
 
   getStorageIntegrityState(world).submittedAuthorEnvelope = authorEnv
-  getStorageIntegrityState(world).submittedEnvelopes = [{ pubkey: getStorageIntegrityState(world).adminPubkey!, ...adminEnv }]
+  getStorageIntegrityState(world).submittedEnvelopes = [{ pubkey: admin.pubkeyHex, ...adminEnv }]
 
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,

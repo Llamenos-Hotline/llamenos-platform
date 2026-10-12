@@ -5,6 +5,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { DEMO_ACCOUNTS } from '@shared/demo-accounts'
 import {
   DEMO_CALLS, DEMO_CASES, DEMO_CONTACTS, DEMO_CONVERSATIONS, DEMO_HUB, DEMO_SHIFTS,
@@ -13,8 +14,6 @@ import { demoIdentities, demoIdentityByName } from '@worker/lib/demo-identities'
 import { demoReader, deriveDemoEncryptionPubkey, sealForReaders } from '@worker/lib/demo-crypto'
 import { seedDemoDataset } from '@worker/services/demo-seeder'
 import type { Services } from '@worker/services'
-
-const NO_AAD = new Uint8Array(0)
 
 /** Demo identities exist only on a development server — the one environment these tests model. */
 const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as const
@@ -26,8 +25,8 @@ function openAs(name: string, encryptedContent: string, envelope: { enc: string;
   const identity = demoIdentityByName(DEV_SERVER, name)
   const encSecret = hkdf(sha256, hexToBytes(identity.seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
   const wrapped = new Uint8Array([...hexToBytes(envelope.enc), ...Buffer.from(envelope.ct, 'base64url')])
-  const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(label), NO_AAD)
-  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(encryptedContent), NO_AAD))
+  const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(label), keyWrapAad(label))
+  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(encryptedContent), contentAad(label)))
 }
 
 describe('demo dataset content', () => {
@@ -133,6 +132,22 @@ describe('sealForReaders', () => {
     const admin = demoReader(demoIdentityByName(DEV_SERVER, 'Demo Admin'))
     const sealed = sealForReaders('secret', [admin], LABEL_NOTE_KEY)
     expect(() => openAs('Demo Admin', sealed.encryptedContent, sealed.envelopes[0], LABEL_CALL_META)).toThrow()
+  })
+
+  it('does not open under an empty AAD — the pre-convention desktop format is dead', () => {
+    // The sealer once bound no AAD at either layer, which made demo notes
+    // unreadable to every canonical implementation (Rust `encrypt_note`, the
+    // mobile clients, the desktop). Pin the convention: both layers carry the
+    // canonical AAD, and empty AAD fails at the HPKE tag first.
+    const admin = demoReader(demoIdentityByName(DEV_SERVER, 'Demo Admin'))
+    const sealed = sealForReaders('secret', [admin], LABEL_NOTE_KEY)
+    const identity = demoIdentityByName(DEV_SERVER, 'Demo Admin')
+    const encSecret = hkdf(sha256, hexToBytes(identity.seedHex), new Uint8Array(0), utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
+    const wrapped = new Uint8Array([...hexToBytes(sealed.envelopes[0].enc), ...Buffer.from(sealed.envelopes[0].ct, 'base64url')])
+
+    expect(() => hpkeOpen(encSecret, wrapped, utf8ToBytes(LABEL_NOTE_KEY), new Uint8Array(0))).toThrow()
+    const contentKey = hpkeOpen(encSecret, wrapped, utf8ToBytes(LABEL_NOTE_KEY), keyWrapAad(LABEL_NOTE_KEY))
+    expect(() => symmetricDecrypt(contentKey, hexToBytes(sealed.encryptedContent), new Uint8Array(0))).toThrow()
   })
 
   it('seals to the X25519 key the client derives from the signing seed', () => {

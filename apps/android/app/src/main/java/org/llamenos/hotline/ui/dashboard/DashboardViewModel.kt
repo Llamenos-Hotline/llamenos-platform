@@ -21,12 +21,14 @@ import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.hotline.model.ActiveCallsResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.model.MeResponse
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
 
@@ -68,6 +70,8 @@ class DashboardViewModel @Inject constructor(
     private val activeHubState: ActiveHubState,
     private val analyticsRepository: AnalyticsRepository,
     private val shiftClockRepository: ShiftClockRepository,
+    private val sipRegistrar: SipRegistrar,
+    private val hubRepository: HubRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -77,8 +81,11 @@ class DashboardViewModel @Inject constructor(
         val signingPubkey = cryptoService.signingPubkeyHex ?: ""
         _uiState.value = DashboardUiState(signingPubkey = signingPubkey)
 
-        viewModelScope.launch { loadAdminDecryptionPubkey() }
-        webSocketService.connect()
+        viewModelScope.launch {
+            hubRepository.ensureInitialHub()
+            loadAdminDecryptionPubkey()
+            webSocketService.connect()
+        }
 
         // Subscribe to connection state changes
         viewModelScope.launch {
@@ -189,6 +196,9 @@ class DashboardViewModel @Inject constructor(
         try {
             val me = apiService.request<MeResponse>("GET", "/api/auth/me")
             sessionState.adminDecryptionPubkey = me.adminDecryptionPubkey
+            me.serverEventKeyHex?.let { currentKey ->
+                webSocketService.setServerEventKeys(currentKey, me.serverEventKeyPrevHex ?: "")
+            }
         } catch (_: Exception) {
             // Non-fatal — retried on the next dashboard load.
         }
@@ -211,15 +221,25 @@ class DashboardViewModel @Inject constructor(
     /**
      * Quick clock in to the active hub from the dashboard.
      */
-    fun clockIn() {
-        clockAction(R.string.dashboard_error_clock_in) { hubId -> shiftClockRepository.clockIn(hubId) }
+    fun clockIn(microphoneGranted: Boolean = true) {
+        clockAction(R.string.dashboard_error_clock_in) { hubId ->
+            shiftClockRepository.clockIn(hubId)
+            if (microphoneGranted) {
+                reportCallSetup(sipRegistrar.registerMemberHubs())
+            } else {
+                _uiState.update { it.copy(errorRes = R.string.incoming_call_microphone_required) }
+            }
+        }
     }
 
     /**
      * Quick clock out of the active hub from the dashboard.
      */
     fun clockOut() {
-        clockAction(R.string.dashboard_error_clock_out) { hubId -> shiftClockRepository.clockOut(hubId) }
+        clockAction(R.string.dashboard_error_clock_out) { hubId ->
+            shiftClockRepository.clockOut(hubId)
+            reportCallSetup(sipRegistrar.syncWithShift(shiftClockRepository.clockedIn.value.isNotEmpty()))
+        }
     }
 
     private fun clockAction(@StringRes failure: Int, action: suspend (hubId: String) -> Unit) {
@@ -237,6 +257,12 @@ class DashboardViewModel @Inject constructor(
                 _uiState.update { it.copy(errorRes = failure) }
             }
             _uiState.update { it.copy(isClockingInOut = false) }
+        }
+    }
+
+    private fun reportCallSetup(result: SipRegistrar.Result?) {
+        if (result is SipRegistrar.Result.Failed) {
+            _uiState.update { it.copy(errorRes = R.string.dashboard_error_in_app_calls_unavailable) }
         }
     }
 
@@ -384,6 +410,7 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "refresh() started")
             _uiState.update { it.copy(isRefreshing = true, errorRes = null) }
+            loadAdminDecryptionPubkey()
             if (!checkHubReachable()) {
                 _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh) }
             }

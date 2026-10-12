@@ -13,6 +13,7 @@ import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.telephony.LinphoneService
 import org.llamenos.hotline.ui.DeepLinkDestination
 import org.llamenos.hotline.ui.LlamenosNavigation
 import org.llamenos.hotline.ui.theme.LlamenosTheme
@@ -39,6 +40,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var offlineQueue: OfflineQueue
 
+    @Inject
+    lateinit var linphoneService: LinphoneService
+
     private var backgroundTimestamp: Long? = null
 
     /** Pending deep link destination, consumed by LlamenosNavigation on composition. */
@@ -61,6 +65,7 @@ class MainActivity : ComponentActivity() {
                     networkMonitor = networkMonitor,
                     offlineQueue = offlineQueue,
                     versionChecker = versionChecker,
+                    linphoneService = linphoneService,
                     pendingDeepLink = pendingDeepLink,
                     onDeepLinkConsumed = { pendingDeepLink = null },
                 )

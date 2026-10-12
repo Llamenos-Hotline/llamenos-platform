@@ -44,6 +44,11 @@ const HOUR = 3_600_000
  * them. That is a verification gap, not a worker producing bad output. Three
  * verification gaps in a row must never read as "the fleet is misbehaving".
  */
+// WEDGED (issue #1755) is excluded the same way QUOTA and UNVERIFIED are:
+// an unresolvable pre-dispatch refusal — the lane's worktree wedged on a
+// salvage branch holding real work — is ONE stuck condition per item, not N
+// failures. Three identical refusals tripping this breaker is exactly how
+// one stray staged test artifact halted the whole fleet for 25 hours.
 const STREAK_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT'])
 // SHADOW is excluded from both sets, like QUOTA — a shadow lane writes a
 // SHADOW row on every pass it runs, so in the mixed ramp the spec prescribes
@@ -144,9 +149,17 @@ export function failureBreaker(rows: RunRecord[], limits: Limits, resumedAt: num
     if (STREAK_RESETS.has(x.outcome)) break
     streak++
   }
-  return streak >= limits.consecutiveFailuresToHalt
-    ? `${streak} consecutive failures since last success`
-    : undefined
+  if (streak < limits.consecutiveFailuresToHalt) return undefined
+  // Issue #1755: the halt reason must carry the CAUSE, not just a count —
+  // "3 consecutive failures" took a manual audit of 39 salvage branches to
+  // diagnose. The newest streak row's lane/item/note is the single best
+  // pointer to what is actually failing, so it travels into
+  // halt-reason.txt verbatim (bounded, like every other note).
+  const latest = considered[0]
+  const cause = latest !== undefined
+    ? ` — latest: ${latest.lane}/${latest.itemId}${latest.note !== undefined ? ` (${latest.note})` : ''}`
+    : ''
+  return `${streak} consecutive failures since last success${cause}`
 }
 
 export function readResumedAt(): number {

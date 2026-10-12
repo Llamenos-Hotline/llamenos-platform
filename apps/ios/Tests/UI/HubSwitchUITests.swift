@@ -111,8 +111,11 @@ final class HubSwitchUITests: BaseUITest {
         }
 
         when("I tap the new hub's row to switch") {
-            let row = app.descendants(matching: .any).matching(createdRow).firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 10), "The hub this test created must be listed")
+            // A super-admin lists every hub on the server, this shard's other
+            // test classes' included, so the hub just created sorts last and is
+            // usually below the fold.
+            let row = scrollToMatch(createdRow)
+            XCTAssertTrue(row.exists, "The hub this test created must be listed")
             row.tap()
         }
 

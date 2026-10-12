@@ -100,11 +100,18 @@ export abstract class SipBridgeAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const { callSid, callerNumber, volunteers, callbackUrl, hubId } = params
+    const { callSid, callerNumber, volunteers, appTargets, callbackUrl, hubId } = params
     const result = await this.bridgeRequest('POST', '/ring', {
       parentCallSid: callSid,
       callerNumber,
       volunteers: volunteers.map((v) => ({ pubkey: v.callToken, phone: v.phone })),
+      // In-app legs are INVITEs to a registered AOR on this PBX, not calls out
+      // through the trunk, so the bridge needs them as their own list. Omitted
+      // entirely when there are none, so the bridge's payload is unchanged for
+      // a phone-only call.
+      ...(appTargets && appTargets.length > 0
+        ? { appTargets: appTargets.map((t) => ({ callToken: t.callToken, sipAor: t.sipAor })) }
+        : {}),
       callbackUrl,
       hubId,
     })

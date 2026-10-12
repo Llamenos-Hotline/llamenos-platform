@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve as resolvePath, sep } from 'node:path'
+import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScopeAcross } from './scope.js'
+import { CERTIFICATE_ONLY_PATTERNS, matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
 import { scrubSecrets } from './github-app.js'
@@ -126,22 +127,55 @@ export function addedLinesFrom(diffText: string): number {
   return n
 }
 
-interface TestRoute { prefix: string; config: string; target: string }
+interface TestRoute {
+  prefix: string
+  config: string
+  /**
+   * The SUITE this route runs — the WHOLE of `config`'s own `include` set.
+   * A label: it names the suite in the gate trace (`tests=<suite>:pass`) and
+   * in the result filename, and it is NEVER passed to vitest as a filter.
+   *
+   * It used to be, and that was #1587. The label was `apps/worker` and it
+   * went to vitest as a positional filename filter, while
+   * `vitest.unit.config.ts` — the config the real `backend-unit` suite runs —
+   * also includes `deploy/docker/tests/**`. So the gate ran 5206 of the
+   * suite's 5280 tests, found no failure among them, and certified a head
+   * whose `backend-unit` was RED. `tests=apps/worker:pass` reads as "the
+   * backend's tests pass"; it meant "the tests whose path contains
+   * apps/worker pass", and the narrowing was invisible in the output.
+   *
+   * There is no filter any more: the gate runs exactly what the suite runs,
+   * so the two cannot disagree about which tests are the backend's. The
+   * label is therefore the suite's own name (`vitest.unit.config.ts` calls
+   * itself `worker-unit`), never a path, so it cannot imply a scope again.
+   */
+  suite: string
+}
 
 /**
  * Diff-targeted, not whole-repo: a route maps a changed path prefix to the
- * ONE vitest config + filter argument that covers it, so verifyMechanical
- * runs only the suite relevant to what the worker actually touched. Order
- * matters only in that both orchestrator source and its own tests route to
- * the same fleet suite — a worker's change to `tests/orchestrator/*.test.ts`
+ * ONE vitest config that covers it, so verifyMechanical runs only the suites
+ * relevant to what the worker actually touched — but each of those suites
+ * WHOLE, exactly as CI runs it (see `TestRoute.suite`).
+ *
+ * Order matters only in that both orchestrator source and its own tests route
+ * to the same fleet suite — a worker's change to `tests/orchestrator/*.test.ts`
  * must re-run the fleet suite exactly as a change to `orchestrator/src/*.ts`
  * would, not silently skip verification because the path prefix looked like
- * "just tests".
+ * "just tests". `deploy/docker/tests/` is here for the same reason, in the
+ * other direction: those files EXECUTE inside the `worker-unit` suite, so
+ * editing one must re-run that suite rather than nothing at all.
+ *
+ * Every `include` glob of every config named here is covered by one of these
+ * prefixes — derived from the configs themselves, and pinned by a rail in
+ * tests/orchestrator/verify-runs-the-whole-suite.test.ts so a glob added to
+ * a config cannot leave the gate running a suite it cannot be triggered by.
  */
 const TEST_ROUTES: readonly TestRoute[] = [
-  { prefix: 'tests/orchestrator/', config: 'vitest.orchestrator.config.ts', target: 'orchestrator' },
-  { prefix: 'orchestrator/', config: 'vitest.orchestrator.config.ts', target: 'orchestrator' },
-  { prefix: 'apps/worker/', config: 'vitest.unit.config.ts', target: 'apps/worker' },
+  { prefix: 'tests/orchestrator/', config: 'vitest.orchestrator.config.ts', suite: 'orchestrator' },
+  { prefix: 'orchestrator/', config: 'vitest.orchestrator.config.ts', suite: 'orchestrator' },
+  { prefix: 'apps/worker/', config: 'vitest.unit.config.ts', suite: 'worker-unit' },
+  { prefix: 'deploy/docker/tests/', config: 'vitest.unit.config.ts', suite: 'worker-unit' },
 ]
 
 function routesFor(changed: string[]): TestRoute[] {
@@ -149,13 +183,25 @@ function routesFor(changed: string[]): TestRoute[] {
   const out: TestRoute[] = []
   for (const f of changed) {
     for (const r of TEST_ROUTES) {
-      if (f.startsWith(r.prefix) && !seen.has(r.target)) {
-        seen.add(r.target)
+      if (f.startsWith(r.prefix) && !seen.has(r.suite)) {
+        seen.add(r.suite)
         out.push(r)
       }
     }
   }
   return out
+}
+
+/** The `include` globs of the configs `TEST_ROUTES` names, read off the
+ *  configs themselves. Exported for the rail that checks every one of them is
+ *  reachable through some route prefix — the gate and the suite must not be
+ *  able to disagree about which files are a suite's tests (#1587). */
+export function routedConfigs(): { config: string; prefixes: string[] }[] {
+  const byConfig = new Map<string, string[]>()
+  for (const r of TEST_ROUTES) {
+    byConfig.set(r.config, [...(byConfig.get(r.config) ?? []), r.prefix])
+  }
+  return [...byConfig].map(([config, prefixes]) => ({ config, prefixes }))
 }
 
 /**
@@ -165,7 +211,7 @@ function routesFor(changed: string[]): TestRoute[] {
  * exactly the slow, diff-irrelevant behaviour this function exists to avoid.
  */
 export function testTargetsFor(changed: string[]): string[] {
-  return routesFor(changed).map((r) => r.target)
+  return routesFor(changed).map((r) => r.suite)
 }
 
 /**
@@ -265,8 +311,94 @@ export function trustedVitestBin(worktree: string): string {
  * `--config` is the gate's own wrapper (absolute, outside the test root) and
  * `--root` is the test root, so nothing here is resolved against the cwd.
  */
-function vitestArgv(route: TestRoute, config: string, testRoot: string, outputFile: string): string[] {
-  return ['run', '--config', config, '--root', testRoot, route.target, '--reporter=json', `--outputFile=${outputFile}`]
+function vitestArgv(config: string, testRoot: string, outputFile: string): string[] {
+  // NO positional filter (#1587). The config's own `include` set is the
+  // suite; narrowing it here is how the gate came to run 5206 of
+  // `vitest.unit.config.ts`'s 5280 tests and report `tests=apps/worker:pass`
+  // on a head whose `backend-unit` was red. Nothing worker-authored reaches
+  // this argv at all now, which is also strictly safer than the character
+  // allowlist that used to guard the filter.
+  return ['run', '--config', config, '--root', testRoot, '--reporter=json', `--outputFile=${outputFile}`]
+}
+
+/** One `resolve.alias` entry: a package name, and the directory inside the
+ *  test root that its imports must resolve to. */
+export interface WorkspaceAlias {
+  /** The package name exactly as it is imported (`@llamenos/i18n`). Vite
+   *  matches a string `find` against the whole specifier or against a
+   *  `<find>/…` subpath, so one entry covers `@llamenos/i18n/languages` too. */
+  find: string
+  replacement: string
+}
+
+/**
+ * Every workspace package the TRUSTED install links into `node_modules`,
+ * re-pointed at the same relative directory inside `testRoot` (#1525).
+ *
+ * The `__dirname` aliases in the vitest configs (`@shared/*`, `@worker/*`,
+ * `@protocol/*`, `@/*`) already follow the export, because `prepareTestRoot`
+ * installs the trusted config's BYTES into the export root and `__dirname` is
+ * then the export. A workspace package has no alias at all: `@llamenos/i18n`
+ * is a real package name, resolved through `node_modules/@llamenos/i18n`,
+ * which `bun install` writes as the relative symlink `../../packages/i18n` —
+ * relative to the checkout holding the install, which under this gate is the
+ * BASE. So every bare workspace import under the gate loaded the base's copy,
+ * and the gate judged the PR's code against `main`'s `packages/i18n`,
+ * `packages/crypto`, `apps/worker` and so on. That fails a PR which ADDS to a
+ * workspace package (#1510) and — the direction that matters — silently
+ * PASSES one that breaks it.
+ *
+ * DERIVED, never enumerated. The list is read off the trusted install itself,
+ * so a sixth workspace package, a rename, a new scope, or a package whose
+ * directory does not match its name (`@llamenos/worker` → `apps/worker`) is
+ * covered the moment `bun install` links it — there is no list for anyone to
+ * forget to extend. A `tests/orchestrator` rail re-derives the expected set
+ * from the root `package.json` workspaces and fails if any linked workspace
+ * package comes back without an alias.
+ *
+ * A link is a workspace package iff its REALPATH lands inside the trusted
+ * worktree and outside its `node_modules`. Realpath, not `readlink` resolved
+ * against the directory walked into: a scope directory can itself be a
+ * symlink, in which case the relative target is relative to the link's real
+ * parent and resolving it against the walked path names a directory that does
+ * not exist. Everything else in `node_modules` — every published dependency —
+ * realpaths outside the worktree and is left alone: this re-points the PR's
+ * OWN packages, never the dependency tree, which must keep coming from the
+ * trusted install.
+ */
+export async function workspaceAliases(worktree: string, testRoot: string): Promise<WorkspaceAlias[]> {
+  const modules = join(resolvePath(worktree), 'node_modules')
+  const [realWorktree, realModules] = await Promise.all([
+    realpath(worktree).catch(() => undefined),
+    realpath(modules).catch(() => undefined),
+  ])
+  if (realWorktree === undefined || realModules === undefined) return []
+
+  const specifiers: string[] = []
+  for (const entry of await readdir(modules, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('@')) {
+      for (const scoped of await readdir(join(modules, entry.name)).catch(() => [])) {
+        specifiers.push(`${entry.name}/${scoped}`)
+      }
+      continue
+    }
+    specifiers.push(entry.name)
+  }
+
+  const out: WorkspaceAlias[] = []
+  for (const specifier of specifiers) {
+    const target = await realpath(join(modules, specifier)).catch(() => undefined)
+    if (target === undefined) continue
+    if (!target.startsWith(realWorktree + sep)) continue
+    if (target === realModules || target.startsWith(realModules + sep)) continue
+    out.push({ find: specifier, replacement: resolvePath(testRoot, relative(realWorktree, target)) })
+  }
+  // Longest name first, so a package whose name prefixes another's
+  // (`@scope/a` and `@scope/ab` are both legal) can never shadow it, and the
+  // order is stable rather than filesystem-dependent.
+  out.sort((a, b) => b.find.length - a.find.length || a.find.localeCompare(b.find))
+  return out
 }
 
 type Prepared = { ok: true; config: string } | { ok: false; reason: string }
@@ -306,7 +438,7 @@ async function prepareTestRoot(
   const configName = basename(route.config)
   if (configName !== route.config) {
     // Unreachable with the fixed route table; refuse rather than write through a path.
-    return { ok: false, reason: `${route.target}: refusing a config path that is not a root file: ${route.config}` }
+    return { ok: false, reason: `${route.suite}: refusing a config path that is not a root file: ${route.config}` }
   }
   const rootConfig = join(resolvePath(testRoot), configName)
 
@@ -316,7 +448,7 @@ async function prepareTestRoot(
     if (trustedModules === undefined || rootModules !== trustedModules) {
       return {
         ok: false,
-        reason: `${route.target}: untrusted test root — ${join(testRoot, 'node_modules')} is not the trusted ` +
+        reason: `${route.suite}: untrusted test root — ${join(testRoot, 'node_modules')} is not the trusted ` +
           `install (${trustedModules ?? 'missing'}); it resolves to ${rootModules ?? 'nothing'}. ` +
           'A commit under judgement may not supply its own node_modules.',
       }
@@ -331,17 +463,35 @@ async function prepareTestRoot(
     } catch (e) {
       return {
         ok: false,
-        reason: `${route.target}: could not install the trusted ${configName} into the test root — ` +
+        reason: `${route.suite}: could not install the trusted ${configName} into the test root — ` +
           `${e instanceof Error ? e.message : String(e)}`,
       }
     }
   }
 
-  const wrapper = join(resultDir, `${route.target.replaceAll('/', '_')}.vitest.config.mjs`)
+  // Appended, never prepended: vite's alias list is first-match-wins, so a
+  // more specific entry the trusted config already carries — notably
+  // `@llamenos/crypto/ffi` → the pure-TS mock, since the real module loads a
+  // native .so through `bun:ffi` — must keep winning over the whole-package
+  // entry generated here.
+  const aliases = await workspaceAliases(worktree, testRoot)
+
+  const wrapper = join(resultDir, `${route.suite.replaceAll('/', '_')}.vitest.config.mjs`)
   await writeFile(wrapper, [
     `import loaded from ${JSON.stringify(rootConfig)}`,
+    `const workspace = ${JSON.stringify(aliases)}`,
+    '// Vite accepts `resolve.alias` as either an array of {find,replacement}',
+    '// or an object; normalised to the array form so the workspace entries can',
+    '// be appended in a defined order.',
+    'const entries = (a) => Array.isArray(a) ? a : Object.entries(a ?? {}).map(([find, replacement]) => ({ find, replacement }))',
     '// Inline PostCSS options: vite never searches the test root for a PostCSS config.',
-    'const pin = (c) => ({ ...c, css: { ...(c.css ?? {}), postcss: {} } })',
+    '// Workspace aliases: bare `@scope/pkg` imports resolve into the test root,',
+    '// not through node_modules into the trusted checkout that holds the install.',
+    'const pin = (c) => ({',
+    '  ...c,',
+    '  css: { ...(c.css ?? {}), postcss: {} },',
+    '  resolve: { ...(c.resolve ?? {}), alias: [...entries(c.resolve?.alias), ...workspace] },',
+    '})',
     "export default typeof loaded === 'function' ? async (env) => pin(await loaded(env)) : pin(loaded)",
     '',
   ].join('\n'), { flag: 'wx' })
@@ -351,14 +501,17 @@ async function prepareTestRoot(
 async function runVitestTarget(
   worktree: string, testRoot: string, route: TestRoute, config: string, outputFile: string,
 ): Promise<TestRunResult> {
-  if (!isSafeTestPath(route.target, testRoot)) {
-    // Should be unreachable — every target above comes from the fixed
+  if (!isSafeTestPath(route.suite, testRoot)) {
+    // Should be unreachable — every suite label above comes from the fixed
     // TEST_ROUTES table, never from diff content — but a gate that trusts
     // its own invariants is exactly how the reference system's hole opened.
-    throw new Error(`refusing to run unsafe test target: ${JSON.stringify(route.target)}`)
+    // Since #1587 the label no longer reaches vitest's argv; it still names a
+    // file the gate writes (the result JSON and the config wrapper), so the
+    // same check still has a job to do.
+    throw new Error(`refusing to run an unsafe suite label: ${JSON.stringify(route.suite)}`)
   }
   try {
-    const { stdout, stderr } = await execFileAsync(trustedVitestBin(worktree), vitestArgv(route, config, testRoot, outputFile), {
+    const { stdout, stderr } = await execFileAsync(trustedVitestBin(worktree), vitestArgv(config, testRoot, outputFile), {
       cwd: testRoot, timeout: 10 * 60_000, maxBuffer: 32 * 1024 * 1024,
     })
     return { exitCode: 0, signal: undefined, output: `${stdout}${stderr}` }
@@ -654,6 +807,42 @@ export function judgeTargetRun(
 }
 
 /**
+ * The bytes behind the `*.pem` carve-out, read the only way this gate is
+ * allowed to read them.
+ *
+ * `git show <head>:<path>` in `worktree`, which is the TRUSTED BASE
+ * CHECKOUT: `fleet-verify.yml` fetches the head sha as an OBJECT into it
+ * (`git fetch --no-tags origin "$HEAD_SHA"`) and never checks it out, and
+ * `rangeFor` (ci.ts) passes that sha as `branch`. So the content is
+ * available here without the commit under judgement being checked out,
+ * installed, or executed — the same property that already lets this function
+ * compute the diff. Nothing from the head reaches a module path, and the
+ * bytes are only ever pattern-matched, never run.
+ *
+ * Reads ONLY files that a `CERTIFICATE_ONLY_PATTERNS` entry matches, so a
+ * normal diff spawns no git process at all and a certificate-bearing one
+ * spawns a handful. Everything else keeps the pre-#1610 path-only decision.
+ *
+ * Every failure is an absent entry, which `matchesSecretPath` reads as
+ * `undefined` and treats as a secret: a file DELETED in the diff (git show
+ * exits non-zero), an unreadable object, a submodule or symlink entry. "I
+ * could not read it" is never "it is safe".
+ */
+async function readCertificateCandidates(
+  worktree: string,
+  rev: string,
+  changedFiles: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  for (const f of changedFiles) {
+    if (!CERTIFICATE_ONLY_PATTERNS.some((p) => matchesPath(f, p))) continue
+    const content = await runGit(worktree, ['show', `${rev}:${f}`])
+    if (content !== undefined) out.set(f, content)
+  }
+  return out
+}
+
+/**
  * Order is the design, not a style choice:
  *
  * 1. Scope — any forbidden or strayed file is an immediate fail, naming the
@@ -664,11 +853,17 @@ export function judgeTargetRun(
  *    by GitHub's own "require review from Code Owners" rule against
  *    `CODEOWNERS`. `classifyImpact` survives to DESCRIBE a diff (the trace,
  *    the digest, the reviewer's turn budget), never to decide about it.
- * 3. Diff-targeted tests only, run by argv via `execFile` — never a shell,
- *    never the whole suite (slow, produces failures unrelated to the diff,
- *    and CI already shards it). The runner, the config's contents and the
- *    dependency tree come from `worktree`; the test root supplies test files
- *    and nothing that runs in vitest's main process (`prepareTestRoot`).
+ * 3. Diff-targeted SUITES, run by argv via `execFile` — never a shell. Which
+ *    suites run is decided by the diff (`TEST_ROUTES`); each suite that runs
+ *    runs WHOLE, exactly as CI runs it. Those are two different questions and
+ *    #1587 is what conflating them cost: a positional filter narrowed the
+ *    `worker-unit` suite to the files whose path contained `apps/worker`,
+ *    the gate reported `tests=apps/worker:pass` over 5206 of 5280 tests, and
+ *    the head it certified had a red `backend-unit`. A suite the gate decides
+ *    to run and then runs only part of is a signal narrower than it reads.
+ *    The runner, the config's contents and the dependency tree come from
+ *    `worktree`; the test root supplies test files and nothing that runs in
+ *    vitest's main process (`prepareTestRoot`).
  * 4. Tests pass only on positive evidence. Each target's machine-readable
  *    result must be read and show no failures (`judgeTargetRun`); a runner
  *    that crashed, was OOM-killed, or wrote nothing readable FAILS the gate.
@@ -723,12 +918,14 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // Dropped here too so the failure message never credits a grant that had no
   // effect.
   const granted = (input.grantedLanes ?? []).filter((g) => g.scope.owned.length > 0)
+  const certificateCandidates = await readCertificateCandidates(worktree, branch, changedFiles)
   const { forbidden, strayed } = checkScopeAcross(
     changedFiles,
     lane.scope,
     granted.map((g) => g.scope),
     [...NEVER_WRITE_PATHS],
     [...GRANT_EXCLUDED_PATHS],
+    (f) => certificateCandidates.get(f),
   )
   if (forbidden.length > 0) {
     reasons.push(`touched never-write paths: ${forbidden.join(', ')}`)
@@ -752,7 +949,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   }
 
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
-  const testsRun = routes.map((r) => r.target)
+  const testsRun = routes.map((r) => r.suite)
   let testsPassed: boolean | undefined
   const testResults: string[] = []
 
@@ -767,10 +964,10 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
           reasons.push(prepared.reason)
           continue
         }
-        const outputFile = join(resultDir, `${route.target.replaceAll('/', '_')}.json`)
+        const outputFile = join(resultDir, `${route.suite.replaceAll('/', '_')}.json`)
         const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
-        const outcome = judgeTargetRun(route.target, run, resultText, testRoot)
+        const outcome = judgeTargetRun(route.suite, run, resultText, testRoot)
         if (outcome.passed) {
           testResults.push(outcome.evidence)
         } else {

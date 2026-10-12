@@ -18,6 +18,13 @@
 #     DEMO_RESET_CRON actually reach a rendered .env and aren't dead
 #     plumbing (the "also fix" #2 finding in review round 2).
 #
+# It also renders the two COMPOSE templates. The PostgreSQL service publishes
+# its port on 127.0.0.1 only when `dev_routes_enabled` is set on a
+# non-production environment (the end-to-end suite has to reach the deployed
+# database over an SSH forward), and must publish nothing otherwise. That is the
+# same "opposite outcomes from the same inputs" shape as the dev-route env vars,
+# so check-required-env.py asserts both directions here too.
+#
 # Usage:
 #   cd deploy/ansible
 #   ansible-playbook playbooks/check-env-templates.yml \
@@ -44,3 +51,39 @@
         src: "{{ playbook_dir }}/../roles/llamenos-app/templates/env/app.j2"
         dest: "/tmp/llamenos-check-env-app{{ env_check_suffix | default('') }}.env"
         mode: "0600"
+
+    - name: Render per-service postgres role compose template (roles/llamenos-postgres/templates/compose/postgres.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos-postgres/templates/compose/postgres.j2"
+        dest: "/tmp/llamenos-check-compose-postgres{{ env_check_suffix | default('') }}.yml"
+        mode: "0600"
+
+    - name: Render monolithic role compose template (roles/llamenos/templates/docker-compose.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos/templates/docker-compose.j2"
+        dest: "/tmp/llamenos-check-compose-monolithic{{ env_check_suffix | default('') }}.yml"
+        mode: "0600"
+
+    # The app service's own compose file carries the SIP trust-anchor bind
+    # mount. Rendered here because SIP_TLS_CA_FILE and that mount are only
+    # correct TOGETHER: the variable names a container path, and without the
+    # mount the container cannot open it — readSipTlsTrustAnchor then logs "not
+    # readable" and returns undefined, which is worse than the unset variable it
+    # replaced. #1656 declined to render the variable for exactly that reason,
+    # so the check has to see both files.
+    - name: Render per-service app role compose template (roles/llamenos-app/templates/compose/app.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos-app/templates/compose/app.j2"
+        dest: "/tmp/llamenos-check-compose-app{{ env_check_suffix | default('') }}.yml"
+        mode: "0600"
+
+    # The relay's own compose file holds --static-auth-secret, which MUST equal
+    # the TURN_SECRET rendered into the app's .env: the worker mints credentials
+    # under it and coturn verifies them, so a mismatch refuses every allocation
+    # with a 200 from /sip-token and no log line anywhere.
+    - name: Render coturn compose template (roles/llamenos-coturn/templates/compose/coturn.j2)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../roles/llamenos-coturn/templates/compose/coturn.j2"
+        dest: "/tmp/llamenos-check-compose-coturn{{ env_check_suffix | default('') }}.yml"
+        mode: "0600"
+      when: llamenos_coturn_enabled | default(false) | bool

@@ -1,5 +1,8 @@
 {
   "_comment": "Checked-in fixture for playbooks/check-env-templates.yml's 'optional vars' scenario. Values are dummy/non-secret placeholders that only need to be non-empty -- never real credentials. Enables every optional worker feature so check-required-env.py can prove APNS_*/NTFY_*/GLITCHTIP_DSN/SIGNAL_NOTIFIER_BEARER_TOKEN/DEMO_RESET_CRON reach a rendered .env (review round 2, 'also fix' #2: no dead vars).",
+  "_comment_admin_keys": "Synthetic, structurally valid (64 lowercase hex, and distinct from each other) stand-ins for the two admin keys -- NOT real keys, and not derived from any seed. They exist so the render exercises the ADMIN_PUBKEY -> ADMIN_DECRYPTION_PUBKEY pairing config.ts enforces at startup (#1283). vars.example.yml leaves both empty, which is the other valid state (admin bootstrapped from the desktop app), so only this scenario can prove the templates emit them together.",
+  "admin_pubkey": "ed255190ed255190ed255190ed255190ed255190ed255190ed255190ed255190",
+  "admin_decryption_pubkey": "c2551900c2551900c2551900c2551900c2551900c2551900c2551900c2551900",
   "env_check_suffix": "-full",
   "app_environment": "demo",
   "demo_mode": true,

@@ -90,6 +90,14 @@ const ALLOWED = new Map<string, string>([
     'apps/worker/__tests__/unit/auth-message-single-source.test.ts',
     'this test',
   ],
+  [
+    'apps/android/app/src/main/java/org/llamenos/hotline/crypto/CryptoService.kt',
+    'comment only: names the nonce-less label on createAuthTokenWithoutNonce',
+  ],
+  [
+    'apps/android/app/src/main/java/org/llamenos/hotline/model/InviteModels.kt',
+    'comment only: names the nonce-less label to explain why the redeem body has no nonce field',
+  ],
 ])
 
 /**

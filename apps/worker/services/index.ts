@@ -16,7 +16,7 @@ import { ConversationsService } from './conversations'
 import { BlastsService } from './blasts'
 import { ContactsService } from './contacts'
 import { CasesService } from './cases'
-import { TaskScheduler } from './scheduler'
+import { TaskScheduler, type TaskSchedulerServiceDeps } from './scheduler'
 import { CryptoKeysService } from './crypto-keys'
 import { FirehoseService } from './firehose'
 import { FirehoseAgentService } from './firehose-agent'
@@ -31,6 +31,7 @@ import { ProviderTemplateService } from './provider-setup/templates'
 import { HubOnboardService } from './provider-setup/hub-onboard'
 import { ErasureService } from './erasure'
 import { RetentionService } from './retention'
+import { HubShredService } from './hub-shred'
 import { RingGroupsService } from './ring-groups'
 import { ShiftOverridesService } from './shift-overrides'
 import { ActiveShiftsService } from './active-shifts'
@@ -68,6 +69,8 @@ export interface Services {
   hubOnboard: HubOnboardService
   erasure: ErasureService
   retention: RetentionService
+  /** The hub crypto-shred executor (spec §4). Takes the blob-storage binding at construction. */
+  hubShred: HubShredService
   ringGroups: RingGroupsService
   shiftOverrides: ShiftOverridesService
   activeShifts: ActiveShiftsService
@@ -87,6 +90,11 @@ export interface ServicesOpts {
   notifierApiKey?: string
   /** Secret shared with the sidecar for signing client registration tokens. Falls back to hmacSecret. */
   notifierTokenSecret?: string
+  /**
+   * Object-storage binding (Env.BLOB_STORAGE) — required for the hub shred to
+   * destroy file envelope mirrors. Wired by the server entrypoint.
+   */
+  blobStorage?: { delete(key: string): Promise<void> }
 }
 
 export function createServices(db: Database, opts?: ServicesOpts): Services {
@@ -108,6 +116,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   const providerSetup = new ProviderSetup(db, opts?.hmacSecret ?? '', opts?.env?.DOMAIN ?? 'localhost')
 
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
+  const hubShred = new HubShredService(db, opts?.blobStorage)
 
   const services: Services = {
     identity,
@@ -128,18 +137,31 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     userNotifications,
     digestCron,
     providerSetup,
-    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', { ENVIRONMENT: opts?.env?.ENVIRONMENT }),
+    // The dev-surface subset, not just ENVIRONMENT: `verifyCode` and friends
+    // decide whether a request may take the synthetic bridge path with
+    // `devSurfaceRequestAuthorized`, which needs the opt-in flag and the
+    // configured secret as well (#1623). Listed explicitly rather than spread,
+    // so what the service can read stays visible here.
+    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', {
+      ENVIRONMENT: opts?.env?.ENVIRONMENT,
+      DEV_ROUTES_ENABLED: opts?.env?.DEV_ROUTES_ENABLED,
+      DEV_RESET_SECRET: opts?.env?.DEV_RESET_SECRET,
+      E2E_TEST_SECRET: opts?.env?.E2E_TEST_SECRET,
+    }),
     a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
-    erasure: new ErasureService(db, identity),
+    erasure: new ErasureService(db, identity, {
+      deleteEnvelopeMirrors: (fileIds) => hubShred.deleteBlobEnvelopeMirrors(fileIds),
+    }),
     retention: new RetentionService(db),
+    hubShred,
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
     activeShifts: new ActiveShiftsService(db),
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
-    recoveryGroup: new RecoveryGroupService(db, audit),
+    recoveryGroup: new RecoveryGroupService(db, settings, audit),
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
@@ -159,6 +181,29 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   }
 
   return services
+}
+
+/**
+ * The scheduler's service dependencies, derived from the registry production
+ * builds. This is the ONE place the background workers are given their
+ * services, so a test can hand `TaskScheduler.start()` exactly what
+ * `src/server/index.ts` hands it (see
+ * apps/worker/__tests__/integration/hub-shred-wiring.test.ts) instead of a
+ * hand-assembled object that can agree with nothing.
+ *
+ * The return type is required in every field, so dropping a service here is a
+ * compile error rather than a worker that silently stops running (#1566).
+ */
+export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDeps {
+  return {
+    blastsService: services.blasts,
+    settingsService: services.settings,
+    retentionService: services.retention,
+    auditService: services.audit,
+    erasureService: services.erasure,
+    identityService: services.identity,
+    hubShred: services.hubShred,
+  }
 }
 
 // Re-export service classes for direct import
@@ -196,4 +241,5 @@ export {
   ShiftAvailabilityService,
   ShiftRequestsService,
   RecoveryGroupService,
+  HubShredService,
 }

@@ -103,7 +103,8 @@ class ShiftsViewModelTest {
             it.client = OkHttpClient()
             it.ioDispatcher = UnconfinedTestDispatcher()
         }
-        return ShiftsViewModel(apiService, activeHubState, ShiftClockRepository(apiService))
+        // SIP registration on clock-in/out is covered by SipRegistrationTest.
+        return ShiftsViewModel(apiService, activeHubState, ShiftClockRepository(apiService), mockk(relaxed = true))
     }
 
     private fun paths() = requests.map { "${it.method} ${it.path}" }

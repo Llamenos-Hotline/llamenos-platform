@@ -32,6 +32,8 @@ import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.LlamenosEvent
 import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.hub.HubRepository
+import org.llamenos.hotline.telephony.SipRegistrar
 import java.util.Collections
 
 /**
@@ -59,7 +61,7 @@ class DashboardViewModelHubAttributionTest {
                 requests += "${request.method} $path"
                 return when (path) {
                     "/api/hubs/$RINGING_HUB/calls/active" -> MockResponse().setBody(
-                        """{"calls":[{"callId":"call-9","startedAt":"2026-09-26T10:00:00Z","status":"ringing"}]}""",
+                        """{"calls":[{"id":"call-9","startedAt":"2026-09-26T10:00:00Z","status":"ringing"}]}""",
                     )
                     "/api/hubs/$RINGING_HUB/calls/call-9/hangup" -> MockResponse().setResponseCode(204)
                     else -> MockResponse().setResponseCode(404).setBody("""{"error":"Not Found"}""")
@@ -100,6 +102,8 @@ class DashboardViewModelHubAttributionTest {
             activeHubState,
             mockk<AnalyticsRepository>(relaxed = true),
             ShiftClockRepository(apiService),
+            mockk<SipRegistrar>(relaxed = true),
+            mockk<HubRepository>(relaxed = true),
         )
     }
 

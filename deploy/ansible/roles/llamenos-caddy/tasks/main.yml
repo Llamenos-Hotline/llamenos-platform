@@ -100,3 +100,13 @@
   vars:
     caddy_adapted_config: "{{ caddy_adapted.stdout | from_json }}"
   when: not (llamenos_disk_encrypted | default(false) | bool)
+
+# Handlers normally run at the end of the play. The certificate check below
+# must see the Caddyfile this run deployed, so flush the restart handler here
+# — the same reasoning roles/ssh-hardening documents for its own early flush.
+- name: Apply any pending Caddy restart before verifying certificates
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify Caddy obtained a certificate for every vhost it serves
+  ansible.builtin.include_tasks: verify-certificates.yml
+  when: llamenos_verify_certificates | default(true) | bool

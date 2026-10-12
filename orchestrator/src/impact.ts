@@ -117,11 +117,13 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   // missing here.
   'scripts/check-bddgen-warmup.sh',
   'scripts/check-codeql-languages.ts',
+  'scripts/check-db-identity.ts',
   'scripts/check-ecies-active.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',
   'scripts/check-migration-drift.sh',
   'scripts/check-migration-drift.ts',
+  'scripts/check-unique-test-names.ts',
   'scripts/typecheck-tests-gate.ts',
   'scripts/eslint-rules/',
   'scripts/regenerate-snapshot.ts',

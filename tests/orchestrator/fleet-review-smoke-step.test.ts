@@ -9,7 +9,11 @@ import { parse as parseYaml } from 'yaml'
  * Rail for the "Smoke-test the review engine" step in fleet-review.yml
  * silently swallowing an engine failure (see the PR that added this file,
  * #872 — updated for #866, which retired `opencode` as the reviewer engine
- * entirely and rewrote this step to invoke `claude` directly instead).
+ * entirely and rewrote this step to invoke `claude` directly instead; and
+ * updated again for the kimi fallback, which added the step's ONE tolerated
+ * failure: a claude cannot-run re-runs the same health question through the
+ * kimi fallback before the step fails — see the step's own comments and the
+ * file header of fleet-review.yml).
  *
  * Root cause (#872, still the invariant this file guards): GitHub runs a
  * `run:` step with no `shell:` override as `bash -e {0}` — `-e` is active
@@ -153,9 +157,33 @@ fi
 if [ -f "$cfg/CLAUDE.md" ]; then printf 'loaded\\n' >> "\${SMOKE_MEMORY_PROBE:-/dev/null}"; fi
 if [ -f "$cfg/.credentials.json" ]; then printf 'present\\n' > "\${SMOKE_AUTH_PROBE:-/dev/null}"; fi
 # ---------------------------------------------------------------------------
+# #1767's exact bug shape: the pre-fix smoke step handed the claude FALLBACK
+# the primary's resolved model — kimi's empty-by-default value — as a
+# literal --model "" argument, and the real claude CLI rejects that outright
+# ("API Error: 400 model: String should have at least 1 character",
+# verified against the installed binary during the #1767 investigation).
+# This fake used to ignore its arguments entirely, which is precisely how
+# the broken fallback kept passing every smoke: reproduce the rejection so
+# no fallback arm can ever carry an empty model again without failing here.
+_prev=""
+for _a in "$@"; do
+  if [ "$_prev" = "--model" ] && [ -z "$_a" ]; then
+    echo "API Error: 400 model: String should have at least 1 character" >&2
+    exit 1
+  fi
+  _prev="$_a"
+done
 case "\${MOCK_CLAUDE_RUN_MODE:-fail}" in
   fail)
     echo "simulated: Unexpected server error from provider" >&2
+    exit 1
+    ;;
+  auth-fail)
+    # Runner-login-expired shape — the smoke step's classify() must read this
+    # as engine-auth, and the kimi fallback tolerance arm must NEVER fire on
+    # it: an auth failure stays loud even with the fallback enabled and a
+    # kimi binary on PATH.
+    echo "Error: not logged in. Please run /login to authenticate." >&2
     exit 1
     ;;
   bad-verdict)
@@ -190,6 +218,54 @@ case "\${MOCK_CLAUDE_RUN_MODE:-fail}" in
 esac
 `
 
+// Stands in for `kimi --output-format stream-json -p <prompt> --agent-file
+// <profile>` — the exact fallback invocation the smoke step's tolerance arm
+// makes (and `kimiArgs` in review.ts builds for the real review). The
+// envelope lines below mirror the REAL binary's stream-json shape, captured
+// verbatim from the installed CLI (system.version meta, assistant messages,
+// session.resume_hint meta) — hand-invented fields would only prove the jq
+// extraction matches a guess. The step must hand us the read-only agent
+// profile: without `--agent-file` the fallback reviewer would run kimi's
+// full default tool set, shell included, and the fake failing loudly on its
+// absence is what pins the step passing it.
+const FAKE_KIMI = `#!/usr/bin/env bash
+case " $* " in
+  *" --agent-file "*) : ;;
+  *)
+    echo "fake kimi: --agent-file was not passed — the fallback reviewer would run with its full default tool set" >&2
+    exit 98
+    ;;
+esac
+case "\${MOCK_KIMI_RUN_MODE:-fail}" in
+  pass)
+    printf '%s\\n' \\
+      '{"role":"meta","type":"system.version","version":"2.1.1-test"}' \\
+      '{"role":"assistant","content":"2 + 2 is equal to 4."}' \\
+      '{"role":"assistant","content":"VERDICT: PASS"}' \\
+      '{"role":"meta","type":"session.resume_hint","session_id":"fake-session","command":"kimi -r fake-session","content":"To resume this session: kimi -r fake-session"}'
+    exit 0
+    ;;
+  fail)
+    echo "fake kimi simulated: provider unreachable" >&2
+    exit 1
+    ;;
+  auth-fail)
+    # Login-expired shape — the smoke step's classify() must read this as
+    # engine-auth, and NO fallback arm may fire on it in either direction.
+    echo "Error: not logged in. Please run /login to authenticate." >&2
+    exit 1
+    ;;
+  bad-verdict)
+    printf '%s\\n' '{"role":"assistant","content":"I decline to answer health checks."}'
+    exit 0
+    ;;
+  *)
+    echo "unhandled fake kimi invocation: $*" >&2
+    exit 99
+    ;;
+esac
+`
+
 let scratch: string
 let binDir: string
 let runnerTemp: string
@@ -210,6 +286,8 @@ beforeEach(() => {
   mkdirSync(join(stepHome, '.claude'), { recursive: true })
   writeFileSync(join(binDir, 'claude'), FAKE_CLAUDE)
   chmodSync(join(binDir, 'claude'), 0o755)
+  writeFileSync(join(binDir, 'kimi'), FAKE_KIMI)
+  chmodSync(join(binDir, 'kimi'), 0o755)
   originalPath = process.env['PATH']
   process.env['PATH'] = `${binDir}${delimiter}${originalPath ?? ''}`
 })
@@ -221,11 +299,22 @@ afterEach(() => {
 
 /** Runs a script body the way GitHub runs an unshelled `run:` step:
  *  `bash -e <file>`. Captures stdout+stderr combined, the way a job log
- *  reads it. */
+ *  reads it.
+ *
+ *  `engines` controls FLEET_REVIEW_PRIMARY / FLEET_REVIEW_FALLBACK. The
+ *  DEFAULT is claude-primary with the fallback OFF: the pre-failure rails
+ *  (#872/#866/#1460) test the step's failure behaviour, and any other
+ *  setting would take a tolerance arm instead of `fail()` — the rails
+ *  would be testing the wrong arm. The order describes below opt in
+ *  explicitly (kimi-primary, fallback on) and pin BOTH directions. The
+ *  fake kimi AND fake claude binaries sit on PATH for every run either way,
+ *  so the only difference between the arms is the variables — never the
+ *  environment accidentally lacking a binary. */
 function runStep(
   script: string,
-  runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass',
+  runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass' | 'auth-fail',
   extraEnv: Record<string, string> = {},
+  engines: { primary?: 'kimi' | 'claude'; fallback?: 'on' | 'off' } = {},
 ): { status: number | null; output: string } {
   const scriptPath = join(scratch, 'step.sh')
   writeFileSync(scriptPath, script)
@@ -238,6 +327,8 @@ function runStep(
       HOME: stepHome,
       RUNNER_TEMP: runnerTemp,
       FLEET_REVIEW_MODEL: 'test-model',
+      FLEET_REVIEW_PRIMARY: engines.primary ?? 'claude',
+      FLEET_REVIEW_FALLBACK: engines.fallback ?? 'off',
       MOCK_CLAUDE_RUN_MODE: runMode,
       ...extraEnv,
     },
@@ -376,11 +467,19 @@ describe('rail: the smoke step and the real review must resolve the SAME engine/
       ...process.env,
       PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}`,
       FLEET_REVIEW_MODEL: 'test-model',
+      // Same order the harness runs the step under (the default is kimi
+      // primary — this rail pins the shared-source resolution, not the
+      // order), so the independent reference resolves the same engine the
+      // step's own line names.
+      FLEET_REVIEW_PRIMARY: 'claude',
     }
     const direct = resolveReviewerInvocationDirectly(env)
     const { status, output } = runStep(smokeStepScript(), 'pass')
     expect(status).toBe(0)
-    expect(output).toContain(`review engine smoke test OK (engine=${direct.binary} model=${direct.model})`)
+    // The OK line now also reports the fallback's own smoke result after a
+    // `;` (#1767 — the fallback is smoked independently on every run), so
+    // the equality this rail pins is the `engine=... model=...` prefix.
+    expect(output).toContain(`review engine smoke test OK (engine=${direct.binary} model=${direct.model}; fallback=`)
   })
 
   // MUTATION (per "audit gates by breaking them"): reintroduce the exact
@@ -395,13 +494,14 @@ describe('rail: the smoke step and the real review must resolve the SAME engine/
       ...process.env,
       PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}`,
       FLEET_REVIEW_MODEL: 'test-model',
+      FLEET_REVIEW_PRIMARY: 'claude',
     }
     const direct = resolveReviewerInvocationDirectly(env)
     const { status, output } = runStep(withoutTheSharedSource(smokeStepScript()), 'pass')
     // The mutated step still "passes" — that is the whole danger: nothing
     // about running it looks wrong.
     expect(status).toBe(0)
-    expect(output).toContain('review engine smoke test OK (engine=claude model=hardcoded-mismatched-model)')
+    expect(output).toContain('review engine smoke test OK (engine=claude model=hardcoded-mismatched-model; fallback=')
     // But it is no longer testing what the real review will actually run.
     expect(output).not.toContain(`engine=${direct.binary} model=${direct.model}`)
     expect(direct.model).toBe('test-model')
@@ -468,12 +568,16 @@ function probeEnv(p: ReturnType<typeof plantPoison>): Record<string, string> {
   }
 }
 
-/** The pre-fix shape for the MCP half: strips `--strict-mcp-config` from the
- *  engine invocation. Separate from the HOME mutation on purpose — the two
- *  halves of #1460 defend against different loads, and a mutation that
- *  conflated them would let one cover for the other's absence. */
+/** The pre-fix shape for the MCP half: strips `--strict-mcp-config` from
+ *  EVERY claude invocation in the step (the primary arm and the
+ *  kimi-primary fallback arm both carry it today — `replaceAll`, not
+ *  `replace`, or the mutation would strip the wrong arm's copy and prove
+ *  nothing about the one that runs). Separate from the HOME mutation on
+ *  purpose — the two halves of #1460 defend against different loads, and a
+ *  mutation that conflated them would let one cover for the other's
+ *  absence. */
 function withoutStrictMcpConfig(script: string): string {
-  const mutated = script.replace('--permission-mode plan --strict-mcp-config --tools', '--permission-mode plan --tools')
+  const mutated = script.replaceAll('--permission-mode plan --strict-mcp-config --tools', '--permission-mode plan --tools')
   expect(mutated, 'the engine invocation does not pass --strict-mcp-config — this mutation is vacuous').not.toBe(script)
   return mutated
 }
@@ -570,5 +674,117 @@ describe('rail: the smoke step names what the engine actually said (partial #150
     expect(status).toBe(1)
     expect(output).toContain('the engine ANSWERED and parseVerdict could not read a verdict from it')
     expect(output, 'the excerpt of the engine\'s own words is missing').toContain('I looked at the diff.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The kimi fallback tolerance arm. A claude failure in the CANNOT-RUN family
+// must re-run the same health question through the kimi fallback (file
+// header) instead of failing the smoke and stopping the review that could
+// still run — that is the whole point of the fallback, and a smoke step that
+// failed on claude quota would defeat it end-to-end: the Review step would
+// never run. `engine-auth` must NEVER take the arm. These tests run the
+// step's REAL script (parsed from the YAML, per this file's discipline)
+// against fake claude AND fake kimi binaries.
+// ---------------------------------------------------------------------------
+
+describe('rail: the smoke step tolerates a primary cannot-run via the other engine — and only that', () => {
+  // ── claude-primary, kimi fallback (the bootstrap-order arm) ──
+  it('a claude outage with the fallback enabled and kimi healthy concludes OK, naming the fallback and claude\'s class', () => {
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'claude', fallback: 'on' })
+    expect(status).toBe(0)
+    expect(output).toContain('review engine smoke test OK (engine=kimi fallback; claude unavailable: engine-unavailable)')
+    expect(output).toContain('smoke verdict (parseVerdict of kimi fallback output): PASS')
+    expect(output).not.toContain(FAILED_MARKER)
+  })
+
+  it('a claude auth failure does NOT take the fallback arm, even with the fallback enabled and kimi on PATH', () => {
+    const { status, output } = runStep(smokeStepScript(), 'auth-fail', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'claude', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-auth')
+    // The kimi fallback must never have been asked — an expired runner login
+    // stays loud.
+    expect(output).not.toContain('engine=kimi fallback')
+    expect(output).not.toContain('smoke verdict (parseVerdict of kimi fallback output)')
+  })
+
+  it('with the fallback disabled, a claude cannot-run fails the step exactly as it did before the fallback existed', () => {
+    // Same claude failure as the tolerated test above; only the variable
+    // differs. This is the operator dial (FLEET_REVIEW_FALLBACK=off) doing
+    // its job — and it pins that the tolerance arm cannot fire by accident.
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'claude', fallback: 'off' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-unavailable')
+    expect(output).toContain('simulated: Unexpected server error from provider')
+    expect(output).not.toContain('engine=kimi fallback')
+  })
+
+  it('a kimi fallback that also cannot run fails the step, naming BOTH engines', () => {
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'fail' }, { primary: 'claude', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-unavailable')
+    expect(output).toContain('claude failed (engine-unavailable) and the kimi fallback also failed')
+    expect(output).toContain('fake kimi simulated: provider unreachable')
+  })
+
+  it('a kimi fallback that answers without a readable verdict fails the step, naming both engines — never a silent pass', () => {
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'bad-verdict' }, { primary: 'claude', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-unavailable')
+    expect(output).toContain('the kimi fallback ANSWERED without a readable verdict')
+    expect(output).toContain('I decline to answer health checks.')
+  })
+
+  // ── kimi-primary, claude fallback (the default order) ──
+  it('kimi PRIMARY happy path: fake kimi answers PASS, the step concludes OK naming kimi — and the claude fallback is smoked too (#1767)', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(0)
+    expect(output).toContain('review engine smoke test OK (engine=kimi model=(config-unreadable); fallback=claude healthy)')
+    expect(output).toContain('smoke verdict (parseVerdict of kimi output): PASS')
+    // #1767 ask 3: a healthy primary says nothing about the fallback, so
+    // the fallback now answers the SAME question on every run. The exact
+    // pre-#1767 assumption this assertion used to pin — "claude was never
+    // invoked" — is how the broken `--model ""` fallback hid for weeks.
+    expect(output).toContain('smoke verdict (parseVerdict of claude fallback output): PASS')
+    expect(output).not.toContain(FAILED_MARKER)
+  })
+
+  it('kimi PRIMARY cannot-run: fake claude carries the smoke as the labelled fallback', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'fail' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(0)
+    expect(output).toContain('review engine smoke test OK (engine=claude fallback; kimi unavailable: engine-unavailable)')
+    expect(output).toContain('smoke verdict (parseVerdict of claude fallback output): PASS')
+    expect(output).not.toContain(FAILED_MARKER)
+  })
+
+  it('a kimi PRIMARY auth failure does NOT cross to claude — engine-auth fails the step loud', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'auth-fail' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-auth')
+    expect(output).not.toContain('engine=claude fallback')
+    expect(output).not.toContain('smoke verdict (parseVerdict of claude fallback output)')
+  })
+
+  it('with the fallback disabled, a kimi PRIMARY cannot-run fails the step as a fallback-less gate would', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'fail' }, { primary: 'kimi', fallback: 'off' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-unavailable')
+    expect(output).toContain('fake kimi simulated: provider unreachable')
+    expect(output).not.toContain('engine=claude fallback')
+  })
+
+  it('a claude fallback that also cannot run fails the step, naming BOTH engines', () => {
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'fail' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(FAILED_MARKER)
+    expect(output).toContain('engine-unavailable')
+    expect(output).toContain('kimi failed (engine-unavailable) and the claude fallback also failed')
+    expect(output).toContain('simulated: Unexpected server error from provider')
   })
 })

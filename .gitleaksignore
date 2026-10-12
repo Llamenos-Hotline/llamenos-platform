@@ -21,3 +21,6 @@ b077eaf65145531b2ffdb3b758fa0aeebefaf4c6:apps/worker/lib/crypto.test.ts:generic-
 
 # PR #240: dev-only HMAC_SECRET in start-server.sh (d723ba2b)
 d723ba2b586390ceb55bf40c99138a7376c7d119:start-server.sh:generic-api-key:10
+
+# PR #1532: hub-shred isolation dummy fixtures (base64 of literal placeholder strings)
+878920b2a74f4cc1572b432dd0ed71fc70b93453:apps/worker/__tests__/integration/hub-shred-isolation.test.ts:generic-api-key:81

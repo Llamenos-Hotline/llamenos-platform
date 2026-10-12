@@ -28,6 +28,7 @@ import org.llamenos.protocol.WsSubscribeMessageType
  * [RelayEventParser] understands. Kind numbers are not part of the protocol codegen yet.
  */
 object RelayEventKinds {
+    const val GLOBAL_PSEUDO_HUB_ID = "global"
     const val CALL_RING = 1000L
     const val CALL_UPDATE = 1001L
     const val CALL_VOICEMAIL = 1002L
@@ -168,6 +169,7 @@ class RelaySession(
         val actions = mutableListOf<Action>(Action.Authenticated(msg.hubs))
         val kindValues = kinds.map { it.toDouble() }
         for (hubId in msg.hubs) {
+            if (hubId == RelayEventKinds.GLOBAL_PSEUDO_HUB_ID) continue
             val subscribe = WsSubscribeMessage(hubID = hubId, kinds = kindValues, type = WsSubscribeMessageType.Subscribe)
             actions += Action.Send(json.encodeToString(WsSubscribeMessage.serializer(), subscribe))
             if (replaySinceMs != null) {

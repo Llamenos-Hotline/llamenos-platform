@@ -15,9 +15,9 @@
 - **Calls:** an answered call that already exists when the dashboard loads is shown and can be hung up. A live ring or answer never reaches the app (the relay is dead, #1016). There is no in-app answer control (#1188). Call History cannot decode for any role (#1343).
 - **Hubs:** listing and switching hubs **work**. The app never selects a hub by itself, so a new user is scoped to nothing until they find Hub Management (#1340).
 - **Conversations:** the app bypasses the active hub, and the list fails to decode (#1344).
-- **Enrolment:** absent. A fresh install creates an identity the server never learns about. Every probe had to enrol through a dev backdoor (#1345, the M1 framing of #766).
+- **Enrollment:** absent. A fresh install creates an identity the server never learns about. Every probe had to enroll through a dev backdoor (#1345, the M1 framing of #766).
 
-**Auth does change the picture.** Four of the six areas fail first on an auth or scoping defect (enrolment, active-hub choice, permissions, PIN), before their own logic runs. The fixes are ordered accordingly (below).
+**Auth does change the picture.** Four of the six areas fail first on an auth or scoping defect (enrollment, active-hub choice, permissions, PIN), before their own logic runs. The fixes are ordered accordingly (below).
 
 ## Method
 
@@ -25,7 +25,7 @@
 
 - Every step either succeeds or fails the test with the state it saw (visible test tags and on-screen text). Nothing is caught.
 - Evidence goes to `adb logcat -s PROBE` and the server's request log (method, path, status).
-- Backdoors are limited to what the app has no UI for, each logged `BACKDOOR`: identity enrolment (`test-add-hub-member`), shift seeding, and telephony/SMS simulation.
+- Backdoors are limited to what the app has no UI for, each logged `BACKDOOR`: identity enrollment (`test-add-hub-member`), shift seeding, and telephony/SMS simulation.
 - Unlike `ScenarioHooks`, the probe **does not write `ActiveHubState`**. It lets the app choose a hub, records the choice, and falls back to the user's path (Dashboard → Hub Management → tap) only when the app chose nothing.
 
 **Environment.** A server on its own port (3171) and its own Postgres database (per-worktree DB, `ENVIRONMENT=development`, `ADMIN_PUBKEY` = CI's test admin), started fresh for each batch. Emulator `test-emu-3` (API 34 x86_64, animations off, `-no-snapshot-save`) was booted per batch. Each probe method ran in its own `am instrument` process after `pm clear org.llamenos.hotline.debug`. The one exception is `notesAfterRestart`, which must inherit phase 1's data. Roles: `probeRole=role-volunteer` (default) and `probeRole=role-hub-admin`.
@@ -58,7 +58,7 @@ States: **WORKS** / **BROKEN** (present, fails; failure given) / **ABSENT** (nev
 | Flow | State | Evidence | Issue |
 |---|---|---|---|
 | Create local identity + set PIN | **WORKS** | Fresh install → hub URL → Create identity → 8-digit PIN ×2 → dashboard, in every run. | — |
-| Enrol the device with the server | **ABSENT** | No invite entry or redemption; `invites/redeem` has no Android caller. The first `GET /api/auth/me` is **401** (logged as `signature_verification_failed`; the pubkey is simply unknown). The only route to a registered identity is a dev backdoor. | #1345 (#766, #1047) |
+| Enroll the device with the server | **ABSENT** | No invite entry or redemption; `invites/redeem` has no Android caller. The first `GET /api/auth/me` is **401** (logged as `signature_verification_failed`; the pubkey is simply unknown). The only route to a registered identity is a dev backdoor. | #1345 (#766, #1047) |
 | PIN lock | **BROKEN** | Dashboard Lock and Settings → Lock both return to the dashboard: `PIN pad shown=false; keys unlocked=false dashboard shown=true`. After "locking", Notes shows "No notes" rather than a lock screen. | #1339 |
 | PIN unlock | **BROKEN** | After activity recreation or cold start the unlock pad appears, and the correct PIN fails: `correct 8-digit PIN: unlocked=false`, `6-digit prefix: unlocked=false`. The set pad has `maxLength = 8`, the unlock pad 6. *Counterfactual* with the pad at 8: `unlocked=true`, and a wrong PIN shows "Incorrect PIN". | #1338 |
 | Logout | **WORKS** (locally) | Settings → Logout → confirm → login screen (`create-identity`). The app sent no server request (no `/api/auth/me/logout`). Whether the encrypted keys leave the disk was not checked (the desktop half is #1305). | — |
@@ -157,9 +157,9 @@ Sizes: **S** ≤ 1 day, **M** 2–4 days, **L** ≥ 1 week.
 | #1338 PIN pad length | (a) | S | every flow across a restart; `#auth`, `#notesAfterRestart` |
 | #1339 Lock leaves the UI unlocked | (a) | S | `#auth` |
 | #1340 choose an active hub after login; re-fetch `/auth/me` after registration | (a) | S–M | every hub-scoped flow without the manual workaround. Delete the `ScenarioHooks` hub write in the same PR. |
-| #1345 enrolment by invite (Android redemption + onboarding, #766) | (d) | L | a real volunteer. Needs invites to exist: desktop admins can create them today, and Android admin invites are #1047. |
+| #1345 enrollment by invite (Android redemption + onboarding, #766) | (d) | L | a real volunteer. Needs invites to exist: desktop admins can create them today, and Android admin invites are #1047. |
 
-The first three are app bugs with no test prerequisites. **No auth Cucumber step can pass before they land.** Enrolment is a feature build. Until it lands, every test (probe included) enrols through a backdoor, and the plan says so.
+The first three are app bugs with no test prerequisites. **No auth Cucumber step can pass before they land.** Enrollment is a feature build. Until it lands, every test (probe included) enrolls through a backdoor, and the plan says so.
 
 ### Stage 2 — realtime · (a) · L
 - **#1016**: the relay client must speak the server's `/ws` protocol. Without it there is no live ring, answer, message or multi-hub signal on Android.

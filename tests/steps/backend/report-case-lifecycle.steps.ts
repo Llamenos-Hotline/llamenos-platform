@@ -19,6 +19,7 @@ import {
   enableCaseManagementViaApi,
   createEntityTypeViaApi,
   updateReportStatusViaApi,
+  uniqueName,
 } from '../../api-helpers'
 import { assertIsObject } from '../../integrity-helpers'
 
@@ -63,7 +64,7 @@ async function ensureEntityType(
   await enableCaseManagementViaApi(request, true)
   const hubId = getScenarioState(world).hubId
   const et = await createEntityTypeViaApi(request, {
-    name: `lifecycle_case_${Date.now()}`,
+    name: uniqueName('lifecycle_case', '_'),
     hubId,
   })
   const entityTypeId = et.id as string

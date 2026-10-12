@@ -9,6 +9,10 @@
     name: fail2ban
     state: present
 
+- name: Build the fail2ban ignoreip list from the SSH allow-list
+  ansible.builtin.set_fact:
+    _f2b_ignore_cidrs: "{{ ssh_allowed_cidrs | default([]) | difference(['0.0.0.0/0', '::/0']) }}"
+
 - name: Configure fail2ban SSH jail
   ansible.builtin.copy:
     dest: /etc/fail2ban/jail.d/llamenos-sshd.conf
@@ -19,6 +23,29 @@
       # Llamenos fail2ban configuration — managed by Ansible
 
       [DEFAULT]
+      # Never ban the operator or the CI runner.
+      #
+      # roles/ssh-hardening sets MaxAuthTries 3, and an SSH client that offers
+      # agent/default identities before the deploy key exhausts that budget on
+      # its own: sshd logs "maximum authentication attempts exceeded ... Too
+      # many authentication failures [preauth]" and fail2ban counts each as a
+      # failure. With maxretry 3 and the sshd-aggressive jail's 24 h bantime,
+      # an operator or shared runner holding three or more keys banned ITSELF
+      # for a day, inserted above the SSH allow rule — and Ansible could then
+      # not reach the host to undo it. Observed in issue #1602 (finding 7).
+      #
+      # ssh_allowed_cidrs is the same list roles/firewall opens the SSH port
+      # to, i.e. exactly the sources that are supposed to be able to reach sshd
+      # at all. preflight.yml already asserts every entry is a real CIDR.
+      #
+      # The two default routes are subtracted on purpose: vars.example.yml
+      # ships ssh_allowed_cidrs as 0.0.0.0/0, and whitelisting that would turn
+      # fail2ban off entirely while leaving every "fail2ban running" check
+      # green — swapping a lockout for a silently disabled brute-force
+      # defence. An operator who really does open SSH to the internet gets
+      # loopback-only ignoreip and should narrow the CIDR list instead
+      # (preflight already warns about 0.0.0.0/0).
+      ignoreip = 127.0.0.1/8 ::1{{ (' ' + (_f2b_ignore_cidrs | join(' '))) if (_f2b_ignore_cidrs | length > 0) else '' }}
       # Ban for 1 hour after 3 failures within 10 minutes
       bantime = 3600
       findtime = 600
