@@ -3,13 +3,13 @@ import Testing
 @testable import Llamenos
 
 final class MockTagsAPIService: TagsAPIServiceProtocol {
-    var listTagsResult: Result<[Tag], Error> = .success([])
+    var listTagsResult: Result<[Llamenos.Tag], Error> = .success([])
     var createTagResult: Result<TagResponse, Error>?
     var deleteTagResult: Result<TagDeleteResponse, Error> = .success(TagDeleteResponse(removedFromContacts: 0))
     var lastCreateArgs: (id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?)?
     var lastDeletedTagId: String?
 
-    func listTags() async throws -> [Tag] {
+    func listTags() async throws -> [Llamenos.Tag] {
         switch listTagsResult {
         case .success(let tags): return tags
         case .failure(let error): throw error
@@ -50,8 +50,8 @@ struct TagsViewModelTests {
         encryptedLabel: String = "deadbeef",
         color: String = "#ef4444",
         encryptedCategory: String? = nil
-    ) -> Tag {
-        Tag(
+    ) -> Llamenos.Tag {
+        Llamenos.Tag(
             color: color,
             createdAt: "2026-01-01T00:00:00Z",
             createdBy: "admin",
