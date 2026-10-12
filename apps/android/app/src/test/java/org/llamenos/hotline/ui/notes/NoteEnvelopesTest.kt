@@ -29,6 +29,8 @@ class NoteEnvelopesTest {
         hpkeEnvelope = HpkeEnvelope(v = 3, labelId = 0, enc = "enc-$tag", ct = "ct-$tag"),
     )
 
+    // List/reply payloads use SharedNote's generated AuthorEnvelope and
+    // SharedNoteAdminEnvelope types, distinct from NoteResponse's envelope types.
     private fun note(
         authorEnvelope: AuthorEnvelope? = null,
         adminEnvelopes: List<SharedNoteAdminEnvelope>? = null,
