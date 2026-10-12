@@ -3,7 +3,7 @@ import Foundation
 // MARK: - TagsAPIServiceProtocol
 
 protocol TagsAPIServiceProtocol {
-    func listTags() async throws -> [TagResponse]
+    func listTags() async throws -> [Tag]
     func createTag(id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?) async throws -> TagResponse
     func updateTag(tagId: String, encryptedLabel: String?, color: String?, encryptedCategory: String?) async throws -> TagResponse
     func deleteTag(tagId: String) async throws -> TagDeleteResponse
@@ -12,7 +12,7 @@ protocol TagsAPIServiceProtocol {
 // MARK: - TagsAPIService
 
 /// API service for hub tags (E2EE labels — see TagsViewModel for the crypto half).
-/// Wire types are the generated protocol types (`TagResponse`, `CreateTagBody`, …).
+/// Wire types are the generated protocol types (`Tag`, `TagResponse`, `CreateTagBody`, …).
 @Observable
 final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
     private let apiService: APIService
@@ -21,7 +21,7 @@ final class TagsAPIService: TagsAPIServiceProtocol, @unchecked Sendable {
         self.apiService = apiService
     }
 
-    func listTags() async throws -> [TagResponse] {
+    func listTags() async throws -> [Tag] {
         let response: TagListResponse = try await apiService.request(
             method: "GET",
             path: apiService.hp("/api/tags")

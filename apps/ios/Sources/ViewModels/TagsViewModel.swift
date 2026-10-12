@@ -14,18 +14,50 @@ struct DecryptedTag: Identifiable, Sendable {
     let category: String?
     let createdAt: String
 
+    init(tag: Tag, hubKey: Data?) {
+        self.init(
+            id: tag.id,
+            name: tag.name,
+            encryptedLabel: tag.encryptedLabel,
+            color: tag.color,
+            encryptedCategory: tag.encryptedCategory,
+            createdAt: tag.createdAt,
+            hubKey: hubKey
+        )
+    }
+
     init(tag: TagResponse, hubKey: Data?) {
-        id = tag.id
-        name = tag.name
-        color = tag.color
-        createdAt = tag.createdAt
+        self.init(
+            id: tag.id,
+            name: tag.name,
+            encryptedLabel: tag.encryptedLabel,
+            color: tag.color,
+            encryptedCategory: tag.encryptedCategory,
+            createdAt: tag.createdAt,
+            hubKey: hubKey
+        )
+    }
+
+    private init(
+        id: String,
+        name: String,
+        encryptedLabel: String,
+        color: String,
+        encryptedCategory: String?,
+        createdAt: String,
+        hubKey: Data?
+    ) {
+        self.id = id
+        self.name = name
+        self.color = color
+        self.createdAt = createdAt
         if let hubKey {
             label = HubFieldCrypto.decrypt(
-                ciphertextHex: tag.encryptedLabel,
+                ciphertextHex: encryptedLabel,
                 label: CryptoLabels.LABEL_TAG_ENCRYPT,
                 hubKey: hubKey
-            ) ?? tag.encryptedLabel
-            if let encryptedCategory = tag.encryptedCategory {
+            ) ?? encryptedLabel
+            if let encryptedCategory {
                 category = HubFieldCrypto.decrypt(
                     ciphertextHex: encryptedCategory,
                     label: CryptoLabels.LABEL_TAG_ENCRYPT,
@@ -35,7 +67,7 @@ struct DecryptedTag: Identifiable, Sendable {
                 category = nil
             }
         } else {
-            label = tag.encryptedLabel
+            label = encryptedLabel
             category = nil
         }
     }

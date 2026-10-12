@@ -3,13 +3,13 @@ import Testing
 @testable import Llamenos
 
 final class MockTagsAPIService: TagsAPIServiceProtocol {
-    var listTagsResult: Result<[TagResponse], Error> = .success([])
+    var listTagsResult: Result<[Tag], Error> = .success([])
     var createTagResult: Result<TagResponse, Error>?
     var deleteTagResult: Result<TagDeleteResponse, Error> = .success(TagDeleteResponse(removedFromContacts: 0))
     var lastCreateArgs: (id: String, name: String, encryptedLabel: String, color: String, encryptedCategory: String?)?
     var lastDeletedTagId: String?
 
-    func listTags() async throws -> [TagResponse] {
+    func listTags() async throws -> [Tag] {
         switch listTagsResult {
         case .success(let tags): return tags
         case .failure(let error): throw error
@@ -50,6 +50,25 @@ struct TagsViewModelTests {
         encryptedLabel: String = "deadbeef",
         color: String = "#ef4444",
         encryptedCategory: String? = nil
+    ) -> Tag {
+        Tag(
+            color: color,
+            createdAt: "2026-01-01T00:00:00Z",
+            createdBy: "admin",
+            encryptedCategory: encryptedCategory,
+            encryptedLabel: encryptedLabel,
+            hubID: "hub-1",
+            id: id,
+            name: name
+        )
+    }
+
+    private func makeTagResponse(
+        id: String = "tag-1",
+        name: String = "urgent",
+        encryptedLabel: String = "deadbeef",
+        color: String = "#ef4444",
+        encryptedCategory: String? = nil
     ) -> TagResponse {
         TagResponse(
             color: color,
@@ -82,9 +101,9 @@ struct TagsViewModelTests {
 
     @Test func createTagCallsAPIAndRefreshes() async throws {
         let mock = MockTagsAPIService()
-        let created = makeTag(id: "tag-new", name: "follow-up")
+        let created = makeTagResponse(id: "tag-new", name: "follow-up")
         mock.createTagResult = .success(created)
-        mock.listTagsResult = .success([created])
+        mock.listTagsResult = .success([makeTag(id: "tag-new", name: "follow-up")])
         let vm = TagsViewModel(tagsAPI: mock, hubKeyProvider: { Self.hubKey })
 
         let result = try await vm.createTag(label: "Follow Up", color: "#3b82f6", category: nil)
