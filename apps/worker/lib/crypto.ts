@@ -11,6 +11,13 @@ import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 
+// getClientIp lives in ./client-ip — it has no crypto/FFI dependency and
+// needs to stay importable from contexts (like the rate-limit middleware)
+// that must not pull in `bun:ffi` via this module. Re-exported here so
+// existing `import { getClientIp } from '../lib/crypto'` call sites keep
+// working unchanged.
+export { getClientIp } from './client-ip'
+
 /** Decode a secret string as hex bytes if valid hex, else as UTF-8 bytes. */
 function secretToKey(secret: string): Uint8Array {
   try {
@@ -40,56 +47,6 @@ export function hashIP(ip: string, secret: string): string {
   return bytesToHex(hmacSha256(key, input)).slice(0, 24)
 }
 
-/**
- * Extract the client IP from request headers with multi-source fallback.
- *
- * B-M7: Never returns a constant like 'unknown' — self-hosted instances
- * without CF-Connecting-IP still get per-client rate limit buckets via
- * X-Forwarded-For, X-Real-IP, or the Bun socket address.
- *
- * Forwarded-for headers are fully client-controlled unless a trusted proxy
- * sets/overwrites them, so they're only honored when TRUST_PROXY_HEADERS=true
- * (operator confirms a reverse proxy sits in front and strips/sets these
- * headers itself). Otherwise a spoofed header would let an attacker pick
- * their own rate-limit bucket. When trusted, we take the right-most
- * X-Forwarded-For entry — the value appended by the nearest (trusted) hop —
- * not the left-most, which the client fully controls.
- */
-export function getClientIp(req: Request): string {
-  if (process.env.TRUST_PROXY_HEADERS === 'true') {
-    // Cloudflare — most reliable when behind CF
-    const cfIp = req.headers.get('CF-Connecting-IP')
-    if (cfIp) return cfIp
-
-    // Reverse proxy (nginx, Caddy, etc.) — right-most entry is the one added
-    // by the trusted hop closest to us.
-    const xff = req.headers.get('X-Forwarded-For')
-    if (xff) {
-      const parts = xff.split(',').map(p => p.trim()).filter(Boolean)
-      const last = parts[parts.length - 1]
-      if (last) return last
-    }
-
-    const realIp = req.headers.get('X-Real-IP')
-    if (realIp) return realIp
-  }
-
-  // Bun exposes the socket address on the request (non-standard)
-  const bunAddr = (req as unknown as Record<string, unknown>).requestIP
-  if (typeof bunAddr === 'function') {
-    const addr = bunAddr()
-    if (addr && typeof addr === 'object' && 'address' in addr) {
-      return String((addr as { address: string }).address)
-    }
-  }
-
-  // Last resort: use a hash of invariant request characteristics so each
-  // unique client at least gets its own bucket (TLS fingerprint, UA, etc.)
-  const ua = req.headers.get('User-Agent') || ''
-  const accept = req.headers.get('Accept-Language') || ''
-  return `fingerprint:${ua}:${accept}`
-}
-
 // --- Server-Side Symmetric Encryption (Tier 1) ---
 
 /**
@@ -110,11 +67,44 @@ export function serverDecrypt(ciphertext: Uint8Array, label: string, serverSecre
 }
 
 // --- Envelope-Pattern Encryption (Tier 3: E2EE) ---
+//
+// Server-sealed records use the stored-record format every reader opens
+// (`open_record_for_reader` in packages/crypto/src/encryption.rs):
+//   encryptedContent = hex(iv || AES-256-GCM(contentKey, plaintext) || tag), no AAD
+//   envelope = { pubkey, enc: hex(32), ct: hex(48) }, HPKE info = label, no AAD
+// No AAD, because client-sealed and server-sealed messages share a conversation
+// and carry no format marker — a reader cannot tell which AAD to supply. The
+// label is bound as HPKE `info`.
+
+const NO_AAD = new Uint8Array(0)
+
+function sealForPubkeys(
+  plaintext: string,
+  pubkeys: string[],
+  label: string,
+): { encryptedContent: string; envelopes: RecipientEnvelope[] } {
+  const contentKey = randomBytes(32)
+  const labelBytes = utf8ToBytes(label)
+  const encryptedContent = bytesToHex(symmetricEncrypt(contentKey, utf8ToBytes(plaintext), NO_AAD))
+  const envelopes = pubkeys.map((pk): RecipientEnvelope => {
+    // hpkeSeal output is enc(32) || ct+tag
+    const sealed = hpkeSeal(hexToBytes(pk), contentKey, labelBytes, NO_AAD)
+    return {
+      pubkey: pk,
+      enc: bytesToHex(sealed.subarray(0, 32)),
+      ct: bytesToHex(sealed.subarray(32)),
+    }
+  })
+  return { encryptedContent, envelopes }
+}
 
 /**
  * Encrypt a message for storage using the HPKE envelope pattern.
  * Generates a random per-message symmetric key, encrypts the plaintext with AES-256-GCM,
  * then wraps the key for each reader via HPKE.
+ *
+ * Each pubkey is both the envelope address and the X25519 key the wrap is sealed
+ * to, so callers must pass X25519 encryption keys.
  *
  * The plaintext is discarded after encryption — the server cannot read
  * stored messages after this function returns.
@@ -124,51 +114,34 @@ export function encryptMessageForStorage(
   readerPubkeys: string[],
   label: string = LABEL_MESSAGE,
 ): { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] } {
-  const messageKey = randomBytes(32)
-  const labelBytes = utf8ToBytes(label)
-  const aadKeyWrap = utf8ToBytes(`${label}:key-wrap`)
+  // A record with no envelopes is ciphertext nobody will ever open — the same
+  // unreadable-forever outcome as sealing to an Ed25519 key (#1021/#1283), just
+  // arrived at by a different route. Refuse loudly rather than persist it: the
+  // content is equally lost either way, and a thrown error is recoverable
+  // operator feedback where a silent write is not.
+  if (readerPubkeys.length === 0) {
+    throw new Error(
+      'encryptMessageForStorage: refusing to encrypt with an empty reader list — ' +
+      'the result would be undecryptable by everyone. Ensure ADMIN_DECRYPTION_PUBKEY ' +
+      'is configured and/or the reader has a registered X25519 device key.'
+    )
+  }
 
-  const encryptedContent = bytesToHex(symmetricEncrypt(messageKey, utf8ToBytes(plaintext), labelBytes))
-
-  const readerEnvelopes: RecipientEnvelope[] = readerPubkeys.map(pk => {
-    const sealed = hpkeSeal(hexToBytes(pk), messageKey, labelBytes, aadKeyWrap)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
-
-  return { encryptedContent, readerEnvelopes }
+  const { encryptedContent, envelopes } = sealForPubkeys(plaintext, readerPubkeys, label)
+  return { encryptedContent, readerEnvelopes: envelopes }
 }
 
 /**
  * Encrypt call record metadata for history storage.
- * Uses the same HPKE envelope pattern as messages: random per-record key
- * wrapped via HPKE for each admin pubkey.
+ * Same format as messages, under LABEL_CALL_META: a random per-record key
+ * wrapped via HPKE for each admin's X25519 pubkey.
  */
 export function encryptCallRecordForStorage(
   metadata: Record<string, unknown>,
   adminPubkeys: string[],
 ): { encryptedContent: string; adminEnvelopes: RecipientEnvelope[] } {
-  const recordKey = randomBytes(32)
-  const labelBytes = utf8ToBytes(LABEL_CALL_META)
-  const aadKeyWrap = utf8ToBytes(`${LABEL_CALL_META}:key-wrap`)
-
-  const encryptedContent = bytesToHex(
-    symmetricEncrypt(recordKey, utf8ToBytes(JSON.stringify(metadata)), labelBytes),
-  )
-
-  const adminEnvelopes: RecipientEnvelope[] = adminPubkeys.map(pk => {
-    const sealed = hpkeSeal(hexToBytes(pk), recordKey, labelBytes, aadKeyWrap)
-    return {
-      pubkey: pk,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: bytesToHex(sealed.subarray(32)),
-    }
-  })
-
-  return { encryptedContent, adminEnvelopes }
+  const { encryptedContent, envelopes } = sealForPubkeys(JSON.stringify(metadata), adminPubkeys, LABEL_CALL_META)
+  return { encryptedContent, adminEnvelopes: envelopes }
 }
 
 // --- Contact Identifier Encryption ---

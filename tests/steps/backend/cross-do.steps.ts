@@ -29,6 +29,7 @@ import {
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import type { CallRecord } from '@protocol/schemas/calls'
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -64,7 +65,13 @@ Before({ tags: '@backend' }, async ({ world }) => {
 // ─── Volunteer Onboarding → Call → Note ─────────────────────────────
 
 When('an admin creates a volunteer', async ({ request, world }) => {
-  const vol = await createVolunteerViaApi(request, { name: uniqueName('XDO Vol') })
+  // Hub membership is the isolation boundary (#1037): the volunteer must be a
+  // member of the scenario hub to answer its calls and write its notes — a
+  // global volunteer role carries no authority inside any hub.
+  const vol = await createVolunteerViaApi(request, {
+    name: uniqueName('XDO Vol'),
+    hubId: getScenarioState(world).hubId,
+  })
   getCrossDoState(world).volunteerPubkey = vol.pubkey
   getCrossDoState(world).volunteerDeviceKey = vol.deviceKey
 })
@@ -111,10 +118,12 @@ When('the volunteer writes a note for the call', async ({ request, world }) => {
     },
     getCrossDoState(world).volunteerDeviceKey!,
   )
-  if (status < 300) {
-    getCrossDoState(world).noteId = (data as Record<string, unknown>)?.id as string
-      ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
-  }
+  // Fail here, not three steps later at the audit assertion, if the volunteer
+  // is refused.
+  expect(status).toBe(201)
+  getCrossDoState(world).noteId = (data as Record<string, unknown>)?.id as string
+    ?? ((data as Record<string, unknown>)?.note as Record<string, unknown>)?.id as string
+  expect(getCrossDoState(world).noteId).toBeTruthy()
 })
 
 Then('the call history should show a completed call', async ({ request, world }) => {
@@ -123,16 +132,15 @@ Then('the call history should show a completed call', async ({ request, world })
     await simulateEndCall(request, getCrossDoState(world).callId!)
   }
   const hubId = getScenarioState(world).hubId
-  const { data } = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(request, `/hubs/${hubId}/calls/history`)
-  const calls = (data as { calls: Array<{ callId: string; status: string }> }).calls
-  const call = calls.find(c => c.callId === getCrossDoState(world).callId)
+  const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
+  const call = data.calls.find(c => c.id === getCrossDoState(world).callId)
   expect(call).toBeDefined()
   expect(call!.status).toBe('completed')
 })
 
-Then('the notes list should contain the volunteer\'s note', async ({request, world: _world}) => {
-  const { notes } = await listNotesViaApi(request)
-  expect(notes.length).toBeGreaterThan(0)
+Then('the notes list should contain the volunteer\'s note', async ({request, world}) => {
+  const { notes } = await listNotesViaApi(request, { hubId: getScenarioState(world).hubId })
+  expect(notes.map(n => n.id)).toContain(getCrossDoState(world).noteId)
 })
 
 Then('the audit log should have entries for each step', async ({request, world}) => {
@@ -396,9 +404,8 @@ Then('the call should go to voicemail', async ({ world }) => {
 
 Then('the call history should show an unanswered call', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
-  const { data } = await apiGet<{ calls: Array<{ callId: string; status: string }> }>(request, `/hubs/${hubId}/calls/history`)
-  const calls = (data as { calls: Array<{ callId: string; status: string }> }).calls
-  const call = calls.find(c => c.callId === getCrossDoState(world).callId)
+  const { data } = await apiGet<{ calls: CallRecord[] }>(request, `/hubs/${hubId}/calls/history`)
+  const call = data.calls.find(c => c.id === getCrossDoState(world).callId)
   expect(call).toBeDefined()
   expect(call!.status).toBe('unanswered')
 })

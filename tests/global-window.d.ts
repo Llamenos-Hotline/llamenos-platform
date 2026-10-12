@@ -33,6 +33,7 @@ declare global {
   interface Window {
     __TEST_ROUTER?: TestRouter
     __TEST_GET_ACTIVE_HUB?: () => string | null
+    __TEST_SET_ACTIVE_HUB?: (id: string | null) => void
     __TEST_PLATFORM?: typeof import('../src/client/lib/platform')
     __TAURI_INTERNALS__?: TauriInternals
   }

@@ -59,8 +59,8 @@ pub fn hpke_wrap_key_hex(
     }
     let mut key = [0u8; 32];
     key.copy_from_slice(&key_bytes);
-    let aad = format!("{label}:key-wrap");
-    let envelope = hpke_envelope::hpke_seal_key(&key, recipient_pubkey_hex, label, aad.as_bytes())?;
+    let aad = crate::envelope_aad::key_wrap_aad(label);
+    let envelope = hpke_envelope::hpke_seal_key(&key, recipient_pubkey_hex, label, &aad)?;
     key.zeroize();
     // Convert base64url → hex wire format
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -86,7 +86,7 @@ pub fn hpke_unwrap_key_hex(
 ) -> Result<String, CryptoError> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    let aad = format!("{label}:key-wrap");
+    let aad = crate::envelope_aad::key_wrap_aad(label);
     let enc_bytes = hex::decode(&envelope.enc).map_err(CryptoError::HexError)?;
     let ct_bytes = hex::decode(&envelope.ct).map_err(CryptoError::HexError)?;
     let label_id = crate::labels::label_to_id(label)
@@ -97,7 +97,7 @@ pub fn hpke_unwrap_key_hex(
         enc: URL_SAFE_NO_PAD.encode(&enc_bytes),
         ct: URL_SAFE_NO_PAD.encode(&ct_bytes),
     };
-    let key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, aad.as_bytes())?;
+    let key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &aad)?;
     let hex_out = hex::encode(key.as_ref());
     Ok(hex_out)
 }

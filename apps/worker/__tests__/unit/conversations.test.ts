@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { ConversationsService } from '@worker/services/conversations'
-import { ServiceError } from '@worker/services/settings'
 import { createMockDb } from './mock-db'
 
 describe('ConversationsService', () => {
@@ -169,8 +168,11 @@ describe('ConversationsService', () => {
   describe('updateMessageStatus', () => {
     it('updates to delivered', async () => {
       const { db, service } = setup()
-      db.$setSelectResult([{ id: 'msg-1', conversationId: 'conv-1', status: 'pending', externalId: 'ext-1' }])
-      db.$setUpdateResult([])
+      // Atomic conditional UPDATE (#1144): the service no longer SELECTs
+      // first to decide whether to write — it issues the guarded UPDATE
+      // directly and reads success off `.returning()`. The mock's update
+      // result stands in for "the guard passed and the row changed".
+      db.$setUpdateResult([{ id: 'msg-1', conversationId: 'conv-1', status: 'delivered', externalId: 'ext-1' }])
 
       const result = await service.updateMessageStatus({ externalId: 'ext-1', status: 'delivered', timestamp: Date.now().toString() })
       expect(result).toHaveProperty('status', 'delivered')
@@ -178,6 +180,11 @@ describe('ConversationsService', () => {
 
     it('skips downgrade except for failed', async () => {
       const { db, service } = setup()
+      // The guarded UPDATE's WHERE excludes this row (status is already
+      // past the new status's rank), so `.returning()` affects zero rows
+      // and the service falls back to a SELECT to report the current
+      // (unchanged) status.
+      db.$setUpdateResult([])
       db.$setSelectResult([{ id: 'msg-1', conversationId: 'conv-1', status: 'read', externalId: 'ext-1' }])
 
       const result = await service.updateMessageStatus({ externalId: 'ext-1', status: 'delivered', timestamp: Date.now().toString() })

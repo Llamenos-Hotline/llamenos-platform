@@ -176,7 +176,8 @@ class PushService : MessagingReceiver() {
             linphoneService.storePendingCallHub(callId, hubId)
         }
         // Multi-hub axiom: do NOT call setActiveHub here.
-        // Hub context switch happens in LinphoneService.onCallStateChanged
+        // The hub switch happens only once the call is answered with the app unlocked
+        // (LinphoneService, Call.State.Connected).
 
         ensureNotificationChannel(
             context,

@@ -11,6 +11,7 @@ import {
   apiDelete,
   apiPatch,
   createUserViaApi,
+  addHubMemberViaApi,
 } from '../../api-helpers'
 
 // ── State ──────────────────────────────────────────────────────────
@@ -48,9 +49,13 @@ interface ErasureConfigBody {
 
 // ── Given ──────────────────────────────────────────────────────────
 
-Given('a volunteer user', async ({ request, world }) => {
+Given('a volunteer user', async ({ request, world, workerHub }) => {
   const s = getS(world)
   s.volunteer = await createUserViaApi(request)
+  // Scenarios act both account-wide (/erasure/me) and in the hub
+  // (/hubs/test-hub/erasure/me): a global role carries no hub authority (#1037),
+  // so the volunteer is also a member of the scenario hub.
+  await addHubMemberViaApi(request, workerHub, s.volunteer.pubkey, ['role-volunteer'])
 })
 
 Given('a registered volunteer user with a pending erasure request', async ({ request, world }) => {

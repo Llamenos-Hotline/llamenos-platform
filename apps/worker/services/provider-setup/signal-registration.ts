@@ -21,6 +21,7 @@ import { signalRegistrations } from '../../db/schema'
 import { encryptCredentials, decryptCredentials } from './crypto'
 import { validateExternalUrl } from '../../lib/ssrf-guard'
 import { safeFetch } from '../../lib/safe-fetch'
+import { devSurfaceRequestAuthorized, type DevSurfacesEnv } from '../../lib/dev-surfaces'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -51,11 +52,21 @@ export interface StartRegistrationParams {
   phoneNumber: string
   method: 'sms' | 'voice'
   hubId: string
+  /**
+   * The `X-Test-Secret` header of the request that asked for this, verbatim and
+   * unvalidated. The SECRET is what travels, never a boolean: the service
+   * checks it against the host's own configured secret (see
+   * {@link SignalRegistrationService.syntheticBridge}), so no caller can turn
+   * the synthetic path on by passing a flag.
+   */
+  harnessSecret?: string
 }
 
 export interface VerifyCodeParams {
   registrationId: string
   code: string
+  /** See {@link StartRegistrationParams.harnessSecret}. */
+  harnessSecret?: string
 }
 
 /** Valid state transitions. */
@@ -72,18 +83,59 @@ const MAX_VERIFY_ATTEMPTS = 3
 
 // ── Service ───────────────────────────────────────────────────────────────
 
-/** Test verification code — bridge is not contacted in dev mode. */
+/**
+ * Test verification code accepted on the synthetic path, where the bridge is
+ * not contacted at all. See {@link SignalRegistrationService.syntheticBridge}
+ * for who gets that path.
+ */
 const TEST_VALID_CODE = '123456'
 
 export class SignalRegistrationService {
-  private readonly isDev: boolean
+  private readonly devSurfaceEnv: DevSurfacesEnv
 
   constructor(
     private readonly db: Database,
     private readonly hmacSecret: string,
-    env?: { ENVIRONMENT?: string },
+    env?: DevSurfacesEnv,
   ) {
-    this.isDev = env?.ENVIRONMENT === 'development'
+    this.devSurfaceEnv = env ?? {}
+  }
+
+  /**
+   * True when this request may take the SYNTHETIC bridge path: the bridge is
+   * not contacted, `startRegistration` skips the register call, `checkStatus`
+   * skips the poll, `verifyCode` accepts {@link TEST_VALID_CODE} and rejects
+   * everything else, and `unregister` skips the bridge delete.
+   *
+   * This used to be `env?.ENVIRONMENT === 'development'`, fixed once at
+   * construction. `createServices` runs exactly once per process, so on a
+   * staging host the flag was permanently false and `verifyCode` dialled an
+   * unreachable mock bridge — `admin/provider-setup-signal` failed with a 502
+   * and a `status` of `undefined`, neither of which names the branch that was
+   * taken (#1623). Setting `ENVIRONMENT=development` on the deployed host to
+   * paper over it would have re-enabled every other development branch in the
+   * codebase at once.
+   *
+   * The replacement is the PER-REQUEST form, `devSurfaceRequestAuthorized`,
+   * which fits here where it did not fit the push recorder: all four callers
+   * are ordinary request handlers in `routes/provider-setup.ts` with the
+   * request's own headers in scope, and the harness sends `X-Test-Secret` on
+   * every request it makes (`tests/dev-surface-secret.ts#devSurfaceHeaders`).
+   * So the substitution is scoped to the caller that proved it is the harness,
+   * rather than to the whole host: an admin of a staging instance who does NOT
+   * hold the secret still talks to the real bridge, and still sees a real
+   * bridge failure rather than a synthetic success.
+   *
+   * Both halves of the conjunction are load-bearing and the order is not
+   * negotiable. `devSurfacesEnabled` refuses `production` FIRST and
+   * unconditionally — before `DEV_ROUTES_ENABLED` or any secret is read — so a
+   * production host that somehow carried a `DEV_RESET_SECRET` still cannot be
+   * talked onto the synthetic path by any header. And without
+   * `devSurfaceSecretPresented` every unauthenticated-to-the-dev-surface admin
+   * on a reachable staging host would get it.
+   */
+  private syntheticBridge(harnessSecret: string | undefined): boolean {
+    return devSurfaceRequestAuthorized(this.devSurfaceEnv, harnessSecret)
   }
 
   /**
@@ -119,7 +171,12 @@ export class SignalRegistrationService {
     // unreachable the admin can poll via checkStatus once it comes back online.
     // Fire-and-forget: detach the promise so the HTTP response is not blocked
     // by the bridge's TCP connect timeout (which can be 30+ seconds).
-    this.callBridgeRegister(bridgeUrl, params.phoneNumber, params.method === 'voice')
+    this.callBridgeRegister(
+      bridgeUrl,
+      params.phoneNumber,
+      params.method === 'voice',
+      this.syntheticBridge(params.harnessSecret),
+    )
       .catch((_err: unknown) => {
         // Bridge unreachable or returned an error — registration stays pending.
         // Intentionally swallowed: bridge availability is not required for the
@@ -136,7 +193,10 @@ export class SignalRegistrationService {
    * For SMS registrations, the bridge confirms automatically when Signal
    * delivers the verification SMS. For voice, the admin must call verifyCode.
    */
-  async checkStatus(registrationId: string): Promise<SignalRegistration> {
+  async checkStatus(
+    registrationId: string,
+    harnessSecret?: string,
+  ): Promise<SignalRegistration> {
     const row = await this.loadRow(registrationId)
     await this.enforceNotExpired(row)
 
@@ -149,8 +209,8 @@ export class SignalRegistrationService {
       return this.toPublic(row)
     }
 
-    // In dev mode, skip bridge poll — no bridge is running
-    if (!this.isDev) {
+    // On the synthetic path, skip the bridge poll — no bridge is running
+    if (!this.syntheticBridge(harnessSecret)) {
       const phone = this.decryptPhone(row.phoneNumber)
       try {
         const res = await this.fetchBridge(
@@ -204,9 +264,10 @@ export class SignalRegistrationService {
       await this.transition(row, 'verifying')
     }
 
-    // In dev mode, simulate bridge verification without a real bridge.
-    // Matches the A2P pattern where Twilio calls return synthetic results.
-    const codeAccepted = this.isDev
+    // On the synthetic path, simulate bridge verification without a real
+    // bridge. Matches the A2P pattern where Twilio calls return synthetic
+    // results.
+    const codeAccepted = this.syntheticBridge(params.harnessSecret)
       ? params.code === TEST_VALID_CODE
       : await this.callBridgeVerify(bridgeUrl, row, params)
 
@@ -250,11 +311,11 @@ export class SignalRegistrationService {
   /**
    * Unregister the phone number from the Signal bridge and delete the DB record.
    */
-  async unregister(registrationId: string): Promise<void> {
+  async unregister(registrationId: string, harnessSecret?: string): Promise<void> {
     const row = await this.loadRow(registrationId)
     const bridgeUrl = row.bridgeUrl
 
-    if (bridgeUrl && !this.isDev) {
+    if (bridgeUrl && !this.syntheticBridge(harnessSecret)) {
       const phone = this.decryptPhone(row.phoneNumber)
       try {
         await this.fetchBridge(
@@ -387,10 +448,11 @@ export class SignalRegistrationService {
     bridgeUrl: string,
     phoneNumber: string,
     useVoice: boolean,
+    synthetic: boolean,
   ): Promise<void> {
-    // In dev mode, skip the real bridge call — no bridge is running.
+    // On the synthetic path, skip the real bridge call — no bridge is running.
     // Matches the A2P pattern where callTwilioSubmitBrand returns synthetic data.
-    if (this.isDev) return
+    if (synthetic) return
 
     try {
       const res = await this.fetchBridge(

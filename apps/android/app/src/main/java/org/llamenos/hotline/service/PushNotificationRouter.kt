@@ -13,8 +13,9 @@ import org.llamenos.hotline.telephony.LinphoneService
  *
  * The only correct places for setActiveHub are:
  * - When the user explicitly taps a notification (notification tap handler).
- * - When the app is unlocked and the user is about to answer a call
- *   (LinphoneService.onCallStateChanged via storePendingCallHub).
+ * - When the app is unlocked and the user answers the call: storePendingCallHub records the
+ *   call's hub here, and LinphoneService switches to it when the incoming call reaches
+ *   Connected — never on the ring (IncomingReceived).
  */
 class PushNotificationRouter(
     private val linphoneService: LinphoneService,

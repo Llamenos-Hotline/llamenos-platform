@@ -21,11 +21,14 @@ import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.HubRepository
 import org.llamenos.hotline.model.ActiveCall
 import org.llamenos.hotline.model.ActiveCallsResponse
+import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.BanRequest
 import org.llamenos.hotline.model.LlamenosEvent
-import org.llamenos.hotline.model.MeResponse
+import org.llamenos.hotline.service.AttributedHubEvent
+import org.llamenos.hotline.telephony.SipRegistrar
 import org.llamenos.protocol.MyStatusResponse
 import javax.inject.Inject
 
@@ -65,6 +68,8 @@ class DashboardViewModel @Inject constructor(
     private val activeHubState: ActiveHubState,
     private val analyticsRepository: AnalyticsRepository,
     private val shiftClockRepository: ShiftClockRepository,
+    private val sipRegistrar: SipRegistrar,
+    private val hubRepository: HubRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -74,8 +79,13 @@ class DashboardViewModel @Inject constructor(
         val signingPubkey = cryptoService.signingPubkeyHex ?: ""
         _uiState.value = DashboardUiState(signingPubkey = signingPubkey)
 
-        // Fetch auth info (including server event key) before connecting WebSocket
+        // Select an initial active hub if none is persisted (first hub in the list).
+        // Runs before fetchServerEventKey so the event key is chosen for the hub that
+        // will actually be active. This is the single call site that covers both the
+        // post-login path and the session-restore (PIN unlock) path — both navigate
+        // here. No-op when a hub is already selected (see HubRepository.ensureInitialHub).
         viewModelScope.launch {
+            hubRepository.ensureInitialHub()
             fetchServerEventKey()
             webSocketService.connect()
         }
@@ -88,13 +98,13 @@ class DashboardViewModel @Inject constructor(
         }
 
         // Subscribe to typed (decrypted + parsed) events from the relay.
-        // Each event carries the hub ID that was active when it arrived.
-        // Guard: skip events from non-active hubs to prevent spurious UI refreshes.
+        // Each event carries the hub ID from the server envelope. Events from
+        // EVERY member hub are handled — never gated on the active hub
+        // (multi-hub routing axiom): a ring on hub B must reach the volunteer
+        // while they are browsing hub A.
         viewModelScope.launch {
             webSocketService.typedEvents.collect { attributed ->
-                if (attributed.hubId.isEmpty() || attributed.hubId == activeHubState.activeHubId.value) {
-                    handleEvent(attributed.event)
-                }
+                handleEvent(attributed)
             }
         }
 
@@ -123,12 +133,16 @@ class DashboardViewModel @Inject constructor(
 
     /**
      * React to typed application events by updating dashboard state.
+     *
+     * Call-related API reads are scoped to the hub the event arrived from
+     * ([AttributedHubEvent.hubId]), not the hub being browsed.
      */
-    private fun handleEvent(event: LlamenosEvent) {
-        when (event) {
+    private fun handleEvent(attributed: AttributedHubEvent<LlamenosEvent>) {
+        val hubId = attributed.hubId
+        when (val event = attributed.event) {
             is LlamenosEvent.CallRing -> {
                 _uiState.update { it.copy(activeCallCount = it.activeCallCount + 1) }
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.CallEnded -> {
                 _uiState.update {
@@ -139,7 +153,7 @@ class DashboardViewModel @Inject constructor(
                 }
             }
             is LlamenosEvent.CallUpdate -> {
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.ShiftUpdate -> {
                 // Schedule changes do not change this device's clock-in state.
@@ -161,7 +175,7 @@ class DashboardViewModel @Inject constructor(
                 // Presence updates could refresh availability indicators
             }
             is LlamenosEvent.CallAnswered -> {
-                viewModelScope.launch { fetchActiveCall() }
+                viewModelScope.launch { fetchActiveCall(hubId) }
             }
             is LlamenosEvent.PresenceDetail -> {
                 // Admin-only detailed presence — dashboard could show counts
@@ -182,23 +196,20 @@ class DashboardViewModel @Inject constructor(
     }
 
     /**
-     * Fetch the server event encryption key from GET /api/auth/me.
-     * Stores it in Rust memory via CryptoService — key never touches JVM memory.
+     * Fetch the server event encryption keys from GET /api/auth/me.
+     * Stores them in Rust memory via CryptoService — keys never touch JVM memory.
      *
-     * The API returns hubEventKeys: Map<hubId, keyHex>. We select the key for the
-     * currently active hub, falling back to the first available key if the active
-     * hub is not yet set (e.g., during initial setup).
+     * The server returns account-wide epoch keys (`serverEventKeyHex` /
+     * `serverEventKeyPrevHex`) that decrypt relay events from every hub; the
+     * schema-side `hubEventKeys` field was never implemented by the server.
      */
     private suspend fun fetchServerEventKey() {
         try {
-            val me = apiService.request<MeResponse>("GET", "/api/auth/me")
-            // Always persist admin decryption pubkey regardless of hub event keys
+            val me = apiService.request<AuthMeEventKeysResponse>("GET", "/api/auth/me")
+            // Always persist admin decryption pubkey regardless of event keys
             sessionState.adminDecryptionPubkey = me.adminDecryptionPubkey
-            val hubKeys = me.hubEventKeys ?: return
-            val activeHubId = activeHubState.activeHubId.value
-            val currentKey = if (activeHubId != null) hubKeys[activeHubId] else hubKeys.values.firstOrNull()
-            currentKey ?: return
-            webSocketService.setServerEventKeys(currentKey)
+            val currentKey = me.serverEventKeyHex ?: return
+            webSocketService.setServerEventKeys(currentKey, me.serverEventKeyPrevHex ?: "")
         } catch (_: Exception) {
             // Non-fatal — WebSocket will still connect but events won't decrypt.
             // The key will be retried on next refresh.
@@ -221,16 +232,31 @@ class DashboardViewModel @Inject constructor(
 
     /**
      * Quick clock in to the active hub from the dashboard.
+     *
+     * [microphoneGranted] is the outcome of the runtime `RECORD_AUDIO` request the screen makes
+     * first. Refused, the clock-in still succeeds (phone calls keep reaching the volunteer) but
+     * this device is deliberately NOT registered for in-app calls: ringing a device that cannot
+     * capture audio only takes the call away from a volunteer who could have answered it.
      */
-    fun clockIn() {
-        clockAction(R.string.dashboard_error_clock_in) { hubId -> shiftClockRepository.clockIn(hubId) }
+    fun clockIn(microphoneGranted: Boolean = true) {
+        clockAction(R.string.dashboard_error_clock_in) { hubId ->
+            shiftClockRepository.clockIn(hubId)
+            if (microphoneGranted) {
+                reportCallSetup(sipRegistrar.registerMemberHubs())
+            } else {
+                _uiState.update { it.copy(errorRes = R.string.incoming_call_microphone_required) }
+            }
+        }
     }
 
     /**
      * Quick clock out of the active hub from the dashboard.
      */
     fun clockOut() {
-        clockAction(R.string.dashboard_error_clock_out) { hubId -> shiftClockRepository.clockOut(hubId) }
+        clockAction(R.string.dashboard_error_clock_out) { hubId ->
+            shiftClockRepository.clockOut(hubId)
+            reportCallSetup(sipRegistrar.syncWithShift(shiftClockRepository.clockedIn.value.isNotEmpty()))
+        }
     }
 
     private fun clockAction(@StringRes failure: Int, action: suspend (hubId: String) -> Unit) {
@@ -248,6 +274,12 @@ class DashboardViewModel @Inject constructor(
                 _uiState.update { it.copy(errorRes = failure) }
             }
             _uiState.update { it.copy(isClockingInOut = false) }
+        }
+    }
+
+    private fun reportCallSetup(result: SipRegistrar.Result?) {
+        if (result is SipRegistrar.Result.Failed) {
+            _uiState.update { it.copy(errorRes = R.string.dashboard_error_in_app_calls_unavailable) }
         }
     }
 
@@ -334,10 +366,17 @@ class DashboardViewModel @Inject constructor(
 
     /**
      * Fetch the volunteer's active call from the API.
+     *
+     * [hubId] scopes the request to the hub an event arrived from; when null
+     * (pull-to-refresh and other UI-triggered reads) the active hub is used.
      */
-    private suspend fun fetchActiveCall() {
+    private suspend fun fetchActiveCall(hubId: String? = null) {
         try {
-            val path = apiService.hp("/api/calls/active")
+            val path = if (hubId.isNullOrEmpty()) {
+                apiService.hp("/api/calls/active")
+            } else {
+                "/api/hubs/$hubId/calls/active"
+            }
             val response = apiService.request<ActiveCallsResponse>("GET", path)
             val call = response.calls.firstOrNull()
             if (call != null) {
@@ -379,6 +418,9 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "refresh() started")
             _uiState.update { it.copy(isRefreshing = true, errorRes = null) }
+            // Re-read /auth/me: the identity may have been registered, or given a hub,
+            // since the dashboard first loaded — and the event key follows the active hub.
+            fetchServerEventKey()
             if (!checkHubReachable()) {
                 _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh) }
             }

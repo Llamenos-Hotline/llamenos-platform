@@ -146,8 +146,10 @@ function makeUser(overrides: { pubkey: string; active?: boolean; onBreak?: boole
     onBreak: overrides.onBreak ?? false,
     callPreference: 'phone',
     phone: '+15551234567',
-    roles: ['role-volunteer'],
-    hubRoles: [] as Array<{ hubId: string; roleIds: string[] }>,
+    // Members of hub-1: global roles other than super-admin carry no authority
+    // inside a hub (#1044), so the ring set comes from the hub assignment.
+    roles: [] as string[],
+    hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] as Array<{ hubId: string; roleIds: string[] }>,
   }
 }
 

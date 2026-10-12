@@ -1,15 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync, execSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   changedFilesFrom, addedLinesFrom, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
-  judgeTargetRun, parseVitestJson, parseVitestFailures,
+  judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases,
 } from '../../orchestrator/src/verify.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
+import { ISRG_ROOT_X1, throwawayPrivateKeyPem } from './pem-fixtures.js'
 
 describe('changedFilesFrom', () => {
   it('splits git diff --name-only output', () => {
@@ -947,4 +950,301 @@ describe('phase 2 runs nothing the commit under judgement controls in vitest mai
     expect(report.passed).toBe(false)
     expect(report.reasons.join('\n')).toMatch(/no tests ran — .*0 passed, 2 skipped\/todo, of 2 test\(s\)/)
   }, TIMEOUT)
+})
+
+// --- #1525. The export is only self-contained if BARE specifiers resolve
+// into it too. `@shared/*`, `@worker/*` and friends are `__dirname` aliases
+// in the trusted config, so installing that config into the export already
+// re-points them (pinned above). `@llamenos/*` has no alias: it is a real
+// package name, resolved through `node_modules/@llamenos/<pkg>`, which bun
+// creates as a relative symlink into the checkout that holds the install —
+// the BASE. So every import of a workspace package under the gate loaded the
+// base's copy of it, and the gate judged the PR's code against main's
+// `packages/crypto`, `packages/i18n`, `apps/worker` and so on.
+//
+// Both directions are reproduced, because they fail differently and only one
+// of them is visible: a PR that ADDS to a workspace package was failed for a
+// symbol the gate could not see (#1510), and a PR that BREAKS one was passed
+// — a fail-open in a required check, with nothing in the report to show it.
+describe('phase 2 resolves workspace packages into the export, not the base (real vitest, #1525)', () => {
+  const cleanup: string[] = []
+  const realModules = resolvePath(dirname(fileURLToPath(import.meta.url)), '../../node_modules')
+  const TIMEOUT = 120_000
+
+  afterEach(() => {
+    while (cleanup.length > 0) {
+      const dir = cleanup.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * The trusted install, reproduced as a real directory so the fake repo can
+   * own workspace links of its own: every entry of this repo's install is
+   * linked in by name (so the real vitest and its dependency tree resolve),
+   * and `@probe/widget` is added as the relative, checkout-local symlink a
+   * `bun install` writes for a workspace package.
+   */
+  function trustedRepoWithWorkspace(widgetSource: string, configAliases: string[] = []): string {
+    const dir = orchestratorDiffRepo(cleanup, {
+      'vitest.orchestrator.config.ts': [
+        "import path from 'node:path'",
+        'export default {',
+        `  resolve: { alias: [${configAliases.join(', ')}] },`,
+        "  test: { include: ['tests/orchestrator/**/*.test.ts'], environment: 'node' },",
+        '}',
+        '',
+      ].join('\n'),
+      'packages/widget/package.json':
+        '{"name":"@probe/widget","type":"module","exports":{".":"./index.ts","./ffi":"./ffi.ts"}}\n',
+      'packages/widget/index.ts': widgetSource,
+      'packages/widget/ffi.ts': "export const impl = 'native'\n",
+    })
+    const nm = join(dir, 'node_modules')
+    mkdirSync(join(nm, '@probe'), { recursive: true })
+    for (const name of readdirSync(realModules)) symlinkSync(join(realModules, name), join(nm, name))
+    symlinkSync('../../packages/widget', join(nm, '@probe', 'widget'))
+    return dir
+  }
+
+  // #1510's shape: the PR adds a value to a workspace package and ships a
+  // test that reads it. The gate resolved `@probe/widget` to the base, where
+  // the value does not exist yet, and failed a correct PR.
+  it("sees a value the PR ADDS to a workspace package", async () => {
+    const dir = trustedRepoWithWorkspace("export const widget = 'ok'\n")
+    const head = headExport(cleanup, dir, {
+      'packages/widget/index.ts': "export const widget = 'ok'\nexport const added = 'yes'\n",
+      'tests/orchestrator/widget.test.ts': [
+        "import { it, expect } from 'vitest'",
+        "import { added } from '@probe/widget'",
+        "it('sees what the head added', () => { expect(added).toBe('yes') })",
+        '',
+      ].join('\n'),
+    })
+
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: fleetLane, testDir: head })
+    expect(report.reasons).toEqual([])
+    expect(report.passed).toBe(true)
+  }, TIMEOUT)
+
+  // The fail-open, and the reason this is a correctness hole rather than an
+  // inconvenience. The test file is IDENTICAL in base and head; only the
+  // workspace package is broken by the PR. A gate that reads the base's copy
+  // reports a green required check for a change it never tested.
+  it("FAILS a PR that BREAKS a workspace package, rather than reading the base's working copy", async () => {
+    const dir = trustedRepoWithWorkspace("export const widget = 'ok'\n")
+    const head = headExport(cleanup, dir, {
+      'packages/widget/index.ts': "export const widget = 'BROKEN'\n",
+      'tests/orchestrator/widget.test.ts': [
+        "import { it, expect } from 'vitest'",
+        "import { widget } from '@probe/widget'",
+        "it('is not broken', () => { expect(widget).toBe('ok') })",
+        '',
+      ].join('\n'),
+    })
+
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: fleetLane, testDir: head })
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join('\n')).toMatch(/tests failed — 1 failed test\(s\)/)
+  }, TIMEOUT)
+
+  // The generated entries are APPENDED, because vite's alias list is
+  // first-match-wins. `vitest.unit.config.ts` points `@llamenos/crypto/ffi`
+  // at a pure-TypeScript mock — the real module loads a native `.so` through
+  // `bun:ffi`, which does not exist under Node — and a whole-package entry
+  // placed ahead of it would send 26 files at the native module and break
+  // every worker unit test that touches crypto.
+  it('lets a more specific alias in the trusted config keep winning over the generated package entry', async () => {
+    const dir = trustedRepoWithWorkspace("export const widget = 'ok'\n", [
+      "{ find: '@probe/widget/ffi', replacement: path.resolve(__dirname, 'mocks/widget-ffi.ts') }",
+    ])
+    const head = headExport(cleanup, dir, {
+      'mocks/widget-ffi.ts': "export const impl = 'mock'\n",
+      'packages/widget/index.ts': "export const widget = 'ok'\nexport const added = 'yes'\n",
+      'tests/orchestrator/widget.test.ts': [
+        "import { it, expect } from 'vitest'",
+        "import { added } from '@probe/widget'",
+        "import { impl } from '@probe/widget/ffi'",
+        "it('resolves the package into the export', () => { expect(added).toBe('yes') })",
+        "it('still gets the mock for the specifically aliased subpath', () => { expect(impl).toBe('mock') })",
+        '',
+      ].join('\n'),
+    })
+
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: fleetLane, testDir: head })
+    expect(report.reasons).toEqual([])
+    expect(report.passed).toBe(true)
+  }, TIMEOUT)
+})
+
+describe('workspaceAliases (#1525)', () => {
+  const cleanup: string[] = []
+
+  afterEach(() => {
+    while (cleanup.length > 0) {
+      const dir = cleanup.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /** A checkout whose `node_modules` holds the three shapes that matter: a
+   *  scoped workspace link, an unscoped one, and a published dependency. */
+  function fixture(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-ws-'))
+    cleanup.push(dir)
+    const nm = join(dir, 'node_modules')
+    mkdirSync(join(nm, '@scope'), { recursive: true })
+    mkdirSync(join(nm, '.bin'), { recursive: true })
+    mkdirSync(join(dir, 'packages', 'alpha'), { recursive: true })
+    mkdirSync(join(dir, 'apps', 'server'), { recursive: true })
+    mkdirSync(join(dir, 'site'), { recursive: true })
+    mkdirSync(join(nm, 'left-pad'), { recursive: true })
+    symlinkSync('../../packages/alpha', join(nm, '@scope', 'alpha'))
+    symlinkSync('../../apps/server', join(nm, '@scope', 'server'))
+    symlinkSync('../site', join(nm, 'site-pkg'))
+    return dir
+  }
+
+  it('maps every workspace link — scoped or not — onto the test root, and leaves dependencies alone', async () => {
+    const dir = fixture()
+    const aliases = await workspaceAliases(dir, '/export')
+    expect(aliases).toEqual([
+      { find: '@scope/server', replacement: join('/export', 'apps/server') },
+      { find: '@scope/alpha', replacement: join('/export', 'packages/alpha') },
+      { find: 'site-pkg', replacement: join('/export', 'site') },
+    ])
+  })
+
+  it('follows the link rather than the name: a package directory need not match its package name', async () => {
+    const aliases = await workspaceAliases(fixture(), '/export')
+    expect(aliases.find((a) => a.find === '@scope/server')?.replacement).toBe(join('/export', 'apps/server'))
+  })
+
+  it('returns [] when there is no install to read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-ws-empty-'))
+    cleanup.push(dir)
+    expect(await workspaceAliases(dir, '/export')).toEqual([])
+  })
+})
+
+/**
+ * The WIRING for the `*.pem` carve-out (#1610), exercised in the CI shape it
+ * actually runs in: git is the TRUSTED BASE CHECKOUT, parked on the base
+ * commit, and the commit under judgement exists only as an OBJECT in it —
+ * never checked out, so the `.pem` is not on disk at all and the only way to
+ * its bytes is `git show <head>:<path>`.
+ *
+ * `fragments.test.ts` proves the predicate and `scope.test.ts` proves the
+ * gate; this proves the bytes reach them. Every case but one injects the
+ * defect the gate exists to catch.
+ */
+describe('verifyMechanical reads certificate content from the head object (#1610)', () => {
+  const createdRepos: string[] = []
+
+  afterEach(() => {
+    while (createdRepos.length > 0) {
+      const dir = createdRepos.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  const PEM = 'apps/android/app/src/test/resources/certs/isrg-root-x1.pem'
+
+  const unrestricted: Lane = {
+    id: 'test', mode: 'live', cap: 1, engine: 'claude',
+    requireLabel: 'agent-dispatchable', vetoLabels: [],
+    scope: { owned: [], notOwned: [] },
+  }
+
+  /** A repo whose HEAD adds `PEM` with `content`, left parked on the base so
+   *  nothing of the judged commit is on disk. Returns what `rangeFor`
+   *  (ci.ts) passes: the base checkout, the base sha, the head sha. */
+  function repoAddingPem(content: string, baseContent?: string): { dir: string; base: string; head: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-verify-pem-'))
+    createdRepos.push(dir)
+    execSync('git init -q -b main', { cwd: dir })
+    execSync('git config user.email test@example.com', { cwd: dir })
+    execSync('git config user.name "Test"', { cwd: dir })
+    writeFileSync(join(dir, 'README.md'), 'base\n')
+    if (baseContent !== undefined) {
+      mkdirSync(dirname(join(dir, PEM)), { recursive: true })
+      writeFileSync(join(dir, PEM), baseContent)
+    }
+    execFileSync('git', ['add', '-A'], { cwd: dir })
+    execSync('git commit -q -m base', { cwd: dir })
+    const base = execSync('git rev-parse HEAD', { cwd: dir }).toString().trim()
+
+    if (content.length === 0 && baseContent !== undefined) {
+      execFileSync('git', ['rm', '-q', PEM], { cwd: dir })
+    } else {
+      mkdirSync(dirname(join(dir, PEM)), { recursive: true })
+      writeFileSync(join(dir, PEM), content)
+      execFileSync('git', ['add', '-A'], { cwd: dir })
+    }
+    execSync('git commit -q -m head', { cwd: dir })
+    const head = execSync('git rev-parse HEAD', { cwd: dir }).toString().trim()
+
+    // Park on the base: this is the CI arrangement, and it is what makes the
+    // `git show` read load-bearing rather than incidental.
+    execFileSync('git', ['checkout', '-q', '--detach', base], { cwd: dir })
+    expect(existsSync(join(dir, PEM))).toBe(baseContent !== undefined)
+    return { dir, base, head }
+  }
+
+  const verify = (r: { dir: string; base: string; head: string }) => verifyMechanical({
+    worktree: r.dir, base: r.base, branch: r.head, lane: unrestricted, skipTests: true,
+  })
+
+  it('permits a real public root CA certificate that exists only in the head object', async () => {
+    const report = await verify(repoAddingPem(ISRG_ROOT_X1))
+    expect(report.reasons).toEqual([])
+    expect(report.passed).toBe(true)
+    expect(report.changedFiles).toEqual([PEM])
+  })
+
+  it('still refuses a genuine private key at the same path', async () => {
+    const report = await verify(repoAddingPem(throwawayPrivateKeyPem()))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain(`touched never-write paths: ${PEM}`)
+  })
+
+  it('still refuses a certificate with a private key appended', async () => {
+    const report = await verify(repoAddingPem(`${ISRG_ROOT_X1}\n${throwawayPrivateKeyPem()}`))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('still refuses a truncated certificate', async () => {
+    const report = await verify(repoAddingPem(ISRG_ROOT_X1.replace('-----END CERTIFICATE-----\n', '')))
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('refuses a DELETED .pem — git show cannot read it, and "could not look" is not "is safe"', async () => {
+    // Documented consequence of failing closed, asserted rather than assumed:
+    // removing a vendored certificate still needs a human. Adding or updating
+    // one — the case #1610 is about — does not.
+    const report = await verify(repoAddingPem('', ISRG_ROOT_X1))
+    expect(report.changedFiles).toEqual([PEM])
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths')
+  })
+
+  it('still refuses a .env in the same diff whose content is a certificate', async () => {
+    // The lookup is scoped to CERTIFICATE_ONLY_PATTERNS; nothing else sees it.
+    const r = repoAddingPem(ISRG_ROOT_X1)
+    execFileSync('git', ['checkout', '-q', r.head], { cwd: r.dir })
+    writeFileSync(join(r.dir, '.env'), ISRG_ROOT_X1)
+    execFileSync('git', ['add', '-A'], { cwd: r.dir })
+    execSync('git commit -q -m "add a .env"', { cwd: r.dir })
+    const head = execSync('git rev-parse HEAD', { cwd: r.dir }).toString().trim()
+    execFileSync('git', ['checkout', '-q', '--detach', r.base], { cwd: r.dir })
+
+    const report = await verifyMechanical({
+      worktree: r.dir, base: r.base, branch: head, lane: unrestricted, skipTests: true,
+    })
+    expect(report.passed).toBe(false)
+    expect(report.reasons.join(' ')).toContain('touched never-write paths: .env')
+    expect(report.reasons.join(' ')).not.toContain(PEM)
+  })
 })

@@ -61,6 +61,15 @@ Feature: Permission Matrix
 
   # ─── Shifts Domain ────────────────────────────────────────────────
 
+  # Seeing the schedule is not seeing the roster. A volunteer needs to know
+  # that shifts exist and when they run — otherwise the shift screen 403s and
+  # they cannot find a shift to ask to join (#1342) — but personal
+  # information is admin-only in this product, so `shifts:read-own` returns
+  # the same schedule with every roster narrowed to the caller. Only
+  # `shifts:read` sees who else is on each shift. The scenario below is the
+  # assertion that replaces the blanket 403 these rows used to carry: the
+  # status may now be 200, and the roster must still be empty of other
+  # people. `reporter` holds neither permission and is still refused outright.
   Scenario Outline: <role> <expected> access to list shifts
     When the "<role>" user sends "GET" to "/api/shifts"
     Then the response status should be <status>
@@ -69,9 +78,15 @@ Feature: Permission Matrix
       | role         | expected  | status |
       | super-admin  | has       | 200    |
       | hub-admin    | has       | 200    |
-      | reviewer     | denied    | 403    |
-      | volunteer    | denied    | 403    |
+      | reviewer     | has       | 200    |
+      | volunteer    | has       | 200    |
       | reporter     | denied    | 403    |
+
+  Scenario: volunteer sees the schedule without learning who else is on it
+    Given a test shift rosters the volunteer alongside another user
+    When the "volunteer" user lists the hub schedule
+    Then the response status should be 200
+    And the schedule shows that shift with only the volunteer on its roster
 
   Scenario Outline: <role> <expected> access to create shift
     When the "<role>" user sends "POST" to "/api/shifts" with valid shift body

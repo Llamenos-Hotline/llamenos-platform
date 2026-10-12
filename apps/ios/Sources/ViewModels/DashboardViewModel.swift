@@ -307,7 +307,7 @@ final class DashboardViewModel {
         do {
             let status: DashboardShiftStatusResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/shifts/my-status"
+                path: apiService.hp("/api/shifts/my-status")
             )
             shiftStatus = status.onShift ? .onShift : .offShift
             activeCallCount = status.activeCallCount ?? 0
@@ -331,6 +331,43 @@ final class DashboardViewModel {
         }
     }
 
+    // MARK: - Note Decryption
+
+    /// Decrypt one note for the dashboard preview.
+    ///
+    /// Internal (not private) so unit tests can drive it directly — constructing the
+    /// view model needs no network. Envelope selection is by trial, never by comparing
+    /// `authorPubkey` — see `NoteResponse.decryptionCandidates` (#1024).
+    func decryptRecentNote(_ encrypted: NoteResponse) -> RecentNotePreview? {
+        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
+
+        for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
+            guard let json = try? cryptoService.decryptNote(
+                ciphertextHex: encrypted.encryptedContent,
+                envelope: envelope
+            ) else { continue }
+
+            // #1633: plain decoder — the note payload is camelCase on every platform, and a
+            // `.convertFromSnakeCase` here would hide an encoder regression.
+            guard let payload = try? JSONDecoder().decode(NotePayload.self, from: Data(json.utf8)) else {
+                return nil
+            }
+
+            let previewText = payload.text.count > 80
+                ? String(payload.text.prefix(80)) + "..."
+                : payload.text
+
+            return RecentNotePreview(
+                id: encrypted.id,
+                preview: previewText,
+                createdAt: DateFormatting.parseISO(encrypted.createdAt) ?? Date(),
+                hasCall: encrypted.callID != nil,
+                hasConversation: encrypted.conversationID != nil
+            )
+        }
+        return nil
+    }
+
     private func fetchRecentNotes() async {
         do {
             let response: NotesListResponse = try await apiService.request(
@@ -341,48 +378,7 @@ final class DashboardViewModel {
             recentNoteCount = response.total
 
             // Decrypt the recent notes for preview using HPKE envelopes
-            recentNotes = response.notes.prefix(3).compactMap { encrypted -> RecentNotePreview? in
-                guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-                var wire: (enc: String, ct: String)?
-
-                if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-                    wire = (authorEnv.enc, authorEnv.ct)
-                }
-
-                if wire == nil, let adminEnvs = encrypted.adminEnvelopes {
-                    if let ourEnv = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                        wire = (ourEnv.enc, ourEnv.ct)
-                    }
-                }
-
-                guard let wire else { return nil }
-
-                do {
-                    let json = try cryptoService.decryptNote(
-                        ciphertextHex: encrypted.encryptedContent,
-                        enc: wire.enc,
-                        ct: wire.ct
-                    )
-                    let decoder = JSONDecoder()
-                    decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    let payload = try decoder.decode(NotePayload.self, from: Data(json.utf8))
-
-                    let previewText = payload.text.count > 80
-                        ? String(payload.text.prefix(80)) + "..."
-                        : payload.text
-
-                    return RecentNotePreview(
-                        id: encrypted.id,
-                        preview: previewText,
-                        createdAt: DateFormatting.parseISO(encrypted.createdAt) ?? Date(),
-                        hasCall: encrypted.callID != nil,
-                        hasConversation: encrypted.conversationID != nil
-                    )
-                } catch {
-                    return nil
-                }
-            }
+            recentNotes = response.notes.prefix(3).compactMap(decryptRecentNote)
         } catch {
             if case APIError.noBaseURL = error {
                 // Expected when hub isn't configured yet

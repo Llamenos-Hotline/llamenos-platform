@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { isValidE164, checkRateLimit } from '../lib/helpers'
 import { verifyAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
@@ -11,7 +11,8 @@ import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { getPrimaryRole } from '@shared/permissions'
+import { getConnectionManager } from '../lib/ws-manager'
+import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
 import { adminHpkeRecipient } from '../lib/hpke-recipient'
@@ -39,9 +40,11 @@ auth.post('/login',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit login attempts by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const ipKey = `auth-login:${hashIP(clientIp, c.env.HMAC_SECRET)}`
+    // Rate limit login attempts by client — always enforced (security audit
+    // Epic A), and never exempt for anybody: `routeRateLimitClient` lets the
+    // end-to-end harness say WHICH client it is, so each scenario gets its own
+    // bucket, but the 5/min inside that bucket still binds.
+    const ipKey = `auth-login:${routeRateLimitClient(c)}`
     const limited = await checkRateLimit(services.settings, ipKey, 5)
     if (limited) {
       return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
@@ -73,7 +76,8 @@ auth.post('/login',
         return c.json({ ok: true, roles: ['role-super-admin'] })
       }
 
-      return c.json({ ok: true, roles: volunteer.roles })
+      // Account-wide, like /auth/me — never used to authorise.
+      return c.json({ ok: true, roles: resolveAllRoleIds(volunteer.roles, volunteer.hubRoles ?? []) })
     } catch {
       return c.json({ error: 'Authentication failed' }, 401)
     }
@@ -101,9 +105,8 @@ auth.post('/bootstrap',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit bootstrap by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 3)
+    // Rate limit bootstrap by client — always enforced (security audit Epic A)
+    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${routeRateLimitClient(c)}`, 3)
     if (limited) {
       return c.json({ error: 'Too many attempts. Try again later.' }, 429)
     }
@@ -153,8 +156,15 @@ auth.get('/me',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const user = c.get('user')
-    const permissions = c.get('permissions')
     const allRoles = c.get('allRoles')
+
+    // Describes the account for client UI gating: everything the user holds,
+    // globally or in any hub. A member whose roles are all hub-scoped (hub
+    // invites, hub user creation — #1037) would otherwise look role-less.
+    // The server never authorises from this set: inside a hub the hub's own
+    // assignment applies (middleware/hub.ts), outside one the global roles.
+    const accountRoleIds = resolveAllRoleIds(user.roles, user.hubRoles ?? [])
+    const permissions = resolvePermissions(accountRoleIds, allRoles)
 
     const { credentials: webauthnCreds } = await services.identity.getWebAuthnCredentials(pubkey)
     const webauthnSettings = await services.identity.getWebAuthnSettings()
@@ -162,7 +172,7 @@ auth.get('/me',
     const isAdmin = checkPermission(permissions, 'settings:manage')
     const webauthnRequired = isAdmin ? webauthnSettings.requireForAdmins : webauthnSettings.requireForUsers
 
-    const primaryRole = getPrimaryRole(user.roles, allRoles)
+    const primaryRole = getPrimaryRole(accountRoleIds, allRoles)
 
     // Derive epoch-scoped server event key for client-side decryption (H1 + H5 fix)
     // Key changes each epoch for forward secrecy. Client receives current + previous epoch keys.
@@ -182,7 +192,10 @@ auth.get('/me',
 
     return c.json({
       pubkey: user.pubkey,
-      roles: user.roles,
+      // Same account-wide set as `permissions` and `primaryRole`: a member
+      // whose only roles are hub-scoped must not look role-less — clients
+      // treat an empty role list as "no account" and sign the user out.
+      roles: accountRoleIds,
       permissions,
       primaryRole: primaryRole ? { id: primaryRole.id, name: primaryRole.name, slug: primaryRole.slug } : null,
       name: user.name,
@@ -234,6 +247,12 @@ auth.post('/me/logout',
       const token = authHeader.slice(8).trim()
       await services.identity.revokeSession(token)
     }
+    // Close this key's live relay sockets and drop their subscriptions. A
+    // WebSocket authenticates with an Ed25519 challenge, not the session token,
+    // so revoking the session leaves an open socket receiving every hub this
+    // user belongs to — and periodic revalidation would not notice, because the
+    // account is still active (#1655).
+    getConnectionManager()?.terminateUser(pubkey, 'logged_out')
     await audit(services.audit, 'logout', pubkey, {}, undefined, null)
     return c.json({ ok: true })
   },

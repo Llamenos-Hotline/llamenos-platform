@@ -9,8 +9,22 @@ import {
 import type { Lane } from '../../orchestrator/src/config.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { trackedFiles } from './codeowners.js'
-import { matchesPath, TEMPLATED_SECRET_PATTERNS } from '../../orchestrator/src/fragments.js'
+import {
+  matchesPath, TEMPLATED_SECRET_PATTERNS, CERTIFICATE_ONLY_PATTERNS, isPublicCertificateFile,
+} from '../../orchestrator/src/fragments.js'
+import { readFileSync } from 'node:fs'
 import { SECRET_PATH_PATTERNS } from '../../orchestrator/src/config.js'
+
+/** Content of a tracked file, or `undefined` for anything unreadable or not
+ *  a regular text file. Mirrors what `verifyMechanical` hands the gate, and
+ *  keeps a binary blob from throwing the coverage sweep. */
+function readSafely(file: string): string | undefined {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return undefined
+  }
+}
 
 describe('assertLiveLanesHaveScope', () => {
   const lane = (mode: Lane['mode'], owned: string[]): Lane => ({
@@ -181,6 +195,47 @@ describe('config', () => {
         ).toContain(p)
       }
     }
+  })
+
+  // The CERTIFICATE carve-out gets the same evidence treatment, both
+  // directions, against the real tree (#1610). It is a content rule, so the
+  // evidence is read from the files themselves rather than from their names.
+
+  it('covers every tracked PUBLIC CERTIFICATE with a carved-out pattern — none is left unwritable', () => {
+    const certs = trackedFiles().filter((f) => isPublicCertificateFile(readSafely(f)))
+    // Guards the guard: the three vendored bundler root CAs the issue names.
+    // If the repo stops tracking them this assertion must fail loudly rather
+    // than pass over an empty list.
+    expect(certs.length, 'no tracked public certificate — this would assert nothing').toBeGreaterThan(0)
+    for (const c of certs) {
+      for (const p of SECRET_PATH_PATTERNS.filter((pattern) => matchesPath(c, pattern))) {
+        expect(
+          CERTIFICATE_ONLY_PATTERNS,
+          `tracked public certificate ${c} matches secret pattern ${p}, which is not carved out — it would be unwritable`,
+        ).toContain(p)
+      }
+    }
+  })
+
+  it('justifies every certificate carve-out with at least one tracked public certificate — no dead exemption', () => {
+    const certs = trackedFiles().filter((f) => isPublicCertificateFile(readSafely(f)))
+    for (const p of CERTIFICATE_ONLY_PATTERNS) {
+      expect(
+        certs.some((c) => matchesPath(c, p)),
+        `carve-out for ${p} is justified by no tracked public certificate — remove it rather than carry latent surface`,
+      ).toBe(true)
+      // A carve-out for a pattern that is not a secret pattern at all would
+      // be meaningless.
+      expect(SECRET_PATH_PATTERNS).toContain(p)
+    }
+  })
+
+  it('permits every public certificate tracked in this repo, and still refuses the same paths unread', () => {
+    const certs = trackedFiles().filter((f) => isPublicCertificateFile(readSafely(f)))
+    const lookup = (f: string) => readSafely(f)
+    expect(checkScope(certs, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS], lookup).forbidden).toEqual([])
+    // Without the content lookup the gate is exactly as it was before #1610.
+    expect(checkScope(certs, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual(certs)
   })
 
   it('justifies every carved-out pattern with at least one tracked template — no dead exemption', () => {

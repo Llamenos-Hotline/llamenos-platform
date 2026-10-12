@@ -19,7 +19,8 @@ import {
   decryptContent,
   wrapKeyForRecipient,
   unwrapKey,
-  x25519PubkeyFromSeed,
+  adminHpkeRecipient,
+  hpkeRecipientForSeed,
 } from '../../crypto-helpers'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { TestDB } from '../../db-helpers'
@@ -46,8 +47,16 @@ interface E2EEIntegrityState {
   dbRow?: Record<string, unknown>
   /** Last decrypted plaintext */
   decryptedText?: string
-  /** The admin seed hex */
+  /** The admin's Ed25519 signing seed — API authentication only. */
   adminSeedHex?: string
+  /**
+   * The admin's X25519 secret — what opens an admin envelope.
+   *
+   * A separate field from `adminSeedHex` on purpose: the two are different
+   * values (the encryption key is HKDF'd from the signing seed), and conflating
+   * them is #1283. Both come from `adminHpkeRecipient()`.
+   */
+  adminHpkeSkHex?: string
   /** The admin Ed25519 pubkey (for registration) */
   adminPubkey?: string
   /** The admin X25519 pubkey (for HPKE operations) */
@@ -86,7 +95,7 @@ function getKeypair(world: Record<string, unknown>, name: string) {
 
 Given('a volunteer {string} with a real keypair', async ({ request, world }, name: string) => {
   const kp = generateTestKeypair()
-  const x25519Pubkey = x25519PubkeyFromSeed(kp.seedHex)
+  const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
   // Register volunteer with Ed25519 pubkey (for auth), X25519 is derived internally for HPKE
   const { status } = await apiPost(request, '/users', {
@@ -99,16 +108,16 @@ Given('a volunteer {string} with a real keypair', async ({ request, world }, nam
 })
 
 Given('the admin keypair is known', async ({ world }) => {
-  const pubkey = seedHexToPubkey(ADMIN_SEED)
-  const x25519Pubkey = x25519PubkeyFromSeed(ADMIN_SEED)
+  const admin = adminHpkeRecipient()
   getE2EEIntegrityState(world).adminSeedHex = ADMIN_SEED
-  getE2EEIntegrityState(world).adminPubkey = pubkey
-  getE2EEIntegrityState(world).adminX25519Pubkey = x25519Pubkey
+  getE2EEIntegrityState(world).adminPubkey = seedHexToPubkey(ADMIN_SEED)
+  getE2EEIntegrityState(world).adminX25519Pubkey = admin.pubkeyHex
+  getE2EEIntegrityState(world).adminHpkeSkHex = admin.skHex
 })
 
 Given('admin {string} with a real keypair', async ({ world }, name: string) => {
   const kp = generateTestKeypair()
-  const x25519Pubkey = x25519PubkeyFromSeed(kp.seedHex)
+  const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
 })
 
@@ -137,7 +146,7 @@ When('the content key is HPKE-wrapped for the admin', async ({ world }) => {
   expect(getE2EEIntegrityState(world).contentKey).toBeDefined()
   expect(getE2EEIntegrityState(world).adminX25519Pubkey).toBeDefined()
 
-  const envelope = await wrapKeyForRecipient(getE2EEIntegrityState(world).contentKey!, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminSeedHex!, LABEL_NOTE_KEY)
+  const envelope = await wrapKeyForRecipient(getE2EEIntegrityState(world).contentKey!, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminHpkeSkHex!, LABEL_NOTE_KEY)
   getE2EEIntegrityState(world).envelopes.set(getE2EEIntegrityState(world).adminX25519Pubkey!, envelope)
 })
 
@@ -191,7 +200,7 @@ When(
     getE2EEIntegrityState(world).envelopes.set(volKp.x25519Pubkey, volEnv)
 
     // Wrap for admin (X25519 pubkey for HPKE)
-    const adminEnv = await wrapKeyForRecipient(contentKey, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminSeedHex!, LABEL_NOTE_KEY)
+    const adminEnv = await wrapKeyForRecipient(contentKey, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminHpkeSkHex!, LABEL_NOTE_KEY)
     getE2EEIntegrityState(world).envelopes.set(getE2EEIntegrityState(world).adminX25519Pubkey!, adminEnv)
   },
 )
@@ -321,7 +330,7 @@ When('the volunteer encrypts note content {string} with real crypto', async ({ w
   getE2EEIntegrityState(world).envelopes.set(volKp.x25519Pubkey, volEnv)
 
   // Wrap for admin (X25519 pubkey for HPKE)
-  const adminEnv = await wrapKeyForRecipient(contentKey, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminSeedHex!, LABEL_NOTE_KEY)
+  const adminEnv = await wrapKeyForRecipient(contentKey, getE2EEIntegrityState(world).adminX25519Pubkey!, getE2EEIntegrityState(world).adminHpkeSkHex!, LABEL_NOTE_KEY)
   getE2EEIntegrityState(world).envelopes.set(getE2EEIntegrityState(world).adminX25519Pubkey!, adminEnv)
 })
 
@@ -374,7 +383,7 @@ When('the volunteer unwraps their envelope and decrypts the note', async ({ worl
 
 When('the admin unwraps their envelope and decrypts the note', async ({ world }) => {
   expect(getE2EEIntegrityState(world).ciphertextHex).toBeDefined()
-  expect(getE2EEIntegrityState(world).adminSeedHex).toBeDefined()
+  expect(getE2EEIntegrityState(world).adminHpkeSkHex).toBeDefined()
   expect(getE2EEIntegrityState(world).adminX25519Pubkey).toBeDefined()
 
   const envelope = getE2EEIntegrityState(world).envelopes.get(getE2EEIntegrityState(world).adminX25519Pubkey!)
@@ -383,7 +392,7 @@ When('the admin unwraps their envelope and decrypts the note', async ({ world })
   const recoveredKey = await unwrapKey(
     envelope!.ct,
     envelope!.enc,
-    getE2EEIntegrityState(world).adminSeedHex!,
+    getE2EEIntegrityState(world).adminHpkeSkHex!,
     LABEL_NOTE_KEY,
   )
   getE2EEIntegrityState(world).decryptedText = decryptContent(getE2EEIntegrityState(world).ciphertextHex!, recoveredKey, LABEL_NOTE_KEY)
@@ -534,7 +543,7 @@ Then('the DB author_envelope JSONB should be a proper object not a string', asyn
 
 Given('a reviewer {string} with a real keypair', async ({ request, world }, name: string) => {
   const kp = generateTestKeypair()
-  const x25519Pubkey = x25519PubkeyFromSeed(kp.seedHex)
+  const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
   const { status } = await apiPost(request, '/users', {
     name: `XU Reviewer ${name} ${Date.now()}`,
@@ -547,7 +556,7 @@ Given('a reviewer {string} with a real keypair', async ({ request, world }, name
 
 Given('a hub admin {string} with a real keypair', async ({ request, world }, name: string) => {
   const kp = generateTestKeypair()
-  const x25519Pubkey = x25519PubkeyFromSeed(kp.seedHex)
+  const x25519Pubkey = hpkeRecipientForSeed(kp.seedHex).pubkeyHex
   getE2EEIntegrityState(world).keypairs.set(name, { ...kp, x25519Pubkey })
   const { status } = await apiPost(request, '/users', {
     name: `XU HubAdmin ${name} ${Date.now()}`,
@@ -580,7 +589,7 @@ When(
     const adminEnv = await wrapKeyForRecipient(
       state.contentKey,
       state.adminX25519Pubkey!,
-      state.adminSeedHex!,
+      state.adminHpkeSkHex!,
       LABEL_NOTE_KEY,
     )
     state.envelopes.set(state.adminX25519Pubkey!, adminEnv)
@@ -616,7 +625,7 @@ When(
     const adminEnv = await wrapKeyForRecipient(
       state.contentKey,
       state.adminX25519Pubkey!,
-      state.adminSeedHex!,
+      state.adminHpkeSkHex!,
       LABEL_NOTE_KEY,
     )
     state.envelopes.set(state.adminX25519Pubkey!, adminEnv)
@@ -707,7 +716,7 @@ When('the admin decrypts the note using the admin envelope', async ({ world }) =
   const recoveredKey = await unwrapKey(
     envelope!.ct,
     envelope!.enc,
-    state.adminSeedHex!,
+    state.adminHpkeSkHex!,
     LABEL_NOTE_KEY,
   )
   state.decryptedText = decryptContent(
@@ -934,17 +943,17 @@ Then(
     const [pubkey1, env1] = entries[0]
     const [pubkey2, env2] = entries[1]
 
-    // Resolve seed hex for each pubkey
-    function seedForPubkey(pubkey: string): string {
-      if (pubkey === state.adminX25519Pubkey) return state.adminSeedHex!
+    // Resolve the X25519 secret that opens an envelope addressed to `pubkey`.
+    function hpkeSkForPubkey(pubkey: string): string {
+      if (pubkey === state.adminX25519Pubkey) return state.adminHpkeSkHex!
       for (const kp of state.keypairs.values()) {
         if (kp.x25519Pubkey === pubkey) return kp.seedHex
       }
-      throw new Error(`No seed found for pubkey ${pubkey}`)
+      throw new Error(`No X25519 secret found for pubkey ${pubkey}`)
     }
 
-    const key1 = await unwrapKey(env1.ct, env1.enc, seedForPubkey(pubkey1), LABEL_NOTE_KEY)
-    const key2 = await unwrapKey(env2.ct, env2.enc, seedForPubkey(pubkey2), LABEL_NOTE_KEY)
+    const key1 = await unwrapKey(env1.ct, env1.enc, hpkeSkForPubkey(pubkey1), LABEL_NOTE_KEY)
+    const key2 = await unwrapKey(env2.ct, env2.enc, hpkeSkForPubkey(pubkey2), LABEL_NOTE_KEY)
 
     // Both unwrapped keys equal the original content key
     expect(bytesToHex(key1)).toBe(bytesToHex(state.contentKey!))

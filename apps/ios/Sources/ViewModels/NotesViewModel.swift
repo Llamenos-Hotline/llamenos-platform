@@ -91,20 +91,32 @@ final class NotesViewModel {
     /// - Parameters:
     ///   - text: The note body text.
     ///   - fields: Custom field values keyed by field name.
-    ///   - callId: Optional associated call ID.
-    ///   - conversationId: Optional associated conversation ID.
+    ///   - callId: The call the note is about. The server requires a note to belong to
+    ///     a call or a conversation (`createNoteBodySchema` refines on
+    ///     `callId || conversationId`); this sheet files notes against a call.
+    ///   - transcript: Optional call transcript, appended to the note text. It must NOT
+    ///     be sent as `conversationId` — that linked the note to a conversation whose
+    ///     ID was the transcript text (#1293).
     ///   - adminPubkeys: Admin encryption public keys (X25519) for envelope encryption.
     func createNote(
         text: String,
         fields: [String: AnyCodableValue]?,
-        callId: String?,
-        conversationId: String?,
+        callId: String,
+        transcript: String?,
         adminPubkeys: [String]
     ) async throws {
-        let payload = NotePayload(text: text, fields: fields)
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        let payloadJSON = String(data: try encoder.encode(payload), encoding: .utf8) ?? "{}"
+        let noteText = transcript.map { "\(text)\n\n--- Transcript ---\n\($0)" } ?? text
+        let payload = NotePayload(text: noteText, fields: fields)
+        // #1633: no key conversion. This encoder used to set `.convertToSnakeCase`,
+        // which was a no-op by luck rather than by design — `NotePayload`'s own keys
+        // are `text` and `fields`, both single words, and a nested Dictionary's keys
+        // (the custom field names in `fields`) are not reached by a key strategy, as
+        // `APIServiceWireFormatTests.testWhichKeysAKeyStrategyActuallyReaches` pins.
+        // Add one camelCase field to `NotePayload` and it would have started sealing a
+        // key desktop and Android cannot find into the ciphertext, where no validator
+        // and no test would see it. The encrypted payload is part of the
+        // cross-platform contract: camelCase, with nothing in the way.
+        let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) ?? "{}"
 
         // Build full recipient list: our encryption key + admin encryption keys
         var recipientPubkeys: [String] = []
@@ -118,41 +130,32 @@ final class NotesViewModel {
         let result = try cryptoService.encryptNote(payload: payloadJSON, recipientPubkeys: recipientPubkeys)
 
         // Map HPKE envelopes to the protocol wire format
-        let authorEnvelope: ProtocolKeyEnvelope?
-        let adminEnvelopes: [RecipientEnvelope]?
+        let authorEnvelope = cryptoService.encryptionPubkeyHex
+            .flatMap { ourPubkey in result.envelopes.first(where: { $0.pubkey == ourPubkey }) }
+            .map { SharedAuthorEnvelope(ct: $0.envelope.ct, enc: $0.envelope.enc) }
 
-        if let ourPubkey = cryptoService.encryptionPubkeyHex,
-           let ours = result.envelopes.first(where: { $0.pubkey == ourPubkey }) {
-            authorEnvelope = ProtocolKeyEnvelope(
-                ct: ours.envelope.ct,
-                enc: ours.envelope.enc
-            )
-        } else {
-            authorEnvelope = nil
-        }
-
-        adminEnvelopes = result.envelopes
+        let adminEnvelopes = result.envelopes
             .filter { $0.pubkey != cryptoService.encryptionPubkeyHex }
-            .map { env in
-                RecipientEnvelope(
-                    ct: env.envelope.ct,
-                    enc: env.envelope.enc,
-                    pubkey: env.pubkey
-                )
-            }
+            .map { SharedAdminEnvelope(ct: $0.envelope.ct, enc: $0.envelope.enc, pubkey: $0.pubkey) }
 
-        let request = CreateNoteRequest(
-            callId: callId,
-            conversationId: conversationId,
-            encryptedContent: result.ciphertextHex,
+        let body = CreateNoteBody(
+            adminEnvelopes: adminEnvelopes,
             authorEnvelope: authorEnvelope,
-            adminEnvelopes: adminEnvelopes
+            callID: callId,
+            caseID: nil,
+            contactHash: nil,
+            conversationID: nil,
+            encryptedContent: result.ciphertextHex,
+            interactionTypeHash: nil
         )
 
-        let _: NoteResponse = try await apiService.request(
+        // POST /api/notes answers 201 with `{ note }` (apps/worker/routes/notes.ts) —
+        // decoding the bare NoteResponse here threw on every successful save and the
+        // sheet reported an error for a note the server had stored.
+        let _: NoteDetailResponse = try await apiService.request(
             method: "POST",
             path: apiService.hp("/api/notes"),
-            body: request
+            body: body
         )
 
         // Haptic feedback on success
@@ -169,34 +172,23 @@ final class NotesViewModel {
     func decryptNote(_ encrypted: NoteResponse) -> DecryptedNote? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
-        // Find our envelope — check author envelope first (volunteer's own note)
-        var wire: (enc: String, ct: String)?
-
-        if encrypted.authorPubkey == ourPubkey, let authorEnv = encrypted.authorEnvelope {
-            wire = (authorEnv.enc, authorEnv.ct)
+        // Envelope selection is by trial, never by comparing `authorPubkey` — see
+        // `NoteResponse.decryptionCandidates` (#1024).
+        for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
+            if let note = decryptNote(encrypted, envelope: envelope) { return note }
         }
+        return nil
+    }
 
-        // Then check admin envelopes
-        if wire == nil, let adminEnvs = encrypted.adminEnvelopes {
-            if let ourEnvelope = adminEnvs.first(where: { $0.pubkey == ourPubkey }) {
-                wire = (ourEnvelope.enc, ourEnvelope.ct)
-            }
-        }
-
-        guard let wire else {
-            return nil
-        }
-
+    private func decryptNote(_ encrypted: NoteResponse, envelope: HpkeEnvelope) -> DecryptedNote? {
         do {
             let decryptedJSON = try cryptoService.decryptNote(
                 ciphertextHex: encrypted.encryptedContent,
-                enc: wire.enc,
-                ct: wire.ct
+                envelope: envelope
             )
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let payload = try decoder.decode(NotePayload.self, from: Data(decryptedJSON.utf8))
+            // Plain decoder, matching the plain encoder above.
+            let payload = try JSONDecoder().decode(NotePayload.self, from: Data(decryptedJSON.utf8))
 
             return DecryptedNote(
                 id: encrypted.id,

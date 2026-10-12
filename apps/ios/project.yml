@@ -25,7 +25,33 @@ settings:
     CODE_SIGN_STYLE: Automatic
     # The Rust XCFramework is only built for arm64 simulator slices.
     # Exclude x86_64 so Release builds on Apple Silicon Macs link cleanly.
+    # (The Linphone SDK's simulator slices are arm64+x86_64, so this does not
+    # drop anything Linphone needs.)
     "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+
+# Linphone SDK (liblinphone + Swift wrapper `linphonesw`), consumed as the upstream
+# Swift package. Pinned to the commit the `5.5.23-novideo` tag points at, not to the
+# tag: a tag is a movable ref, and Package.resolved lives inside the gitignored
+# .xcodeproj, so a tag pin would not be reproducible across fresh checkouts.
+# That commit's Package.swift carries a SHA-256 `checksum:` for every binary
+# xcframework zip, and SwiftPM refuses to use a download that does not match it.
+# `-novideo`: this is a voice-only hotline. It shrinks mediastreamer2 (35.2 MB -> 10.9 MB
+# compressed) and the Swift API is byte-identical to the full variant. It does NOT give a
+# voice-only app: upstream's single `linphonexcframeworks` target depends on all 17 binary
+# targets, so the built .app embeds every one of them. Measured in the simulator build:
+# msopenh264 (H.264), msamr and mscodec2 are present, and so are linphonetester.framework
+# and bctoolbox-tester.framework — upstream's own test harness, loaded in-process with the
+# app's entitlements — plus ~9 MB of .mkv/.wav tester fixtures inside linphone.framework.
+# Stripping them needs a post-embed build phase plus a CI assertion, and is a follow-up
+# rather than part of linking; this comment exists so nobody reads `-novideo` as having
+# already done it.
+# Keep in sync with Package.swift. apps/ios/linphone-sdk-checksums.txt holds our own copy
+# of that commit's 17 artifact SHA-256s, so an upstream force-push is detectable; read that
+# file's header for what it does and does not yet enforce.
+packages:
+  linphonesw:
+    url: https://github.com/BelledonneCommunications/linphone-sdk-swift-ios
+    revision: dc3c6e3601a2aceeee74d0420353f20d911eb802 # tag 5.5.23-novideo
 
 targets:
   # ─── Main Application ───────────────────────────────────────
@@ -43,6 +69,7 @@ targets:
     dependencies:
       - framework: LlamenosCoreFFI.xcframework
         embed: false
+      - package: linphonesw
     info:
       path: Sources/App/Info.plist
       properties:
@@ -53,9 +80,10 @@ targets:
         # immediately invoke CXProvider.reportNewIncomingCall on every PushKit push;
         # non-compliant apps are terminated and have PushKit delivery blocked by iOS.
         # The Llamenos PushKit/CallKit integration is gated on the Linphone SDK
-        # (apps/ios/Frameworks/linphone-sdk.xcframework) being linked AND verified
-        # end-to-end on a real device. Until then, incoming-call notifications use
-        # the standard APNs path (remote-notification + UNUserNotification).
+        # (the `linphonesw` package above) being linked AND verified end-to-end on
+        # a real device. It is linked; device verification has NOT happened. Until
+        # then, incoming-call notifications use the standard APNs path
+        # (remote-notification + UNUserNotification).
         # Re-add `voip` when PushKit is registered and CallKit reporting is wired.
         UIBackgroundModes:
           - remote-notification
@@ -65,6 +93,15 @@ targets:
             CFBundleURLSchemes:
               - llamenos
         ITSAppUsesNonExemptEncryption: true
+        # `xcodegen generate` REWRITES Sources/App/Info.plist from this block, dropping any
+        # key it does not declare. NSAppTransportSecurity was committed only in the plist, so
+        # every build that regenerates the project (CI's ensure_xcodeproj on a fresh checkout,
+        # and mobile-release.yml:513) silently shipped without ATS pinned off. Declared here
+        # so it survives. Known remaining drift: CFBundleShortVersionString is reset to 1.0 by
+        # the same mechanism — knope owns it in Info.plist (knope.toml:14), so fixing it needs
+        # a knope.toml change and is reported rather than done here.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
         NSMicrophoneUsageDescription: Llamenos uses the microphone for VoIP calls and voice-to-text input when filling out report fields.
         NSSpeechRecognitionUsageDescription: Llamenos uses speech recognition to transcribe voice input into report fields.
         NSLocationWhenInUseUsageDescription: Llamenos uses your location to autofill location fields in reports, with your permission.

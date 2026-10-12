@@ -540,35 +540,41 @@ export class CasesService {
     caseId: string,
     pubkeys: string[],
   ): Promise<{ assignedTo: string[] }> {
-    const existing = await this.db
-      .select()
-      .from(caseRecords)
-      .where(eq(caseRecords.id, caseId))
-    if (existing.length === 0) {
-      throw new ServiceError(404, 'Record not found')
-    }
-    const record = existing[0]
-
-    // Deduplicate: add only new pubkeys
-    const existingSet = new Set(record.assignedTo)
-    const newPubkeys = pubkeys.filter((pk) => !existingSet.has(pk))
-
-    if (newPubkeys.length === 0) {
-      return { assignedTo: record.assignedTo }
+    // Dedupe the input itself (pure JS, no race) before touching the DB.
+    const requested = [...new Set(pubkeys)]
+    if (requested.length === 0) {
+      const [existing] = await this.db
+        .select({ assignedTo: caseRecords.assignedTo })
+        .from(caseRecords)
+        .where(eq(caseRecords.id, caseId))
+      if (!existing) throw new ServiceError(404, 'Record not found')
+      return { assignedTo: existing.assignedTo }
     }
 
-    // Use array_cat to append new pubkeys
+    // Atomic dedup against the stored row (#1144). The previous
+    // implementation computed "which of these pubkeys are new" from a
+    // SELECT taken before the UPDATE — two concurrent assign() calls both
+    // compute "new" against the same stale read, and both array_cat the
+    // same pubkey in, producing a duplicate. The subquery below recomputes
+    // "which requested pubkeys are not already present" against the row
+    // this UPDATE just locked, so it's correct regardless of what another
+    // concurrent assign() already committed.
     const [updated] = await this.db
       .update(caseRecords)
       .set({
-        assignedTo: sql`array_cat(${caseRecords.assignedTo}, ARRAY[${sql.join(
-          newPubkeys.map((pk) => sql`${pk}`),
-          sql.raw(','),
-        )}]::text[])`,
+        assignedTo: sql`array_cat(${caseRecords.assignedTo}, COALESCE((
+          SELECT array_agg(pk) FROM unnest(ARRAY[${sql.join(
+            requested.map((pk) => sql`${pk}`),
+            sql.raw(','),
+          )}]::text[]) AS pk
+          WHERE pk <> ALL(${caseRecords.assignedTo})
+        ), ARRAY[]::text[]))`,
         updatedAt: new Date(),
       })
       .where(eq(caseRecords.id, caseId))
       .returning({ assignedTo: caseRecords.assignedTo })
+
+    if (!updated) throw new ServiceError(404, 'Record not found')
 
     return { assignedTo: updated.assignedTo }
   }

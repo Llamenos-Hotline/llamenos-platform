@@ -1,3 +1,8 @@
+# The device-linking wire protocol (QR format, room transport, roles, SAS
+# ceremony, key-bundle payload, failure modes) is specified in
+# docs/protocol/PROTOCOL.md §6 (Device Linking Protocol, issue #1027).
+# These scenarios are the lifecycle contract (register/list/revoke) that
+# linked devices operate under once imported.
 @backend @security @crypto
 Feature: Device Lifecycle
   As a multi-device user

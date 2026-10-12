@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "已签到，但此设备无法在应用内接听电话。请尝试重新签到。",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Go On Break",
     "help": "Help",
@@ -2455,6 +2456,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "此中心的加密内容暂时无法在此设备上打开",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,11 +2469,14 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "点按一个中心以切换当前上下文。当前中心决定你看到哪些数据。",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "无法加载你的中心",
+    "membershipLoadFailedBody": "服务器没有说明你属于哪些中心，因此暂时无法显示任何内容。请检查网络连接后重试。"
   },
   "identityLabel": "Identity",
   "import": {
@@ -2493,6 +2498,9 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "在应用内接听来电需要麦克风权限。",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2553,7 +2561,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -2747,6 +2757,7 @@
     "backupAcknowledge": "我已将恢复密钥保存在安全的位置",
     "backupDescription": "请记下此恢复密钥并妥善保管。这是在新设备上恢复账户的唯一方式。",
     "backupDownloaded": "备份已下载",
+    "backupFailed": "无法创建您的加密备份：{{reason}}",
     "backupTitle": "保存您的恢复密钥",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2761,6 +2772,8 @@
     "getStarted": "开始",
     "goToLogin": "前往登录",
     "invalidCode": "邀请码无效",
+    "rateLimitedRetry": "尝试次数过多。请等待 {{seconds}} 秒后重试。",
+    "validationUnavailable": "暂时无法验证您的邀请。请检查网络连接后重试。",
     "noCode": "未提供邀请码",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
@@ -4662,5 +4675,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

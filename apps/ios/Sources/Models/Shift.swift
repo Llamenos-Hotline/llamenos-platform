@@ -81,45 +81,10 @@ extension Shift: Identifiable {
     }
 }
 
-// MARK: - ShiftStatusResponse
-// Generated `MyStatusResponse` has a different structure (currentShift/nextShift).
-// Keep this client-side type for the iOS-specific status endpoint shape.
-
-/// Response from `GET /api/shifts/my-status`.
-struct ShiftStatusResponse: Codable, Sendable {
-    let onShift: Bool
-    let shiftId: String?
-    let startedAt: String?
-    let activeCallCount: Int?
-    let recentNoteCount: Int?
-}
-
 // MARK: - ShiftsListResponse
 // Generated `ShiftListResponse` exists with the same shape. Use a typealias.
 
 typealias ShiftsListResponse = ShiftListResponse
-
-// MARK: - ClockInResponse
-
-/// Response from `POST /api/shifts/clock-in`.
-struct ClockInResponse: Codable, Sendable {
-    let ok: Bool
-    let shiftId: String?
-}
-
-// MARK: - ClockOutResponse
-
-/// Response from `POST /api/shifts/clock-out`.
-struct ClockOutResponse: Codable, Sendable {
-    let ok: Bool
-}
-
-// MARK: - ShiftSignupRequest
-
-/// Request body for `POST /api/shifts/:id/signup`.
-struct ShiftSignupRequest: Encodable, Sendable {
-    let pubkey: String
-}
 
 // MARK: - ShiftDay
 

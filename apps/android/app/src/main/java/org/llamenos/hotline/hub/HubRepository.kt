@@ -3,9 +3,12 @@ package org.llamenos.hotline.hub
 import android.util.Log
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
+import org.llamenos.hotline.model.HubsListResponse
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -62,10 +65,59 @@ class HubRepository @Inject constructor(
     }
 
     /**
-     * Initialize hub selection after login. If no hub is persisted, select the first one.
+     * Give a signed-in user a hub to browse (#1340), from the hubs the server says they
+     * belong to. Runs when the unlocked app opens and on the dashboard's pull-to-refresh
+     * (a hub admin may have added the user since). Browsing context only: it never
+     * replaces a hub the user chose and still belongs to, and it runs in the foreground,
+     * never from a background event.
+     *
+     * An unregistered identity, or no network, has no hub list to choose from; that is
+     * logged and the current choice is left alone.
+     */
+    suspend fun selectInitialHub() {
+        val hubs = try {
+            apiService.request<HubsListResponse>("GET", "/api/hubs").hubs
+        } catch (e: ApiException) {
+            Log.w(TAG, "hub list unavailable (HTTP ${e.code}); active hub unchanged")
+            return
+        } catch (e: IOException) {
+            Log.w(TAG, "hub list unavailable (${e.message}); active hub unchanged")
+            return
+        }
+        loadInitialHub(hubs)
+    }
+
+    /**
+     * Keep the persisted hub if the user is still a member of it; otherwise select their
+     * first hub, or none if they belong to none.
      */
     suspend fun loadInitialHub(hubs: List<Hub>) {
+        activeHubState.awaitHydrated()
+        val current = activeHubState.activeHubId.value
+        if (current != null && hubs.any { it.id == current }) return
+        val first = hubs.firstOrNull()
+        when {
+            first != null -> switchHub(first.id)
+            current != null -> activeHubState.clearActiveHub()
+        }
+    }
+
+    private companion object {
+        const val TAG = "HubRepository"
+    }
+
+    /**
+     * Ensure an active hub is selected whenever the user lands on the dashboard with
+     * no persisted choice — after a fresh login and on session restore (PIN unlock).
+     * No-op when a hub is already selected (restored from DataStore, or chosen by the
+     * user in Hub Management).
+     *
+     * Hub-list fetch failures are non-fatal: the dashboard stays hub-less until the
+     * user picks a hub or a later attempt succeeds.
+     */
+    suspend fun ensureInitialHub() {
         if (activeHubState.activeHubId.value != null) return
-        hubs.firstOrNull()?.id?.let { switchHub(it) }
+        val hubs = runCatching { apiService.getHubs() }.getOrNull()?.hubs ?: return
+        loadInitialHub(hubs)
     }
 }

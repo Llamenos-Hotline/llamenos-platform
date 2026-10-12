@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Schicht begonnen, aber dieses Gerät kann keine Anrufe in der App empfangen. Versuche erneut, die Schicht zu beginnen.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Pause machen",
     "help": "Help",
@@ -2455,6 +2456,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "Verschlüsselte Inhalte in diesem Hub lassen sich auf diesem Gerät noch nicht öffnen",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,11 +2469,14 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "Tippe auf einen Hub, um deinen aktiven Kontext zu wechseln. Der aktive Hub bestimmt, welche Daten du siehst.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Deine Hubs konnten nicht geladen werden",
+    "membershipLoadFailedBody": "Der Server hat nicht mitgeteilt, zu welchen Hubs du gehörst, daher kann noch nichts angezeigt werden. Prüfe deine Verbindung und versuche es erneut."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2493,6 +2498,9 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Für Anrufe in der App ist Zugriff auf das Mikrofon erforderlich.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2553,7 +2561,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -2747,6 +2757,7 @@
     "backupAcknowledge": "Ich habe meinen Wiederherstellungsschlüssel an einem sicheren Ort gespeichert",
     "backupDescription": "Notieren Sie diesen Wiederherstellungsschlüssel und bewahren Sie ihn sicher auf. Er ist die einzige Möglichkeit, Ihr Konto auf einem neuen Gerät wiederherzustellen.",
     "backupDownloaded": "Backup heruntergeladen",
+    "backupFailed": "Ihr verschlüsseltes Backup konnte nicht erstellt werden: {{reason}}",
     "backupTitle": "Wiederherstellungsschlüssel speichern",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2761,6 +2772,8 @@
     "getStarted": "Loslegen",
     "goToLogin": "Zur Anmeldung",
     "invalidCode": "Ungültiger Einladungscode",
+    "rateLimitedRetry": "Zu viele Versuche. Bitte warte {{seconds}} Sekunden und versuche es dann erneut.",
+    "validationUnavailable": "Deine Einladung konnte gerade nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut.",
     "noCode": "Kein Einladungscode angegeben",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
@@ -4662,5 +4675,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

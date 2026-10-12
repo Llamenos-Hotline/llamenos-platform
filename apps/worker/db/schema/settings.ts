@@ -72,6 +72,14 @@ export const hubs = pgTable('hubs', {
   status: text('status').notNull().default('active'),
   phoneNumber: text('phone_number'),
   createdBy: text('created_by').notNull(),
+  /**
+   * Generation of the hub key that `hub_keys` currently wraps. 0 = no key yet.
+   * It only ever moves forward, and only inside the transaction that replaces
+   * the envelopes, so it is the authoritative order of key sets: a write
+   * carrying an older generation is refused. That is what stops a replayed
+   * envelope write from re-installing a key a shred has destroyed.
+   */
+  hubKeyGeneration: integer('hub_key_generation').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -3,7 +3,7 @@ import { IdentifierStore } from './store'
 import { buildRoutes, type AuthConfig } from './routes'
 import { AuditLogger } from './audit'
 import { createConnection } from './db/connection'
-import { signalIdentifiers, signalAuditLog } from './db/schema'
+import { signalIdentifiers } from './db/schema'
 import type { BridgeConfig } from './signal-client'
 import { sql } from 'drizzle-orm'
 

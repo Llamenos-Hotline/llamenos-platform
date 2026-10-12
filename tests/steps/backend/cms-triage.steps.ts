@@ -62,7 +62,7 @@ function parseMetadata(report: Record<string, unknown>): Record<string, unknown>
 Given('a CMS report type with allowCaseConversion enabled exists', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
   const rt = await createCmsReportTypeViaApi(request, {
-    name: `triage_enabled_${Date.now()}`,
+    name: uniqueName('triage_enabled', '_'),
     allowCaseConversion: true,
     hubId,
   })
@@ -73,7 +73,7 @@ Given('a CMS report type with allowCaseConversion enabled exists', async ({ requ
 Given('a CMS report type with allowCaseConversion disabled exists', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
   const rt = await createCmsReportTypeViaApi(request, {
-    name: `triage_disabled_${Date.now()}`,
+    name: uniqueName('triage_disabled', '_'),
     allowCaseConversion: false,
     hubId,
   })

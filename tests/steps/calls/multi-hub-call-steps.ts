@@ -20,6 +20,7 @@ import { When, Then } from '../fixtures'
 import { TestIds, Timeouts } from '../../helpers'
 import { rowTestId } from '../../test-ids'
 import { apiGet, setFallbackGroupViaApi } from '../../api-helpers'
+import type { CallRecord } from '@protocol/schemas/calls'
 import { simulateIncomingCall, uniqueCallerNumber } from '../../simulation-helpers'
 
 /**
@@ -86,14 +87,13 @@ Then('the volunteer should be on an active call', async ({ page }) => {
 Then('that call should be answered on the second hub', async ({ page, backendRequest }) => {
   const { hubId, callId } = await recordedIds(page)
   // The server is the authority: the answer must have landed on the call's own hub.
-  // (Wire rows are keyed `callId`, as in tests/steps/backend/call-actions.steps.ts.)
   await expect.poll(async () => {
-    const { status, data } = await apiGet<{ calls: { callId: string; status: string; answeredBy?: string | null }[] }>(
+    const { status, data } = await apiGet<{ calls: CallRecord[] }>(
       backendRequest,
       `/hubs/${hubId}/calls/active`,
     )
     expect(status).toBe(200)
-    const call = data.calls.find(c => c.callId === callId)
+    const call = data.calls.find(c => c.id === callId)
     return call ? { status: call.status, answered: !!call.answeredBy } : null
   }, { timeout: Timeouts.API }).toEqual({ status: 'in-progress', answered: true })
 })

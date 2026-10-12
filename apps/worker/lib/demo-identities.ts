@@ -7,16 +7,21 @@
  * are held only in that process's memory, and die with it — so nobody can sign
  * as a demo account unless this process handed them its seed.
  *
- * Only a development server can produce them (`devSurfacesEnabled`:
- * ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true, the /api/test-*
- * boundary). DEMO_MODE, the setup wizard's `demoMode` flag in the database and
- * request input are not inputs to that decision: on every other deployment
- * nothing can create, register or reveal a demo identity.
+ * Only a development server can produce them (`demoSurfacesEnabled`:
+ * ENVIRONMENT=development AND DEV_ROUTES_ENABLED=true). DEMO_MODE, the setup
+ * wizard's `demoMode` flag in the database and request input are not inputs to
+ * that decision: on every other deployment nothing can create, register or
+ * reveal a demo identity.
+ *
+ * Deliberately NOT `devSurfacesEnabled`, which the staging allowlist widened so
+ * the end-to-end suite can reach a deployed target. Handing out signing seeds is
+ * a separate decision from letting a harness reach /api/test-* (#723), so it
+ * keeps its own predicate pinned to `development`.
  */
 import { ed25519PubkeyFromSeed } from '@llamenos/crypto/ffi'
 import { bytesToHex } from '@shared/encoding'
 import { DEMO_ACCOUNTS, type DemoAccount } from '@shared/demo-accounts'
-import { devSurfacesEnabled, type DevSurfacesEnv } from './dev-surfaces'
+import { demoSurfacesEnabled, type DevSurfacesEnv } from './dev-surfaces'
 
 export interface DemoIdentity extends DemoAccount {
   /** Ed25519 signing seed the client imports to sign in as this account. */
@@ -39,7 +44,7 @@ let identities: readonly DemoIdentity[] | null = null
  * `DemoIdentitiesUnavailableError` anywhere but a development server.
  */
 export function demoIdentities(env: DevSurfacesEnv): readonly DemoIdentity[] {
-  if (!devSurfacesEnabled(env)) throw new DemoIdentitiesUnavailableError()
+  if (!demoSurfacesEnabled(env)) throw new DemoIdentitiesUnavailableError()
   identities ??= DEMO_ACCOUNTS.map((account) => {
     const seed = crypto.getRandomValues(new Uint8Array(32))
     return {

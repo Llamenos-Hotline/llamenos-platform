@@ -56,6 +56,9 @@ let mockHubKey: Uint8Array | null = null
 // epoch-keyed) label split — see packages/crypto/src/labels.rs.
 const LABEL_HUB_EVENT = 'llamenos:hub-event'
 const LABEL_HUB_EVENT_EPOCH = 'llamenos:hub-event-epoch:v1'
+const LABEL_BACKUP = 'llamenos:backup'
+const LABEL_BACKUP_HKDF_INFO = 'llamenos:backup:v1'
+const LABEL_DEVICE_ENCRYPTION_SEED = 'llamenos:device-encryption-seed:v1'
 let mockServerEventKeys: Array<[number, Uint8Array]> = []
 
 // ── PUK seed mock state ─────────────────────────────────────────────
@@ -168,6 +171,61 @@ function requireDeviceState(): MockDeviceKeyState {
 const ARGON2_M_COST_KIB = 4_096   // 4 MiB (production Rust uses 65_536)
 const ARGON2_T_COST = 3
 const ARGON2_P_COST = 4
+
+// ── Backup container (v4) — mirrors packages/crypto/src/backup.rs ───
+const BACKUP_FORMAT_VERSION = 4
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+
+/** Base32-encode (RFC 4648, no padding) and group into dash-separated quads. */
+function formatRecoveryKey(bytes: Uint8Array): string {
+  let chars = ''
+  let buffer = 0
+  let bits = 0
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte
+    bits += 8
+    while (bits >= 5) {
+      bits -= 5
+      chars += BASE32_ALPHABET[(buffer >> bits) & 0x1f]
+    }
+  }
+  if (bits > 0) chars += BASE32_ALPHABET[(buffer << (5 - bits)) & 0x1f]
+  return (chars.match(/.{1,4}/g) ?? [chars]).join('-')
+}
+
+/** Drop everything that is not an ASCII letter or digit, then upper-case. */
+function normalizeRecoveryKey(recoveryKey: string): string {
+  return recoveryKey.replace(/[^0-9a-zA-Z]/g, '').toUpperCase()
+}
+
+/** HKDF-SHA256 over the normalized recovery key's UTF-8 bytes. */
+function deriveRecoveryKek(recoveryKey: string, salt: Uint8Array): Uint8Array {
+  return hkdf(sha256, utf8ToBytes(normalizeRecoveryKey(recoveryKey)), salt,
+    utf8ToBytes(LABEL_BACKUP_HKDF_INFO), 32)
+}
+
+/** Open a v4 backup with either credential, returning the 32-byte signing seed. */
+async function openMockBackup(
+  backupJson: string, credential: string, isRecoveryKey: boolean,
+): Promise<Uint8Array> {
+  const file = JSON.parse(backupJson)
+  if (file.v !== BACKUP_FORMAT_VERSION) {
+    throw new Error(`Unsupported backup version ${file.v} (this build reads v${BACKUP_FORMAT_VERSION})`)
+  }
+  const block = isRecoveryKey ? file.r : file.d
+  const kek = isRecoveryKey
+    ? deriveRecoveryKek(credential, hexToBytes(block.s))
+    : await deriveKek(credential, hexToBytes(block.s))
+  const aad = utf8ToBytes(isRecoveryKey ? LABEL_BACKUP_HKDF_INFO : LABEL_BACKUP)
+  let seed: Uint8Array
+  try {
+    seed = gcm(kek, hexToBytes(block.n), aad).decrypt(hexToBytes(block.c))
+  } catch {
+    throw new Error('Decryption failed: authentication tag mismatch')
+  }
+  if (seed.length !== 32) throw new Error('Backup payload must be a 32-byte signing seed')
+  return seed
+}
 
 async function deriveKek(pin: string, salt: Uint8Array): Promise<Uint8Array> {
   return argon2id(utf8ToBytes(pin), salt, {
@@ -635,47 +693,47 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- HPKE envelope encryption ---
 
-  hpke_seal: (a) => {
+  hpke_seal: async (a) => {
     const plaintext = hexToBytes(a.plaintextHex as string)
     const recipientPubkeyHex = a.recipientPubkeyHex as string
     const label = a.label as string
     const aad = hexToBytes(a.aadHex as string)
-    return hpkeSealMock(plaintext, recipientPubkeyHex, label, aad)
+    return await hpkeSealMock(plaintext, recipientPubkeyHex, label, aad)
   },
 
-  hpke_open_from_state: (a) => {
+  hpke_open_from_state: async (a) => {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
-    const plaintext = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
     return bytesToHex(plaintext)
   },
 
-  hpke_seal_key: (a) => {
+  hpke_seal_key: async (a) => {
     const keyBytes = hexToBytes(a.keyHex as string)
     if (keyBytes.length !== 32) throw new Error('Key must be 32 bytes')
     const recipientPubkeyHex = a.recipientPubkeyHex as string
     const label = a.label as string
     const aad = hexToBytes(a.aadHex as string)
-    return hpkeSealMock(keyBytes, recipientPubkeyHex, label, aad)
+    return await hpkeSealMock(keyBytes, recipientPubkeyHex, label, aad)
   },
 
-  hpke_open_key_from_state: (a) => {
+  hpke_open_key_from_state: async (a) => {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
-    const plaintext = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const plaintext = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
     if (plaintext.length !== 32) throw new Error('Unwrapped key must be 32 bytes')
     return bytesToHex(plaintext)
   },
 
   // --- PUK (Per-User Key) ---
 
-  puk_create_from_state: () => {
+  puk_create_from_state: async () => {
     const ds = requireDeviceState()
 
     // Generate random seed
@@ -695,7 +753,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
 
     // HPKE seal the seed to the device's encryption pubkey
-    const envelope = hpkeSealMock(
+    const envelope = await hpkeSealMock(
       seed,
       ds.encryptionPubkeyHex,
       'llamenos:puk:wrap:device:v1',
@@ -708,7 +766,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  puk_rotate_from_state: (a) => {
+  puk_rotate_from_state: async (a) => {
     if (!mockPukSeed) throw new Error('No PUK seed loaded. Unwrap or create PUK first.')
     const oldSeedBytes = mockPukSeed
     const oldGen = a.oldGen as number
@@ -735,15 +793,17 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
 
     // HPKE seal new seed to each remaining device
-    const deviceEnvelopes = remainingDevices.map(([deviceId, encPubkeyHex]) => ({
-      deviceId,
-      envelope: hpkeSealMock(
-        newSeed,
-        encPubkeyHex,
-        'llamenos:puk:wrap:device:v1',
-        new Uint8Array(0),
-      ),
-    }))
+    const deviceEnvelopes = await Promise.all(
+      remainingDevices.map(async ([deviceId, encPubkeyHex]) => ({
+        deviceId,
+        envelope: await hpkeSealMock(
+          newSeed,
+          encPubkeyHex,
+          'llamenos:puk:wrap:device:v1',
+          new Uint8Array(0),
+        ),
+      })),
+    )
 
     // CLKR: encrypt old seed under new generation's secretbox key
     const sbLabel = new Uint8Array([...utf8ToBytes('llamenos:puk:secretbox:v1'), ...genBuf])
@@ -760,13 +820,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return { state, deviceEnvelopes, clkrChainLinkHex }
   },
 
-  puk_unwrap_seed_from_state: (a) => {
+  puk_unwrap_seed_from_state: async (a) => {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
-    const seed = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const seed = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
     if (seed.length !== 32) throw new Error('PUK seed must be 32 bytes')
     // Store PUK seed in mock state — never return to JS
     mockPukSeed = seed
@@ -908,7 +968,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const signingSeed = hexToBytes(signingSecretHex)
     // Derive encryption seed from signing seed via HKDF (matches Rust)
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
@@ -940,19 +1000,72 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  // --- Backup generation ---
+  // --- Backup generation / restore (v4 container) ---
+  //
+  // These honour their arguments and really encrypt, so an E2E can round-trip a
+  // backup and a wrong credential is actually rejected. The container shape
+  // mirrors packages/crypto/src/backup.rs, but these are independent JS
+  // implementations — they cannot prove the Rust codec is self-consistent, and
+  // deliberately do not try to. That proof is the `backup::tests` round-trip in
+  // packages/crypto (#1709: the previous mock discarded every argument and
+  // returned a canned object, so no E2E assertion about this step meant
+  // anything at all).
 
-  generate_backup_from_state: (_a) => {
+  generate_recovery_key: () => formatRecoveryKey(randomBytes(16)),
+
+  generate_backup_from_state: async (a) => {
     const secrets = requireSecrets()
     const state = requireDeviceState()
-    // Return a mock backup JSON — real Rust would encrypt with recovery key
+    const pin = a.pin as string
+    const recoveryKey = a.recoveryKey as string
+    if (!pin) throw new Error('PIN is empty')
+    if (!normalizeRecoveryKey(recoveryKey)) throw new Error('Recovery key is empty after normalization')
+
+    const pinSalt = randomBytes(32)
+    const pinNonce = randomBytes(12)
+    const pinCt = gcm(await deriveKek(pin, pinSalt), pinNonce, utf8ToBytes(LABEL_BACKUP))
+      .encrypt(secrets.signingSeed)
+
+    const rSalt = randomBytes(32)
+    const rNonce = randomBytes(12)
+    const rCt = gcm(deriveRecoveryKek(recoveryKey, rSalt), rNonce, utf8ToBytes(LABEL_BACKUP_HKDF_INFO))
+      .encrypt(secrets.signingSeed)
+
     return JSON.stringify({
-      v: 3,
-      deviceId: state.deviceId,
-      signingPubkeyHex: state.signingPubkeyHex,
-      encryptionPubkeyHex: state.encryptionPubkeyHex,
-      encryptedPayload: bytesToHex(secrets.signingSeed), // Mock: not actually encrypted
+      v: BACKUP_FORMAT_VERSION,
+      id: bytesToHex(sha256(utf8ToBytes(state.signingPubkeyHex))).slice(0, 6),
+      t: Math.round(Date.now() / 3_600_000) * 3_600,
+      d: {
+        kv: 2, s: bytesToHex(pinSalt), m: ARGON2_M_COST_KIB, i: ARGON2_T_COST, p: ARGON2_P_COST,
+        n: bytesToHex(pinNonce), c: bytesToHex(pinCt),
+      },
+      r: { kv: 1, s: bytesToHex(rSalt), n: bytesToHex(rNonce), c: bytesToHex(rCt) },
     })
+  },
+
+  backup_verify_credential: async (a) => {
+    await openMockBackup(a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean)
+  },
+
+  restore_backup_and_load: async (a) => {
+    const signingSeed = await openMockBackup(
+      a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean,
+    )
+    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
+
+    const state: MockDeviceKeyState = {
+      deviceId: a.deviceId as string,
+      signingPubkeyHex: bytesToHex(deriveEd25519Pubkey(signingSeed)),
+      encryptionPubkeyHex: bytesToHex(deriveX25519Pubkey(encryptionSeed)),
+    }
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, a.newPin as string)
+    const result = { ...encrypted, state }
+
+    mockSecrets = { signingSeed, encryptionSeed }
+    mockDeviceState = state
+    mockEncryptedKeys = result
+    return result
   },
 
   // --- Shamir secret sharing (only stateless verification exposed as IPC) ---
@@ -998,7 +1111,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   // H16: Reconstruct recovery group key from HPKE-encrypted share envelopes
-  recovery_group_reconstruct_from_shares: (a) => {
+  recovery_group_reconstruct_from_shares: async (a) => {
     const envelopes = JSON.parse(a.envelopesJson as string) as Array<{
       envelope: { v: number; labelId: number; enc: string; ct: string }
     }>
@@ -1012,7 +1125,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Decrypt each envelope to get share bytes
     const shareObjs: Array<{ x: number; y: string }> = []
     for (const env of envelopes) {
-      const plaintext = hpkeOpenMock(env.envelope, secretHex, label, new Uint8Array(0))
+      const plaintext = await hpkeOpenMock(env.envelope, secretHex, label, new Uint8Array(0))
       const x = plaintext[0]
       const yHex = bytesToHex(plaintext.slice(1))
       shareObjs.push({ x, y: yHex })
@@ -1028,7 +1141,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   // H16: Decrypt using stored recovery group key (one-shot, zeroized after)
-  recovery_group_decrypt: (a) => {
+  recovery_group_decrypt: async (a) => {
     if (!mockRecoveryGroupKey) {
       throw new Error('No recovery group key loaded. Reconstruct from shares first.')
     }
@@ -1038,7 +1151,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const envelope = JSON.parse(ciphertextHex) as { v: number; labelId: number; enc: string; ct: string }
     const secretHex = bytesToHex(mockRecoveryGroupKey)
 
-    const plaintext = hpkeOpenMock(envelope, secretHex, label, new Uint8Array(0))
+    const plaintext = await hpkeOpenMock(envelope, secretHex, label, new Uint8Array(0))
 
     // Zeroize after use
     mockRecoveryGroupKey = null
@@ -1256,7 +1369,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive encryption seed from signing seed (matches Rust)
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
@@ -1280,13 +1393,13 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- Hub key management (key stays in mock state, never enters JS) ---
 
-  hpke_unwrap_and_set_hub_key: (a) => {
+  hpke_unwrap_and_set_hub_key: async (a) => {
     const secrets = requireSecrets()
     const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
     const expectedLabel = a.expectedLabel as string
     const aad = hexToBytes(a.aadHex as string)
     const secretHex = bytesToHex(secrets.encryptionSeed)
-    const key = hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const key = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
     if (key.length !== 32) throw new Error('Hub key must be 32 bytes')
     mockHubKey = key
   },
@@ -1295,12 +1408,12 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockHubKey = randomBytes(32)
   },
 
-  wrap_hub_key_for_member: (a) => {
+  wrap_hub_key_for_member: async (a) => {
     if (!mockHubKey) throw new Error('Hub key not loaded')
     const recipientPubkeyHex = a.recipientPubkeyHex as string
     const label = a.label as string
     const aad = hexToBytes(a.aadHex as string)
-    return hpkeSealMock(mockHubKey, recipientPubkeyHex, label, aad)
+    return await hpkeSealMock(mockHubKey, recipientPubkeyHex, label, aad)
   },
 
   encrypt_hub_field: (a) => {

@@ -7,7 +7,7 @@ import { SipBridgeAdapter } from '../telephony/sip-bridge-adapter'
 import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
-import { hashPhone } from '../lib/crypto'
+import { hashPhone, getClientIp } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/settings'
@@ -92,7 +92,7 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const cidrs = (env as unknown as Record<string, string | undefined>).TELEPHONY_WEBHOOK_IPS
   if (cidrs) {
     const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-    const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+    const clientIp = getClientIp(c.req.raw)
     if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
       logger.warn('Telephony webhook IP not in allowlist', { clientIp })
       return c.json({ error: 'Forbidden' }, 403)

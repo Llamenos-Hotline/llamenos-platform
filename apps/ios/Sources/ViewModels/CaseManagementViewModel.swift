@@ -39,7 +39,7 @@ final class CaseManagementViewModel {
     var interactions: [Interaction] = []
 
     /// Contacts linked to the selected record.
-    var contacts: [RecordContact] = []
+    var contacts: [RecordContactLink] = []
 
     /// Evidence items for the selected record.
     /// Uses the generated `Evidence` type from protocol codegen.

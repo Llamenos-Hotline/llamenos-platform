@@ -187,7 +187,7 @@ describe('Telephony routes', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'CF-Connecting-IP': '127.0.0.1',
+          'X-Forwarded-For': '127.0.0.1',
         },
         body: 'CallSid=CA123',
       })

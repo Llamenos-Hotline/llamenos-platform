@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://llamenos.org/schemas/crypto-labels.json",
   "title": "Cryptographic Domain Separation Labels",
-  "description": "All domain separation constants used across llamenos crypto operations. Key order here is NOT the HPKE envelope labelId: numeric IDs are the indices of LABEL_REGISTRY in packages/crypto/src/labels.rs, which codegen reads (and cross-checks against this file) to generate CryptoLabelIds for Swift and Kotlin.",
+  "description": "All domain separation constants used across llamenos crypto operations. This file is the source of truth for label strings and codegen input. Numeric HPKE label IDs are NOT derived from this JSON object's incidental member order: they are the indices of LABEL_REGISTRY in packages/crypto/src/labels.rs, whose array index is the labelId byte in the wire format. Codegen reads and cross-checks that registry to generate CryptoLabelIds for Swift and Kotlin; the registry's membership and count are checked against this file, and its indices are pinned append-only against packages/crypto/label-registry.wire.snapshot.",
   "labels": {
     "LABEL_NOTE_KEY": "llamenos:note-key",
     "LABEL_FILE_KEY": "llamenos:file-key",
@@ -100,6 +100,7 @@
     "LABEL_FIREHOSE_BUFFER_ENCRYPT": "llamenos:firehose:buffer-encrypt",
     "LABEL_FIREHOSE_REPORT_WRAP": "llamenos:firehose:report-wrap",
     "HMAC_IVR_MEDIA_URL": "llamenos:ivr-media-url:v1",
-    "LABEL_DEVICE_AUTH_NO_NONCE": "llamenos:device-auth-no-nonce:v1"
+    "LABEL_DEVICE_AUTH_NO_NONCE": "llamenos:device-auth-no-nonce:v1",
+    "HMAC_SIP_VOLUNTEER_SECRET": "llamenos:sip-volunteer-secret:v1"
   }
 }

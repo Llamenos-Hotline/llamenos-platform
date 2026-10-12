@@ -78,6 +78,16 @@ class HubCommunicationsViewModel @Inject constructor(
 
     /** Serializes onboarding start/step calls — the server rejects out-of-order steps. */
     private val onboardingSteps = Mutex()
+
+    /**
+     * Steps with a submission queued or in flight. Taps are never disabled in the
+     * UI (a tap while another step is in flight queues behind [onboardingSteps]),
+     * so this set is what keeps a double-tap on one step from being submitted
+     * twice — the server would reject the duplicate as out-of-order and surface
+     * a spurious error. Entries are removed on completion, so a failed step can
+     * be retried. Accessed only on the main dispatcher via [viewModelScope].
+     */
+    private val pendingSteps = mutableSetOf<String>()
     val uiState: StateFlow<HubCommunicationsUiState> = _uiState.asStateFlow()
 
     init {
@@ -214,36 +224,41 @@ class HubCommunicationsViewModel @Inject constructor(
      *
      * The server only accepts the current step, and the sheet advances locally
      * before each response arrives, so completions run one at a time in order.
+     * Calls are never dropped: a tap while a previous step is still in flight
+     * queues behind the mutex. Only a repeat submission of the SAME step (a
+     * double-tap) is ignored — the server would reject it as out-of-order.
      */
     fun completeStep(step: String, channelConfig: ChannelConfig? = null) {
         viewModelScope.launch {
+            if (!pendingSteps.add(step)) return@launch
             _uiState.update { it.copy(isCompletingStep = true, saveError = null) }
-            val result = onboardingSteps.withLock {
-                hubOnboardApi.completeStep(step = step, channelConfig = channelConfig)
+            try {
+                val result = onboardingSteps.withLock {
+                    hubOnboardApi.completeStep(step = step, channelConfig = channelConfig)
+                }
+                result.fold(
+                    onSuccess = { state ->
+                        _uiState.update {
+                            it.copy(
+                                onboardingState = state,
+                                showOnboarding = !state.isComplete && it.showOnboarding,
+                            )
+                        }
+                        if (state.isComplete) {
+                            // Onboarding finished — reload everything
+                            loadAll()
+                        }
+                    },
+                    onFailure = { e ->
+                        _uiState.update {
+                            it.copy(saveError = e.message ?: "Failed to complete step")
+                        }
+                    },
+                )
+            } finally {
+                pendingSteps.remove(step)
+                _uiState.update { it.copy(isCompletingStep = pendingSteps.isNotEmpty()) }
             }
-            result.fold(
-                onSuccess = { state ->
-                    _uiState.update {
-                        it.copy(
-                            onboardingState = state,
-                            isCompletingStep = false,
-                            showOnboarding = !state.isComplete && it.showOnboarding,
-                        )
-                    }
-                    if (state.isComplete) {
-                        // Onboarding finished — reload everything
-                        loadAll()
-                    }
-                },
-                onFailure = { e ->
-                    _uiState.update {
-                        it.copy(
-                            isCompletingStep = false,
-                            saveError = e.message ?: "Failed to complete step",
-                        )
-                    }
-                },
-            )
         }
     }
 

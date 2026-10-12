@@ -12,13 +12,19 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+# 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
+# compose bind-mounts this config into the promtail container, which runs as
+# root — and `docker_userns_remap: true` maps that to host uid 100000, which
+# is neither this file's owner nor in the deploy group, so 0640 made it
+# unreadable. The config holds no credential; one that did would keep 0600 and
+# be made readable by owner instead.
 - name: Template Promtail config
   ansible.builtin.template:
     src: promtail-config.yml.j2
     dest: "{{ app_dir }}/observability/promtail/promtail-config.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart promtail
 
 - name: Template Promtail docker-compose.yml

@@ -91,12 +91,12 @@ describe('createPushDispatcherFromService', () => {
     expect(dispatcher.sendToAllOnShift({} as WakePayload, {} as FullPushPayload)).resolves.toBeUndefined()
   })
 
-  it('returns a recording dispatcher in development without credentials', () => {
+  it('returns a recording dispatcher on a dev-surface host without credentials', () => {
     clearTestPushLog()
-    const env = { ENVIRONMENT: 'development' } as Env
+    const env = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' } as Env
     const dispatcher = createPushDispatcherFromService(env, mockIdentityService, mockShiftsService)
 
-    // The development wrapper records to the test push log
+    // The dev-surface wrapper records to the test push log
     const payload: WakePayload = { hubId: 'h1', type: 'message' }
     dispatcher.sendToVolunteer('test-pk', payload, {} as FullPushPayload)
 
@@ -131,18 +131,23 @@ describe('createPushDispatcherFromService', () => {
   // dispatcher that was selected exclusively when BOTH transports were
   // unconfigured. Setting a single transport variable therefore emptied the log
   // permanently and silently — the hubId contract went unobserved in every
-  // configuration that ships. In development the payload must be recorded
-  // whichever transport is configured.
+  // configuration that ships. On a dev-surface host the payload must be
+  // recorded whichever transport is configured.
   it.each([
-    ['ntfy configured', { ENVIRONMENT: 'development', NTFY_URL: 'http://ntfy:80' }],
+    ['ntfy configured', {
+      ENVIRONMENT: 'development',
+      DEV_ROUTES_ENABLED: 'true',
+      NTFY_URL: 'http://ntfy:80',
+    }],
     ['APNs configured', {
       ENVIRONMENT: 'development',
+      DEV_ROUTES_ENABLED: 'true',
       APNS_KEY_P8: 'key',
       APNS_KEY_ID: 'kid',
       APNS_TEAM_ID: 'team',
     }],
-    ['no transport configured', { ENVIRONMENT: 'development' }],
-  ])('records the wake payload in development with %s', async (_label, envFields) => {
+    ['no transport configured', { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' }],
+  ])('records the wake payload on a dev-surface host with %s', async (_label, envFields) => {
     clearTestPushLog()
     const dispatcher = createPushDispatcherFromService(
       envFields as Env,
@@ -159,7 +164,7 @@ describe('createPushDispatcherFromService', () => {
     expect(log[0].recipientPubkey).toBe('recipient-pk')
   })
 
-  it('does not record outside development even with no transport configured', async () => {
+  it('does not record on a host without the dev surface, even with no transport configured', async () => {
     clearTestPushLog()
     const dispatcher = createPushDispatcherFromService(
       { ENVIRONMENT: 'production' } as Env,
@@ -170,13 +175,13 @@ describe('createPushDispatcherFromService', () => {
     expect(getTestPushLog()).toHaveLength(0)
   })
 
-  it('records one entry per on-shift volunteer in development with a transport configured', async () => {
+  it('records one entry per on-shift volunteer on a dev-surface host with a transport configured', async () => {
     clearTestPushLog()
     const shifts = {
       getCurrentVolunteers: vi.fn().mockResolvedValue(['pk-1', 'pk-2']),
     } as never
     const dispatcher = createPushDispatcherFromService(
-      { ENVIRONMENT: 'development', NTFY_URL: 'http://ntfy:80' } as Env,
+      { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true', NTFY_URL: 'http://ntfy:80' } as Env,
       mockIdentityService,
       shifts,
     )
@@ -186,5 +191,94 @@ describe('createPushDispatcherFromService', () => {
     const log = getTestPushLog()
     expect(log.map(l => l.recipientPubkey)).toEqual(['pk-1', 'pk-2'])
     expect(log.every(l => l.wakePayload.hubId === 'hub-multi')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Mixed device sets — desktop registrations without push tokens (#1548)
+// ---------------------------------------------------------------------------
+
+describe('ServicePushDispatcher with desktop devices in the device list', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const wake: WakePayload = { hubId: 'hub-1', type: 'message' }
+
+  function mixedDeviceIdentity() {
+    const identity = {
+      getDevices: vi.fn().mockResolvedValue({
+        devices: [
+          {
+            platform: 'android',
+            pushToken: 'https://ntfy.example.com/up-android',
+            wakeKeyPublic: 'wake-android',
+            registeredAt: '2026-01-01T00:00:00Z',
+            lastSeenAt: '2026-01-01T00:00:00Z',
+          },
+          {
+            // Desktop device: registered without a push token or wake key.
+            platform: 'desktop',
+            pushToken: '',
+            wakeKeyPublic: '',
+            registeredAt: '2026-01-02T00:00:00Z',
+            lastSeenAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+      }),
+      cleanupDevices: vi.fn().mockResolvedValue(undefined),
+    }
+    return { identity: identity as never, cleanupDevices: identity.cleanupDevices }
+  }
+
+  it('skips tokenless desktop devices without error and never marks them stale', async () => {
+    const { identity, cleanupDevices } = mixedDeviceIdentity()
+    const shifts = { getCurrentVolunteers: vi.fn().mockResolvedValue([]) } as never
+    const dispatcher = createPushDispatcherFromService(
+      { ENVIRONMENT: 'production', NTFY_URL: 'http://ntfy:80' } as Env,
+      identity,
+      shifts,
+    )
+
+    await expect(
+      dispatcher.sendToVolunteer('user-pk', wake, {} as FullPushPayload),
+    ).resolves.toBeUndefined()
+
+    const { NtfyClient } = await import('@worker/lib/ntfy-client')
+    expect(NtfyClient.prototype.send).toHaveBeenCalledTimes(1)
+    // The desktop device must not end up in the stale-token cleanup sweep.
+    expect(cleanupDevices).not.toHaveBeenCalled()
+  })
+
+  it('treats a desktop-only device list as nothing to push (no cleanup, no throw)', async () => {
+    const cleanupDevices = vi.fn().mockResolvedValue(undefined)
+    const identity = {
+      getDevices: vi.fn().mockResolvedValue({
+        devices: [
+          {
+            platform: 'desktop',
+            pushToken: '',
+            wakeKeyPublic: '',
+            registeredAt: '2026-01-02T00:00:00Z',
+            lastSeenAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+      }),
+      cleanupDevices,
+    } as never
+    const shifts = { getCurrentVolunteers: vi.fn().mockResolvedValue([]) } as never
+    const dispatcher = createPushDispatcherFromService(
+      { ENVIRONMENT: 'production', NTFY_URL: 'http://ntfy:80' } as Env,
+      identity,
+      shifts,
+    )
+
+    await expect(
+      dispatcher.sendToVolunteer('user-pk', wake, {} as FullPushPayload),
+    ).resolves.toBeUndefined()
+
+    const { NtfyClient } = await import('@worker/lib/ntfy-client')
+    expect(NtfyClient.prototype.send).not.toHaveBeenCalled()
+    expect(cleanupDevices).not.toHaveBeenCalled()
   })
 })

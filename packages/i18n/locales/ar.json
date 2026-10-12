@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "تم بدء المناوبة، لكن هذا الجهاز لا يمكنه استقبال المكالمات داخل التطبيق. حاول بدء المناوبة مرة أخرى.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "أخذ استراحة",
     "help": "Help",
@@ -2455,6 +2456,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "لا يمكن فتح المحتوى المشفّر في هذا المركز على هذا الجهاز بعد",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,11 +2469,14 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "اضغط على مركز للتبديل إلى سياقك النشط. المركز النشط يحدد البيانات التي تراها.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "تعذّر تحميل المراكز الخاصة بك",
+    "membershipLoadFailedBody": "لم يذكر الخادم المراكز التي تنتمي إليها، لذا لا يمكن عرض أي شيء بعد. تحقّق من اتصالك وحاول مرة أخرى."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2493,6 +2498,9 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "يلزم الوصول إلى الميكروفون للرد على المكالمات في التطبيق.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2553,7 +2561,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -2747,6 +2757,7 @@
     "backupAcknowledge": "لقد حفظت مفتاح الاسترداد الخاص بي في مكان آمن",
     "backupDescription": "اكتب مفتاح الاسترداد هذا واحتفظ به في مكان آمن. إنه الطريقة الوحيدة لاستعادة حسابك على جهاز جديد.",
     "backupDownloaded": "تم تحميل النسخة الاحتياطية",
+    "backupFailed": "تعذّر إنشاء النسخة الاحتياطية المشفّرة: {{reason}}",
     "backupTitle": "احفظ مفتاح الاسترداد الخاص بك",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2761,6 +2772,8 @@
     "getStarted": "ابدأ",
     "goToLogin": "الذهاب لتسجيل الدخول",
     "invalidCode": "رمز دعوة غير صالح",
+    "rateLimitedRetry": "محاولات كثيرة جدًا. يرجى الانتظار {{seconds}} ثانية ثم المحاولة مرة أخرى.",
+    "validationUnavailable": "تعذّر التحقق من دعوتك الآن. تحقق من اتصالك وحاول مرة أخرى.",
     "noCode": "لم يتم تقديم رمز دعوة",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
@@ -4662,5 +4675,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

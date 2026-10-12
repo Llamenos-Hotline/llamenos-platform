@@ -2,8 +2,10 @@
  * Erasure domain tables: erasure requests, erasure config,
  * re-encryption jobs, audit user keys.
  */
+import { sql } from 'drizzle-orm'
 import {
   boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -22,7 +24,22 @@ export const erasureRequests = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    userId: text('user_id').notNull(),
+    /**
+     * 'user' — a person's right to erasure. 'hub' — a hub crypto-shred.
+     * Both destroy keys rather than rows, so they share this table and its
+     * delay / cancellation / co-approval machinery rather than duplicating it.
+     */
+    scope: text('scope').notNull().default('user'),
+    /** The subject when scope = 'user'. Null for a hub shred. */
+    userId: text('user_id'),
+    /** The subject when scope = 'hub'. Null for a person's erasure. */
+    hubId: text('hub_id'),
+    /**
+     * The hub's status before the shred was scheduled, so a cancel inside the
+     * window restores exactly what was there instead of assuming 'active'.
+     * Null for scope = 'user'.
+     */
+    previousStatus: text('previous_status'),
     status: text('status').notNull().default('pending'),
     requestedBy: text('requested_by').notNull(),
     requestedAt: timestamp('requested_at', { withTimezone: true })
@@ -38,8 +55,19 @@ export const erasureRequests = pgTable(
   },
   (table) => [
     index('erasure_requests_user_id_idx').on(table.userId),
+    index('erasure_requests_hub_id_idx').on(table.hubId),
     index('erasure_requests_status_idx').on(table.status),
     index('erasure_requests_execute_at_idx').on(table.executeAt),
+    /**
+     * Exactly one subject per request. Without this, `scope` is a label that
+     * can disagree with the columns actually set — and a request that names
+     * both a person and a hub has no defined meaning.
+     */
+    check(
+      'erasure_requests_scope_subject',
+      sql`(scope = 'user' AND user_id IS NOT NULL AND hub_id IS NULL)
+       OR (scope = 'hub'  AND hub_id  IS NOT NULL AND user_id IS NULL)`,
+    ),
   ],
 )
 
@@ -49,7 +77,14 @@ export const erasureRequests = pgTable(
 
 export const erasureConfig = pgTable('erasure_config', {
   hubId: text('hub_id').primaryKey(),
+  /** The delay before a person's erasure executes. */
   delayHours: integer('delay_hours').notNull().default(72),
+  /**
+   * The undo window before a hub crypto-shred executes. Separate from
+   * delayHours — a hub is not a person — but subject to the same platform
+   * floor and unlocked by the same co-approved emergency override.
+   */
+  hubShredDelayHours: integer('hub_shred_delay_hours').notNull().default(48),
   emergencyOverrideEnabled: boolean('emergency_override_enabled')
     .notNull()
     .default(true),
@@ -69,7 +104,10 @@ export const reEncryptionJobs = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    userId: text('user_id').notNull(),
+    /** 'user' — strip one departed member's envelopes. 'hub' — shred them all. */
+    scope: text('scope').notNull().default('user'),
+    /** The departed member when scope = 'user'. Null for a hub shred. */
+    userId: text('user_id'),
     hubId: text('hub_id').notNull(),
     status: text('status').notNull().default('queued'),
     totalEnvelopes: integer('total_envelopes').notNull().default(0),

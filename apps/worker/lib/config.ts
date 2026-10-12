@@ -48,6 +48,7 @@ function assertDatabaseUrl(env: ConfigInput): void {
 }
 
 import { createLogger } from './logger'
+import { MIN_DEPLOYED_SECRET_LENGTH } from './dev-surfaces'
 
 const logger = createLogger('config')
 
@@ -162,6 +163,41 @@ export function validateConfig(env: ConfigInput = process.env): void {
     logger.warn(
       'DEMO_MODE is enabled — scheduled data resets are active. ' +
       'This server will periodically destroy all application data.',
+    )
+  }
+
+  // --- Dev-surface production gate ---
+  // The /api/test-* routes reset the database, delete the admin and promote
+  // arbitrary pubkeys. lib/dev-surfaces.ts already refuses to SERVE them under
+  // ENVIRONMENT=production, and deploy/ansible refuses to RENDER the vars for a
+  // production host. This is the third, independent layer: a production process
+  // configured with them refuses to start at all, rather than running with a
+  // disabled-but-configured backdoor nobody notices until the guard regresses.
+  const devRoutesEnabled = env['DEV_ROUTES_ENABLED']?.trim() === 'true'
+  const devSecret = (env['DEV_RESET_SECRET'] ?? env['E2E_TEST_SECRET'] ?? '').trim()
+  if (environment === 'production' && (devRoutesEnabled || devSecret.length > 0)) {
+    const offenders = [
+      devRoutesEnabled ? 'DEV_ROUTES_ENABLED=true' : null,
+      env['DEV_RESET_SECRET']?.trim() ? 'DEV_RESET_SECRET' : null,
+      env['E2E_TEST_SECRET']?.trim() ? 'E2E_TEST_SECRET' : null,
+    ].filter(Boolean).join(', ')
+    throw new Error(
+      `[llamenos] CRITICAL: ${offenders} is set in a production environment. ` +
+      'Those variables exist only to let the end-to-end suite reset a throwaway ' +
+      'staging target; on production they configure a destructive backdoor. ' +
+      'Remove them, or set ENVIRONMENT=staging if this host really is the test target.',
+    )
+  }
+  // A reachable dev surface without a strong secret is the failure mode the
+  // length minimum exists for; say so at startup rather than letting every
+  // /api/test-* request 404 for a reason nobody can see.
+  if (devRoutesEnabled && environment !== 'development' && devSecret.length < MIN_DEPLOYED_SECRET_LENGTH) {
+    throw new Error(
+      `[llamenos] DEV_ROUTES_ENABLED=true on ENVIRONMENT=${environment} requires ` +
+      `DEV_RESET_SECRET of at least ${MIN_DEPLOYED_SECRET_LENGTH} characters ` +
+      `(got ${devSecret.length}). The /api/test-* surface is reachable on a deployed ` +
+      'host, so it may not be served without a strong shared secret. ' +
+      'Generate one with: openssl rand -hex 32',
     )
   }
 

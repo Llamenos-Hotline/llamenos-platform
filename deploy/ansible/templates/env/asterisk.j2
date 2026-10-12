@@ -1,9 +1,0 @@
-# Asterisk Bridge Environment — managed by Ansible
-# Do not edit manually; changes will be overwritten on next deploy.
-# Generated: {{ ansible_date_time.iso8601 | default('unknown') }}
-
-ARI_URL=ws://asterisk:8088/ari/events
-ARI_USERNAME={{ ari_username }}
-ARI_PASSWORD={{ ari_password }}
-WORKER_WEBHOOK_URL=http://{{ llamenos_app_host | default('app') }}:3000
-BRIDGE_SECRET={{ bridge_secret }}

@@ -12,19 +12,29 @@
     state: directory
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0750"
+    # 0755, not 0750: rules/ is bind-mounted into the prometheus container,
+    # which runs as `nobody` (uid 65534). A directory it can neither own nor
+    # reach by group is untraversable whatever the files inside are set to —
+    # the same reasoning as the 0644 on prometheus.yml below.
+    mode: "0755"
   loop:
     - ""
     - data
     - rules
 
+# 0644, for the same reason as the Caddyfile (issue #1602, finding 2's class):
+# compose bind-mounts prometheus.yml and rules/ into the prometheus container,
+# which runs as `nobody` (uid 65534) — prom/prometheus sets USER nobody — so a
+# 0640 file owned by the deploy user was unreadable to it, whether or not
+# docker_userns_remap is on. Neither of these files holds a credential; a
+# config that does must keep 0600 and be made readable by owner instead.
 - name: Template prometheus.yml config
   ansible.builtin.template:
     src: prometheus.yml.j2
     dest: "{{ app_dir }}/observability/prometheus/prometheus.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart prometheus
 
 - name: Template alert rules
@@ -33,7 +43,7 @@
     dest: "{{ app_dir }}/observability/prometheus/rules/llamenos.yml"
     owner: "{{ deploy_user }}"
     group: "{{ deploy_group }}"
-    mode: "0640"
+    mode: "0644"
   notify: Restart prometheus
 
 - name: Template Prometheus docker-compose.yml

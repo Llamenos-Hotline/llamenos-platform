@@ -24,6 +24,18 @@
 # fails CI if any of them stop appearing in a render of either role's output.
 PLATFORM=bun
 PORT=3000
+# Both deployment profiles put Caddy in front of this container, and the app
+# port is published on 127.0.0.1 only — Caddy is the sole ingress. Caddy SETS
+# X-Forwarded-For to the real remote address and deletes every other
+# forwarded-for header (roles/llamenos-caddy/templates/caddy.j2), so the
+# right-most X-Forwarded-For entry the app reads is authentic.
+#
+# Without this the app bucketed every caller in the world on Caddy's container
+# address: one rate-limit bucket for the entire internet, five logins a minute
+# total, and a one-client denial of service against the hotline (#1606). Do not
+# set it on any host where the app port is reachable without passing through
+# Caddy.
+TRUST_PROXY_HEADERS=true
 DATABASE_URL=postgresql://llamenos:{{ pg_password }}@postgres:5432/llamenos
 PG_POOL_SIZE={{ pg_pool_size | default(10) }}
 {% if (admin_pubkey | default('')) | length > 0 %}
@@ -31,11 +43,21 @@ ADMIN_PUBKEY={{ admin_pubkey }}
 {% endif %}
 {# ADMIN_PUBKEY is an Ed25519 SIGNING key. Admin envelopes need the admin's
    X25519 ENCRYPTION key, which is a different value derived from the same
-   seed. The app falls back to ADMIN_PUBKEY when this is unset, which wraps
-   envelopes to a key that cannot decrypt them — so set it. `bun run
-   bootstrap-admin` prints both. #}
-{% if (admin_decryption_pubkey | default('')) | length > 0 %}
-ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey }}
+   seed. The app no longer falls back to ADMIN_PUBKEY (#1283) — it refuses to
+   start when ADMIN_PUBKEY is set and this is not, rather than write envelopes
+   nobody can open. `bun run bootstrap-admin` prints both.
+
+   `or undef(...)` rather than `| mandatory`: vars.example.yml ships
+   `admin_decryption_pubkey: ""`, so the var is DEFINED on every real deploy
+   and `mandatory` — which only rejects an undefined var — would pass straight
+   through and emit an empty value. That renders a .env the app then refuses
+   to boot on, turning a clear render-time error into a container crash loop.
+   Failing on empty as well as undefined keeps the error where the operator
+   can act on it. #}
+{% if (admin_pubkey | default('')) | length > 0 %}
+ADMIN_DECRYPTION_PUBKEY={{ (admin_decryption_pubkey | default('')) | trim or undef(hint='admin_decryption_pubkey is required whenever admin_pubkey is set — the admin X25519 HPKE recipient key, distinct from the Ed25519 admin_pubkey; run: bun run bootstrap-admin') }}
+{% elif (admin_decryption_pubkey | default('')) | trim | length > 0 %}
+ADMIN_DECRYPTION_PUBKEY={{ admin_decryption_pubkey | trim }}
 {% endif %}
 {% if (ntfy_allowed_origins | default('')) | length > 0 %}
 NTFY_ALLOWED_ORIGINS={{ ntfy_allowed_origins }}
@@ -87,6 +109,59 @@ NTFY_PUBLIC_URL=https://{{ ntfy_domain }}
 NTFY_AUTH_TOKEN={{ ntfy_auth_token }}
 {% endif %}
 {% endif %}
+{# ── In-app calling: the registrar, the relay, and the SIP edge's anchor ──
+   Every variable below was consumed by apps/worker/ and assigned in NO Ansible
+   template, so on a deployed host each silently took its absent branch and
+   nothing reported it. roles/kamailio/tasks/main.yml carried a COMMENT saying
+   an operator had to add them "by hand"; a comment is not a check, and nothing
+   failed when the hand-step was skipped (#1657). #}
+{% if llamenos_asterisk_enabled | default(false) | bool %}
+{# SIP_REGISTRAR_SECRET is the master secret every volunteer's PJSIP endpoint
+   password is derived from (HMAC_SIP_VOLUNTEER_SECRET over `vol_<pubkey16>` —
+   apps/worker/telephony/registrar.ts `deriveVolunteerSipSecret`). Rotating it
+   rotates every volunteer at once, which is why it is its own value and not
+   HMAC_SECRET. Gated on asterisk because only our own PBX issues per-volunteer
+   identities at all: every vendor path is refused at the source
+   (`sipCredentialsMayBeIssued`, #1203), so on a vendor deployment this would
+   be a secret nothing can use. #}
+SIP_REGISTRAR_SECRET={{ sip_registrar_secret }}
+{% endif %}
+{% if llamenos_coturn_enabled | default(false) | bool %}
+{# TURN_HOST/TURN_SECRET are what turn a STUN-only ICE set into one with a
+   relay. apps/worker/routes/webrtc.ts returns undefined unless BOTH are set,
+   and /api/telephony/sip-token then emits STUN only — a valid ICE
+   configuration, a 200, and no media path for a volunteer behind a symmetric
+   NAT (common on mobile carriers, i.e. exactly the volunteers this is for).
+   TURN_SECRET must equal roles/llamenos-coturn's --static-auth-secret: the
+   worker MINTS credentials under it and coturn VERIFIES them. Both render from
+   `turn_secret`, so they cannot drift.
+   Gated on the role that runs the relay, so these never name a host that
+   refuses every allocation — a relay candidate that cannot work is worse than
+   no relay candidate, because ICE spends its check budget on it. #}
+TURN_HOST={{ turn_host }}
+TURN_SECRET={{ turn_secret }}
+{% endif %}
+{% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
+{# SIP_TLS_CA_FILE is the SIP edge's public trust anchor, published to clients
+   inside the authenticated /api/telephony/sip-token response so a volunteer's
+   client can VERIFY a self-hosted PBX certificate that no public CA vouches
+   for. It matters because liblinphone does not consult the platform trust store
+   for its SIP socket — it verifies against its own CA set — so on both mobile
+   clients this anchor is the only way that chain becomes verifiable at all.
+   Absent means "verify against the device trust store"; it never means "do not
+   verify".
+   This is a CONTAINER path, and the mount that makes it readable is in both app
+   compose templates (roles/llamenos-app/templates/compose/app.j2 and
+   roles/llamenos/templates/docker-compose.j2). Rendering the path WITHOUT that
+   mount is why #1656 declined to ship this: `readSipTlsTrustAnchor` would then
+   log "not readable" and return undefined, which is strictly worse than the
+   unset variable it replaced — the same outcome, plus an error line implying a
+   broken anchor rather than an absent one.
+   Both conditions matter: with publish_anchor false the role writes no anchor
+   (correct for a publicly-trusted certificate, where pinning a leaf breaks at
+   every renewal), so the path would name a file that is deliberately absent. #}
+SIP_TLS_CA_FILE={{ sip_tls_anchor_container_path | default('/var/lib/llamenos/sip-tls') }}/sip-edge-anchor.pem
+{% endif %}
 {% if (glitchtip_dsn | default('')) | length > 0 %}
 GLITCHTIP_DSN={{ glitchtip_dsn }}
 {% endif %}
@@ -100,9 +175,50 @@ DEMO_MODE_CONFIRM={{ demo_mode_confirm }}
 DEMO_RESET_CRON={{ demo_reset_cron }}
 {% endif %}
 {% endif %}
+{# ── Developer/test routes (/api/test-*) — THIRD of three independent layers ──
+   DEV_ROUTES_ENABLED and DEV_RESET_SECRET open the destructive `/api/test-*`
+   surface (reset the database, mint identities). They are ONLY ever wanted on
+   a throwaway staging target that the end-to-end suite resets, never on a host
+   serving real callers or volunteers.
+
+   The `app_environment != 'production'` condition below is DELIBERATE, not an
+   oversight: on a production host these two vars are silently omitted from the
+   rendered .env even if an operator set `dev_routes_enabled: true` in vars.yml.
+   The omission is safe to make quietly because it can only ever happen in a
+   configuration two other layers already refuse outright — this layer exists so
+   that a bypass of either of them still cannot write the backdoor to disk.
+
+   The three layers, in the order a deploy hits them:
+     1. RUN TIME, before any file is written —
+        deploy/ansible/playbooks/tasks/guard-dev-routes.yml hard-fails the play
+        when app_environment == 'production' and dev_routes_enabled or
+        dev_reset_secret is set. Imported by preflight.yml, which both the
+        hosted and the self-hosted deploy path run via setup.yml. Keyed on
+        app_environment alone, with no reference to demo mode, so it survives
+        demo mode's removal.
+     2. RENDER TIME (here) — the var never reaches the .env on disk, so even a
+        path that skipped the preflight guard (an ad-hoc role invocation, a
+        future playbook that forgets the import) cannot template a backdoor onto
+        a production host.
+     3. PROCESS START — apps/worker/lib/config.ts throws when
+        ENVIRONMENT=production and any of DEV_ROUTES_ENABLED / DEV_RESET_SECRET /
+        E2E_TEST_SECRET is set, and apps/worker/lib/dev-surfaces.ts refuses to
+        serve /api/test-* outside the ['development', 'staging'] allowlist (and,
+        outside development, without a >= 32-char secret).
+
+   `staging` (and any other non-production value the var set allows) still emits
+   both vars normally — that is the whole point of #723: the E2E suite cannot
+   bootstrap a deployed target that answers 404 on /api/test-*.
+
+   deploy/ansible/scripts/check-required-env.py renders this template at
+   app_environment=staging AND app_environment=production with identical
+   dev_routes_enabled/dev_reset_secret inputs and asserts the opposite outcomes,
+   so neither half of this conditional can rot unnoticed. #}
+{% if (app_environment | default('production')) != 'production' %}
 {% if dev_routes_enabled | default(false) | bool %}
 DEV_ROUTES_ENABLED=true
 {% endif %}
 {% if (dev_reset_secret | default('')) | length > 0 %}
 DEV_RESET_SECRET={{ dev_reset_secret }}
+{% endif %}
 {% endif %}

@@ -166,7 +166,12 @@ final class CryptoServiceTests: XCTestCase {
         let envelope = result.envelopes.first!.envelope
 
         // Read back through the wire pair only — the server stores {enc, ct}, not labelId.
-        let decrypted = try author.decryptNote(ciphertextHex: result.ciphertextHex, enc: envelope.enc, ct: envelope.ct)
+        let wireEnvelope = try CryptoService.wireEnvelope(
+            enc: envelope.enc,
+            ct: envelope.ct,
+            label: CryptoLabels.LABEL_NOTE_KEY
+        )
+        let decrypted = try author.decryptNote(ciphertextHex: result.ciphertextHex, envelope: wireEnvelope)
         XCTAssertEqual(decrypted, payload)
     }
 
@@ -220,17 +225,15 @@ final class CryptoServiceTests: XCTestCase {
         let sealed = try author.encryptMessage(plaintext: plaintext, readerPubkeys: [secondPubkey])
         XCTAssertEqual(Set(sealed.envelopes.map(\.pubkey)), [authorPubkey, secondPubkey])
 
-        let authorEnv = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == authorPubkey })
         XCTAssertEqual(
-            try author.decryptMessage(encryptedContent: sealed.encryptedContent, enc: authorEnv.enc, ct: authorEnv.ct),
+            try author.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: sealed.envelopes),
             plaintext
         )
 
         // Switch the (process-global) Rust state to the second reader's device key.
         _ = try second.unlockWithPin(data: secondKeys, pin: "22222222")
-        let secondEnv = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == secondPubkey })
         XCTAssertEqual(
-            try second.decryptMessage(encryptedContent: sealed.encryptedContent, enc: secondEnv.enc, ct: secondEnv.ct),
+            try second.decryptMessage(encryptedContent: sealed.encryptedContent, readerEnvelopes: sealed.envelopes),
             plaintext
         )
     }
@@ -244,14 +247,20 @@ final class CryptoServiceTests: XCTestCase {
 
         let message = try service.encryptMessage(plaintext: "m", readerPubkeys: [])
         let messageEnv = try XCTUnwrap(message.envelopes.first { $0.pubkey == me })
+        let messageWireEnvelope = try CryptoService.wireEnvelope(
+            enc: messageEnv.enc,
+            ct: messageEnv.ct,
+            label: CryptoLabels.LABEL_MESSAGE
+        )
         XCTAssertThrowsError(
-            try service.decryptNote(ciphertextHex: message.encryptedContent, enc: messageEnv.enc, ct: messageEnv.ct)
+            try service.decryptNote(ciphertextHex: message.encryptedContent, envelope: messageWireEnvelope)
         )
 
         let note = try service.encryptNote(payload: "{\"text\":\"n\"}", recipientPubkeys: [me])
         let noteEnv = try XCTUnwrap(note.envelopes.first).envelope
+        let noteReaderEnvelope = RecipientEnvelope(ct: noteEnv.ct, enc: noteEnv.enc, pubkey: me)
         XCTAssertThrowsError(
-            try service.decryptMessage(encryptedContent: note.ciphertextHex, enc: noteEnv.enc, ct: noteEnv.ct)
+            try service.decryptMessage(encryptedContent: note.ciphertextHex, readerEnvelopes: [noteReaderEnvelope])
         )
     }
 

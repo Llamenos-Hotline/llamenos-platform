@@ -25,6 +25,7 @@ import {
   addHubMemberViaApi,
   ADMIN_SEED,
   type CreateVolunteerResult,
+  uniqueName,
 } from '../../api-helpers'
 
 // ── Local State ────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ async function ensureEntityType(
   await enableCaseManagementViaApi(request, true)
   const hubId = getScenarioState(world).hubId
   const et = await createEntityTypeViaApi(request, {
-    name: `isolation_case_${Date.now()}`,
+    name: uniqueName('isolation_case', '_'),
     hubId,
   })
   isoState.entityTypeId = et.id as string
@@ -517,7 +518,7 @@ Then('the admin should see notes from {string}', async ({ world }, name: string)
 Given(
   'volunteer {string} is a member of dedicated hub {string}',
   async ({ request, world }, volName: string, hubLabel: string) => {
-    const hubId = await createHubViaApi(request, `bdd-iso-${hubLabel}-${Date.now()}`)
+    const hubId = await createHubViaApi(request, uniqueName(`bdd-iso-${hubLabel}`))
 
     // Create the volunteer with NO global roles so they only have hub-specific access.
     // This ensures they get 403 when accessing a hub they are not a member of.
@@ -610,22 +611,15 @@ Then(
     expect(author, `author "${authorName}" not found`).toBeTruthy()
     expect(hubEntry, `hub "${hubLabel}" not found`).toBeTruthy()
 
-    // The viewer accesses the hub directly — the response may be 200 (global
-    // volunteer role grants hub entry) but the note list must be filtered to
-    // their own authorPubkey, so the author's notes are never visible.
-    const { status, data } = await apiGet<{ notes: Array<{ id: string }> }>(
+    // The viewer is not a member of this hub, so the hub itself is closed to
+    // them — a global role is not hub membership (#1037). Nothing of the
+    // author's (not even a filtered list) may come back.
+    const { status, data } = await apiGet<{ notes?: Array<{ id: string }> }>(
       request,
       `/hubs/${hubEntry!.hubId}/notes`,
       viewer!.deviceKey,
     )
-    expect(status, `expected 200 for ${viewerName} accessing hub ${hubLabel}`).toBe(200)
-
-    const visibleNoteIds = data.notes.map(n => n.id)
-    for (const authorNoteId of author!.noteIds) {
-      expect(
-        visibleNoteIds,
-        `${viewerName} must not see ${authorName}'s note ${authorNoteId} in hub "${hubLabel}"`,
-      ).not.toContain(authorNoteId)
-    }
+    expect(status, `expected 403 for non-member ${viewerName} accessing hub ${hubLabel}`).toBe(403)
+    expect(data?.notes, `${viewerName} must not receive ${authorName}'s notes from hub "${hubLabel}"`).toBeUndefined()
   },
 )

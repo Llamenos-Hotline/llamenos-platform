@@ -62,7 +62,7 @@ function canonicalizeJson(value: unknown): unknown {
  */
 function computeLinkHash(
   seqNo: number,
-  prevHash: string,
+  prevHash: string | null,
   payload: unknown,
   signerDeviceId: string,
   signerPubkey: string,
@@ -84,7 +84,7 @@ async function appendLink(
   deviceKey: string,
   targetPubkey: string,
   opts: {
-    seqNo: number; linkType: string; prevHash: string;
+    seqNo: number; linkType: string; prevHash: string | null;
     payload?: Record<string, unknown>; signature?: string; hash?: string;
     signerDeviceId?: string; signerPubkey?: string; timestamp?: string;
   },
@@ -116,12 +116,12 @@ Given('the user has a genesis sigchain link', async ({ request, world }) => {
   const s = getS(world)
   expect(s.user).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 0, linkType: 'genesis', prevHash: '', payload })
+  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 1, linkType: 'genesis', prevHash: null, payload })
   expect(res.status).toBe(201)
   // Extract the server-accepted hash from the response
   s.genesisHash = (res.data as { hash: string }).hash
   s.lastHash = s.genesisHash
-  s.lastSeqNo = 0
+  s.lastSeqNo = 1
 })
 
 Given('a second registered user', async ({ request, world }) => {
@@ -135,11 +135,11 @@ When('the user appends a genesis sigchain link', async ({ request, world }) => {
   const s = getS(world)
   expect(s.user).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 0, linkType: 'genesis', prevHash: '', payload })
+  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 1, linkType: 'genesis', prevHash: null, payload })
   setLastResponse(world, res)
   if (res.status === 201) {
     const hash = (res.data as { hash: string }).hash
-    s.genesisHash = hash; s.lastHash = hash; s.lastSeqNo = 0
+    s.genesisHash = hash; s.lastHash = hash; s.lastSeqNo = 1
   }
 })
 
@@ -186,7 +186,11 @@ When('the user appends a link with duplicate seqNo {int}', async ({ request, wor
   const s = getS(world)
   expect(s.user).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo, linkType: 'genesis', prevHash: '', payload })
+  // `prevHash: null` is the genesis spelling the wire schema accepts since #1537
+  // aligned genesis with the crate verifier (seq 1, null prevHash); `''` is a
+  // legacy alias. The scenario must reach the continuity check that answers 409,
+  // not be turned away by schema validation with a 400.
+  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo, linkType: 'genesis', prevHash: null, payload })
   setLastResponse(world, res)
 })
 
@@ -195,7 +199,7 @@ When('the second user tries to append to the first user\'s sigchain', async ({ r
   expect(s.user).toBeDefined()
   expect(s.secondUser).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.secondUser!.deviceKey, s.user!.pubkey, { seqNo: 0, linkType: 'genesis', prevHash: '', payload })
+  const res = await appendLink(request, s.secondUser!.deviceKey, s.user!.pubkey, { seqNo: 1, linkType: 'genesis', prevHash: null, payload })
   setLastResponse(world, res)
 })
 
@@ -218,11 +222,11 @@ When('the user appends a genesis sigchain link with correctly computed hash', as
   const s = getS(world)
   expect(s.user).toBeDefined()
   const payload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
-  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 0, linkType: 'genesis', prevHash: '', payload })
+  const res = await appendLink(request, s.user!.deviceKey, s.user!.pubkey, { seqNo: 1, linkType: 'genesis', prevHash: null, payload })
   setLastResponse(world, res)
   if (res.status === 201) {
     const hash = (res.data as { hash: string }).hash
-    s.genesisHash = hash; s.lastHash = hash; s.lastSeqNo = 0
+    s.genesisHash = hash; s.lastHash = hash; s.lastSeqNo = 1
   }
 })
 
@@ -234,13 +238,13 @@ When('the user appends a sigchain link whose payload was modified after hashing'
   const timestamp = new Date().toISOString()
   const originalPayload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
   // Compute hash with the original payload
-  const hash = computeLinkHash(0, '', originalPayload, signerDeviceId, signerPubkey, timestamp)
+  const hash = computeLinkHash(1, null, originalPayload, signerDeviceId, signerPubkey, timestamp)
   const signature = bytesToHex(ed25519.sign(hexToBytes(hash), hexToBytes(s.user!.deviceKey)))
   // Tamper the payload AFTER hashing
   const tamperedPayload = { devicePubkey: bytesToHex(crypto.getRandomValues(new Uint8Array(32))) }
   const res = await apiPost(request, `/users/${s.user!.pubkey}/sigchain`, {
-    seqNo: 0, linkType: 'genesis', payload: tamperedPayload,
-    signature, prevHash: '', hash, signerDeviceId, signerPubkey, timestamp,
+    seqNo: 1, linkType: 'genesis', payload: tamperedPayload,
+    signature, prevHash: null, hash, signerDeviceId, signerPubkey, timestamp,
   }, s.user!.deviceKey)
   setLastResponse(world, res)
 })
@@ -256,8 +260,8 @@ When('the user appends a sigchain link with a hash that does not match the canon
   const forgedHash = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
   const signature = bytesToHex(ed25519.sign(hexToBytes(forgedHash), hexToBytes(s.user!.deviceKey)))
   const res = await apiPost(request, `/users/${s.user!.pubkey}/sigchain`, {
-    seqNo: 0, linkType: 'genesis', payload,
-    signature, prevHash: '', hash: forgedHash, signerDeviceId, signerPubkey, timestamp,
+    seqNo: 1, linkType: 'genesis', payload,
+    signature, prevHash: null, hash: forgedHash, signerDeviceId, signerPubkey, timestamp,
   }, s.user!.deviceKey)
   setLastResponse(world, res)
 })

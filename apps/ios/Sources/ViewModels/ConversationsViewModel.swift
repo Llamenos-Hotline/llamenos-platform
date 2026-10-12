@@ -167,7 +167,7 @@ final class ConversationsViewModel {
 
             let request = SendMessageRequest(
                 encryptedContent: encrypted.encryptedContent,
-                recipientEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes
             )
 
             let _: ConversationMessage = try await apiService.request(
@@ -254,27 +254,18 @@ final class ConversationsViewModel {
 
     // MARK: - Message Decryption
 
-    /// Decrypt a conversation message using the HPKE envelope for our encryption pubkey.
+    /// Decrypt a conversation message with whichever of its envelopes is ours.
     private func decryptConversationMessage(_ message: ConversationMessage) -> DecryptedMessage? {
-        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-        // Find our envelope
-        guard let ourEnvelope = message.recipientEnvelopes.first(where: { $0.pubkey == ourPubkey }) else {
-            return nil
-        }
-
         do {
             let decryptedText = try cryptoService.decryptMessage(
                 encryptedContent: message.encryptedContent,
-                enc: ourEnvelope.enc,
-                ct: ourEnvelope.ct
+                readerEnvelopes: message.readerEnvelopes
             )
 
             return DecryptedMessage(
                 id: message.id,
                 text: decryptedText,
                 direction: message.direction,
-                channelType: message.channelType,
                 createdAt: DateFormatting.parseISO(message.createdAt) ?? Date(),
                 isRead: message.isRead
             )

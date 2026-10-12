@@ -176,7 +176,14 @@ export async function request<T>(path: string, options: RequestInit & { retries?
         offlineQueue.replay(getAuthHeadersForReplay).catch(() => {})
       }
 
-      return res.json()
+      // 204 No Content (and 205) carry no body, and several routes use them —
+      // `/devices/register`, `/devices/voip-token`, `DELETE /sessions/:id`.
+      // `res.json()` on an empty body throws a SyntaxError, which surfaced as
+      // "device encryption key registration failed" on a registration the
+      // server had already accepted.
+      if (res.status === 204 || res.status === 205) return undefined as T
+      const text = await res.text()
+      return (text ? JSON.parse(text) : undefined) as T
     } catch (err) {
       if (err instanceof ApiError) throw err
       if (err instanceof OfflineQueuedError) throw err
@@ -267,6 +274,11 @@ export function hubPath(hubId: string, path: string): string {
 
 // --- Public config (no auth) ---
 
+/**
+ * The UNAUTHENTICATED pre-login config. It carries no hub roster and no
+ * `defaultHubId` (#1710) — hubs come from the authenticated `listHubs()`,
+ * filtered by the server to the caller's memberships.
+ */
 export async function getConfig() {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -286,8 +298,6 @@ export async function getConfig() {
       demoMode?: boolean
       demoResetSchedule?: string | null
       needsBootstrap?: boolean
-      hubs?: import('@shared/types').Hub[]
-      defaultHubId?: string
       serverPubkey?: string
       wsRelayUrl?: string
       apiVersion?: number

@@ -1757,6 +1757,7 @@
     "errorBreak": "Failed to update break status",
     "errorClockIn": "Failed to clock in",
     "errorClockOut": "Failed to clock out",
+    "errorInAppCallsUnavailable": "Đã vào ca, nhưng thiết bị này không thể nhận cuộc gọi trong ứng dụng. Hãy thử vào ca lại.",
     "errorRefresh": "Failed to refresh",
     "goOnBreak": "Nghỉ giải lao",
     "help": "Help",
@@ -2455,6 +2456,7 @@
     "hubPhoneNumber": "Phone Number",
     "hubPhoneNumberHelp": "The primary phone number for this hub (E.164 format).",
     "hubUpdated": "Hub updated successfully",
+    "keyUnavailable": "Nội dung được mã hóa trong hub này chưa thể mở trên thiết bị này",
     "namePlaceholder": "Hub name",
     "nameSection": "Hub Name",
     "noHubs": "No hubs yet. Create a hub to start organizing your hotline.",
@@ -2467,11 +2469,14 @@
       "archived": "Archived",
       "suspended": "Suspended"
     },
+    "switchFooter": "Chạm vào một hub để chuyển ngữ cảnh đang hoạt động. Hub đang hoạt động quyết định dữ liệu bạn thấy.",
     "switchHub": "Switch hub",
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Không tải được các hub của bạn",
+    "membershipLoadFailedBody": "Máy chủ không cho biết bạn thuộc những hub nào, nên chưa thể hiển thị gì. Hãy kiểm tra kết nối và thử lại."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2493,6 +2498,9 @@
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
+  "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Cần quyền truy cập micrô để trả lời cuộc gọi trong ứng dụng.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2553,7 +2561,9 @@
     "importKey": "Import Existing Key",
     "linkDevice": "Link a Device",
     "or": "or",
-    "subtitle": "Secure crisis response hotline"
+    "subtitle": "Secure crisis response hotline",
+    "inviteCodeLabel": "Invite code (optional)",
+    "inviteCodePlaceholder": "Code or invite link"
   },
   "logout": {
     "confirmAction": "Logout",
@@ -2747,6 +2757,7 @@
     "backupAcknowledge": "Tôi đã lưu khóa khôi phục của mình ở một vị trí an toàn",
     "backupDescription": "Ghi lại khóa khôi phục này và giữ nó an toàn. Đây là cách duy nhất để khôi phục tài khoản trên thiết bị mới.",
     "backupDownloaded": "Đã tải bản sao lưu",
+    "backupFailed": "Không thể tạo bản sao lưu được mã hóa của bạn: {{reason}}",
     "backupTitle": "Lưu Khóa Khôi Phục Của Bạn",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2761,6 +2772,8 @@
     "getStarted": "Bắt đầu",
     "goToLogin": "Đến trang Đăng nhập",
     "invalidCode": "Mã mời không hợp lệ",
+    "rateLimitedRetry": "Quá nhiều lần thử. Vui lòng đợi {{seconds}} giây rồi thử lại.",
+    "validationUnavailable": "Không thể xác thực lời mời của bạn ngay bây giờ. Kiểm tra kết nối rồi thử lại.",
     "noCode": "Không có mã mời",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
@@ -4662,5 +4675,17 @@
   "deepLinkConfirmTitle": "Open link?",
   "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
   "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel"
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

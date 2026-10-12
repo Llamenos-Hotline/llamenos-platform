@@ -29,6 +29,8 @@ vi.mock('@worker/db', () => ({
 import app from '@worker/app'
 
 const CANARY_PATH = '/api/test-devguard-canary'
+/** Satisfies MIN_DEPLOYED_SECRET_LENGTH in lib/dev-surfaces.ts. */
+const STRONG_SECRET = 'e2e-deployed-target-secret-0123456789abcdef'
 
 describe('devGuard (#1277)', () => {
   it.each([
@@ -42,9 +44,71 @@ describe('devGuard (#1277)', () => {
     expect(await res.json()).toEqual({ error: 'Not Found' })
   })
 
+  // The three-factor staging opt-in (lib/dev-surfaces.ts): each factor missing
+  // in turn, through the REAL app, so this covers the registration order too.
+  it.each([
+    ['ENVIRONMENT=staging alone', { ENVIRONMENT: 'staging' }],
+    ['ENVIRONMENT=staging + flag, no secret', { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true' }],
+    ['ENVIRONMENT=staging + flag + a secret too short to be one', {
+      ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: 'test-reset-secret',
+    }],
+    ['ENVIRONMENT=demo with everything set', {
+      ENVIRONMENT: 'demo', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET,
+    }],
+    ['ENVIRONMENT=production with everything set', {
+      ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET,
+    }],
+  ])('404s the canary /test-* route for %s', async (_label, env) => {
+    const res = await app.request(CANARY_PATH, {}, env)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'Not Found' })
+  })
+
   it('lets the canary /test-* route through when devSurfacesEnabled(env) is true', async () => {
     const res = await app.request(CANARY_PATH, {}, { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
+  })
+
+  // The reason this change exists: the end-to-end suite's api-bootstrap step
+  // got 404s against a deployed staging instance (#723), so the suite could
+  // never be pointed at one.
+  it('lets the canary /test-* route through on a staging target with all three factors', async () => {
+    const res = await app.request(CANARY_PATH, {}, {
+      ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET,
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+
+  // Real routes, not just the canary: the inner per-route guard must agree with
+  // the outer one. These carry their own check (routes/dev.ts `devRouteDenied`),
+  // which is where 18 hand-copied `ENVIRONMENT !== 'development'` conditions
+  // used to live — one of which had already drifted.
+  describe('the real bootstrap routes the suite needs', () => {
+    const BOOTSTRAP_ROUTES = ['/api/test-reset-no-admin', '/api/test-promote-admin', '/api/test-db-identity']
+
+    it.each(BOOTSTRAP_ROUTES)('404s %s on production with everything set', async (path) => {
+      const res = await app.request(path, {
+        method: path === '/api/test-db-identity' ? 'GET' : 'POST',
+        headers: { 'X-Test-Secret': STRONG_SECRET },
+      }, { ENVIRONMENT: 'production', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET })
+      expect(res.status).toBe(404)
+    })
+
+    it.each(BOOTSTRAP_ROUTES)('404s %s on staging without the X-Test-Secret header', async (path) => {
+      const res = await app.request(path, {
+        method: path === '/api/test-db-identity' ? 'GET' : 'POST',
+      }, { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET })
+      expect(res.status).toBe(404)
+    })
+
+    it.each(BOOTSTRAP_ROUTES)('404s %s on staging with the wrong X-Test-Secret', async (path) => {
+      const res = await app.request(path, {
+        method: path === '/api/test-db-identity' ? 'GET' : 'POST',
+        headers: { 'X-Test-Secret': `${STRONG_SECRET}-wrong` },
+      }, { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET })
+      expect(res.status).toBe(404)
+    })
   })
 })
