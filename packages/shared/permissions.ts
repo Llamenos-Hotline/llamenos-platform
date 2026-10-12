@@ -72,8 +72,13 @@ export const PERMISSION_CATALOG = {
   'users:manage-devices': 'View and manage user devices (admin device oversight, SAS verification)',
 
   // Shifts
-  'shifts:read-own': 'Check own shift status',
-  'shifts:read': 'View all shifts',
+  // Describes what the route actually grants. Until #1342 this read "Check
+  // own shift status" and guarded nothing at all — GET /shifts/my-status is
+  // open to any hub member — so the volunteer role advertised a capability
+  // the server never implemented. It now gates GET /shifts, which returns
+  // the schedule with every roster narrowed to the caller.
+  'shifts:read-own': 'View the shift schedule, seeing only own roster entries',
+  'shifts:read': 'View all shifts, including who is on each roster',
   'shifts:create': 'Create shifts',
   'shifts:update': 'Modify shifts',
   'shifts:delete': 'Delete shifts',
@@ -538,6 +543,33 @@ export function resolveAllRoleIds(
     for (const id of assignment.roleIds) roleIds.add(id)
   }
   return Array.from(roleIds)
+}
+
+/**
+ * True when the user still holds authority in SOME hub.
+ *
+ * This is {@link resolveHubPermissions} — the admission rule `hubContext` and
+ * ringing's hub filter both use — applied across every hub the user is
+ * assigned to, plus a super-admin, who holds every hub. It is deliberately
+ * built from that one primitive rather than reading `hubRoles` directly, so
+ * "is this person still a member anywhere" can never drift from "may this
+ * person act in this hub".
+ *
+ * Account-wide capabilities that are not scoped to one hub but still require
+ * membership somewhere resolve their authority here — the per-volunteer SIP
+ * credential above all (`/api/telephony/sip-token`): one endpoint rings for
+ * every member hub, so it must stop being issuable, and be torn down at the
+ * PBX, the moment the last membership is gone (#1540).
+ */
+export function hasAnyHubAccess(
+  globalRoles: string[],
+  hubRoles: { hubId: string; roleIds: string[] }[],
+  allRoleDefs: Role[],
+): boolean {
+  if (isSuperAdmin(globalRoles, allRoleDefs)) return true
+  return hubRoles.some(hr =>
+    resolveHubPermissions(globalRoles, hubRoles, allRoleDefs, hr.hubId).length > 0,
+  )
 }
 
 /**

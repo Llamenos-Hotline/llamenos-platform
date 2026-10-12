@@ -127,7 +127,9 @@ struct CreateReportRequest: Encodable, Sendable {
 
 /// Request body for `POST /api/reports/:id/assign`.
 struct ReportAssignRequest: Encodable, Sendable {
-    let assignTo: String
+    /// #1633: `assignReportBodySchema` names this `assignedTo`, and requires it.
+    /// It was `assignTo` here — a key the schema does not declare.
+    let assignedTo: String
 }
 
 // MARK: - ReportUpdateRequest

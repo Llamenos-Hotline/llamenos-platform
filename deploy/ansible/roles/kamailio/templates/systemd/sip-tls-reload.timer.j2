@@ -1,0 +1,13 @@
+[Unit]
+Description=Check the SIP edge TLS certificate for renewal on schedule
+
+[Timer]
+OnCalendar={{ kamailio_tls_reload_on_calendar | default('hourly') }}
+# Spread the check so it does not land with every other hourly job.
+RandomizedDelaySec=300
+# Catch up after a reboot: a renewal that happened while the host was down
+# would otherwise wait for the next tick.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

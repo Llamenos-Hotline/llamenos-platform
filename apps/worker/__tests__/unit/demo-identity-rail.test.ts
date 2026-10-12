@@ -19,6 +19,7 @@ import type { Services } from '@worker/services'
 import configRoute from '@worker/routes/config'
 import demoRoute from '@worker/routes/demo'
 import { demoIdentities, DemoIdentitiesUnavailableError } from '@worker/lib/demo-identities'
+import { devSurfacesEnabled, demoSurfacesEnabled, MIN_DEPLOYED_SECRET_LENGTH } from '@worker/lib/dev-surfaces'
 import { resetDemoData, seedDemoDataset } from '@worker/services/demo-seeder'
 import { isRevokedSigningKey, revokedSigningKeys } from '@worker/lib/revoked-signing-keys'
 import { authenticateRequest, validateToken } from '@worker/lib/auth'
@@ -44,14 +45,28 @@ const DEV_SERVER = { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' }
 const ENVIRONMENTS = ['production', 'staging', 'demo', 'test', '', undefined, 'Development', 'development ']
 const DEV_ROUTES = ['true', undefined, 'TRUE', '1']
 
+/**
+ * Long enough to satisfy the deployed-target opt-in in lib/dev-surfaces.ts.
+ * This is the third axis, and it is load-bearing: `ENVIRONMENT=staging` +
+ * `DEV_ROUTES_ENABLED=true` WITHOUT it leaves `devSurfacesEnabled` false, so a
+ * matrix that omits it never exercises the one configuration the staging
+ * allowlist newly opens. Every row below is run with the secret present and
+ * absent.
+ */
+const STRONG_SECRET = 'e'.repeat(MIN_DEPLOYED_SECRET_LENGTH)
+const RESET_SECRETS = [undefined, STRONG_SECRET]
+
 /** Every combination except the one development-server configuration. */
 const NOT_DEV: Array<Record<string, string | undefined>> = ENVIRONMENTS
-  .flatMap(ENVIRONMENT => DEV_ROUTES.map(DEV_ROUTES_ENABLED => ({ ...DEMO_FLAGS, ENVIRONMENT, DEV_ROUTES_ENABLED })))
+  .flatMap(ENVIRONMENT => DEV_ROUTES.flatMap(DEV_ROUTES_ENABLED =>
+    RESET_SECRETS.map(DEV_RESET_SECRET => ({ ...DEMO_FLAGS, ENVIRONMENT, DEV_ROUTES_ENABLED, DEV_RESET_SECRET }))))
   .filter(env => !(env.ENVIRONMENT === 'development' && env.DEV_ROUTES_ENABLED === 'true'))
-  .concat([{ ...DEMO_FLAGS, ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: undefined }])
+  .concat(RESET_SECRETS.map(DEV_RESET_SECRET =>
+    ({ ...DEMO_FLAGS, ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: undefined, DEV_RESET_SECRET })))
 
 const label = (env: Record<string, string | undefined>) =>
-  `ENVIRONMENT=${JSON.stringify(env.ENVIRONMENT)} DEV_ROUTES_ENABLED=${JSON.stringify(env.DEV_ROUTES_ENABLED)}`
+  `ENVIRONMENT=${JSON.stringify(env.ENVIRONMENT)} DEV_ROUTES_ENABLED=${JSON.stringify(env.DEV_ROUTES_ENABLED)} ` +
+  `DEV_RESET_SECRET=${env.DEV_RESET_SECRET ? '(a strong secret)' : '(unset)'}`
 
 /** Services that record every property touched — a refused request must touch none. */
 function untouchableServices() {
@@ -66,8 +81,8 @@ function untouchableServices() {
 }
 
 /** A database whose setup state claims the wizard's demo toggle was ticked. */
-function demoClaimingServices() {
-  const getSetupState = vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: true })
+function demoClaimingServices(storedDemoMode = true) {
+  const getSetupState = vi.fn().mockResolvedValue({ setupCompleted: true, demoMode: storedDemoMode })
   const services = {
     settings: {
       getSetupState,
@@ -132,6 +147,59 @@ describe('demo identities off a development server', () => {
     await expect(resetDemoData(reset.services, { ...env, ENVIRONMENT: env.ENVIRONMENT ?? '', HMAC_SECRET: 'x' }))
       .rejects.toThrow(DemoIdentitiesUnavailableError)
     expect(reset.touched).toEqual([])
+  })
+})
+
+/**
+ * The one configuration the staging allowlist newly opens, called out on its own
+ * because the matrix above used to miss it: `ENVIRONMENT=staging` +
+ * `DEV_ROUTES_ENABLED=true` + a strong `DEV_RESET_SECRET`. Here
+ * `devSurfacesEnabled` is TRUE — that is the whole point, `/api/test-*` is
+ * served — so anything that rode on that predicate silently changed meaning.
+ * The demo surfaces must not ride on it.
+ */
+describe('a fully opted-in staging end-to-end target', () => {
+  const STAGING_E2E = { ENVIRONMENT: 'staging', DEV_ROUTES_ENABLED: 'true', DEV_RESET_SECRET: STRONG_SECRET }
+
+  it('is a host whose DEV surface is open and whose DEMO surface is not', () => {
+    expect(devSurfacesEnabled(STAGING_E2E)).toBe(true)
+    expect(demoSurfacesEnabled(STAGING_E2E)).toBe(false)
+  })
+
+  it('refuses the signing seeds with a 404 decided before the database is read', async () => {
+    const { services, getSetupState } = demoClaimingServices()
+    const res = await appWith({ ...DEMO_FLAGS, ...STAGING_E2E }, services).request('/config/demo/credentials')
+    // 404, NOT the 500 that `demoIdentities()` throwing one layer below the
+    // guard would produce: non-disclosure rests on the guard, not on a throw.
+    expect(res.status).toBe(404)
+    expect(JSON.stringify(await res.json())).not.toMatch(/seed/i)
+    expect(getSetupState).not.toHaveBeenCalled()
+  })
+
+  it('is not put into demo mode by a stored database flag', async () => {
+    const { services } = demoClaimingServices()
+    const res = await appWith({ ...STAGING_E2E, DEMO_MODE: undefined }, services).request('/config')
+    expect(res.status).toBe(200)
+    expect((await res.json() as { demoMode: boolean }).demoMode).toBe(false)
+  })
+
+  // The deliberate other half of the decision: `DEMO_MODE` is deployment
+  // configuration an operator set on purpose, and it drives the demo BANNER —
+  // a warning that nothing here is real. A warning is not a capability, and
+  // suppressing it on a reachable host would be the less safe choice, so this
+  // arm is unchanged. The capability (the seeds above) stays refused.
+  it('still reports demo mode when the operator set DEMO_MODE, with no stored flag', async () => {
+    const { services } = demoClaimingServices(false)
+    const res = await appWith({ ...STAGING_E2E, DEMO_MODE: 'true' }, services).request('/config')
+    expect(res.status).toBe(200)
+    expect((await res.json() as { demoMode: boolean }).demoMode).toBe(true)
+  })
+
+  it('refuses the admin-authenticated demo reset without touching any service', async () => {
+    const { services, touched } = untouchableServices()
+    const res = await appWith({ ...DEMO_FLAGS, ...STAGING_E2E }, services).request('/demo/reset', { method: 'POST' })
+    expect(res.status).toBe(403)
+    expect(touched).toEqual([])
   })
 })
 

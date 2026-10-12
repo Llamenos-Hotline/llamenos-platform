@@ -12,6 +12,7 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.di.ActiveHubEntryPoint
 import org.llamenos.hotline.helpers.SimulationClient
+import org.llamenos.hotline.helpers.TestPermissions
 import org.llamenos.hotline.helpers.TestApiClient
 import org.llamenos.hotline.hub.ActiveHubState
 
@@ -61,19 +62,14 @@ class ScenarioHooks {
     /**
      * Grant runtime permissions before each scenario to prevent system dialogs
      * from stealing focus from the Compose test harness.
-     * Camera permission is needed for Device Linking QR scanner.
+     *
+     * CAMERA is needed for the Device Linking QR scanner; RECORD_AUDIO is asked for at
+     * clock-in and at answer (#1188), so every scenario that clocks a volunteer in would
+     * otherwise stall behind a dialog the harness cannot dismiss.
      */
     @Before(order = 0)
     fun grantPermissions() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val packageName = instrumentation.targetContext.packageName
-        try {
-            instrumentation.uiAutomation.executeShellCommand(
-                "pm grant $packageName android.permission.CAMERA"
-            ).close()
-        } catch (e: Exception) {
-            Log.w(TAG, "Camera permission grant failed: ${e.message}")
-        }
+        TestPermissions.grant()
     }
 
     /**

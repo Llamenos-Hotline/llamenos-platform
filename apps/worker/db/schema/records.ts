@@ -2,6 +2,7 @@
  * Records domain tables: notes, note replies, bans,
  * contact metadata, and audit log.
  */
+import { sql } from 'drizzle-orm'
 import {
   index,
   integer,
@@ -93,6 +94,14 @@ export const bans = pgTable(
   },
   (table) => [
     uniqueIndex('bans_hub_id_phone_hash_idx').on(table.hubId, table.phone),
+    // Closes the dedup gap for platform-wide bans (#1144): in Postgres
+    // NULL <> NULL for uniqueness purposes, so the composite index above
+    // never fires for hub_id IS NULL rows — two platform-wide bans for the
+    // same phone were never deduped at all. This partial index gives
+    // platform bans their own uniqueness guarantee.
+    uniqueIndex('bans_platform_phone_hash_idx')
+      .on(table.phone)
+      .where(sql`hub_id IS NULL`),
   ],
 )
 

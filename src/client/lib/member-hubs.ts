@@ -1,53 +1,27 @@
-import { useEffect, useMemo, useState } from 'react'
-import { listHubs } from './api'
+import { useMemo } from 'react'
 import { useConfig } from './config'
 
-/** Membership changes rarely; a slow refresh picks up added/removed hubs without a relaunch. */
-const REFRESH_INTERVAL_MS = 5 * 60_000
-
-// Several components mount this hook at once (layout, dashboard, conversations);
-// share one in-flight request between them.
-let inflight: Promise<string[]> | null = null
-
-function fetchMemberHubIds(): Promise<string[]> {
-  inflight ??= listHubs()
-    .then(({ hubs }) => hubs.map(h => h.id))
-    .finally(() => { inflight = null })
-  return inflight
-}
-
 /**
- * IDs of every hub the authenticated user is a member of (sorted, stable identity
- * while the set is unchanged).
+ * IDs of every hub the authenticated user is a member of (sorted, stable
+ * identity while the set is unchanged).
  *
- * This is deliberately NOT `useConfig().hubs`: that is the public instance hub
- * list from `/config`, served before authentication. Membership comes from the
- * authenticated `GET /hubs`, which the server filters by the user's hub roles.
+ * This is deliberately NOT an instance-wide hub list. Membership comes from the
+ * authenticated `GET /hubs`, which the server filters by the user's hub roles;
+ * `ConfigProvider` holds the result and `AuthProvider` refreshes it while a
+ * session exists. Before #1708 the public, pre-login `/config` roster was used
+ * for the active hub, which is how a volunteer ended up browsing a hub they
+ * were not in.
  *
- * The active hub is always included — it is by definition one the user can browse,
- * and it keeps single-hub behaviour intact while membership is loading or if the
- * membership request fails.
+ * The active hub is always included — it is by definition one the user can
+ * browse, and it keeps single-hub behaviour intact while membership is loading.
  *
  * Multi-hub axiom: incoming calls and conversation events must be received for
  * every hub in this list, whichever hub is active in the UI.
  */
 export function useMemberHubIds(): string[] {
-  const { currentHubId } = useConfig()
-  const [fetched, setFetched] = useState<string[]>([])
+  const { hubs, currentHubId } = useConfig()
 
-  useEffect(() => {
-    let mounted = true
-    const load = () => {
-      fetchMemberHubIds()
-        .then(ids => { if (mounted) setFetched(prev => (prev.join(',') === ids.join(',') ? prev : ids)) })
-        .catch(() => { console.error('[hubs] Failed to load hub memberships') })
-    }
-    load()
-    const interval = setInterval(load, REFRESH_INTERVAL_MS)
-    return () => { mounted = false; clearInterval(interval) }
-  }, [])
-
-  const key = [...new Set(currentHubId ? [...fetched, currentHubId] : fetched)].sort().join(',')
+  const key = [...new Set(currentHubId ? [...hubs.map(h => h.id), currentHubId] : hubs.map(h => h.id))].sort().join(',')
   // Re-derive the array only when the set changes so effects keyed on it don't churn.
   return useMemo(() => (key ? key.split(',') : []), [key])
 }

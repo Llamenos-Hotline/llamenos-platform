@@ -338,7 +338,7 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
    * added the OPERATOR-invoked `llamenos-fleet review-and-merge <pr>`
    * command, which is a human running a named command against a named PR —
    * a different act from the autonomous tick loop deciding to arm
-   * auto-merge on its own. Its one real, `--squash --delete-branch` merge is
+   * auto-merge on its own. Its one real, `--squash` merge is
    * reached only after `runReviewAndMerge` has independently re-verified
    * every required check (including a fresh `fleet/review`) is green on an
    * unmoved head (`evaluateMergeReadiness`) — GitHub is still what actually
@@ -378,8 +378,17 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
     expect(realMerges).toHaveLength(1)
     expect(realMerges[0]?.file, 'a real (squash) gh pr merge exists outside review-and-merge.ts')
       .toBe(REVIEW_AND_MERGE_FILE)
-    expect(realMerges[0]?.call, 'the real merge in review-and-merge.ts must delete the branch too')
-      .toContain("'--delete-branch'")
+    // No `gh pr merge` may carry `--delete-branch`. This rail used to require
+    // the opposite, and that inversion IS #1804: `gh` refuses the flag when the
+    // target branch has a merge queue ("Cannot use `-d` or `--delete-branch`
+    // when merge queue enabled"), so every arming call failed and the fleet
+    // merged nothing unattended while still reviewing and verifying correctly.
+    // Branch hygiene is the repository's `delete_branch_on_merge` setting's
+    // job, not a flag this process passes.
+    for (const call of [...arms, ...disarms, ...realMerges.map((m) => m.call)]) {
+      expect(call, 'gh pr merge must not pass --delete-branch — a merge queue refuses it')
+        .not.toContain("'--delete-branch'")
+    }
   })
 
   /**
@@ -902,14 +911,18 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
   // operator dial is off, never without the other engine's binary on PATH
   // (no half-run). Removing any guard makes this rail fail — the arms are
   // what keep one engine's outage from stopping the merge train AND what
-  // keep it from becoming a silent pass.
+  // keep it from becoming a silent pass. Since #1767 the operator dial
+  // also gates the both-engine smoke blocks (a healthy primary no longer
+  // excuses an untested fallback), so the dial appears four times; the
+  // binary checks now name the RESOLVED binaries ($rev_binary / $fb_binary
+  // — #1767 ask 2: one shared resolution place), never literals.
   it('the smoke step\'s fallback arms are gated on not-auth, the operator dial, and the other engine being on PATH — both directions', () => {
     const text = fleetReviewJobText()
     const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
     expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
-    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(2)
-    expect(text).toContain('command -v claude >/dev/null 2>&1')
-    expect(text).toContain('command -v kimi >/dev/null 2>&1')
+    expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(4)
+    expect(text.match(/command -v "\$rev_binary" >\/dev\/null 2>&1/g)?.length).toBe(2)
+    expect(text.match(/command -v "\$fb_binary" >\/dev\/null 2>&1/g)?.length).toBe(4)
     // And the primary branch is selected from the RESOLVED engine — never
     // from an env var read directly — so the smoke test and the real review
     // smoke the same engine by construction (including the bootstrap
@@ -1827,8 +1840,14 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
  * runner, on the operator's own Max subscription — the provider-quota
  * pressure that justified a 2-3-turn budget is gone, and a session that can
  * actually use its tools reviews better than one starved for turns. The
- * budget widened accordingly: 10 turns / 10-minute wall clock by default,
- * 20 turns / 20-minute wall clock for a high-impact diff. Pinned to the
+ * budget widened accordingly, and widened AGAIN at #1485 (an operator
+ * decision, a straight doubling): 20 turns / 10-minute wall clock by
+ * default, 40 turns / 20-minute wall clock for a high-impact diff. The case
+ * behind the second raise is why the turn count moved and the wall clock did
+ * not — #1485 exhausted 10 turns on TEN files (+137/-63) while a
+ * 50-file/+3933 PR reached a verdict the same day, so what spends the budget
+ * is exploration, not size, and 20/40 turns inside 10/20 minutes still
+ * allows ~30s per turn. Pinned to the
  * actual exported numbers, not a description of them: a PR that quietly
  * raises or lowers these must fail THIS test, not just read wrong in a
  * comment. `fleet-review.yml`'s own `timeout-minutes` must stay above
@@ -1836,9 +1855,9 @@ describe('rail: every ruleset-15885614-required context reports on merge_group, 
  * rail above.
  */
 describe('rail: the reviewer gets a full session\'s budget, not a thin API call\'s', () => {
-  it('caps turns at the full-session budget (10 default / 20 high-impact)', () => {
-    expect(DEFAULT_MAX_TURNS).toBe(10)
-    expect(HIGH_IMPACT_MAX_TURNS).toBe(20)
+  it('caps turns at the full-session budget (20 default / 40 high-impact)', () => {
+    expect(DEFAULT_MAX_TURNS).toBe(20)
+    expect(HIGH_IMPACT_MAX_TURNS).toBe(40)
     // High impact always gets AT LEAST as much room as the default —
     // pinned as an inequality too, so a mutation that flips the two values
     // relative to each other still fails even if it kept both numbers
@@ -3253,10 +3272,22 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     expect(jobLevelIf(jobBlock(workflowText('desktop-e2e.yml'), job))).toBe("needs.changes.outputs.desktop == 'true'")
   })
 
-  it('the changes job diffs against the PR/merge-group base sha, not HEAD^', () => {
+  it('the changes job diffs against the PR base and the QUEUE TARGET, not HEAD^ and not the group base', () => {
     const block = jobBlock(ciYaml(), 'changes')
     expect(block).toContain('github.event.pull_request.base.sha')
-    expect(block).toContain('github.event.merge_group.base_sha')
+    // #1594: `merge_group.base_sha` is the PREVIOUS queue entry's head, so
+    // for any entry but the first it already contains the earlier entries'
+    // files — and platform detection against it filters away the suites
+    // those files require while the group still lands them. The right base
+    // is the branch the group lands ON (`base_ref`). This assertion is the
+    // inverse of what it used to say, deliberately: it used to require the
+    // defect.
+    expect(block).toContain('github.event.merge_group.base_ref')
+    expect(block, 'the changes job must not diff platform scope against the group base')
+      .not.toContain('github.event.merge_group.base_sha }}')
+    // `lint` is the opposite case and keeps base_sha: eslint's verdict is
+    // per file, so every entry's own group lints exactly its own files.
+    expect(jobBlock(ciYaml(), 'lint')).toContain('github.event.merge_group.base_sha')
   })
 
   it('ci.yml, ios-e2e.yml and desktop-e2e.yml all call the one shared classification script — no second copy of the path map', () => {

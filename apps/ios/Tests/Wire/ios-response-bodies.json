@@ -1,0 +1,176 @@
+{
+  "$comment": [
+    "#1633 - what iOS must be able to DECODE. The sibling of ios-request-bodies.json,",
+    "which only ever proved what iOS sends.",
+    "",
+    "That asymmetry was the structural gap: renaming a request key to match its schema",
+    "says nothing about the response model on the same endpoint, and for",
+    "POST /api/conversations/:id/messages the response model still required",
+    "recipientEnvelopes (and a channelType a message row does not have). While the",
+    "request keys were snake_cased the send 400'd and the response was never decoded;",
+    "once the send validated, the message was stored and delivered and THEN the decode",
+    "threw - reporting failure for a delivered reply and inviting a duplicate send.",
+    "",
+    "Each payload below is validated against the named Zod response schema by",
+    "apps/worker/__tests__/unit/ios-wire-bodies.test.ts, which also asserts that every",
+    "key the Swift model REQUIRES is a key that schema actually declares - so the",
+    "fixture cannot quietly drift into inventing fields the server never sends. The",
+    "Swift side (APIServiceResponseDecodingTests) decodes these same bytes through",
+    "APIService.makeResponseDecoder(), the real decoder."
+  ],
+  "cases": [
+    {
+      "id": "message",
+      "endpoint": "POST /api/conversations/:id/messages (201) and GET .../messages",
+      "module": "@protocol/schemas/conversations",
+      "schema": "messageResponseSchema",
+      "swiftType": "Message",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "id",
+        "conversationId",
+        "encryptedContent",
+        "readerEnvelopes",
+        "createdAt"
+      ],
+      "absentFromServer": [
+        "recipientEnvelopes",
+        "channelType"
+      ]
+    },
+    {
+      "id": "conversation",
+      "endpoint": "GET /api/conversations",
+      "module": "@protocol/schemas/conversations",
+      "schema": "conversationResponseSchema",
+      "swiftType": "ConversationListResponseConversation",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "id",
+        "channelType",
+        "contactIdentifierHash",
+        "createdAt",
+        "updatedAt",
+        "messageCount"
+      ],
+      "absentFromServer": [
+        "contactHash",
+        "unreadCount",
+        "assignedVolunteerPubkey"
+      ]
+    },
+    {
+      "id": "telephonyProvider",
+      "endpoint": "GET /api/settings/telephony-provider",
+      "module": "@protocol/schemas/settings",
+      "schema": "telephonyProviderSchema",
+      "swiftType": "TelephonyProvider",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "type"
+      ],
+      "absentFromServer": [
+        "provider"
+      ]
+    },
+    {
+      "id": "transcriptionSettings",
+      "endpoint": "GET /api/settings/transcription and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "transcriptionSettingsSchema",
+      "swiftType": "TranscriptionSettings",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [],
+      "absentFromServer": [
+        "enabled",
+        "allowVolunteerOptOut"
+      ]
+    },
+    {
+      "id": "spamSettings",
+      "endpoint": "GET /api/settings/spam and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "spamSettingsSchema",
+      "swiftType": "SpamSettings",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [],
+      "absentFromServer": [
+        "maxCallsPerHour",
+        "knownNumberBypass"
+      ]
+    },
+    {
+      "id": "ivrLanguages",
+      "endpoint": "GET /api/settings/ivr-languages and PATCH (200)",
+      "module": "@protocol/schemas/settings",
+      "schema": "ivrLanguagesSchema",
+      "swiftType": "IvrLanguages",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
+      "requiredSwiftKeys": [
+        "enabledLanguages"
+      ],
+      "absentFromServer": [
+        "languages"
+      ]
+    }
+  ],
+  "responses": {
+    "message": {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "conversationId": "33333333-3333-4333-8333-333333333333",
+      "direction": "outbound",
+      "authorPubkey": "abababababababababababababababababababababababababababababababab",
+      "encryptedContent": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "readerEnvelopes": [
+        {
+          "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "pubkey": "abababababababababababababababababababababababababababababababab"
+        }
+      ],
+      "hasAttachments": false,
+      "attachmentIds": [],
+      "status": "sent",
+      "deliveredAt": "2026-10-07T12:00:01.000Z",
+      "readAt": null,
+      "failureReason": null,
+      "retryCount": 0,
+      "createdAt": "2026-10-07T12:00:00.000Z"
+    },
+    "conversation": {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "channelType": "sms",
+      "contactIdentifierHash": "deadbeefdeadbeef",
+      "contactLast4": "1234",
+      "assignedTo": "abababababababababababababababababababababababababababababababab",
+      "status": "active",
+      "createdAt": "2026-10-07T11:00:00.000Z",
+      "updatedAt": "2026-10-07T12:00:00.000Z",
+      "lastMessageAt": "2026-10-07T12:00:00.000Z",
+      "messageCount": 3
+    },
+    "telephonyProvider": {
+      "type": "twilio",
+      "phoneNumber": "+15550001111",
+      "accountSid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "authToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "transcriptionSettings": {
+      "globalEnabled": true,
+      "allowUserOptOut": false
+    },
+    "spamSettings": {
+      "voiceCaptchaEnabled": false,
+      "rateLimitEnabled": true,
+      "maxCallsPerMinute": 3,
+      "blockDurationMinutes": 30
+    },
+    "ivrLanguages": {
+      "enabledLanguages": [
+        "es",
+        "en",
+        "zh"
+      ]
+    }
+  }
+}

@@ -739,7 +739,9 @@
     "keyUnavailable": "ဤဟပ်ရှိ စာဝှက်ထားသောအကြောင်းအရာကို ဤစက်ပစ္စည်းတွင် ယခုအချိန်တွင် မဖွင့်နိုင်သေးပါ",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "သင့်ဟပ်များကို ဖွင့်မရပါ",
+    "membershipLoadFailedBody": "သင်မည်သည့်ဟပ်များတွင် ပါဝင်သည်ကို ဆာဗာမှ မဖြေကြားသဖြင့် ယခုအချိန်တွင် မည်သည့်အရာမျှ ပြသနိုင်ခြင်း မရှိပါ။ ချိတ်ဆက်မှုကို စစ်ဆေးပြီး ပြန်လုပ်ကြည့်ပါ။"
   },
   "ivr": {
     "selfAnnouncement": "မြန်မာဘာသာအတွက် [N] နှိပ်ပါ။",
@@ -877,6 +879,7 @@
     "backupAcknowledge": "ကျွန်ုပ်၏ ပြန်လည်ရယူရေးသော့ကို လုံခြုံသောနေရာတွင် သိမ်းဆည်းပြီးပါပြီ",
     "backupDescription": "ဤပြန်လည်ရယူရေးသော့ကို ရေးမှတ်ပြီး လုံခြုံစွာ သိမ်းဆည်းပါ။ စက်အသစ်တွင် သင့်အကောင့်ကို ပြန်လည်ရယူရန် တစ်ခုတည်းသောနည်းလမ်းဖြစ်သည်။",
     "backupDownloaded": "အရန်ဖိုင် ဒေါင်းလုဒ်လုပ်ပြီး",
+    "backupFailed": "သင့်၏ကုဒ်ဖြင့်ဝှက်ထားသော အရန်ဖိုင်ကို ဖန်တီးမရပါ— {{reason}}",
     "backupTitle": "သင့်ပြန်လည်ရယူရေးသော့ကို သိမ်းဆည်းပါ",
     "confirmPin": "သင့် PIN ကို အတည်ပြုပါ",
     "confirmPinDescription": "အတည်ပြုရန် တူညီသော PIN ကို ထပ်ရိုက်ပါ",
@@ -891,6 +894,8 @@
     "getStarted": "စတင်မည်",
     "goToLogin": "ဝင်ရောက်ရန်သို့ သွားမည်",
     "invalidCode": "ဖိတ်ကြားကုဒ် မမှန်ကန်ပါ",
+    "rateLimitedRetry": "ကြိုးစားမှု များလွန်းပါသည်။ {{seconds}} စက္ကန့် စောင့်ပြီး ထပ်ကြိုးစားပါ။",
+    "validationUnavailable": "သင့်ဖိတ်စာကို ယခုအချိန်တွင် အတည်ပြု၍ မရပါ။ ချိတ်ဆက်မှုကို စစ်ဆေးပြီး ထပ်ကြိုးစားပါ။",
     "noCode": "ဖိတ်ကြားကုဒ် မပေးထားပါ",
     "npubLabel": "သင့်အများသုံးသော့",
     "deviceKeyLabel": "သင့်လျှို့ဝှက်သော့",
@@ -4546,6 +4551,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",

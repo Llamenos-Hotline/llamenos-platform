@@ -161,10 +161,23 @@ const smokeFailed = (engineFailure: string): Facts => ({
 })
 
 /**
- * Every outcome, as the facts the job really leaves behind, and the ONE
- * token it must be named with. The numbered entries are #1230's own list;
- * the rest are the gate's other outcomes and every other way a run ends.
+ * Every outcome, as the facts the job really leaves behind, the ONE token it
+ * must be named with, and the exit code the naming step itself must take.
+ * The numbered entries are #1230's own list; the rest are the gate's other
+ * outcomes and every other way a run ends.
+ *
+ * The step's own exit code is DERIVED from those two facts rather than given
+ * a column of its own, because it is an invariant and not a per-case choice:
+ * the step exits non-zero exactly when the job arrived GREEN and the token
+ * is not a `PASS:` one — a green run by a path nothing here can name, which
+ * #1588 made fail closed. Every other outcome exits 0, the conclusion having
+ * already been decided by the steps above it. The rail for that whole class,
+ * and the proof it can fail, is
+ * tests/orchestrator/review-unnamed-outcome-fails-closed.test.ts.
  */
+const expectedExit = (facts: Facts, token: ReviewOutcomeToken): number =>
+  facts.JOB_STATUS === 'success' && !token.startsWith('PASS:') ? 1 : 0
+
 const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // #1230 (1) and (2): a reviewer rejected the diff. (2) is the same state
   // — what was wrong there was the NAME ("review-did-not-run", from the
@@ -188,6 +201,16 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // under the same budget and exhausts again.
   ['(6b) budget exhausted — the engine ran a full session and reached no verdict',
     reviewed('budget-exhausted', 'failure'), 'NO-VERDICT:budget-exhausted'],
+  // #1485's own shape, once a salvage call recovers what the exhausted
+  // session had concluded (review.ts's `salvagePartialVerdict`). Two
+  // outcomes, two names, and NEITHER of them green: a partial rejection
+  // reads as a rejection, and a partial pass is honestly NOT a pass — it
+  // gets a `NO-VERDICT:` name precisely so no reader and no grep can take it
+  // for one (#1564).
+  ['(6c) a partial review that REJECTED what it managed to read',
+    reviewed('partial-fail', 'failure'), 'REJECTED:partial'],
+  ['(6d) a partial review that found nothing wrong in the part it read',
+    reviewed('partial-pass', 'failure'), 'NO-VERDICT:partial-pass'],
   ['(7) scope — touched files outside the lane\'s scope (#1235)', reviewed('scope', 'failure'), 'NO-VERDICT:scope'],
   ['review-set-unresolved, decided by the gate',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'review-set-unresolved' }, 'NO-VERDICT:review-set-unresolved'],
@@ -200,7 +223,12 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // red on its own account — the PR's last earned verdict stands.
   ['a push carries the PASS the PR last earned', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'PASS:carried'],
   ['a push carries the FAIL the PR last earned', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carried', EARNED_SHA: EARNED }, 'REJECTED:carried'],
-  ['a push to a PR no review was ever earned on', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'unreviewed' }, 'PASS:unreviewed'],
+  // #1564: a push to a PR nothing has ever reviewed is RED. It used to
+  // conclude `PASS:unreviewed` — a required context satisfied by a run that
+  // made no model call and formed no verdict. The enumeration rail that keeps
+  // every no-verdict outcome out of the PASS class is in
+  // tests/orchestrator/review-no-verdict-is-red.test.ts.
+  ['a push to a PR no review was ever earned on', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'unreviewed' }, 'NO-VERDICT:unreviewed'],
   ['a push whose PR history could not be read', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'carry-unreadable' }, 'NO-VERDICT:carry-unreadable'],
   ['low-tier — no reviewable content', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'low-tier' }, 'PASS:low-tier'],
   ['the engine hit a usage limit', smokeFailed('engine-quota'), 'NO-VERDICT:engine-quota'],
@@ -214,14 +242,17 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['the gate succeeded but wrote no outcome (gate-outcome-missing)', { JOB_STATUS: 'failure', GATE_CONCLUSION: 'success' }, 'NO-VERDICT:gate-error'],
   ['the base predates the review gate', { JOB_STATUS: 'failure', BASE_GATE_OUTCOME: 'failure', GATE_CONCLUSION: 'skipped' }, 'NO-VERDICT:base-predates-gate'],
   ['the job failed before the gate ran (e.g. the PR lookup)', { JOB_STATUS: 'failure', BASE_GATE_OUTCOME: '', GATE_CONCLUSION: '' }, 'NO-VERDICT:setup-failed'],
-  ['a passing run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'PASS:unclassified'],
+  // #1588: a green job on an outcome this step has no name for. It used to
+  // be named `PASS:unclassified` and stay green; now the step fails it.
+  ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
+  ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
   ['a verdict of PASS, then a later step failed the job', reviewed('pass', 'failure'), 'NO-VERDICT:unclassified'],
 ]
 
 describe('rail: every fleet/review outcome is named on its own check (#1230)', () => {
   it.each(OUTCOMES)('%s → %s', (_label, facts, token) => {
     const named = name(facts)
-    expect(named.status, named.stdout).toBe(0)
+    expect(named.status, named.stdout).toBe(expectedExit(facts, token))
     expect(named.title, `no "${ANNOTATION_TITLE}" annotation was emitted:\n${named.stdout}`).not.toBeNull()
     expect(reviewOutcomeToken(named.title)).toBe(token)
     expect(named.title).toMatch(new RegExp(`^${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — \\S`))
@@ -310,7 +341,38 @@ describe('rail: every fleet/review outcome is named on its own check (#1230)', (
 
   it('writes nothing a verdict depends on — the review job stays read-only', () => {
     const script = step('fleet-review', NAMING_STEP).run
-    for (const forbidden of [/\bgh\s/, /\bcurl\b/, /GITHUB_OUTPUT/, /\bexit\s+[1-9]/]) expect(script).not.toMatch(forbidden)
+    for (const forbidden of [/\bgh\s/, /\bcurl\b/, /GITHUB_OUTPUT/]) expect(script).not.toMatch(forbidden)
+  })
+
+  /**
+   * #1588 CHANGED THIS STEP'S ONE POWER, deliberately. It used to be banned
+   * from exiting non-zero at all, on the reasoning that a step which only
+   * prints must not touch the verdict. The hole that reasoning left: the
+   * success branch's `*) token="PASS:unclassified"` default handed a GREEN
+   * required context to every outcome nobody had named — `bot-authored`
+   * among them, which is how four Dependabot PRs were green with no model
+   * call ever made.
+   *
+   * So the ban is now directional rather than absolute: the step may only
+   * ADD red, and only for an outcome it cannot name. Exactly one `exit`, it
+   * is `exit 1`, it is guarded by `$unnamed`, and `$unnamed` is set in no
+   * branch that produced a token — every named outcome in OUTCOMES above
+   * asserts `status === 0`, which is what proves the guard cannot misfire.
+   */
+  it('can only ADD red, and only for an outcome it cannot name (#1588)', () => {
+    const script = step('fleet-review', NAMING_STEP).run
+    const exits = [...script.matchAll(/^\s*exit\s+(\d+)\s*$/gm)].map((m) => m[1])
+    expect(exits, 'the naming step must have exactly one exit, and it must be a failure').toEqual(['1'])
+    expect(script, 'the exit must be guarded by the unnamed-outcome flag').toMatch(
+      /if \[ -n "\$unnamed" \]; then\n(?:.*\n)*?\s*exit 1\n\s*fi/,
+    )
+    // And it is the LAST thing the step does, so the annotation and the
+    // summary are written before the step fails.
+    const annotation = script.lastIndexOf('title=fleet/review outcome::')
+    const summary = script.lastIndexOf('GITHUB_STEP_SUMMARY')
+    const exit = script.lastIndexOf('exit 1')
+    expect(exit).toBeGreaterThan(annotation)
+    expect(exit).toBeGreaterThan(summary)
   })
 })
 
@@ -467,6 +529,37 @@ describe('rail: runReviewCi names the result of every return path', () => {
     ['the reviewer used its whole turn budget',
       { secondOpinion: async () => ({ verdict: 'UNREADABLE' as const, text: 'Error: Reached max turns (10)', failureKind: 'budget-exhausted' as const }) },
       'budget-exhausted', false],
+    // A salvaged PARTIAL review: still UNREADABLE (the gate's fail-closed
+    // shape is untouched), but now carrying what the exhausted session had
+    // concluded. `ok` is false for BOTH — a partial pass must never be a
+    // green check, which is the whole point of giving it its own result.
+    ['a reviewer ran out of turns after rejecting what it had read',
+      { secondOpinion: async () => ({
+        verdict: 'UNREADABLE' as const,
+        text: 'VERDICT (partial): FAIL — the toggle is still referenced',
+        failureKind: 'budget-exhausted' as const,
+        partial: { verdict: 'FAIL' as const, notReviewed: '- deploy/ansible/', text: 'VERDICT: FAIL — the toggle is still referenced' },
+      }) },
+      'partial-fail', false],
+    ['a reviewer ran out of turns having found nothing wrong in the part it read',
+      { secondOpinion: async () => ({
+        verdict: 'UNREADABLE' as const,
+        text: 'VERDICT (partial): PASS',
+        failureKind: 'budget-exhausted' as const,
+        partial: { verdict: 'PASS' as const, notReviewed: '- everything else', text: 'VERDICT: PASS' },
+      }) },
+      'partial-pass', false],
+    // A FULL rejection still outranks a partial one: it rests on the whole
+    // diff, so "fix the code" is the stronger, truer instruction.
+    ['a full rejection outranks a partial verdict beside it',
+      { ...withProfile,
+        secondOpinion: verdict('FAIL'),
+        profileReview: async () => ({
+          verdict: 'UNREADABLE' as const, text: 'VERDICT (partial): PASS',
+          failureKind: 'budget-exhausted' as const,
+          partial: { verdict: 'PASS' as const, notReviewed: '', text: 'VERDICT: PASS' },
+        }) },
+      'fail', false],
     ['a reviewer threw', { secondOpinion: async () => { throw new Error('engine exploded') } }, 'unreadable', false],
     ['a cached PASS', { cacheFor: cacheOf({ verdict: 'PASS', text: 'cached pass' }) }, 'cache-pass', true],
     ['a cached FAIL', { cacheFor: cacheOf({ verdict: 'FAIL', text: 'cached fail' }) }, 'cache-fail', false],

@@ -3,7 +3,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import type { AppEnv, WebAuthnCredential } from '../types'
 import { uint8ArrayToBase64URL, checkRateLimit } from '../lib/helpers'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { generateRegOptions, verifyRegResponse, generateAuthOptions, verifyAuthResponse } from '../lib/webauthn'
 import { auth as authMiddleware } from '../middleware/auth'
 import { rateLimit } from '../middleware/rate-limit'
@@ -37,8 +37,7 @@ webauthn.post('/login/options',
   async (c) => {
     const services = c.get('services')
     // Rate limit WebAuthn login attempts to prevent challenge flooding
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `webauthn:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const limited = await checkRateLimit(services.settings, `webauthn:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests. Try again later.' }, 429)
     const rpID = new URL(c.req.url).hostname
     const { credentials } = await services.identity.getAllWebAuthnCredentials()
@@ -73,8 +72,7 @@ webauthn.post('/login/verify',
   async (c) => {
     const services = c.get('services')
     // Rate limit verification attempts
-    const clientIp = getClientIp(c.req.raw)
-    const verifyLimited = await checkRateLimit(services.settings, `webauthn-verify:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 5)
+    const verifyLimited = await checkRateLimit(services.settings, `webauthn-verify:${routeRateLimitClient(c)}`, 5)
     if (verifyLimited) return c.json({ error: 'Too many requests. Try again later.' }, 429)
     const body = c.req.valid('json')
     const assertion = body.assertion as unknown as AuthenticationResponseJSON

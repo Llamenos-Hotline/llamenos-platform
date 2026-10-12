@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "허브를 불러올 수 없습니다",
+    "membershipLoadFailedBody": "서버가 어느 허브에 소속되어 있는지 알려주지 않아 아직 아무것도 표시할 수 없습니다. 연결을 확인한 후 다시 시도하세요."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2498,6 +2500,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "앱에서 통화에 응답하려면 마이크 접근 권한이 필요합니다.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2754,6 +2757,7 @@
     "backupAcknowledge": "복구 키를 안전한 장소에 저장했습니다",
     "backupDescription": "이 복구 키를 적어두고 안전하게 보관하세요. 새 기기에서 계정을 복구하는 유일한 방법입니다.",
     "backupDownloaded": "백업 다운로드됨",
+    "backupFailed": "암호화된 백업을 생성할 수 없습니다: {{reason}}",
     "backupTitle": "복구 키 저장",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2768,6 +2772,8 @@
     "getStarted": "시작하기",
     "goToLogin": "로그인으로 이동",
     "invalidCode": "유효하지 않은 초대 코드",
+    "rateLimitedRetry": "시도 횟수가 너무 많습니다. {{seconds}}초 기다린 후 다시 시도하세요.",
+    "validationUnavailable": "지금은 초대를 확인할 수 없습니다. 연결을 확인하고 다시 시도하세요.",
     "noCode": "초대 코드가 없습니다",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

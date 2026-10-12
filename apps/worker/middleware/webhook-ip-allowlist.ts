@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import { createLogger } from '../lib/logger'
+import { getClientIp } from '../lib/client-ip'
 
 const logger = createLogger('webhook-ip')
 
@@ -25,7 +26,7 @@ export function webhookIpAllowlist(provider: string) {
     if (!cidrs) return next()
 
     const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-    const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+    const clientIp = getClientIp(c.req.raw)
     if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
       logger.warn('Webhook IP not in allowlist', { provider })
       return c.text('Forbidden', 403)

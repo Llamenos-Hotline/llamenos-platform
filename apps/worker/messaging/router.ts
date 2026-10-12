@@ -17,6 +17,7 @@ import { observeFirehoseMessage } from './firehose-observer'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { getDb } from '../db'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
+import { getClientIp } from '../lib/client-ip'
 import { webhookAuth } from '../middleware/webhook-auth'
 import { hasHubPermission, permissionGranted, resolvePermissions } from '@shared/permissions'
 
@@ -99,7 +100,7 @@ messaging.post('/:channel/webhook',
   const cidrs = (c.env as unknown as Record<string, string | undefined>)[cidrKey]
   if (cidrs) {
     const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-    const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+    const clientIp = getClientIp(c.req.raw)
     if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
       logger.warn(`Messaging webhook IP not in allowlist for ${channel}`, { clientIp })
       return new Response('Forbidden', { status: 403 })

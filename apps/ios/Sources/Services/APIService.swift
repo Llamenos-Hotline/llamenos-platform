@@ -170,16 +170,28 @@ final class APIService: @unchecked Sendable {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
+        // Hub API responses carry E2EE envelopes, hub rosters and call history. None of
+        // it may be written to a response cache, where it could outlive logout.
+        ResponseCachePolicy.harden(config)
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
 
-        // Keys go on the wire exactly as the Swift types name them. The API contract
-        // (packages/protocol/schemas) is camelCase throughout, and the generated
-        // protocol types already carry camelCase CodingKeys. A key strategy here
-        // rewrote every multi-word key: `encryptedContent` went out as
-        // `encrypted_content` (#1293), and dictionary keys were rewritten too.
+        // Schema fields and generated CodingKeys are camelCase; no encoding strategy
+        // should rewrite typed or dictionary keys.
         self.encoder = JSONEncoder()
-        self.decoder = JSONDecoder()
+        self.decoder = Self.makeResponseDecoder()
+    }
+
+    /// Keep response decoding aligned with the production decoder and testable against
+    /// recorded server payloads. CamelCase server keys pass through unchanged.
+    static func makeResponseDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }
+
+    deinit {
+        session.finishTasksAndInvalidate()
     }
 
     /// Set or update the hub base URL.
@@ -369,8 +381,8 @@ final class APIService: @unchecked Sendable {
 
     /// Perform an authenticated API request with a pre-encoded JSON body.
     ///
-    /// Use this when the body is built as untyped JSON (`JSONSerialization`) rather than
-    /// as an `Encodable` type.
+    /// Use this only when the body is not `Encodable` — for example, a heterogeneous
+    /// `[String: Any]` built with `JSONSerialization`. Prefer `body:` for typed payloads.
     ///
     /// - Parameters:
     ///   - method: HTTP method.
@@ -484,8 +496,8 @@ final class APIService: @unchecked Sendable {
 
     /// Fetch short-lived SIP credentials for the given hub.
     /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
-        return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
+    func getSipToken() async throws -> SipTokenResponse {
+        return try await request(method: "GET", path: "/api/telephony/sip-token")
     }
 
     // MARK: - Version Check
@@ -884,4 +896,3 @@ struct PinListResponse: Decodable {
         let label: String
     }
 }
-

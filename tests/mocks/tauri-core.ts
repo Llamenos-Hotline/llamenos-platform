@@ -56,6 +56,9 @@ let mockHubKey: Uint8Array | null = null
 // epoch-keyed) label split — see packages/crypto/src/labels.rs.
 const LABEL_HUB_EVENT = 'llamenos:hub-event'
 const LABEL_HUB_EVENT_EPOCH = 'llamenos:hub-event-epoch:v1'
+const LABEL_BACKUP = 'llamenos:backup'
+const LABEL_BACKUP_HKDF_INFO = 'llamenos:backup:v1'
+const LABEL_DEVICE_ENCRYPTION_SEED = 'llamenos:device-encryption-seed:v1'
 let mockServerEventKeys: Array<[number, Uint8Array]> = []
 
 // ── PUK seed mock state ─────────────────────────────────────────────
@@ -168,6 +171,61 @@ function requireDeviceState(): MockDeviceKeyState {
 const ARGON2_M_COST_KIB = 4_096   // 4 MiB (production Rust uses 65_536)
 const ARGON2_T_COST = 3
 const ARGON2_P_COST = 4
+
+// ── Backup container (v4) — mirrors packages/crypto/src/backup.rs ───
+const BACKUP_FORMAT_VERSION = 4
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+
+/** Base32-encode (RFC 4648, no padding) and group into dash-separated quads. */
+function formatRecoveryKey(bytes: Uint8Array): string {
+  let chars = ''
+  let buffer = 0
+  let bits = 0
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte
+    bits += 8
+    while (bits >= 5) {
+      bits -= 5
+      chars += BASE32_ALPHABET[(buffer >> bits) & 0x1f]
+    }
+  }
+  if (bits > 0) chars += BASE32_ALPHABET[(buffer << (5 - bits)) & 0x1f]
+  return (chars.match(/.{1,4}/g) ?? [chars]).join('-')
+}
+
+/** Drop everything that is not an ASCII letter or digit, then upper-case. */
+function normalizeRecoveryKey(recoveryKey: string): string {
+  return recoveryKey.replace(/[^0-9a-zA-Z]/g, '').toUpperCase()
+}
+
+/** HKDF-SHA256 over the normalized recovery key's UTF-8 bytes. */
+function deriveRecoveryKek(recoveryKey: string, salt: Uint8Array): Uint8Array {
+  return hkdf(sha256, utf8ToBytes(normalizeRecoveryKey(recoveryKey)), salt,
+    utf8ToBytes(LABEL_BACKUP_HKDF_INFO), 32)
+}
+
+/** Open a v4 backup with either credential, returning the 32-byte signing seed. */
+async function openMockBackup(
+  backupJson: string, credential: string, isRecoveryKey: boolean,
+): Promise<Uint8Array> {
+  const file = JSON.parse(backupJson)
+  if (file.v !== BACKUP_FORMAT_VERSION) {
+    throw new Error(`Unsupported backup version ${file.v} (this build reads v${BACKUP_FORMAT_VERSION})`)
+  }
+  const block = isRecoveryKey ? file.r : file.d
+  const kek = isRecoveryKey
+    ? deriveRecoveryKek(credential, hexToBytes(block.s))
+    : await deriveKek(credential, hexToBytes(block.s))
+  const aad = utf8ToBytes(isRecoveryKey ? LABEL_BACKUP_HKDF_INFO : LABEL_BACKUP)
+  let seed: Uint8Array
+  try {
+    seed = gcm(kek, hexToBytes(block.n), aad).decrypt(hexToBytes(block.c))
+  } catch {
+    throw new Error('Decryption failed: authentication tag mismatch')
+  }
+  if (seed.length !== 32) throw new Error('Backup payload must be a 32-byte signing seed')
+  return seed
+}
 
 async function deriveKek(pin: string, salt: Uint8Array): Promise<Uint8Array> {
   return argon2id(utf8ToBytes(pin), salt, {
@@ -910,7 +968,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const signingSeed = hexToBytes(signingSecretHex)
     // Derive encryption seed from signing seed via HKDF (matches Rust)
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
@@ -942,19 +1000,72 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     }
   },
 
-  // --- Backup generation ---
+  // --- Backup generation / restore (v4 container) ---
+  //
+  // These honour their arguments and really encrypt, so an E2E can round-trip a
+  // backup and a wrong credential is actually rejected. The container shape
+  // mirrors packages/crypto/src/backup.rs, but these are independent JS
+  // implementations — they cannot prove the Rust codec is self-consistent, and
+  // deliberately do not try to. That proof is the `backup::tests` round-trip in
+  // packages/crypto (#1709: the previous mock discarded every argument and
+  // returned a canned object, so no E2E assertion about this step meant
+  // anything at all).
 
-  generate_backup_from_state: (_a) => {
+  generate_recovery_key: () => formatRecoveryKey(randomBytes(16)),
+
+  generate_backup_from_state: async (a) => {
     const secrets = requireSecrets()
     const state = requireDeviceState()
-    // Return a mock backup JSON — real Rust would encrypt with recovery key
+    const pin = a.pin as string
+    const recoveryKey = a.recoveryKey as string
+    if (!pin) throw new Error('PIN is empty')
+    if (!normalizeRecoveryKey(recoveryKey)) throw new Error('Recovery key is empty after normalization')
+
+    const pinSalt = randomBytes(32)
+    const pinNonce = randomBytes(12)
+    const pinCt = gcm(await deriveKek(pin, pinSalt), pinNonce, utf8ToBytes(LABEL_BACKUP))
+      .encrypt(secrets.signingSeed)
+
+    const rSalt = randomBytes(32)
+    const rNonce = randomBytes(12)
+    const rCt = gcm(deriveRecoveryKek(recoveryKey, rSalt), rNonce, utf8ToBytes(LABEL_BACKUP_HKDF_INFO))
+      .encrypt(secrets.signingSeed)
+
     return JSON.stringify({
-      v: 3,
-      deviceId: state.deviceId,
-      signingPubkeyHex: state.signingPubkeyHex,
-      encryptionPubkeyHex: state.encryptionPubkeyHex,
-      encryptedPayload: bytesToHex(secrets.signingSeed), // Mock: not actually encrypted
+      v: BACKUP_FORMAT_VERSION,
+      id: bytesToHex(sha256(utf8ToBytes(state.signingPubkeyHex))).slice(0, 6),
+      t: Math.round(Date.now() / 3_600_000) * 3_600,
+      d: {
+        kv: 2, s: bytesToHex(pinSalt), m: ARGON2_M_COST_KIB, i: ARGON2_T_COST, p: ARGON2_P_COST,
+        n: bytesToHex(pinNonce), c: bytesToHex(pinCt),
+      },
+      r: { kv: 1, s: bytesToHex(rSalt), n: bytesToHex(rNonce), c: bytesToHex(rCt) },
     })
+  },
+
+  backup_verify_credential: async (a) => {
+    await openMockBackup(a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean)
+  },
+
+  restore_backup_and_load: async (a) => {
+    const signingSeed = await openMockBackup(
+      a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean,
+    )
+    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
+
+    const state: MockDeviceKeyState = {
+      deviceId: a.deviceId as string,
+      signingPubkeyHex: bytesToHex(deriveEd25519Pubkey(signingSeed)),
+      encryptionPubkeyHex: bytesToHex(deriveX25519Pubkey(encryptionSeed)),
+    }
+    const encrypted = await encryptWithPin(signingSeed, encryptionSeed, a.newPin as string)
+    const result = { ...encrypted, state }
+
+    mockSecrets = { signingSeed, encryptionSeed }
+    mockDeviceState = state
+    mockEncryptedKeys = result
+    return result
   },
 
   // --- Shamir secret sharing (only stateless verification exposed as IPC) ---
@@ -1258,7 +1369,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Derive encryption seed from signing seed (matches Rust)
     const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes('llamenos:device-encryption-seed:v1'), 32)
+      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)

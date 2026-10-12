@@ -179,7 +179,7 @@ export function NoteSheet() {
                         {call.callerNumber} — {new Date(call.startedAt).toLocaleString()}
                       </SelectItem>
                     ))}
-                    <SelectItem value="__manual">{t('notes.enterManually')}</SelectItem>
+                    <SelectItem value="__manual" data-testid="call-id-manual-option">{t('notes.enterManually')}</SelectItem>
                   </SelectContent>
                 </Select>
               ) : (

@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
-import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
+import { resolveHubPermissions } from '@shared/permissions'
 import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema } from '@protocol/schemas/hubs'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -16,6 +16,11 @@ import { encryptStorageCredential } from '../lib/crypto'
 import { hubContext } from '../middleware/hub'
 import { checkRoleGrant } from '../lib/hub-scope'
 import type { StorageManager } from '../lib/storage-manager'
+import { revokeSipIdentityIfRoleless } from '../telephony/registrar'
+import { createLogger } from '../lib/logger'
+import { getConnectionManager } from '../lib/ws-manager'
+
+const logger = createLogger('routes.hubs')
 
 const routes = new Hono<AppEnv>()
 
@@ -44,8 +49,21 @@ routes.get('/',
   }),
   // No global permission gate: hub membership is per hub (#1037), so a member
   // whose roles are all hub-scoped must still be able to list their hubs.
-  // Each hub is shown only if the caller holds hubs:read IN that hub —
-  // resolveHubPermissions grants a super-admin every hub.
+  //
+  // A hub is listed iff the caller holds AT LEAST ONE permission in it — the
+  // same predicate `hubContext` admits a request with (middleware/hub.ts), and
+  // `resolveHubPermissions` grants a super-admin every hub. So this endpoint
+  // answers exactly "the hubs you can do something in", which is what makes it
+  // usable as the client's membership oracle (#1708).
+  //
+  // It used to require `hubs:read` in the hub, and that is a different
+  // question. `role-reporter` holds no `hubs:read` (packages/shared/
+  // permissions.ts) yet is admitted to `/hubs/:hubId/reports` by hubContext —
+  // so a reporter was a hub member who could not discover which hub they were
+  // in. Measured: the desktop client resolved no active hub for a reporter and
+  // could render nothing at all. Narrowing a list to less than the access it
+  // describes makes the list lie, and nothing here widens what a caller can
+  // reach: a hub they hold no permission in is still not listed.
   async (c) => {
     const services = c.get('services')
     const user = c.get('user')
@@ -54,7 +72,7 @@ routes.get('/',
     const { hubs } = await services.settings.getHubs()
     const visible = hubs.filter(h =>
       h.status === 'active' &&
-      permissionGranted(resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, h.id), 'hubs:read'),
+      resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, h.id).length > 0,
     )
     return c.json({ hubs: visible })
   },
@@ -285,6 +303,16 @@ routes.delete('/:hubId/members/:pubkey',
 
     try {
       await services.identity.removeHubRole({ pubkey: targetPubkey, hubId })
+      // Drop the departed member's live relay subscription for this hub now.
+      // Without this, their open socket keeps receiving the hub's events until
+      // the next periodic membership revalidation — up to
+      // MEMBERSHIP_REVALIDATION_INTERVAL_MS of delivery to a non-member (#1655).
+      getConnectionManager()?.evictMember(targetPubkey, hubId)
+      // Role loss: when the volunteer holds no hub role anywhere left, their
+      // per-volunteer SIP identity on our own PBX must die with it (a no-op
+      // for vendor providers) — and /sip-token refuses to re-provision it,
+      // under the same predicate (#1540).
+      await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, targetPubkey, c.get('allRoles'))
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
     } catch {
@@ -324,7 +352,24 @@ routes.delete('/:hubId',
         await storageManager.destroyHub(hubId, creds?.userName)
       }
 
+      // Deleting a hub strips its role from every member (and deletes those
+      // who belonged to no other hub), so it is a member-removal path like
+      // any other: read the roster BEFORE the hub is gone, and revoke the SIP
+      // identity of everyone the deletion leaves with no hub role.
+      // Best-effort throughout — telephony cleanup must never be what stops a
+      // hub from being deleted.
+      let members: string[] = []
+      try {
+        members = (await services.identity.getUsers(hubId)).users.map(u => u.pubkey)
+      } catch (err) {
+        logger.error('Hub deletion: member roster unreadable — SIP endpoints may linger', { hubId, err })
+      }
+
       await services.settings.deleteHub(hubId)
+
+      for (const member of members) {
+        await revokeSipIdentityIfRoleless(services, c.env.HMAC_SECRET, member, c.get('allRoles'))
+      }
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError) {

@@ -244,6 +244,8 @@ final class ReportsViewModel {
                 readerEnvelopes: encrypted.envelopes
             )
 
+            // #1633: the shared encoder applies no key conversion, so the plain-encoder
+            // `rawBody:` detour this used to need is gone.
             let _: ClientReportResponse = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports"),
@@ -274,7 +276,7 @@ final class ReportsViewModel {
         errorMessage = nil
 
         do {
-            let request = ReportAssignRequest(assignTo: signingPubkey)
+            let request = ReportAssignRequest(assignedTo: signingPubkey)
             let _: ClientReportResponse = try await apiService.request(
                 method: "POST",
                 path: apiService.hp("/api/reports/\(id)/assign"),

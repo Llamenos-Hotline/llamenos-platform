@@ -157,6 +157,22 @@ fi
 if [ -f "$cfg/CLAUDE.md" ]; then printf 'loaded\\n' >> "\${SMOKE_MEMORY_PROBE:-/dev/null}"; fi
 if [ -f "$cfg/.credentials.json" ]; then printf 'present\\n' > "\${SMOKE_AUTH_PROBE:-/dev/null}"; fi
 # ---------------------------------------------------------------------------
+# #1767's exact bug shape: the pre-fix smoke step handed the claude FALLBACK
+# the primary's resolved model — kimi's empty-by-default value — as a
+# literal --model "" argument, and the real claude CLI rejects that outright
+# ("API Error: 400 model: String should have at least 1 character",
+# verified against the installed binary during the #1767 investigation).
+# This fake used to ignore its arguments entirely, which is precisely how
+# the broken fallback kept passing every smoke: reproduce the rejection so
+# no fallback arm can ever carry an empty model again without failing here.
+_prev=""
+for _a in "$@"; do
+  if [ "$_prev" = "--model" ] && [ -z "$_a" ]; then
+    echo "API Error: 400 model: String should have at least 1 character" >&2
+    exit 1
+  fi
+  _prev="$_a"
+done
 case "\${MOCK_CLAUDE_RUN_MODE:-fail}" in
   fail)
     echo "simulated: Unexpected server error from provider" >&2
@@ -460,7 +476,10 @@ describe('rail: the smoke step and the real review must resolve the SAME engine/
     const direct = resolveReviewerInvocationDirectly(env)
     const { status, output } = runStep(smokeStepScript(), 'pass')
     expect(status).toBe(0)
-    expect(output).toContain(`review engine smoke test OK (engine=${direct.binary} model=${direct.model})`)
+    // The OK line now also reports the fallback's own smoke result after a
+    // `;` (#1767 — the fallback is smoked independently on every run), so
+    // the equality this rail pins is the `engine=... model=...` prefix.
+    expect(output).toContain(`review engine smoke test OK (engine=${direct.binary} model=${direct.model}; fallback=`)
   })
 
   // MUTATION (per "audit gates by breaking them"): reintroduce the exact
@@ -482,7 +501,7 @@ describe('rail: the smoke step and the real review must resolve the SAME engine/
     // The mutated step still "passes" — that is the whole danger: nothing
     // about running it looks wrong.
     expect(status).toBe(0)
-    expect(output).toContain('review engine smoke test OK (engine=claude model=hardcoded-mismatched-model)')
+    expect(output).toContain('review engine smoke test OK (engine=claude model=hardcoded-mismatched-model; fallback=')
     // But it is no longer testing what the real review will actually run.
     expect(output).not.toContain(`engine=${direct.binary} model=${direct.model}`)
     expect(direct.model).toBe('test-model')
@@ -721,14 +740,16 @@ describe('rail: the smoke step tolerates a primary cannot-run via the other engi
   })
 
   // ── kimi-primary, claude fallback (the default order) ──
-  it('kimi PRIMARY happy path: fake kimi answers PASS and the step concludes OK naming kimi — claude never invoked', () => {
+  it('kimi PRIMARY happy path: fake kimi answers PASS, the step concludes OK naming kimi — and the claude fallback is smoked too (#1767)', () => {
     const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'kimi', fallback: 'on' })
     expect(status).toBe(0)
-    expect(output).toContain('review engine smoke test OK (engine=kimi)')
+    expect(output).toContain('review engine smoke test OK (engine=kimi model=(config-unreadable); fallback=claude healthy)')
     expect(output).toContain('smoke verdict (parseVerdict of kimi output): PASS')
-    // claude was healthy ('pass' mode) yet must never have been called —
-    // the primary answered.
-    expect(output).not.toContain('parseVerdict of claude output')
+    // #1767 ask 3: a healthy primary says nothing about the fallback, so
+    // the fallback now answers the SAME question on every run. The exact
+    // pre-#1767 assumption this assertion used to pin — "claude was never
+    // invoked" — is how the broken `--model ""` fallback hid for weeks.
+    expect(output).toContain('smoke verdict (parseVerdict of claude fallback output): PASS')
     expect(output).not.toContain(FAILED_MARKER)
   })
 

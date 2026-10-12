@@ -11,6 +11,7 @@ import {
   createHubViaApi,
   addHubMemberViaApi,
   createUserViaApi,
+  uniqueName,
 } from '../../api-helpers'
 import { bytesToHex } from '@shared/encoding'
 
@@ -58,7 +59,7 @@ function _randomPushToken(): string {
 
 Given('a test hub exists', async ({ request, world }) => {
   const s = getS(world)
-  s.hubId = await createHubViaApi(request, `mls-hub-${Date.now()}`)
+  s.hubId = await createHubViaApi(request, uniqueName('mls-hub'))
   // Add the test user as a hub member so their devices pass getHubMemberDeviceIds() checks
   if (s.user) {
     await addHubMemberViaApi(request, s.hubId, s.user.pubkey)

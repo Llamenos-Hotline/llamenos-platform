@@ -58,7 +58,7 @@ struct SystemHealthView: View {
                 key: "server",
                 icon: "server.rack",
                 label: NSLocalizedString("admin_health_server", comment: "Server"),
-                status: health.server.status,
+                status: Self.serverStatus(health.server),
                 rows: [
                     HealthRow(label: NSLocalizedString("admin_system_uptime", comment: "Uptime"), value: Self.formatUptime(health.server.uptime)),
                     HealthRow(label: NSLocalizedString("admin_system_version", comment: "Version"), value: health.server.version),
@@ -69,7 +69,7 @@ struct SystemHealthView: View {
                 key: "services",
                 icon: "gearshape.2.fill",
                 label: NSLocalizedString("admin_health_services", comment: "Services"),
-                status: health.services.map(\.status).max { $0.severity < $1.severity },
+                status: Self.servicesStatus(health.services),
                 rows: health.services.isEmpty
                     ? [HealthRow(label: NSLocalizedString("admin_system_services", comment: "Services"), value: NSLocalizedString("admin_system_no_data", comment: "No data"))]
                     : health.services.map { HealthRow(label: $0.name, value: $0.status.rawValue) }
@@ -79,7 +79,7 @@ struct SystemHealthView: View {
                 key: "calls",
                 icon: "phone.fill",
                 label: NSLocalizedString("admin_health_calls", comment: "Calls"),
-                status: nil,
+                status: Self.callsStatus(health.calls),
                 rows: [
                     HealthRow(label: NSLocalizedString("admin_system_calls_today", comment: "Calls Today"), value: Self.count(health.calls.today)),
                     HealthRow(label: NSLocalizedString("admin_system_active_calls", comment: "Active Calls"), value: Self.count(health.calls.active)),
@@ -92,7 +92,7 @@ struct SystemHealthView: View {
                 key: "storage",
                 icon: "internaldrive.fill",
                 label: NSLocalizedString("admin_health_storage", comment: "Storage"),
-                status: nil,
+                status: Self.storageStatus(health.storage),
                 rows: [
                     HealthRow(label: NSLocalizedString("admin_system_db_size", comment: "Database Size"), value: health.storage.dbSize),
                     HealthRow(label: NSLocalizedString("admin_system_blob_storage", comment: "Blob Storage"), value: health.storage.blobStorage),
@@ -103,7 +103,7 @@ struct SystemHealthView: View {
                 key: "backup",
                 icon: "arrow.triangle.2.circlepath",
                 label: NSLocalizedString("admin_health_backup", comment: "Backup"),
-                status: nil,
+                status: Self.backupStatus(health.backup),
                 rows: [
                     HealthRow(label: NSLocalizedString("admin_system_last_backup", comment: "Last Backup"), value: Self.timestamp(health.backup.lastBackup)),
                     HealthRow(label: NSLocalizedString("admin_system_backup_size", comment: "Backup Size"), value: health.backup.backupSize),
@@ -115,7 +115,7 @@ struct SystemHealthView: View {
                 key: "volunteers",
                 icon: "person.3.fill",
                 label: NSLocalizedString("admin_health_users", comment: "Volunteers"),
-                status: nil,
+                status: Self.volunteersStatus(health.users),
                 rows: [
                     HealthRow(label: NSLocalizedString("admin_system_total_active", comment: "Total Active"), value: Self.count(health.users.totalActive)),
                     HealthRow(label: NSLocalizedString("admin_system_online_now", comment: "Online Now"), value: Self.count(health.users.onlineNow)),
@@ -125,6 +125,60 @@ struct SystemHealthView: View {
             )
         }
         .padding()
+    }
+
+    // MARK: - Response Mapping
+
+    static func serverStatus(_ server: Server) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Server",
+            status: server.status.rawValue,
+            details: "v\(server.version) · up \(formatUptime(server.uptime))"
+        )
+    }
+
+    static func servicesStatus(_ services: [SystemHealthResponseService]) -> ServiceHealthStatus {
+        let worst = services.contains(where: { $0.status == .down }) ? "down"
+            : services.contains(where: { $0.status == .degraded }) ? "degraded"
+            : "ok"
+        let healthy = services.filter { $0.status == .ok }.count
+        let degradedNames = services.filter { $0.status != .ok }.map(\.name)
+        let details = degradedNames.isEmpty
+            ? "\(healthy)/\(services.count) healthy"
+            : degradedNames.joined(separator: ", ")
+        return ServiceHealthStatus(name: "Services", status: worst, details: details)
+    }
+
+    static func callsStatus(_ calls: Calls) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Calls",
+            status: "ok",
+            details: "\(Int(calls.today)) today · \(Int(calls.active)) active · \(Int(calls.missed)) missed"
+        )
+    }
+
+    static func storageStatus(_ storage: Storage) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Storage",
+            status: "ok",
+            details: "DB \(storage.dbSize) · Blob \(storage.blobStorage)"
+        )
+    }
+
+    static func backupStatus(_ backup: Backup) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Backup",
+            status: backup.lastBackup == nil ? "degraded" : "ok",
+            details: backup.lastBackup.map { "Last: \($0)" } ?? "No backup yet"
+        )
+    }
+
+    static func volunteersStatus(_ users: Users) -> ServiceHealthStatus {
+        ServiceHealthStatus(
+            name: "Volunteers",
+            status: "ok",
+            details: "\(Int(users.onShift)) on shift · \(Int(users.totalActive)) active · \(Int(users.onlineNow)) online"
+        )
     }
 
     // MARK: - Formatting
@@ -218,7 +272,7 @@ struct HealthCardView: View {
     let key: String
     let icon: String
     let label: String
-    let status: SharedServiceStatusStatus?
+    let status: ServiceHealthStatus
     let rows: [HealthRow]
 
     var body: some View {
@@ -231,11 +285,9 @@ struct HealthCardView: View {
 
                 Spacer()
 
-                if let status {
-                    Image(systemName: status.icon)
-                        .font(.body)
-                        .foregroundStyle(statusColor(status))
-                }
+                Image(systemName: status.healthLevel.icon)
+                    .font(.body)
+                    .foregroundStyle(statusColor)
             }
 
             // Label
@@ -243,12 +295,17 @@ struct HealthCardView: View {
                 .font(.brand(.headline))
                 .foregroundStyle(Color.brandForeground)
 
-            if let status {
-                Text(status.rawValue.capitalized)
-                    .font(.brand(.subheadline))
-                    .fontWeight(.medium)
-                    .foregroundStyle(statusColor(status))
-                    .accessibilityIdentifier("health-status-\(key)")
+            Text(status.status.capitalized)
+                .font(.brand(.subheadline))
+                .fontWeight(.medium)
+                .foregroundStyle(statusColor)
+                .accessibilityIdentifier("health-status-\(key)")
+
+            if let details = status.details, !details.isEmpty {
+                Text(details)
+                    .font(.brand(.caption))
+                    .foregroundStyle(Color.brandMutedForeground)
+                    .lineLimit(2)
             }
 
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
@@ -276,11 +333,11 @@ struct HealthCardView: View {
         .accessibilityIdentifier("health-card-\(key)")
     }
 
-    private func statusColor(_ status: SharedServiceStatusStatus) -> Color {
-        switch status {
-        case .ok: return .green
+    private var statusColor: Color {
+        switch status.healthLevel {
+        case .healthy: return .green
         case .degraded: return .orange
-        case .down: return .red
+        case .critical: return .red
         }
     }
 }

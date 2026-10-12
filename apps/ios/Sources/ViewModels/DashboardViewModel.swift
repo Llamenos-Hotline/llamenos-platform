@@ -342,29 +342,32 @@ final class DashboardViewModel {
 
             // Decrypt the recent notes for preview using HPKE envelopes
             recentNotes = response.notes.prefix(3).compactMap { encrypted -> RecentNotePreview? in
-                guard let envelope = encrypted.readerEnvelope(for: cryptoService) else { return nil }
+                guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
 
-                do {
-                    let json = try cryptoService.decryptNote(
-                        ciphertextHex: encrypted.encryptedContent,
-                        envelope: envelope
-                    )
-                    let payload = try JSONDecoder().decode(NotePayload.self, from: Data(json.utf8))
+                for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
+                    do {
+                        let json = try cryptoService.decryptNote(
+                            ciphertextHex: encrypted.encryptedContent,
+                            envelope: envelope
+                        )
+                        let payload = try JSONDecoder().decode(NotePayload.self, from: Data(json.utf8))
 
-                    let previewText = payload.text.count > 80
-                        ? String(payload.text.prefix(80)) + "..."
-                        : payload.text
+                        let previewText = payload.text.count > 80
+                            ? String(payload.text.prefix(80)) + "..."
+                            : payload.text
 
-                    return RecentNotePreview(
-                        id: encrypted.id,
-                        preview: previewText,
-                        createdAt: DateFormatting.parseISO(encrypted.createdAt) ?? Date(),
-                        hasCall: encrypted.callID != nil,
-                        hasConversation: encrypted.conversationID != nil
-                    )
-                } catch {
-                    return nil
+                        return RecentNotePreview(
+                            id: encrypted.id,
+                            preview: previewText,
+                            createdAt: DateFormatting.parseISO(encrypted.createdAt) ?? Date(),
+                            hasCall: encrypted.callID != nil,
+                            hasConversation: encrypted.conversationID != nil
+                        )
+                    } catch {
+                        continue
+                    }
                 }
+                return nil
             }
         } catch {
             if case APIError.noBaseURL = error {
@@ -391,4 +394,3 @@ private struct DashboardShiftStatusResponse: Decodable {
     let activeCallCount: Int?
     let recentNoteCount: Int?
 }
-

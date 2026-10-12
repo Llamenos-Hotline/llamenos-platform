@@ -47,16 +47,27 @@ function longestMatch(file: string, patterns: string[]): string | undefined {
  * `*.example` secret templates permanently unwritable. Ownership still uses
  * plain `matchesPath` — a template is owned by whichever lane owns its
  * directory, exactly as before. See `SECRET_TEMPLATE_SUFFIXES`.
+ *
+ * `contentOf` is the same arrangement for the second carve-out, which is
+ * decided by CONTENT rather than by path: a public root CA certificate is
+ * not a key, and `*.pem` had been making every tracked certificate in this
+ * repo permanently unwritable (#1610). It is optional, and its ABSENCE is
+ * the fail-closed default — without it every `*.pem` is a secret, exactly as
+ * before. These functions stay pure: the caller does the reading and hands
+ * in a lookup, so the gate's own trust boundary (git in the base checkout,
+ * the head as data) is decided where it is already decided, in `verify.ts`.
+ * See `CERTIFICATE_ONLY_PATTERNS` and `isPublicCertificateFile`.
  */
 export function checkScope(
   changed: string[],
   scope: LaneScope,
   neverWrite: string[],
+  contentOf?: (file: string) => string | undefined,
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesSecretPath(f, p))) {
+    if (neverWrite.some((p) => matchesSecretPath(f, p, contentOf))) {
       forbidden.push(f)
       continue
     }
@@ -115,6 +126,7 @@ export function checkScopeAcross(
   grantedScopes: LaneScope[],
   neverWrite: string[],
   grantExcluded: string[] = [],
+  contentOf?: (file: string) => string | undefined,
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
@@ -123,7 +135,7 @@ export function checkScopeAcross(
   const unrestricted = ownScope.owned.length === 0
   const granted = grantedScopes.filter((s) => s.owned.length > 0)
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesSecretPath(f, p))) {
+    if (neverWrite.some((p) => matchesSecretPath(f, p, contentOf))) {
       forbidden.push(f)
       continue
     }

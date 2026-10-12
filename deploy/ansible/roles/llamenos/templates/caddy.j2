@@ -1,18 +1,41 @@
 # Llamenos Caddyfile — managed by Ansible
 # Do not edit manually; changes will be overwritten on next deploy.
 
+# Trusted-reverse-proxy hygiene (#1606). Caddy is the only hop in front of the
+# app, so it is the only thing that gets to say who the client is:
+# X-Forwarded-For is SET to the real remote address (discarding whatever the
+# caller sent) and every other forwarded-for header is deleted. The app runs
+# with TRUST_PROXY_HEADERS=true and reads the right-most X-Forwarded-For entry
+# (apps/worker/lib/client-ip.ts); without this a caller could hand itself a
+# fresh rate-limit bucket just by setting a header. CF-Connecting-IP is
+# stripped, not honored — nothing here is ever behind Cloudflare.
+(client_ip_headers) {
+    header_up X-Forwarded-For {remote_host}
+    header_up -CF-Connecting-IP
+    header_up -True-Client-IP
+    header_up -X-Real-IP
+    header_up -X-Client-IP
+    header_up -Forwarded
+}
+
 {{ domain }} {
-    reverse_proxy app:3000
+    reverse_proxy app:3000 {
+        import client_ip_headers
+    }
     tls {{ acme_email }}
 }
 
 app.{{ domain }} {
-    reverse_proxy app:3000
+    reverse_proxy app:3000 {
+        import client_ip_headers
+    }
     tls {{ acme_email }}
 }
 
 api.{{ domain }} {
-    reverse_proxy app:3000
+    reverse_proxy app:3000 {
+        import client_ip_headers
+    }
     tls {{ acme_email }}
 }
 
@@ -21,7 +44,9 @@ api.{{ domain }} {
 # subscribe (anonymous, read-only, keyed by an unguessable topic name).
 # Caddy proxies WebSocket upgrades automatically.
 {{ ntfy_domain }} {
-    reverse_proxy ntfy:80
+    reverse_proxy ntfy:80 {
+        import client_ip_headers
+    }
     tls {{ acme_email }}
 }
 {% endif %}

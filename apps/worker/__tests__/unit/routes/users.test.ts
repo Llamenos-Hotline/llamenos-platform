@@ -66,6 +66,10 @@ function createTestApp(opts: {
     if (hubId !== undefined) {
       c.set('hubId', hubId)
     }
+    // Minimal env — the delete route reads HMAC_SECRET for SIP revocation.
+    c.env = {
+      HMAC_SECRET: 'test-hmac-secret',
+    } as unknown as AppEnv['Bindings']
     await next()
   })
 

@@ -153,16 +153,20 @@ final class NotesViewModel {
 
     // MARK: - Note Decryption
 
-    /// Find the matching envelope for our pubkey and decrypt the note using HPKE.
+    /// Try the author envelope, then this device's admin envelope, and decrypt.
     func decryptNote(_ encrypted: SharedNote) -> DecryptedNote? {
-        guard let hpkeEnvelope = encrypted.readerEnvelope(for: cryptoService) else {
-            return nil
+        guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
+        for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
+            if let note = decryptNote(encrypted, envelope: envelope) { return note }
         }
+        return nil
+    }
 
+    private func decryptNote(_ encrypted: SharedNote, envelope: HpkeEnvelope) -> DecryptedNote? {
         do {
             let decryptedJSON = try cryptoService.decryptNote(
                 ciphertextHex: encrypted.encryptedContent,
-                envelope: hpkeEnvelope
+                envelope: envelope
             )
 
             let payload = try JSONDecoder().decode(NotePayload.self, from: Data(decryptedJSON.utf8))

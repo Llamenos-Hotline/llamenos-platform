@@ -2,6 +2,7 @@ import { type APIRequestContext } from '@playwright/test'
 import { test as base, createBdd } from 'playwright-bdd'
 import { createHubViaApi, ensureAdminRole, type RoleDefinition } from '../api-helpers'
 import type { SeededConversation } from '../conversation-seeding'
+import { devSurfaceHeaders } from '../dev-surface-secret'
 
 // ── Scenario-scoped World types ──────────────────────────────────────
 // Each scenario gets a fresh instance via fixture. Step definitions read/write
@@ -23,6 +24,18 @@ export type RolesWorld = {
   lastCreatedRoleId: string
   volunteerNsec: string
   reporterNsec: string
+}
+
+/** Backup restore scenarios (packages/test-specs/.../auth/backup-restore.feature). */
+export type BackupWorld = {
+  /** Recovery key displayed to the user when the backup was written. */
+  recoveryKey: string
+  /** PIN the backup was written under. */
+  pin: string
+  /** Signing pubkey of the device key the backup was made from. */
+  pubkeyHex: string
+  /** Path of the backup file on disk, for the file input. */
+  filePath: string
 }
 
 export type CasesWorld = {
@@ -86,6 +99,7 @@ export const test = base.extend<
     adminWorld: AdminWorld
     rolesWorld: RolesWorld
     casesWorld: CasesWorld
+    backupWorld: BackupWorld
     conversationWorld: ConversationWorld
     sasWorld: SasWorld
   },
@@ -97,7 +111,10 @@ export const test = base.extend<
   // Used by CMS step definitions that need to call API helpers for Given-step data setup.
   backendRequest: async ({ playwright }, use) => {
     const backendUrl = process.env.TEST_HUB_URL || 'http://localhost:3000'
-    const ctx = await playwright.request.newContext({ baseURL: backendUrl })
+    // extraHTTPHeaders from the Playwright PROJECT is not inherited by a
+    // context made here, so the harness header has to be given explicitly —
+    // see ../dev-surface-secret.ts.
+    const ctx = await playwright.request.newContext({ baseURL: backendUrl, extraHTTPHeaders: devSurfaceHeaders() })
     await use(ctx)
     await ctx.dispose()
   },
@@ -174,6 +191,9 @@ export const test = base.extend<
       lastSuggestions: [],
     })
   },
+  backupWorld: async ({}, use) => {
+    await use({ recoveryKey: '', pin: '', pubkeyHex: '', filePath: '' })
+  },
   conversationWorld: async ({}, use) => {
     await use({})
   },
@@ -185,7 +205,7 @@ export const test = base.extend<
   // Hub is NOT deleted after tests — stale hubs accumulate and are purged separately.
   workerHub: [async ({ playwright }, use, workerInfo) => {
     const backendUrl = process.env.TEST_HUB_URL || 'http://localhost:3000'
-    const ctx = await playwright.request.newContext({ baseURL: backendUrl, timeout: 60_000 })
+    const ctx = await playwright.request.newContext({ baseURL: backendUrl, timeout: 60_000, extraHTTPHeaders: devSurfaceHeaders() })
     // Ensure admin has role-super-admin before creating hub — parallel workers
     // can race with test-reset, leaving the admin with role-volunteer which
     // causes cascading 403 failures on all hub-scoped and permission-guarded routes.

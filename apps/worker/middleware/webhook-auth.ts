@@ -4,6 +4,7 @@ import { createLogger } from '../lib/logger'
 import { checkWebhookReplay } from '../services/webhook-replay'
 import { isIpInCidrs } from './webhook-ip-allowlist'
 import { getDb } from '../db'
+import { getClientIp } from '../lib/client-ip'
 
 const logger = createLogger('webhook-auth')
 
@@ -31,7 +32,7 @@ export function webhookAuth(options: WebhookAuthOptions) {
     const cidrs = (c.env as unknown as Record<string, string | undefined>)[cidrKey]
     if (cidrs) {
       const cidrList = cidrs.split(',').map(s => s.trim()).filter(Boolean)
-      const clientIp = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+      const clientIp = getClientIp(c.req.raw)
       if (!clientIp || !isIpInCidrs(clientIp, cidrList)) {
         logger.warn('Webhook IP not in allowlist', { provider })
         return c.text('Forbidden', 403)

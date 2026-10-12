@@ -24,10 +24,23 @@ import {
   apiGet,
   createHubViaApi,
   createVolunteerViaApi,
+  uniqueName,
 } from '../../api-helpers'
 
-const RELAY_URL = process.env.TEST_RELAY_URL || 'ws://localhost:3000/ws'
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
+
+/**
+ * The relay is served by the SAME process as the API, at `/ws` — so its URL is
+ * `TEST_HUB_URL` with the scheme swapped, and defaulting it to a hardcoded
+ * `ws://localhost:3000/ws` is wrong for every run that points the suite
+ * somewhere. Against a deployed target reached over an SSH forward on another
+ * port, all 11 @relay scenarios failed on a connection to a relay that was not
+ * the server under test, while every other scenario in the same run passed.
+ * `TEST_RELAY_URL` still wins, for the case where the relay really is
+ * elsewhere.
+ */
+const RELAY_URL = process.env.TEST_RELAY_URL
+  || `${BASE_URL.replace(/^http/, 'ws').replace(/\/$/, '')}/ws`
 
 const RELAY_KEY = 'relay'
 
@@ -38,6 +51,46 @@ interface RelayStepState {
   serverEventKeyHex?: string
   /** A user who belongs to a different hub only (never to the scenario hub) */
   otherHubMember?: { seedHex: string; hubId: string }
+  /** A user who belongs to BOTH the scenario hub and a second hub */
+  twoHubMember?: { seedHex: string; pubkey: string; secondHubId: string }
+  /** That user's channel subscribed to the scenario hub */
+  firstChannel?: RelayCapture
+  /** That user's channel subscribed to the second hub */
+  secondChannel?: RelayCapture
+}
+
+/**
+ * This Playwright worker's own relay subscriber, created once per process and
+ * a member of this worker's hub alone.
+ *
+ * It must NOT be the admin. Relay delivery is per-user by design (#1655): one
+ * channel per client carries every hub that user has subscribed, combined, so
+ * that a member never misses a hub's events for want of subscribing on the
+ * right socket (the multi-hub routing axiom in CLAUDE.md). The admin, however,
+ * is a member of EVERY worker's hub — so subscribing as the admin made each
+ * worker's socket receive every other worker's hub events, and
+ * `the event hubId should be the scenario hub` then failed on a foreign hub's
+ * event roughly one run in three. That was a test-isolation defect, not a
+ * server one, and the fix is a distinct pubkey per worker rather than a looser
+ * assertion: with a subscriber that belongs to one hub only, a foreign hub's
+ * event cannot reach it at all, and the hubId assertion keeps its teeth —
+ * publishing a ring to the wrong hub still fails the scenario, now by timeout.
+ *
+ * Module scope IS worker scope: each Playwright worker is its own process, and
+ * `workerHub` (tests/steps/fixtures.ts) is worker-scoped too, so one identity
+ * per module matches one hub per worker.
+ */
+let workerRelaySubscriber: { seedHex: string; pubkey: string; hubId: string } | null = null
+
+async function relaySubscriberFor(
+  request: Parameters<typeof createVolunteerViaApi>[0],
+  hubId: string,
+): Promise<{ seedHex: string; pubkey: string; hubId: string }> {
+  if (workerRelaySubscriber?.hubId === hubId) return workerRelaySubscriber
+  const sub = await createVolunteerViaApi(request, { name: uniqueName('BDD Relay Subscriber') })
+  await addHubMemberViaApi(request, hubId, sub.pubkey, ['role-volunteer'])
+  workerRelaySubscriber = { seedHex: sub.seedHex, pubkey: sub.pubkey, hubId }
+  return workerRelaySubscriber
 }
 
 function getRelayState(world: Record<string, unknown>): RelayStepState {
@@ -57,8 +110,9 @@ Given('the test relay is connected and capturing events', async ({ request, worl
   if (state.relayCapture) {
     state.relayCapture.close()
   }
+  const subscriber = await relaySubscriberFor(request, state.hubId)
   state.relayCapture = await RelayCapture.connect(RELAY_URL, {
-    seedHex: ADMIN_SEED,
+    seedHex: subscriber.seedHex,
     hubId: state.hubId ?? undefined,
   })
 
@@ -79,6 +133,10 @@ After(async ({ world }) => {
     state.relayCapture = undefined
   }
   const rs = getRelayState(world)
+  rs.firstChannel?.close()
+  rs.secondChannel?.close()
+  rs.firstChannel = undefined
+  rs.secondChannel = undefined
   rs.lastCapturedEvent = undefined
 })
 
@@ -130,7 +188,7 @@ When('an inbound SMS message arrives from a unique number', async ({ request, wo
 
 Given('a volunteer who is a member of a different hub only', async ({ request, world }) => {
   const rs = getRelayState(world)
-  const otherHubId = await createHubViaApi(request, `bdd-other-hub-${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('bdd-other-hub'))
   const vol = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
   await addHubMemberViaApi(request, otherHubId, vol.pubkey)
   rs.otherHubMember = { seedHex: vol.seedHex, hubId: otherHubId }
@@ -163,6 +221,67 @@ Then("that volunteer's relay subscription to their own hub should be accepted", 
   })
   capture.close()
 })
+
+// --- Per-user delivery: one channel carries every subscribed hub ---
+//
+// Guards the decision recorded in #1655 and in ConnectionManager.publishToHub:
+// a client holds ONE channel for its whole session and that channel carries
+// every hub the user subscribed, combined and unfiltered. Re-introducing a
+// per-connection hub filter — the one-line `continue` the issue first floated —
+// fails the Then step below, which is the point of having it.
+
+Given('a volunteer who is a member of the scenario hub and a second hub', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const rs = getRelayState(world)
+  const secondHubId = await createHubViaApi(request, uniqueName('bdd-second-hub'))
+  const vol = await createVolunteerViaApi(request, { name: uniqueName('BDD Two-Hub Vol') })
+  await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
+  await addHubMemberViaApi(request, secondHubId, vol.pubkey, ['role-volunteer'])
+  rs.twoHubMember = { seedHex: vol.seedHex, pubkey: vol.pubkey, secondHubId }
+})
+
+Given("that volunteer's first channel is subscribed to the scenario hub", async ({ world }) => {
+  const state = getScenarioState(world)
+  const rs = getRelayState(world)
+  expect(rs.twoHubMember).toBeTruthy()
+  rs.firstChannel = await RelayCapture.connect(RELAY_URL, {
+    seedHex: rs.twoHubMember!.seedHex,
+    hubId: state.hubId,
+  })
+})
+
+Given("that volunteer's second channel is subscribed to the second hub", async ({ world }) => {
+  const rs = getRelayState(world)
+  expect(rs.twoHubMember).toBeTruthy()
+  rs.secondChannel = await RelayCapture.connect(RELAY_URL, {
+    seedHex: rs.twoHubMember!.seedHex,
+    hubId: rs.twoHubMember!.secondHubId,
+  })
+})
+
+When('an incoming call arrives in the second hub', async ({ request, world }) => {
+  const rs = getRelayState(world)
+  expect(rs.twoHubMember).toBeTruthy()
+  await simulateIncomingCall(request, {
+    callerNumber: uniqueCallerNumber(),
+    hubId: rs.twoHubMember!.secondHubId,
+  })
+})
+
+Then(
+  'the first channel should receive a kind {int} event for the second hub within {int} seconds',
+  async ({ world }, kind: number, seconds: number) => {
+    const rs = getRelayState(world)
+    expect(rs.firstChannel).toBeTruthy()
+    expect(rs.twoHubMember).toBeTruthy()
+    const events = await rs.firstChannel!.waitForEvents({
+      kind,
+      count: 1,
+      timeoutMs: seconds * 1000,
+    })
+    expect(events.map(e => e.hubId)).toEqual([rs.twoHubMember!.secondHubId])
+  },
+)
 
 // --- Relay Capture Utilities ---
 

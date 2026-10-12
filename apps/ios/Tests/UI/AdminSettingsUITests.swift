@@ -186,8 +186,11 @@ final class AdminSettingsUITests: BaseUITest {
     func testTranscriptionSettingsHasToggles() {
         navigateToAdminSettingsScreen("admin-transcription-settings")
 
-        let view = find("transcription-settings-view")
-        XCTAssertTrue(view.waitForExistence(timeout: 10), "Transcription settings view ('transcription-settings-view') should appear after opening it from the admin panel")
+        navigateToAdminSettingsScreen("admin-transcription-settings")
+        XCTAssertTrue(
+            find("transcription-enabled-toggle").waitForExistence(timeout: 15),
+            "The transcription setting should appear before it is changed"
+        )
 
         let enabledToggle = scrollToFind("transcription-enabled-toggle")
         XCTAssertTrue(enabledToggle.exists, "Transcription enabled toggle should exist")
@@ -218,8 +221,11 @@ final class AdminSettingsUITests: BaseUITest {
     func testSpamSettingsHasControls() {
         navigateToAdminSettingsScreen("admin-spam-settings")
 
-        let view = find("spam-settings-view")
-        XCTAssertTrue(view.waitForExistence(timeout: 10), "Spam settings view ('spam-settings-view') should appear after opening it from the admin panel")
+        navigateToAdminSettingsScreen("admin-spam-settings")
+        XCTAssertTrue(
+            find("spam-max-calls-value").waitForExistence(timeout: 15),
+            "The spam rate limit should appear before it is checked"
+        )
 
         let maxCalls = scrollToFind("spam-max-calls-stepper")
         XCTAssertTrue(maxCalls.exists, "Max calls stepper should exist")
