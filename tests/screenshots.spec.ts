@@ -252,7 +252,7 @@ test.describe('App Screenshots', () => {
       { senderNumber: uniqueCallerNumber(), body: 'Is there anyone available to talk?' },
       { senderNumber: uniqueCallerNumber(), body: 'Following up from yesterday' },
     ]) {
-      await request.post('http://localhost:3000/api/test-simulate/incoming-message', {
+      await request.post('/api/test-simulate/incoming-message', {
         headers: { 'Content-Type': 'application/json', 'X-Test-Secret': secret },
         data: msg,
       }).catch(() => {})
