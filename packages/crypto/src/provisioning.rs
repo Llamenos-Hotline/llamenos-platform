@@ -37,7 +37,7 @@
 //! specific label, so a payload built for one bundle format can never
 //! authenticate under another (no silent downgrade to an older format).
 //!
-//! ## Scope (interim — see PROTOCOL.md §6.1.1)
+//! ## Scope (interim — see PROTOCOL.md §6.7.2)
 //!
 //! This is seed-transport linking: the linked device receives the primary's
 //! device identity rather than generating its own and being authorized by a

@@ -24,6 +24,14 @@ permissions:
 
 jobs:
   semgrep:
+    # Release-PR exemption (#1817) — the SAME predicate codeql.yml,
+    # desktop-e2e.yml and security-audit.yml carry; keep them byte-identical.
+    # The knope release PR (head branch `release`) diffs version strings and
+    # a changelog — no code — so a full Semgrep scan per regeneration (6 on
+    # 2026-10-11) measures nothing. The scan still runs on the push to main
+    # the merge produces. Semgrep is not a required context, so the skipped
+    # job cannot strand the PR.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     permissions:
       contents: read # for actions/checkout to fetch code
       security-events: write # for github/codeql-action/upload-sarif to upload SARIF results

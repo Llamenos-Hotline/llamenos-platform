@@ -142,15 +142,23 @@ Then('I should see the full note text', async ({ page }) => {
 })
 
 Then('I should see the creation date', async ({ page }) => {
-  // Date should appear within the note context — look for date-like patterns
-  const datePattern = page.locator('text=/\\d{1,2}[\\/\\-]|ago|today|yesterday|\\d{4}/i')
-  await expect(datePattern.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // Scoped to the note card: the old page-wide `text=/\d{1,2}[\/\-]|…|\d{4}/i`
+  // matched any four digits anywhere in the chrome (a year in the sidebar, a
+  // phone number), so it could pass with no note on screen at all.
+  const noteCard = page.getByTestId(TestIds.NOTE_CARD).first()
+  await expect(noteCard).toContainText(/\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/, { timeout: Timeouts.ELEMENT })
 })
 
 Then('I should see the author pubkey', async ({ page }) => {
-  // Author pubkey or npub should be visible
-  const author = page.locator('text=/npub1|[a-f0-9]{8}/i')
-  await expect(author.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The card attributes the note to its author: the visible text is the author's
+  // display name when one resolves and the truncated pubkey otherwise, while the
+  // full pubkey is always carried in `title` (src/client/routes/notes.tsx). Assert
+  // that, not the rendered text — the old page-wide `text=/npub1|[a-f0-9]{8}/i`
+  // matched any eight hex characters anywhere on the page, so it passed or failed
+  // on incidental chrome and never looked at the note's author at all.
+  const author = page.getByTestId(TestIds.NOTE_CARD).first().getByTestId(TestIds.NOTE_AUTHOR)
+  await expect(author).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(author).toHaveAttribute('title', /^[0-9a-f]{64}$/i)
 })
 
 When('I am on a note detail view', async ({ page }) => {

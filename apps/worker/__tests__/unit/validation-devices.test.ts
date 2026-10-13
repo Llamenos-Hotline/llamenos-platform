@@ -112,6 +112,58 @@ describe('devices route validation', () => {
       expect(res.status).not.toBe(400)
     })
 
+    // #1548 groundwork: desktop registrations carry no push token but must
+    // publish their X25519 identity key.
+    it('accepts a desktop registration without a push token', async () => {
+      const app = createApp()
+      const { pushToken: _pt, wakeKeyPublic: _wk, ...body } = VALID_REGISTER
+      const res = await sendJSON(app, '/devices/register', {
+        ...body,
+        platform: 'desktop',
+        x25519Pubkey: VALID_PUBKEY,
+      })
+      expect(res.status).not.toBe(400)
+    })
+
+    it('rejects a desktop registration without x25519Pubkey', async () => {
+      const app = createApp()
+      const { pushToken: _pt, wakeKeyPublic: _wk, ...body } = VALID_REGISTER
+      const res = await sendJSON(app, '/devices/register', {
+        ...body,
+        platform: 'desktop',
+      })
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a desktop registration with an invalid x25519Pubkey', async () => {
+      const app = createApp()
+      const { pushToken: _pt, wakeKeyPublic: _wk, ...body } = VALID_REGISTER
+      const res = await sendJSON(app, '/devices/register', {
+        ...body,
+        platform: 'desktop',
+        x25519Pubkey: 'not-hex',
+      })
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects mobile registrations without a push token', async () => {
+      const app = createApp()
+      for (const platform of ['ios', 'android']) {
+        const { pushToken: _, ...body } = VALID_REGISTER
+        const res = await sendJSON(app, '/devices/register', { ...body, platform })
+        expect(res.status).toBe(400)
+      }
+    })
+
+    it('rejects mobile registrations without wakeKeyPublic', async () => {
+      const app = createApp()
+      for (const platform of ['ios', 'android']) {
+        const { wakeKeyPublic: _, ...body } = VALID_REGISTER
+        const res = await sendJSON(app, '/devices/register', { ...body, platform })
+        expect(res.status).toBe(400)
+      }
+    })
+
     it('rejects ed25519Pubkey that is not 64 hex chars', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/devices/register', {

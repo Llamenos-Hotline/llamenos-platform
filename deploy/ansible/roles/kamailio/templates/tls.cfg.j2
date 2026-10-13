@@ -1,12 +1,25 @@
 # TLS Configuration — managed by Ansible
 # Kamailio TLS module settings
+#
+# certificate/private_key are two separate settings because a real certificate
+# is two files. The defaults name the self-signed pair the role generates; set
+# kamailio_tls_cert_file / kamailio_tls_key_file to serve a Let's Encrypt
+# certificate instead (see defaults/main.yml), and remember that a renewal
+# needs `kamcmd tls.reload` — the role's reload timer does that.
+#
+# method is TLSv1.2+ rather than the module default (TLSv1.2 exactly), which
+# trips "no suitable signature algorithm" against OpenSSL 3 clients.
 
 [server:default]
 method = TLSv1.2+
+# Clients authenticate with a per-volunteer digest secret, not a client
+# certificate, so a client certificate is neither verified nor required. This
+# says nothing about the SERVER certificate clients verify — that is
+# [client:default] below, and it stays on.
 verify_certificate = no
 require_certificate = no
-private_key = /etc/kamailio/tls/kamailio.key
-certificate = /etc/kamailio/tls/kamailio.crt
+private_key = {{ kamailio_tls_key_file }}
+certificate = {{ kamailio_tls_cert_file }}
 
 [client:default]
 method = TLSv1.2+

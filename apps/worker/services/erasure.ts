@@ -5,7 +5,7 @@
  * admin immediate erasure, cryptographic cascade execution,
  * and re-encryption job queuing.
  */
-import { eq, and, sql, desc, count } from 'drizzle-orm'
+import { eq, and, sql, desc, count, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   erasureRequests,
@@ -41,6 +41,24 @@ export const DEFAULT_ERASURE_DELAY_HOURS = 72
 export const DEFAULT_EMERGENCY_OVERRIDE_ENABLED = true
 /** The undo window before a hub crypto-shred executes, when no config row exists. */
 export const DEFAULT_HUB_SHRED_DELAY_HOURS = 48
+
+/**
+ * SQL predicate: `column` (a jsonb array of HPKE envelopes) holds an envelope
+ * addressed to `pubkey`.
+ *
+ * Compares the pubkey as a text parameter, read out of each array element with
+ * `->>`. The obvious-looking `column @> ${JSON.stringify([{ pubkey }])}::jsonb`
+ * does NOT work: binding a JS *string* to a jsonb parameter position reaches
+ * Postgres double-encoded — a jsonb *string scalar*, not an array — so the
+ * containment matched nothing. Here that meant the gating COUNT came back 0 and
+ * all three envelope-stripping UPDATEs touched 0 rows, so a removed or erased
+ * user kept every envelope (and so the ability to decrypt the content) while
+ * the job reported success. `identity.ts` carries the same warning for the same
+ * reason; this is the corrected form.
+ */
+function hasEnvelopeFor(column: SQL, pubkey: string): SQL {
+  return sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${column}) AS envelope WHERE envelope->>'pubkey' = ${pubkey})`
+}
 
 const ADMIN_ROLES = ['role-super-admin', 'role-admin', 'role-hub-admin'] as const
 
@@ -731,6 +749,18 @@ export class ErasureService {
       return
     }
 
+    // A user-scope job with no user is unprocessable: every predicate below
+    // would compare against NULL, match nothing, and the job would report
+    // completion having stripped no envelopes — the exact silent success this
+    // whole path is being fixed for. Leave it queued and say so.
+    if (job.userId === null) {
+      logger.error('User-scope re-encryption job has no user — not processing', {
+        jobId: job.id,
+        hubId: job.hubId,
+      })
+      return
+    }
+
     const userPubkey = job.userId
     const hubId = job.hubId
 
@@ -738,7 +768,7 @@ export class ErasureService {
       SELECT COUNT(*) as cnt FROM notes
       WHERE hub_id = ${hubId}
       AND (
-        admin_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+        ${hasEnvelopeFor(sql`admin_envelopes`, userPubkey)}
         OR author_envelope->>'pubkey' = ${userPubkey}
       )
     `)
@@ -747,14 +777,14 @@ export class ErasureService {
       SELECT COUNT(*) as cnt FROM note_replies nr
       JOIN notes n ON nr.note_id = n.id
       WHERE n.hub_id = ${hubId}
-      AND nr.reader_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+      AND ${hasEnvelopeFor(sql`nr.reader_envelopes`, userPubkey)}
     `)
 
     const messageCount = await this.db.execute(sql`
       SELECT COUNT(*) as cnt FROM messages m
       JOIN conversations c ON m.conversation_id = c.id
       WHERE c.hub_id = ${hubId}
-      AND m.reader_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+      AND ${hasEnvelopeFor(sql`m.reader_envelopes`, userPubkey)}
     `)
 
     const total =
@@ -778,7 +808,7 @@ export class ErasureService {
         WHERE elem->>'pubkey' != ${userPubkey}
       )
       WHERE hub_id = ${hubId}
-      AND admin_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+      AND ${hasEnvelopeFor(sql`admin_envelopes`, userPubkey)}
     `)
     processed += Number((noteCount[0] as { cnt: string }).cnt)
     await this.updateReEncryptionJobProgress(jobId, processed, total)
@@ -791,7 +821,7 @@ export class ErasureService {
         WHERE elem->>'pubkey' != ${userPubkey}
       )
       WHERE note_id IN (SELECT id FROM notes WHERE hub_id = ${hubId})
-      AND reader_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+      AND ${hasEnvelopeFor(sql`reader_envelopes`, userPubkey)}
     `)
     processed += Number((replyCount[0] as { cnt: string }).cnt)
     await this.updateReEncryptionJobProgress(jobId, processed, total)
@@ -806,7 +836,7 @@ export class ErasureService {
       WHERE conversation_id IN (
         SELECT id FROM conversations WHERE hub_id = ${hubId}
       )
-      AND reader_envelopes @> ${JSON.stringify([{ pubkey: userPubkey }])}::jsonb
+      AND ${hasEnvelopeFor(sql`reader_envelopes`, userPubkey)}
     `)
     processed += Number((messageCount[0] as { cnt: string }).cnt)
     await this.updateReEncryptionJobProgress(jobId, processed, total)

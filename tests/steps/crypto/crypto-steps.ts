@@ -42,6 +42,7 @@ import type { Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
 import * as clientLabels from '@shared/crypto-labels'
 import { buildAuthMessage } from '@shared/auth-message'
+import { keyWrapAadHex } from '@shared/envelope-aad'
 import { bytesToHex } from '@shared/encoding'
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
@@ -346,7 +347,7 @@ Then('every admin envelope should name a distinct recipient', async ({ page }) =
 })
 
 When('I encrypt the same payload as two separate notes', async ({ page }) => {
-  const notes = await page.evaluate(async (payload) => {
+  const notes = await page.evaluate(async ({ payload, keyWrapAad }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       encryptNote(payload: string, author: string, admins: string[]): Promise<{
@@ -378,15 +379,20 @@ When('I encrypt the same payload as two separate notes', async ({ page }) => {
       enc: hexToB64url(e.enc),
       ct: hexToB64url(e.ct),
     })
-    const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', '')
-    const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', '')
+    // A note's key wrap binds the canonical key-wrap AAD (PROTOCOL.md §2.3:
+    // `UTF-8("llamenos:note-key:key-wrap")`), which is what `encryptNote` seals
+    // with and `decryptNote` opens with. Passing empty here failed the AEAD tag
+    // and threw out of the step — it is derived from `@shared/envelope-aad`,
+    // never re-spelled, so it cannot drift from the production call site again.
+    const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', keyWrapAad)
+    const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', keyWrapAad)
     return {
       one: { encryptedContent: one.encryptedContent },
       two: { encryptedContent: two.encryptedContent },
       keysEqual: k1 === k2,
       keyLen: k1.length,
     }
-  }, NOTE_PAYLOAD)
+  }, { payload: NOTE_PAYLOAD, keyWrapAad: keyWrapAadHex(clientLabels.LABEL_NOTE_KEY) })
   await setStash(page, '__test_notes_pair', notes)
 })
 

@@ -3,7 +3,7 @@
  * Targets: deleteUser, hub roles, invites CRUD, redeemInvite, sessions, WebAuthn credentials/challenges/settings,
  * devices (register/list/delete/cleanup/voip), createProvisionRoom.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 import { IdentityService } from '@worker/services/identity'
 import { createMockDb } from './mock-db'
 
@@ -259,6 +259,70 @@ describe('IdentityService.removeHubRole', () => {
 
     const result = await service.removeHubRole({ pubkey: 'pk-1', hubId: 'nonexistent-hub' })
     expect(result.volunteer.hubRoles).toHaveLength(0)
+  })
+
+  // #1601 — dropping the role revokes nothing on its own: the departed member
+  // keeps an envelope copy on every record they could read, and the server-held
+  // hub-key wrap. The behaviour these mocks can gate is that the call site
+  // EXISTS; that it genuinely strips access is proven against real PostgreSQL
+  // and the Bun SQL driver in
+  // apps/worker/__tests__/integration-bun/hub-member-removal-reencryption.test.ts.
+  it('enqueues a user-scope re-encryption job scoped to the hub left', async () => {
+    const { db, service } = setup()
+    const user = makeUserRow({
+      hubRoles: [
+        { hubId: 'hub-1', roleIds: ['role-volunteer'] },
+        { hubId: 'hub-2', roleIds: ['role-admin'] },
+      ],
+    })
+    // 1st select: the user row. 2nd: the dedupe lookup — nothing queued yet.
+    db.$setSelectResults([[user], []])
+    db.$setUpdateResult([{ ...user, hubRoles: [{ hubId: 'hub-2', roleIds: ['role-admin'] }] }])
+
+    await service.removeHubRole({ pubkey: 'pk-1', hubId: 'hub-1' })
+
+    expect(db.insert).toHaveBeenCalled()
+    const values = (db.insert.mock.results[0].value.values as Mock).mock.calls[0][0]
+    expect(values).toMatchObject({
+      scope: 'user',
+      userId: 'pk-1',
+      hubId: 'hub-1',
+      status: 'queued',
+    })
+  })
+
+  it('revokes the hub-key wrap for the hub left', async () => {
+    const { db, service } = setup()
+    const user = makeUserRow({ hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] })
+    db.$setSelectResults([[user], []])
+    db.$setUpdateResult([{ ...user, hubRoles: [] }])
+
+    await service.removeHubRole({ pubkey: 'pk-1', hubId: 'hub-1' })
+
+    expect(db.delete).toHaveBeenCalled()
+  })
+
+  it('does not enqueue a duplicate when a job is already queued for that hub', async () => {
+    const { db, service } = setup()
+    const user = makeUserRow({ hubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }] })
+    db.$setSelectResults([[user], [{ id: 'job-already-queued' }]])
+    db.$setUpdateResult([{ ...user, hubRoles: [] }])
+
+    await service.removeHubRole({ pubkey: 'pk-1', hubId: 'hub-1' })
+
+    expect(db.insert).not.toHaveBeenCalled()
+  })
+
+  it('does not enqueue for a user who was never in that hub', async () => {
+    const { db, service } = setup()
+    const user = makeUserRow({ hubRoles: [{ hubId: 'hub-2', roleIds: ['role-admin'] }] })
+    db.$setSelectResults([[user], []])
+    db.$setUpdateResult([user])
+    db.$setDeleteResult([]) // no wrap existed either
+
+    await service.removeHubRole({ pubkey: 'pk-1', hubId: 'hub-1' })
+
+    expect(db.insert).not.toHaveBeenCalled()
   })
 })
 

@@ -240,7 +240,7 @@ describe('rateLimit() tier middleware against real PostgreSQL', () => {
 
   function request(app: ReturnType<typeof makeApp>, ip: string, environment: string) {
     return app.fetch(
-      new Request('http://local.test/strict', { headers: { 'CF-Connecting-IP': ip } }),
+      new Request('http://local.test/strict', { headers: { 'X-Forwarded-For': ip } }),
       { ENVIRONMENT: environment },
     )
   }

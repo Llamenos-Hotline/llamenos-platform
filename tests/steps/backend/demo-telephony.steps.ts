@@ -22,6 +22,7 @@ import {
   deleteHubViaApiIfPresent,
   listAuditLogViaApi,
   setFallbackGroupViaApi,
+  uniqueName,
 } from '../../api-helpers'
 import { ALWAYS_ON_SHIFT } from './always-on-shift'
 
@@ -127,7 +128,7 @@ Given('a volunteer is in the instance-wide fallback group', async ({ request, wo
 
 Given('a volunteer who belongs only to another hub is also in the hub fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
-  const otherHubId = await createHubViaApi(request, `BDD Other Hub ${Date.now()}`)
+  const otherHubId = await createHubViaApi(request, uniqueName('BDD Other Hub'))
   extraHubIds.push(otherHubId)
   const outsider = await createVolunteerViaApi(request, { name: `BDD Other-Hub Vol ${Date.now()}` })
   await addHubMemberViaApi(request, otherHubId, outsider.pubkey)

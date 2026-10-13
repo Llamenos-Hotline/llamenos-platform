@@ -36,7 +36,7 @@ Feature: Sigchain Integrity
   @backend
   Scenario: Reject duplicate seqNo
     Given the user has a genesis sigchain link
-    When the user appends a link with duplicate seqNo 0
+    When the user appends a link with duplicate seqNo 1
     Then the response status is 409
 
   @backend

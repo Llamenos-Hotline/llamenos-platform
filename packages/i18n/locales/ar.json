@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "تعذّر تحميل المراكز الخاصة بك",
+    "membershipLoadFailedBody": "لم يذكر الخادم المراكز التي تنتمي إليها، لذا لا يمكن عرض أي شيء بعد. تحقّق من اتصالك وحاول مرة أخرى."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2498,6 +2500,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "يلزم الوصول إلى الميكروفون للرد على المكالمات في التطبيق.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2754,6 +2757,7 @@
     "backupAcknowledge": "لقد حفظت مفتاح الاسترداد الخاص بي في مكان آمن",
     "backupDescription": "اكتب مفتاح الاسترداد هذا واحتفظ به في مكان آمن. إنه الطريقة الوحيدة لاستعادة حسابك على جهاز جديد.",
     "backupDownloaded": "تم تحميل النسخة الاحتياطية",
+    "backupFailed": "تعذّر إنشاء النسخة الاحتياطية المشفّرة: {{reason}}",
     "backupTitle": "احفظ مفتاح الاسترداد الخاص بك",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2768,6 +2772,8 @@
     "getStarted": "ابدأ",
     "goToLogin": "الذهاب لتسجيل الدخول",
     "invalidCode": "رمز دعوة غير صالح",
+    "rateLimitedRetry": "محاولات كثيرة جدًا. يرجى الانتظار {{seconds}} ثانية ثم المحاولة مرة أخرى.",
+    "validationUnavailable": "تعذّر التحقق من دعوتك الآن. تحقق من اتصالك وحاول مرة أخرى.",
     "noCode": "لم يتم تقديم رمز دعوة",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

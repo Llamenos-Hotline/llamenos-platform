@@ -205,7 +205,7 @@ pub fn compute_shared_x_hex(
 ///
 /// NOT a device-linking import path. This uses `LABEL_DEVICE_PROVISION` as
 /// associated data, so it cannot open a device key bundle
-/// (`LABEL_DEVICE_PROVISION_BUNDLE`, PROTOCOL.md §6.1.1) — a bundle fails the
+/// (`LABEL_DEVICE_PROVISION_BUNDLE`, PROTOCOL.md §6.7.2) — a bundle fails the
 /// tag check here rather than decoding. Device linking must go through
 /// `provisioning::decrypt_provisioned_bundle`, which returns both seeds as a
 /// `DeviceSecrets` that zeroizes on drop; mobile has no such path yet, so

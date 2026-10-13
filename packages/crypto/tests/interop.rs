@@ -98,7 +98,7 @@ struct TestVectors {
     /// Adversarial test vectors (wrong keys, tampered data)
     adversarial: AdversarialVectors,
 
-    /// Device provisioning key-bundle vectors (PROTOCOL.md 6.1.1)
+    /// Device provisioning key-bundle vectors (PROTOCOL.md 6.7.2)
     provisioning: ProvisioningVectors,
 }
 

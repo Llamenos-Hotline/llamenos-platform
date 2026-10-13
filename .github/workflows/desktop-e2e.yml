@@ -48,6 +48,17 @@ jobs:
   # truth (#664). Consolidated from what used to be this workflow's own
   # `on.pull_request.paths:` list.
   changes:
+    # Release-PR exemption (#1817) — the SAME predicate codeql.yml,
+    # semgrep.yml and security-audit.yml carry; keep them byte-identical.
+    # The knope release PR (head branch `release`) diffs version strings —
+    # its apps/desktop/Cargo.toml bump sets `desktop: true`, so E2E (Linux)
+    # ran ~11 min of UI tests per regeneration (6 on 2026-10-11) over a diff
+    # with no UI code. Gated HERE, at `changes`, because the `build`/`test`
+    # job-level `if:`s are pinned byte-exact by tests/orchestrator/
+    # guards.test.ts; skipping this job empties the outputs they read, so
+    # both skip. Desktop E2E is not a required context (see the header), so
+    # a skipped run cannot strand the PR.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read

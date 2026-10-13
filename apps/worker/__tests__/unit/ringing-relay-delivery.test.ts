@@ -21,6 +21,9 @@ import type { Services } from '../../services'
 vi.mock('../../lib/service-factories', () => ({
   getTelephonyFromService: vi.fn().mockResolvedValue(null),
   getHubTelephonyFromService: vi.fn().mockResolvedValue(null),
+  // No telephony provider at all in these scenarios: they are about relay
+  // fan-out, and nobody is in-app reachable without the self-hosted registrar.
+  resolveHubTelephonyConfig: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('../../lib/voip-push', () => ({
@@ -48,7 +51,6 @@ function connect(
     pubkey,
     ws: { send: (m: string) => frames.push(m) } as unknown as WebSocket,
     hubs: new Set(memberHubs),
-    subscribedHubs: new Set(),
     lastReplayAt: 0,
   }
   expect(mgr.register(state)).toBe(true)

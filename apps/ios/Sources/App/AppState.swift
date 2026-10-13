@@ -35,6 +35,7 @@ final class AppState {
     let linphoneService: LinphoneService
     let wipeService: WipeService
     let permissionService: PermissionService
+    let shiftClockService: ShiftClockService
 
     // MARK: - Auth State
 
@@ -122,6 +123,7 @@ final class AppState {
         self.hubActivityService = hubActivity
         self.linphoneService = linphone
         self.permissionService = permission
+        self.shiftClockService = ShiftClockService(apiService: api)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,

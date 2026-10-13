@@ -49,10 +49,20 @@ worktree_db_redact() {
   printf '%s' "$1" | sed -E 's#(://[^:/@]+:)[^@]*@#\1***@#'
 }
 
-# worktree_db_export [--ensure | --shared]
+# worktree_db_export [--ensure | --shared | --require-explicit]
 #   --ensure  server launcher: create / forward-migrate this worktree's database first
 #   --shared  the server under test is not this worktree's (e.g. the containerised
 #             app in scripts/test-integration-full.sh, which always uses `llamenos`)
+#   --require-explicit
+#             the caller POINTED the suite at a particular server (TEST_HUB_URL),
+#             so nothing here knows which database that server writes to. Refuse
+#             to resolve one: DATABASE_URL must have been given (environment or
+#             the checkout's .env). Resolving one would hand the suite THIS
+#             machine's database while the server wrote to the target's, and
+#             every direct-database assertion would then pass or fail for
+#             reasons unrelated to what is under test. The worktree resolver is
+#             a convenience for the server this machine started; aimed anywhere
+#             else it is a false-green generator.
 worktree_db_export() {
   local flag="${1:-}" root line mode db user host port password
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -69,6 +79,18 @@ worktree_db_export() {
     export DATABASE_URL
     _worktree_db_log "DATABASE_URL set explicitly — using it as-is: $(worktree_db_redact "$DATABASE_URL")"
     return 0
+  fi
+
+  if [[ "$flag" == "--require-explicit" ]]; then
+    _worktree_db_log "ERROR: DATABASE_URL is not set, and the suite was pointed at a specific"
+    _worktree_db_log "       server. Refusing to resolve this worktree's database: the suite asserts"
+    _worktree_db_log "       persisted state straight from PostgreSQL, so a database this machine"
+    _worktree_db_log "       chose would make every one of those assertions meaningless against a"
+    _worktree_db_log "       server that writes somewhere else."
+    _worktree_db_log "       Set DATABASE_URL to the database THAT server writes to. For a deployed"
+    _worktree_db_log "       target that means a tunnel to its PostgreSQL —"
+    _worktree_db_log "       see docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md."
+    return 1
   fi
 
   line="$(bun "$root/scripts/worktree-db.ts" resolve)" || return 1
