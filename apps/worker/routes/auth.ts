@@ -11,6 +11,7 @@ import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { getConnectionManager } from '../lib/ws-manager'
 import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
@@ -246,6 +247,12 @@ auth.post('/me/logout',
       const token = authHeader.slice(8).trim()
       await services.identity.revokeSession(token)
     }
+    // Close this key's live relay sockets and drop their subscriptions. A
+    // WebSocket authenticates with an Ed25519 challenge, not the session token,
+    // so revoking the session leaves an open socket receiving every hub this
+    // user belongs to — and periodic revalidation would not notice, because the
+    // account is still active (#1655).
+    getConnectionManager()?.terminateUser(pubkey, 'logged_out')
     await audit(services.audit, 'logout', pubkey, {}, undefined, null)
     return c.json({ ok: true })
   },

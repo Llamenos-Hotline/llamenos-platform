@@ -95,6 +95,29 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
   const recoveryKey = page.getByTestId('recovery-key')
   await expect(recoveryKey).toBeVisible({ timeout: 90000 })
 
+  // #1709: this download gates `Continue to Setup`, so a failure on it must be
+  // visible. The reachable failure is an idle auto-lock while the user is on
+  // this screen — CryptoState then holds no secrets and the backup command
+  // refuses. Before the real download, prove the refusal is SHOWN and that
+  // Continue stays disabled, instead of the rejection being swallowed and the
+  // installer stranded with a dead button.
+  await page.evaluate(async () => {
+    const platform = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      lockCrypto(): Promise<void>
+    }
+    await platform.lockCrypto()
+  })
+  await page.getByRole('button', { name: /download.*backup/i }).click()
+  await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toBeVisible({ timeout: 20000 })
+  await expect(page.getByRole('button', { name: /continue to setup/i })).toBeDisabled()
+  console.log('[SETUP] Backup failure surfaced and Continue stayed disabled')
+  await page.evaluate(async (pin) => {
+    const km = (window as unknown as Record<string, unknown>).__TEST_KEY_MANAGER as {
+      unlock(pin: string): Promise<string | null>
+    }
+    if (!(await km.unlock(pin))) throw new Error('could not re-unlock after the deliberate lock')
+  }, TEST_PIN)
+
   // Download backup (required before continuing)
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: /download.*backup/i }).click()

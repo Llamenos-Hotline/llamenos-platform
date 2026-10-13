@@ -1,7 +1,8 @@
 /**
- * A minimal SIP user agent over TCP that plays the part of a volunteer's app:
- * it REGISTERs with the credential `/api/telephony/sip-token` issued, stays
- * registered, and reports the requests the PBX sends it.
+ * A minimal SIP user agent over verified TLS that plays the part of a
+ * volunteer's app: it REGISTERs through Kamailio with the credential
+ * `/api/telephony/sip-token` issued, stays registered, and reports the
+ * requests the PBX sends it.
  *
  * It exists for one claim: that an INVITE actually arrives at the volunteer's
  * AOR. Asserting that our code called a function proves nothing about that —
@@ -21,8 +22,9 @@
  *
  * Used by asterisk-inapp-ring.e2e.ts.
  */
-import { createConnection, type Socket } from 'node:net'
+import { isIP, type Socket } from 'node:net'
 import { randomBytes } from 'node:crypto'
+import { connect as connectTls } from 'node:tls'
 import { parseDigestChallenge, digestAuthorization } from './sip-register'
 
 /** One SIP request the PBX sent this UA. */
@@ -54,12 +56,14 @@ export interface SipUaOptions {
   domain: string
   username: string
   password: string
+  /** Certificate published by the edge; verification is never disabled. */
+  caPem: string
   /** Registration lifetime asked for, in seconds. */
   expires?: number
 }
 
 /**
- * A registered volunteer endpoint. `register()` leaves the TCP connection
+ * A registered volunteer endpoint. `register()` leaves the TLS connection
  * open: PJSIP reuses it to reach the rewritten contact, so the INVITE for a
  * call comes back down this same socket — the way a real client behind NAT
  * receives one.
@@ -88,9 +92,16 @@ export class SipUa {
   }
 
   static async connect(opts: SipUaOptions): Promise<SipUa> {
-    const socket = createConnection({ host: opts.host, port: opts.port })
+    if (!opts.caPem.trim()) throw new Error('TLS SIP UA requires the published SIP edge trust anchor')
+    const socket = connectTls({
+      host: opts.host,
+      port: opts.port,
+      ca: opts.caPem,
+      rejectUnauthorized: true,
+      ...(isIP(opts.host) ? {} : { servername: opts.host }),
+    })
     await new Promise<void>((resolve, reject) => {
-      socket.once('connect', () => resolve())
+      socket.once('secureConnect', () => resolve())
       socket.once('error', reject)
     })
     socket.setNoDelay(true)
@@ -145,7 +156,7 @@ export class SipUa {
   // --- Registration --------------------------------------------------------
 
   private get contact(): string {
-    return `<sip:${this.opts.username}@${this.socket.localAddress}:${this.socket.localPort};transport=tcp>`
+    return `<sip:${this.opts.username}@${this.socket.localAddress}:${this.socket.localPort};transport=tls>`
   }
 
   private send(message: string): void {
@@ -156,7 +167,7 @@ export class SipUa {
     this.cseq += 1
     const lines = [
       `REGISTER sip:${this.opts.domain} SIP/2.0`,
-      `Via: SIP/2.0/TCP ${this.socket.localAddress}:${this.socket.localPort};branch=z9hG4bK${randomBytes(8).toString('hex')};rport`,
+      `Via: SIP/2.0/TLS ${this.socket.localAddress}:${this.socket.localPort};branch=z9hG4bK${randomBytes(8).toString('hex')};rport`,
       `From: <sip:${this.opts.username}@${this.opts.domain}>;tag=${this.fromTag}`,
       `To: <sip:${this.opts.username}@${this.opts.domain}>`,
       `Call-ID: ${this.callId}`,

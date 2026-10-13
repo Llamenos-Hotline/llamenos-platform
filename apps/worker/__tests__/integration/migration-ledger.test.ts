@@ -22,6 +22,8 @@
  * Each test gets its own database, dropped on teardown.
  */
 import { spawnSync } from 'node:child_process'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
@@ -61,10 +63,15 @@ interface MigrateResult {
 }
 
 /** Run the real entrypoint migration command, exactly as the container does. */
-function migrate(databaseUrl: string): MigrateResult {
+function migrate(databaseUrl: string, migrationsDir?: string): MigrateResult {
   const run = spawnSync('bun', ['--no-env-file', 'scripts/run-migrations.ts'], {
     cwd: REPO_ROOT,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL: databaseUrl },
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      DATABASE_URL: databaseUrl,
+      ...(migrationsDir ? { LLAMENOS_MIGRATIONS_DIR: migrationsDir } : {}),
+    },
     encoding: 'utf-8',
     timeout: MIGRATE_TIMEOUT_MS,
   })
@@ -147,6 +154,12 @@ describe('migration runner: each file applies at most once', () => {
     expect(total).toBeGreaterThan(0)
     expect(applied).toBe(total)
     expect(first).toMatch(new RegExp(`${total} applied`))
+    // #791 AC3: a fresh bootstrap tolerates nothing. 0032/0036's duplicate
+    // ADD COLUMNs are guarded no-ops now, not swallowed "already exists"
+    // errors, and no other file collides either.
+    expect(first).not.toMatch(/already exists/)
+    expect(first).not.toMatch(/replay no-op/)
+    expect(first).not.toMatch(/FAILED/)
     // Nothing is applied or reconciled on the second run.
     expect(second).toMatch(/0 applied, 0 reconciled/)
     expect(second).toMatch(new RegExp(`${total} already in the ledger`))
@@ -211,6 +224,12 @@ describe('migration runner: a database predating the ledger', () => {
 
     const output = migrateOrThrow(url)
     expect(output).toMatch(/CATCH-UP RUN/)
+    // Tolerated replay collisions name the CATCH_UP_REPLAY_ERRORS rule that
+    // allowed them; the volunteers→users rename is the one that must survive,
+    // because the empty `volunteers` table the replay recreated is dropped on
+    // the strength of it.
+    expect(output).toMatch(/replay no-op \[rename-table-replay\]/)
+    expect(output).not.toMatch(/FAILED/)
 
     await withDb(url, async (sql) => {
       const [user] = await sql<{ team_id: string | null }[]>`
@@ -245,4 +264,39 @@ describe('migration runner: a database predating the ledger', () => {
     expect(migrateOrThrow(url)).toMatch(/0 applied, 0 reconciled/)
   }, MIGRATE_TIMEOUT_MS * 5)
 
+})
+
+describe('migration runner: unexpected SQL errors are fatal', () => {
+  it('fails with a non-zero exit instead of tolerating an "already exists" error', async () => {
+    // #791 AC2. The bogus file re-adds the PRIMARY KEY 0000 created inline on
+    // volunteers — precisely the "already exists"-class error the old runner
+    // swallowed on a first-time application. The runner must now fail the run.
+    // Sorts right after 0000_bouncy_morlocks.sql so the run fails fast, before
+    // the other ~58 files.
+    const dir = mkdtempSync(path.join(tmpdir(), 'llamenos-migrations-'))
+    try {
+      cpSync(path.join(REPO_ROOT, 'drizzle', 'migrations'), dir, { recursive: true })
+      writeFileSync(
+        path.join(dir, '0000_zzz_bogus.sql'),
+        'ALTER TABLE "volunteers" ADD CONSTRAINT "volunteers_pkey" PRIMARY KEY ("pubkey");\n',
+      )
+
+      const url = await createDatabase()
+      const run = migrate(url, dir)
+
+      expect(run.status).not.toBe(0)
+      expect(run.output).toMatch(/0000_zzz_bogus\.sql: FAILED/)
+      expect(run.output).not.toMatch(/All migrations applied successfully/)
+
+      // A failed file is never recorded as applied — the next boot retries it.
+      await withDb(url, async (sql) => {
+        const [row] = await sql<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM ${sql(LEDGER)}
+          WHERE filename = '0000_zzz_bogus.sql' AND applied_at IS NOT NULL`
+        expect(row.n).toBe(0)
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, MIGRATE_TIMEOUT_MS)
 })

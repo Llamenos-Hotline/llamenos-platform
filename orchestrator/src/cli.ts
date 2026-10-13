@@ -9,15 +9,17 @@ import { readAll, append, since, type RunRecord } from './ledger.js'
 import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt } from './circuit.js'
 import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
+import { checkoutProvenance, ensureRuntimeCurrent, fleetRuntimeRoot, provenanceProblems } from './provenance.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
-import { dispatch as dispatchWorker, type EffortLevel } from './engines.js'
+import { dispatch as dispatchWorker, doctorRegistryIdForOpencodeModel, modelResolutionProblem, type EffortLevel } from './engines.js'
 import { verifyMechanical } from './verify.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
   exportReviewSnapshot,
   HIGH_IMPACT_MAX_TURNS, HIGH_IMPACT_TIMEOUT_MS,
+  type PrClaim,
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
@@ -40,6 +42,8 @@ import {
   findWorktreeForBranch,
   currentBranch,
   deleteLocalBranch,
+  resolveWedgeForDispatch,
+  salvageInventory,
   type SettleTarget,
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
@@ -61,10 +65,14 @@ import {
 import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { armStandardAutoMergeAtOpen } from './automerge.js'
+import {
+  requestReviewAtOpen as requestReviewAtOpenWithRecovery,
+  defaultReviewRequestAtOpenDeps,
+} from './review-request.js'
 
 const execFileAsync = promisify(execFile)
 
-const REPO_ROOT = process.env['FLEET_REPO_ROOT'] ?? process.cwd()
+const REPO_ROOT = fleetRuntimeRoot()
 
 function log(msg: string): void {
   mkdirSync(FLEET_DIR, { recursive: true })
@@ -160,6 +168,31 @@ export async function doctor(): Promise<number> {
       checks.push([`lane ${l.id} is live on opencode, opencode binary on PATH`, opencodeOk,
         'install opencode (https://opencode.ai), or set this lane\'s engine back to claude in ~/.llamenos-fleet/lanes.json'])
     }
+
+    // Issue #1738: the binary being on PATH says nothing about whether the
+    // lane's configured model id still resolves — provider ids vanish or get
+    // renamed (kimi-for-coding → kimi-code-plan-global) and the dispatch
+    // failure reads like a provider outage, so a doctor that stops at the
+    // binary check reports every lane ok over a fleet that is fully halted.
+    // Enumerate `opencode models` once and check each lane's effective
+    // registry id against it. Enumeration failing is fail-CLOSED here: "we
+    // could not verify the model" must never render identically to "the
+    // model resolves" — that conflation is the outage this check exists for.
+    if (opencodeOk) {
+      let availableModels: string[] | undefined
+      try {
+        availableModels = execFileSync('opencode', ['models'], { stdio: 'pipe', encoding: 'utf8', timeout: 30_000 })
+          .split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+      } catch { /* reported as a per-lane failure below */ }
+      for (const l of liveOpencode) {
+        const rawId = doctorRegistryIdForOpencodeModel(l.model ?? DEFAULT_OPENCODE_MODEL)
+        if (rawId === undefined) continue // dispatcher token whose target only dispatch-one.sh itself knows
+        const problem = availableModels === undefined
+          ? 'could not enumerate `opencode models` — cannot verify this lane\'s configured model resolves'
+          : modelResolutionProblem(rawId, availableModels)
+        checks.push([`lane ${l.id} is live on opencode, model "${rawId}" resolves`, problem === undefined, problem ?? ''])
+      }
+    }
   }
   checks.push(['not halted', !haltedLocally(),
     existsSync(HALT_REASON_FILE) ? `halted: ${readFileSync(HALT_REASON_FILE, 'utf8').trim()} — clear with: llamenos-fleet resume` : ''])
@@ -174,18 +207,36 @@ export async function doctor(): Promise<number> {
   checks.push(['last tick pass did not error', last?.aborted !== 'error',
     last?.aborted === 'error' ? `${last.errorMessage ?? '(no message)'} — see ${LOG_FILE}` : ''])
 
+  // Issue #1801: the fleet's OWN runtime checkout is a provenance input, and
+  // until this check existed doctor validated configuration and liveness but
+  // never provenance — it reported every lane ok for hours while the runtime
+  // sat 35 commits behind origin/main on a detached HEAD, so merged fixes
+  // (#1771) were reviewed, merged, and not running. This is a hard FAIL, not
+  // a WARN: doctor's standing warnings train the reader to skim, and this
+  // condition silently disables merged code. Behind-ness names the commit
+  // count AND the drifted orchestrator files, because "35 behind" does not
+  // tell an operator that review-requesting is off.
+  const rt = checkoutProvenance(REPO_ROOT)
+  const rtProblems = provenanceProblems(rt)
+  checks.push([
+    `fleet runtime current with origin/main (${rt.commit?.slice(0, 12) ?? '(unknown)'}${rt.branch !== undefined ? ` on ${rt.branch}` : ', detached'})`,
+    rtProblems.length === 0,
+    rtProblems.join('; '),
+  ])
+
   // The dispatch dependency lives outside this repo (a symlink into the
   // claude-skills git repo, see paths.ts) and cannot be pinned by a llamenos
-  // commit, so doctor is the only place its state is ever surfaced. A dirty
-  // dependency repo is reported as a WARNING below, not a hard check here —
-  // it is normal while iterating on the skill — but every other problem
-  // (missing/non-executable script, not a git repo, dead-command rules) is a
-  // hard failure: those make dispatch behave in a way this repo cannot trace
-  // or trust.
+  // commit, so doctor is the only place its state is ever surfaced.
+  // Issue #1801: a DIRTY dependency repo is now a hard failure like every
+  // other problem here, no longer a warning — an uncommitted edit to
+  // dispatch-one.sh is the identical provenance hole as a stale runtime
+  // (code runs that no reviewed commit describes), and treating the two as
+  // one class is the point of that fix. Iterating on the skill means
+  // committing in ITS repo, which keeps this check green; working
+  // tree edits that are never committed are exactly what must not dispatch.
   const dep = checkDispatchDependency()
-  const depHardProblems = dep.problems.filter((p) => !/uncommitted/i.test(p))
-  checks.push([`dispatch dependency ok (${DISPATCH_SCRIPT})`, depHardProblems.length === 0,
-    depHardProblems.join('; ')])
+  checks.push([`dispatch dependency ok (${DISPATCH_SCRIPT})`, dep.problems.length === 0,
+    dep.problems.join('; ')])
 
   // #773: the fleet's GitHub identity. `absent` is the expected state until
   // the bot account's token is placed here, so it is a WARNING, printed
@@ -237,10 +288,49 @@ export async function doctor(): Promise<number> {
 
   process.stdout.write(`\ndispatch dependency: ${DISPATCH_SCRIPT}\n`)
   process.stdout.write(`dispatch dependency commit: ${dep.commit ?? '(unknown — not a readable git repo)'}\n`)
+  // Every dependency problem is a FAIL since #1801 — including uncommitted
+  // changes, which used to be the one WARN here (see the check above).
   if (dep.problems.length > 0) {
     for (const p of dep.problems) {
-      const isWarning = /uncommitted/i.test(p)
-      process.stdout.write(`${isWarning ? ' WARN ' : ' FAIL '} dispatch dependency: ${p}\n`)
+      process.stdout.write(` FAIL  dispatch dependency: ${p}\n`)
+    }
+  }
+
+  // Issue #1801: the runtime's own revision is printed unconditionally, the
+  // same way the dependency's is — an operator reading doctor output should
+  // never have to wonder which checkout they are looking at.
+  process.stdout.write(`\nfleet runtime: ${REPO_ROOT}\n`)
+  process.stdout.write(
+    `fleet runtime commit: ${rt.commit ?? '(unknown — not a readable git repo)'}` +
+    `${rt.branch !== undefined ? ` on ${rt.branch}` : ' (detached HEAD)'}` +
+    `${rt.behindBy !== undefined ? `, ${rt.behindBy} behind origin/main` : ''}\n`,
+  )
+
+  // Issue #1755: the salvage inventory. 39 `salvage/*` branches accrued on
+  // the dispatch host with no signal at all — 32 held nothing but a staged
+  // test artifact, 7 held completed work that cost more to rebase with every
+  // week it sat unreported. Reported as WARN lines (never FAIL): salvage
+  // branches existing is a state to reconcile, not a misconfiguration, and
+  // doctor must stay usable while an operator works through them. Branches
+  // whose diff against origin/main cannot be read are named as unreadable —
+  // "could not look" must never render identically to "holds nothing".
+  const salvage = await salvageInventory(REPO_ROOT)
+  if (salvage.length > 0) {
+    const withWork = salvage.filter((s) => s.realFiles !== undefined && s.realFiles > 0)
+    const unreadable = salvage.filter((s) => s.realFiles === undefined)
+    warnings++
+    process.stdout.write(
+      ` WARN  ${salvage.length} salvage branch(es) present — ` +
+      `${withWork.length} holding real work, ${unreadable.length} unreadable\n`,
+    )
+    for (const s of withWork) {
+      process.stdout.write(
+        `        ${s.branch}: ${s.realFiles} real file(s) beyond origin/main` +
+        `${s.hasWorktree ? ' (worktree attached)' : ''} — rebase and PR it, or discard it\n`,
+      )
+    }
+    for (const s of unreadable) {
+      process.stdout.write(`        ${s.branch}: could not diff against origin/main — inspect by hand\n`)
     }
   }
 
@@ -271,7 +361,7 @@ const DEFAULT_MODEL = 'sonnet'
 // An opencode lane with no model override must not fall back to the Claude
 // default — 'sonnet' would route the dispatch to the claude CLI, silently
 // defeating the engine selection. 'kimi' is dispatch-one.sh's maintained
-// opencode token (maps to kimi-for-coding/k3-256k inside the script).
+// opencode token (maps to kimi-code-plan-global/k3-256k inside the script).
 const DEFAULT_OPENCODE_MODEL = 'kimi'
 
 /** One name identifies a dispatched item everywhere: the tmux session
@@ -409,6 +499,23 @@ async function findOpenPr(lane: Lane, item: WorkItem): Promise<string | undefine
 
 async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome> {
   const branch = fleetBranchFor(lane.id, item.id)
+
+  // Issue #1755: before spending a worker, resolve a salvage wedge for this
+  // exact branch — a leftover worktree checked out on `salvage/<branch>-*`.
+  // An artifact-only wedge (a staged/committed `.test-encrypted-seed.sqlite`
+  // and nothing else) is cleared here and the lane dispatches fresh; a wedge
+  // holding real work refuses WITHOUT launching a worker and is recorded as
+  // the distinct WEDGED outcome (tick.ts) — one stuck condition, never three
+  // breaker-consuming failures, and the salvage branch is always kept.
+  const wedge = await resolveWedgeForDispatch(REPO_ROOT, branch)
+  if (wedge.kind === 'cleared') {
+    log(`dispatch: cleared artifact-only salvage wedge for ${branch} (worktree ${wedge.worktree}, branch ${wedge.salvageBranch} kept)`)
+  } else if (wedge.kind === 'blocked') {
+    const note = `wedged: worktree ${wedge.worktree} is on salvage branch ${wedge.salvageBranch} — ${wedge.reason}`
+    log(`dispatch: item ${item.id} REFUSED — ${note}`)
+    return { outcome: 'WEDGED', worktree: wedge.worktree, branch: wedge.salvageBranch, note }
+  }
+
   const baseBrief = buildBrief(item, lane, branch)
   // Prior-attempt history and governing contracts are memory.ts's sole
   // concern (see brief.ts's own comment on why: a caller rendering both
@@ -477,6 +584,17 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
   await armStandardAutoMergeAtOpen(
     { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
     { enableAutoMerge, log },
+  )
+
+  // The review the `fleet/review` gate waits on, requested in the same step
+  // the PR is discovered — #1760: before this, nothing in the PR-open path
+  // ever made the request, and every fleet PR was born BLOCKED at
+  // NO-VERDICT:unreviewed with no way to self-clear. See review-request.ts's
+  // module comment for the three rules this honours (event-count
+  // confirmation, pending-is-success at open, never ask the author).
+  await requestReviewAtOpenWithRecovery(
+    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
+    defaultReviewRequestAtOpenDeps(log),
   )
 
   return resolved
@@ -554,9 +672,16 @@ async function commentOnPr(pr: string, body: string): Promise<void> {
  * Reached only after mechanical verification AND the non-author review have
  * both passed — see tick.ts. No bypass flag is passed here and none may ever
  * be added: see the rail in tests/orchestrator/guards.test.ts.
+ *
+ * No `--delete-branch`: `gh` REFUSES it outright when the target branch has a
+ * merge queue ("Cannot use `-d` or `--delete-branch` when merge queue
+ * enabled"), and `main` has one — so passing it made this call fail for every
+ * PR the fleet opened, which is #1804. Branch deletion is not lost: the
+ * repository sets `delete_branch_on_merge`, so GitHub deletes the head branch
+ * itself once the queue merges.
  */
 async function enableAutoMerge(pr: string): Promise<void> {
-  await gh(['pr', 'merge', pr, '--auto', '--squash', '--delete-branch'])
+  await gh(['pr', 'merge', pr, '--auto', '--squash'])
 }
 
 /** Clears an auto-merge armed by an EARLIER attempt on the same PR before
@@ -648,6 +773,18 @@ function defaultIssueLinkDeps(): IssueLinkDeps {
 }
 
 async function runTick(): Promise<number> {
+  // Issue #1801: never dispatch yesterday's rails. The runtime checkout is
+  // fast-forwarded to origin/main when that is safe (on main, clean,
+  // verifiably behind); when it is not safe the pass is REFUSED outright —
+  // a fleet that stops and says so beats a fleet silently running code that
+  // was never reviewed into place. Runs before loadLanes so the pass reads
+  // lane fragments from the fresh tree when a fast-forward happened.
+  const currency = ensureRuntimeCurrent(REPO_ROOT, log)
+  if (!currency.ok) {
+    process.stderr.write(`ERROR: ${currency.reason ?? 'fleet runtime is not current'}\n`)
+    return 1
+  }
+
   const lanes = await loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger)
 
   const deps: TickDeps = {
@@ -1562,6 +1699,11 @@ async function writeReviewReport(ctx: CiContext, entries: readonly ReviewReportE
 interface ReviewPrFacts {
   labels: string[]
   description: string
+  /** The PR's title and body kept SEPARATE — what every reviewer's prompt
+   *  needs (`prClaimSection`, review.ts), as against `description`'s
+   *  concatenation, which exists for the review set's keyword scan and would
+   *  reach a prompt as one unlabelled blob (#1696). One read serves both. */
+  claim: PrClaim
   /** The PR's author login. The gate needs it on every event, and only a
    *  `pull_request` payload carries one — `workflow_dispatch` has no payload
    *  at all, so this read is where a dispatch learns who wrote the PR
@@ -1611,6 +1753,7 @@ async function readPrFacts(
   return {
     labels: data.labels.map((l) => l.name),
     description: `${data.title ?? ''}\n\n${data.body ?? ''}`,
+    claim: { title: data.title ?? '', body: data.body ?? '' },
     author: data.user?.login ?? undefined,
     requestedReviewers: (data.requested_reviewers ?? []).flatMap((r) => (r.login == null ? [] : [r.login])),
   }
@@ -1715,6 +1858,17 @@ const HANDLERS: Record<string, CommandHandler> = {
     prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     prDiff: () => ciDiff(ctx),
     secondOpinion,
+    // The PR's own stated intent, for the `## Pull request` section of every
+    // reviewer's prompt (#1696). The SAME live read the review set already
+    // makes — `readPrFacts` fetches `title,body` and `decideReviewSet` used
+    // the concatenation to pick the crypto reviewer and then discarded it,
+    // so the reviewer was asked whether the diff does what the PR claims and
+    // shown only the PR NUMBER. An unreadable PR yields `undefined`, which
+    // the prompt states as "no claim" rather than inventing one.
+    prClaim: async () => (await readPrFacts(
+      ctx.pr,
+      'no reviewer can be shown what this PR claims to do, so each is told plainly that no claim was stated',
+    ))?.claim,
     // Decided HERE, from a live read of the PR — never handed in by the
     // workflow step that started this process, which on a `pull_request`
     // event is the PR's own copy of the workflow file.
@@ -1736,10 +1890,10 @@ const HANDLERS: Record<string, CommandHandler> = {
     exportBase: (repoDir, sha) => exportReviewSnapshot(repoDir, sha),
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.
-    profileReview: async (profile, diff, changedFiles) => toSecondOpinion(await invokeVerifierEngine({
+    profileReview: async (profile, diff, changedFiles, claim) => toSecondOpinion(await invokeVerifierEngine({
       authorEngine: 'claude',
       exportDir: ctx.headDir,
-      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir),
+      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir, claim),
       maxTurns: HIGH_IMPACT_MAX_TURNS,
       timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
     })),

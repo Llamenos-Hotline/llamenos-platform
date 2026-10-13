@@ -2,7 +2,10 @@
  * WebSocket ConnectionManager — manages authenticated connections, hub subscriptions,
  * event fan-out with signing, and per-hub ring buffers for replay.
  *
- * Replaces legacy relay implementation.
+ * A subscription is a fact about a USER, not about one of their sockets: each
+ * client holds a single channel for its whole session, carrying every hub that
+ * user has subscribed to, combined. `publishToHub` documents why, and why no
+ * per-connection hub filter may be added to it.
  */
 import { ed25519Sign } from '@llamenos/crypto/ffi'
 import { bytesToHex, utf8ToBytes } from '@shared/encoding'
@@ -67,8 +70,6 @@ export interface ConnectionState {
   ws: WebSocket
   /** Hub IDs the user is a member of (from auth lookup) */
   hubs: Set<string>
-  /** Hub IDs this specific connection has subscribed to */
-  subscribedHubs: Set<string>
   lastReplayAt: number
 }
 
@@ -78,6 +79,17 @@ export class ConnectionManager {
 
   /** hubId → Map<pubkey, Set<subscribed kinds>> */
   private hubSubscriptions = new Map<string, Map<string, Set<number>>>()
+
+  /**
+   * pubkey → every hub that user has subscribed to, on any of their connections.
+   *
+   * The reverse index of `hubSubscriptions`, and keyed the same way: by USER.
+   * It replaced a per-connection `ConnectionState.subscribedHubs` set, which
+   * described a per-connection scoping the delivery path never applied (#1655)
+   * — and, being per-connection, leaked a subscription whenever the connection
+   * that requested it was not the last one to close.
+   */
+  private subscribedHubsByUser = new Map<string, Set<string>>()
 
   /** hubId → ring buffer of recent durable events */
   private eventBuffers = new Map<string, RingBuffer<WsEventMessage>>()
@@ -109,7 +121,13 @@ export class ConnectionManager {
     return true
   }
 
-  /** Unregister a connection on close. Cleans up empty maps. */
+  /**
+   * Unregister a connection on close. Cleans up empty maps.
+   *
+   * Subscriptions are user-scoped, so they survive until the user's LAST
+   * connection closes — and then all of them go, not merely the ones this
+   * connection happened to ask for.
+   */
   unregister(state: ConnectionState): void {
     const conns = this.connections.get(state.pubkey)
     if (conns) {
@@ -118,17 +136,26 @@ export class ConnectionManager {
         this.connections.delete(state.pubkey)
       }
     }
-    const remainingConns = this.connections.get(state.pubkey)
-    if (!remainingConns || remainingConns.size === 0) {
-      for (const hubId of state.subscribedHubs) {
-        this.removeSubscription(state.pubkey, hubId)
-      }
+    if (!this.connections.has(state.pubkey)) {
+      this.removeAllSubscriptions(state.pubkey)
     }
   }
 
-  /** Subscribe a user to event kinds on a hub. */
+  /**
+   * Subscribe a user to event kinds on a hub.
+   *
+   * The subscription is recorded against the user, not against `state` — see
+   * `publishToHub` for why the distinction cannot be made in the delivery path.
+   * `state` is taken so the caller cannot subscribe a user it has no live,
+   * authenticated connection for.
+   */
   subscribe(state: ConnectionState, hubId: string, kinds: number[]): void {
-    state.subscribedHubs.add(hubId)
+    let userHubs = this.subscribedHubsByUser.get(state.pubkey)
+    if (!userHubs) {
+      userHubs = new Set()
+      this.subscribedHubsByUser.set(state.pubkey, userHubs)
+    }
+    userHubs.add(hubId)
     let hubSubs = this.hubSubscriptions.get(hubId)
     if (!hubSubs) {
       hubSubs = new Map()
@@ -144,21 +171,41 @@ export class ConnectionManager {
     }
   }
 
-  /** Unsubscribe a user from a hub entirely. */
+  /**
+   * Unsubscribe a user from a hub entirely — on every connection they hold.
+   *
+   * That breadth is the point, not a bug: a subscription belongs to the user's
+   * session, so dropping it drops the hub from the one channel each of their
+   * connections is receiving. Hub MEMBERSHIP (`ConnectionState.hubs`, set at
+   * auth) is untouched, so the user may re-subscribe.
+   */
   unsubscribe(pubkey: string, hubId: string): void {
     this.removeSubscription(pubkey, hubId)
-    // Remove from active subscription tracking (not from membership — hubs is set at auth)
-    const conns = this.connections.get(pubkey)
-    if (conns) {
-      for (const conn of conns) {
-        conn.subscribedHubs.delete(hubId)
-      }
-    }
   }
 
   /**
    * Publish an event to all subscribers of a hub.
    * Signs the event, buffers durable events, and fans out to WebSocket connections.
+   *
+   * ## Delivery is per-user, and deliberately unfiltered per connection
+   *
+   * Every connection of a subscribed pubkey receives the event, whichever
+   * connection asked for the hub. Do not add a per-connection hub filter here
+   * (#1655): one client holds ONE channel for its whole session and that
+   * channel carries every hub the user has subscribed, combined. Filtering
+   * would split it into a socket per hub and cost exactly the browser
+   * performance the single channel buys.
+   *
+   * It is also what implements the multi-hub routing axiom in CLAUDE.md: a
+   * user may belong to several hubs at once and must receive calls, push and
+   * relay events from ALL of them regardless of which hub the UI currently
+   * shows. The active hub scopes browsing, never delivery — so narrowing this
+   * loop would stop a device ringing for a hub it belongs to.
+   *
+   * Scoping is enforced where it belongs instead: membership is checked at
+   * subscribe (`routes/ws.ts`), so a non-member is never in `hubSubscriptions`
+   * and never receives anything, and `evictMember` drops the subscription the
+   * moment membership goes away.
    */
   publishToHub(hubId: string, kind: number, payload: string, epoch: number): void {
     // Rate limit check
@@ -196,6 +243,7 @@ export class ConnectionManager {
       if (!kinds.has(kind)) continue
       const conns = this.connections.get(pubkey)
       if (!conns) continue
+      // Every connection of this user, by design — see the doc comment above.
       for (const conn of conns) {
         try {
           conn.ws.send(eventJson)
@@ -238,6 +286,8 @@ export class ConnectionManager {
    * Sends unsubscribed message and removes subscription.
    */
   evictMember(pubkey: string, hubId: string): void {
+    // Drops the subscription for the whole user, so no connection of theirs
+    // receives another event for this hub.
     this.removeSubscription(pubkey, hubId)
 
     const conns = this.connections.get(pubkey)
@@ -308,23 +358,39 @@ export class ConnectionManager {
   }
 
   /**
-   * Terminate all connections for a user.
-   * Called after erasure execution to force disconnect.
+   * Terminate all connections for a user and drop every subscription they hold.
+   *
+   * Called after erasure execution, and on logout — a socket authenticated by
+   * a signing key keeps receiving its user's events until something closes it,
+   * and periodic revalidation would leave up to one interval of delivery to a
+   * session the user has already ended (#1655).
+   *
+   * All-or-nothing per pubkey is the only lever available while a subscription
+   * is keyed by signing key. Since signing keys are per device, that is the
+   * device's own set of sockets (at most MAX_CONNECTIONS_PER_USER) and not the
+   * user's other devices.
    */
-  terminateUser(pubkey: string): void {
+  terminateUser(pubkey: string, reason = 'account_erased'): void {
+    this.removeAllSubscriptions(pubkey)
     const conns = this.connections.get(pubkey)
     if (!conns) return
     for (const conn of conns) {
-      for (const hubId of conn.subscribedHubs) {
-        this.removeSubscription(pubkey, hubId)
-      }
       try {
-        conn.ws.close(4001, 'account_erased')
+        conn.ws.close(4001, reason)
       } catch {
         // Already closed
       }
     }
     this.connections.delete(pubkey)
+  }
+
+  /** Drop every hub subscription held by a user. */
+  private removeAllSubscriptions(pubkey: string): void {
+    const userHubs = this.subscribedHubsByUser.get(pubkey)
+    if (!userHubs) return
+    for (const hubId of [...userHubs]) {
+      this.removeSubscription(pubkey, hubId)
+    }
   }
 
   private removeSubscription(pubkey: string, hubId: string): void {
@@ -333,6 +399,13 @@ export class ConnectionManager {
       hubSubs.delete(pubkey)
       if (hubSubs.size === 0) {
         this.hubSubscriptions.delete(hubId)
+      }
+    }
+    const userHubs = this.subscribedHubsByUser.get(pubkey)
+    if (userHubs) {
+      userHubs.delete(hubId)
+      if (userHubs.size === 0) {
+        this.subscribedHubsByUser.delete(pubkey)
       }
     }
   }

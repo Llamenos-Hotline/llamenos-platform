@@ -1,14 +1,16 @@
 package org.llamenos.hotline.service
 
 /**
- * Wraps a real-time event with the hub ID that was active when the event arrived.
+ * Wraps a real-time event with the hub ID it originated from.
  *
- * ViewModels receive [AttributedHubEvent] from [org.llamenos.hotline.api.WebSocketService]
- * and can use [hubId] to route events to the correct hub-scoped state, or discard events
- * that don't belong to the currently active hub.
+ * ViewModels receive [AttributedHubEvent] from [org.llamenos.hotline.api.WebSocketService].
+ * [hubId] comes from the server event envelope — the authoritative origin of the
+ * event, independent of which hub is active in the UI. Per the multi-hub routing
+ * axiom, subscribers must not discard or relabel events from non-active hubs;
+ * the active hub controls browsing context only.
  *
  * @param T the underlying event type (e.g. [org.llamenos.hotline.model.LlamenosEvent])
- * @property hubId the active hub ID at the time the event was received; empty string if none
+ * @property hubId the originating hub ID from the server envelope
  * @property event the underlying event payload
  */
 data class AttributedHubEvent<out T>(

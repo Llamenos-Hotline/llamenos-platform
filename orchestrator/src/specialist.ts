@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { READ_ONLY_CONTRACT, VERDICT_CONTRACT, reviewFilesSection } from './review.js'
+import { READ_ONLY_CONTRACT, VERDICT_CONTRACT, prClaimSection, reviewFilesSection, type PrClaim } from './review.js'
 
 /**
  * Reviewer PROFILES — the registry half of `fleet/review` (#1158).
@@ -133,9 +133,19 @@ export async function resolveReviewerLabel(label: string, registryDir: string): 
  * A profile's prompt: its own agent definition first (the expertise), then
  * the SAME read-only and verdict contract the general reviewer gets
  * (review.ts), then the PR, the export path as data, and the diff.
+ *
+ * `prClaimSection` is the SAME copy the generalist reads (#1696), and this
+ * is the half that was load-bearing: the reviewer that rejected #1653 — a
+ * type rename whose body said exactly that — was a PROFILE, not the
+ * generalist. A profile's checklist is written against the codebase rather
+ * than against the diff, so everything its eye lands on looks in bounds; the
+ * stated intent is what makes an in-scope change recognisable as in-scope.
+ * It carries its own untrusted-input framing with it, so the body can never
+ * be fenced on one path and bare on the other.
  */
 export function buildProfileReviewPrompt(
   profile: ReviewerProfile, pr: string, diff: string, changedFiles: readonly string[], exportDir: string,
+  claim?: PrClaim,
 ): string {
   return `${profile.instructions}\n\n` +
     '## How this review runs\n\n' +
@@ -144,6 +154,6 @@ export function buildProfileReviewPrompt(
     'on any defect in that scope — a FAIL from you fails `fleet/review` even when every other reviewer ' +
     'passed.\n\n' +
     `${READ_ONLY_CONTRACT}\n\n${VERDICT_CONTRACT}\n\n` +
-    `## Pull request\n\n${pr}\n\n${reviewFilesSection(changedFiles, exportDir)}\n\n` +
+    `${prClaimSection(pr, claim)}\n\n${reviewFilesSection(changedFiles, exportDir)}\n\n` +
     `## Diff\n\n\`\`\`diff\n${diff}\n\`\`\`\n`
 }

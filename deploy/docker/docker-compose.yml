@@ -258,8 +258,26 @@ services:
       start_period: 30s
 
   # ── Optional: Asterisk PBX ───────────────────────────────
+  #
+  # Minimum Asterisk 22.10.0. Below that, `dtls_verify = fingerprint` — which
+  # apps/worker/telephony/registrar.ts sets on every volunteer endpoint — does
+  # NOT give fingerprint-only verification. asterisk-config/sorcery.conf backs
+  # `endpoint` with astdb, so every endpoint is serialised on write and parsed
+  # back on each inbound INVITE, and before 22.10.0 the serialiser wrote any
+  # non-zero verify mode as the string "Yes". "Yes" parses back as
+  # fingerprint AND certificate, so Asterisk ran full X.509 chain verification
+  # against an empty trust store and no RFC 5763 self-signed peer certificate
+  # could ever pass: every DTLS-SRTP call died at the handshake with
+  # `certificate verify failed` and the leg carried no audio (#1687).
+  #
+  # Upstream fixed the serialiser in 269a566a347f, first released in 22.10.0.
+  # A pin below that silently turns the media plane's only
+  # certificate-to-session binding into a call-killing chain check, so
+  # deploy/docker/tests/telephony/asterisk-image-dtls-pin.test.ts refuses any
+  # digest not vetted for it. If you bump this image, add the new digest there
+  # with its Asterisk version.
   asterisk:
-    image: andrius/asterisk@sha256:e30df5ec1b512827bf3cffc49b8000b07376a05c950736d028348eba80035015 # 22.x
+    image: andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6 # 22.10.1 — NOT below 22.10.0, see #1687
     # Also enabled by "telephony": kamailio (telephony profile) has a hard
     # `depends_on: asterisk: condition: service_healthy` below, so activating
     # telephony without asterisk previously failed compose config resolution
@@ -457,6 +475,24 @@ services:
     # --external-ip is needed only behind 1:1 NAT (a cloud VM whose public
     # address the host does not see on an interface); set TURN_EXTERNAL_IP to
     # `public/private` there, e.g. 203.0.113.4/10.0.0.4.
+    #
+    # --listening-ip/--relay-ip are pinned explicitly: unset, coturn enumerates
+    # every host interface — each docker bridge included — logs "NO EXPLICIT
+    # RELAY ADDRESS(ES) ARE CONFIGURED", and can source the RTCP component of an
+    # allocation from an address its relay candidate never named, which an ICE
+    # peer is entitled to reject (#1689: one-way/absent audio on a call that
+    # connected). TURN_RELAY_IP MUST be the address TURN_HOST resolves to — the
+    # 127.0.0.1 default serves local STUN and the healthcheck, and allocates
+    # relay candidates no remote peer can use. (A compose `:?` hard-require was
+    # measured to fail the WHOLE file's interpolation even with the telephony
+    # profile off, breaking `docker compose up app` for deployments that run no
+    # relay at all — hence the loud default plus the .env.example REQUIRED note
+    # instead.)
+    #
+    # --log-file=stdout: coturn's default log target is a /var/tmp file the
+    # container's docker logging driver never sees — `docker compose logs`
+    # would read an empty log, the exact trap the #1689 smoke assertion guards
+    # against on the Ansible path.
     command: >
       --realm=${DOMAIN:-localhost}
       --fingerprint
@@ -465,10 +501,13 @@ services:
       --listening-port=${TURN_PORT:-3478}
       --min-port=${TURN_RELAY_MIN_PORT:-49160}
       --max-port=${TURN_RELAY_MAX_PORT:-49200}
+      --listening-ip=${TURN_LISTENING_IP:-127.0.0.1}
+      --relay-ip=${TURN_RELAY_IP:-127.0.0.1}
       ${TURN_EXTERNAL_IP:+--external-ip=${TURN_EXTERNAL_IP}}
       --no-tls
       --no-dtls
       --no-cli
+      --log-file=stdout
     healthcheck:
       # A STUN Binding request, which coturn answers UNAUTHENTICATED even in
       # --use-auth-secret mode (only TURN allocation needs the credential). So
@@ -476,8 +515,11 @@ services:
       # unlike the `pgrep` it replaces, it can pass at all: the pinned image
       # ships no pgrep, so that healthcheck failed every time and marked a
       # perfectly working coturn unhealthy. A dead listener never replies, so
-      # the probe hangs and the timeout below is what fails it.
-      test: ["CMD-SHELL", "turnutils_stunclient -p ${TURN_PORT:-3478} 127.0.0.1 2>&1 | grep -q 'reflexive addr'"]
+      # the probe hangs and the timeout below is what fails it. Targets the
+      # configured listening address, not hardcoded loopback: with --relay-ip
+      # pinned, coturn binds ONLY the named address, so 127.0.0.1 answers only
+      # when that is the configured address.
+      test: ["CMD-SHELL", "turnutils_stunclient -p ${TURN_PORT:-3478} ${TURN_LISTENING_IP:-127.0.0.1} 2>&1 | grep -q 'reflexive addr'"]
       interval: 30s
       timeout: 10s
       retries: 3

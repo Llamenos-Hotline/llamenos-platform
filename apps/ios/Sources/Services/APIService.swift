@@ -207,10 +207,12 @@ final class APIService: @unchecked Sendable {
         self.decoder = Self.makeResponseDecoder()
     }
 
-    /// The decoder every response goes through. Exposed (internal) so
-    /// `APIServiceResponseDecodingTests` can decode fixtures with the *real*
-    /// configuration rather than a re-created one — a response test that builds its
-    /// own decoder proves only that the test is self-consistent.
+    /// The decoder every response body is read through. A factory rather than an inline
+    /// construction, and exposed (internal), so `APIServiceResponseDecodingTests` and
+    /// `SipTokenResponseDecodingTests` can decode recorded server payloads through the
+    /// PRODUCTION decoder. A response test that builds its own decoder proves only that
+    /// the test is self-consistent — and self-consistent tests are precisely what let
+    /// #1659 and #1633 ship.
     ///
     /// `.convertFromSnakeCase` is retained deliberately and is a no-op for the
     /// camelCase the server actually sends: Foundation leaves a key with no underscore
@@ -218,7 +220,8 @@ final class APIService: @unchecked Sendable {
     /// genuinely snake_case payload would still decode, and it is *not* a licence for a
     /// response model to disagree with its schema — it cannot bridge
     /// `readerEnvelopes` → `recipientEnvelopes`, which is exactly how #1633's
-    /// response-side defect survived.
+    /// response-side defect survived, and it cannot change a field's DEPTH, which is
+    /// how #1659's survived (`testTheSnakeCaseStrategyCannotFlattenANestedResponse`).
     static func makeResponseDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -537,10 +540,19 @@ final class APIService: @unchecked Sendable {
 
     // MARK: - Telephony / SIP
 
-    /// Fetch short-lived SIP credentials for the given hub.
-    /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
-        return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
+    /// Fetch the volunteer's per-volunteer SIP credential.
+    ///
+    /// NOT hub-scoped, and the path is not `/api/hubs/{hubId}/…` — that spelling was a
+    /// 404 on every deployed host (`webrtc.ts` is mounted at `/api/telephony`, and
+    /// `routes/hubs.ts` has no `sip-token`). The credential is issued per VOLUNTEER:
+    /// `vol_<pubkey16>` authorised by membership of *any* hub (`callerHasAnyHubAccess`),
+    /// which is why one credential serves every member hub — and why Android's
+    /// `ApiService.getSipConnectionParams()` takes no hub either.
+    ///
+    /// Called when the volunteer clocks in so a SIP account can be registered with
+    /// Linphone.
+    func getSipToken() async throws -> SipTokenResponse {
+        return try await request(method: "GET", path: "/api/telephony/sip-token")
     }
 
     // MARK: - Version Check
