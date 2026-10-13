@@ -48,15 +48,17 @@ final class WipeServiceTests: XCTestCase {
         )
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() {
         URLCache.shared = previousSharedCache
         previousSharedCache = nil
         wipeService = nil
         keychainService = nil
         cryptoService = nil
-        try FileManager.default.removeItem(at: cacheStoreDirectory)
         cacheStoreDirectory = nil
-        try super.tearDownWithError()
+        // URLCache writes to disk asynchronously and may still hold the store after this
+        // test finishes. Leave the isolated directory in the app container rather than
+        // removing it underneath a pending cache write; the test app container is disposable.
+        super.tearDown()
     }
 
     // MARK: - wipeAll
