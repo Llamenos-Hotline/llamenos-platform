@@ -2772,6 +2772,8 @@
     "getStarted": "Começar",
     "goToLogin": "Ir para Login",
     "invalidCode": "Código de convite inválido",
+    "rateLimitedRetry": "Demasiadas tentativas. Aguarde {{seconds}} segundos e tente novamente.",
+    "validationUnavailable": "Não foi possível validar o seu convite neste momento. Verifique a sua ligação e tente novamente.",
     "noCode": "Nenhum código de convite fornecido",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

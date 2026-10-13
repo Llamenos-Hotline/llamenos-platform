@@ -2708,6 +2708,8 @@
     "getStarted": "Get Started",
     "goToLogin": "Go to Login",
     "invalidCode": "Invalid invite code",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "No invite code provided",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

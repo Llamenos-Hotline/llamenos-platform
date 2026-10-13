@@ -2772,6 +2772,8 @@
     "getStarted": "शुरू करें",
     "goToLogin": "लॉगिन पर जाएं",
     "invalidCode": "अमान्य आमंत्रण कोड",
+    "rateLimitedRetry": "बहुत अधिक प्रयास। कृपया {{seconds}} सेकंड प्रतीक्षा करें, फिर पुनः प्रयास करें।",
+    "validationUnavailable": "अभी आपका निमंत्रण सत्यापित नहीं किया जा सका। अपना कनेक्शन जांचें और पुनः प्रयास करें।",
     "noCode": "कोई आमंत्रण कोड नहीं दिया गया",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

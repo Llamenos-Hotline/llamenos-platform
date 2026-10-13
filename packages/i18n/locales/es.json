@@ -2772,6 +2772,8 @@
     "getStarted": "Comenzar",
     "goToLogin": "Ir a Iniciar Sesión",
     "invalidCode": "Código de invitación inválido",
+    "rateLimitedRetry": "Demasiados intentos. Espera {{seconds}} segundos y vuelve a intentarlo.",
+    "validationUnavailable": "No se pudo validar tu invitación en este momento. Comprueba tu conexión e inténtalo de nuevo.",
     "noCode": "No se proporcionó código de invitación",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

@@ -2772,6 +2772,8 @@
     "getStarted": "ابدأ",
     "goToLogin": "الذهاب لتسجيل الدخول",
     "invalidCode": "رمز دعوة غير صالح",
+    "rateLimitedRetry": "محاولات كثيرة جدًا. يرجى الانتظار {{seconds}} ثانية ثم المحاولة مرة أخرى.",
+    "validationUnavailable": "تعذّر التحقق من دعوتك الآن. تحقق من اتصالك وحاول مرة أخرى.",
     "noCode": "لم يتم تقديم رمز دعوة",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

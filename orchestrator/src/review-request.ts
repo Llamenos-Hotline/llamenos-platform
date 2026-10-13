@@ -116,6 +116,36 @@ export function isAuthorCollision(e: unknown): boolean {
   return text.toLowerCase().includes('cannot be requested from pull request author')
 }
 
+/**
+ * The `pr` this module receives from `realDispatch` is whatever the worker's
+ * status file carried — in production a FULL URL
+ * (`https://github.com/<owner>/<repo>/pull/<n>`), because every `gh pr ...`
+ * verb the rest of the fleet calls accepts one. `gh api` paths do NOT: a URL
+ * interpolated into `repos/${REPO}/pulls/${pr}` produces
+ * `pulls/https://github.com/...`, and gh fails with
+ * `unsupported protocol scheme ""`. That is exactly how every at-open review
+ * request failed from #1760's first live run until this fix (fleet.log
+ * 2026-10-11, PR #1818): the read "failed", this module refused to guess whom
+ * to ask, and the PR sat at NO-VERDICT:unreviewed with nothing ever asking.
+ *
+ * Accepted shapes: a bare number (`'1818'`), or a canonical github.com PR URL
+ * for the PINNED repo (owner/repo compared case-folded, as GitHub itself
+ * compares them). A URL for any OTHER repository returns `undefined` too —
+ * mapping it onto `repos/${REPO}/pulls/<n>` would request a review on the
+ * wrong PR, which is worse than the failure this function exists to prevent.
+ */
+export function prApiNumber(pr: string): string | undefined {
+  const trimmed = pr.trim()
+  if (/^\d+$/.test(trimmed)) return trimmed
+  const m = /^https:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:[/?#].*)?$/.exec(trimmed)
+  if (m === null) return undefined
+  const [wantOwner, wantName] = REPO.split('/')
+  if (m[1]?.toLowerCase() !== wantOwner?.toLowerCase() || m[2]?.toLowerCase() !== wantName?.toLowerCase()) {
+    return undefined
+  }
+  return m[3]
+}
+
 /** Case-insensitive login membership — GitHub logins compare case-folded
  *  everywhere else in this codebase (`loginOf`, ci.ts). */
 function hasLogin(logins: readonly string[], login: string): boolean {
@@ -176,13 +206,23 @@ export async function requestReviewAtOpen(
   input: { pr: string | undefined; headRefName: string; branchMismatch: string | undefined },
   deps: ReviewRequestAtOpenDeps,
 ): Promise<ReviewRequestOutcome> {
-  const { pr, headRefName, branchMismatch } = input
-  if (pr === undefined) return { kind: 'skipped', reason: 'no PR was opened' }
+  const { pr: prRaw, headRefName, branchMismatch } = input
+  if (prRaw === undefined) return { kind: 'skipped', reason: 'no PR was opened' }
   if (branchMismatch !== undefined) {
     return { kind: 'skipped', reason: `branch-mismatch:${branchMismatch} — the PR is not on the branch this item was dispatched for` }
   }
   if (!isFleetOwnedBranch(headRefName)) {
     return { kind: 'skipped', reason: `${headRefName} is not a fleet-owned branch` }
+  }
+
+  // Every dep call below interpolates `pr` into a `gh api` path, which a
+  // full PR URL breaks — see prApiNumber's own comment. Normalise once here
+  // so the live deps AND every test double see the same shape.
+  const pr = prApiNumber(prRaw)
+  if (pr === undefined) {
+    const reason = `PR ${prRaw} is neither a number nor a ${REPO} pull URL — cannot build the api path, not guessing`
+    deps.log(`review-request: pr ${prRaw} FAILED — ${reason}`)
+    return { kind: 'failed', reason }
   }
 
   const facts = await readPrSafe(pr, deps)

@@ -2772,6 +2772,8 @@
     "getStarted": "Loslegen",
     "goToLogin": "Zur Anmeldung",
     "invalidCode": "Ungültiger Einladungscode",
+    "rateLimitedRetry": "Zu viele Versuche. Bitte warte {{seconds}} Sekunden und versuche es dann erneut.",
+    "validationUnavailable": "Deine Einladung konnte gerade nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut.",
     "noCode": "Kein Einladungscode angegeben",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

@@ -866,7 +866,8 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     // operator's own explicit act, run by hand against one named PR, gated
     // by everything above — never the autonomous tick loop, which still
     // never merges anything itself.
-    merge: async (pr) => { await gh(['pr', 'merge', pr, '--squash', '--delete-branch']) },
+    // No `--delete-branch` here either — see enableAutoMerge in cli.ts (#1804).
+    merge: async (pr) => { await gh(['pr', 'merge', pr, '--squash']) },
     log,
   }
 }

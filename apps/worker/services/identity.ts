@@ -7,7 +7,7 @@
  */
 import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
-import { buildReaderPubkeys } from '../lib/encryption-keys'
+import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
@@ -329,6 +329,24 @@ export class IdentityService {
     userPubkeys: string[],
   ): Promise<string[]> {
     return buildReaderPubkeys(this.db, adminDecryptionPubkey, userPubkeys)
+  }
+
+  /**
+   * Map each given user (Ed25519) pubkey to the X25519 encryption pubkeys of
+   * their registered devices.
+   *
+   * Users with no registered device key are absent from the map rather than
+   * mapped to an empty array, so a caller cannot mistake "cannot be addressed"
+   * for "addressed by their identity key" — the substitution behind #1021.
+   *
+   * Unlike `buildReaderPubkeys` this adds no admin recipient and flattens
+   * nothing: callers that must know *which* member a recipient key belongs to
+   * (`GET /api/records/envelope-recipients`) need the association preserved.
+   */
+  async resolveDeviceEncryptionPubkeys(
+    userPubkeys: string[],
+  ): Promise<Map<string, string[]>> {
+    return resolveEncryptionPubkeys(this.db, userPubkeys)
   }
 
   /**
