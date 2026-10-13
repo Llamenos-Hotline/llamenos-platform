@@ -145,6 +145,17 @@ jobs:
   # ─── Required legs: exact parity with default setup ───────────────────
   analyze:
     name: Analyze advanced (${{ matrix.language }})
+    # Release-PR exemption (#1817) — the SAME predicate desktop-e2e.yml,
+    # semgrep.yml and security-audit.yml carry; keep them byte-identical.
+    # The knope release PR (head branch `release`) diffs version strings and
+    # a changelog — no code — yet every merge to main regenerated it and ran
+    # all five legs (~8 min each) over that diff, 6 times on 2026-10-11
+    # alone. Skipping here is safe because the legs still run on the push to
+    # main the merge itself produces, and the rollup below names the skip
+    # rather than reading it as a failure. scripts/check-codeql-languages.ts
+    # allowlists exactly this expression — any other `if:` here is a
+    # violation.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -364,9 +375,12 @@ jobs:
 
   # ─── Rollup: the `CodeQL` check-run on every event (see the header) ───
   # Needs ONLY the required matrix. `needs.analyze.result` is `success` only
-  # if every leg succeeded; a failed, cancelled or skipped leg fails this job
-  # — unlike ci-status, `skipped` is not accepted, because `analyze` has no
-  # condition under which skipping it would be legitimate.
+  # if every leg succeeded; a failed or cancelled leg fails this job —
+  # and so does a `skipped` one, with exactly ONE exemption (#1817, see the
+  # `analyze` job's `if:`): the knope release PR, whose version-bump diff
+  # carries no code to analyse. Everywhere else `skipped` is not accepted,
+  # because `analyze` has no other condition under which skipping it would be
+  # legitimate.
   codeql:
     name: CodeQL
     needs: [analyze]
@@ -379,8 +393,19 @@ jobs:
       - name: Require every required leg to have analysed and uploaded
         env:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           if [[ "$ANALYZE_RESULT" != "success" ]]; then
+            # The ONE legitimate skip (#1817): the knope release PR's diff is
+            # a version bump with no code, so `analyze` is gated off for that
+            # head branch and reports `skipped` here. Full analysis still
+            # runs on the push to main the merge produces. Any OTHER skipped
+            # leg stays a failure — a missing leg is missing coverage.
+            if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REF" == "release" && "$ANALYZE_RESULT" == "skipped" ]]; then
+              echo "Required CodeQL legs skipped by design on the knope release PR (#1817): version-bump-only diff; analysis runs on the push to main when it merges."
+              exit 0
+            fi
             echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage — see the Analyze advanced (<language>) jobs."
             exit 1
           fi

@@ -541,6 +541,8 @@
     "cancel": "Use PIN",
     "none": "No biometrics"
   },
+  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
+  "biometricUnlockTitle": "Unlock Llamenos",
   "blast": {
     "channelSignal": "Signal",
     "channelSms": "SMS",
@@ -1786,6 +1788,10 @@
     "viewCalls": "View Calls"
   },
   "decryptingKeys": "Decrypting keys...",
+  "deepLinkConfirmCancel": "Cancel",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
+  "deepLinkConfirmProceed": "Proceed",
+  "deepLinkConfirmTitle": "Open link?",
   "delete": "Delete",
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
@@ -1802,6 +1808,13 @@
     "resetNotice": "Demo data resets daily",
     "tryDemo": "Try the demo",
     "volunteer": "Volunteer"
+  },
+  "deviceKey": {
+    "displayLabel": "Your secret key",
+    "displayValue": "Secret key is displayed. Keep this private.",
+    "label": "Private Key ",
+    "placeholder": "Enter key hex",
+    "warning": "Never share your private key with anyone"
   },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
@@ -1866,6 +1879,18 @@
     "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  },
   "enterApiCredentials": "Enter API Credentials",
   "entityTemplates": {
     "title": "Entity Templates",
@@ -2474,7 +2499,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Hindi ma-load ang iyong mga hub",
+    "membershipLoadFailedBody": "Hindi sinabi ng server kung aling mga hub ang kinabibilangan mo, kaya wala pang maipapakita. Tingnan ang iyong koneksyon at subukan muli."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2495,8 +2522,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
+  "incomingCallBody": "Someone is calling the hotline",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "Kailangan ng access sa mikropono para sumagot ng tawag sa app.",
   "inviteCode": "Invite Code",
@@ -2720,13 +2747,6 @@
     "sendError": "Failed to send notifications",
     "contactsSection": "Contacts"
   },
-  "deviceKey": {
-    "displayLabel": "Your secret key",
-    "displayValue": "Secret key is displayed. Keep this private.",
-    "label": "Private Key ",
-    "placeholder": "Enter key hex",
-    "warning": "Never share your private key with anyone"
-  },
   "oauthConnectTitle": "Connect Provider",
   "oauthDescription": "Connect via OAuth",
   "oauthProvider": {
@@ -2755,6 +2775,7 @@
     "backupAcknowledge": "Nai-save ko na ang aking recovery key sa ligtas na lokasyon",
     "backupDescription": "Isulat ang recovery key na ito at itago nang maayos. Ito lang ang paraan para ma-recover ang iyong account sa bagong device.",
     "backupDownloaded": "Na-download na ang backup",
+    "backupFailed": "Hindi makagawa ng naka-encrypt na backup: {{reason}}",
     "backupTitle": "I-save ang Iyong Recovery Key",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2762,6 +2783,7 @@
     "copied": "Copied!",
     "copy": "Copy to Clipboard",
     "createPin": "Create a PIN",
+    "deviceKeyLabel": "Your Device Key",
     "downloadBackup": "I-download ang Encrypted na Backup",
     "errorTitle": "Error sa Imbitasyon",
     "expired": "Nag-expire na ang imbitasyong ito",
@@ -2769,14 +2791,11 @@
     "getStarted": "Magsimula",
     "goToLogin": "Pumunta sa Login",
     "invalidCode": "Hindi valid ang invite code",
-    "tryAgain": "Subukan muli",
-    "validateUnavailable": "Hindi namin masuri ang inyong imbitasyon ngayon. Hindi ito problema sa imbitasyon — subukan muli.",
-    "validateRetryAfter": "Hindi namin masuri ang inyong imbitasyon ngayon. Subukan muli pagkalipas ng {{seconds}} segundo.",
     "noCode": "Walang ibinigay na invite code",
     "npubLabel": "Your Public Key",
-    "deviceKeyLabel": "Your Device Key",
     "pinDescription": "Choose a 6-digit PIN to protect your key on this device",
     "pinMismatch": "PINs don't match. Try again.",
+    "rateLimitedRetry": "Masyadong maraming pagtatangka. Maghintay ng {{seconds}} segundo, pagkatapos ay subukan muli.",
     "recoveryKey": "Ang iyong recovery key",
     "recoveryKeyWarning": "Isulat ito at itago nang ligtas. Kung mawala ang iyong PIN at ang key na ito, hindi na mare-recover ang iyong account.",
     "redeemFailed": "Nabigong i-redeem ang imbitasyon",
@@ -2786,6 +2805,10 @@
     "storageTipsTitle": "Paano itago ang iyong recovery key",
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
+    "tryAgain": "Subukan muli",
+    "validateRetryAfter": "Hindi namin masuri ang inyong imbitasyon ngayon. Subukan muli pagkalipas ng {{seconds}} segundo.",
+    "validateUnavailable": "Hindi namin masuri ang inyong imbitasyon ngayon. Hindi ito problema sa imbitasyon — subukan muli.",
+    "validationUnavailable": "Hindi mapatunayan ang iyong imbitasyon sa ngayon. Suriin ang iyong koneksyon at subukan muli.",
     "welcomeDescription": "Inimbitahan kang sumali bilang boluntaryo, {{volunteerName}}",
     "welcomeTitle": "Maligayang pagdating sa {{name}}"
   },
@@ -3141,6 +3164,15 @@
   "provisionNumberTitle": "Provision Number",
   "provisionSuccessMessage": "Your phone number has been provisioned successfully",
   "provisionSuccessTitle": "Number Provisioned",
+  "pushSetup": {
+    "title": "Push Notifications",
+    "description": "Select a push notification provider to receive alerts when you're offline.",
+    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
+    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
+    "registered": "Push notifications are active.",
+    "registering": "Registering for push notifications…",
+    "failed": "Push notification registration failed. Try again later."
+  },
   "pwa": {
     "installButton": "Install",
     "installText": "Install this app for quick access and a better experience."
@@ -3617,6 +3649,20 @@
     "placeholder": "Select..."
   },
   "selectNumber": "Select Number",
+  "serverAddress": {
+    "checking": "Checking...",
+    "connect": "Connect",
+    "errorWithDetail": "Couldn't reach that server: {{detail}}",
+    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
+    "firstRunTitle": "Connect to your hotline server",
+    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
+    "label": "Server address",
+    "placeholder": "app.example.org",
+    "saveAndReconnect": "Save and reconnect",
+    "settingsDescription": "Change which server this desktop app connects to.",
+    "settingsTitle": "Server connection",
+    "unreachable": "Couldn't reach that server. Check the address and try again."
+  },
   "session": {
     "expired": "Nag-expire na ang Session",
     "expiredDescription": "Nag-expire na ang iyong session. Puwede kang mag-reconnect o mag-log in muli.",
@@ -3753,20 +3799,6 @@
     "biometricEnrolled": "Biometric unlock is on for this device.",
     "biometricInvalidated": "Your device's biometrics changed, so biometric unlock was turned off. Re-enable it below, or continue using your PIN.",
     "biometricPinPrompt": "Enter your PIN to enable biometric unlock"
-  },
-  "serverAddress": {
-    "checking": "Checking...",
-    "connect": "Connect",
-    "errorWithDetail": "Couldn't reach that server: {{detail}}",
-    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
-    "firstRunTitle": "Connect to your hotline server",
-    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
-    "label": "Server address",
-    "placeholder": "app.example.org",
-    "saveAndReconnect": "Save and reconnect",
-    "settingsDescription": "Change which server this desktop app connects to.",
-    "settingsTitle": "Server connection",
-    "unreachable": "Couldn't reach that server. Check the address and try again."
   },
   "setup": {
     "autoResponse": "Auto-Response Template",
@@ -4508,6 +4540,7 @@
     "versionChange": "{{current}} → {{new}}"
   },
   "useBiometric": "Use Biometric",
+  "usePinInstead": "Use PIN",
   "userProfile": {
     "activity": "Aktibidad",
     "allChannels": "All Channels",
@@ -4574,6 +4607,20 @@
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",
   "verifyCodeButton": "Verify Code",
+  "voice": {
+    "greeting": "Salamat sa pagtawag sa {name}.",
+    "rateLimited": "Maraming tumatawag sa ngayon. Pakisubukan muli mamaya.",
+    "captchaPrompt": "Pakilagay ang mga sumusunod na numero:",
+    "captchaTimeout": "Hindi namin natanggap ang iyong input. Paalam.",
+    "pleaseHold": "Pakihintay habang kinokonekta ka namin.",
+    "captchaSuccess": "Salamat. Pakihintay habang kinokonekta ka namin.",
+    "captchaFail": "Hindi namin makonekta ang iyong tawag. Paalam.",
+    "captchaRetry": "Hindi tama iyon. Pakisubukan muli.",
+    "waitMessage": "Mahalaga sa amin ang iyong tawag. Pakihintay habang kinokonekta ka namin sa isang boluntaryo.",
+    "unavailableMessage": "Paumanhin, walang available na sumagot sa iyong tawag sa ngayon. Pakisubukan muli mamaya. Paalam.",
+    "voicemailPrompt": "Walang available na makasagot ng iyong tawag ngayon. Mangyaring mag-iwan ng mensahe pagkatapos ng tono.",
+    "voicemailThanks": "Salamat sa iyong mensahe. Paalam."
+  },
   "voiceIncomingWebhook": "Voice Incoming Webhook",
   "voiceStatusWebhook": "Voice Status Webhook",
   "webauthn": {
@@ -4643,47 +4690,5 @@
   "yes": "Yes",
   "yourIdentity": "Your Identity",
   "yourPrivateKey": "Your Private Key",
-  "yourPublicKey": "Your Public Key",
-  "pushSetup": {
-    "title": "Push Notifications",
-    "description": "Select a push notification provider to receive alerts when you're offline.",
-    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
-    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
-    "registered": "Push notifications are active.",
-    "registering": "Registering for push notifications…",
-    "failed": "Push notification registration failed. Try again later."
-  },
-  "voice": {
-    "greeting": "Salamat sa pagtawag sa {name}.",
-    "rateLimited": "Maraming tumatawag sa ngayon. Pakisubukan muli mamaya.",
-    "captchaPrompt": "Pakilagay ang mga sumusunod na numero:",
-    "captchaTimeout": "Hindi namin natanggap ang iyong input. Paalam.",
-    "pleaseHold": "Pakihintay habang kinokonekta ka namin.",
-    "captchaSuccess": "Salamat. Pakihintay habang kinokonekta ka namin.",
-    "captchaFail": "Hindi namin makonekta ang iyong tawag. Paalam.",
-    "captchaRetry": "Hindi tama iyon. Pakisubukan muli.",
-    "waitMessage": "Mahalaga sa amin ang iyong tawag. Pakihintay habang kinokonekta ka namin sa isang boluntaryo.",
-    "unavailableMessage": "Paumanhin, walang available na sumagot sa iyong tawag sa ngayon. Pakisubukan muli mamaya. Paalam.",
-    "voicemailPrompt": "Walang available na makasagot ng iyong tawag ngayon. Mangyaring mag-iwan ng mensahe pagkatapos ng tono.",
-    "voicemailThanks": "Salamat sa iyong mensahe. Paalam."
-  },
-  "biometricUnlockTitle": "Unlock Llamenos",
-  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
-  "usePinInstead": "Use PIN",
-  "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
-  "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel",
-  "enroll": {
-    "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enroll",
-    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
-    "errorNotFound": "Invite not found. Check the code and try again.",
-    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
-    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
-    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
-    "retry": "Retry",
-    "continueWithout": "Continue without enrolling"
-  }
+  "yourPublicKey": "Your Public Key"
 }

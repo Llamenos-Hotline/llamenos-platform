@@ -541,6 +541,8 @@
     "cancel": "Use PIN",
     "none": "No biometrics"
   },
+  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
+  "biometricUnlockTitle": "Unlock Llamenos",
   "blast": {
     "channelSignal": "Signal",
     "channelSms": "SMS",
@@ -1786,6 +1788,10 @@
     "viewCalls": "View Calls"
   },
   "decryptingKeys": "Decrypting keys...",
+  "deepLinkConfirmCancel": "Cancel",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
+  "deepLinkConfirmProceed": "Proceed",
+  "deepLinkConfirmTitle": "Open link?",
   "delete": "Delete",
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
@@ -1802,6 +1808,13 @@
     "resetNotice": "Demo data resets daily",
     "tryDemo": "Try the demo",
     "volunteer": "Volunteer"
+  },
+  "deviceKey": {
+    "displayLabel": "Your secret key",
+    "displayValue": "Secret key is displayed. Keep this private.",
+    "label": "Private Key ",
+    "placeholder": "Enter key hex",
+    "warning": "Never share your private key with anyone"
   },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
@@ -1866,6 +1879,18 @@
     "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  },
   "enterApiCredentials": "Enter API Credentials",
   "entityTemplates": {
     "title": "Entity Templates",
@@ -2474,7 +2499,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "आपके हब लोड नहीं हो सके",
+    "membershipLoadFailedBody": "सर्वर ने नहीं बताया कि आप किन हबों से जुड़े हैं, इसलिए अभी कुछ भी नहीं दिखाया जा सकता। अपना कनेक्शन जाँचें और फिर कोशिश करें।"
   },
   "identityLabel": "Identity",
   "import": {
@@ -2495,8 +2522,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
+  "incomingCallBody": "Someone is calling the hotline",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "ऐप में कॉल का उत्तर देने के लिए माइक्रोफ़ोन की अनुमति आवश्यक है।",
   "inviteCode": "Invite Code",
@@ -2720,13 +2747,6 @@
     "sendError": "Failed to send notifications",
     "contactsSection": "Contacts"
   },
-  "deviceKey": {
-    "displayLabel": "Your secret key",
-    "displayValue": "Secret key is displayed. Keep this private.",
-    "label": "Private Key ",
-    "placeholder": "Enter key hex",
-    "warning": "Never share your private key with anyone"
-  },
   "oauthConnectTitle": "Connect Provider",
   "oauthDescription": "Connect via OAuth",
   "oauthProvider": {
@@ -2755,6 +2775,7 @@
     "backupAcknowledge": "मैंने अपनी रिकवरी कुंजी को एक सुरक्षित स्थान पर सहेज लिया है",
     "backupDescription": "इस रिकवरी कुंजी को लिख लें और सुरक्षित रखें। नए डिवाइस पर अपना खाता पुनर्प्राप्त करने का यही एकमात्र तरीका है।",
     "backupDownloaded": "बैकअप डाउनलोड हो गया",
+    "backupFailed": "आपका एन्क्रिप्टेड बैकअप नहीं बनाया जा सका: {{reason}}",
     "backupTitle": "अपनी रिकवरी कुंजी सहेजें",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2762,6 +2783,7 @@
     "copied": "Copied!",
     "copy": "Copy to Clipboard",
     "createPin": "Create a PIN",
+    "deviceKeyLabel": "Your Device Key",
     "downloadBackup": "एन्क्रिप्टेड बैकअप डाउनलोड करें",
     "errorTitle": "आमंत्रण त्रुटि",
     "expired": "यह आमंत्रण समाप्त हो गया है",
@@ -2769,14 +2791,11 @@
     "getStarted": "शुरू करें",
     "goToLogin": "लॉगिन पर जाएं",
     "invalidCode": "अमान्य आमंत्रण कोड",
-    "tryAgain": "पुनः प्रयास करें",
-    "validateUnavailable": "हम अभी आपका आमंत्रण जाँच नहीं सके। यह आपके आमंत्रण की समस्या नहीं है — कृपया पुनः प्रयास करें।",
-    "validateRetryAfter": "हम अभी आपका आमंत्रण जाँच नहीं सके। कृपया {{seconds}} सेकंड बाद पुनः प्रयास करें।",
     "noCode": "कोई आमंत्रण कोड नहीं दिया गया",
     "npubLabel": "Your Public Key",
-    "deviceKeyLabel": "Your Device Key",
     "pinDescription": "Choose a 6-digit PIN to protect your key on this device",
     "pinMismatch": "PINs don't match. Try again.",
+    "rateLimitedRetry": "बहुत अधिक प्रयास। कृपया {{seconds}} सेकंड प्रतीक्षा करें, फिर पुनः प्रयास करें।",
     "recoveryKey": "आपकी रिकवरी कुंजी",
     "recoveryKeyWarning": "इसे लिख लें और सुरक्षित रूप से संग्रहित करें। यदि आप अपना PIN और यह कुंजी दोनों खो देते हैं, तो आपका खाता पुनर्प्राप्त नहीं किया जा सकता।",
     "redeemFailed": "आमंत्रण उपयोग करने में विफल",
@@ -2786,6 +2805,10 @@
     "storageTipsTitle": "अपनी रिकवरी कुंजी को कैसे स्टोर करें",
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
+    "tryAgain": "पुनः प्रयास करें",
+    "validateRetryAfter": "हम अभी आपका आमंत्रण जाँच नहीं सके। कृपया {{seconds}} सेकंड बाद पुनः प्रयास करें।",
+    "validateUnavailable": "हम अभी आपका आमंत्रण जाँच नहीं सके। यह आपके आमंत्रण की समस्या नहीं है — कृपया पुनः प्रयास करें।",
+    "validationUnavailable": "अभी आपका निमंत्रण सत्यापित नहीं किया जा सका। अपना कनेक्शन जांचें और पुनः प्रयास करें।",
     "welcomeDescription": "आपको स्वयंसेवक के रूप में आमंत्रित किया गया है, {{volunteerName}}",
     "welcomeTitle": "{{name}} में आपका स्वागत है"
   },
@@ -3141,6 +3164,15 @@
   "provisionNumberTitle": "Provision Number",
   "provisionSuccessMessage": "Your phone number has been provisioned successfully",
   "provisionSuccessTitle": "Number Provisioned",
+  "pushSetup": {
+    "title": "Push Notifications",
+    "description": "Select a push notification provider to receive alerts when you're offline.",
+    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
+    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
+    "registered": "Push notifications are active.",
+    "registering": "Registering for push notifications…",
+    "failed": "Push notification registration failed. Try again later."
+  },
   "pwa": {
     "installButton": "Install",
     "installText": "Install this app for quick access and a better experience."
@@ -3617,6 +3649,20 @@
     "placeholder": "Select..."
   },
   "selectNumber": "Select Number",
+  "serverAddress": {
+    "checking": "Checking...",
+    "connect": "Connect",
+    "errorWithDetail": "Couldn't reach that server: {{detail}}",
+    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
+    "firstRunTitle": "Connect to your hotline server",
+    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
+    "label": "Server address",
+    "placeholder": "app.example.org",
+    "saveAndReconnect": "Save and reconnect",
+    "settingsDescription": "Change which server this desktop app connects to.",
+    "settingsTitle": "Server connection",
+    "unreachable": "Couldn't reach that server. Check the address and try again."
+  },
   "session": {
     "expired": "सत्र समाप्त",
     "expiredDescription": "आपका सत्र समाप्त हो गया है। आप पुनः कनेक्ट कर सकते हैं या फिर से लॉग इन कर सकते हैं।",
@@ -3753,20 +3799,6 @@
     "biometricEnrolled": "इस डिवाइस पर बायोमेट्रिक अनलॉक चालू है।",
     "biometricInvalidated": "आपके डिवाइस की बायोमेट्रिक जानकारी बदल गई, इसलिए बायोमेट्रिक अनलॉक बंद कर दिया गया। नीचे इसे फिर से चालू करें, या अपने पिन का उपयोग जारी रखें।",
     "biometricPinPrompt": "बायोमेट्रिक अनलॉक चालू करने के लिए अपना पिन दर्ज करें"
-  },
-  "serverAddress": {
-    "checking": "Checking...",
-    "connect": "Connect",
-    "errorWithDetail": "Couldn't reach that server: {{detail}}",
-    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
-    "firstRunTitle": "Connect to your hotline server",
-    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
-    "label": "Server address",
-    "placeholder": "app.example.org",
-    "saveAndReconnect": "Save and reconnect",
-    "settingsDescription": "Change which server this desktop app connects to.",
-    "settingsTitle": "Server connection",
-    "unreachable": "Couldn't reach that server. Check the address and try again."
   },
   "setup": {
     "autoResponse": "Auto-Response Template",
@@ -4508,6 +4540,7 @@
     "versionChange": "{{current}} → {{new}}"
   },
   "useBiometric": "Use Biometric",
+  "usePinInstead": "Use PIN",
   "userProfile": {
     "activity": "गतिविधि",
     "allChannels": "All Channels",
@@ -4574,6 +4607,20 @@
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",
   "verifyCodeButton": "Verify Code",
+  "voice": {
+    "greeting": "{name} पर कॉल करने के लिए धन्यवाद।",
+    "rateLimited": "वर्तमान में कॉल की संख्या अधिक है। कृपया बाद में पुनः प्रयास करें।",
+    "captchaPrompt": "कृपया निम्नलिखित अंक दर्ज करें:",
+    "captchaTimeout": "हमें आपका इनपुट नहीं मिला। अलविदा।",
+    "pleaseHold": "कृपया प्रतीक्षा करें, हम आपको कनेक्ट कर रहे हैं।",
+    "captchaSuccess": "धन्यवाद। कृपया प्रतीक्षा करें, हम आपको कनेक्ट कर रहे हैं।",
+    "captchaFail": "हम आपकी कॉल कनेक्ट नहीं कर पा रहे हैं। अलविदा।",
+    "captchaRetry": "यह गलत था। कृपया पुनः प्रयास करें।",
+    "waitMessage": "आपकी कॉल हमारे लिए महत्वपूर्ण है। कृपया प्रतीक्षा करें, हम आपको एक स्वयंसेवक से जोड़ रहे हैं।",
+    "unavailableMessage": "क्षमा करें, इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें। अलविदा।",
+    "voicemailPrompt": "इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बीप के बाद एक संदेश छोड़ें।",
+    "voicemailThanks": "आपके संदेश के लिए धन्यवाद। अलविदा।"
+  },
   "voiceIncomingWebhook": "Voice Incoming Webhook",
   "voiceStatusWebhook": "Voice Status Webhook",
   "webauthn": {
@@ -4643,47 +4690,5 @@
   "yes": "Yes",
   "yourIdentity": "Your Identity",
   "yourPrivateKey": "Your Private Key",
-  "yourPublicKey": "Your Public Key",
-  "pushSetup": {
-    "title": "Push Notifications",
-    "description": "Select a push notification provider to receive alerts when you're offline.",
-    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
-    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
-    "registered": "Push notifications are active.",
-    "registering": "Registering for push notifications…",
-    "failed": "Push notification registration failed. Try again later."
-  },
-  "voice": {
-    "greeting": "{name} पर कॉल करने के लिए धन्यवाद।",
-    "rateLimited": "वर्तमान में कॉल की संख्या अधिक है। कृपया बाद में पुनः प्रयास करें।",
-    "captchaPrompt": "कृपया निम्नलिखित अंक दर्ज करें:",
-    "captchaTimeout": "हमें आपका इनपुट नहीं मिला। अलविदा।",
-    "pleaseHold": "कृपया प्रतीक्षा करें, हम आपको कनेक्ट कर रहे हैं।",
-    "captchaSuccess": "धन्यवाद। कृपया प्रतीक्षा करें, हम आपको कनेक्ट कर रहे हैं।",
-    "captchaFail": "हम आपकी कॉल कनेक्ट नहीं कर पा रहे हैं। अलविदा।",
-    "captchaRetry": "यह गलत था। कृपया पुनः प्रयास करें।",
-    "waitMessage": "आपकी कॉल हमारे लिए महत्वपूर्ण है। कृपया प्रतीक्षा करें, हम आपको एक स्वयंसेवक से जोड़ रहे हैं।",
-    "unavailableMessage": "क्षमा करें, इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें। अलविदा।",
-    "voicemailPrompt": "इस समय आपकी कॉल लेने के लिए कोई उपलब्ध नहीं है। कृपया बीप के बाद एक संदेश छोड़ें।",
-    "voicemailThanks": "आपके संदेश के लिए धन्यवाद। अलविदा।"
-  },
-  "biometricUnlockTitle": "Unlock Llamenos",
-  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
-  "usePinInstead": "Use PIN",
-  "deepLinkConfirmTitle": "Open link?",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
-  "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmCancel": "Cancel",
-  "enroll": {
-    "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enroll",
-    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
-    "errorNotFound": "Invite not found. Check the code and try again.",
-    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
-    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
-    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
-    "retry": "Retry",
-    "continueWithout": "Continue without enrolling"
-  }
+  "yourPublicKey": "Your Public Key"
 }

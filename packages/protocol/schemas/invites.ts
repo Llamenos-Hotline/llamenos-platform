@@ -32,6 +32,8 @@ export const inviteValidationResponseSchema = z.object({
   roleIds: z.array(z.string()).optional(),
 })
 
+export type InviteValidationResponse = z.infer<typeof inviteValidationResponseSchema>
+
 // --- List/wrapper response schemas ---
 
 export const inviteListResponseSchema = z.object({

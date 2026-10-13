@@ -35,10 +35,11 @@ vi.mock('@/lib/api-config', () => ({ getApiUrl: (p: string) => `/api${p}` }))
 const { validateInvite } = await import('@/lib/api/invites')
 
 /** A `Response`-shaped stand-in: only `ok`, `status` and `json()` are read. */
-function reply(status: number, body: unknown) {
+function reply(status: number, body: unknown, headers = new Headers()) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers,
     json: async () => body,
   }
 }
@@ -67,6 +68,13 @@ describe('validateInvite', () => {
     expect(result.outcome).not.toBe('invalid')
   })
 
+  it('uses a Retry-After response header when available', async () => {
+    nextResponse = () => reply(429, {}, new Headers({ 'Retry-After': '45' }))
+    expect(await validateInvite('abc')).toMatchObject({
+      outcome: 'retryable', status: 429, retryAfterSeconds: 45,
+    })
+  })
+
   it('treats a 5xx as retryable, not as a bad invite', async () => {
     nextResponse = () => reply(502, { error: 'Bad Gateway' })
     expect(await validateInvite('abc')).toMatchObject({ outcome: 'retryable', status: 502 })
@@ -74,7 +82,8 @@ describe('validateInvite', () => {
 
   it('treats a non-JSON error page as retryable without throwing', async () => {
     nextResponse = () => ({
-      ok: false, status: 502, json: async () => { throw new SyntaxError('Unexpected token <') },
+      ok: false, status: 502, headers: new Headers(),
+      json: async () => { throw new SyntaxError('Unexpected token <') },
     })
     expect(await validateInvite('abc')).toEqual({ outcome: 'retryable', status: 502, retryAfterSeconds: undefined })
   })

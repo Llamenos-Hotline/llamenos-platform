@@ -4,9 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useConfig } from '@/lib/config'
 import { validateInvite, redeemInvite } from '@/lib/api'
-import { generateKeypairAndLoad, generateBackupFromState, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
+import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createNoncelessAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin } from '@/lib/key-manager'
-import { generateRecoveryKey, downloadBackupFile } from '@/lib/backup'
+import { downloadBackupFile, type BackupFile } from '@/lib/backup'
 import { useToast } from '@/lib/toast'
 import { setLanguage } from '@/lib/i18n'
 import { LANGUAGES } from '@shared/languages'
@@ -54,6 +54,7 @@ function OnboardingPage() {
   const [recoveryKeyStr, setRecoveryKeyStr] = useState('')
   const [backupAcknowledged, setBackupAcknowledged] = useState(false)
   const [backupDownloaded, setBackupDownloaded] = useState(false)
+  const [backupError, setBackupError] = useState('')
 
   const langGroupRef = useRef<HTMLDivElement>(null)
 
@@ -103,8 +104,8 @@ function OnboardingPage() {
         setErrorRetryable(true)
         setErrorMsg(
           result.retryAfterSeconds !== undefined
-            ? t('onboarding.validateRetryAfter', { seconds: result.retryAfterSeconds })
-            : t('onboarding.validateUnavailable'),
+            ? t('onboarding.rateLimitedRetry', { seconds: result.retryAfterSeconds })
+            : t('onboarding.validationUnavailable'),
         )
         return
       }
@@ -126,9 +127,9 @@ function OnboardingPage() {
   }
 
   useEffect(() => {
-    if (step !== 'loading') return
+    if (validatingRef.current || step !== 'loading') return
     runValidation()
-  }, [inviteCode])
+  }, [inviteCode, runValidation, step])
 
   function handlePinComplete(enteredPin: string) {
     if (pinStep === 'create') {
@@ -172,7 +173,7 @@ function OnboardingPage() {
       await redeemInvite(inviteCode, result.publicKey, parsed.timestamp, parsed.token)
 
       // Generate recovery key (shown to user instead of device key)
-      const rk = generateRecoveryKey()
+      const rk = await generateRecoveryKey()
       setRecoveryKeyStr(rk)
 
       setStep('backup')
@@ -184,12 +185,21 @@ function OnboardingPage() {
 
   async function downloadBackup() {
     if (!genResult) return
-    // Backup created entirely in Rust — device key never enters JS
-    const backupJson = await generateBackupFromState(genResult.publicKey, confirmedPin, recoveryKeyStr)
-    const backup = JSON.parse(backupJson) as Parameters<typeof downloadBackupFile>[0]
-    downloadBackupFile(backup)
-    setBackupDownloaded(true)
-    toast(t('onboarding.backupDownloaded'), 'success')
+    // Backup created entirely in Rust — device key never enters JS.
+    // This step gates `Continue`, so a failure must be visible: an unhandled
+    // rejection here used to leave the user stranded with a dead button and no
+    // explanation (#1709).
+    setBackupError('')
+    try {
+      const backupJson = await generateBackupFromState(confirmedPin, recoveryKeyStr)
+      downloadBackupFile(JSON.parse(backupJson) as BackupFile)
+      setBackupDownloaded(true)
+      toast(t('onboarding.backupDownloaded'), 'success')
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      setBackupError(t('onboarding.backupFailed', { reason }))
+      toast(t('onboarding.backupFailed', { reason }), 'error')
+    }
   }
 
   async function handleComplete() {
@@ -224,15 +234,15 @@ function OnboardingPage() {
               <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
             </div>
             <CardTitle>{t('onboarding.errorTitle')}</CardTitle>
-            <CardDescription>{errorMsg}</CardDescription>
+            <CardDescription data-testid="onboarding-error-message">{errorMsg}</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col items-center gap-2">
+          <CardContent className="flex flex-col items-center gap-2 text-center">
             {errorRetryable && (
-              <Button data-testid="onboarding-retry-btn" onClick={retryInvite} className="w-full">
+              <Button data-testid="onboarding-retry" onClick={retryInvite} className="w-full">
                 {t('onboarding.tryAgain')}
               </Button>
             )}
-            <Button variant="outline" onClick={() => navigate({ to: '/login' })} data-testid="onboarding-go-to-login-btn">
+            <Button variant="outline" data-testid="onboarding-go-to-login" onClick={() => navigate({ to: '/login' })}>
               {t('onboarding.goToLogin')}
             </Button>
           </CardContent>
@@ -253,7 +263,7 @@ function OnboardingPage() {
               <div className="mx-auto mb-3">
                 <LogoMark size="xl" />
               </div>
-              <CardTitle className="text-2xl">
+              <CardTitle className="text-2xl" data-testid="onboarding-welcome-title">
                 {t('onboarding.welcomeTitle', { name: hotlineName })}
               </CardTitle>
               <CardDescription>
@@ -398,6 +408,17 @@ function OnboardingPage() {
                 <Download className="h-4 w-4" />
                 {t('onboarding.downloadBackup')}
               </Button>
+
+              {backupError && (
+                <div
+                  data-testid="backup-error"
+                  role="alert"
+                  className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+                >
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{backupError}</span>
+                </div>
+              )}
 
               {/* Acknowledgment checkbox + continue */}
               <label className="flex items-start gap-2 cursor-pointer select-none">

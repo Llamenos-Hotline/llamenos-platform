@@ -158,13 +158,14 @@ function rulesAreClean(): boolean {
 
 /**
  * Gathers the live facts and reports the dependency's state. Called by
- * `doctor` (surfaced as path + HEAD commit + every problem, with a dirty repo
- * as a warning rather than a hard failure — normal while iterating on the
- * skill, but never silent) and by the engine adapter at dispatch time, which
- * records the HEAD commit in the run's ledger note so a run's behaviour can
- * always be traced back to the exact version of the script that produced it —
- * the version pin llamenos cannot otherwise express for a dependency it does
- * not vendor.
+ * `doctor` (surfaced as path + HEAD commit + every problem, ALL of them
+ * hard failures since issue #1801 — an uncommitted edit to dispatch-one.sh
+ * is the same provenance hole as a stale runtime checkout: code runs that
+ * no reviewed commit describes) and by the engine adapter at dispatch time,
+ * which records the HEAD commit in the run's ledger note so a run's
+ * behaviour can always be traced back to the exact version of the script
+ * that produced it — the version pin llamenos cannot otherwise express for
+ * a dependency it does not vendor.
  */
 export function checkDispatchDependency(): DependencyReport {
   const exists = existsSync(DISPATCH_SCRIPT)

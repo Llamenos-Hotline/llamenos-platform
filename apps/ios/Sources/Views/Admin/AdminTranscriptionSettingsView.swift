@@ -2,8 +2,17 @@ import SwiftUI
 
 // MARK: - AdminTranscriptionSettingsView
 
-/// Admin view for configuring transcription settings. Controls global
-/// transcription enable/disable and volunteer opt-out permissions.
+/// Admin view for the hub's two transcription settings: whether call
+/// transcription is on at all, and whether a user may turn it off for their
+/// own calls.
+///
+/// Those are the whole of `transcriptionSettingsSchema` — `globalEnabled` and
+/// `allowUserOptOut`, surfaced to Swift as the generated
+/// `TranscriptionSettings`. The screen used to decode the route's answer into a
+/// hand-written `{ enabled, allowVolunteerOptOut }`, so the load failed and the
+/// toggles showed hardcoded `false`s, and its Save button sent
+/// `PUT /api/settings/transcription` — a verb the server does not mount,
+/// answering 404 every time (#1724).
 struct AdminTranscriptionSettingsView: View {
     @Bindable var viewModel: AdminViewModel
 
@@ -27,6 +36,7 @@ struct AdminTranscriptionSettingsView: View {
                         Text(error)
                             .font(.brand(.footnote))
                             .foregroundStyle(Color.brandDestructive)
+                            .accessibilityIdentifier("transcription-settings-error")
                     }
                 }
 
@@ -35,6 +45,7 @@ struct AdminTranscriptionSettingsView: View {
                         Text(success)
                             .font(.brand(.footnote))
                             .foregroundStyle(.green)
+                            .accessibilityIdentifier("transcription-settings-success")
                     }
                 }
             }
@@ -51,27 +62,18 @@ struct AdminTranscriptionSettingsView: View {
 
     private var transcriptionSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.transcriptionSettings.enabled },
-                set: { viewModel.transcriptionSettings.enabled = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString(
-                        "admin_transcription_enabled",
-                        comment: "Enable Transcription"
-                    ))
-                    .font(.brand(.body))
-
-                    Text(NSLocalizedString(
-                        "admin_transcription_enabled_description",
-                        comment: "Automatically transcribe calls using client-side Whisper. Audio never leaves the device."
-                    ))
-                    .font(.brand(.caption))
-                    .foregroundStyle(Color.brandMutedForeground)
-                }
-            }
-            .tint(Color.brandPrimary)
-            .accessibilityIdentifier("transcription-enabled-toggle")
+            settingToggle(
+                title: NSLocalizedString(
+                    "admin_transcription_enabled",
+                    comment: "Enable Transcription"
+                ),
+                description: NSLocalizedString(
+                    "admin_transcription_enabled_desc",
+                    comment: "Automatically transcribe calls using on-device Whisper"
+                ),
+                identifier: "transcription-enabled-toggle",
+                isOn: $viewModel.transcriptionGlobalEnabled
+            )
         } header: {
             Text(NSLocalizedString("admin_transcription_header", comment: "Transcription"))
         }
@@ -81,39 +83,55 @@ struct AdminTranscriptionSettingsView: View {
 
     private var optOutSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.transcriptionSettings.allowVolunteerOptOut },
-                set: { viewModel.transcriptionSettings.allowVolunteerOptOut = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString(
-                        "admin_transcription_opt_out",
-                        comment: "Allow Volunteer Opt-Out"
-                    ))
+            settingToggle(
+                title: NSLocalizedString(
+                    "admin_transcription_optout",
+                    comment: "Allow Volunteer Opt-Out"
+                ),
+                description: NSLocalizedString(
+                    "admin_transcription_optout_desc",
+                    comment: "Let volunteers disable transcription for their calls"
+                ),
+                identifier: "transcription-opt-out-toggle",
+                isOn: $viewModel.transcriptionAllowUserOptOut
+            )
+            .disabled(!viewModel.transcriptionGlobalEnabled)
+        } header: {
+            Text(NSLocalizedString(
+                "admin_transcription_volunteer_header",
+                comment: "Volunteer Opt-Out"
+            ))
+        } footer: {
+            Text(NSLocalizedString(
+                "transcription_allow_opt_out_description",
+                comment: "When disabled, volunteers cannot opt out of call transcription"
+            ))
+            .font(.brand(.caption))
+        }
+    }
+
+    /// One labelled switch. The identifier is on the `Toggle` itself, so a test
+    /// reads its `value` ("0"/"1") and can compare what the screen shows against
+    /// what the server stored — an assertion that the switch merely *exists*
+    /// stayed green throughout the period in which saving was impossible.
+    private func settingToggle(
+        title: String,
+        description: String,
+        identifier: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
                     .font(.brand(.body))
 
-                    Text(NSLocalizedString(
-                        "admin_transcription_opt_out_description",
-                        comment: "Let volunteers disable transcription for their own calls."
-                    ))
+                Text(description)
                     .font(.brand(.caption))
                     .foregroundStyle(Color.brandMutedForeground)
-                }
-            }
-            .tint(Color.brandPrimary)
-            .disabled(!viewModel.transcriptionSettings.enabled)
-            .accessibilityIdentifier("transcription-opt-out-toggle")
-        } header: {
-            Text(NSLocalizedString("admin_transcription_volunteer_header", comment: "Volunteer Settings"))
-        } footer: {
-            if !viewModel.transcriptionSettings.enabled {
-                Text(NSLocalizedString(
-                    "admin_transcription_disabled_note",
-                    comment: "Enable transcription above to configure volunteer opt-out."
-                ))
-                .font(.brand(.caption))
             }
         }
+        .tint(Color.brandPrimary)
+        .accessibilityIdentifier(identifier)
     }
 
     // MARK: - Save Section

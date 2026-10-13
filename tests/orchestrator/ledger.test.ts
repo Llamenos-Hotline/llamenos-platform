@@ -58,6 +58,20 @@ describe('ledger', () => {
     expect(failedAttemptsIn(rows, '7')).toBe(1)
   })
 
+  // Issue #1755: WEDGED is excused from the FLEET-WIDE breaker (one stuck
+  // condition is not three failures) but NOT from the item's own attempt
+  // budget — a wedge is the item's lane state, so three wedges with the
+  // `needs-human` label cleared must still exhaust the item rather than
+  // retry the same refusal forever.
+  it('counts WEDGED as a failed attempt — the per-item bound still closes over it', () => {
+    const rows = [
+      rec({ itemId: '7', outcome: 'WEDGED', ts: 1 }),
+      rec({ itemId: '7', outcome: 'WEDGED', ts: 2 }),
+      rec({ itemId: '7', outcome: 'WEDGED', ts: 3 }),
+    ]
+    expect(failedAttemptsIn(rows, '7')).toBe(3)
+  })
+
   it('selects rows inside a window relative to an injected now', () => {
     const rows = [rec({ ts: 1000 }), rec({ ts: 5000 })]
     expect(sinceIn(rows, 2000, 6000)).toHaveLength(1)

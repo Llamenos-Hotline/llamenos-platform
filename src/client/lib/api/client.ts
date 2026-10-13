@@ -274,6 +274,11 @@ export function hubPath(hubId: string, path: string): string {
 
 // --- Public config (no auth) ---
 
+/**
+ * The UNAUTHENTICATED pre-login config. It carries no hub roster and no
+ * `defaultHubId` (#1710) — hubs come from the authenticated `listHubs()`,
+ * filtered by the server to the caller's memberships.
+ */
 export async function getConfig() {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -293,8 +298,6 @@ export async function getConfig() {
       demoMode?: boolean
       demoResetSchedule?: string | null
       needsBootstrap?: boolean
-      hubs?: import('@shared/types').Hub[]
-      defaultHubId?: string
       serverPubkey?: string
       wsRelayUrl?: string
       apiVersion?: number

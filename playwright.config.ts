@@ -21,6 +21,56 @@ const desktopStepDirs = [
 // linked issue; `bun run test-specs:validate` rejects the tag without one.
 const MISSING_STEPS = "fail-on-gen";
 
+/**
+ * The one resolver for "which backend is under test" (#1792).
+ *
+ * TEST_HUB_URL names the backend; everything that talks to it derives from
+ * this single expression — the backend-bdd* projects below, the bootstrap
+ * project's baseURL, tests/global-setup.ts (same expression), and
+ * vite.config.ts's /api proxy (apiProxyTarget). There is no second place to
+ * point at a different host.
+ */
+const BACKEND_BASE_URL = process.env.TEST_HUB_URL || "http://localhost:3000";
+
+/**
+ * Where the SPA is served during tests (the vite preview, or an explicit
+ * PLAYWRIGHT_BASE_URL). This is the UI host ONLY — it is never the authority
+ * for which backend a project talks to.
+ */
+const UI_BASE_URL =
+  process.env.PLAYWRIGHT_BASE_URL ||
+  `http://localhost:${process.env.PLAYWRIGHT_PORT || "8788"}`;
+
+function isLoopbackUrl(url: string): boolean {
+  const h = new URL(url).hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+}
+
+// Refuse the one combination that can still misdirect the destructive reset
+// (#1792): TEST_HUB_URL naming a REMOTE backend while PLAYWRIGHT_BASE_URL
+// points bootstrap at a different origin. bootstrap opens with
+// POST /api/test-reset-no-admin — a table wipe — resolved against its baseURL,
+// and with this combination that request lands on whatever PLAYWRIGHT_BASE_URL
+// proxies to, which cannot be verified from here. A loopback TEST_HUB_URL is
+// allowed (CI desktop sets TEST_HUB_URL=http://localhost:3000 alongside
+// PLAYWRIGHT_BASE_URL=http://localhost:8788): both hosts are local, and wiping
+// the local dev database is the designed behavior of a local run.
+if (
+  process.env.TEST_HUB_URL &&
+  process.env.PLAYWRIGHT_BASE_URL &&
+  new URL(process.env.TEST_HUB_URL).origin !== new URL(UI_BASE_URL).origin &&
+  !isLoopbackUrl(process.env.TEST_HUB_URL)
+) {
+  throw new Error(
+    `[playwright.config] Refusing to start: TEST_HUB_URL (${process.env.TEST_HUB_URL}) names a ` +
+      `remote backend, but PLAYWRIGHT_BASE_URL (${UI_BASE_URL}) would send the bootstrap ` +
+      `project's destructive POST /api/test-reset-no-admin to a different, unverifiable host ` +
+      `(#1792). Unset PLAYWRIGHT_BASE_URL so bootstrap targets TEST_HUB_URL directly, or run ` +
+      `backend-only suites via scripts/test-backend-bdd.sh, which bootstraps through the API ` +
+      `against TEST_HUB_URL and passes --no-deps so the bootstrap project never runs.`,
+  );
+}
+
 // Shared by every backend BDD project: they all talk to the backend server
 // directly rather than to the Vite preview.
 //
@@ -35,10 +85,10 @@ const MISSING_STEPS = "fail-on-gen";
 // cannot withhold is a credential the suite can no longer test, so the default
 // here is an ordinary caller and the exemption is opt-in at the call site.
 const BACKEND_PROJECT_USE = {
-  baseURL: process.env.TEST_HUB_URL || "http://localhost:3000",
+  baseURL: BACKEND_BASE_URL,
 };
 
-export default defineConfig({
+const playwrightConfig = defineConfig({
   testDir: "./tests",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
@@ -57,7 +107,7 @@ export default defineConfig({
     timeout: process.env.CI ? 15_000 : 10_000,
   },
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${process.env.PLAYWRIGHT_PORT || "8788"}`,
+    baseURL: UI_BASE_URL,
     trace: "on-first-retry",
     actionTimeout: process.env.CI ? 15_000 : 10_000,
     navigationTimeout: process.env.CI ? 30_000 : 15_000,
@@ -68,7 +118,25 @@ export default defineConfig({
       // before all parallel tests to avoid corrupting shared DB state.
       // The last bootstrap test restores normal state via resetTestState().
       name: "bootstrap",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // The reset must go to the host the operator named, never to a host
+        // inherited from the top-level default (#1792): this spec opens with
+        // POST /api/test-reset-no-admin, which wipes every table on whichever
+        // origin its relative requests resolve to. PLAYWRIGHT_BASE_URL wins
+        // when set (CI desktop names it alongside TEST_HUB_URL; that preview
+        // serves the SPA and proxies /api to the backend). Otherwise a named
+        // TEST_HUB_URL is the target — the SPA is not served there, so the UI
+        // half of this spec fails loudly, which is correct: the supported
+        // deployed path is scripts/test-backend-bdd.sh (--no-deps + API
+        // bootstrap), and a silent skip of the target's reset is the failure
+        // this guard exists to prevent. Only when neither is set does the
+        // local vite preview default apply.
+        baseURL:
+          process.env.PLAYWRIGHT_BASE_URL ||
+          process.env.TEST_HUB_URL ||
+          UI_BASE_URL,
+      },
       testMatch: ["**/bootstrap.spec.ts"],
     },
     {
@@ -219,3 +287,15 @@ export default defineConfig({
         timeout: 120_000, // Allow time for the build step
       },
 });
+
+// State where the suite will run (#1792): several failures in this repo came
+// from a suite passing — or wiping — against a host nobody intended, and the
+// resolved target was invisible in the output. Print each project's effective
+// baseURL once at config load so the target is on record before anything runs.
+for (const project of playwrightConfig.projects ?? []) {
+  const baseURL =
+    (project.use?.baseURL as string | undefined) ?? UI_BASE_URL;
+  console.log(`[playwright] project "${project.name}" → ${baseURL}`);
+}
+
+export default playwrightConfig;

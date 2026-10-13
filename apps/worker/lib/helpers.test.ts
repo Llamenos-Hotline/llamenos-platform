@@ -5,7 +5,7 @@
  * encodeCursor, decodeCursor, and TokenBucketRateLimiter.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { isValidE164, json, error, uint8ArrayToBase64URL } from './helpers'
 import { encodeCursor, decodeCursor } from './pagination'
 import { TokenBucketRateLimiter } from './rate-limiter'
