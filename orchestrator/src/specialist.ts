@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { READ_ONLY_CONTRACT, VERDICT_CONTRACT, prClaimSection, reviewFilesSection, type PrClaim } from './review.js'
+import {
+  READ_ONLY_CONTRACT, VERDICT_CONTRACT, compactReviewDiff, prClaimSection, reviewFilesSection, type PrClaim,
+} from './review.js'
 
 /**
  * Reviewer PROFILES — the registry half of `fleet/review` (#1158).
@@ -145,8 +147,10 @@ export async function resolveReviewerLabel(label: string, registryDir: string): 
  */
 export function buildProfileReviewPrompt(
   profile: ReviewerProfile, pr: string, diff: string, changedFiles: readonly string[], exportDir: string,
-  claim?: PrClaim,
+  claim?: PrClaim, baseDir?: string,
 ): string {
+  const compacted = compactReviewDiff(diff, exportDir, baseDir)
+  const localeSummary = compacted.summary === '' ? '' : `${compacted.summary}\n\n`
   return `${profile.instructions}\n\n` +
     '## How this review runs\n\n' +
     `You are the \`${profile.agent}\` reviewer for this pull request. You run CONCURRENTLY WITH, and ` +
@@ -154,6 +158,6 @@ export function buildProfileReviewPrompt(
     'on any defect in that scope — a FAIL from you fails `fleet/review` even when every other reviewer ' +
     'passed.\n\n' +
     `${READ_ONLY_CONTRACT}\n\n${VERDICT_CONTRACT}\n\n` +
-    `${prClaimSection(pr, claim)}\n\n${reviewFilesSection(changedFiles, exportDir)}\n\n` +
-    `## Diff\n\n\`\`\`diff\n${diff}\n\`\`\`\n`
+    `${prClaimSection(pr, claim)}\n\n${reviewFilesSection(changedFiles, exportDir)}\n\n${localeSummary}` +
+    `## Diff\n\n\`\`\`diff\n${compacted.diff}\n\`\`\`\n`
 }

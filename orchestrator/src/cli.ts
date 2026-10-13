@@ -1845,10 +1845,10 @@ const HANDLERS: Record<string, CommandHandler> = {
     exportBase: (repoDir, sha) => exportReviewSnapshot(repoDir, sha),
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.
-    profileReview: async (profile, diff, changedFiles, claim) => toSecondOpinion(await invokeVerifierEngine({
+    profileReview: async (profile, diff, changedFiles, claim, baseDir) => toSecondOpinion(await invokeVerifierEngine({
       authorEngine: 'claude',
       exportDir: ctx.headDir,
-      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir, claim),
+      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir, claim, baseDir),
       maxTurns: HIGH_IMPACT_MAX_TURNS,
       timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
     })),

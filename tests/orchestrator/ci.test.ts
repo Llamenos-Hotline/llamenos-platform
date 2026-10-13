@@ -387,6 +387,19 @@ describe('fleet/review in CI', () => {
     expect(v.summary).not.toContain('review unavailable:')
   })
 
+  it('reports a brief-size refusal distinctly from an unavailable reviewer engine', async () => {
+    const v = await runReviewCi(deps({
+      secondOpinion: vi.fn(async () => ({
+        verdict: 'UNREADABLE' as const,
+        text: 'kimi invocation skipped: the brief is 2000001 chars, over the 2000000-char sanity ceiling',
+        failureKind: 'brief-too-large' as const,
+      })),
+    }))
+    expect(v.ok).toBe(false)
+    expect(v.summary).toContain('review brief too large:')
+    expect(v.summary).not.toContain('review unavailable:')
+  })
+
   it('fails and says UNAVAILABLE when secondOpinion throws (a tamper detection, a crashed engine)', async () => {
     const v = await runReviewCi(deps({
       secondOpinion: vi.fn(async () => { throw new Error('worktree changed mid-review') }),
@@ -695,9 +708,11 @@ describe('fleet/review runs the whole review set in one job', () => {
 
   it('hands each profile its own resolved instructions, the diff, the export path and the PR\'s claim', async () => {
     const claim = { title: 'fix(x): rename a type', body: 'a pure rename, nothing else' }
+    const cleanupBase = vi.fn(async () => {})
     const d = deps({
       reviewSet: async () => ({ ok: true, profiles: [CRYPTO], fromLabels: [], reasons: [] }),
       prClaim: async () => claim,
+      exportBase: async () => ({ dir: '/tmp/base', cleanup: cleanupBase }),
     })
     await runReviewCi(d)
     // The claim reaches the PROFILE too, not only the generalist (#1696) —
@@ -709,8 +724,10 @@ describe('fleet/review runs the whole review set in one job', () => {
       'diff --git a/x b/x',
       passing.changedFiles,
       claim,
+      '/tmp/base',
     )
     expect(d.secondOpinion).toHaveBeenCalledWith(expect.objectContaining({ claim }))
+    expect(cleanupBase).toHaveBeenCalledTimes(1)
   })
 
   it('an unreadable PR read hands every reviewer no claim at all — never an invented one', async () => {

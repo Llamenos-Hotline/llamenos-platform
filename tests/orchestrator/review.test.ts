@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import {
   verifierArgs,
+  buildReviewPrompt,
   reviewFilesSection,
   REVIEWER_TOOLS,
   decodeEngineOutput,
@@ -371,6 +372,83 @@ describe('stripReviewerControlFiles', () => {
       rmSync(root, { recursive: true, force: true })
       rmSync(outside, { recursive: true, force: true })
     }
+  })
+})
+
+describe('review prompt locale diff compaction', () => {
+  it('omits locale patch churn and lists added, removed, and changed keys per locale', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-base-'))
+    const headDir = mkdtempSync(join(tmpdir(), 'llamenos-review-locale-head-'))
+    const localePath = 'packages/i18n/locales/en.json'
+    const baseFile = join(baseDir, localePath)
+    const headFile = join(headDir, localePath)
+    mkdirSync(join(baseDir, 'packages/i18n/locales'), { recursive: true })
+    mkdirSync(join(headDir, 'packages/i18n/locales'), { recursive: true })
+    writeFileSync(baseFile, JSON.stringify({
+      onboarding: { tryAgain: 'old value', welcomeTitle: 'unchanged' },
+      account: { removeMe: 'removed value' },
+    }, null, 2))
+    writeFileSync(headFile, JSON.stringify({
+      account: {},
+      onboarding: {
+        validateUnavailable: 'new key',
+        welcomeTitle: 'unchanged',
+        tryAgain: 'new value',
+      },
+    }, null, 2))
+    const diff = [
+      'diff --git a/packages/i18n/locales/en.json b/packages/i18n/locales/en.json',
+      '--- a/packages/i18n/locales/en.json',
+      '+++ b/packages/i18n/locales/en.json',
+      '-  "relocated": "LOCALE-CHURN-MUST-NOT-REACH-REVIEWER",',
+      '+  "relocated": "LOCALE-CHURN-MUST-NOT-REACH-REVIEWER",',
+      `+  "moved": "${'x'.repeat(KIMI_PROMPT_MAX_CHARS)}",`,
+      'diff --git a/apps/worker/src/change.ts b/apps/worker/src/change.ts',
+      '--- a/apps/worker/src/change.ts',
+      '+++ b/apps/worker/src/change.ts',
+      '+export const importantChange = true',
+      '',
+    ].join('\n')
+    try {
+      const prompt = buildReviewPrompt('1715', diff, {
+        passed: true, reasons: [], changedFiles: [localePath, 'apps/worker/src/change.ts'],
+        addedLines: 1, impact: 'low', impactReasons: [],
+      }, headDir, baseDir)
+
+      expect(prompt).not.toContain('LOCALE-CHURN-MUST-NOT-REACH-REVIEWER')
+      expect(prompt).not.toContain('diff --git a/packages/i18n/locales/en.json')
+      expect(prompt).toContain('Locale key changes (locale files omitted)')
+      expect(prompt).toContain('- en: added onboarding.validateUnavailable; removed account.removeMe; changed onboarding.tryAgain')
+      expect(prompt).toContain('export const importantChange = true')
+      expect(prompt.length).toBeLessThan(KIMI_PROMPT_MAX_CHARS)
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true })
+      rmSync(headDir, { recursive: true, force: true })
+    }
+  })
+
+  it('summarizes property changes from the patch when no base snapshot is available', () => {
+    const localePath = 'packages/i18n/locales/fr.json'
+    const diff = [
+      `diff --git a/${localePath} b/${localePath}`,
+      `--- a/${localePath}`,
+      `+++ b/${localePath}`,
+      '-  "changed": "old",',
+      '+  "changed": "new",',
+      '-  "removed": "value"',
+      '+  "added": "value"',
+      '-  "moved": "unchanged"',
+      '+  "moved": "unchanged"',
+      '',
+    ].join('\n')
+    const prompt = buildReviewPrompt('1715', diff, {
+      passed: true, reasons: [], changedFiles: [localePath],
+      addedLines: 2, impact: 'low', impactReasons: [],
+    }, '/head')
+
+    expect(prompt).not.toContain('diff --git a/packages/i18n/locales/fr.json')
+    expect(prompt).toContain('- fr: added added; removed removed; changed changed')
+    expect(prompt).not.toContain('"moved": "unchanged"')
   })
 })
 
@@ -1424,12 +1502,14 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     rmSync(bareDir, { recursive: true, force: true })
   })
 
-  it('a brief over the sanity ceiling cannot run kimi: claude carries it instead (guard)', async () => {
+  it('a brief over the sanity ceiling is a size refusal and does not cross to claude', async () => {
     mockExecFileResolves(CLAUDE_PASS)
     const result = await runSecondOpinion(`diff --git a/x b/x\n${'x'.repeat(KIMI_PROMPT_MAX_CHARS + 1)}`)
-    expect(result.verdict).toBe('PASS')
-    expect(result.engine).toBe('claude')
-    expect(mockExecFile).toHaveBeenCalledTimes(1) // kimi never exec'd — skipped pre-flight
+    expect(result.verdict).toBe('UNREADABLE')
+    expect(result.failureKind).toBe('brief-too-large')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toContain('over the 2000000-char sanity ceiling')
+    expect(mockExecFile).not.toHaveBeenCalled() // neither engine is invoked for an oversized brief
   })
 
   it('the temp brief file is deleted even when kimi fails (failure path)', async () => {
