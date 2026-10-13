@@ -16,7 +16,11 @@
  */
 import type { Database } from '../db'
 import type { MessagingAdapter } from '../messaging/adapter'
-import { SignalMessageQueue } from '../messaging/signal/queue'
+import {
+  DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
+  SIGNAL_QUEUE_CLEANUP_INTERVAL_MS,
+  SignalMessageQueue,
+} from '../messaging/signal/queue'
 import { createLogger } from './logger'
 
 const logger = createLogger('lib.signal-queue-drain')
@@ -32,17 +36,21 @@ export type SignalAdapterResolver = () => Promise<MessagingAdapter | null>
 export interface SignalQueueDrainWorkerOpts {
   queue: SignalMessageQueue
   resolveSignalAdapter: SignalAdapterResolver
+  retentionDays?: number
 }
 
 /** Convenience for the scheduler — builds the queue from a Database handle. */
 export function createSignalQueueDrainOpts(
   db: Database,
   resolveSignalAdapter: SignalAdapterResolver,
+  hmacSecret: string,
+  retentionDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
 ): SignalQueueDrainWorkerOpts {
-  return { queue: new SignalMessageQueue(db), resolveSignalAdapter }
+  return { queue: new SignalMessageQueue(db, hmacSecret), resolveSignalAdapter, retentionDays }
 }
 
 let intervalId: ReturnType<typeof setInterval> | null = null
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null
 
 /**
  * Drain one batch. Returns the number of messages claimed. Exported for
@@ -104,6 +112,11 @@ export async function drainSignalQueue(opts: SignalQueueDrainWorkerOpts): Promis
   return batch.length
 }
 
+/** Remove completed/dead-letter rows beyond the configured retention window. */
+export async function cleanupSignalQueue(opts: SignalQueueDrainWorkerOpts): Promise<number> {
+  return opts.queue.cleanup(opts.retentionDays ?? DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS)
+}
+
 export function startSignalQueueDrainWorker(opts: SignalQueueDrainWorkerOpts): void {
   if (intervalId) return
 
@@ -115,8 +128,16 @@ export function startSignalQueueDrainWorker(opts: SignalQueueDrainWorkerOpts): v
     })
   }
 
+  const runCleanup = () => {
+    cleanupSignalQueue(opts).catch((err) => {
+      logger.error('Signal queue cleanup run failed', { error: err })
+    })
+  }
+
   run()
   intervalId = setInterval(run, DRAIN_INTERVAL_MS)
+  runCleanup()
+  cleanupIntervalId = setInterval(runCleanup, SIGNAL_QUEUE_CLEANUP_INTERVAL_MS)
 }
 
 export function stopSignalQueueDrainWorker(): void {
@@ -124,5 +145,9 @@ export function stopSignalQueueDrainWorker(): void {
     clearInterval(intervalId)
     intervalId = null
     logger.info('Stopped Signal queue drain worker')
+  }
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId)
+    cleanupIntervalId = null
   }
 }
