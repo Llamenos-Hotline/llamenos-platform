@@ -85,20 +85,24 @@ final class CaseManagementUITests: BaseUITest {
         }
         and("a case exists") {
             navigateToCases()
-            createCase(title: entityTabsCaseTitle, typeLabel: "Arrest Case")
+            createCase(
+                title: entityTabsCaseTitle,
+                entityTypeName: "arrest_case"
+            )
         }
         when("I navigate to the Cases screen") {
             navigateToCases()
         }
         then("selecting Arrest Case should keep its case in the filtered list") {
-            let arrestCaseTab = entityTypeFilterButton(label: "Arrest Case")
+            let arrestCaseTab = entityTypeFilterButton(name: "arrest_case")
             arrestCaseTab.tap()
             XCTAssertTrue(
                 waitForSelected(arrestCaseTab),
                 "Selecting Arrest Case should apply that entity type filter"
             )
 
-            let caseTitle = app.staticTexts.matching(
+            let caseList = find("case-list")
+            let caseTitle = caseList.staticTexts.matching(
                 NSPredicate(format: "label CONTAINS %@", entityTabsCaseTitle)
             ).firstMatch
             let titleAppears = XCTNSPredicateExpectation(
@@ -119,7 +123,10 @@ final class CaseManagementUITests: BaseUITest {
             configureCaseManagementWithTwoTypes()
             launchAsAdminWithAPI()
             navigateToCases()
-            createCase(title: entityTabsCaseTitle, typeLabel: "Arrest Case")
+            createCase(
+                title: entityTabsCaseTitle,
+                entityTypeName: "arrest_case"
+            )
             navigateToCases()
         }
         when("I switch between All and an entity type") {
@@ -127,7 +134,7 @@ final class CaseManagementUITests: BaseUITest {
             allTab.tap()
             XCTAssertTrue(waitForSelected(allTab), "Selecting All should reset the entity type filter")
 
-            let arrestCaseTab = entityTypeFilterButton(label: "Arrest Case")
+            let arrestCaseTab = entityTypeFilterButton(name: "arrest_case")
             arrestCaseTab.tap()
             XCTAssertTrue(waitForSelected(arrestCaseTab), "Selecting Arrest Case should apply that filter")
 
@@ -148,10 +155,8 @@ final class CaseManagementUITests: BaseUITest {
         TestAdminAPI.applyTemplate("jail-support", hubId: testHubId, baseURL: testHubURL)
     }
 
-    private func entityTypeFilterButton(label: String) -> XCUIElement {
-        app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH 'case-tab-' AND label CONTAINS %@", label)
-        ).firstMatch
+    private func entityTypeFilterButton(name: String) -> XCUIElement {
+        app.buttons["case-tab-\(name)"]
     }
 
     private func waitForSelected(_ button: XCUIElement, timeout: TimeInterval = 5) -> Bool {
@@ -165,7 +170,7 @@ final class CaseManagementUITests: BaseUITest {
     }
 
     /// Create a case through the create-case sheet and wait for the sheet to close.
-    private func createCase(title: String, typeLabel: String) {
+    private func createCase(title: String, entityTypeName: String) {
         // `case-new-btn` is a toolbar Button — query the button itself, not its
         // container, and wait for it: it only renders once CMS state and entity
         // types have loaded over the API.
@@ -182,8 +187,14 @@ final class CaseManagementUITests: BaseUITest {
         let picker = find("case-type-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 10), "A case type picker should be shown for two entity types")
         picker.tap()
-        let option = app.buttons[typeLabel]
-        XCTAssertTrue(option.waitForExistence(timeout: 10), "Case type '\(typeLabel)' should be selectable")
+        let optionIdentifier = "case-type-option-\(entityTypeName)"
+        let option = app.menus.buttons[optionIdentifier]
+        XCTAssertTrue(option.waitForExistence(timeout: 10), "Case type '\(entityTypeName)' should be selectable")
+        XCTAssertEqual(
+            app.menus.buttons.matching(identifier: optionIdentifier).count,
+            1,
+            "The case type menu should expose exactly one option with this identifier"
+        )
         option.tap()
 
         let titleInput = find("case-title-input")
@@ -217,9 +228,9 @@ final class CaseManagementUITests: BaseUITest {
 
             if caseList.waitForExistence(timeout: 10) {
                 // Case list is visible — verify at least one card exists by checking
-                // for any element whose identifier starts with "case-card-"
-                let firstCard = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
+                // for any case-list row with its stable, record-specific identifier.
+                let firstCard = caseList.descendants(matching: .any)
+                    .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
                     .firstMatch
                 XCTAssertTrue(
                     firstCard.waitForExistence(timeout: 5),
@@ -341,8 +352,8 @@ final class CaseManagementUITests: BaseUITest {
                 // No case list — skip detail tests
                 return
             }
-            let firstCard = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
+            let firstCard = caseList.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
                 .firstMatch
             guard firstCard.waitForExistence(timeout: 5) else {
                 return
@@ -870,8 +881,8 @@ final class CaseManagementUITests: BaseUITest {
             return false
         }
 
-        let firstCard = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'case-card-'"))
+        let firstCard = find("case-list").descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'case-list-row-'"))
             .firstMatch
         guard firstCard.waitForExistence(timeout: 5) else {
             return false
