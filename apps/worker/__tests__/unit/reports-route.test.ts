@@ -32,12 +32,20 @@ type ConvLike = {
   status?: string
 }
 
+type ReportTypeLike = { id: string; allowCaseConversion: boolean; isArchived?: boolean }
+
 function makeApp(opts: {
   permissions?: string[]
   pubkey?: string
   conversations?: ConvLike[]
   conversation?: ConvLike
   hubId?: string
+  /**
+   * Report type definitions keyed by the hub that owns them. The
+   * `getCmsReportTypes` fake below mirrors the real service: a hub id selects
+   * that hub's rows, no hub id selects every hub's rows.
+   */
+  reportTypesByHub?: Record<string, ReportTypeLike[]>
 } = {}) {
   const {
     permissions = ['reports:read-all', 'reports:create', 'reports:assign', 'reports:update', 'reports:send-message', 'cases:read-all'],
@@ -50,6 +58,7 @@ function makeApp(opts: {
       metadata: { type: 'report' },
     },
     hubId = 'hub-1',
+    reportTypesByHub,
   } = opts
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
@@ -70,7 +79,13 @@ function makeApp(opts: {
   const mockSettings = {
     getReportCategories: vi.fn().mockResolvedValue({ categories: [] }),
     getReportTypes: vi.fn().mockResolvedValue({ reportTypes: [] }),
-    getCmsReportTypes: vi.fn().mockResolvedValue({ reportTypes: [] }),
+    getCmsReportTypes: vi.fn(async (scope?: string) => ({
+      reportTypes: reportTypesByHub === undefined
+        ? []
+        : Object.entries(reportTypesByHub)
+          .filter(([owner]) => scope === undefined || owner === scope)
+          .flatMap(([, types]) => types),
+    })),
   }
 
   const app = new Hono<AppEnv>()
@@ -148,6 +163,58 @@ describe('GET /reports', () => {
     const body = await res.json() as { conversations: ConvLike[] }
     expect(body.conversations).toHaveLength(1)
     expect(body.conversations[0].id).toBe('r1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET / — conversionEnabled triage queue is scoped to the active hub (#1591)
+// ---------------------------------------------------------------------------
+
+describe('GET /reports?conversionEnabled — hub scoping', () => {
+  // Hub A archived its report type; hub B's equivalent is still live. Both are
+  // flagged for case conversion, so only the hub the request acts on decides
+  // which report ids the triage queue treats as conversion-enabled.
+  const reportTypesByHub = {
+    'hub-a': [{ id: 'rt-archived-in-a', allowCaseConversion: true, isArchived: true }],
+    'hub-b': [{ id: 'rt-live-in-b', allowCaseConversion: true, isArchived: false }],
+  }
+
+  /** Reports in whichever hub is under test, one per hub's report type. */
+  const convs: ConvLike[] = [
+    { id: 'r-typed-a', contactIdentifierHash: 'p1', metadata: { type: 'report', reportTypeId: 'rt-archived-in-a' } },
+    { id: 'r-typed-b', contactIdentifierHash: 'p2', metadata: { type: 'report', reportTypeId: 'rt-live-in-b' } },
+  ]
+
+  async function triageQueue(hubId: string) {
+    const { app, mockConversations, mockSettings } = makeApp({
+      permissions: ['reports:read-all'],
+      hubId,
+      conversations: convs,
+      reportTypesByHub,
+    })
+    mockConversations.list.mockResolvedValueOnce({ conversations: convs, total: convs.length })
+    const res = await app.request('/?page=1&limit=10&conversionEnabled=true')
+    const body = await res.json() as { conversations: ConvLike[]; total: number }
+    return { res, body, mockSettings }
+  }
+
+  it('resolves report types for the hub the request acts on', async () => {
+    const { mockSettings } = await triageQueue('hub-b')
+    expect(mockSettings.getCmsReportTypes).toHaveBeenCalledWith('hub-b')
+  })
+
+  it("another hub's report type does not make a report conversion-enabled here", async () => {
+    const { res, body } = await triageQueue('hub-b')
+    expect(res.status).toBe(200)
+    expect(body.conversations.map(c => c.id)).toEqual(['r-typed-b'])
+    expect(body.total).toBe(1)
+  })
+
+  it("a report type archived in one hub does not gate another hub's queue", async () => {
+    const { res, body } = await triageQueue('hub-a')
+    expect(res.status).toBe(200)
+    expect(body.conversations.map(c => c.id)).toEqual(['r-typed-a'])
+    expect(body.total).toBe(1)
   })
 })
 

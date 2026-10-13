@@ -739,7 +739,9 @@
     "keyUnavailable": "Bu merkezdeki şifreli içerik bu cihazda henüz açılamıyor",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Merkezleriniz yüklenemedi",
+    "membershipLoadFailedBody": "Sunucu hangi merkezlere ait olduğunuzu bildirmedi, bu yüzden henüz hiçbir şey gösterilemiyor. Bağlantınızı kontrol edip tekrar deneyin."
   },
   "ivr": {
     "selfAnnouncement": "Türkçe için [N] tuşuna basın.",
@@ -877,6 +879,7 @@
     "backupAcknowledge": "Kurtarma anahtarımı güvenli bir yere kaydettim",
     "backupDescription": "Bu kurtarma anahtarını yazın ve güvenli bir yerde saklayın. Yeni bir cihazda hesabınızı kurtarmanın tek yolu budur.",
     "backupDownloaded": "Yedek indirildi",
+    "backupFailed": "Şifreli yedeğiniz oluşturulamadı: {{reason}}",
     "backupTitle": "Kurtarma Anahtarınızı Kaydedin",
     "confirmPin": "PIN onaylayın",
     "confirmPinDescription": "Onaylamak için aynı PIN kodunu tekrar girin",
@@ -891,6 +894,8 @@
     "getStarted": "Başlayın",
     "goToLogin": "Giriş Sayfasına Git",
     "invalidCode": "Geçersiz davet kodu",
+    "rateLimitedRetry": "Çok fazla deneme. Lütfen {{seconds}} saniye bekleyip yeniden deneyin.",
+    "validationUnavailable": "Davetiniz şu anda doğrulanamadı. Bağlantınızı kontrol edip yeniden deneyin.",
     "noCode": "Davet kodu sağlanmadı",
     "npubLabel": "Genel Anahtarınız",
     "deviceKeyLabel": "Gizli Anahtarınız",
@@ -4546,6 +4551,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Uygulamada çağrı yanıtlamak için mikrofon erişimi gerekir.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",

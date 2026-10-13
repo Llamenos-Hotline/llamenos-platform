@@ -77,12 +77,25 @@ cmd_start() {
     export ADMIN_DECRYPTION_PUBKEY="${ADMIN_DECRYPTION_PUBKEY:-27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177}"
   fi
   export HOTLINE_NAME="${HOTLINE_NAME:-Llámenos (Dev)}"
-  # ENVIRONMENT is required unconditionally by apps/worker/lib/config.ts and gates the
-  # dev-only test-reset/test-promote-admin routes the admin bootstrap flow relies on —
-  # it must always be set for local dev, regardless of whether ADMIN_PUBKEY is set.
-  # needsBootstrap depends only on whether an admin exists in the DB, not on ENVIRONMENT,
-  # so this does not affect whether the setup wizard is shown.
+  # ENVIRONMENT is required unconditionally by apps/worker/lib/config.ts, and it is
+  # the FIRST of the factors that open the dev-only test-reset/test-promote-admin
+  # routes the admin bootstrap flow relies on — it must always be set for local
+  # dev, regardless of whether ADMIN_PUBKEY is set. needsBootstrap depends only on
+  # whether an admin exists in the DB, not on ENVIRONMENT, so this does not affect
+  # whether the setup wizard is shown.
   export ENVIRONMENT="${ENVIRONMENT:-development}"
+  # The SECOND factor (apps/worker/lib/dev-surfaces.ts requires both). This was
+  # missing, and the gap only showed in a checkout with no .env: a fresh worktree
+  # got 404 on every /api/test-* route — including the ones the comment above says
+  # this script enables — so `bun run test:backend:bdd` could not bootstrap at all,
+  # while every long-lived checkout worked because its gitignored .env carried the
+  # flag. The launcher that decides this is a development server is the right place
+  # to say so; nothing here can reach a deployed host.
+  export DEV_ROUTES_ENABLED="${DEV_ROUTES_ENABLED:-true}"
+  # The THIRD factor is only a MINIMUM on a reachable host: `development` accepts
+  # any non-empty secret, so the harness default is fine here. A deployed target
+  # needs >= 32 characters (MIN_DEPLOYED_SECRET_LENGTH) — see
+  # docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md.
   export DEV_RESET_SECRET="${DEV_RESET_SECRET:-test-reset-secret}"
   # No real reverse proxy in front of local dev, but the backend BDD suite
   # simulates one (CF-Connecting-IP) to test per-client rate-limit buckets —

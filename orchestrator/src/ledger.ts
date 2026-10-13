@@ -55,10 +55,23 @@ import { LEDGER_FILE } from './paths.js'
  * question — "once a human clears that label, how many attempts does this
  * item still have?" — and an infrastructure gap that was never the worker's
  * fault must not have spent any of them, exactly as a QUOTA row never does.
+ *
+ * WEDGED (issue #1755) names a dispatch refused BEFORE any worker launched:
+ * the lane's worktree is checked out on a `salvage/<branch>-*` branch holding
+ * real work, so dispatching would either destroy that work or redo it
+ * blindly. Three identical refusals for the same lane+item are ONE stuck
+ * condition, not three failures — WEDGED is deliberately absent from
+ * `circuit.ts`'s STREAK_FAILURES, so an unresolvable refusal never consumes
+ * fleet-wide breaker budget. It IS in `TERMINAL_FAILURES` below,
+ * deliberately unlike UNVERIFIED: a wedge is a property of the ITEM's own
+ * lane state, not a transient fleet plumbing gap, so the per-item attempt
+ * bound is the right backstop for the case where the `needs-human` label is
+ * removed without the wedge being cleared.
  */
 export type Outcome =
   | 'DISPATCHED' | 'SUCCESS' | 'FAILED' | 'BLOCKED'
   | 'TIMEOUT' | 'SHADOW' | 'REJECTED' | 'QUOTA' | 'UNVERIFIED'
+  | 'WEDGED'
 
 export interface RunRecord {
   ts: number
@@ -132,8 +145,10 @@ export function since(windowMs: number, now = Date.now()): RunRecord[] {
 // "is this claimable right now" — and conflating them is what let three
 // consecutive UNVERIFIED rows (or, per issue #870's own worked incident, a
 // mix of infra failures) burn through an item's entire budget before a
-// human ever looked at it.
-const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'BLOCKED', 'REJECTED'])
+// human ever looked at it. WEDGED is included, unlike UNVERIFIED — see the
+// `Outcome` doc comment above: a wedge is the item's own lane state, so the
+// per-item bound must still close over it.
+const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'BLOCKED', 'REJECTED', 'WEDGED'])
 
 /** Counts backward from the newest record for this item and stops at a SUCCESS. */
 export function failedAttemptsIn(rows: RunRecord[], itemId: string): number {

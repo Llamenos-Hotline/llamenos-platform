@@ -739,7 +739,9 @@
     "keyUnavailable": "محتوای رمزگذاری‌شدهٔ این هاب هنوز روی این دستگاه باز نمی‌شود",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "هاب‌های شما بارگیری نشد",
+    "membershipLoadFailedBody": "سرور نگفت که عضو کدام هاب‌ها هستید، بنابراین هنوز چیزی نمایش داده نمی‌شود. اتصال خود را بررسی کنید و دوباره تلاش کنید."
   },
   "ivr": {
     "selfAnnouncement": "برای فارسی، [N] را فشار دهید.",
@@ -877,6 +879,7 @@
     "backupAcknowledge": "کلید بازیابی خود را در مکانی امن ذخیره کرده‌ام",
     "backupDescription": "این کلید بازیابی را یادداشت کرده و در جای امن نگه دارید. تنها راه بازیابی حساب شما در دستگاه جدید همین است.",
     "backupDownloaded": "پشتیبان دانلود شد",
+    "backupFailed": "ایجاد پشتیبان رمزگذاری‌شده ممکن نبود: {{reason}}",
     "backupTitle": "کلید بازیابی خود را ذخیره کنید",
     "confirmPin": "PIN خود را تایید کنید",
     "confirmPinDescription": "همان PIN را دوباره برای تایید وارد کنید",
@@ -891,6 +894,8 @@
     "getStarted": "شروع کنید",
     "goToLogin": "رفتن به صفحه ورود",
     "invalidCode": "کد دعوت نامعتبر",
+    "rateLimitedRetry": "تعداد تلاش‌ها بیش از حد است. لطفاً {{seconds}} ثانیه صبر کنید و دوباره تلاش کنید.",
+    "validationUnavailable": "در حال حاضر امکان تأیید دعوت شما وجود ندارد. اتصال خود را بررسی کنید و دوباره تلاش کنید.",
     "noCode": "کد دعوتی ارائه نشده",
     "npubLabel": "کلید عمومی شما",
     "deviceKeyLabel": "کلید محرمانه شما",
@@ -4546,6 +4551,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "برای پاسخ دادن به تماس‌ها در برنامه، دسترسی به میکروفون لازم است.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteSelectRole": "Select Role",

@@ -5,9 +5,9 @@
  * devices, provisioning rooms, hub roles, and admin bootstrap.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
+import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
-import { buildReaderPubkeys } from '../lib/encryption-keys'
+import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
 import type { Database } from '../db'
 import {
   users,
@@ -23,6 +23,8 @@ import {
   securityEvents,
   deviceVerifications,
   authNonces,
+  hubKeys,
+  reEncryptionJobs,
 } from '../db/schema'
 import type {
   User,
@@ -327,6 +329,24 @@ export class IdentityService {
     userPubkeys: string[],
   ): Promise<string[]> {
     return buildReaderPubkeys(this.db, adminDecryptionPubkey, userPubkeys)
+  }
+
+  /**
+   * Map each given user (Ed25519) pubkey to the X25519 encryption pubkeys of
+   * their registered devices.
+   *
+   * Users with no registered device key are absent from the map rather than
+   * mapped to an empty array, so a caller cannot mistake "cannot be addressed"
+   * for "addressed by their identity key" — the substitution behind #1021.
+   *
+   * Unlike `buildReaderPubkeys` this adds no admin recipient and flattens
+   * nothing: callers that must know *which* member a recipient key belongs to
+   * (`GET /api/records/envelope-recipients`) need the association preserved.
+   */
+  async resolveDeviceEncryptionPubkeys(
+    userPubkeys: string[],
+  ): Promise<Map<string, string[]>> {
+    return resolveEncryptionPubkeys(this.db, userPubkeys)
   }
 
   /**
@@ -664,7 +684,38 @@ export class IdentityService {
   }
 
   /**
-   * Remove all hub-specific roles for a volunteer in a given hub.
+   * Remove all hub-specific roles for a volunteer in a given hub, and revoke
+   * the access that membership gave them (#1601).
+   *
+   * Dropping the role alone revokes nothing cryptographically: the departed
+   * member keeps an HPKE envelope copy on every note, note reply and message
+   * they could read, plus the server-held wrap of the hub key. So removal does
+   * three things, atomically:
+   *
+   *   1. Drops the hub's roles from `users.hub_roles`.
+   *   2. Deletes the server-held hub-key wrap for THIS hub. Left behind, it
+   *      keeps the departed member on the hub's key-recipient roster —
+   *      `getHubKeyEnvelopes` still serves it, the erasure cascade still reads
+   *      `hub_keys` as the list of hubs a user belongs to, and the next admin
+   *      rotation would re-wrap the new key for someone who is no longer a
+   *      member.
+   *   3. Enqueues a user-scope re-encryption job for THIS hub, which the
+   *      re-encryption worker (apps/worker/lib/re-encryption-worker.ts) picks
+   *      up to strip that member's envelope copies from the hub's records.
+   *
+   * Scoping is the correctness question: a user may be a member of several
+   * hubs at once, so the job carries `hubId` and the wrap delete is filtered by
+   * it. Removal from one hub must never strip envelopes in another.
+   *
+   * **Ordering relative to hub-key rotation.** The two are independent and
+   * neither waits on the other. Rotation is client-driven — only an admin
+   * client can mint a new hub key and PUT the re-wraps, because the server
+   * never sees the key — and it protects *future* content. The envelope strip
+   * queued here protects content that already exists, and is the only half the
+   * server can guarantee. It is enqueued inside this transaction (the same
+   * reason the erasure cascade's enqueue is inside its own, RACE-10): a crash
+   * between the role removal and the enqueue would otherwise commit the
+   * removal while silently losing the revocation.
    */
   async removeHubRole(data: { pubkey: string; hubId: string }): Promise<{ volunteer: User }> {
     return this.db.transaction(async (tx) => {
@@ -677,13 +728,61 @@ export class IdentityService {
       if (rows.length === 0) throw new ServiceError(404, 'User not found')
 
       const vol = rowToUser(rows[0])
-      const hubRoles = (vol.hubRoles ?? []).filter(hr => hr.hubId !== data.hubId)
+      const priorRoles = vol.hubRoles ?? []
+      const hubRoles = priorRoles.filter(hr => hr.hubId !== data.hubId)
 
       const [row] = await tx
         .update(users)
         .set({ hubRoles, updatedAt: new Date() })
         .where(eq(users.pubkey, data.pubkey))
         .returning()
+
+      // Revoke the server-held hub-key wrap. `returning()` tells us whether one
+      // existed, which — together with the role we just dropped — is what
+      // distinguishes a real departure from a no-op DELETE on a non-member.
+      const revokedWraps = await tx
+        .delete(hubKeys)
+        .where(
+          and(eq(hubKeys.hubId, data.hubId), eq(hubKeys.recipientPubkey, data.pubkey)),
+        )
+        .returning({ recipientPubkey: hubKeys.recipientPubkey })
+
+      const wasMember =
+        priorRoles.length !== hubRoles.length || revokedWraps.length > 0
+      if (!wasMember) return { volunteer: rowToUser(row) }
+
+      // Idempotent: DELETE /hubs/:hubId/members/:pubkey may be retried, and a
+      // second strip of the same (user, hub) would be pure duplicate work —
+      // one queued job strips every envelope the member holds in this hub at
+      // the moment it runs.
+      //
+      // A re-add before the queued job runs does NOT cancel it. Removal
+      // revoking historical access and re-adding not restoring it is the
+      // semantics either way — once the job has run, re-adding cannot bring the
+      // stripped envelopes back — so letting it run keeps the outcome
+      // independent of when the worker happens to wake up. An admin who
+      // re-adds a member re-shares what that member should see.
+      const pending = await tx
+        .select({ id: reEncryptionJobs.id })
+        .from(reEncryptionJobs)
+        .where(
+          and(
+            eq(reEncryptionJobs.scope, 'user'),
+            eq(reEncryptionJobs.userId, data.pubkey),
+            eq(reEncryptionJobs.hubId, data.hubId),
+            inArray(reEncryptionJobs.status, ['queued', 'running']),
+          ),
+        )
+        .limit(1)
+
+      if (pending.length === 0) {
+        await tx.insert(reEncryptionJobs).values({
+          scope: 'user',
+          userId: data.pubkey,
+          hubId: data.hubId,
+          status: 'queued',
+        })
+      }
 
       return { volunteer: rowToUser(row) }
     })
@@ -1853,6 +1952,35 @@ export class IdentityService {
   // =========================================================================
   // Security Events (EP02)
   // =========================================================================
+
+  /**
+   * How many events of one type were ever recorded about this pubkey.
+   *
+   * security_events is append-only, which makes a count of one event type a
+   * monotonic counter that needs no column of its own. The SIP registrar uses
+   * `sipIdentityRevoked` this way, as the epoch its per-volunteer secret is
+   * derived under, so a re-admitted volunteer is issued a credential they
+   * never held before.
+   *
+   * Matched on `metadata->>'pubkey'` as well as `user_pubkey`, because the
+   * revocations that matter most happen as the user row is deleted — the FK
+   * sets `user_pubkey` to NULL — and the count must survive that.
+   */
+  async countSecurityEvents(pubkey: string, eventType: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(securityEvents)
+      .where(
+        and(
+          eq(securityEvents.eventType, eventType),
+          or(
+            eq(securityEvents.userPubkey, pubkey),
+            sql`${securityEvents.metadata}->>'pubkey' = ${pubkey}`,
+          ),
+        ),
+      )
+    return Number(row?.count ?? 0)
+  }
 
   async listSecurityEvents(pubkey: string, limit: number, offset: number) {
     const [countResult] = await this.db

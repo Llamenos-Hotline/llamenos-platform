@@ -220,6 +220,9 @@ pub fn run() {
             crypto::device_import_and_load,
             crypto::generate_ephemeral_ed25519,
             crypto::generate_backup_from_state,
+            crypto::generate_recovery_key,
+            crypto::backup_verify_credential,
+            crypto::restore_backup_and_load,
             // H17: Stronghold vault file wipe
             crypto::wipe_keys,
             // Device provisioning (seed NEVER enters the webview)

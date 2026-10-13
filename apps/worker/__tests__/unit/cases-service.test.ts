@@ -259,18 +259,13 @@ describe('CasesService — CRUD', () => {
 
 describe('CasesService — Assignment', () => {
   describe('assign', () => {
+    // #1144: assign() now computes dedup atomically in SQL against the row
+    // the UPDATE itself locks, rather than a prior SELECT read — so even a
+    // fully-redundant request (every pubkey already assigned) issues the
+    // UPDATE and lets the database confirm nothing changes, instead of
+    // deciding that in JS from a potentially stale read.
     it('deduplicates — does not add already-assigned pubkeys', async () => {
-      const existingRow = makeCaseRow({
-        id: 'case-1',
-        assignedTo: ['pk-1', 'pk-2'],
-      })
-
       const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([existingRow]),
-          }),
-        }),
         update: vi.fn().mockReturnValue({
           set: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -285,24 +280,13 @@ describe('CasesService — Assignment', () => {
       const svc = new CasesService(db as never)
       const result = await svc.assign('case-1', ['pk-1', 'pk-2'])
 
-      // Should return existing list unchanged (no new pubkeys)
+      // DB-side dedup leaves the list unchanged (no new pubkeys)
       expect(result.assignedTo).toEqual(['pk-1', 'pk-2'])
-      // update should NOT be called since all pubkeys are already assigned
-      expect(db.update).not.toHaveBeenCalled()
+      expect(db.update).toHaveBeenCalled()
     })
 
     it('adds only new pubkeys', async () => {
-      const existingRow = makeCaseRow({
-        id: 'case-1',
-        assignedTo: ['pk-1'],
-      })
-
       const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([existingRow]),
-          }),
-        }),
         update: vi.fn().mockReturnValue({
           set: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -323,15 +307,39 @@ describe('CasesService — Assignment', () => {
 
     it('throws 404 for nonexistent case', async () => {
       const db = {
-        select: vi.fn().mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
+        update: vi.fn().mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([]),
+            }),
           }),
         }),
       }
 
       const svc = new CasesService(db as never)
       await expect(svc.assign('nonexistent', ['pk-1'])).rejects.toThrow('Record not found')
+    })
+
+    it('short-circuits on an empty pubkey list without issuing an UPDATE', async () => {
+      const existingRow = makeCaseRow({
+        id: 'case-1',
+        assignedTo: ['pk-1'],
+      })
+
+      const db = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([existingRow]),
+          }),
+        }),
+        update: vi.fn(),
+      }
+
+      const svc = new CasesService(db as never)
+      const result = await svc.assign('case-1', [])
+
+      expect(result.assignedTo).toEqual(['pk-1'])
+      expect(db.update).not.toHaveBeenCalled()
     })
   })
 

@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DISPATCH_SCRIPT } from './paths.js'
-import { checkDispatchDependency } from './dependency.js'
+import { checkDispatchDependency, gitFactsFor } from './dependency.js'
+import { fleetRuntimeRoot } from './provenance.js'
 import { fleetBranchFor } from './ci.js'
 import type { Lane, EngineId } from './config.js'
 import type { WorkItem } from './source.js'
@@ -409,14 +410,78 @@ const DISPATCHER_TOKEN = /^(?:opus|sonnet|haiku|fable|kimi|kimi-thinking|glm|cop
  * verified-working opencode registry model, so a lane configured with the raw
  * id maps back to the token rather than to `opencode:<id>` — same runtime,
  * same model, but via the dispatcher's maintained selector.
+ *
+ * This constant is also the fleet's own mirror of what the `kimi` token
+ * resolves to — `llamenos-fleet doctor` checks it against `opencode models`
+ * (see `doctorRegistryIdForOpencodeModel`), so a stale value here is exactly
+ * the latent outage issue #1738 is about: the provider renamed
+ * `kimi-for-coding` to `kimi-code-plan-global` and the old id started
+ * failing with a generic "server error" that reads like an outage, while a
+ * doctor that only checks the binary on PATH reported every lane ok.
  */
-const KIMI_DISPATCHER_MODEL = 'kimi-for-coding/k3-256k'
+const KIMI_DISPATCHER_MODEL = 'kimi-code-plan-global/k3-256k'
+
+/**
+ * The retired provider id for the same subscription and model (renamed —
+ * issue #1738). A lane file on disk may still carry it, so it keeps mapping
+ * to the `kimi` token; removing this branch would silently re-route those
+ * lanes to `opencode:kimi-for-coding/k3-256k`, an id that no longer resolves.
+ */
+const KIMI_DISPATCHER_MODEL_RETIRED = 'kimi-for-coding/k3-256k'
 
 export function resolveDispatchModel(engine: EngineId, model: string): string {
   if (engine !== 'opencode') return model
   if (DISPATCHER_TOKEN.test(model)) return model
-  if (model === KIMI_DISPATCHER_MODEL) return 'kimi'
+  if (model === KIMI_DISPATCHER_MODEL || model === KIMI_DISPATCHER_MODEL_RETIRED) return 'kimi'
   return `opencode:${model}`
+}
+
+/**
+ * The registry id a live opencode lane's configured model will actually
+ * resolve to once dispatch-one.sh has done its mapping — the value
+ * `llamenos-fleet doctor` can check against `opencode models` (issue #1738).
+ *
+ * Returns `undefined` for dispatcher tokens whose target only dispatch-one.sh
+ * itself knows (`glm`, `copilot`, `kimi-thinking`, ...): this repo has no
+ * mirror of those mappings, and inventing one would be a guess wearing the
+ * clothes of a check. The `kimi` token is the one exception — its mapping IS
+ * mirrored here (`KIMI_DISPATCHER_MODEL` exists precisely to document what
+ * dispatch-one.sh maps it to), so a kimi lane whose underlying id has been
+ * renamed out from under the fleet is caught instead of reported ok.
+ */
+export function doctorRegistryIdForOpencodeModel(model: string): string | undefined {
+  const resolved = resolveDispatchModel('opencode', model)
+  if (resolved.startsWith('opencode:')) return resolved.slice('opencode:'.length)
+  if (resolved === 'kimi') return KIMI_DISPATCHER_MODEL
+  return undefined
+}
+
+/**
+ * The pure core of doctor's model-resolution check (issue #1738): `rawId` is
+ * a registry id a live opencode lane will be dispatched with, `available` is
+ * `opencode models` output (one id per line, already split). Returns
+ * `undefined` when the id resolves; otherwise a failure message that names
+ * the dead id, says plainly that it is a MISCONFIGURATION (not an outage —
+ * the renamed `kimi-for-coding` id failed as a generic "server error" and
+ * cost the fleet real downtime being debugged as one), and lists a readable
+ * subset of the ids that DO resolve — same-provider ids first, falling back
+ * to a name-substring match, capped so a 100+ model registry doesn't drown
+ * the one line that matters.
+ */
+export function modelResolutionProblem(rawId: string, available: string[]): string | undefined {
+  if (available.includes(rawId)) return undefined
+  const provider = rawId.split('/')[0] ?? ''
+  const modelName = rawId.slice(rawId.indexOf('/') + 1)
+  let suggestions = provider !== '' ? available.filter((m) => m.startsWith(`${provider}/`)) : []
+  if (suggestions.length === 0 && modelName !== '') {
+    suggestions = available.filter((m) => m.includes(modelName))
+  }
+  const shown = suggestions.slice(0, 10)
+  const available_ = shown.length > 0 ? ` Available ids include: ${shown.join(', ')}` : ''
+  return (
+    `model "${rawId}" does not resolve — this is a misconfiguration, not an outage.` +
+    `${available_} Fix the lane's model in ~/.llamenos-fleet/lanes.json (or drop the override to use the default).`
+  )
 }
 
 /**
@@ -500,6 +565,12 @@ export interface LaunchOutcomeInput {
    *  `branch`/`worktree` are read from here as a fallback. */
   seed: Record<string, string> | undefined
   depCommit: string | undefined
+  /** The fleet runtime checkout's own HEAD commit (issue #1801) — without
+   *  it a worker's behaviour cannot be attributed to a runtime revision
+   *  after the fact, which is exactly the forensics the drift incident
+   *  needed and lacked. Cheap to read (no fetch — this records what RAN,
+   *  not what origin/main now holds; drift detection is doctor/tick's job). */
+  rtCommit: string | undefined
   /** The worker's raw log text, if one exists — passed in rather than read
    *  here so this function stays a pure decision, not a file read. */
   workerLog: string | undefined
@@ -526,12 +597,14 @@ export function resolveLaunchOutcome(input: LaunchOutcomeInput): DispatchResult 
   const rawStatus = input.status?.['status'] ?? 'DISPATCHED' // never observed a status file: treat as never-started
   let outcome = statusToOutcome(rawStatus)
 
-  // Record the dependency's HEAD commit in the note so a run's behaviour can
-  // always be traced back to the exact version of dispatch-one.sh that
+  // Record the dependency's HEAD commit AND the fleet runtime's own HEAD
+  // commit in the note, so a run's behaviour can always be traced back to
+  // the exact revisions of dispatch-one.sh and of the orchestrator that
   // produced it — the version pin this repo cannot otherwise express for a
-  // dependency it does not vendor (see dependency.ts).
+  // dependency it does not vendor (see dependency.ts), and the forensics
+  // issue #1801's drift incident needed and lacked.
   const workerNote = input.status?.['notes']
-  let note = `dep:${input.depCommit ?? 'unknown'}${workerNote ? ` ${workerNote}` : ''}`
+  let note = `dep:${input.depCommit ?? 'unknown'} rt:${input.rtCommit ?? 'unknown'}${workerNote ? ` ${workerNote}` : ''}`
 
   if (input.launchError !== undefined) {
     // Issue #870: logged for a human, NEVER used to override `outcome` — see
@@ -649,6 +722,7 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     status,
     seed,
     depCommit: dep.commit,
+    rtCommit: gitFactsFor(fleetRuntimeRoot()).commit,
     workerLog: readWorkerLog(req.name),
   })
 }

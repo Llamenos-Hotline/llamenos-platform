@@ -64,22 +64,38 @@ it refuses to proceed if `demo_mode`, `dev_routes_enabled` or
 refuses to proceed if `demo_mode` is true without the exact
 `demo_mode_confirm: "DESTROY_ALL_DATA"` two-factor value.
 
-## Known gap: on-demand data reset does not currently work under `ENVIRONMENT=demo`
+## The `/api/test-*` surface on a non-production instance
 
-`playbooks/reset-demo.yml` calls `POST /api/test-reset` on the demo host.
-That route (like every `/test-*` route) is gated by
-`apps/worker/app.ts`'s `devGuard`, which requires **both**
-`ENVIRONMENT=development` **and** `DEV_ROUTES_ENABLED=true`
-(`apps/worker/app.ts:122-129`). Setting `app_environment: demo` — the value
-this decision calls for — means that guard will 404 the reset call, even
-with `dev_routes_enabled: true` set, until the guard is widened to also
-accept `staging`/`demo`. That widening is tracked separately as **#723** and
-is explicitly out of scope here. Until #723 lands, an operator who needs
-`reset-demo.yml` to work today has to run the demo host with
-`app_environment: development` instead of `demo`, which is a real tradeoff:
-it keeps the manual reset working but reports a `development` environment
-label rather than a `demo`/`staging` one. Whoever provisions the actual host
-should pick one of the two knowingly rather than discover the 404 later.
+`devGuard` (`apps/worker/app.ts`, via `apps/worker/lib/dev-surfaces.ts`) is no
+longer pinned to `ENVIRONMENT=development`. It admits `staging` as well,
+provided `DEV_ROUTES_ENABLED=true` **and** a `DEV_RESET_SECRET` of at least 32
+characters are also set — three factors, all explicit. That is what makes the
+end-to-end suite runnable against a deployment; see
+`docs/deploy/E2E_AGAINST_A_DEPLOYMENT.md` for the runbook and for the four
+layers that keep it off a production host.
+
+The axis is `app_environment`, not the deployment profile: the hosted shape
+(`deploy/scripts/deploy-official.sh`) and the self-hosted shape
+(`deploy/scripts/deploy-self-hosted.sh`) both run `setup.yml` ->
+`playbooks/deploy.yml` -> the same per-service roles, so only
+`app_environment` says whether an instance is production.
+
+`demo` is **not** on that allowlist, and demo mode is being removed from the
+product altogether. Two consequences while it still exists:
+
+- `playbooks/reset-demo.yml` POSTs `/api/test-reset`, which a host running
+  `app_environment: demo` still answers 404. The endpoint that exists for such
+  a host is the admin-authenticated `POST /api/demo/reset`
+  (`apps/worker/routes/demo.ts`), and that playbook has never been pointed at
+  it. Tracked as **#1133**; not fixed here, and moot once the demo path goes.
+- `POST /api/demo/reset` is itself still pinned to `ENVIRONMENT=development`
+  (`demoSurfacesEnabled`), because it mints and registers the demo cast's
+  signing seeds. That pin is deliberately unchanged: the staging allowlist must
+  not hand signing material to a deployed host as a side effect.
+
+An operator who needs an on-demand reset on a deployed instance today runs it
+as `app_environment: staging` with the `dev_routes_enabled` +
+`dev_reset_secret` pair set, and resets through `/api/test-reset`.
 
 ## What's still needs-human here
 

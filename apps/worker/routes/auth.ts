@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { hashIP, getClientIp } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { isValidE164, checkRateLimit } from '../lib/helpers'
 import { verifyAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
@@ -11,6 +11,7 @@ import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { getConnectionManager } from '../lib/ws-manager'
 import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
 import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
 import { bytesToHex } from '@shared/encoding'
@@ -39,9 +40,11 @@ auth.post('/login',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit login attempts by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const ipKey = `auth-login:${hashIP(clientIp, c.env.HMAC_SECRET)}`
+    // Rate limit login attempts by client — always enforced (security audit
+    // Epic A), and never exempt for anybody: `routeRateLimitClient` lets the
+    // end-to-end harness say WHICH client it is, so each scenario gets its own
+    // bucket, but the 5/min inside that bucket still binds.
+    const ipKey = `auth-login:${routeRateLimitClient(c)}`
     const limited = await checkRateLimit(services.settings, ipKey, 5)
     if (limited) {
       return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
@@ -102,9 +105,8 @@ auth.post('/bootstrap',
   async (c) => {
     const services = c.get('services')
 
-    // Rate limit bootstrap by IP — always enforced (security audit Epic A)
-    const clientIp = getClientIp(c.req.raw)
-    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${hashIP(clientIp, c.env.HMAC_SECRET)}`, 3)
+    // Rate limit bootstrap by client — always enforced (security audit Epic A)
+    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${routeRateLimitClient(c)}`, 3)
     if (limited) {
       return c.json({ error: 'Too many attempts. Try again later.' }, 429)
     }
@@ -245,6 +247,12 @@ auth.post('/me/logout',
       const token = authHeader.slice(8).trim()
       await services.identity.revokeSession(token)
     }
+    // Close this key's live relay sockets and drop their subscriptions. A
+    // WebSocket authenticates with an Ed25519 challenge, not the session token,
+    // so revoking the session leaves an open socket receiving every hub this
+    // user belongs to — and periodic revalidation would not notice, because the
+    // account is still active (#1655).
+    getConnectionManager()?.terminateUser(pubkey, 'logged_out')
     await audit(services.audit, 'logout', pubkey, {}, undefined, null)
     return c.json({ ok: true })
   },

@@ -170,14 +170,72 @@ final class APIService: @unchecked Sendable {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
+        // Hub API responses carry E2EE envelopes, hub rosters and call history. None of
+        // it may be written to a response cache, where it would outlive logout (#1658).
+        ResponseCachePolicy.harden(config)
         // H14: Use certificate pinning delegate for all API requests
         self.session = URLSession(configuration: config, delegate: pinningDelegate, delegateQueue: nil)
 
+        // The wire protocol is camelCase end to end: every input schema under
+        // `packages/protocol/schemas/` declares camelCase fields, and the generated
+        // Swift types in `packages/protocol/generated/swift/Types.swift` already carry
+        // the matching `CodingKeys`. So this encoder applies NO key conversion.
+        //
+        // #1633: it used to set `.convertToSnakeCase`, which rewrites a type's own
+        // `CodingKeys` — `UpdateContactBody.hubID = "hubId"` shipped as `hub_id`,
+        // `encryptedPII` as `encrypted_pii` — and, because `body:` wraps the body in
+        // `AnyEncodable` and so hides its type from Foundation, the keys of a
+        // top-level `Dictionary` body as well.
+        //
+        // No schema accepts those, and because the schemas are not `strict()` an
+        // unknown key is *ignored* rather than rejected: a required field 400'd, but an
+        // OPTIONAL one was silently dropped. On the all-optional `.partial()` update
+        // bodies (`PATCH /api/contacts-v2/:id`, `PATCH /api/records/:id`) that meant
+        // every key — ciphertext and HPKE envelopes included — was discarded, the
+        // request validated against `{}`, the row was left untouched, and the client
+        // was told it had saved.
+        //
+        // `APIServiceWireFormatTests` pins the bytes this encoder produces, and
+        // `testWhichKeysAKeyStrategyActuallyReaches` pins exactly which keys a strategy
+        // would reach, so neither the fix nor its blast radius rests on inference.
+        //
+        // Do not reintroduce a key strategy here. An endpoint that genuinely wants a
+        // different wire shape gets its own encoder at its own call site (see
+        // `SecurityEventService.uploadBatch`, the one snake_case endpoint we have).
         self.encoder = JSONEncoder()
-        self.encoder.keyEncodingStrategy = .convertToSnakeCase
 
-        self.decoder = JSONDecoder()
-        self.decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = Self.makeResponseDecoder()
+    }
+
+    /// The decoder every response body is read through. A factory rather than an inline
+    /// construction, and exposed (internal), so `APIServiceResponseDecodingTests` and
+    /// `SipTokenResponseDecodingTests` can decode recorded server payloads through the
+    /// PRODUCTION decoder. A response test that builds its own decoder proves only that
+    /// the test is self-consistent — and self-consistent tests are precisely what let
+    /// #1659 and #1633 ship.
+    ///
+    /// `.convertFromSnakeCase` is retained deliberately and is a no-op for the
+    /// camelCase the server actually sends: Foundation leaves a key with no underscore
+    /// alone (`components.count == 1` → returned verbatim). It is kept only so a
+    /// genuinely snake_case payload would still decode, and it is *not* a licence for a
+    /// response model to disagree with its schema — it cannot bridge
+    /// `readerEnvelopes` → `recipientEnvelopes`, which is exactly how #1633's
+    /// response-side defect survived, and it cannot change a field's DEPTH, which is
+    /// how #1659's survived (`testTheSnakeCaseStrategyCannotFlattenANestedResponse`).
+    static func makeResponseDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }
+
+    /// A `URLSession` created with a delegate is retained by the system until it is
+    /// invalidated — `URLSession` holds a strong reference to its delegate and to itself
+    /// for the lifetime of the session. So an `APIService` that goes out of scope without
+    /// this leaves its session, its `CertificatePinningDelegate` and its operation queue
+    /// alive for the rest of the process. `finishTasksAndInvalidate` rather than
+    /// `invalidateAndCancel` so a request already in flight still completes.
+    deinit {
+        session.finishTasksAndInvalidate()
     }
 
     /// Set or update the hub base URL.
@@ -367,8 +425,10 @@ final class APIService: @unchecked Sendable {
 
     /// Perform an authenticated API request with a pre-encoded JSON body.
     ///
-    /// Use this when the body must bypass the `convertToSnakeCase` encoder — for example,
-    /// when the backend expects camelCase keys (`reportTypeId`, `encryptedContent`).
+    /// Use this only when the body is not `Encodable` — a heterogeneous
+    /// `[String: Any]` built with `JSONSerialization`, for instance. It is NOT an
+    /// encoder bypass: since #1633 the `body:` path applies no key conversion, so an
+    /// `Encodable` body already ships its own `CodingKeys` verbatim. Prefer `body:`.
     ///
     /// - Parameters:
     ///   - method: HTTP method.
@@ -480,10 +540,19 @@ final class APIService: @unchecked Sendable {
 
     // MARK: - Telephony / SIP
 
-    /// Fetch short-lived SIP credentials for the given hub.
-    /// Called when the volunteer clocks in so a SIP account can be registered with Linphone.
-    func getSipToken(hubId: String) async throws -> SipTokenResponse {
-        return try await request(method: "GET", path: "/api/hubs/\(hubId)/telephony/sip-token")
+    /// Fetch the volunteer's per-volunteer SIP credential.
+    ///
+    /// NOT hub-scoped, and the path is not `/api/hubs/{hubId}/…` — that spelling was a
+    /// 404 on every deployed host (`webrtc.ts` is mounted at `/api/telephony`, and
+    /// `routes/hubs.ts` has no `sip-token`). The credential is issued per VOLUNTEER:
+    /// `vol_<pubkey16>` authorised by membership of *any* hub (`callerHasAnyHubAccess`),
+    /// which is why one credential serves every member hub — and why Android's
+    /// `ApiService.getSipConnectionParams()` takes no hub either.
+    ///
+    /// Called when the volunteer clocks in so a SIP account can be registered with
+    /// Linphone.
+    func getSipToken() async throws -> SipTokenResponse {
+        return try await request(method: "GET", path: "/api/telephony/sip-token")
     }
 
     // MARK: - Version Check
@@ -701,7 +770,9 @@ extension APIService {
 // MARK: - Helper Types
 
 /// Type-erased Encodable wrapper for passing heterogeneous body types.
-private struct AnyEncodable: Encodable {
+/// Type-erases an `any Encodable` so `JSONEncoder` can encode it. Internal rather than
+/// private because `APIServiceWireFormatTests` encodes the same existentials this way.
+struct AnyEncodable: Encodable {
     private let encodeFunc: (Encoder) throws -> Void
 
     init(_ wrapped: any Encodable) {
@@ -757,7 +828,7 @@ enum CertificatePins {
 
     /// ISRG Root X2 (ECDSA P-384, backup root).
     /// Extracted via same procedure against isrg-root-x2.pem.
-    static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GGvrTcuvhPy/MzA="
+    static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
 
     /// Static default pins — used until dynamic pins are fetched and verified.
     /// Minimum 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).

@@ -119,8 +119,8 @@ function listedUsers(state: IsolationState): ListedUser[] {
 
 Before({ tags: '@hub-isolation' }, async ({ request, world }) => {
   // Create two isolated hubs with separate admin users
-  const hubAId = await createHubViaApi(request, `bdd-iso-a-${Date.now()}`)
-  const hubBId = await createHubViaApi(request, `bdd-iso-b-${Date.now()}`)
+  const hubAId = await createHubViaApi(request, uniqueName('bdd-iso-a'))
+  const hubBId = await createHubViaApi(request, uniqueName('bdd-iso-b'))
 
   // Create admin users for each hub
   const roleA = await createRoleViaApi(request, {
@@ -316,7 +316,7 @@ When('{string} POSTs to create a provider template', async ({ request, world }, 
     '/provider-templates',
     {
       name: uniqueName('iso-template'),
-      slug: `iso-template-${Date.now()}`,
+      slug: uniqueName('iso-template'),
       providerType: 'twilio',
       defaultChannels: ['voice'],
     },

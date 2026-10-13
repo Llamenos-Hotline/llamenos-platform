@@ -56,6 +56,58 @@ export async function getTelephonyFromService(
   return null
 }
 
+/** The settings reads a hub's telephony configuration is resolved from. */
+interface TelephonySettingsReader {
+  getHubTelephonyProvider(hubId: string, hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+  getTelephonyProvider(hmacSecret?: string): Promise<TelephonyProviderConfig | null>
+}
+
+/**
+ * The telephony provider configuration a call for this hub is served by: the
+ * hub's own if it has one, else the instance-wide one.
+ *
+ * Exported for callers that need the configuration ITSELF rather than an
+ * adapter built from it — `services/ringing.ts` asks it whether this hub's
+ * calls go through the PBX we run, because only then does a volunteer have an
+ * in-app endpoint to be sent an INVITE. Resolving that separately is how the
+ * in-app path first failed: a hub with no per-hub row made the hub-scoped read
+ * null, so it concluded "not our PBX" while `getHubTelephonyFromService` was
+ * happily placing calls through the instance-wide Asterisk. The agreement is
+ * pinned by a test (service-factories.test.ts).
+ *
+ * Returns null when nothing is configured or the configuration cannot be read.
+ * A mock provider in an environment that forbids one is also null: never
+ * degrade to a different provider than the one the call will use.
+ */
+export async function resolveHubTelephonyConfig(
+  env: Env,
+  settingsService: TelephonySettingsReader,
+  hubId: string,
+): Promise<TelephonyProviderConfig | null> {
+  if (hubId !== '') {
+    try {
+      const config = await settingsService.getHubTelephonyProvider(hubId, env.HMAC_SECRET)
+      if (config) return config
+    } catch (e) {
+      if (e instanceof MockTelephonyRefusedError) {
+        logger.error('Mock telephony provider refused', { hubId, reason: e.reason })
+        return null
+      }
+      logger.warn('getHubTelephonyProvider failed for hub, falling back to global', { error: e })
+    }
+  }
+  try {
+    return await settingsService.getTelephonyProvider(env.HMAC_SECRET)
+  } catch (e) {
+    if (e instanceof MockTelephonyRefusedError) {
+      logger.error('Mock telephony provider refused', { reason: e.reason })
+    } else {
+      logger.warn('getTelephonyProvider failed', { error: e })
+    }
+    return null
+  }
+}
+
 /**
  * Get TelephonyAdapter for a specific hub (service-based version).
  * Falls back to global telephony config, then env vars.

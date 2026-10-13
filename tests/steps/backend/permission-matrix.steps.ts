@@ -5,10 +5,11 @@
  * across all API endpoints. Creates one user per default role and
  * verifies expected HTTP status codes for each endpoint.
  */
-import { Given, When, Before, getState, setState } from './fixtures'
+import { Given, When, Then, Before, getState, setState } from './fixtures'
 // Status assertions (Then) are in assertions.steps.ts
 import { getSharedState, setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
+import { devSurfaceHeaders } from '../../dev-surface-secret'
 import {
   apiGet,
   apiPost,
@@ -39,6 +40,9 @@ interface PermMatrixState {
   testVolunteerPubkey?: string
   deletableVolunteerPubkey?: string
   testShiftId?: string
+  /** Shift rostering the volunteer plus one other user — see the schedule scenario. */
+  sharedRosterShiftId?: string
+  sharedRosterOtherPubkey?: string
   deletableShiftId?: string
   testBanPhone?: string
   testInviteCode?: string
@@ -111,6 +115,48 @@ Given('a test shift exists', async ({ request, world }) => {
     const hubId = getScenarioState(world).hubId
     const shift = await createShiftViaApi(request, { name: `PM Shift ${Date.now()}`, hubId })
     getPermMatrixState(world).testShiftId = shift.id
+  }
+})
+
+// A volunteer may see the schedule without seeing who else is on it: the
+// roster the server returns to a `shifts:read-own` caller must contain the
+// caller and nobody else. Rostering two people is the whole point — a shift
+// with only the volunteer on it would make the assertion vacuous.
+Given('a test shift rosters the volunteer alongside another user', async ({ request, world }) => {
+  const pm = getPermMatrixState(world)
+  const volunteer = pm.roleUsers['volunteer']
+  const other = pm.roleUsers['reporter']
+  if (!volunteer || !other) throw new Error('role users were not created')
+  const hubId = getScenarioState(world).hubId
+  const shift = await createShiftViaApi(request, {
+    name: `PM Roster ${Date.now()}`,
+    hubId,
+    userPubkeys: [other.pubkey, volunteer.pubkey],
+  })
+  pm.sharedRosterShiftId = shift.id
+  pm.sharedRosterOtherPubkey = other.pubkey
+})
+
+When('the {string} user lists the hub schedule', async ({ request, world }, role: string) => {
+  const user = getPermMatrixState(world).roleUsers[role]
+  if (!user) throw new Error(`No test user for role "${role}"`)
+  const hubId = getScenarioState(world).hubId
+  getSharedState(world).lastResponse = await apiGet(request, `/hubs/${hubId}/shifts`, user.deviceKey)
+})
+
+Then('the schedule shows that shift with only the volunteer on its roster', async ({ world }) => {
+  const pm = getPermMatrixState(world)
+  const volunteer = pm.roleUsers['volunteer']
+  if (!volunteer) throw new Error('role users were not created')
+  const body = getSharedState(world).lastResponse?.data as
+    { shifts?: Array<{ id: string; userPubkeys: string[] }> } | undefined
+  const shifts = body?.shifts ?? []
+  const row = shifts.find(s => s.id === pm.sharedRosterShiftId)
+  if (!row) {
+    throw new Error(`the volunteer could not see shift ${pm.sharedRosterShiftId} in ${JSON.stringify(shifts.map(s => s.id))}`)
+  }
+  if (row.userPubkeys.length !== 1 || row.userPubkeys[0] !== volunteer.pubkey) {
+    throw new Error(`roster leaked: expected only the caller, got ${JSON.stringify(row.userPubkeys)}`)
   }
 })
 
@@ -415,7 +461,7 @@ When('the {string} user sends {string} to {string} with valid role body', async 
 
   getSharedState(world).lastResponse = await apiPost(request, '/settings/roles', {
     name: uniqueName('PM Role'),
-    slug: `pm-role-${Date.now()}`,
+    slug: uniqueName('pm-role'),
     permissions: ['notes:read-own'],
     description: 'PM test role',
   }, user.deviceKey)
@@ -462,31 +508,28 @@ When('the {string} user sends {string} to {string} with valid report body', asyn
 
 When('an unauthenticated request is sent to {string} {string}', async ({request, world}, method: string, path: string) => {
   const url = `${BASE_URL}${path}`
+  // Deliberately NO Authorization header — that is the thing under test. The
+  // harness header is unrelated to authentication: some of the paths in the
+  // examples table (`/api/invites`) are on the `strict` tier at 5/min per IP,
+  // and on a deployed target every scenario shares Caddy's address, so the
+  // limiter answered 429 instead of the 401 these scenarios assert (#1625).
+  const headers = { 'Content-Type': 'application/json', ...devSurfaceHeaders() }
   let res
   switch (method) {
     case 'GET':
-      res = await request.get(url, { headers: { 'Content-Type': 'application/json' } })
+      res = await request.get(url, { headers })
       break
     case 'POST':
-      res = await request.post(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.post(url, { headers, data: {} })
       break
     case 'PATCH':
-      res = await request.patch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.patch(url, { headers, data: {} })
       break
     case 'PUT':
-      res = await request.put(url, {
-        headers: { 'Content-Type': 'application/json' },
-        data: {},
-      })
+      res = await request.put(url, { headers, data: {} })
       break
     case 'DELETE':
-      res = await request.delete(url, { headers: { 'Content-Type': 'application/json' } })
+      res = await request.delete(url, { headers })
       break
     default:
       throw new Error(`Unknown method: ${method}`)

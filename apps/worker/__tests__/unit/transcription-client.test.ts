@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createTranscriptionService } from '@worker/lib/transcription-client'
-import type { TranscriptionService } from '@worker/types'
 
 describe('transcription-client', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>

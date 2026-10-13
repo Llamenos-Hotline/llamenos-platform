@@ -55,6 +55,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
+import org.llamenos.hotline.model.TelephonyProviderType
+import org.llamenos.hotline.ui.settings.SUPPORTED_LANGUAGES
 import kotlin.math.roundToInt
 
 /**
@@ -133,20 +135,18 @@ fun AdminSettingsTab(
 
                 // --- Call Settings Section ---
                 CallSettingsSection(
-                    ringTimeout = uiState.ringTimeout,
-                    maxCallDuration = uiState.maxCallDuration,
-                    parallelRingCount = uiState.parallelRingCount,
+                    queueTimeoutSeconds = uiState.queueTimeoutSeconds,
+                    voicemailMaxSeconds = uiState.voicemailMaxSeconds,
                     isLoading = uiState.isLoadingCallSettings,
                     error = uiState.callSettingsError,
-                    onRingTimeoutChange = { viewModel.updateRingTimeout(it) },
-                    onMaxCallDurationChange = { viewModel.updateMaxCallDuration(it) },
-                    onParallelRingCountChange = { viewModel.updateParallelRingCount(it) },
+                    onQueueTimeoutChange = { viewModel.updateQueueTimeout(it) },
+                    onVoicemailMaxChange = { viewModel.updateVoicemailMax(it) },
                     onSave = { viewModel.saveCallSettings() },
                 )
 
                 // --- IVR Languages Section ---
                 IvrLanguagesSection(
-                    languages = uiState.ivrLanguages,
+                    enabledLanguages = uiState.ivrEnabledLanguages,
                     isLoading = uiState.isLoadingIvrLanguages,
                     error = uiState.ivrLanguagesError,
                     onToggleLanguage = { code, enabled -> viewModel.toggleIvrLanguage(code, enabled) },
@@ -155,14 +155,16 @@ fun AdminSettingsTab(
 
                 // --- Spam Settings Section ---
                 SpamSettingsSection(
-                    maxCallsPerHour = uiState.maxCallsPerHour,
+                    maxCallsPerMinute = uiState.maxCallsPerMinute,
+                    blockDurationMinutes = uiState.blockDurationMinutes,
+                    rateLimitEnabled = uiState.rateLimitEnabled,
                     voiceCaptchaEnabled = uiState.voiceCaptchaEnabled,
-                    knownNumberBypass = uiState.knownNumberBypass,
                     isLoading = uiState.isLoadingSpamSettings,
                     error = uiState.spamSettingsError,
-                    onMaxCallsPerHourChange = { viewModel.updateMaxCallsPerHour(it) },
+                    onMaxCallsPerMinuteChange = { viewModel.updateMaxCallsPerMinute(it) },
+                    onBlockDurationChange = { viewModel.updateBlockDuration(it) },
+                    onToggleRateLimit = { viewModel.toggleRateLimit(it) },
                     onToggleVoiceCaptcha = { viewModel.toggleVoiceCaptcha(it) },
-                    onToggleKnownNumberBypass = { viewModel.toggleKnownNumberBypass(it) },
                     onSave = { viewModel.saveSpamSettings() },
                 )
 
@@ -343,30 +345,54 @@ internal fun ReportCategoriesSection(
 
 // ---- Telephony Section ----
 
+/**
+ * Picker order: the cloud providers first, then the self-hosted PBXes.
+ *
+ * `TelephonyProviderType` is the generated `SharedProviderType`, so this is
+ * exactly the eight providers `telephonyProviderTypeSchema` accepts. The list
+ * here used to be five hardcoded strings, which left an operator on Telnyx,
+ * Bandwidth or FreeSWITCH unable to select their own provider (#1724).
+ */
+internal val TELEPHONY_PROVIDER_PICKER_ORDER = listOf(
+    TelephonyProviderType.Twilio,
+    TelephonyProviderType.Signalwire,
+    TelephonyProviderType.Vonage,
+    TelephonyProviderType.Plivo,
+    TelephonyProviderType.Telnyx,
+    TelephonyProviderType.Bandwidth,
+    TelephonyProviderType.Asterisk,
+    TelephonyProviderType.Freeswitch,
+)
+
+/** The provider's own brand name. Trademarks are not localized. */
+internal val TelephonyProviderType.displayName: String
+    get() = when (this) {
+        TelephonyProviderType.Twilio -> "Twilio"
+        TelephonyProviderType.Signalwire -> "SignalWire"
+        TelephonyProviderType.Vonage -> "Vonage"
+        TelephonyProviderType.Plivo -> "Plivo"
+        TelephonyProviderType.Telnyx -> "Telnyx"
+        TelephonyProviderType.Bandwidth -> "Bandwidth"
+        TelephonyProviderType.Asterisk -> "Asterisk"
+        TelephonyProviderType.Freeswitch -> "FreeSWITCH"
+    }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TelephonySection(
-    provider: String,
+    provider: TelephonyProviderType,
     accountSid: String,
     authToken: String,
     phoneNumber: String,
     isLoading: Boolean,
     error: String?,
-    onProviderChange: (String) -> Unit,
+    onProviderChange: (TelephonyProviderType) -> Unit,
     onAccountSidChange: (String) -> Unit,
     onAuthTokenChange: (String) -> Unit,
     onPhoneNumberChange: (String) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val providers = listOf("twilio", "signalwire", "vonage", "plivo", "asterisk")
-    val providerLabels = mapOf(
-        "twilio" to "Twilio",
-        "signalwire" to "SignalWire",
-        "vonage" to "Vonage",
-        "plivo" to "Plivo",
-        "asterisk" to "Asterisk",
-    )
     var expanded by remember { mutableStateOf(false) }
 
     Card(
@@ -405,7 +431,7 @@ internal fun TelephonySection(
                     onExpandedChange = { expanded = it },
                 ) {
                     OutlinedTextField(
-                        value = providerLabels[provider] ?: provider,
+                        value = provider.displayName,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text(stringResource(R.string.admin_telephony_provider)) },
@@ -419,9 +445,9 @@ internal fun TelephonySection(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
                     ) {
-                        providers.forEach { p ->
+                        TELEPHONY_PROVIDER_PICKER_ORDER.forEach { p ->
                             DropdownMenuItem(
-                                text = { Text(providerLabels[p] ?: p) },
+                                text = { Text(p.displayName) },
                                 onClick = {
                                     onProviderChange(p)
                                     expanded = false
@@ -494,16 +520,17 @@ internal fun TelephonySection(
 
 // ---- Call Settings Section ----
 
+/** 30...300 in 15-second steps, so the slider has 18 interior stops. */
+private const val CALL_SECONDS_STEPS = 17
+
 @Composable
 internal fun CallSettingsSection(
-    ringTimeout: Int,
-    maxCallDuration: Int,
-    parallelRingCount: Int,
+    queueTimeoutSeconds: Int,
+    voicemailMaxSeconds: Int,
     isLoading: Boolean,
     error: String?,
-    onRingTimeoutChange: (Int) -> Unit,
-    onMaxCallDurationChange: (Int) -> Unit,
-    onParallelRingCountChange: (Int) -> Unit,
+    onQueueTimeoutChange: (Int) -> Unit,
+    onVoicemailMaxChange: (Int) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -537,41 +564,30 @@ internal fun CallSettingsSection(
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
             } else {
-                // Ring timeout slider (15-60s)
+                // The two call settings the server has, both in seconds over its
+                // own 30...300 clamp. The three that used to be here — a ring
+                // timeout, a maximum call duration and a parallel ring count —
+                // have no server field, no storage and no effect (#1724).
                 SliderSetting(
-                    label = stringResource(R.string.admin_call_ring_timeout),
-                    value = ringTimeout.toFloat(),
-                    valueRange = 15f..60f,
-                    steps = 8,
-                    valueLabel = stringResource(R.string.admin_seconds_unit, ringTimeout),
-                    onValueChange = { onRingTimeoutChange(it.roundToInt()) },
-                    testTag = "ring-timeout-slider",
+                    label = stringResource(R.string.call_settings_queue_timeout),
+                    value = queueTimeoutSeconds.toFloat(),
+                    valueRange = CALL_SECONDS_RANGE.first.toFloat()..CALL_SECONDS_RANGE.last.toFloat(),
+                    steps = CALL_SECONDS_STEPS,
+                    valueLabel = stringResource(R.string.admin_seconds_unit, queueTimeoutSeconds),
+                    onValueChange = { onQueueTimeoutChange(it.roundToInt()) },
+                    testTag = "queue-timeout-slider",
                 )
 
                 Spacer(Modifier.height(12.dp))
 
-                // Max call duration slider (5-120 min)
                 SliderSetting(
-                    label = stringResource(R.string.admin_call_max_duration),
-                    value = maxCallDuration.toFloat(),
-                    valueRange = 5f..120f,
-                    steps = 22,
-                    valueLabel = stringResource(R.string.admin_minutes_unit, maxCallDuration),
-                    onValueChange = { onMaxCallDurationChange(it.roundToInt()) },
-                    testTag = "max-call-duration-slider",
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                // Parallel ring count slider (1-10)
-                SliderSetting(
-                    label = stringResource(R.string.admin_call_parallel_ring),
-                    value = parallelRingCount.toFloat(),
-                    valueRange = 1f..10f,
-                    steps = 8,
-                    valueLabel = parallelRingCount.toString(),
-                    onValueChange = { onParallelRingCountChange(it.roundToInt()) },
-                    testTag = "parallel-ring-count-slider",
+                    label = stringResource(R.string.call_settings_voicemail_max),
+                    value = voicemailMaxSeconds.toFloat(),
+                    valueRange = CALL_SECONDS_RANGE.first.toFloat()..CALL_SECONDS_RANGE.last.toFloat(),
+                    steps = CALL_SECONDS_STEPS,
+                    valueLabel = stringResource(R.string.admin_seconds_unit, voicemailMaxSeconds),
+                    onValueChange = { onVoicemailMaxChange(it.roundToInt()) },
+                    testTag = "voicemail-max-slider",
                 )
 
                 Spacer(Modifier.height(12.dp))
@@ -601,27 +617,35 @@ internal fun CallSettingsSection(
 // ---- IVR Languages Section ----
 
 /**
- * All 13 supported IVR languages with their codes and native labels.
+ * Every locale a caller can be offered, with the language's own name.
+ *
+ * The same set as `SUPPORTED_LANGUAGES` in `ui/settings/SettingsScreen.kt`,
+ * which mirrors `LANGUAGES` in `packages/i18n/languages.ts` — the source of
+ * truth for which locales exist. This list held 13 of them, so nine shipped
+ * locales were unreachable from this screen; the server still rejects a code
+ * outside `LANGUAGE_CODES`, so a drift here cannot store a language that does
+ * not exist.
  */
-internal val IVR_LANGUAGE_LIST = listOf(
-    "en" to "English",
-    "es" to "Espa\u00f1ol",
-    "zh" to "\u4e2d\u6587",
-    "tl" to "Tagalog",
-    "vi" to "Ti\u1ebfng Vi\u1ec7t",
-    "ar" to "\u0627\u0644\u0639\u0631\u0628\u064a\u0629",
-    "fr" to "Fran\u00e7ais",
-    "ht" to "Krey\u00f2l Ayisyen",
-    "ko" to "\ud55c\uad6d\uc5b4",
-    "ru" to "\u0420\u0443\u0441\u0441\u043a\u0438\u0439",
-    "hi" to "\u0939\u093f\u0928\u094d\u0926\u0940",
-    "pt" to "Portugu\u00eas",
-    "de" to "Deutsch",
-)
+internal val IVR_LANGUAGE_LIST = SUPPORTED_LANGUAGES.map { it.code to it.label }
+
+/**
+ * Positions from this index on are reached through the "more languages" digit —
+ * `ivrIndexToDigit` in `packages/i18n/languages.ts`, which the server's IVR
+ * menu builder uses.
+ */
+private const val IVR_SUB_MENU_THRESHOLD = 8
+
+/** The keypad digit that selects the language at [index]. */
+private fun ivrDigitLabel(index: Int): String =
+    if (index < IVR_SUB_MENU_THRESHOLD) "${index + 1}" else "9\u00b7${index - IVR_SUB_MENU_THRESHOLD + 1}"
+
+/** The language's own name, or the bare code for one this build does not list. */
+private fun ivrLanguageLabel(code: String): String =
+    IVR_LANGUAGE_LIST.firstOrNull { it.first == code }?.second ?: code.uppercase()
 
 @Composable
 internal fun IvrLanguagesSection(
-    languages: Map<String, Boolean>,
+    enabledLanguages: List<String>,
     isLoading: Boolean,
     error: String?,
     onToggleLanguage: (String, Boolean) -> Unit,
@@ -658,6 +682,48 @@ internal fun IvrLanguagesSection(
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
             } else {
+                // The enabled languages in the order callers hear them, each with
+                // the digit that selects it: position is a setting in its own
+                // right, which the `Map<String, Boolean>` this screen used to
+                // hold could not express at all.
+                Text(
+                    text = stringResource(R.string.ivr_enabled_languages),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                if (enabledLanguages.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.ivr_at_least_one),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                enabledLanguages.forEachIndexed { index, code ->
+                    Text(
+                        text = "${ivrDigitLabel(index)}  ${ivrLanguageLabel(code)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("ivr-enabled-$code"),
+                    )
+                }
+                Text(
+                    // One string a test can compare against the server's array,
+                    // because the order is what a per-row assertion cannot see.
+                    text = enabledLanguages.joinToString(","),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("ivr-enabled-order"),
+                )
+                Text(
+                    text = stringResource(R.string.ivr_sub_menu_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = stringResource(R.string.ivr_available_languages),
+                    style = MaterialTheme.typography.labelMedium,
+                )
                 IVR_LANGUAGE_LIST.forEach { (code, label) ->
                     Row(
                         modifier = Modifier
@@ -672,7 +738,7 @@ internal fun IvrLanguagesSection(
                             modifier = Modifier.weight(1f),
                         )
                         Switch(
-                            checked = languages[code] ?: false,
+                            checked = code in enabledLanguages,
                             onCheckedChange = { onToggleLanguage(code, it) },
                         )
                     }
@@ -682,6 +748,7 @@ internal fun IvrLanguagesSection(
 
                 Button(
                     onClick = onSave,
+                    enabled = enabledLanguages.isNotEmpty(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("ivr-languages-save-button"),
@@ -706,14 +773,16 @@ internal fun IvrLanguagesSection(
 
 @Composable
 internal fun SpamSettingsSection(
-    maxCallsPerHour: Int,
+    maxCallsPerMinute: Int,
+    blockDurationMinutes: Int,
+    rateLimitEnabled: Boolean,
     voiceCaptchaEnabled: Boolean,
-    knownNumberBypass: Boolean,
     isLoading: Boolean,
     error: String?,
-    onMaxCallsPerHourChange: (Int) -> Unit,
+    onMaxCallsPerMinuteChange: (Int) -> Unit,
+    onBlockDurationChange: (Int) -> Unit,
+    onToggleRateLimit: (Boolean) -> Unit,
     onToggleVoiceCaptcha: (Boolean) -> Unit,
-    onToggleKnownNumberBypass: (Boolean) -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -747,35 +816,51 @@ internal fun SpamSettingsSection(
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
             } else {
-                // Max calls per hour slider (1-100)
+                // The server's rate limit is per MINUTE, with a block duration
+                // alongside it. This screen offered a per-HOUR limit and a
+                // "known number bypass" the server does not have at all — a
+                // switch that promised to exempt repeat callers from the
+                // CAPTCHA and controlled nothing in either position (#1724).
+                SettingsToggleRow(
+                    title = stringResource(R.string.spam_rate_limiting),
+                    description = stringResource(R.string.spam_rate_limiting_description),
+                    checked = rateLimitEnabled,
+                    onCheckedChange = onToggleRateLimit,
+                    testTag = "rate-limit-toggle",
+                )
+
+                Spacer(Modifier.height(12.dp))
+
                 SliderSetting(
-                    label = stringResource(R.string.admin_spam_max_calls),
-                    value = maxCallsPerHour.toFloat(),
-                    valueRange = 1f..100f,
-                    steps = 98,
-                    valueLabel = maxCallsPerHour.toString(),
-                    onValueChange = { onMaxCallsPerHourChange(it.roundToInt()) },
-                    testTag = "max-calls-per-hour-slider",
+                    label = stringResource(R.string.spam_max_calls_per_minute),
+                    value = maxCallsPerMinute.toFloat(),
+                    valueRange = MAX_CALLS_PER_MINUTE_RANGE.first.toFloat()..MAX_CALLS_PER_MINUTE_RANGE.last.toFloat(),
+                    steps = MAX_CALLS_PER_MINUTE_RANGE.last - MAX_CALLS_PER_MINUTE_RANGE.first - 1,
+                    valueLabel = maxCallsPerMinute.toString(),
+                    onValueChange = { onMaxCallsPerMinuteChange(it.roundToInt()) },
+                    testTag = "max-calls-per-minute-slider",
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                SliderSetting(
+                    label = stringResource(R.string.spam_block_duration),
+                    value = blockDurationMinutes.toFloat(),
+                    valueRange = BLOCK_DURATION_MINUTES_RANGE.first.toFloat()..BLOCK_DURATION_MINUTES_RANGE.last.toFloat(),
+                    steps = 0,
+                    valueLabel = blockDurationMinutes.toString(),
+                    onValueChange = { onBlockDurationChange(it.roundToInt()) },
+                    testTag = "block-duration-slider",
                 )
 
                 Spacer(Modifier.height(12.dp))
 
                 SettingsToggleRow(
-                    title = stringResource(R.string.admin_spam_captcha),
-                    description = stringResource(R.string.admin_spam_captcha_desc),
+                    title = stringResource(R.string.spam_voice_captcha),
+                    description = stringResource(R.string.spam_voice_captcha_description),
                     checked = voiceCaptchaEnabled,
                     onCheckedChange = onToggleVoiceCaptcha,
                     testTag = "voice-captcha-toggle",
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                SettingsToggleRow(
-                    title = stringResource(R.string.admin_spam_known_bypass),
-                    description = stringResource(R.string.admin_spam_known_bypass_desc),
-                    checked = knownNumberBypass,
-                    onCheckedChange = onToggleKnownNumberBypass,
-                    testTag = "known-number-bypass-toggle",
                 )
 
                 Spacer(Modifier.height(12.dp))

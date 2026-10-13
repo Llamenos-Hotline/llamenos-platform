@@ -2401,7 +2401,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Couldn't load your hubs",
+    "membershipLoadFailedBody": "The server didn't say which hubs you belong to, so nothing can be shown yet. Check your connection and try again."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2425,6 +2427,7 @@
   "incomingCallBody": "Someone is calling the hotline",
   "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
+  "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
   "inviteCodeCopied": "Invite code copied",
   "inviteCreate": "Create Invite",
@@ -2690,6 +2693,7 @@
     "backupAcknowledge": "I have saved my recovery key in a secure location",
     "backupDescription": "Write this recovery key down and keep it safe. It's the only way to recover your account on a new device.",
     "backupDownloaded": "Backup downloaded",
+    "backupFailed": "Could not create your encrypted backup: {{reason}}",
     "backupTitle": "Save Your Recovery Key",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2704,6 +2708,8 @@
     "getStarted": "Get Started",
     "goToLogin": "Go to Login",
     "invalidCode": "Invalid invite code",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "No invite code provided",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

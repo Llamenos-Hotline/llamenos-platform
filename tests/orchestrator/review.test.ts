@@ -15,6 +15,10 @@ import {
   classifyEngineFailure,
   reviewerBinaryFor,
   reviewerInvocationFor,
+  reviewerInvocationForEngine,
+  otherReviewerEngine,
+  resolveKimiReviewerModel,
+  kimiReviewerModelProblem,
   canFallbackAfterFailure,
   fallbackReviewerEnabled,
   reviewPrimaryEngine,
@@ -96,6 +100,133 @@ describe('reviewerInvocationFor / reviewerBinaryFor', () => {
     // Cast: 'opencode' is deliberately NOT a ReviewRunEngine — the throw for
     // unknown engines is the very contract under test.
     expect(() => reviewerBinaryFor('opencode' as never)).toThrow(/no wired reviewer invocation/)
+  })
+})
+
+// #1767 ask 2: the fallback engine's binary/model must resolve from the
+// SAME function as the primary — the pre-#1767 smoke step handed the claude
+// fallback kimi's empty-by-default model as a literal `--model ""`, which
+// claude rejects outright, so the fallback never once worked and only one
+// log line on a doubly-failed run ever said so.
+describe('reviewerInvocationForEngine / otherReviewerEngine (#1767)', () => {
+  const ENVS = ['FLEET_REVIEW_PRIMARY', 'FLEET_REVIEW_MODEL', 'FLEET_REVIEW_KIMI_MODEL'] as const
+  let saved: Record<string, string | undefined>
+  beforeEach(() => {
+    saved = {}
+    for (const e of ENVS) { saved[e] = process.env[e]; delete process.env[e] }
+  })
+  afterEach(() => {
+    for (const e of ENVS) {
+      if (saved[e] === undefined) delete process.env[e]
+      else process.env[e] = saved[e]
+    }
+  })
+
+  it('resolves each engine directly, independent of FLEET_REVIEW_PRIMARY', () => {
+    process.env['FLEET_REVIEW_PRIMARY'] = 'kimi'
+    // claude with NO FLEET_REVIEW_MODEL set must still carry its own
+    // default tier — never the primary's model, and never empty.
+    expect(reviewerInvocationForEngine('claude')).toEqual({ engine: 'claude', binary: 'claude', model: 'sonnet' })
+    // kimi with no override carries '' — meaningful: kimi's own configured
+    // default (see kimiReviewModel).
+    expect(reviewerInvocationForEngine('kimi')).toEqual({ engine: 'kimi', binary: 'kimi', model: '' })
+    process.env['FLEET_REVIEW_PRIMARY'] = 'claude'
+    expect(reviewerInvocationForEngine('kimi')).toEqual({ engine: 'kimi', binary: 'kimi', model: '' })
+  })
+
+  it('reviewerInvocationFor delegates to the primary engine exactly', () => {
+    expect(reviewerInvocationFor('claude')).toEqual(reviewerInvocationForEngine('kimi'))
+    process.env['FLEET_REVIEW_PRIMARY'] = 'claude'
+    expect(reviewerInvocationFor('claude')).toEqual(reviewerInvocationForEngine('claude'))
+  })
+
+  it('otherReviewerEngine is the involution pairing kimi and claude, hard-failing otherwise', () => {
+    expect(otherReviewerEngine('kimi')).toBe('claude')
+    expect(otherReviewerEngine('claude')).toBe('kimi')
+    expect(otherReviewerEngine(otherReviewerEngine('kimi'))).toBe('kimi')
+    expect(() => otherReviewerEngine('opencode' as never)).toThrow(/unknown reviewer engine/)
+  })
+
+  // The exact bug shape: with the default order (kimi primary, kimi model
+  // empty-by-default), a fallback claude invocation derived from the
+  // PRIMARY's resolution carries `--model ""` — claude exits 1 on it
+  // ("model: String should have at least 1 character"). Deriving the
+  // fallback through otherReviewerEngine + reviewerInvocationForEngine can
+  // never produce it.
+  it('MUTATION GUARD: the resolved fallback invocation can never carry the primary\'s empty model', () => {
+    const primary = reviewerInvocationFor('claude')
+    expect(primary).toEqual({ engine: 'kimi', binary: 'kimi', model: '' })
+    const fallback = reviewerInvocationForEngine(otherReviewerEngine(primary.engine))
+    expect(fallback.engine).toBe('claude')
+    expect(fallback.binary).toBe('claude')
+    expect(fallback.model).not.toBe('')
+    expect(fallback.model).not.toBe(primary.model)
+  })
+})
+
+// #1767: kimi's effective reviewer model resolves from ONE place the engine
+// itself shares — kimi's own config.toml default_model (`kimi --help`:
+// "Defaults to default_model in config.toml") — never a guessed id that the
+// provider can rename out from under the gate (#1738). These fixtures pin
+// the parse; the smoke step's shell twin is pinned against the same shapes
+// in fleet-review-smoke-step.test.ts.
+describe('resolveKimiReviewerModel / kimiReviewerModelProblem (#1767)', () => {
+  const ENV = 'FLEET_REVIEW_KIMI_MODEL'
+  let saved: string | undefined
+  let dir: string
+  beforeEach(() => {
+    saved = process.env[ENV]
+    delete process.env[ENV]
+    dir = mkdtempSync(join(tmpdir(), 'llamenos-kimi-cfg-'))
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV]
+    else process.env[ENV] = saved
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const writeConfig = (body: string) => writeFileSync(join(dir, 'config.toml'), body)
+
+  it('FLEET_REVIEW_KIMI_MODEL overrides everything, with its own provenance', () => {
+    process.env[ENV] = 'override-model'
+    writeConfig('default_model = "config-model"\n[models."config-model"]\nprovider = "x"\n[models."override-model"]\nprovider = "y"\n')
+    expect(resolveKimiReviewerModel(dir)).toEqual({ model: 'override-model', source: 'override', known: ['config-model', 'override-model'] })
+  })
+
+  it('reads default_model from kimi\'s own config.toml, listing the configured registry', () => {
+    writeConfig('default_model = "kimi-code/kimi-for-coding"\n\n[models."kimi-code/kimi-for-coding"]\nprovider = "x"\n\n[models."kimi-code-plan-global/k3-256k"]\nprovider = "y"\n')
+    expect(resolveKimiReviewerModel(dir)).toEqual({
+      model: 'kimi-code/kimi-for-coding',
+      source: 'config-default',
+      known: ['kimi-code/kimi-for-coding', 'kimi-code-plan-global/k3-256k'],
+    })
+    expect(kimiReviewerModelProblem(resolveKimiReviewerModel(dir))).toBeUndefined()
+  })
+
+  it('flags a configured id the registry does not define — a provider rename is misconfiguration, not an outage', () => {
+    writeConfig('default_model = "kimi-code/renamed-away"\n\n[models."kimi-code-plan-global/k3-256k"]\nprovider = "y"\n')
+    const resolution = resolveKimiReviewerModel(dir)
+    const problem = kimiReviewerModelProblem(resolution)
+    if (problem === undefined) throw new Error('expected a staleness problem, got none')
+    expect(problem).toContain('kimi-code/renamed-away')
+    expect(problem).toContain('misconfiguration')
+    expect(problem).toContain('kimi-code-plan-global/k3-256k')
+  })
+
+  it('does not flag an override id the registry defines', () => {
+    process.env[ENV] = 'kimi-code-plan-global/k3-256k'
+    writeConfig('default_model = "other"\n[models."other"]\nprovider = "x"\n[models."kimi-code-plan-global/k3-256k"]\nprovider = "y"\n')
+    expect(kimiReviewerModelProblem(resolveKimiReviewerModel(dir))).toBeUndefined()
+  })
+
+  it('trusts kimi\'s own resolution when no default_model line exists — no phantom failure', () => {
+    writeConfig('[models."kimi-code-plan-global/k3-256k"]\nprovider = "y"\n')
+    expect(resolveKimiReviewerModel(dir)).toBeUndefined()
+    expect(kimiReviewerModelProblem(resolveKimiReviewerModel(dir))).toBeUndefined()
+  })
+
+  it('a missing config.toml resolves to nothing and is never a problem', () => {
+    expect(resolveKimiReviewerModel(join(dir, 'no-such-dir'))).toBeUndefined()
   })
 })
 

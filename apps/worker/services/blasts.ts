@@ -396,6 +396,15 @@ export class BlastsService {
       if (existing) {
         // RACE-13: Atomic channel merge at the SQL level to avoid read-modify-write race.
         // Uses jsonb_agg(DISTINCT elem) to merge existing channels with the new one.
+        //
+        // The payload goes through `(...)::text::jsonb`, not `...::jsonb`:
+        // binding a JS *string* straight to a jsonb parameter position reaches
+        // Postgres double-encoded — a jsonb *string scalar* — so the merged
+        // array gained a quoted string instead of a channel object. Every
+        // consumer reads channels with `elem->>'type'`, which is NULL for a
+        // string element, so the re-subscribed channel was invisible to the
+        // subscriber filter and to blast recipient selection. Same warning as
+        // identity.ts and erasure.ts.
         const newChannel = JSON.stringify({ type: data.channel, verified: true })
         await this.db
           .update(subscribers)
@@ -406,7 +415,7 @@ export class BlastsService {
               FROM (
                 SELECT elem FROM jsonb_array_elements(${subscribers.channels}) elem
                 UNION ALL
-                SELECT ${newChannel}::jsonb
+                SELECT (${newChannel})::text::jsonb
               ) combined
             )`,
           })

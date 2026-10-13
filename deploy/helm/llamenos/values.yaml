@@ -73,7 +73,12 @@ asterisk:
   enabled: false
   image:
     repository: andrius/asterisk
-    tag: "20.11"
+    # Must stay >= 22.10.0. Below it, the `dtls_verify = fingerprint` the app
+    # provisions on every volunteer endpoint becomes full X.509 chain
+    # verification and every DTLS-SRTP call dies at the handshake — see
+    # deploy/docker/docker-compose.yml and #1687. The previous `20.11` pin both
+    # predates that fix and diverged from the compose digest.
+    tag: "22.10.1_debian-trixie"
 
 # SIP bridge (supports Asterisk, FreeSWITCH, Kamailio via PBX_TYPE)
 sipBridge:

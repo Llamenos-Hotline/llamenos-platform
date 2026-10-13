@@ -263,22 +263,27 @@ export function requireAdminSeed(): string {
 /**
  * The hub an R1 deployment serves callers from.
  *
- * R1 is one VM with one hotline, so there is exactly one active hub and
- * /api/config publishes it as `defaultHubId`. Resolving it from the server
- * rather than from an env var is deliberate: a deployment where the setup
- * wizard never finished has no hub, and this throws there instead of
- * silently exercising the unscoped (hubId `''`) routes, which answer 200
- * and touch nothing a caller can reach.
+ * Read from the AUTHENTICATED `GET /api/hubs` as the admin, which the server
+ * filters to the caller's memberships. It used to come from `/api/config`'s
+ * `defaultHubId`, but a public endpoint has no business publishing the hub
+ * roster (#1710) and that field is gone.
+ *
+ * Resolving it from the server rather than from an env var is deliberate: a
+ * deployment where the setup wizard never finished has no hub, and this throws
+ * there instead of silently exercising the unscoped (hubId `''`) routes, which
+ * answer 200 and touch nothing a caller can reach.
  */
 export async function resolveHubId(request: APIRequestContext): Promise<string> {
-  const res = await request.get('/api/config')
-  if (!res.ok()) throw new Error(`GET /api/config failed: ${res.status()}`)
-  const cfg = await res.json() as { defaultHubId?: string; hubs?: Array<{ id: string; status: string }> }
-  const hubId = cfg.defaultHubId ?? cfg.hubs?.find(h => h.status === 'active')?.id
+  const { status, data } = await apiGet<{ hubs?: Array<{ id: string; status: string }> }>(
+    request, '/hubs', requireAdminSeed(),
+  )
+  if (status !== 200) throw new Error(`GET /api/hubs failed: ${status}`)
+  const hubId = data.hubs?.find(h => h.status === 'active')?.id
   if (!hubId) {
     throw new Error(
-      'this deployment has no active hub — the setup wizard has not been completed, '
-      + 'so no part of the R1 flow can run (see deployment-readiness.spec.ts)',
+      'this deployment has no active hub the admin is a member of — the setup '
+      + 'wizard has not been completed, so no part of the R1 flow can run '
+      + '(see deployment-readiness.spec.ts)',
     )
   }
   return hubId

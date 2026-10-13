@@ -18,7 +18,7 @@ import {
   submitClientSecurityEventsResponseSchema,
 } from '../schemas/client-security-events'
 import { publicErrors } from '../openapi/helpers'
-import { getClientIp, hashIP } from '../lib/crypto'
+import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { checkRateLimit } from '../lib/helpers'
 import { createLogger } from '../lib/logger'
 
@@ -118,7 +118,7 @@ publicSecurityEventsRoutes.post('/',
   // Always enforced (unlike rateLimit('strict'), which is skipped in development) and
   // counted before validation so malformed floods are throttled too.
   async (c, next) => {
-    const ipKey = `security-events-submit:${hashIP(getClientIp(c.req.raw), c.env.HMAC_SECRET)}`
+    const ipKey = `security-events-submit:${routeRateLimitClient(c)}`
     if (await checkRateLimit(c.get('services').settings, ipKey, SUBMIT_MAX_PER_MINUTE)) {
       return c.json({ error: 'Too many requests. Try again later.' }, 429)
     }

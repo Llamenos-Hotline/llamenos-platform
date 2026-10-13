@@ -76,7 +76,7 @@ reports.get('/',
       if (!canReadAll) {
         return c.json({ error: 'Forbidden', required: 'reports:read-all' }, 403)
       }
-      const { reportTypes } = await services.settings.getCmsReportTypes()
+      const { reportTypes } = await services.settings.getCmsReportTypes(hubId)
       const conversionTypeIds = new Set(
         reportTypes.filter(rt => rt.allowCaseConversion).map(rt => rt.id),
       )

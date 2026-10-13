@@ -1,6 +1,6 @@
 import type { Env } from '../types'
 import type { Services } from '../services'
-import { getTelephonyFromService, getHubTelephonyFromService } from '../lib/service-factories'
+import { getTelephonyFromService, getHubTelephonyFromService, resolveHubTelephonyConfig } from '../lib/service-factories'
 import { dispatchVoipPushFromService } from '../lib/voip-push'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING } from '@shared/event-kinds'
@@ -10,6 +10,7 @@ import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { incCounter } from '../routes/metrics'
 import { hashPhone } from '../lib/crypto'
 import { resolveHubPermissions } from '@shared/permissions'
+import { listReachableVolunteerEndpoints, volunteerSipUsername } from '../telephony/registrar'
 
 const logger = createLogger('ringing')
 
@@ -157,6 +158,86 @@ export async function resolveRingableVolunteers(
 }
 
 // ---------------------------------------------------------------------------
+// In-app ring targets
+// ---------------------------------------------------------------------------
+
+/** One in-app leg to ring: the volunteer, and the AOR their app registered. */
+interface InAppRingTarget {
+  pubkey: string
+  sipAor: string
+}
+
+/**
+ * Which of the volunteers this call already rings also have a reachable
+ * in-app endpoint — the set that gets an INVITE as well as (not instead of)
+ * their phone.
+ *
+ * `candidates` is a subset of `available`, so eligibility is inherited, never
+ * recomputed: the schedule ∩ clock-in intersection, the hub-access and
+ * availability filters and the volunteer's own call preference have all
+ * already been applied by the caller. A second eligibility rule here would
+ * drift from the first, which is exactly how presence drifted once already.
+ * This function answers only the question `available` cannot: can the PBX
+ * reach their app *right now*.
+ *
+ * Total by construction: an empty list, never a throw, for every reason
+ * in-app ringing cannot happen. That is deliberate rather than tidy — this
+ * runs inside the ring path that places the phone legs, and PSTN ringing
+ * works today. Nothing about a PBX that will not answer, or a provider
+ * configuration that will not read, may cost a volunteer their phone call.
+ *
+ *  - the hub's provider is not the self-hosted registrar (no vendor has a
+ *    per-volunteer AOR to dial, by the design `sipCredentialsMayBeIssued`
+ *    documents), so no volunteer is in-app reachable at all — the quiet,
+ *    expected case;
+ *  - the PBX cannot be asked, or refuses — logged at error level with a
+ *    counter rather than swallowed, because it means registered volunteers
+ *    are not being rung in-app.
+ *
+ * The provider is read through `resolveHubTelephonyConfig`, the same
+ * resolution the adapter that places the call is built from. Asking
+ * `getHubTelephonyProvider` directly is how this first failed: a hub with no
+ * per-hub row read as null, so this concluded "not our PBX" while the call
+ * itself went out through the instance-wide Asterisk.
+ */
+async function resolveInAppRingTargets(
+  env: Env,
+  services: Services,
+  hubId: string,
+  candidates: RingableUser[],
+): Promise<InAppRingTarget[]> {
+  // A call that resolved to no hub has no relay channel and no push audience
+  // (see below); it gets no in-app leg either, so the in-app path never
+  // reaches someone the other notification paths deliberately skipped.
+  if (hubId === '' || candidates.length === 0) return []
+
+  try {
+    const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
+    if (config?.type !== 'asterisk') return []
+
+    // The PBX is the only authority on who is registered.
+    const reachable = await listReachableVolunteerEndpoints(config)
+    const targets: InAppRingTarget[] = []
+    for (const volunteer of candidates) {
+      const sipAor = volunteerSipUsername(volunteer.pubkey)
+      if (reachable.has(sipAor)) targets.push({ pubkey: volunteer.pubkey, sipAor })
+    }
+    logger.info('In-app ring targets resolved', {
+      hubId,
+      candidates: candidates.length,
+      reachable: targets.length,
+    })
+    return targets
+  } catch (err) {
+    // Without the PBX's answer, assume nobody is reachable: the phone legs
+    // still ring, and an operator can see that in-app ringing is not working.
+    logger.error('In-app ringing: could not decide who is reachable — ringing phones only', err, { hubId })
+    incCounter('llamenos_inapp_ring_errors_total', { reason: 'reachability' })
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ring-leg registry (first-pickup-wins)
 // ---------------------------------------------------------------------------
 
@@ -270,7 +351,14 @@ export async function startParallelRinging(
       return { ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 }
     }
 
-    logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length })
+    // …and, when their app is actually registered on our own PBX, they are
+    // RUNG: an INVITE to their AOR, as a parallel leg next to the phone legs.
+    // A relay event and a push tell a client a call exists; neither makes a
+    // registered endpoint ring. Derived from `browserVoip`, so a volunteer who
+    // asked for phone-only is not dialled in-app however reachable they are.
+    const appTargets = await resolveInAppRingTargets(env, services, hubId, browserVoip)
+
+    logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length, inApp: appTargets.length })
 
     const callerLast4 = callerNumber.slice(-4)
     if (hubId !== '') {
@@ -298,8 +386,10 @@ export async function startParallelRinging(
       logger.error('Call resolved to no hub — relay and VoIP clients cannot be rung', { callSid })
     }
 
-    // Ring phone volunteers via telephony adapter (skip if no one needs phone ringing)
-    if (toRingPhone.length > 0) {
+    // Ring the legs that actually make a device ring: volunteers' phones, and
+    // the in-app endpoints registered on our own PBX. Both go through the one
+    // adapter call, so both land in the one first-pickup-wins leg registry.
+    if (toRingPhone.length > 0 || appTargets.length > 0) {
       const adapter = hubId !== ''
         ? await getHubTelephonyFromService(env, services.settings, hubId)
         : await getTelephonyFromService(env, services.settings)
@@ -321,7 +411,23 @@ export async function startParallelRinging(
         }),
       )
 
-      if (volunteersWithTokens.length === 0) return { ringing: true, volunteersNotified: available.length }
+      // In-app legs need the same opaque single-use token: the leg answers on
+      // /user-answer, which resolves the token to decide (atomically) whether
+      // this leg won the call.
+      const appTargetsWithTokens = await Promise.all(
+        appTargets.map(async (target) => ({
+          sipAor: target.sipAor,
+          callToken: await services.calls.createCallToken({
+            callSid,
+            volunteerPubkey: target.pubkey,
+            hubId,
+          }),
+        })),
+      )
+
+      if (volunteersWithTokens.length === 0 && appTargetsWithTokens.length === 0) {
+        return { ringing: true, volunteersNotified: available.length }
+      }
 
       const breaker = getCircuitBreaker({
         name: 'telephony:ringVolunteers',
@@ -335,6 +441,7 @@ export async function startParallelRinging(
             callSid,
             callerNumber,
             volunteers: volunteersWithTokens,
+            appTargets: appTargetsWithTokens,
             callbackUrl: origin,
             hubId,
           }),
@@ -351,6 +458,30 @@ export async function startParallelRinging(
         )
       )
       recordRingLegs(callSid, legSids)
+
+      // An INVITE the PBX refused (endpoint gone between the reachability read
+      // and the dial, a TLS failure to the contact, a PBX that will not
+      // originate) costs a leg. The remaining legs still carry the call — and
+      // if none do, the caller holds and times out into voicemail as they
+      // always have — but it must not be invisible: a volunteer who believes
+      // their app rings would be the only one who found out.
+      //
+      // Scoped to calls that asked for an in-app leg, which only the
+      // self-hosted PBX path can: one channel per requested leg is a property
+      // of that adapter, not of every provider.
+      if (appTargetsWithTokens.length > 0) {
+        const requested = volunteersWithTokens.length + appTargetsWithTokens.length
+        if (legSids.length < requested) {
+          logger.error('Some ring legs were refused by the PBX — those volunteers were not rung', {
+            callSid,
+            hubId,
+            requested,
+            rung: legSids.length,
+            inAppRequested: appTargetsWithTokens.length,
+          })
+          incCounter('llamenos_ring_legs_refused_total', { reason: 'originate-failed' })
+        }
+      }
     }
     return { ringing: true, volunteersNotified: available.length }
   } catch (err) {

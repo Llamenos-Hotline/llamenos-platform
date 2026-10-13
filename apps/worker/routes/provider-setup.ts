@@ -26,6 +26,7 @@ import { getProviderCapability } from '../services/provider-setup/registry'
 import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
 import { A2pRegistrationError } from '../services/provider-setup/a2p-registration'
+import { removeAllVolunteerEndpoints } from '../telephony/registrar'
 
 /**
  * Resolve the hub a provider-setup request acts on: the path hub, or a hub
@@ -439,12 +440,27 @@ providerSetup.post('/configure',
 
     try {
       const hubId = validateBodyHubAccess(c, body.hubId, 'telephony:manage-providers')
+      // Endpoint cleanup when the GLOBAL provider moves away from Asterisk:
+      // the gate stops issuing, but provisioned PJSIP objects on the PBX
+      // would keep accepting registrations from old credentials — tear them
+      // down with the config that can still reach the PBX. Best-effort per
+      // endpoint; the outcome is logged by removeAllVolunteerEndpoints.
+      const previous = hubId
+        ? null
+        : await services.settings.getTelephonyProvider(c.env.HMAC_SECRET)
       await services.providerSetup.configure(
         body.provider,
         body.credentials ?? {},
         hubId,
         body.phoneNumber,
       )
+      if (previous?.type === 'asterisk' && body.provider !== 'asterisk') {
+        const { users } = await services.identity.getUsers()
+        await removeAllVolunteerEndpoints(
+          previous,
+          users.map((u) => u.pubkey),
+        )
+      }
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ProviderApiError) {
@@ -803,6 +819,11 @@ providerSetup.post('/signal/register',
         phoneNumber: body.phoneNumber,
         method: body.method ?? 'sms',
         hubId,
+        // Forward the dev-surface secret as presented, never a decision. The
+        // service checks it against the host's own (lib/dev-surfaces.ts), which
+        // refuses `production` before reading any secret at all — see
+        // SignalRegistrationService.syntheticBridge (#1623).
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -834,7 +855,10 @@ providerSetup.get('/signal/status',
 
     try {
       if (registrationId) {
-        const registration = await services.signalRegistration.checkStatus(registrationId)
+        const registration = await services.signalRegistration.checkStatus(
+          registrationId,
+          c.req.header('X-Test-Secret'),
+        )
         return c.json(registration)
       }
 
@@ -882,6 +906,7 @@ providerSetup.post('/signal/verify',
       const registration = await services.signalRegistration.verifyCode({
         registrationId: body.registrationId,
         code: body.code,
+        harnessSecret: c.req.header('X-Test-Secret'),
       })
       return c.json(registration)
     } catch (err) {
@@ -916,7 +941,7 @@ providerSetup.delete('/signal/unregister',
     }
 
     try {
-      await services.signalRegistration.unregister(registrationId)
+      await services.signalRegistration.unregister(registrationId, c.req.header('X-Test-Secret'))
       return c.json({ ok: true })
     } catch (err) {
       return handleSignalError(err, c)

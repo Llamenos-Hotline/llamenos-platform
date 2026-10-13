@@ -137,7 +137,17 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     userNotifications,
     digestCron,
     providerSetup,
-    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', { ENVIRONMENT: opts?.env?.ENVIRONMENT }),
+    // The dev-surface subset, not just ENVIRONMENT: `verifyCode` and friends
+    // decide whether a request may take the synthetic bridge path with
+    // `devSurfaceRequestAuthorized`, which needs the opt-in flag and the
+    // configured secret as well (#1623). Listed explicitly rather than spread,
+    // so what the service can read stays visible here.
+    signalRegistration: new SignalRegistrationService(db, opts?.hmacSecret ?? '', {
+      ENVIRONMENT: opts?.env?.ENVIRONMENT,
+      DEV_ROUTES_ENABLED: opts?.env?.DEV_ROUTES_ENABLED,
+      DEV_RESET_SECRET: opts?.env?.DEV_RESET_SECRET,
+      E2E_TEST_SECRET: opts?.env?.E2E_TEST_SECRET,
+    }),
     a2pRegistration: new A2pRegistrationService(db, opts?.hmacSecret ?? ''),
     providerTemplates: new ProviderTemplateService(db),
     hubOnboard: new HubOnboardService(db, providerSetup, settings),
@@ -151,7 +161,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     activeShifts: new ActiveShiftsService(db),
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
-    recoveryGroup: new RecoveryGroupService(db, audit),
+    recoveryGroup: new RecoveryGroupService(db, settings, audit),
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
