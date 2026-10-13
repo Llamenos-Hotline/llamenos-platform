@@ -541,8 +541,6 @@
     "cancel": "Use PIN",
     "none": "No biometrics"
   },
-  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
-  "biometricUnlockTitle": "Unlock Llamenos",
   "blast": {
     "channelSignal": "Signal",
     "channelSms": "SMS",
@@ -1788,10 +1786,6 @@
     "viewCalls": "View Calls"
   },
   "decryptingKeys": "Decrypting keys...",
-  "deepLinkConfirmCancel": "Cancel",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
-  "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmTitle": "Open link?",
   "delete": "Delete",
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
@@ -1808,13 +1802,6 @@
     "resetNotice": "Demo data resets daily",
     "tryDemo": "Try the demo",
     "volunteer": "Volunteer"
-  },
-  "deviceKey": {
-    "displayLabel": "Your secret key",
-    "displayValue": "Secret key is displayed. Keep this private.",
-    "label": "Private Key ",
-    "placeholder": "Enter key hex",
-    "warning": "Never share your private key with anyone"
   },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
@@ -1879,18 +1866,6 @@
     "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
-  "enroll": {
-    "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enroll",
-    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
-    "errorNotFound": "Invite not found. Check the code and try again.",
-    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
-    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
-    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
-    "retry": "Retry",
-    "continueWithout": "Continue without enrolling"
-  },
   "enterApiCredentials": "Enter API Credentials",
   "entityTemplates": {
     "title": "Entity Templates",
@@ -2522,8 +2497,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallAnswer": "Answer",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "Cần quyền truy cập micrô để trả lời cuộc gọi trong ứng dụng.",
   "inviteCode": "Invite Code",
@@ -2747,6 +2722,13 @@
     "sendError": "Failed to send notifications",
     "contactsSection": "Contacts"
   },
+  "deviceKey": {
+    "displayLabel": "Your secret key",
+    "displayValue": "Secret key is displayed. Keep this private.",
+    "label": "Private Key ",
+    "placeholder": "Enter key hex",
+    "warning": "Never share your private key with anyone"
+  },
   "oauthConnectTitle": "Connect Provider",
   "oauthDescription": "Connect via OAuth",
   "oauthProvider": {
@@ -2783,7 +2765,6 @@
     "copied": "Copied!",
     "copy": "Copy to Clipboard",
     "createPin": "Create a PIN",
-    "deviceKeyLabel": "Your Device Key",
     "downloadBackup": "Tải Bản Sao Lưu Mã Hóa",
     "errorTitle": "Lỗi Lời Mời",
     "expired": "Lời mời này đã hết hạn",
@@ -2791,11 +2772,13 @@
     "getStarted": "Bắt đầu",
     "goToLogin": "Đến trang Đăng nhập",
     "invalidCode": "Mã mời không hợp lệ",
+    "rateLimitedRetry": "Quá nhiều lần thử. Vui lòng đợi {{seconds}} giây rồi thử lại.",
+    "validationUnavailable": "Không thể xác thực lời mời của bạn ngay bây giờ. Kiểm tra kết nối rồi thử lại.",
     "noCode": "Không có mã mời",
     "npubLabel": "Your Public Key",
+    "deviceKeyLabel": "Your Device Key",
     "pinDescription": "Choose a 6-digit PIN to protect your key on this device",
     "pinMismatch": "PINs don't match. Try again.",
-    "rateLimitedRetry": "Quá nhiều lần thử. Vui lòng đợi {{seconds}} giây rồi thử lại.",
     "recoveryKey": "Khóa khôi phục của bạn",
     "recoveryKeyWarning": "Ghi lại và lưu trữ an toàn. Nếu bạn mất PIN và khóa này, tài khoản của bạn không thể được khôi phục.",
     "redeemFailed": "Không thể đổi lời mời",
@@ -2805,12 +2788,11 @@
     "storageTipsTitle": "Cách lưu trữ khóa khôi phục của bạn",
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
+    "welcomeDescription": "Bạn đã được mời tham gia với tư cách tình nguyện viên, {{volunteerName}}",
+    "welcomeTitle": "Chào mừng đến với {{name}}",
     "tryAgain": "Thử lại",
     "validateRetryAfter": "Hiện chúng tôi không thể kiểm tra lời mời của bạn. Vui lòng thử lại sau {{seconds}} giây.",
-    "validateUnavailable": "Hiện chúng tôi không thể kiểm tra lời mời của bạn. Đây không phải lỗi của lời mời — vui lòng thử lại.",
-    "validationUnavailable": "Không thể xác thực lời mời của bạn ngay bây giờ. Kiểm tra kết nối rồi thử lại.",
-    "welcomeDescription": "Bạn đã được mời tham gia với tư cách tình nguyện viên, {{volunteerName}}",
-    "welcomeTitle": "Chào mừng đến với {{name}}"
+    "validateUnavailable": "Hiện chúng tôi không thể kiểm tra lời mời của bạn. Đây không phải lỗi của lời mời — vui lòng thử lại."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -3164,15 +3146,6 @@
   "provisionNumberTitle": "Provision Number",
   "provisionSuccessMessage": "Your phone number has been provisioned successfully",
   "provisionSuccessTitle": "Number Provisioned",
-  "pushSetup": {
-    "title": "Push Notifications",
-    "description": "Select a push notification provider to receive alerts when you're offline.",
-    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
-    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
-    "registered": "Push notifications are active.",
-    "registering": "Registering for push notifications…",
-    "failed": "Push notification registration failed. Try again later."
-  },
   "pwa": {
     "installButton": "Install",
     "installText": "Install this app for quick access and a better experience."
@@ -3649,20 +3622,6 @@
     "placeholder": "Select..."
   },
   "selectNumber": "Select Number",
-  "serverAddress": {
-    "checking": "Checking...",
-    "connect": "Connect",
-    "errorWithDetail": "Couldn't reach that server: {{detail}}",
-    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
-    "firstRunTitle": "Connect to your hotline server",
-    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
-    "label": "Server address",
-    "placeholder": "app.example.org",
-    "saveAndReconnect": "Save and reconnect",
-    "settingsDescription": "Change which server this desktop app connects to.",
-    "settingsTitle": "Server connection",
-    "unreachable": "Couldn't reach that server. Check the address and try again."
-  },
   "session": {
     "expired": "Phiên đã hết hạn",
     "expiredDescription": "Phiên của bạn đã hết hạn. Bạn có thể kết nối lại hoặc đăng nhập lại.",
@@ -3799,6 +3758,20 @@
     "biometricEnrolled": "Mở khóa sinh trắc học đang bật trên thiết bị này.",
     "biometricInvalidated": "Dữ liệu sinh trắc học trên thiết bị của bạn đã thay đổi, vì vậy mở khóa sinh trắc học đã bị tắt. Bật lại bên dưới, hoặc tiếp tục dùng mã PIN.",
     "biometricPinPrompt": "Nhập mã PIN để bật mở khóa sinh trắc học"
+  },
+  "serverAddress": {
+    "checking": "Checking...",
+    "connect": "Connect",
+    "errorWithDetail": "Couldn't reach that server: {{detail}}",
+    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
+    "firstRunTitle": "Connect to your hotline server",
+    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
+    "label": "Server address",
+    "placeholder": "app.example.org",
+    "saveAndReconnect": "Save and reconnect",
+    "settingsDescription": "Change which server this desktop app connects to.",
+    "settingsTitle": "Server connection",
+    "unreachable": "Couldn't reach that server. Check the address and try again."
   },
   "setup": {
     "autoResponse": "Auto-Response Template",
@@ -4540,7 +4513,6 @@
     "versionChange": "{{current}} → {{new}}"
   },
   "useBiometric": "Use Biometric",
-  "usePinInstead": "Use PIN",
   "userProfile": {
     "activity": "Hoạt động",
     "allChannels": "All Channels",
@@ -4607,20 +4579,6 @@
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",
   "verifyCodeButton": "Verify Code",
-  "voice": {
-    "greeting": "Cảm ơn bạn đã gọi đến {name}.",
-    "rateLimited": "Chúng tôi hiện đang có lượng cuộc gọi cao. Vui lòng thử lại sau.",
-    "captchaPrompt": "Vui lòng nhập các chữ số sau:",
-    "captchaTimeout": "Chúng tôi không nhận được thông tin của bạn. Tạm biệt.",
-    "pleaseHold": "Xin vui lòng chờ trong khi chúng tôi kết nối bạn.",
-    "captchaSuccess": "Cảm ơn bạn. Xin vui lòng chờ trong khi chúng tôi kết nối bạn.",
-    "captchaFail": "Chúng tôi không thể kết nối cuộc gọi của bạn. Tạm biệt.",
-    "captchaRetry": "Không chính xác. Vui lòng thử lại.",
-    "waitMessage": "Cuộc gọi của bạn rất quan trọng với chúng tôi. Xin vui lòng chờ trong khi chúng tôi kết nối bạn với tình nguyện viên.",
-    "unavailableMessage": "Xin lỗi, hiện không có ai sẵn sàng nhận cuộc gọi của bạn. Vui lòng thử lại sau. Tạm biệt.",
-    "voicemailPrompt": "Hiện không có ai có thể nhận cuộc gọi của bạn. Vui lòng để lại tin nhắn sau tiếng bíp.",
-    "voicemailThanks": "Cảm ơn tin nhắn của bạn. Tạm biệt."
-  },
   "voiceIncomingWebhook": "Voice Incoming Webhook",
   "voiceStatusWebhook": "Voice Status Webhook",
   "webauthn": {
@@ -4690,5 +4648,47 @@
   "yes": "Yes",
   "yourIdentity": "Your Identity",
   "yourPrivateKey": "Your Private Key",
-  "yourPublicKey": "Your Public Key"
+  "yourPublicKey": "Your Public Key",
+  "pushSetup": {
+    "title": "Push Notifications",
+    "description": "Select a push notification provider to receive alerts when you're offline.",
+    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
+    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
+    "registered": "Push notifications are active.",
+    "registering": "Registering for push notifications…",
+    "failed": "Push notification registration failed. Try again later."
+  },
+  "voice": {
+    "greeting": "Cảm ơn bạn đã gọi đến {name}.",
+    "rateLimited": "Chúng tôi hiện đang có lượng cuộc gọi cao. Vui lòng thử lại sau.",
+    "captchaPrompt": "Vui lòng nhập các chữ số sau:",
+    "captchaTimeout": "Chúng tôi không nhận được thông tin của bạn. Tạm biệt.",
+    "pleaseHold": "Xin vui lòng chờ trong khi chúng tôi kết nối bạn.",
+    "captchaSuccess": "Cảm ơn bạn. Xin vui lòng chờ trong khi chúng tôi kết nối bạn.",
+    "captchaFail": "Chúng tôi không thể kết nối cuộc gọi của bạn. Tạm biệt.",
+    "captchaRetry": "Không chính xác. Vui lòng thử lại.",
+    "waitMessage": "Cuộc gọi của bạn rất quan trọng với chúng tôi. Xin vui lòng chờ trong khi chúng tôi kết nối bạn với tình nguyện viên.",
+    "unavailableMessage": "Xin lỗi, hiện không có ai sẵn sàng nhận cuộc gọi của bạn. Vui lòng thử lại sau. Tạm biệt.",
+    "voicemailPrompt": "Hiện không có ai có thể nhận cuộc gọi của bạn. Vui lòng để lại tin nhắn sau tiếng bíp.",
+    "voicemailThanks": "Cảm ơn tin nhắn của bạn. Tạm biệt."
+  },
+  "biometricUnlockTitle": "Unlock Llamenos",
+  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
+  "usePinInstead": "Use PIN",
+  "deepLinkConfirmTitle": "Open link?",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
+  "deepLinkConfirmProceed": "Proceed",
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

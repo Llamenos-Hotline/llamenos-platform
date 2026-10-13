@@ -1,4 +1,14 @@
 {
+  "assignment": {
+    "title": "Assign Volunteer",
+    "workloadLabel": "Workload score",
+    "specializationLabel": "Specialization match",
+    "languageMatch": "Language match",
+    "noVolunteers": "No available volunteers found",
+    "noVolunteersHint": "Make sure volunteers are on-shift and have capacity.",
+    "assignBtn": "Assign",
+    "assignedSuccess": "Volunteer assigned"
+  },
   "a11y": {
     "back": "Back",
     "clearFilters": "Clear filters",
@@ -294,16 +304,6 @@
       "connectionFailed": "Connection failed ({{latency}}ms)"
     }
   },
-  "adminEntityType": {
-    "edit": "Edit Entity Type",
-    "label": "Label",
-    "labelPlural": "Plural label",
-    "sectionGeneral": "General",
-    "showInNavigation": "Show in navigation"
-  },
-  "adminEntityTypes": {
-    "title": "Entity Types"
-  },
   "adminNav": {
     "groups": {
       "callsVoice": "Calls & Voice",
@@ -435,16 +435,6 @@
     "name": "Llamenos"
   },
   "areaCodeLabel": "Area Code",
-  "assignment": {
-    "title": "Assign Volunteer",
-    "workloadLabel": "Workload score",
-    "specializationLabel": "Specialization match",
-    "languageMatch": "Language match",
-    "noVolunteers": "No available volunteers found",
-    "noVolunteersHint": "Make sure volunteers are on-shift and have capacity.",
-    "assignBtn": "Assign",
-    "assignedSuccess": "Volunteer assigned"
-  },
   "audioInput": {
     "permissionTitle": "Speech Recognition",
     "start": "Start voice input",
@@ -541,8 +531,6 @@
     "cancel": "Use PIN",
     "none": "No biometrics"
   },
-  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
-  "biometricUnlockTitle": "Unlock Llamenos",
   "blast": {
     "channelSignal": "Signal",
     "channelSms": "SMS",
@@ -1786,10 +1774,6 @@
     "viewCalls": "View Calls"
   },
   "decryptingKeys": "Decrypting keys...",
-  "deepLinkConfirmCancel": "Cancel",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
-  "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmTitle": "Open link?",
   "delete": "Delete",
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
@@ -1806,13 +1790,6 @@
     "resetNotice": "Demo data resets daily",
     "tryDemo": "Try the demo",
     "volunteer": "Volunteer"
-  },
-  "deviceKey": {
-    "displayLabel": "Your device key",
-    "displayValue": "Device key is displayed. Keep this private.",
-    "label": "Device Key",
-    "placeholder": "Enter key hex",
-    "warning": "Never share your device key with anyone"
   },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
@@ -1877,80 +1854,7 @@
     "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
-  "enroll": {
-    "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enroll",
-    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
-    "errorNotFound": "Invite not found. Check the code and try again.",
-    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
-    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
-    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
-    "retry": "Retry",
-    "continueWithout": "Continue without enrolling"
-  },
   "enterApiCredentials": "Enter API Credentials",
-  "entityTemplates": {
-    "title": "Entity Templates",
-    "description": "Pre-configured entity types for common use cases.",
-    "noTemplates": "No templates available.",
-    "apply": "Apply Template",
-    "applied": "Applied",
-    "notApplied": "Not Applied",
-    "applyBtn": "Enable for this hub",
-    "applySuccess": "Template applied successfully",
-    "applyError": "Failed to apply template",
-    "builtinBadge": "Built-in",
-    "entityTypes": "entity types",
-    "templates": {
-      "case": {
-        "label": "Case",
-        "labelPlural": "Cases",
-        "description": "General-purpose case for tracking incidents and follow-up."
-      },
-      "event": {
-        "label": "Event",
-        "labelPlural": "Events",
-        "description": "Time-bounded event with encrypted dates and location."
-      },
-      "incidentReport": {
-        "label": "Incident Report",
-        "labelPlural": "Incident Reports",
-        "description": "Triage-oriented incident documentation with severity tracking."
-      },
-      "contactNote": {
-        "label": "Contact Note",
-        "labelPlural": "Contact Notes",
-        "description": "Minimal note linked to a contact."
-      }
-    },
-    "fields": {
-      "startDate": "Start Date",
-      "endDate": "End Date",
-      "location": "Location",
-      "title": "Title",
-      "description": "Description",
-      "note": "Note",
-      "date": "Date",
-      "incidentDate": "Incident Date/Time",
-      "incidentLocation": "Incident Location",
-      "whatHappened": "What Happened"
-    },
-    "statuses": {
-      "open": "Open",
-      "inProgress": "In Progress",
-      "resolved": "Resolved",
-      "closed": "Closed",
-      "planned": "Planned",
-      "active": "Active",
-      "concluded": "Concluded",
-      "cancelled": "Cancelled",
-      "new": "New",
-      "underReview": "Under Review",
-      "documented": "Documented",
-      "archived": "Archived"
-    }
-  },
   "erasure": {
     "admin": {
       "confirmErase": "Erase User",
@@ -2520,8 +2424,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallAnswer": "Answer",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "Microphone access is required to answer calls in the app.",
   "inviteCode": "Invite Code",
@@ -2720,6 +2624,15 @@
     "incomingCall": "Incoming Call"
   },
   "notificationChannelCalls": "Calls",
+  "pushSetup": {
+    "title": "Push Notifications",
+    "description": "Select a push notification provider to receive alerts when you're offline.",
+    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
+    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
+    "registered": "Push notifications are active.",
+    "registering": "Registering for push notifications…",
+    "failed": "Push notification registration failed. Try again later."
+  },
   "notificationChannelGeneral": "General",
   "notificationChannelShifts": "Shifts",
   "notifications": {
@@ -2744,6 +2657,13 @@
     "sent": "Notifications sent",
     "sendError": "Failed to send notifications",
     "contactsSection": "Contacts"
+  },
+  "deviceKey": {
+    "displayLabel": "Your device key",
+    "displayValue": "Device key is displayed. Keep this private.",
+    "label": "Device Key",
+    "placeholder": "Enter key hex",
+    "warning": "Never share your device key with anyone"
   },
   "oauthConnectTitle": "Connect Provider",
   "oauthDescription": "Connect via OAuth",
@@ -2781,7 +2701,6 @@
     "copied": "Copied!",
     "copy": "Copy to Clipboard",
     "createPin": "Create a PIN",
-    "deviceKeyLabel": "Your Device Key",
     "downloadBackup": "Download Encrypted Backup",
     "errorTitle": "Invite Error",
     "expired": "This invite has expired",
@@ -2789,11 +2708,13 @@
     "getStarted": "Get Started",
     "goToLogin": "Go to Login",
     "invalidCode": "Invalid invite code",
+    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
+    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
     "noCode": "No invite code provided",
     "npubLabel": "Your Public Key",
+    "deviceKeyLabel": "Your Device Key",
     "pinDescription": "Choose a 6-digit PIN to protect your key on this device",
     "pinMismatch": "PINs don't match. Try again.",
-    "rateLimitedRetry": "Too many attempts. Please wait {{seconds}} seconds, then try again.",
     "recoveryKey": "Your recovery key",
     "recoveryKeyWarning": "Write this down and store it securely. If you lose your PIN and this key, your account cannot be recovered.",
     "redeemFailed": "Failed to redeem invite",
@@ -2803,12 +2724,11 @@
     "storageTipsTitle": "How to store your recovery key",
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
+    "welcomeDescription": "You've been invited to join as a volunteer, {{volunteerName}}",
+    "welcomeTitle": "Welcome to {{name}}",
     "tryAgain": "Try again",
     "validateRetryAfter": "We couldn't check your invite just now. Please try again in {{seconds}} seconds.",
-    "validateUnavailable": "We couldn't check your invite just now. This isn't a problem with your invite — please try again.",
-    "validationUnavailable": "Couldn't validate your invite right now. Check your connection and try again.",
-    "welcomeDescription": "You've been invited to join as a volunteer, {{volunteerName}}",
-    "welcomeTitle": "Welcome to {{name}}"
+    "validateUnavailable": "We couldn't check your invite just now. This isn't a problem with your invite — please try again."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -2950,9 +2870,6 @@
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
     "totalCount": "{{count}} total bans"
-  },
-  "platformRoles": {
-    "description": "Manage platform-wide roles that apply across all hubs. Role names are end-to-end encrypted."
   },
   "platformSettings": {
     "branding": {
@@ -3162,15 +3079,6 @@
   "provisionNumberTitle": "Provision Number",
   "provisionSuccessMessage": "Your phone number has been provisioned successfully",
   "provisionSuccessTitle": "Number Provisioned",
-  "pushSetup": {
-    "title": "Push Notifications",
-    "description": "Select a push notification provider to receive alerts when you're offline.",
-    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
-    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
-    "registered": "Push notifications are active.",
-    "registering": "Registering for push notifications…",
-    "failed": "Push notification registration failed. Try again later."
-  },
   "pwa": {
     "installButton": "Install",
     "installText": "Install this app for quick access and a better experience."
@@ -3202,97 +3110,6 @@
     "enterRecoveryKey": "Enter your recovery key",
     "options": "Recovery options",
     "title": "Account Recovery"
-  },
-  "recoveryGroup": {
-    "title": "Recovery Team",
-    "description": "Set up a recovery team so users can recover their accounts if they lose access to their devices. Recovery contacts hold approval keys; a minimum number of approvals is required.",
-    "requiredApprovals": "Required approvals",
-    "totalContacts": "Total recovery contacts",
-    "setup": "Set up recovery team",
-    "settingUp": "Setting up…",
-    "setupSuccess": "Recovery team set up successfully.",
-    "rotate": "Rotate recovery team",
-    "rotating": "Rotating…",
-    "rotateSuccess": "Recovery team rotated successfully.",
-    "contacts": "Recovery contacts",
-    "selected": "Selected",
-    "noTeam": "No recovery team configured",
-    "noContacts": "No eligible recovery contacts found.",
-    "lastRotated": "Last rotated",
-    "contactHealth": "Contact status",
-    "deviceVerified": "Device verified",
-    "deviceUnverified": "Device not verified",
-    "livenessOk": "Share verified",
-    "livenessStale": "Share verification overdue",
-    "delayConfig": "Recovery waiting period (hours)",
-    "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
-    "geoWarning": "Consider distributing recovery contacts across different regions for better security",
-    "requests": {
-      "title": "Account Recovery Requests",
-      "active": "Active requests",
-      "history": "Request history",
-      "none": "No active recovery requests.",
-      "status": {
-        "pending": "Awaiting verification",
-        "verified": "Verified — waiting for approvals",
-        "active": "Approved — waiting period",
-        "completed": "Completed",
-        "expired": "Expired",
-        "cancelled": "Cancelled"
-      },
-      "approve": "Approve recovery",
-      "approving": "Approving…",
-      "approvalProgress": "{{count}} of {{required}} approvals",
-      "timeRemaining": "Time remaining",
-      "cancel": "Cancel request",
-      "cancelConfirm": "Are you sure? This will stop the recovery process.",
-      "duressAlert": "Warning: a potential coercion alert has been detected. Verify this request through a separate channel before proceeding."
-    },
-    "urgent": {
-      "title": "Urgent recovery",
-      "enable": "Enable urgent recovery",
-      "description": "Reduces the waiting period. Requires a second approver and a written reason.",
-      "justification": "Reason for urgency",
-      "justificationPlaceholder": "Explain why this recovery is urgent (min 16 characters)",
-      "secondApprover": "Second approver",
-      "selectApprover": "Select a second approver",
-      "reducedDelay": "Waiting period reduced to {{hours}} hours"
-    },
-    "initiate": {
-      "title": "Account recovery",
-      "description": "Lost access to your device? Your recovery contacts can help you regain access to your account.",
-      "identifier": "Your email or phone number",
-      "selectHub": "Select your organization",
-      "submit": "Start recovery",
-      "submitting": "Starting…",
-      "restoring": "Restoring your account…",
-      "signalVerification": "Enter the verification code sent to your Signal",
-      "verificationCode": "Verification code",
-      "verify": "Verify",
-      "waiting": "Waiting for your recovery contacts to approve",
-      "approvalsReceived": "{{count}} of {{required}} approvals received",
-      "delayCountdown": "Access will be restored in {{time}}",
-      "complete": "Account recovered",
-      "setPin": "Set a PIN to protect your new device",
-      "success": "You're all set. Your account has been recovered."
-    },
-    "status": {
-      "enrolled": "Your account is recoverable in {{hubName}}",
-      "notConfigured": "No recovery team configured for this organization"
-    },
-    "error": {
-      "thresholdExceedsTotal": "Required approvals cannot exceed total contacts",
-      "rateLimited": "Too many requests. Please wait a few minutes.",
-      "sessionExpired": "This recovery request has expired",
-      "commitmentFailed": "Recovery data verification failed — contact your administrator",
-      "alreadyApproved": "You have already approved this request",
-      "notContact": "You are not a recovery contact for this organization",
-      "signalVerificationFailed": "Verification code is incorrect",
-      "signalVerificationExpired": "Verification code has expired. Please start over.",
-      "sigchainMismatch": "Recovery team configuration could not be verified. Contact your administrator.",
-      "sessionNotFound": "Session not found",
-      "deviceLocked": "Device must be unlocked"
-    }
   },
   "report": {
     "bodyLabel": "Description",
@@ -3491,6 +3308,9 @@
   },
   "retry": "Retry",
   "retryRegistration": "Retry Registration",
+  "platformRoles": {
+    "description": "Manage platform-wide roles that apply across all hubs. Role names are end-to-end encrypted."
+  },
   "role": {
     "admin": "Admin",
     "volunteer": "Volunteer"
@@ -3647,20 +3467,6 @@
     "placeholder": "Select..."
   },
   "selectNumber": "Select Number",
-  "serverAddress": {
-    "checking": "Checking...",
-    "connect": "Connect",
-    "errorWithDetail": "Couldn't reach that server: {{detail}}",
-    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
-    "firstRunTitle": "Connect to your hotline server",
-    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
-    "label": "Server address",
-    "placeholder": "app.example.org",
-    "saveAndReconnect": "Save and reconnect",
-    "settingsDescription": "Change which server this desktop app connects to.",
-    "settingsTitle": "Server connection",
-    "unreachable": "Couldn't reach that server. Check the address and try again."
-  },
   "session": {
     "expired": "Session Expired",
     "expiredDescription": "Your session has expired. You can reconnect or log in again.",
@@ -3797,6 +3603,20 @@
     "version": "Version",
     "voicemail": "Voicemail",
     "webrtcNotConfigured": "Browser calling is not available. Your admin needs to enable WebRTC in the telephony provider settings."
+  },
+  "serverAddress": {
+    "checking": "Checking...",
+    "connect": "Connect",
+    "errorWithDetail": "Couldn't reach that server: {{detail}}",
+    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
+    "firstRunTitle": "Connect to your hotline server",
+    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
+    "label": "Server address",
+    "placeholder": "app.example.org",
+    "saveAndReconnect": "Save and reconnect",
+    "settingsDescription": "Change which server this desktop app connects to.",
+    "settingsTitle": "Server connection",
+    "unreachable": "Couldn't reach that server. Check the address and try again."
   },
   "setup": {
     "autoResponse": "Auto-Response Template",
@@ -4537,8 +4357,14 @@
     "updateRequiredTitle": "Update Required",
     "versionChange": "{{current}} → {{new}}"
   },
-  "useBiometric": "Use Biometric",
+  "biometricUnlockTitle": "Unlock Llamenos",
+  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
   "usePinInstead": "Use PIN",
+  "deepLinkConfirmTitle": "Open link?",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
+  "deepLinkConfirmProceed": "Proceed",
+  "deepLinkConfirmCancel": "Cancel",
+  "useBiometric": "Use Biometric",
   "userProfile": {
     "activity": "Activity",
     "allChannels": "All Channels",
@@ -4605,20 +4431,6 @@
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",
   "verifyCodeButton": "Verify Code",
-  "voice": {
-    "greeting": "Thank you for calling {name}.",
-    "rateLimited": "We are currently experiencing high call volume. Please try again later.",
-    "captchaPrompt": "Please enter the following digits:",
-    "captchaTimeout": "We did not receive your input. Goodbye.",
-    "pleaseHold": "Please hold while we connect you.",
-    "captchaSuccess": "Thank you. Please hold while we connect you.",
-    "captchaFail": "We are unable to connect your call. Goodbye.",
-    "captchaRetry": "That was incorrect. Please try again.",
-    "waitMessage": "Your call is important to us. Please hold while we connect you with a volunteer.",
-    "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
-    "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
-    "voicemailThanks": "Thank you for your message. Goodbye."
-  },
   "voiceIncomingWebhook": "Voice Incoming Webhook",
   "voiceStatusWebhook": "Voice Status Webhook",
   "webauthn": {
@@ -4688,5 +4500,193 @@
   "yes": "Yes",
   "yourIdentity": "Your Identity",
   "yourPrivateKey": "Your Private Key",
-  "yourPublicKey": "Your Public Key"
+  "yourPublicKey": "Your Public Key",
+  "entityTemplates": {
+    "title": "Entity Templates",
+    "description": "Pre-configured entity types for common use cases.",
+    "noTemplates": "No templates available.",
+    "apply": "Apply Template",
+    "applied": "Applied",
+    "notApplied": "Not Applied",
+    "applyBtn": "Enable for this hub",
+    "applySuccess": "Template applied successfully",
+    "applyError": "Failed to apply template",
+    "builtinBadge": "Built-in",
+    "entityTypes": "entity types",
+    "templates": {
+      "case": {
+        "label": "Case",
+        "labelPlural": "Cases",
+        "description": "General-purpose case for tracking incidents and follow-up."
+      },
+      "event": {
+        "label": "Event",
+        "labelPlural": "Events",
+        "description": "Time-bounded event with encrypted dates and location."
+      },
+      "incidentReport": {
+        "label": "Incident Report",
+        "labelPlural": "Incident Reports",
+        "description": "Triage-oriented incident documentation with severity tracking."
+      },
+      "contactNote": {
+        "label": "Contact Note",
+        "labelPlural": "Contact Notes",
+        "description": "Minimal note linked to a contact."
+      }
+    },
+    "fields": {
+      "startDate": "Start Date",
+      "endDate": "End Date",
+      "location": "Location",
+      "title": "Title",
+      "description": "Description",
+      "note": "Note",
+      "date": "Date",
+      "incidentDate": "Incident Date/Time",
+      "incidentLocation": "Incident Location",
+      "whatHappened": "What Happened"
+    },
+    "statuses": {
+      "open": "Open",
+      "inProgress": "In Progress",
+      "resolved": "Resolved",
+      "closed": "Closed",
+      "planned": "Planned",
+      "active": "Active",
+      "concluded": "Concluded",
+      "cancelled": "Cancelled",
+      "new": "New",
+      "underReview": "Under Review",
+      "documented": "Documented",
+      "archived": "Archived"
+    }
+  },
+  "adminEntityType": {
+    "edit": "Edit Entity Type",
+    "label": "Label",
+    "labelPlural": "Plural label",
+    "sectionGeneral": "General",
+    "showInNavigation": "Show in navigation"
+  },
+  "adminEntityTypes": {
+    "title": "Entity Types"
+  },
+  "recoveryGroup": {
+    "title": "Recovery Team",
+    "description": "Set up a recovery team so users can recover their accounts if they lose access to their devices. Recovery contacts hold approval keys; a minimum number of approvals is required.",
+    "requiredApprovals": "Required approvals",
+    "totalContacts": "Total recovery contacts",
+    "setup": "Set up recovery team",
+    "settingUp": "Setting up…",
+    "setupSuccess": "Recovery team set up successfully.",
+    "rotate": "Rotate recovery team",
+    "rotating": "Rotating…",
+    "rotateSuccess": "Recovery team rotated successfully.",
+    "contacts": "Recovery contacts",
+    "selected": "Selected",
+    "noTeam": "No recovery team configured",
+    "noContacts": "No eligible recovery contacts found.",
+    "lastRotated": "Last rotated",
+    "contactHealth": "Contact status",
+    "deviceVerified": "Device verified",
+    "deviceUnverified": "Device not verified",
+    "livenessOk": "Share verified",
+    "livenessStale": "Share verification overdue",
+    "delayConfig": "Recovery waiting period (hours)",
+    "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
+    "geoWarning": "Consider distributing recovery contacts across different regions for better security",
+    "requests": {
+      "title": "Account Recovery Requests",
+      "active": "Active requests",
+      "history": "Request history",
+      "none": "No active recovery requests.",
+      "status": {
+        "pending": "Awaiting verification",
+        "verified": "Verified — waiting for approvals",
+        "active": "Approved — waiting period",
+        "completed": "Completed",
+        "expired": "Expired",
+        "cancelled": "Cancelled"
+      },
+      "approve": "Approve recovery",
+      "approving": "Approving…",
+      "approvalProgress": "{{count}} of {{required}} approvals",
+      "timeRemaining": "Time remaining",
+      "cancel": "Cancel request",
+      "cancelConfirm": "Are you sure? This will stop the recovery process.",
+      "duressAlert": "Warning: a potential coercion alert has been detected. Verify this request through a separate channel before proceeding."
+    },
+    "urgent": {
+      "title": "Urgent recovery",
+      "enable": "Enable urgent recovery",
+      "description": "Reduces the waiting period. Requires a second approver and a written reason.",
+      "justification": "Reason for urgency",
+      "justificationPlaceholder": "Explain why this recovery is urgent (min 16 characters)",
+      "secondApprover": "Second approver",
+      "selectApprover": "Select a second approver",
+      "reducedDelay": "Waiting period reduced to {{hours}} hours"
+    },
+    "initiate": {
+      "title": "Account recovery",
+      "description": "Lost access to your device? Your recovery contacts can help you regain access to your account.",
+      "identifier": "Your email or phone number",
+      "selectHub": "Select your organization",
+      "submit": "Start recovery",
+      "submitting": "Starting…",
+      "restoring": "Restoring your account…",
+      "signalVerification": "Enter the verification code sent to your Signal",
+      "verificationCode": "Verification code",
+      "verify": "Verify",
+      "waiting": "Waiting for your recovery contacts to approve",
+      "approvalsReceived": "{{count}} of {{required}} approvals received",
+      "delayCountdown": "Access will be restored in {{time}}",
+      "complete": "Account recovered",
+      "setPin": "Set a PIN to protect your new device",
+      "success": "You're all set. Your account has been recovered."
+    },
+    "status": {
+      "enrolled": "Your account is recoverable in {{hubName}}",
+      "notConfigured": "No recovery team configured for this organization"
+    },
+    "error": {
+      "thresholdExceedsTotal": "Required approvals cannot exceed total contacts",
+      "rateLimited": "Too many requests. Please wait a few minutes.",
+      "sessionExpired": "This recovery request has expired",
+      "commitmentFailed": "Recovery data verification failed — contact your administrator",
+      "alreadyApproved": "You have already approved this request",
+      "notContact": "You are not a recovery contact for this organization",
+      "signalVerificationFailed": "Verification code is incorrect",
+      "signalVerificationExpired": "Verification code has expired. Please start over.",
+      "sigchainMismatch": "Recovery team configuration could not be verified. Contact your administrator.",
+      "sessionNotFound": "Session not found",
+      "deviceLocked": "Device must be unlocked"
+    }
+  },
+  "voice": {
+    "greeting": "Thank you for calling {name}.",
+    "rateLimited": "We are currently experiencing high call volume. Please try again later.",
+    "captchaPrompt": "Please enter the following digits:",
+    "captchaTimeout": "We did not receive your input. Goodbye.",
+    "pleaseHold": "Please hold while we connect you.",
+    "captchaSuccess": "Thank you. Please hold while we connect you.",
+    "captchaFail": "We are unable to connect your call. Goodbye.",
+    "captchaRetry": "That was incorrect. Please try again.",
+    "waitMessage": "Your call is important to us. Please hold while we connect you with a volunteer.",
+    "unavailableMessage": "We are sorry, no one is available to take your call at this time. Please try again later. Goodbye.",
+    "voicemailPrompt": "No one is available to take your call right now. Please leave a message after the tone and we will get back to you.",
+    "voicemailThanks": "Thank you for your message. Goodbye."
+  },
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }

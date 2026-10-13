@@ -541,8 +541,6 @@
     "cancel": "Use PIN",
     "none": "No biometrics"
   },
-  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
-  "biometricUnlockTitle": "Unlock Llamenos",
   "blast": {
     "channelSignal": "Signal",
     "channelSms": "SMS",
@@ -1788,10 +1786,6 @@
     "viewCalls": "View Calls"
   },
   "decryptingKeys": "Decrypting keys...",
-  "deepLinkConfirmCancel": "Cancel",
-  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
-  "deepLinkConfirmProceed": "Proceed",
-  "deepLinkConfirmTitle": "Open link?",
   "delete": "Delete",
   "deleteConfirm": {
     "description": "Are you sure you want to delete \"{{name}}\"? Users assigned this role will lose its permissions.",
@@ -1808,13 +1802,6 @@
     "resetNotice": "Demo data resets daily",
     "tryDemo": "Try the demo",
     "volunteer": "Volunteer"
-  },
-  "deviceKey": {
-    "displayLabel": "Your secret key",
-    "displayValue": "Secret key is displayed. Keep this private.",
-    "label": "Private Key ",
-    "placeholder": "Enter key hex",
-    "warning": "Never share your private key with anyone"
   },
   "deviceLink": {
     "cameraPermission": "Camera permission is required to scan QR codes",
@@ -1879,18 +1866,6 @@
     "sec": "{{seconds}}s"
   },
   "encryptingKeys": "Encrypting keys...",
-  "enroll": {
-    "redeeming": "Joining the hub…",
-    "failedTitle": "Couldn’t enroll",
-    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
-    "errorNotFound": "Invite not found. Check the code and try again.",
-    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
-    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
-    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
-    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
-    "retry": "Retry",
-    "continueWithout": "Continue without enrolling"
-  },
   "enterApiCredentials": "Enter API Credentials",
   "entityTemplates": {
     "title": "Entity Templates",
@@ -2522,8 +2497,8 @@
   "importFromTemplate": "Import from template",
   "importKey": "Import Key",
   "incomingCall": "Incoming Call",
-  "incomingCallAnswer": "Answer",
   "incomingCallBody": "Someone is calling the hotline",
+  "incomingCallAnswer": "Answer",
   "incomingCallDecline": "Decline",
   "incomingCallMicrophoneRequired": "Für Anrufe in der App ist Zugriff auf das Mikrofon erforderlich.",
   "inviteCode": "Invite Code",
@@ -2747,6 +2722,13 @@
     "sendError": "Failed to send notifications",
     "contactsSection": "Contacts"
   },
+  "deviceKey": {
+    "displayLabel": "Your secret key",
+    "displayValue": "Secret key is displayed. Keep this private.",
+    "label": "Private Key ",
+    "placeholder": "Enter key hex",
+    "warning": "Never share your private key with anyone"
+  },
   "oauthConnectTitle": "Connect Provider",
   "oauthDescription": "Connect via OAuth",
   "oauthProvider": {
@@ -2783,7 +2765,6 @@
     "copied": "Copied!",
     "copy": "Copy to Clipboard",
     "createPin": "Create a PIN",
-    "deviceKeyLabel": "Your Device Key",
     "downloadBackup": "Verschlüsseltes Backup herunterladen",
     "errorTitle": "Einladungsfehler",
     "expired": "Diese Einladung ist abgelaufen",
@@ -2791,11 +2772,13 @@
     "getStarted": "Loslegen",
     "goToLogin": "Zur Anmeldung",
     "invalidCode": "Ungültiger Einladungscode",
+    "rateLimitedRetry": "Zu viele Versuche. Bitte warte {{seconds}} Sekunden und versuche es dann erneut.",
+    "validationUnavailable": "Deine Einladung konnte gerade nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut.",
     "noCode": "Kein Einladungscode angegeben",
     "npubLabel": "Your Public Key",
+    "deviceKeyLabel": "Your Device Key",
     "pinDescription": "Choose a 6-digit PIN to protect your key on this device",
     "pinMismatch": "PINs don't match. Try again.",
-    "rateLimitedRetry": "Zu viele Versuche. Bitte warte {{seconds}} Sekunden und versuche es dann erneut.",
     "recoveryKey": "Ihr Wiederherstellungsschlüssel",
     "recoveryKeyWarning": "Notieren Sie dies und bewahren Sie es sicher auf. Wenn Sie Ihre PIN und diesen Schlüssel verlieren, kann Ihr Konto nicht wiederhergestellt werden.",
     "redeemFailed": "Einladung konnte nicht eingelöst werden",
@@ -2805,12 +2788,11 @@
     "storageTipsTitle": "So speichern Sie Ihren Wiederherstellungsschlüssel",
     "subtitle": "Secure crisis response hotline",
     "title": "Your Secret Key",
+    "welcomeDescription": "Sie wurden als Freiwilliger eingeladen, {{volunteerName}}",
+    "welcomeTitle": "Willkommen bei {{name}}",
     "tryAgain": "Erneut versuchen",
     "validateRetryAfter": "Wir konnten Ihre Einladung gerade nicht prüfen. Bitte versuchen Sie es in {{seconds}} Sekunden erneut.",
-    "validateUnavailable": "Wir konnten Ihre Einladung gerade nicht prüfen. Das ist kein Problem mit Ihrer Einladung — bitte versuchen Sie es erneut.",
-    "validationUnavailable": "Deine Einladung konnte gerade nicht überprüft werden. Prüfe deine Verbindung und versuche es erneut.",
-    "welcomeDescription": "Sie wurden als Freiwilliger eingeladen, {{volunteerName}}",
-    "welcomeTitle": "Willkommen bei {{name}}"
+    "validateUnavailable": "Wir konnten Ihre Einladung gerade nicht prüfen. Das ist kein Problem mit Ihrer Einladung — bitte versuchen Sie es erneut."
   },
   "ownedNumbersTab": "Owned Numbers",
   "panicWipe": {
@@ -3164,15 +3146,6 @@
   "provisionNumberTitle": "Provision Number",
   "provisionSuccessMessage": "Your phone number has been provisioned successfully",
   "provisionSuccessTitle": "Number Provisioned",
-  "pushSetup": {
-    "title": "Push Notifications",
-    "description": "Select a push notification provider to receive alerts when you're offline.",
-    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
-    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
-    "registered": "Push notifications are active.",
-    "registering": "Registering for push notifications…",
-    "failed": "Push notification registration failed. Try again later."
-  },
   "pwa": {
     "installButton": "Install",
     "installText": "Install this app for quick access and a better experience."
@@ -3649,20 +3622,6 @@
     "placeholder": "Select..."
   },
   "selectNumber": "Select Number",
-  "serverAddress": {
-    "checking": "Checking...",
-    "connect": "Connect",
-    "errorWithDetail": "Couldn't reach that server: {{detail}}",
-    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
-    "firstRunTitle": "Connect to your hotline server",
-    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
-    "label": "Server address",
-    "placeholder": "app.example.org",
-    "saveAndReconnect": "Save and reconnect",
-    "settingsDescription": "Change which server this desktop app connects to.",
-    "settingsTitle": "Server connection",
-    "unreachable": "Couldn't reach that server. Check the address and try again."
-  },
   "session": {
     "expired": "Sitzung abgelaufen",
     "expiredDescription": "Ihre Sitzung ist abgelaufen. Sie können sich erneut verbinden oder neu anmelden.",
@@ -3799,6 +3758,20 @@
     "biometricEnrolled": "Die biometrische Entsperrung ist für dieses Gerät aktiviert.",
     "biometricInvalidated": "Die Biometrie Ihres Geräts hat sich geändert, daher wurde die biometrische Entsperrung deaktiviert. Aktivieren Sie sie unten erneut, oder verwenden Sie weiterhin Ihre PIN.",
     "biometricPinPrompt": "Geben Sie Ihre PIN ein, um die biometrische Entsperrung zu aktivieren"
+  },
+  "serverAddress": {
+    "checking": "Checking...",
+    "connect": "Connect",
+    "errorWithDetail": "Couldn't reach that server: {{detail}}",
+    "firstRunDescription": "This app needs to know which Llámenos server to connect to before it can sign in.",
+    "firstRunTitle": "Connect to your hotline server",
+    "help": "Enter your organization's server address, e.g. app.example.org. We'll infer https:// unless you specify otherwise.",
+    "label": "Server address",
+    "placeholder": "app.example.org",
+    "saveAndReconnect": "Save and reconnect",
+    "settingsDescription": "Change which server this desktop app connects to.",
+    "settingsTitle": "Server connection",
+    "unreachable": "Couldn't reach that server. Check the address and try again."
   },
   "setup": {
     "autoResponse": "Auto-Response Template",
@@ -4540,7 +4513,6 @@
     "versionChange": "{{current}} → {{new}}"
   },
   "useBiometric": "Use Biometric",
-  "usePinInstead": "Use PIN",
   "userProfile": {
     "activity": "Aktivität",
     "allChannels": "All Channels",
@@ -4607,20 +4579,6 @@
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",
   "verifyCodeButton": "Verify Code",
-  "voice": {
-    "greeting": "Vielen Dank für Ihren Anruf bei {name}.",
-    "rateLimited": "Wir haben derzeit ein hohes Anrufaufkommen. Bitte versuchen Sie es später erneut.",
-    "captchaPrompt": "Bitte geben Sie die folgenden Ziffern ein:",
-    "captchaTimeout": "Wir haben Ihre Eingabe nicht erhalten. Auf Wiederhören.",
-    "pleaseHold": "Bitte warten Sie, während wir Sie verbinden.",
-    "captchaSuccess": "Danke. Bitte warten Sie, während wir Sie verbinden.",
-    "captchaFail": "Wir können Ihren Anruf nicht verbinden. Auf Wiederhören.",
-    "captchaRetry": "Das war nicht korrekt. Bitte versuchen Sie es erneut.",
-    "waitMessage": "Ihr Anruf ist uns wichtig. Bitte warten Sie, während wir Sie mit einem Freiwilligen verbinden.",
-    "unavailableMessage": "Es tut uns leid, im Moment ist niemand erreichbar. Bitte versuchen Sie es später erneut. Auf Wiederhören.",
-    "voicemailPrompt": "Im Moment ist niemand verfügbar, um Ihren Anruf entgegenzunehmen. Bitte hinterlassen Sie eine Nachricht nach dem Signalton.",
-    "voicemailThanks": "Vielen Dank für Ihre Nachricht. Auf Wiederhören."
-  },
   "voiceIncomingWebhook": "Voice Incoming Webhook",
   "voiceStatusWebhook": "Voice Status Webhook",
   "webauthn": {
@@ -4690,5 +4648,47 @@
   "yes": "Yes",
   "yourIdentity": "Your Identity",
   "yourPrivateKey": "Your Private Key",
-  "yourPublicKey": "Your Public Key"
+  "yourPublicKey": "Your Public Key",
+  "pushSetup": {
+    "title": "Push Notifications",
+    "description": "Select a push notification provider to receive alerts when you're offline.",
+    "distributorRequired": "A UnifiedPush distributor (e.g. ntfy) is required for push notifications.",
+    "distributorNotFound": "No UnifiedPush distributor found. Install ntfy from F-Droid.",
+    "registered": "Push notifications are active.",
+    "registering": "Registering for push notifications…",
+    "failed": "Push notification registration failed. Try again later."
+  },
+  "voice": {
+    "greeting": "Vielen Dank für Ihren Anruf bei {name}.",
+    "rateLimited": "Wir haben derzeit ein hohes Anrufaufkommen. Bitte versuchen Sie es später erneut.",
+    "captchaPrompt": "Bitte geben Sie die folgenden Ziffern ein:",
+    "captchaTimeout": "Wir haben Ihre Eingabe nicht erhalten. Auf Wiederhören.",
+    "pleaseHold": "Bitte warten Sie, während wir Sie verbinden.",
+    "captchaSuccess": "Danke. Bitte warten Sie, während wir Sie verbinden.",
+    "captchaFail": "Wir können Ihren Anruf nicht verbinden. Auf Wiederhören.",
+    "captchaRetry": "Das war nicht korrekt. Bitte versuchen Sie es erneut.",
+    "waitMessage": "Ihr Anruf ist uns wichtig. Bitte warten Sie, während wir Sie mit einem Freiwilligen verbinden.",
+    "unavailableMessage": "Es tut uns leid, im Moment ist niemand erreichbar. Bitte versuchen Sie es später erneut. Auf Wiederhören.",
+    "voicemailPrompt": "Im Moment ist niemand verfügbar, um Ihren Anruf entgegenzunehmen. Bitte hinterlassen Sie eine Nachricht nach dem Signalton.",
+    "voicemailThanks": "Vielen Dank für Ihre Nachricht. Auf Wiederhören."
+  },
+  "biometricUnlockTitle": "Unlock Llamenos",
+  "biometricUnlockSubtitle": "Use your fingerprint or face to unlock",
+  "usePinInstead": "Use PIN",
+  "deepLinkConfirmTitle": "Open link?",
+  "deepLinkConfirmMessage": "Llamenos wants to perform a {{action}} action.",
+  "deepLinkConfirmProceed": "Proceed",
+  "deepLinkConfirmCancel": "Cancel",
+  "enroll": {
+    "redeeming": "Joining the hub…",
+    "failedTitle": "Couldn’t enroll",
+    "errorInvalidCode": "That invite code doesn’t look right. Check it and try again.",
+    "errorNotFound": "Invite not found. Check the code and try again.",
+    "errorExpired": "This invite has expired or was already used. Ask your hub for a new one.",
+    "errorRateLimited": "Too many attempts. Wait a moment and try again.",
+    "errorNetwork": "Couldn’t reach the hub. Check the hub address and your connection.",
+    "errorUnknown": "Something went wrong while enrolling. You can retry or continue and enroll later.",
+    "retry": "Retry",
+    "continueWithout": "Continue without enrolling"
+  }
 }
