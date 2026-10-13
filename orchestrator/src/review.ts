@@ -494,8 +494,17 @@ const REVIEWER_MODEL = process.env['FLEET_REVIEW_MODEL'] || 'sonnet'
  *     the call still failed — a crash, a timeout, a missing binary, or a
  *     real error from `claude` itself that is not a model-id complaint.
  *     This is the transient case retrying can plausibly fix.
+ *   - `'budget-exhausted'`: the engine ran out of turns before reaching a
+ *     verdict. The brief may need a smaller or more focused review.
+ *   - `'brief-too-large'`: a local sanity ceiling refused the brief before
+ *     invocation. Retrying it through another engine would send the same
+ *     oversized input and cannot recover the review.
  */
-export type EngineFailureKind = 'engine-misconfigured' | 'engine-unavailable' | 'budget-exhausted'
+export type EngineFailureKind =
+  | 'engine-misconfigured'
+  | 'engine-unavailable'
+  | 'budget-exhausted'
+  | 'brief-too-large'
 
 /**
  * `claude`'s own, stable error text for a `--model` id its build does not
@@ -689,7 +698,7 @@ const FALLBACK_AUTH_RE =
   /\b401\b|unauthorized|invalid.*(api.?key|token|credential)|not logged in|please (run|login|re-?authenticate)|authenticat(e|ion)? (fail|error|required)/i
 
 export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: string): boolean {
-  if (failureKind === 'budget-exhausted') return false
+  if (failureKind === 'budget-exhausted' || failureKind === 'brief-too-large') return false
   if (failureKind === 'engine-misconfigured') return true
   return !FALLBACK_AUTH_RE.test(text)
 }
@@ -705,9 +714,8 @@ export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: st
  * What the ceiling remains good for is pure abuse-prevention: a diff so
  * large it would take hours of review time and gigabytes of context is not
  * something this gate should hand to any engine. A brief past this bound is
- * a cannot-run result exactly like a missing binary: with the fallback
- * enabled it degrades to claude (whose stdin pipe has no length cap either),
- * and with the fallback disabled it reports `engine-unavailable`.
+ * a distinct size refusal, not an engine-health failure: neither engine
+ * should receive the same oversized brief.
  */
 export const KIMI_PROMPT_MAX_CHARS = 2_000_000 // sanity ceiling only — file-based -p @<file> passing has no argv limit
 
@@ -1311,24 +1319,24 @@ export interface PrClaim {
  * the reviewer part of the DIFF: a silently truncated diff is a reviewer
  * judging something other than what is about to merge, which is far worse
  * than a missing description. So the bound is a CONSTANT, chosen here and
- * independent of the diff, rather than a remainder computed against a total
- * prompt budget — a remainder is exactly the arithmetic that lets one input
- * crowd out another.
+ * independent of the review body, rather than a remainder computed against
+ * a total prompt budget — a remainder is exactly the arithmetic that lets
+ * one input crowd out another.
  *
  * `prClaimSection`'s output is therefore bounded above by
  * `PR_CLAIM_TITLE_MAX_CHARS + PR_CLAIM_BODY_MAX_CHARS` plus fixed framing
- * plus the PR number, and neither prompt builder truncates anything at all —
- * the diff is interpolated whole in both. Adding a claim cannot remove a
- * byte of diff, and `tests/orchestrator/review-pr-claim.test.ts` pins that
- * with a megabyte-long body.
+ * plus the PR number. Neither prompt builder truncates the code diff; locale
+ * JSON patches are omitted from both and replaced with semantic key summaries.
+ * Adding a claim cannot remove a byte of code diff, and
+ * `tests/orchestrator/review-pr-claim.test.ts` pins that with a megabyte-long
+ * body.
  *
  * The only length-sensitive behaviour downstream is
- * `KIMI_PROMPT_MAX_CHARS` (2,000,000), which REJECTS an oversized brief
- * outright — reported as `engine-unavailable`, which degrades to claude
- * (stdin, no cap) — rather than trimming it. Stated honestly: a brief
- * already within a few kilobytes of 2,000,000 chars could be pushed over
- * that line by a claim, and the consequence is the documented engine
- * fallback, never a shortened diff.
+ * `KIMI_PROMPT_MAX_CHARS` (2,000,000), which rejects an oversized brief as
+ * `brief-too-large` without trying a second engine on the same input, rather
+ * than trimming it. Stated honestly: a brief already within a few kilobytes
+ * of 2,000,000 chars could be pushed over that line by a claim, and the
+ * consequence is a clearly classified size refusal, never a shortened diff.
  *
  * 4,000 chars is roughly a thousand tokens — enough for the stated intent of
  * every PR in this repository's history, and far too little to matter
@@ -1518,12 +1526,160 @@ export function prClaimSection(pr: string, claim?: PrClaim): string {
 export function buildReviewPrompt(
   pr: string, diff: string, report: VerifyReport, exportDir: string, baseDir?: string, claim?: PrClaim,
 ): string {
+  const compacted = compactReviewDiff(diff, exportDir, baseDir)
   const impactNote = report.impact === 'high'
     ? `\n\nThis diff was classified HIGH IMPACT for:\n${report.impactReasons.map((r) => `- ${r}`).join('\n')}\n\n` +
       `Give it a slower, more careful pass than a routine diff would get.`
     : ''
   const files = reviewFilesSection(report.changedFiles, exportDir, baseDir)
-  return `${VERIFIER_BRIEF}${impactNote}\n\n${prClaimSection(pr, claim)}\n\n${files}\n\n## Diff\n\n\`\`\`diff\n${diff}\n\`\`\`\n`
+  const localeSummary = compacted.summary === '' ? '' : `${compacted.summary}\n\n`
+  return `${VERIFIER_BRIEF}${impactNote}\n\n${prClaimSection(pr, claim)}\n\n${files}\n\n${localeSummary}` +
+    `## Diff\n\n\`\`\`diff\n${compacted.diff}\n\`\`\`\n`
+}
+
+interface CompactedReviewDiff {
+  diff: string
+  summary: string
+}
+
+interface LocaleKeyChanges {
+  path: string
+  added: string[]
+  removed: string[]
+  changed: string[]
+}
+
+const LOCALE_DIFF_PATH = 'packages/i18n/locales/'
+
+function isLocaleDiffPath(path: string): boolean {
+  return path.startsWith(LOCALE_DIFF_PATH)
+}
+
+function localePatchPath(section: string): { oldPath: string; newPath: string } | undefined {
+  const header = /^diff --git a\/(.+?) b\/(.+?)(?:\r?\n|$)/.exec(section)
+  if (header?.[1] === undefined || header[2] === undefined) return undefined
+  return { oldPath: header[1], newPath: header[2] }
+}
+
+function flattenLocaleValues(value: unknown, prefix = '', out = new Map<string, string>()): Map<string, string> {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      flattenLocaleValues(child, prefix === '' ? key : `${prefix}.${key}`, out)
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach((child, index) => flattenLocaleValues(child, `${prefix}[${index}]`, out))
+  } else if (prefix !== '') {
+    out.set(prefix, JSON.stringify(value))
+  }
+  return out
+}
+
+function readLocaleValues(root: string, path: string): Map<string, string> {
+  const fullPath = join(root, ...path.split('/'))
+  if (!existsSync(fullPath)) return new Map()
+  let value: unknown
+  try {
+    value = JSON.parse(readFileSync(fullPath, 'utf8'))
+  } catch (e) {
+    throw new Error(`cannot summarize locale diff at ${path}: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`cannot summarize locale diff at ${path}: expected a JSON object`)
+  }
+  return flattenLocaleValues(value)
+}
+
+function snapshotLocaleChanges(path: string, headDir: string, baseDir: string): LocaleKeyChanges {
+  const headFile = join(headDir, ...path.split('/'))
+  const baseFile = join(baseDir, ...path.split('/'))
+  if (!existsSync(headFile) && !existsSync(baseFile)) {
+    throw new Error(`cannot summarize locale diff at ${path}: absent from both review snapshots`)
+  }
+  const before = readLocaleValues(baseDir, path)
+  const after = readLocaleValues(headDir, path)
+  const added: string[] = []
+  const removed: string[] = []
+  const changed: string[] = []
+  for (const key of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    if (!before.has(key)) added.push(key)
+    else if (!after.has(key)) removed.push(key)
+    else if (before.get(key) !== after.get(key)) changed.push(key)
+  }
+  return { path, added, removed, changed }
+}
+
+function patchLocaleChanges(path: string, section: string): LocaleKeyChanges {
+  const removed = new Map<string, string[]>()
+  const added = new Map<string, string[]>()
+  for (const line of section.split('\n')) {
+    const prefix = line[0]
+    if (prefix !== '+' && prefix !== '-') continue
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    const property = /^[+-]\s*"((?:\\.|[^"\\])*)"\s*:\s*(.*?)(?:,)?\s*$/.exec(line)
+    if (property?.[1] === undefined || property[2] === undefined) continue
+    const key = JSON.parse(`"${property[1]}"`) as string
+    const values = prefix === '+' ? added : removed
+    const existing = values.get(key) ?? []
+    existing.push(property[2])
+    values.set(key, existing)
+  }
+  const changes: LocaleKeyChanges = { path, added: [], removed: [], changed: [] }
+  for (const key of [...new Set([...removed.keys(), ...added.keys()])].sort()) {
+    const before = [...(removed.get(key) ?? [])]
+    const after = [...(added.get(key) ?? [])]
+    for (const value of [...before]) {
+      const beforeIndex = before.indexOf(value)
+      const afterIndex = after.indexOf(value)
+      if (beforeIndex !== -1 && afterIndex !== -1) {
+        before.splice(beforeIndex, 1)
+        after.splice(afterIndex, 1)
+      }
+    }
+    if (before.length > 0 && after.length > 0) changes.changed.push(key)
+    else if (before.length > 0) changes.removed.push(key)
+    else if (after.length > 0) changes.added.push(key)
+  }
+  return changes
+}
+
+function formatLocaleChanges(changes: LocaleKeyChanges[]): string {
+  const rows = changes.sort((a, b) => a.path.localeCompare(b.path)).map((change) => {
+    const localeFile = change.path.slice(LOCALE_DIFF_PATH.length).replace(/\.json$/, '')
+    const list = (keys: string[]) => keys.length === 0 ? 'none' : keys.join(', ')
+    return `- ${localeFile}: added ${list(change.added)}; removed ${list(change.removed)}; changed ${list(change.changed)}`
+  })
+  return `## Locale key changes (locale files omitted)\n\n${rows.join('\n')}`
+}
+
+/**
+ * Locale JSON is mechanically regenerated across every language, so its
+ * patch body is not useful review material. Keep the non-locale diff intact
+ * and report semantic key changes from the exported trees. When a base
+ * export is unavailable, identical moved property lines cancel out.
+ */
+export function compactReviewDiff(diff: string, headDir?: string, baseDir?: string): CompactedReviewDiff {
+  const sections = diff.split(/(?=^diff --git )/m)
+  const kept: string[] = []
+  const localeSections: Array<{ path: string; section: string }> = []
+  for (const section of sections) {
+    const paths = localePatchPath(section)
+    if (paths === undefined) {
+      kept.push(section)
+      continue
+    }
+    const localePath = isLocaleDiffPath(paths.newPath) ? paths.newPath : paths.oldPath
+    if (!isLocaleDiffPath(localePath) || !isLocaleDiffPath(paths.oldPath) || !isLocaleDiffPath(paths.newPath)) {
+      kept.push(section)
+      continue
+    }
+    localeSections.push({ path: localePath, section })
+  }
+  if (localeSections.length === 0) return { diff, summary: '' }
+  const changes = localeSections.map(({ path, section }) =>
+    headDir !== undefined && baseDir !== undefined
+      ? snapshotLocaleChanges(path, headDir, baseDir)
+      : patchLocaleChanges(path, section))
+  return { diff: kept.join(''), summary: formatLocaleChanges(changes) }
 }
 
 /**
@@ -1929,8 +2085,8 @@ export interface EngineRun {
   /** False for a crash, a timeout, a non-zero exit or a missing binary
    *  (which includes a `--model` id the engine itself refuses to run —
    *  see `classifyEngineFailure` and `failureKind`), or a kimi invocation
-   *  skipped because its binary is absent or the brief exceeds the sanity
-   *  ceiling (`KIMI_PROMPT_MAX_CHARS`). */
+   *  skipped because its binary is absent. An oversized brief is classified
+   *  as `brief-too-large`, not as an engine-health failure. */
   reached: boolean
   /** The engine this run's outcome came from — always set for runs
    *  `invokeVerifierEngine` produced. */
@@ -2246,23 +2402,25 @@ export function salvageArgs(input: { model: string; maxTurns: number }): string[
  * `canFallbackAfterFailure` for the taxonomy):
  *
  *   1. The PRIMARY engine (`kimi` by default) is attempted. A kimi attempt
- *      that never reaches a verdict because its binary is absent, the brief
- *      exceeds the sanity ceiling, the call crashed, timed out, or returned
- *      an unreachable-class error is a CANNOT-RUN result — not a verdict.
+ *      that never reaches a verdict because its binary is absent, the call
+ *      crashed, timed out, or returned an unreachable-class error is a
+ *      CANNOT-RUN result — not a verdict. A brief over the size ceiling is a
+ *      distinct input refusal.
  *   2. Only then — and only when the failure is in the cannot-run family,
  *      the fallback toggle is on (`FLEET_REVIEW_FALLBACK`, default on), and
  *      the SAME brief can be carried — does the OTHER engine (`claude`) run.
  *      With `FLEET_REVIEW_PRIMARY=claude` the two arms swap positions
  *      symmetrically: claude first, kimi as its cannot-run fallback.
  *   3. Any condition failing returns the primary's result UNCHANGED — the
- *      pre-fallback failure shape, `NO-VERDICT:engine-unavailable` and all.
+ *   pre-fallback failure shape and classification.
  *
  *   Never fired on: a substantive PASS/FAIL from EITHER engine (returned
  *   as-is — a FAIL is never "retried" through another engine), an
  *   auth-failure-shaped error on EITHER arm (ambiguous — an expired runner
  *   login must stay loud; the gate never crosses engines silently on auth
- *   problems), or an exhausted turn budget (the brief, not the engine, is
- *   what failed). Both engines failing produces one UNREADABLE naming both.
+ *   problems), an oversized brief (the input, not the engine, is what failed),
+ *   or an exhausted turn budget. Both engines failing produces one UNREADABLE
+ *   naming both.
  *
  * ONE HONEST DIFFERENCE between the engines' environments, carried in
  * `fleet-review.yml`'s header too: claude runs under a GATE-OWNED HOME
@@ -2581,10 +2739,9 @@ async function runSalvageOnce(input: {
  * ONE kimi invocation — everything about calling kimi lives here so the
  * primary and fallback positions run the IDENTICAL argv, env, decode and
  * classification; position only decides WHEN this runs and how the result
- * is attributed. Pre-flight cannot-run conditions (missing binary, brief
- * over the sanity ceiling) are reported as `engine-unavailable` runs rather
- * than thrown, so the orchestration in `invokeVerifierEngine` can treat them
- * exactly like a crashed or timed-out call.
+ * is attributed. A missing binary is reported as `engine-unavailable`;
+ * exceeding the sanity ceiling is instead a `brief-too-large` result, which
+ * prevents handing the same oversized input to the other engine.
  */
 async function runKimiOnce(input: {
   prompt: string
@@ -2597,7 +2754,7 @@ async function runKimiOnce(input: {
   if (input.prompt.length > KIMI_PROMPT_MAX_CHARS) {
     return {
       reached: false, engine: 'kimi', assistantText: '',
-      failureKind: 'engine-unavailable',
+      failureKind: 'brief-too-large',
       diagnostics: `kimi invocation skipped: the brief is ${input.prompt.length} chars, over the ${KIMI_PROMPT_MAX_CHARS}-char sanity ceiling`,
     }
   }
