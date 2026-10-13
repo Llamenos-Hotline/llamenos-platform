@@ -80,6 +80,15 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   // Deleting every wrap ends it. The executor also advances
   // hubs.hub_key_generation, without which a replayed PUT /hubs/:id/key
   // carrying cached envelopes would re-install the key this destroys.
+  //
+  // Class A is also what covers fields sealed directly under the hub key with
+  // encryptHubField (tags, teams): no wrap of theirs exists to clear, so once
+  // the key is gone their columns are unreadable without a target entry here.
+  // ring_groups.encrypted_name and shifts.encrypted_name are NOT covered this
+  // way today — they hold raw plaintext (#1506) and survive a shred legibly.
+  // When #1506's client fix seals them under the hub key, Class A covers them
+  // with no change to this list; until then their names remain readable after
+  // a shred, and any "what does a shred destroy" analysis must say so.
   { kind: 'delete-rows', table: 'hub_keys', scope: BY_HUB },
 
   // --- Class B: per-row recipient envelopes -------------------------------
