@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Nou pa t kapab chaje hub ou yo",
+    "membershipLoadFailedBody": "Sèvè a pa t di nan ki hub ou ye, konsa nou pa ka montre anyen ankò. Tcheke koneksyon ou epi eseye ankò."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2755,6 +2757,7 @@
     "backupAcknowledge": "Mwen te anrejistre kle rekiperasyon mwen nan yon kote ki an sekirite",
     "backupDescription": "Ekri kle rekiperasyon sa a epi kenbe li an sekirite. Se sèl fason pou rekipere kont ou sou yon nouvo aparèy.",
     "backupDownloaded": "Sovgad telechaje",
+    "backupFailed": "Nou pa t kapab kreye backup chifre ou a: {{reason}}",
     "backupTitle": "Anrejistre Kle Rekiperasyon Ou",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2769,6 +2772,8 @@
     "getStarted": "Kòmanse",
     "goToLogin": "Ale nan Koneksyon",
     "invalidCode": "Kòd envitasyon envalid",
+    "rateLimitedRetry": "Twòp tantativ. Tanpri tann {{seconds}} segonn, epi eseye ankò.",
+    "validationUnavailable": "Nou pa t ka verifye envitasyon ou kounye a. Tcheke koneksyon ou epi eseye ankò.",
     "noCode": "Pa gen kòd envitasyon",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

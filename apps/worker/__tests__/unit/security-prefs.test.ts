@@ -1,46 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { SecurityPrefsService } from '../../services/security-prefs'
-
-// ---------------------------------------------------------------------------
-// Mock DB layer
-// ---------------------------------------------------------------------------
-
-function makeMockDb() {
-  const store = new Map<string, Record<string, unknown>>()
-
-  const mockChain = () => {
-    let _whereKey: string | undefined
-    return {
-      from: () => mockChain(),
-      where: (condition: unknown) => {
-        // Extract the pubkey from the mock condition
-        _whereKey = (condition as { value?: string })?.value
-        return mockChain()
-      },
-      limit: () => {
-        const key = _whereKey
-        if (key && store.has(key)) return [store.get(key)]
-        return []
-      },
-      set: () => mockChain(),
-      returning: () => {
-        const key = _whereKey
-        if (key && store.has(key)) return [store.get(key)]
-        return []
-      },
-    }
-  }
-
-  // Simplified mock that tracks calls and returns controlled data
-  const db = {
-    select: vi.fn(),
-    insert: vi.fn(),
-    update: vi.fn(),
-    _store: store,
-  }
-
-  return db
-}
 
 // ---------------------------------------------------------------------------
 // Lightweight functional test with a real-ish mock

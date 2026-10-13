@@ -18,6 +18,14 @@ services:
     # here for the app service.
     env_file:
       - .env
+{% if (kamailio_enabled | default(false) | bool) and (kamailio_tls_enabled | default(true) | bool) and (kamailio_tls_publish_anchor | default(true) | bool) %}
+    # The SIP edge's PUBLIC trust anchor the app publishes to clients in
+    # /api/telephony/sip-token (SIP_TLS_CA_FILE in .env). Same mount, same
+    # reasoning, as roles/llamenos-app/templates/compose/app.j2 — see the long
+    # note there. Read-only, directory not file, certificate only.
+    volumes:
+      - {{ kamailio_tls_anchor_dir | default(app_dir ~ '/services/kamailio/anchor') }}:{{ sip_tls_anchor_container_path | default('/var/lib/llamenos/sip-tls') }}:ro
+{% endif %}
     # Loopback-only publish, matching roles/llamenos-app's compose. The host
     # has to be able to reach the app directly for two reasons: the "Wait for
     # application health check" task in this role probes

@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "No se pudieron cargar tus centros",
+    "membershipLoadFailedBody": "El servidor no indicó a qué centros perteneces, así que todavía no se puede mostrar nada. Comprueba tu conexión e inténtalo de nuevo."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2755,6 +2757,7 @@
     "backupAcknowledge": "He guardado mi clave de recuperación en un lugar seguro",
     "backupDescription": "Anota esta clave de recuperación y guárdala en un lugar seguro. Es la única forma de recuperar tu cuenta en un nuevo dispositivo.",
     "backupDownloaded": "Copia de seguridad descargada",
+    "backupFailed": "No se pudo crear tu copia de seguridad cifrada: {{reason}}",
     "backupTitle": "Guarda Tu Clave de Recuperación",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2769,6 +2772,8 @@
     "getStarted": "Comenzar",
     "goToLogin": "Ir a Iniciar Sesión",
     "invalidCode": "Código de invitación inválido",
+    "rateLimitedRetry": "Demasiados intentos. Espera {{seconds}} segundos y vuelve a intentarlo.",
+    "validationUnavailable": "No se pudo validar tu invitación en este momento. Comprueba tu conexión e inténtalo de nuevo.",
     "noCode": "No se proporcionó código de invitación",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",

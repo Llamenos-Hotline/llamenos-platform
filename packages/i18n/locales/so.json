@@ -739,7 +739,9 @@
     "keyUnavailable": "Waxa sirta ah ee xaruntan lagama furi karo qalabkan weli",
     "namePlaceholder": "Hub name",
     "slugPlaceholder": "hub-slug",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Xarumahaada lama soo rarin",
+    "membershipLoadFailedBody": "Server-ku ma sheegin xarumaha aad ka tirsan tahay, sidaas darteed weli wax lama muujin karo. Hubi xiriirkaaga oo isku day mar kale."
   },
   "ivr": {
     "selfAnnouncement": "Soomaaliga, taabo [N].",
@@ -877,6 +879,7 @@
     "backupAcknowledge": "Furuhayga soo celinta waxaan ku kaydiyay meel amaan ah",
     "backupDescription": "Qor furahan soo celinta oo meel amaan ah kaydi. Waa habka keliya ee lagu soo celiyo xisaabtaada qalabka cusub.",
     "backupDownloaded": "Kaydkii waa la soo dejiyay",
+    "backupFailed": "Lama abuuri karin kaydkaaga sirroobay: {{reason}}",
     "backupTitle": "Kaydi Furuhaa Soo Celinta",
     "confirmPin": "Xaqiiji PIN-kaaga",
     "confirmPinDescription": "Mar kale geli PIN-kii si aad u xaqiijiso",
@@ -891,6 +894,8 @@
     "getStarted": "Bilow",
     "goToLogin": "Aad Soo Galitaanka",
     "invalidCode": "Koodka martiqaaddu waa khalad",
+    "rateLimitedRetry": "Isku day badan. Fadlan sug {{seconds}} ilbiriqsi, kadib isku day mar kale.",
+    "validationUnavailable": "Ma xaqiijin karno casuumaddaada hadda. Hubi isku xirkaaga oo isku day mar kale.",
     "noCode": "Kood martiqaad ah lama bixin",
     "npubLabel": "Furuhaaga Dadweynaha",
     "deviceKeyLabel": "Furuhaaga Sirta ah",

@@ -179,10 +179,13 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
  * does on day one, which is the flow worth exercising anyway. See #1423.
  */
 async function completeFirstRunSetup(baseUrl: string): Promise<void> {
+  // `setupCompleted` is the public signal that the wizard already ran, and
+  // running it is what creates the hub. This used to check `config.hubs`, but
+  // the unauthenticated payload no longer publishes a hub roster (#1710).
   const configRes = await fetch(`${baseUrl}/api/config`)
   if (!configRes.ok) return
-  const config = await configRes.json() as { hubs?: Array<{ id: string }> }
-  if (config.hubs && config.hubs.length > 0) return
+  const config = await configRes.json() as { setupCompleted?: boolean }
+  if (config.setupCompleted) return
 
   const path = '/api/setup/complete'
   const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)

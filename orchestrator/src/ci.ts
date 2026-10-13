@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
-import { finalLine, requiredAdditionalReviewers, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
+import { finalLine, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
   diffHash, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
@@ -808,8 +808,29 @@ export interface ReviewCiDeps extends CiDeps {
    * (`stripExport`) is an unsafe one. Only the second may stop the gate.
    */
   exportBase?(repoDir: string, sha: string): Promise<{ dir: string; cleanup(): Promise<void> }>
-  /** Runs ONE resolved profile, read-only, against the same export. */
-  profileReview(profile: ReviewerProfile, diff: string, changedFiles: readonly string[]): Promise<SecondOpinionResult>
+  /**
+   * The PR's own stated intent — title and body — read LIVE from the PR, for
+   * the `## Pull request` section of every reviewer's prompt
+   * (`prClaimSection`, review.ts). `undefined` means the read FAILED, and
+   * the prompt then says plainly that no claim was stated (#1696).
+   *
+   * OPTIONAL and fail-soft, for the same reason as `exportBase` above: a
+   * missing claim is a WORSE review (the reviewer is back to judging "does
+   * the diff do what the PR claims" against a bare PR number), never an
+   * UNSAFE one. Only a missing security control may stop the gate.
+   *
+   * Deliberately NOT part of the review cache key (`ReviewCacheKey` is the
+   * PR plus the diff hash): an edited description does not change the code
+   * under judgement, and re-running every reviewer on a typo fix in a body
+   * is the review churn this gate's cache exists to avoid.
+   */
+  prClaim?(): Promise<PrClaim | undefined>
+  /** Runs ONE resolved profile, read-only, against the same export. The
+   *  claim travels to the profile too — see `buildProfileReviewPrompt`'s own
+   *  comment for why the profile half is the load-bearing one (#1696). */
+  profileReview(
+    profile: ReviewerProfile, diff: string, changedFiles: readonly string[], claim?: PrClaim,
+  ): Promise<SecondOpinionResult>
   /**
    * Hands every reviewer's FULL text somewhere the PR itself will show it.
    * Required, not optional, and the reason is a measured failure: two real
@@ -1341,12 +1362,22 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   // judged commit's code anywhere in this job — which is what lets it hold
   // the key, and what every reviewer in this batch inherits.
   const names = [GENERAL_REVIEWER, ...profiles.map((p) => p.agent)]
+  // Read ONCE and shared by every reviewer in the batch, so the generalist
+  // and every profile judge the diff against the SAME stated intent — two
+  // reviewers disagreeing because they read the PR at different moments
+  // would be the worst possible shape for this. Fail-soft: an unreadable
+  // claim is `undefined` and the prompt says so (see `ReviewCiDeps.prClaim`).
+  const claim = await deps.prClaim?.().catch(() => undefined)
+  if (claim === undefined) {
+    deps.log(`no PR title/body available for pr=${deps.ctx.pr} — every reviewer is told plainly that ` +
+      'this PR stated no claim, rather than being shown a bare PR number as if it were one')
+  }
   const settled = await Promise.allSettled([
     deps.secondOpinion({
       authorEngine: lane.engine, pr: deps.ctx.pr, snapshotDir: deps.ctx.headDir,
-      baseDir: baseExport?.dir, diff, report,
+      baseDir: baseExport?.dir, diff, report, claim,
     }),
-    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles)),
+    ...profiles.map((p) => deps.profileReview(p, diff, report.changedFiles, claim)),
   ])
   // Every reviewer has finished (`allSettled` never rejects), so the base
   // tree has no readers left. Removed here rather than in a `finally`

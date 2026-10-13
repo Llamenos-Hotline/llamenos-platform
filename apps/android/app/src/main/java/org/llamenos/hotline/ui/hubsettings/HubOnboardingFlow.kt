@@ -162,7 +162,10 @@ fun HubOnboardingFlow(
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("onboarding-next-provider"),
-                            enabled = !isCompletingStep,
+                            // Never disabled: the ViewModel serializes step
+                            // submissions on a FIFO mutex, so a tap made while a
+                            // previous step is still in flight must queue, not be
+                            // silently dropped (#1820).
                         ) {
                             if (isCompletingStep) {
                                 CircularProgressIndicator(
@@ -217,7 +220,6 @@ fun HubOnboardingFlow(
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("onboarding-next-phone"),
-                                enabled = !isCompletingStep,
                             ) {
                                 Text(stringResource(R.string.hub_onboarding_step_phone_number))
                             }
@@ -267,7 +269,6 @@ fun HubOnboardingFlow(
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("onboarding-next-summary"),
-                                enabled = !isCompletingStep,
                             ) {
                                 Text(stringResource(R.string.hub_onboarding_step_summary))
                             }
@@ -311,7 +312,6 @@ fun HubOnboardingFlow(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("onboarding-complete"),
-                            enabled = !isCompletingStep,
                         ) {
                             if (isCompletingStep) {
                                 CircularProgressIndicator(

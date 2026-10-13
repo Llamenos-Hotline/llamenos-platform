@@ -1,214 +1,61 @@
 /**
- * Key backup & recovery utilities.
+ * Key backup & recovery — file I/O only.
  *
- * Backup files use generic, non-identifying field names to avoid
- * associating the file with any specific application if discovered
- * on a seized device.
+ * The backup format, both KDFs and the cipher are defined once, in Rust:
+ * `packages/crypto/src/backup.rs` (container v4). That module's doc comment is
+ * the specification; read it before changing anything here.
  *
- * Format: { v, id, t, d: { s, i, n, c }, r?: { s, i, n, c } }
- *   v  = version (1)
- *   id = first 6 hex chars of SHA-256(pubkey) — user identification only
- *   t  = unix timestamp, rounded to nearest hour
- *   d  = PIN-encrypted data: salt, iterations, nonce, ciphertext
- *   r  = recovery key encrypted data (same structure)
+ * This file deliberately contains **no cryptography**. It used to hold a second,
+ * incompatible implementation (PBKDF2 over the recovery key, `v: 1` container)
+ * while Rust wrote a third (HKDF over a hex decode of the key, `v: 3`) — the
+ * writer could never produce a file this reader would accept, and the hex decode
+ * made the download fail outright (#1709). Reinstating any crypto here
+ * re-creates that divergence, and would put device key material back in the
+ * webview, which the architecture forbids.
  *
- * Recovery key: 128-bit random, Base32-encoded, formatted as XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+ * Writing a backup:  `generateRecoveryKey()` + `generateBackupFromState()` from
+ *                    `@/lib/platform`, then `downloadBackupFile()` here.
+ * Reading a backup:  `readBackupFile()` here, then `verifyBackupCredential()` /
+ *                    `restoreBackupAndLoad()` from `@/lib/platform`.
+ *
+ * Field names in the file are generic and carry no plaintext device identifier,
+ * so a backup found on a seized device does not reveal which application wrote
+ * it or whose key it holds.
  */
 
-import { gcm } from '@noble/ciphers/aes.js'
-import { utf8ToBytes } from '@noble/ciphers/utils.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
-import { RECOVERY_SALT } from '@shared/crypto-labels'
+/** Container version this build reads and writes. Must match Rust's `BACKUP_FORMAT_VERSION`. */
+export const BACKUP_FORMAT_VERSION = 4
 
-const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+/** PIN-protected block: Argon2id over the credential, AES-256-GCM. */
+interface PinBlock {
+  kv: number // KDF version (2 = Argon2id)
+  s: string // Argon2id salt (hex)
+  m: number // Argon2id memory cost (KiB)
+  i: number // Argon2id time cost
+  p: number // Argon2id parallelism
+  n: string // AES-256-GCM nonce (hex)
+  c: string // AES-256-GCM ciphertext (hex)
+}
 
-interface EncryptedBlock {
-  s: string  // salt (hex)
-  i: number  // PBKDF2 iterations
-  n: string  // nonce (hex)
-  c: string  // ciphertext (hex)
+/** Recovery-key-protected block: HKDF-SHA256 over the normalized key, AES-256-GCM. */
+interface RecoveryBlock {
+  kv: number // KDF version (1 = HKDF-SHA256)
+  s: string // HKDF salt (hex)
+  n: string // AES-256-GCM nonce (hex)
+  c: string // AES-256-GCM ciphertext (hex)
 }
 
 export interface BackupFile {
-  v: 1
-  id: string         // truncated SHA-256(pubkey), first 6 hex chars
-  t: number          // unix timestamp (seconds), rounded to nearest hour
-  d: EncryptedBlock  // PIN-encrypted device key
-  r?: EncryptedBlock // recovery-key-encrypted device key
-}
-
-/**
- * Generate a 128-bit recovery key, Base32-encoded with dashes.
- */
-export function generateRecoveryKey(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  let base32 = ''
-  let bits = 0
-  let buffer = 0
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte
-    bits += 8
-    while (bits >= 5) {
-      bits -= 5
-      base32 += BASE32_CHARS[(buffer >> bits) & 0x1f]
-    }
-  }
-  if (bits > 0) {
-    base32 += BASE32_CHARS[(buffer << (5 - bits)) & 0x1f]
-  }
-  return (base32.match(/.{1,4}/g) ?? [base32]).join('-')
-}
-
-/**
- * Derive a KEK from a recovery key using PBKDF2.
- */
-async function deriveFromRecoveryKey(recoveryKey: string, perBackupSalt?: Uint8Array): Promise<Uint8Array> {
-  const normalized = recoveryKey.replace(/-/g, '').toUpperCase()
-  const keyBytes = utf8ToBytes(normalized)
-  const salt = perBackupSalt ?? utf8ToBytes(RECOVERY_SALT)
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    keyBytes.buffer as ArrayBuffer,
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  )
-  const derived = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: salt.buffer as ArrayBuffer,
-      iterations: 100_000,
-    },
-    keyMaterial,
-    256,
-  )
-  return new Uint8Array(derived)
-}
-
-/**
- * Derive a KEK from a PIN using PBKDF2.
- */
-async function deriveFromPin(pin: string, salt: Uint8Array): Promise<Uint8Array> {
-  const pinBytes = utf8ToBytes(pin)
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    pinBytes.buffer as ArrayBuffer,
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  )
-  const derived = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: salt.buffer as ArrayBuffer,
-      iterations: 600_000,
-    },
-    keyMaterial,
-    256,
-  )
-  return new Uint8Array(derived)
-}
-
-function encrypt(plaintext: string, kek: Uint8Array): { nonce: string; ciphertext: string } {
-  const nonce = new Uint8Array(12)
-  crypto.getRandomValues(nonce)
-  const cipher = gcm(kek, nonce)
-  const ct = cipher.encrypt(utf8ToBytes(plaintext))
-  return { nonce: bytesToHex(nonce), ciphertext: bytesToHex(ct) }
-}
-
-function decrypt(nonce: string, ciphertext: string, kek: Uint8Array): string | null {
-  try {
-    const cipher = gcm(kek, hexToBytes(nonce))
-    const pt = cipher.decrypt(hexToBytes(ciphertext))
-    return new TextDecoder().decode(pt)
-  } catch {
-    return null
-  }
-}
-
-/**
- * Create a truncated pubkey identifier (first 6 hex chars of SHA-256).
- * Enough for the user to identify which backup is which, not enough to identify the pubkey.
- */
-function truncatedPubkeyId(pubkey: string): string {
-  const hash = sha256(utf8ToBytes(pubkey))
-  return bytesToHex(hash).slice(0, 6)
-}
-
-/**
- * Round a timestamp to the nearest hour to reduce timing correlation.
- */
-function roundToHour(date: Date): number {
-  const ms = date.getTime()
-  const hourMs = 3_600_000
-  return Math.round(ms / hourMs) * hourMs / 1000
-}
-
-/**
- * Create an encrypted backup file.
- */
-export async function createBackup(
-  seedHex: string,
-  pin: string,
-  pubkey: string,
-  recoveryKey: string,
-): Promise<BackupFile> {
-  const salt = new Uint8Array(16)
-  crypto.getRandomValues(salt)
-  const kek = await deriveFromPin(pin, salt)
-  const { nonce, ciphertext } = encrypt(seedHex, kek)
-
-  const rSalt = new Uint8Array(16)
-  crypto.getRandomValues(rSalt)
-  const rKek = await deriveFromRecoveryKey(recoveryKey, rSalt)
-  const { nonce: rNonce, ciphertext: rCt } = encrypt(seedHex, rKek)
-
-  return {
-    v: 1,
-    id: truncatedPubkeyId(pubkey),
-    t: roundToHour(new Date()),
-    d: {
-      s: bytesToHex(salt),
-      i: 600_000,
-      n: nonce,
-      c: ciphertext,
-    },
-    r: {
-      s: bytesToHex(rSalt),
-      i: 100_000,
-      n: rNonce,
-      c: rCt,
-    },
-  }
-}
-
-/**
- * Restore device key from a backup file using PIN.
- */
-export async function restoreFromBackupWithPin(backup: BackupFile, pin: string): Promise<string | null> {
-  const salt = hexToBytes(backup.d.s)
-  const kek = await deriveFromPin(pin, salt)
-  return decrypt(backup.d.n, backup.d.c, kek)
-}
-
-/**
- * Restore device key from a backup file using recovery key.
- */
-export async function restoreFromBackupWithRecoveryKey(backup: BackupFile, recoveryKey: string): Promise<string | null> {
-  if (!backup.r) return null
-  const perBackupSalt = backup.r.s ? hexToBytes(backup.r.s) : undefined
-  const rKek = await deriveFromRecoveryKey(recoveryKey, perBackupSalt)
-  return decrypt(backup.r.n, backup.r.c, rKek)
+  v: typeof BACKUP_FORMAT_VERSION
+  id: string // first 6 hex chars of SHA-256(signing pubkey hex) — identification only
+  t: number // unix seconds, rounded to the nearest hour
+  d: PinBlock // PIN-protected copy of the signing seed
+  r: RecoveryBlock // recovery-key-protected copy of the signing seed
 }
 
 /**
  * Download a backup file to the user's device.
- * Uses compact JSON (no pretty-print) and generic filename.
+ * Compact JSON, random filename — nothing in the name identifies the app or user.
  */
 export function downloadBackupFile(backup: BackupFile): void {
   const content = JSON.stringify(backup)
@@ -223,19 +70,41 @@ export function downloadBackupFile(backup: BackupFile): void {
   URL.revokeObjectURL(url)
 }
 
+function isHex(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && /^[0-9a-f]+$/i.test(value)
+}
+
+function isPinBlock(block: unknown): block is PinBlock {
+  if (typeof block !== 'object' || block === null) return false
+  const b = block as Record<string, unknown>
+  return typeof b.kv === 'number' && isHex(b.s) && isHex(b.n) && isHex(b.c)
+    && typeof b.m === 'number' && typeof b.i === 'number' && typeof b.p === 'number'
+}
+
+function isRecoveryBlock(block: unknown): block is RecoveryBlock {
+  if (typeof block !== 'object' || block === null) return false
+  const b = block as Record<string, unknown>
+  return typeof b.kv === 'number' && isHex(b.s) && isHex(b.n) && isHex(b.c)
+}
+
 /**
- * Read a backup file from a File input.
- * Recognizes the new format by presence of "v" and "d" fields.
+ * Parse a user-selected backup file.
+ *
+ * Shape and version are validated here so a wrong or truncated file is rejected
+ * before a credential is asked for; the credential itself is checked in Rust.
+ * Returns null for anything that is not a v4 backup — including the v1 and v3
+ * files older builds could produce, which are not readable by any build (see
+ * `packages/crypto/src/backup.rs`, "Compatibility").
  */
 export async function readBackupFile(file: File): Promise<BackupFile | null> {
   try {
-    const text = await file.text()
-    const data = JSON.parse(text)
-    // New format: has "v" and "d" fields
-    if (data.v === 1 && data.d && typeof data.d.s === 'string') {
-      return data as BackupFile
-    }
-    return null
+    const data: unknown = JSON.parse(await file.text())
+    if (typeof data !== 'object' || data === null) return null
+    const candidate = data as Record<string, unknown>
+    if (candidate.v !== BACKUP_FORMAT_VERSION) return null
+    if (typeof candidate.id !== 'string' || typeof candidate.t !== 'number') return null
+    if (!isPinBlock(candidate.d) || !isRecoveryBlock(candidate.r)) return null
+    return candidate as unknown as BackupFile
   } catch {
     return null
   }

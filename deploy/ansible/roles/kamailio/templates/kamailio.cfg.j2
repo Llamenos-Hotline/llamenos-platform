@@ -11,8 +11,23 @@
 #   - NAT traversal support
 
 # === Memory and Logging ===
-memdump=2
-memlog=2
+# `memdbg`, not `memdump`: there is no core parameter called memdump, and
+# Kamailio's config parser rejects the whole file over it —
+# "parse error in config file /etc/kamailio/kamailio.cfg, line 14, column 8:
+# syntax error" — so the daemon exited at startup and the container sat in a
+# restart loop. It went unnoticed because this role was on no deploy path (the
+# same reason its trust anchor was never written and its config mount pointed
+# at the wrong directory, #1657 / #1660). Found by bringing the rendered role
+# up, not by reading it: issue #1636's two new fatal probes target this
+# service, and a fatal probe aimed at something that cannot start is worse
+# than no probe.
+#
+# memdbg is a LEVEL, not a flag: every allocation is logged when `debug` is at
+# or above it. At memdbg=2 with debug=2 the daemon printed a qm_malloc line per
+# allocation, which buries the startup errors above in tens of thousands of
+# lines. 5 is Kamailio's own default and keeps them visible.
+memdbg=5
+memlog=5
 log_stderror=no
 log_facility=LOG_LOCAL0
 log_name="kamailio"
@@ -63,7 +78,25 @@ loadmodule "ratelimit.so"
 # === Module Parameters ===
 
 # JSONRPC
-modparam("jsonrpcs", "transport", 1)
+#
+# `transport` is a bitmask of the transports jsonrpcs serves: 1 = HTTP (via
+# xhttp), 2 = FIFO, 4 = DATAGRAM. It was 1 — HTTP only — and xhttp.so is not
+# loaded, so the module could not initialise and took the whole daemon with
+# it: "jsonrpcs: cannot find bind_xhttp", "cannot bind to XHTTP API",
+# "ERROR: error while initializing modules", exit. Kamailio never started on
+# this config, which is why nothing ever noticed the rest.
+#
+# 2 (FIFO) is what this configuration can actually serve. The HTTP transport
+# needs xhttp.so loaded AND an `event_route[xhttp:request]` dispatching to
+# jsonrpc_dispatch(), and it would then answer on the SIP TCP/TLS listeners —
+# NOT on a port of its own. So `kamailio_jsonrpc_port` is bound by nothing
+# here, the compose file publishes it nowhere, and the role's own host-side
+# `uri` probe of http://localhost:<that port>/jsonrpc cannot succeed on any
+# deployment. The smoke check therefore measures the management interface with
+# `kamcmd core.version` over the ctl.so binrpc socket — the same thing the
+# container healthcheck runs — rather than over an endpoint that does not
+# exist (issue #1636).
+modparam("jsonrpcs", "transport", 2)
 modparam("jsonrpcs", "pretty_format", 1)
 
 # Transaction module
@@ -87,16 +120,31 @@ modparam("dispatcher", "ds_ping_reply_codes", "class=2;code=403;code=484;code=48
 # Hash table for rate limiting
 modparam("htable", "htable", "ipban=>size=8;autoexpire=300")
 
-# NAT helper
-modparam("nathelper", "natping_interval", {{ kamailio_nat_keepalive }})
-modparam("nathelper", "ping_nated_only", 1)
-modparam("nathelper", "sipping_bflag", 1)
-modparam("nathelper", "sipping_from", "sip:pinger@{{ kamailio_sip_domain }}")
+# NAT helper.
+#
+# natping_interval MUST be 0 here. A non-zero interval turns on pinging of
+# REGISTERED contacts, which nathelper reads out of usrloc — and usrloc is not
+# loaded, because this proxy deliberately registers nobody ("we don't handle
+# registrations — pass to backends", in route[REQINIT] below). With
+# kamailio_nat_keepalive's default of 60 the module failed to initialise —
+# "nathelper: can't find usrloc module", "error while initializing modules" —
+# and the daemon exited, so NOTHING in this role ever ran.
+#
+# The functions the routing logic actually uses (nat_uac_test,
+# fix_nated_contact, fix_nated_register, force_rport) need none of that and
+# work with pinging off. kamailio_nat_keepalive is therefore unused until this
+# proxy gains a location table; keeping the modparam pointed at it would mean
+# keeping a deployment that cannot start.
+modparam("nathelper", "natping_interval", 0)
 
 {% if kamailio_tls_enabled | default(true) | bool %}
 # TLS
 modparam("tls", "config", "/etc/kamailio/tls.cfg")
-modparam("tls", "force_run_as_root", 0)
+# No `force_run_as_root` here: the tls module has no such parameter —
+# "parameter <force_run_as_root> of type <2:int> not found in module <tls>",
+# then "Can't set module parameter" and the daemon refuses to start. It is not
+# a Kamailio setting at all. Removed rather than corrected; the container
+# already runs as root, so there is nothing to force.
 {% endif %}
 
 {% if kamailio_rate_limit_enabled | default(true) | bool %}
@@ -145,15 +193,20 @@ request_route {
 # Request initialization
 route[REQINIT] {
 {% if kamailio_rate_limit_enabled | default(true) | bool %}
-    # Pike rate limiting
+    # Pike rate limiting.
+    #
+    # `$sht(ipban=>$si)`, with the `=>`: the htable pseudo-variable separates
+    # table from key with `=>`, and `=` is a parse error that stops the daemon
+    # booting — "pvar \"sht\" has an invalid name param [ipban=$si]", then
+    # "Can't get from cache". Both occurrences below were wrong.
     if(src_ip!=myself) {
-        if($sht(ipban=$si)!=$null) {
+        if($sht(ipban=>$si)!=$null) {
             xlog("L_ALERT","Banning IP $si\n");
             exit;
         }
         if (!pike_check_req()) {
             xlog("L_ALERT","ALERT: pike blocking $rm from $fu (IP:$si:$sp)\n");
-            $sht(ipban=$si) = 1;
+            $sht(ipban=>$si) = 1;
             exit;
         }
     }
@@ -229,14 +282,21 @@ route[RELAY] {
 }
 
 # NAT detection
+#
+# No fix_nated_register() branch. That function stores the received URI in an
+# AVP for the REGISTRAR module to pick up, so nathelper refuses to fix it up
+# without `received_avp` — "you must set 'received_avp' parameter. Must be same
+# value as parameter 'received_avp' of registrar module" — and the
+# configuration then fails to fix, three times over, and the daemon exits. This
+# proxy loads no registrar and keeps no location table: a REGISTER is relayed
+# to a backend (route[REQINIT] below), and rewriting its Contact here would
+# point the backend's binding at this proxy instead of the client. The Contact
+# fix-up that IS correct for a relaying proxy is the one every other method
+# gets.
 route[NATDETECT] {
     force_rport();
     if (nat_uac_test("19")) {
-        if (is_method("REGISTER")) {
-            fix_nated_register();
-        } else {
-            fix_nated_contact();
-        }
+        fix_nated_contact();
         setflag(1);  # NAT flag
     }
     return;

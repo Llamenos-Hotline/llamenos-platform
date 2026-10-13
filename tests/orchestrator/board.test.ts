@@ -63,6 +63,7 @@ function pr(overrides: Partial<PrFact> = {}): PrFact {
     files: ['docs/notes.md'],
     changedFiles: 1,
     checks: cheapPassChecks(),
+    reviewRequests: [],
     ...overrides,
   }
 }
@@ -121,6 +122,7 @@ function gqlPr(number: number, contexts: GqlContextFixture[] = []): GqlPrNodeFix
     changedFiles: 1,
     files: { nodes: [{ path: 'docs/notes.md' }] },
     latestOpinionatedReviews: { nodes: [] },
+    reviewRequests: { nodes: [] },
     commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: { contexts: { nodes: contexts } } } }] },
   }
 }
@@ -248,7 +250,7 @@ describe('classifyPr — fleet/review tree', () => {
   })
 
   it('the retired "review" label no longer makes a PR STALE_LABEL — nothing fires on it (#1158)', () => {
-    const result = classify(pr({ labels: ['review'], checks: cheapPassChecks() }))
+    const result = classify(pr({ labels: ['review'], checks: cheapPassChecks(), reviewRequests: ['llamenos-auto'] }))
     expect(result.action).toBe('LABEL_FOR_REVIEW_CANDIDATE')
   })
 
@@ -287,7 +289,7 @@ describe('classifyPr — the head-binding rule (mandatory rail #1, per the brief
   // sole open PR a LABEL_FOR_REVIEW candidate, not a merge.
   it('a fleet/review PASS on a stale SHA is treated as ABSENT, not as a live PASS', () => {
     const staleReview = reviewCheck({ sha: OTHER_SHA, state: 'PASS' })
-    const result = classify(pr({ checks: [...cheapPassChecks(), staleReview] }))
+    const result = classify(pr({ checks: [...cheapPassChecks(), staleReview], reviewRequests: ['llamenos-auto'] }))
     expect(result.action).not.toBe('MERGE')
     expect(result.action).not.toBe('APPROVE_THEN_MERGE')
     expect(result.action).toBe('LABEL_FOR_REVIEW_CANDIDATE')
@@ -295,7 +297,7 @@ describe('classifyPr — the head-binding rule (mandatory rail #1, per the brief
 
   it('the same PR, surfaced through buildBoard as the sole open PR, becomes LABEL_FOR_REVIEW — never MERGE', () => {
     const staleReview = reviewCheck({ sha: OTHER_SHA, state: 'PASS' })
-    const view = buildBoard(facts([pr({ number: 862, checks: [...cheapPassChecks(), staleReview] })]))
+    const view = buildBoard(facts([pr({ number: 862, checks: [...cheapPassChecks(), staleReview], reviewRequests: ['llamenos-auto'] })]))
     expect(view.rows).toHaveLength(1)
     expect(view.rows[0]?.action).toBe('LABEL_FOR_REVIEW')
   })
@@ -309,8 +311,13 @@ describe('classifyPr — the head-binding rule (mandatory rail #1, per the brief
 })
 
 describe('buildBoard — LABEL_FOR_REVIEW is capped to one per invocation', () => {
+  // The cap fixtures carry a PENDING reviewer: with `requested_reviewers`
+  // empty every one of these is #1760's REQUEST_REVIEW instead, which is
+  // deliberately NOT capped — the cap's own behaviour is only observable
+  // on PRs whose review was already asked for.
+  const asked = { reviewRequests: ['llamenos-auto'] }
   it('picks exactly one, the OLDEST eligible by PR number, and defers the rest to WAITING', () => {
-    const candidate = (n: number): PrFact => pr({ number: n, checks: cheapPassChecks() })
+    const candidate = (n: number): PrFact => pr({ number: n, checks: cheapPassChecks(), ...asked })
     const view = buildBoard(facts([candidate(50), candidate(12), candidate(99)]))
 
     const labelled = view.rows.filter((r) => r.action === 'LABEL_FOR_REVIEW')
@@ -322,7 +329,7 @@ describe('buildBoard — LABEL_FOR_REVIEW is capped to one per invocation', () =
   })
 
   it('is a no-op cap when only one PR is eligible', () => {
-    const view = buildBoard(facts([pr({ number: 7, checks: cheapPassChecks() })]))
+    const view = buildBoard(facts([pr({ number: 7, checks: cheapPassChecks(), ...asked })]))
     expect(view.rows.map((r) => r.action)).toEqual(['LABEL_FOR_REVIEW'])
   })
 })
@@ -335,7 +342,7 @@ describe('buildBoard — totality', () => {
       pr({ number: 3, authorLogin: 'a-human', checks: [...cheapPassChecks(), reviewCheck()] }),
     ]))
     expect(view.rows).toHaveLength(3)
-    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'LABEL_FOR_REVIEW', 'RERUN_REVIEW', 'NEEDS_FIX', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
+    const publicActions = new Set(['MERGE', 'APPROVE_THEN_MERGE', 'LABEL_FOR_REVIEW', 'RERUN_REVIEW', 'REQUEST_REVIEW', 'NEEDS_FIX', 'WAITING', 'STALE_LABEL', 'OPERATOR'])
     for (const row of view.rows) expect(publicActions.has(row.action)).toBe(true)
   })
 
@@ -759,7 +766,7 @@ describe('classifyPr: reviewer labels are the worklist, not a second check (#115
   })
 
   it('a reviewer label with NO fleet/review verdict on this head is STALE_LABEL, naming the label', () => {
-    const c = classify(pr({ labels: ['crypto-security-reviewer'], checks: cheapPassChecks() }))
+    const c = classify(pr({ labels: ['crypto-security-reviewer'], checks: cheapPassChecks(), reviewRequests: ['llamenos-auto'] }))
     expect(c.action).toBe('STALE_LABEL')
     expect(c.reason).toContain('crypto-security-reviewer')
     expect(c.reason).toContain('re-request a review')
@@ -770,7 +777,117 @@ describe('classifyPr: reviewer labels are the worklist, not a second check (#115
   })
 
   it('an ordinary label is not a reviewer request and never makes a PR STALE_LABEL', () => {
-    expect(classify(pr({ labels: ['lane:infra', 'crypto'], checks: cheapPassChecks() })).action)
+    expect(classify(pr({ labels: ['lane:infra', 'crypto'], checks: cheapPassChecks(), reviewRequests: ['llamenos-auto'] })).action)
       .toBe('LABEL_FOR_REVIEW_CANDIDATE')
+  })
+})
+
+describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
+  it('fleet/review ABSENT and requested_reviewers EMPTY: named REQUEST_REVIEW, never a routine label candidate', () => {
+    const c = classify(pr({ checks: cheapPassChecks() }))
+    expect(c.action).toBe('REQUEST_REVIEW')
+    expect(c.reason).toContain('no review has ever been requested')
+    expect(c.reason).toContain('a push never starts one')
+  })
+
+  it('outranks STALE_LABEL: a -reviewer label with an empty request list was never asked for either', () => {
+    const c = classify(pr({ labels: ['crypto-security-reviewer'], checks: cheapPassChecks() }))
+    expect(c.action).toBe('REQUEST_REVIEW')
+  })
+
+  it('a red NO-VERDICT:unreviewed with an empty request list is REQUEST_REVIEW — never RERUN_REVIEW', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({
+        state: 'FAIL',
+        title: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one',
+        reviewFailureKind: 'infrastructure',
+        runAttempt: 1,
+      })],
+    }))
+    expect(c.action).toBe('REQUEST_REVIEW')
+    expect(c.action).not.toBe('RERUN_REVIEW')
+    expect(c.reason).toContain('NO-VERDICT:unreviewed')
+    expect(c.failingContexts).toContain(REVIEW_JOB)
+  })
+
+  it('a red NO-VERDICT:not-requested with an empty request list is REQUEST_REVIEW', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({
+        state: 'FAIL',
+        title: 'NO-VERDICT:not-requested — this event did not ask us for a review',
+        reviewFailureKind: 'infrastructure',
+        runAttempt: 1,
+      })],
+    }))
+    expect(c.action).toBe('REQUEST_REVIEW')
+  })
+
+  it('a red NO-VERDICT:unreviewed with a PENDING reviewer stays on the rerun tree — somebody HAS asked', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({
+        state: 'FAIL',
+        title: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one',
+        reviewFailureKind: 'infrastructure',
+        runAttempt: 1,
+      })],
+      reviewRequests: ['llamenos-auto'],
+    }))
+    expect(c.action).toBe('RERUN_REVIEW')
+  })
+
+  it('any OTHER red title with an empty request list keeps the old tree — the remedy there IS a rerun', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({
+        state: 'FAIL',
+        title: 'NO-VERDICT:engine-unavailable — the review engine could not run',
+        reviewFailureKind: 'infrastructure',
+        runAttempt: 1,
+      })],
+    }))
+    expect(c.action).toBe('RERUN_REVIEW')
+  })
+
+  it('a red check with NO title at all keeps the old tree', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({ state: 'FAIL', reviewFailureKind: 'infrastructure', runAttempt: 1 })],
+    }))
+    expect(c.action).toBe('RERUN_REVIEW')
+  })
+
+  it('buildBoard does NOT cap REQUEST_REVIEW the way it caps LABEL_FOR_REVIEW — every dead PR is named', () => {
+    const view = buildBoard(facts([pr({ number: 12, checks: cheapPassChecks() }), pr({ number: 50, checks: cheapPassChecks() })]))
+    const dead = view.rows.filter((r) => r.action === 'REQUEST_REVIEW')
+    expect(dead.map((r) => r.number).sort((a, b) => a - b)).toEqual([12, 50])
+  })
+})
+
+describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)', () => {
+  const gateDeps = {
+    checkFleetHalt: async () => ({ halted: false }),
+    fetchBranchRules: async () => LIVE_MAIN_RULES,
+    fetchCodeOwners: async () => null,
+    fetchRunJobs: async () => ({ steps: [], runAttempt: 1 }),
+  }
+
+  it('maps user logins and team slugs from reviewRequests nodes', async () => {
+    const node = gqlPr(7)
+    node.reviewRequests = {
+      nodes: [
+        { requestedReviewer: { __typename: 'User', login: 'llamenos-auto' } },
+        { requestedReviewer: { __typename: 'Team', slug: 'core-team' } },
+        { requestedReviewer: null },
+      ],
+    }
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node] } } } }) })
+    expect(factsOut.prs[0]?.reviewRequests).toEqual(['llamenos-auto', 'core-team'])
+  })
+
+  it('carries the CheckRun title through to the PrCheckContext so classifyPr can read the outcome token', async () => {
+    const node = gqlPr(7, [
+      { __typename: 'CheckRun', name: REVIEW_JOB, title: 'NO-VERDICT:unreviewed — nothing has judged this diff', status: 'COMPLETED', conclusion: 'FAILURE', checkSuite: { workflowRun: { databaseId: 42 } } },
+    ])
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node] } } } }) })
+    const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
+    expect(review?.title).toContain('NO-VERDICT:unreviewed')
   })
 })

@@ -41,6 +41,12 @@ Nothing here touches a server, and nothing needs root.
   FIXTURE_POSTGRES and FIXTURE_RUSTFS. The loopback server still answers 9000
   so `--compare-old` can exercise the pre-#1615 host-side probe on the same
   fixtures.
+* The SIP edge checks run against REAL listeners too, and that is the point
+  of them: a TLS fixture serving a generated certificate for the PASS case, a
+  BARE TCP listener that accepts and then says nothing for the false green a
+  `nc -z` style probe reports as healthy, a listener serving a certificate the
+  published anchor cannot vouch for, and an unbound port. The Kamailio probe
+  runs against the loopback JSONRPC fixture.
 * The four checks that require a publicly-trusted HTTPS name (Caddy HTTPS,
   HSTS, X-Frame-Options, the ntfy public vhost, the update server) cannot be
   served from a workstation without binding 443 with a trusted chain. They are
@@ -48,6 +54,16 @@ Nothing here touches a server, and nothing needs root.
   (enabled, nothing answering) — which are the two states this bug was about.
   Their PASS state is covered by check-record-smoke-result.yml, which drives
   the shared recorder with synthesized probe results.
+
+Severity (issue #1636)
+----------------------
+Every recorded verdict now carries `severity`: fatal or advisory. A fatal FAIL
+stops the deploy; an advisory FAIL is reported under a DEGRADED heading and the
+deploy proceeds. The cases assert BOTH the verdict and the play's exit status,
+so "advisory" cannot drift into "fatal" or vice versa without a case failing —
+and `--list-severities` prints the ruling straight out of the playbook, so the
+policy cannot be documented in one place and implemented differently in
+another.
 
 Usage:
     python3 deploy/ansible/scripts/check-smoke-verdicts.py
@@ -88,11 +104,18 @@ NTFY = "ntfy health endpoint"
 NTFY_PUBLIC = "ntfy public vhost"
 SIGNAL = "Signal Notifier sidecar"
 SIP = "SIP bridge health"
+ASTERISK_AGREE = "asterisk enablement agrees"
+ASTERISK_SERVICES = "every service the asterisk compose declares"
 UPDATES = "Update server health"
 CADDY = "Caddy HTTPS serving"
 HSTS = "HSTS header present"
 XFO = "X-Frame-Options"
 DISK = "Disk space"
+SIP_TLS = "SIP TLS listener bound"
+KAMAILIO = "Kamailio SIP proxy answering on its management socket"
+READY_SIP = "App readiness reports the SIP bridge dependency ok"
+READY_DEPS = "App readiness reports no failing dependency"
+COTURN = "coturn explicit relay address"
 
 # Ports the loopback probes use, and the playbook paths served on each.
 FIXTURE_PORTS = {
@@ -102,6 +125,11 @@ FIXTURE_PORTS = {
     3100: ["/health"],
     3101: ["/health"],
 }
+
+# The SIP TLS listener the handshake probe targets. Not an HTTP fixture: each
+# case decides what is actually bound here — a TLS server with a given
+# certificate, a bare TCP acceptor, or nothing at all.
+SIP_TLS_PORT = 5061
 
 # Stub executables. Each honours a FIXTURE_* variable so one case can break one
 # probe while leaving the rest healthy.
@@ -142,6 +170,46 @@ case "$1" in
     [ "${FIXTURE_UNHEALTHY_CONTAINERS:-}" = "" ] || printf '%s\n' "${FIXTURE_UNHEALTHY_CONTAINERS}"
     ;;
   compose)
+    # Which compose subcommand? `-f <file>` and other flags may precede it.
+    sub=""
+    for a in "$@"; do
+      case "$a" in config|ps|exec|logs) sub="$a"; break ;; esac
+    done
+    if [ -n "${FIXTURE_DOCKER_COMPOSE_BROKEN:-}" ] && [ "$sub" != "exec" ]; then
+      # A compose project the CLI cannot read at all. The probe must report
+      # that it could not measure, not an empty (and so vacuously clean) diff.
+      echo "error: no configuration file provided: not found" >&2
+      exit 14
+    fi
+    if [ "$sub" = "config" ]; then
+      # `docker compose config --format json` for the asterisk project. The
+      # sip-bridge image ref is what issue #1697's failure message must name.
+      cat <<JSON
+{"services": {"asterisk": {"image": "andrius/asterisk:22"},
+ "sip-bridge": {"image": "${FIXTURE_SIP_BRIDGE_IMAGE:-registry.invalid/llamenos-sip-bridge:1.0.0}"}}}
+JSON
+      exit 0
+    fi
+    if [ "$sub" = "ps" ]; then
+      # `docker compose ps --all --services` — the services that HAVE a
+      # container. Default: both. #1697 is the case where sip-bridge does not.
+      printf '%s\n' ${FIXTURE_ASTERISK_RUNNING-asterisk sip-bridge}
+      exit 0
+    fi
+    # `docker compose -f <file> logs --no-color coturn`: the #1689 probe reads
+    # the relay's startup log for the enumeration warning. FIXTURE_COTURN_LOG
+    # carries the log body; FIXTURE_COTURN=down makes the read itself fail.
+    if [ "$sub" = "logs" ]; then
+      if [ "${FIXTURE_COTURN:-up}" = "up" ]; then
+        # `-` not `:-`: an explicitly EMPTY value must stay empty so the
+        # broken_coturn_log_empty case can reach it.
+        printf '%s\n' "${FIXTURE_COTURN_LOG-0: : Relay address to use: 203.0.113.4}"
+      else
+        echo "no configuration file provided: not found" >&2
+        exit 1
+      fi
+      exit 0
+    fi
     svc=""
     while [ $# -gt 0 ]; do
       if [ "$1" = "-T" ]; then svc="$2"; break; fi
@@ -155,6 +223,18 @@ case "$1" in
         else
           echo "/var/run/postgresql:5432 - no response"
           exit 2
+        fi
+        ;;
+      kamailio)
+        # `kamcmd core.version` over the ctl.so unix socket — what the
+        # container's own healthcheck runs, and what the smoke check runs
+        # because the JSONRPC-over-HTTP port the role probes is published
+        # nowhere and disabled in kamailio.cfg.
+        if [ "${FIXTURE_KAMAILIO:-up}" = "up" ]; then
+          echo "kamailio 5.7.1 (x86_64/linux)"
+        else
+          echo "ERROR: kamcmd: cannot connect to /run/kamailio/kamailio_ctl" >&2
+          exit 1
         fi
         ;;
       rustfs)
@@ -196,7 +276,7 @@ echo "/dev/fixture         100    10 ${FIXTURE_DISK_FREE_GB:-50}G   10% /"
 }
 
 FIXTURE_SERVER = r"""
-import os, sys, threading
+import json, os, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # PORT:path=code,path=code;PORT:...
@@ -207,17 +287,51 @@ for chunk in sys.argv[1].split(";"):
         (p, int(c)) for p, c in (kv.split("=") for kv in rest.split(",") if kv)
     )
 
-def make(codes):
+# Bodies for paths whose BODY the playbook reads, not just the status code.
+# /api/health/ready is one: the readiness checks that came out of #1636 read
+# `checks` out of the response, because /ready deliberately returns 200 with a
+# failing optional dependency (#1418) and the status code therefore cannot
+# carry that report.
+BODIES = {}
+if os.environ.get("FIXTURE_READY_BODY"):
+    BODIES["/api/health/ready"] = os.environ["FIXTURE_READY_BODY"]
+
+# The SIP bridge's /health is JSON, and the field that matters is `connected`:
+# the bridge answers 200 with "status":"degraded","connected":false when it is
+# running but has no ARI session to the PBX, i.e. when no call can route. A
+# plain-text `ok` body would let that check pass on a bridge reaching nothing.
+SIP_BRIDGE_PORT = 3101
+
+def sip_bridge_body():
+    connected = os.environ.get("FIXTURE_SIP_CONNECTED", "true").lower() == "true"
+    return json.dumps({
+        "status": "ok" if connected else "degraded",
+        "pbxType": "asterisk",
+        "connected": connected,
+        "activeCalls": 0,
+    }).encode()
+
+def make(codes, port):
     class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            code = codes.get(self.path.split("?")[0], 404)
-            body = b"ok"
+        def respond(self):
+            path = self.path.split("?")[0]
+            code = codes.get(path, 404)
+            if port == SIP_BRIDGE_PORT:
+                body = sip_bridge_body()
+                ctype = "application/json"
+            else:
+                text = BODIES.get(path)
+                ctype = "application/json" if text is not None else "text/plain"
+                body = (text or "ok").encode()
             self.send_response(code)
-            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
+        do_GET = respond
+        # Kamailio's management interface is JSONRPC over POST.
+        do_POST = respond
         def log_message(self, *a):
             pass
     return H
@@ -225,7 +339,7 @@ def make(codes):
 servers = []
 for port, codes in spec.items():
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", port), make(codes))
+        srv = ThreadingHTTPServer(("127.0.0.1", port), make(codes, port))
     except OSError as exc:
         print(f"FIXTURE-PORT-BUSY {port}: {exc}", flush=True)
         continue
@@ -236,6 +350,53 @@ try:
     threading.Event().wait()
 except KeyboardInterrupt:
     pass
+"""
+
+
+# A TLS listener, or a bare TCP acceptor that never speaks TLS. argv:
+#   <port> tls <cert.pem> <key.pem>   |   <port> bare
+SIP_EDGE_FIXTURE = r"""
+import socket, ssl, sys, threading
+
+port = int(sys.argv[1])
+mode = sys.argv[2]
+
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port))
+srv.listen(16)
+
+ctx = None
+if mode == "tls":
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(sys.argv[3], sys.argv[4])
+
+print("READY", flush=True)
+
+def handle(conn):
+    try:
+        if ctx is None:
+            # The false green: accept and say NOTHING. A TCP-reachability
+            # probe calls this healthy; a TLS handshake cannot.
+            while conn.recv(4096):
+                pass
+        else:
+            with ctx.wrap_socket(conn, server_side=True) as tls:
+                tls.recv(4096)
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+while True:
+    try:
+        c, _ = srv.accept()
+    except OSError:
+        break
+    threading.Thread(target=handle, args=(c,), daemon=True).start()
 """
 
 
@@ -265,12 +426,56 @@ BASE_VARS = {
     "llamenos_asterisk_enabled": True,
     "llamenos_update_server_enabled": False,
     "llamenos_caddy_enabled": False,
+    # The SIP edge is off by default, so its two checks record SKIPPED unless a
+    # case turns them on — the same shape as the other optional features here.
+    "kamailio_enabled": False,
+    "kamailio_tls_enabled": True,
+    "kamailio_tls_publish_anchor": True,
+    "kamailio_tls_port": SIP_TLS_PORT,
+    "kamailio_sip_domain": "sip.smoke.example.invalid",
+    "llamenos_coturn_enabled": False,
 }
+
+# What /api/health/ready reports by default: every dependency present and ok.
+# A case overrides it to reproduce the shape that motivated the readiness
+# checks — sipBridge OMITTED from the response because SIP_BRIDGE_URL was
+# unrendered, which read as "three checks and ok" instead of "four checks and
+# sipBridge failing".
+READY_HEALTHY = json.dumps({
+    "status": "ok",
+    "checks": {
+        "postgres": {"status": "ok"},
+        "storage": {"status": "ok"},
+        "relay": {"status": "ok"},
+        "sipBridge": {"status": "ok"},
+        "signalNotifier": {"status": "ok"},
+    },
+})
+READY_SIPBRIDGE_OMITTED = json.dumps({
+    "status": "ok",
+    "checks": {
+        "postgres": {"status": "ok"},
+        "storage": {"status": "ok"},
+        "relay": {"status": "ok"},
+    },
+})
+READY_SIGNAL_FAILING = json.dumps({
+    "status": "ok",
+    "checks": {
+        "postgres": {"status": "ok"},
+        "storage": {"status": "ok"},
+        "relay": {"status": "ok"},
+        "sipBridge": {"status": "ok"},
+        "signalNotifier": {"status": "failing", "detail": "SIGNAL_NOTIFIER_URL is not set"},
+    },
+})
 
 
 class Case:
     def __init__(self, name: str, *, fixture_env=None, ports=None, extra_vars=None,
-                 expect=None, expect_result=None, note=""):
+                 expect=None, expect_result=None, note="", sip_edge=None,
+                 expect_degraded=None, ready_body=None, sip_anchor=None,
+                 expect_severity=None):
         self.name = name
         self.fixture_env = fixture_env or {}
         self.ports = ports if ports is not None else all_up()
@@ -278,6 +483,19 @@ class Case:
         self.expect = expect or {}
         self.expect_result = expect_result
         self.note = note
+        # None = nothing bound on the SIP TLS port. "bare" = a TCP acceptor
+        # with no TLS behind it. "tls:<cert>" = a TLS listener serving that
+        # generated certificate.
+        self.sip_edge = sip_edge
+        # How many ADVISORY failures the summary must report. 0 is meaningful:
+        # it asserts a fatal failure did not get counted as a degradation.
+        self.expect_degraded = expect_degraded
+        self.ready_body = ready_body
+        # Which generated certificate is published as the trust anchor clients
+        # verify against. None = no anchor on disk, which is itself a failure
+        # when the deployment says it publishes one.
+        self.sip_anchor = sip_anchor
+        self.expect_severity = expect_severity
 
 
 def cases() -> list[Case]:
@@ -286,10 +504,16 @@ def cases() -> list[Case]:
         SYNCOOKIES: "PASS", CONTAINERS: "PASS", APP_LIVE: "PASS", APP_READY: "PASS",
         APP_HEALTH: "PASS", POSTGRES: "PASS", RUSTFS: "PASS", SIGNAL: "PASS",
         SIP: "PASS", DISK: "PASS",
+        READY_SIP: "PASS", READY_DEPS: "PASS",
+        ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "PASS",
         # Off in BASE_VARS: these must be SKIPPED, not PASS.
         NTFY: "SKIPPED", NTFY_PUBLIC: "SKIPPED", UPDATES: "SKIPPED",
         CADDY: "SKIPPED", HSTS: "SKIPPED", XFO: "SKIPPED",
+        SIP_TLS: "SKIPPED", KAMAILIO: "SKIPPED", COTURN: "SKIPPED",
     }
+    # Turning the SIP edge on for a case. `kamailio_enabled` alone is what the
+    # Kamailio probe keys off; the TLS probe needs kamailio_tls_enabled too.
+    sip_on = {"kamailio_enabled": True}
     out = [
         # ── case 3: healthy host, nothing forced ──────────────────────────
         Case("healthy", expect=healthy_pass, expect_result="PASSED",
@@ -305,8 +529,58 @@ def cases() -> list[Case]:
              expect={RUSTFS: "SKIPPED", APP_LIVE: "PASS"}, expect_result="PASSED"),
         Case("skip_signal", extra_vars={"llamenos_signal_enabled": False},
              expect={SIGNAL: "SKIPPED"}, expect_result="PASSED"),
-        Case("skip_sip", extra_vars={"llamenos_asterisk_enabled": False},
-             expect={SIP: "SKIPPED"}, expect_result="PASSED"),
+        # `skip_sip` USED TO LIVE HERE, asserting that the SIP probe skips
+        # when llamenos_asterisk_enabled is false. That expectation was the
+        # defect, not a property worth keeping (issue #1697): the measured
+        # host had the flag false, the asterisk project deployed and the
+        # bridge dead, and this suite called the absent measurement correct.
+        # A probe is allowed to skip because the service IS NOT THERE, never
+        # because a variable says it should not be. The three cases below
+        # replace it — one per cell of (flag, on-disk) that matters.
+        Case("asterisk_deployed_but_flag_off",
+             extra_vars={"llamenos_asterisk_enabled": False},
+             expect={ASTERISK_AGREE: "FAIL", ASTERISK_SERVICES: "PASS", SIP: "PASS"},
+             expect_result="FAILED",
+             note="the measured #1697 state: flag false, project on disk. The "
+                  "flag no longer gates the probes, and the disagreement is "
+                  "itself fatal"),
+        Case("asterisk_not_deployed_at_all",
+             extra_vars={"llamenos_asterisk_enabled": False},
+             fixture_env={"FIXTURE_NO_ASTERISK_PROJECT": "1"},
+             expect={ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "SKIPPED",
+                     SIP: "SKIPPED"},
+             expect_result="PASSED",
+             note="no telephony anywhere: nothing declared, so skipping is "
+                  "honest and the agreement check passes"),
+        Case("asterisk_enabled_but_role_left_nothing",
+             fixture_env={"FIXTURE_NO_ASTERISK_PROJECT": "1"},
+             expect={ASTERISK_AGREE: "FAIL", ASTERISK_SERVICES: "SKIPPED",
+                     SIP: "SKIPPED"},
+             expect_result="FAILED",
+             note="flag on, nothing on disk — the role never ran where it was "
+                  "meant to, which no probe used to notice"),
+
+        # ── issue #1697 itself: declared, and no container ────────────────
+        # The sip-bridge image was derived by suffix and built by nothing, so
+        # `docker compose up` answered `manifest unknown`, the service stayed
+        # declared-and-absent, and the deploy reported success. Asterisk's own
+        # health probe passes throughout — which is why the check has to be
+        # about the PROJECT's services, not about Asterisk.
+        Case("sip_bridge_declared_but_no_container",
+             fixture_env={"FIXTURE_ASTERISK_RUNNING": "asterisk"},
+             expect={ASTERISK_AGREE: "PASS", ASTERISK_SERVICES: "FAIL"},
+             expect_result="FAILED",
+             note="#1697: sip-bridge declared, no container, image named in "
+                  "the detail"),
+        # An unreadable compose project is an UNMEASURED one. Without this,
+        # a `docker compose config` that errors would leave the comparison
+        # vacuously empty and the check green.
+        Case("asterisk_project_unreadable",
+             fixture_env={"FIXTURE_ASTERISK_RUNNING": "asterisk",
+                          "FIXTURE_DOCKER_COMPOSE_BROKEN": "1"},
+             expect={ASTERISK_SERVICES: "FAIL"},
+             expect_result="FAILED",
+             note="the probe could not measure, so it must not pass"),
         Case("skip_ntfy", extra_vars={"llamenos_ntfy_enabled": False},
              expect={NTFY: "SKIPPED", NTFY_PUBLIC: "SKIPPED"}, expect_result="PASSED"),
         # The whole host excluded from the app group: every app-placed probe
@@ -362,21 +636,163 @@ def cases() -> list[Case]:
              expect={DISK: "FAIL"}, expect_result="FAILED",
              note="1 GiB free, floor is 2"),
     ]
+    out += [
+        # ── issue #1636 part 1: nothing asserted the TLS listener bound ────
+        #
+        # Each of these four binds the SIP TLS port differently and the probe
+        # must tell them apart. The decisive one is `sip_tls_bare_tcp`: a TCP
+        # acceptor with no TLS behind it, which is what a reachability probe
+        # calls healthy and a handshake cannot.
+        Case("sip_tls_healthy", extra_vars=sip_on, sip_edge="tls:good",
+             sip_anchor="good",
+             expect={SIP_TLS: "PASS", KAMAILIO: "PASS"}, expect_result="PASSED",
+             expect_severity={SIP_TLS: "fatal", KAMAILIO: "fatal"},
+             note="a real handshake, a name-matching certificate, and it "
+                  "verifies against the anchor clients are given"),
+        Case("sip_tls_listener_down", extra_vars=sip_on, sip_edge=None,
+             sip_anchor="good",
+             expect={SIP_TLS: "FAIL", KAMAILIO: "PASS"}, expect_result="FAILED",
+             expect_degraded=0,
+             note="nothing bound on the TLS port — the certificate generation "
+                  "failure sip-tls-cert.sh degrades over, now reported"),
+        Case("sip_tls_bare_tcp", extra_vars=sip_on, sip_edge="bare",
+             sip_anchor="good",
+             expect={SIP_TLS: "FAIL"}, expect_result="FAILED",
+             note="THE false green: the port accepts a TCP connection and "
+                  "never speaks TLS"),
+        Case("sip_tls_wrong_certificate", extra_vars=sip_on, sip_edge="tls:wrong",
+             sip_anchor="good",
+             expect={SIP_TLS: "FAIL"}, expect_result="FAILED",
+             note="a completed handshake, with a certificate that covers "
+                  "neither the SIP domain nor the published anchor"),
+        Case("sip_tls_expired_certificate", extra_vars=sip_on, sip_edge="tls:expired",
+             sip_anchor="expired",
+             expect={SIP_TLS: "FAIL"}, expect_result="FAILED",
+             note="the renewal case: valid file, right name, already expired"),
+        Case("sip_tls_anchor_missing", extra_vars=sip_on, sip_edge="tls:good",
+             sip_anchor=None,
+             expect={SIP_TLS: "FAIL"}, expect_result="FAILED",
+             note="the listener is healthy but the anchor the app publishes to "
+                  "clients is not on disk, so every client fails closed"),
+        Case("skip_sip_tls", extra_vars={**sip_on, "kamailio_tls_enabled": False},
+             sip_edge=None,
+             expect={SIP_TLS: "SKIPPED", KAMAILIO: "PASS"}, expect_result="PASSED",
+             note="TLS genuinely not configured for this deployment — SKIPPED, "
+                  "which #1635 made a distinct state so this could be honest"),
+        Case("skip_sip_edge_entirely", extra_vars={"kamailio_enabled": False},
+             sip_edge=None,
+             expect={SIP_TLS: "SKIPPED", KAMAILIO: "SKIPPED"}, expect_result="PASSED"),
+
+        # ── issue #1636 part 2: Kamailio's verdict now gates ──────────────
+        # Before this, a Kamailio that never answered printed NOT READY from
+        # roles/kamailio and the deploy succeeded. The gate is here, after the
+        # deploy has applied everything, so a fatal verdict cannot block the
+        # fix — only the claim of success.
+        Case("kamailio_unhealthy", extra_vars=sip_on, sip_edge="tls:good",
+             sip_anchor="good", fixture_env={"FIXTURE_KAMAILIO": "down"},
+             expect={KAMAILIO: "FAIL", SIP_TLS: "PASS"}, expect_result="FAILED",
+             expect_degraded=0, expect_severity={KAMAILIO: "fatal"},
+             note="kamcmd cannot reach Kamailio's control socket: the SIP proxy "
+                  "every call leg traverses is down, and the deploy now stops"),
+
+        # ── issue #1636 part 3: a probe that could omit itself ────────────
+        Case("ready_sipbridge_omitted", ready_body=READY_SIPBRIDGE_OMITTED,
+             expect={APP_READY: "PASS", READY_SIP: "FAIL"}, expect_result="FAILED",
+             expect_severity={READY_SIP: "fatal"},
+             note="the measured defect: /ready answers 200 with sipBridge "
+                  "ABSENT from checks, so the status code says nothing"),
+        Case("ready_signal_failing", ready_body=READY_SIGNAL_FAILING,
+             expect={APP_READY: "PASS", READY_SIP: "PASS", READY_DEPS: "FAIL"},
+             expect_result="PASSED", expect_degraded=1,
+             expect_severity={READY_DEPS: "advisory"},
+             note="a dependency reports failing behind a 200; advisory, so the "
+                  "deploy proceeds and the summary says what is degraded"),
+
+        # ── the severity ruling itself ────────────────────────────────────
+        Case("advisory_signal_sidecar_down",
+             ports={p: dict(c) for p, c in all_up().items() if p != 3100},
+             expect={SIGNAL: "FAIL"}, expect_result="PASSED", expect_degraded=1,
+             expect_severity={SIGNAL: "advisory"},
+             note="the Signal sidecar is down: a real failure, reported under "
+                  "DEGRADED, and the phone still rings so the deploy stands"),
+        Case("advisory_update_server_down",
+             extra_vars={"llamenos_update_server_enabled": True},
+             expect={UPDATES: "FAIL"}, expect_result="PASSED", expect_degraded=1,
+             expect_severity={UPDATES: "advisory"},
+             note="desktop auto-update is unavailable; no call path impact"),
+        Case("fatal_beats_advisory",
+             extra_vars={"llamenos_update_server_enabled": True},
+             fixture_env={"FIXTURE_UFW": "inactive"},
+             expect={UFW: "FAIL", UPDATES: "FAIL"}, expect_result="FAILED",
+             expect_degraded=1,
+             note="one fatal and one advisory failure together: the deploy "
+                  "stops, and the advisory one is still named separately"),
+    ]
+
     # One HTTP probe broken at a time: the service answers, with the wrong code.
-    for name, port, path, check in [
-        ("broken_app_live", 3000, "/api/health/live", APP_LIVE),
-        ("broken_app_ready", 3000, "/api/health/ready", APP_READY),
-        ("broken_app_health", 3000, "/api/health", APP_HEALTH),
-        ("broken_signal", 3100, "/health", SIGNAL),
-        ("broken_sip", 3101, "/health", SIP),
+    # `result` differs per row and that IS the severity ruling: a dead Signal
+    # sidecar degrades the deployment, a dead SIP bridge stops it.
+    for name, port, path, check, result, degraded in [
+        ("broken_app_live", 3000, "/api/health/live", APP_LIVE, "FAILED", 0),
+        ("broken_app_ready", 3000, "/api/health/ready", APP_READY, "FAILED", 1),
+        ("broken_app_health", 3000, "/api/health", APP_HEALTH, "FAILED", 0),
+        ("broken_signal", 3100, "/health", SIGNAL, "PASSED", 1),
+        ("broken_sip", 3101, "/health", SIP, "FAILED", 0),
     ]:
         ports = {p: dict(c) for p, c in all_up().items()}
         ports[port][path] = 500
-        out.append(Case(name, ports=ports, expect={check: "FAIL"}, expect_result="FAILED"))
+        out.append(Case(name, ports=ports, expect={check: "FAIL"},
+                        expect_result=result, expect_degraded=degraded))
     # A service entirely absent (connection refused), not merely unhealthy.
     ports = {p: dict(c) for p, c in all_up().items() if p != 3100}
     out.append(Case("absent_signal_sidecar", ports=ports, expect={SIGNAL: "FAIL"},
-                    expect_result="FAILED", note="nothing listening on 3100 at all"))
+                    expect_result="PASSED", expect_degraded=1,
+                    note="nothing listening on 3100 at all — a real failure, "
+                         "reported under DEGRADED because the phone still rings"))
+    # A bridge that ANSWERS 200 and reaches no PBX. The container's own
+    # healthcheck is also only a 200 check, so docker reports it healthy while
+    # every call goes unanswered — measured on a deployed target alongside
+    # #1697, and the reason the probe reads `connected` rather than the status
+    # code alone.
+    out.append(Case("sip_bridge_up_but_not_connected",
+                    fixture_env={"FIXTURE_SIP_CONNECTED": "false"},
+                    expect={SIP: "FAIL"}, expect_result="FAILED",
+                    note="200 with connected=false is a dead call path, not a pass"))
+    # ── issue #1689: the coturn enumeration warning must fail the suite ──
+    # Enabled with a clean startup log: the warning string is absent, so PASS.
+    out.append(Case("healthy_coturn",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    expect={COTURN: "PASS"}, expect_result="PASSED",
+                    note="startup log names one relay address, no warning"))
+    # The defect itself, injected: the startup log carries the exact line the
+    # deployed host produced. The suite must FAIL — this is the verdict that
+    # used to be discoverable only by reading logs after the fact.
+    out.append(Case("broken_coturn_relay",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN_LOG":
+                                 "0: : NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED\n"
+                                 "0: : Relay address to use: 172.18.0.1\n"
+                                 "0: : Relay address to use: 172.19.0.1"},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED",
+                    note="issue #1689: coturn enumerated the docker bridges"))
+    # Enabled but the log cannot be read at all (container gone). rc != 0 must
+    # not read as "no warning found".
+    out.append(Case("broken_coturn_log_unreadable",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN": "down"},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED"))
+    # An EMPTY log carries no warning and still must not pass: coturn without
+    # --log-file=stdout writes to a tmpfs file, and `docker compose logs`
+    # returning nothing would otherwise read as "no warning found" while the
+    # check measured nothing.
+    out.append(Case("broken_coturn_log_empty",
+                    extra_vars={"llamenos_coturn_enabled": True},
+                    fixture_env={"FIXTURE_COTURN_LOG": ""},
+                    expect={COTURN: "FAIL"}, expect_result="FAILED"))
+    # Disabled feature: the probe never runs and the verdict is SKIPPED.
+    out.append(Case("skip_coturn",
+                    extra_vars={"llamenos_coturn_enabled": False},
+                    expect={COTURN: "SKIPPED"}, expect_result="PASSED"))
     return out
 
 
@@ -391,13 +807,74 @@ class Harness:
             p.write_text(body)
             p.chmod(0o755)
         self.app_dir = tmp / "app"
-        for svc in ("postgres", "rustfs"):
+        for svc in ("postgres", "rustfs", "kamailio", "asterisk", "coturn"):
             (self.app_dir / "services" / svc).mkdir(parents=True, exist_ok=True)
+        self.tls_dir = self.app_dir / "services" / "kamailio" / "tls"
+        self.tls_dir.mkdir(parents=True, exist_ok=True)
+        self.certs = self.make_certs(tmp / "certs")
         self.failures: list[str] = []
         self.n = 0
 
+    # ── certificate material for the SIP edge fixtures ──────────────────
+    def make_certs(self, where: Path) -> dict[str, tuple[Path, Path]]:
+        """Three certificates, generated with openssl exactly as the SIP edge
+        generates its own: one that covers the SIP domain, one that does not,
+        and one that is already expired. `openssl x509 -days -1` is what makes
+        the third possible without a fake clock."""
+        where.mkdir(parents=True, exist_ok=True)
+        domain = BASE_VARS["kamailio_sip_domain"]
+        out: dict[str, tuple[Path, Path]] = {}
+        for label, cn, sans in (
+            ("good", domain, f"DNS:{domain},IP:127.0.0.1"),
+            ("wrong", "not-the-sip-domain.invalid", "DNS:not-the-sip-domain.invalid"),
+        ):
+            crt, key = where / f"{label}.crt", where / f"{label}.key"
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                 "-keyout", str(key), "-out", str(crt), "-days", "3650",
+                 "-subj", f"/CN={cn}", "-addext", f"subjectAltName={sans}"],
+                check=True, capture_output=True)
+            out[label] = (crt, key)
+        crt, key, csr = where / "expired.crt", where / "expired.key", where / "expired.csr"
+        subprocess.run(
+            ["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key), "-out", str(csr), "-subj", f"/CN={domain}"],
+            check=True, capture_output=True)
+        ext = where / "expired.ext"
+        ext.write_text(f"subjectAltName=DNS:{domain},IP:127.0.0.1\n")
+        subprocess.run(
+            ["openssl", "x509", "-req", "-in", str(csr), "-signkey", str(key),
+             "-days", "-1", "-out", str(crt), "-extfile", str(ext)],
+            check=True, capture_output=True)
+        out["expired"] = (crt, key)
+        return out
+
+    def start_sip_edge(self, spec: str | None, anchor: str | None):
+        """Bind the SIP TLS port per the case, and put the trust anchor the
+        deployment publishes to clients where the playbook looks for it."""
+        target = self.tls_dir / "sip-edge-anchor.pem"
+        target.unlink(missing_ok=True)
+        if anchor:
+            target.write_bytes(Path(anchor).read_bytes())
+        if spec is None:
+            return None
+        if spec == "bare":
+            argv = [sys.executable, "-c", SIP_EDGE_FIXTURE, str(SIP_TLS_PORT), "bare"]
+        else:
+            crt, key = self.certs[spec.split(":", 1)[1]]
+            argv = [sys.executable, "-c", SIP_EDGE_FIXTURE, str(SIP_TLS_PORT),
+                    "tls", str(crt), str(key)]
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        line = proc.stdout.readline()
+        if not line.startswith("READY"):
+            proc.terminate()
+            raise RuntimeError(f"SIP edge fixture ({spec}) did not start: {line.strip()}")
+        return proc
+
     # ── fixtures ────────────────────────────────────────────────────────
-    def start_server(self, ports: dict[str, dict[str, int]]):
+    def start_server(self, ports: dict[str, dict[str, int]],
+                     ready_body: str | None = None, fixture_env=None):
         spec = ";".join(
             f"{port}:" + ",".join(f"{path}={code}" for path, code in codes.items())
             for port, codes in ports.items()
@@ -405,6 +882,14 @@ class Harness:
         proc = subprocess.Popen(
             [sys.executable, "-c", FIXTURE_SERVER, spec],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            # The readiness BODY is a fixture input in its own right: the
+            # checks added for #1636 read `checks` out of it, and the status
+            # code cannot carry that report. The bridge fixture reads
+            # FIXTURE_SIP_CONNECTED, so the case's fixture_env has to reach
+            # the SERVER and not only the playbook.
+            env={**os.environ,
+                 "FIXTURE_READY_BODY": ready_body or READY_HEALTHY,
+                 **{k: str(v) for k, v in (fixture_env or {}).items()}},
         )
         busy = []
         while True:
@@ -427,7 +912,8 @@ class Harness:
         the host should not serve the app, which is how the playbook's
         `_smoke_serves_*` vars express placement."""
         groups = {g: {"hosts": {"smoke-target": {}}}
-                  for g in ("llamenos_db", "llamenos_storage", "llamenos_ntfy", "llamenos_asterisk")}
+                  for g in ("llamenos_db", "llamenos_storage", "llamenos_ntfy",
+                            "llamenos_asterisk", "llamenos_kamailio")}
         groups["llamenos_app"] = {"hosts": {"other-host": {}}} if not serves_app else {"hosts": {"smoke-target": {}}}
         return {
             "all": {
@@ -451,6 +937,22 @@ class Harness:
         serves_app = not extra.pop("_smoke_force_not_app", False)
         extra["app_dir"] = str(self.app_dir)
         extra["deploy_user"] = getpass.getuser()
+        extra["kamailio_tls_dir"] = str(self.tls_dir)
+
+        # The telephony checks derive placement from the host's own rendered
+        # compose file rather than from llamenos_asterisk_enabled (#1697), so
+        # the fixture has to be able to say "this project is on disk" and
+        # "it is not" independently of the flag. Those two axes crossed are
+        # exactly the state the defect hid in: flag false, project deployed.
+        asterisk_compose = self.app_dir / "services" / "asterisk" / "docker-compose.yml"
+        if case.fixture_env.get("FIXTURE_NO_ASTERISK_PROJECT"):
+            asterisk_compose.unlink(missing_ok=True)
+        else:
+            asterisk_compose.write_text(
+                "# fixture: contents are never parsed by the playbook, which\n"
+                "# asks the docker stub for the project's services instead.\n"
+                "services: {asterisk: {}, sip-bridge: {}}\n"
+            )
 
         inv = self.tmp / f"inv-{self.n}.json"
         inv.write_text(json.dumps(self.inventory(serves_app)))
@@ -469,7 +971,9 @@ class Harness:
         }
         env.update({k: str(v) for k, v in case.fixture_env.items()})
 
-        server = self.start_server(case.ports)
+        server = self.start_server(case.ports, case.ready_body, case.fixture_env)
+        anchor = str(self.certs[case.sip_anchor][0]) if case.sip_anchor else None
+        edge = self.start_sip_edge(case.sip_edge, anchor)
         try:
             proc = subprocess.run(
                 ["ansible-playbook", self.playbook, "-i", str(inv), "-e", f"@{varsf}"],
@@ -479,6 +983,9 @@ class Harness:
         finally:
             server.terminate()
             server.wait(timeout=10)
+            if edge is not None:
+                edge.terminate()
+                edge.wait(timeout=10)
         return proc.returncode, proc.stdout + proc.stderr, extract_results(proc.stdout)
 
     def expect(self, case: Case, rc: int, out: str, results: list[dict]) -> None:
@@ -497,6 +1004,20 @@ class Harness:
                 problems.append(f"{needle!r} matched several checks: {hits}")
             elif hits[0][1] != want:
                 problems.append(f"{hits[0][0]!r}: expected {want}, got {hits[0][1]}")
+        # Severity is part of the contract, not decoration: a check that drifts
+        # from advisory to fatal changes whether a deploy stops.
+        for needle, want_sev in (case.expect_severity or {}).items():
+            hits = [r for r in results if needle in r["check"]]
+            if len(hits) != 1:
+                problems.append(f"severity: {needle!r} matched {len(hits)} checks")
+            elif hits[0].get("severity") != want_sev:
+                problems.append(f"{hits[0]['check']!r}: expected severity "
+                                f"{want_sev}, got {hits[0].get('severity')!r}")
+        if case.expect_degraded is not None:
+            if f", {case.expect_degraded} DEGRADED" not in out and case.expect_degraded > 0:
+                problems.append(f"summary does not report {case.expect_degraded} DEGRADED")
+            if case.expect_degraded == 0 and "DEGRADED" in out:
+                problems.append("summary reports a DEGRADED block, expected none")
         if case.expect_result:
             # `ansible.builtin.fail` exits 2, not 1; all that matters is that a
             # FAILED summary makes the deploy step non-zero and a PASSED one
@@ -513,7 +1034,8 @@ class Harness:
         # A SKIPPED verdict must never be counted as a pass anywhere.
         if "SKIPPED" in case.expect.values():
             n_skipped = sum(1 for s in by_name.values() if s == "SKIPPED")
-            if f"Skipped: {n_skipped}" not in out:
+            # Whitespace-tolerant: the summary pads its labels into columns.
+            if not re.search(rf"Skipped:\s+{n_skipped}\b", out):
                 problems.append(f"summary does not report Skipped: {n_skipped}")
             if "NOT MEASURED" not in out:
                 problems.append("summary does not flag the skipped checks as NOT MEASURED")
@@ -551,6 +1073,24 @@ def extract_results(stdout: str) -> list[dict]:
                 if isinstance(got, list):
                     latest = got
     return latest
+
+
+def extract_summary(stdout: str) -> str:
+    """The human-readable summary block the playbook prints, pulled back out of
+    the JSON callback. `--show` prints it so the gate's own words — the Result
+    line, the NOT MEASURED list, the DEGRADED list — can be read and quoted,
+    rather than inferred from an exit status."""
+    try:
+        data, _ = json.JSONDecoder().raw_decode(stdout[stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError):
+        return "(no JSON output to read a summary from)"
+    for play in data.get("plays", []):
+        for task in play.get("tasks", []):
+            for res in task.get("hosts", {}).values():
+                msg = res.get("msg")
+                if isinstance(msg, str) and "SMOKE CHECK SUMMARY" in msg:
+                    return msg
+    return "(the summary task did not run)"
 
 
 def compare_old(ref: str, only: list[str] | None) -> int:
@@ -626,11 +1166,25 @@ def main() -> int:
     ap.add_argument("--no-netns", action="store_true",
                     help="do not isolate the network namespace (ports must be free)")
     ap.add_argument("--only", nargs="*", help="case names to run")
+    ap.add_argument("--show", action="store_true",
+                    help="print each case's full summary block, exactly as the "
+                         "playbook prints it on a target host")
     ap.add_argument("--compare-old", metavar="REF",
                     help="also run the same fixtures against the playbook at REF")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--list-severities", action="store_true",
+                    help="print the fatal/advisory ruling straight out of the "
+                         "playbook, so the policy cannot be documented in one "
+                         "place and implemented in another")
     args = ap.parse_args()
 
+    if args.list_severities:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "check_smoke_severity", Path(__file__).with_name("check-smoke-severity.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.main()
     if args.list:
         for c in cases():
             print(c.name)
@@ -659,6 +1213,9 @@ def main() -> int:
         for case in selected:
             rc, out, results = h.run_case(case)
             h.expect(case, rc, out, results)
+            if args.show:
+                print(f"\n----- {case.name}: ansible-playbook exit {rc} -----")
+                print(extract_summary(out))
     print()
     if h.failures:
         print(f"{len(h.failures)} case(s) behaved wrongly: {', '.join(h.failures)}")

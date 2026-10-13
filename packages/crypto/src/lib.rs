@@ -57,6 +57,9 @@ pub mod envelope_aad;
 // === Audit key management (AES-256-GCM + HPKE wrapping) ===
 pub mod audit_key;
 
+// === Offline key backup — the one canonical backup file format (v4) ===
+pub mod backup;
+
 // === Erasure override + device wipe signatures ===
 pub mod erasure;
 

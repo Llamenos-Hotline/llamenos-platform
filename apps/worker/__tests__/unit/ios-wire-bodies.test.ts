@@ -37,6 +37,8 @@ import * as reports from '@protocol/schemas/reports'
 import * as records from '@protocol/schemas/records'
 import * as recoveryGroup from '@protocol/schemas/recovery-group'
 import * as devices from '@protocol/schemas/devices'
+import * as settings from '@protocol/schemas/settings'
+import * as providerSetupApi from '@protocol/schemas/provider-setup/api'
 
 const MODULES: Record<string, Record<string, unknown>> = {
   '@protocol/schemas/notes': notes,
@@ -46,6 +48,11 @@ const MODULES: Record<string, Record<string, unknown>> = {
   '@protocol/schemas/records': records,
   '@protocol/schemas/recovery-group': recoveryGroup,
   '@protocol/schemas/devices': devices,
+  // #1724 — the four admin settings screens. Each sent a body naming fields no
+  // schema declares, so the write validated against `{}` (or 400'd) while the
+  // screen reported success.
+  '@protocol/schemas/settings': settings,
+  '@protocol/schemas/provider-setup/api': providerSetupApi,
 }
 
 const FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-request-bodies.json')
