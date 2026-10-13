@@ -1206,6 +1206,15 @@ jobs:
             exit 1
           }
 
+          # Fail closed on a typo rather than allowing reviewPrimaryEngine()
+          # to silently select kimi for every value other than "claude".
+          # Escape the value so a malformed repo variable stays one log line.
+          printf -v primary_setting_display '%q' "$FLEET_REVIEW_PRIMARY"
+          case "$FLEET_REVIEW_PRIMARY" in
+            kimi|claude) ;;
+            *) fail "engine-misconfigured" "FLEET_REVIEW_PRIMARY is unsupported: $primary_setting_display (expected kimi or claude)" ;;
+          esac
+
           # degraded() — the fallback engine is unhealthy but the PRIMARY
           # answered, so the review runs and the PR is not failed (#1767
           # ask 3: an unhealthy fallback is the gate's own problem, not this
@@ -1344,7 +1353,7 @@ jobs:
           fb_model="$(printf '%s' "$fb_json" | jq -r '.model')"
           if [ "$fb_model" = "null" ]; then fb_model=""; fi
           if [ "$fb_engine" != "$fb_want" ] || [ -z "$fb_binary" ] || [ "$fb_binary" = "null" ]; then
-            fail "engine-misconfigured" "reviewerInvocationFor resolved the fallback ($fb_want) to something else: $fb_json"$'\n'"$fb_err"
+            fail "engine-misconfigured" "reviewerInvocationFor resolved fallback $fb_want to something else (FLEET_REVIEW_PRIMARY=$primary_setting_display, primary=$rev_engine): $fb_json"$'\n'"$fb_err"
           fi
           # claude requires a tier and the shared function always provides
           # one; an empty model here is the #1767 bug shape itself, so refuse
