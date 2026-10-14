@@ -69,6 +69,14 @@ pub const LABEL_DEVICE_PROVISION: &str = "llamenos:device-provision";
 /// HKDF salt for provisioning key derivation
 pub const LABEL_PROVISIONING_SALT: &str = "llamenos:provisioning:v1";
 
+/// AEAD associated data for the device provisioning key bundle.
+///
+/// Distinct from `LABEL_DEVICE_PROVISION` (which keys the AEAD) so that a
+/// payload from one provisioning bundle format can never authenticate under
+/// another: changing the bundle format means minting a new label, and an
+/// old-format payload simply fails the GCM tag check.
+pub const LABEL_DEVICE_PROVISION_BUNDLE: &str = "llamenos:device-provision-bundle:v1";
+
 // --- SAS Verification ---
 
 /// SAS HKDF salt for provisioning verification
@@ -416,6 +424,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Indices 92-94: Firehose Agent (EP-Firehose)
 // Index 96: IVR media URL signing
 // Index 98: Per-volunteer SIP registrar (#1556)
+// Index 99: Device provisioning key bundle
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -552,6 +561,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_DEVICE_AUTH_NO_NONCE, // 97
     // 98: per-volunteer SIP registrar (#1556)
     HMAC_SIP_VOLUNTEER_SECRET, // 98
+    // 99: Device provisioning key bundle
+    LABEL_DEVICE_PROVISION_BUNDLE, // 99
 ];
 
 /// Look up a label string by its numeric ID.
@@ -733,12 +744,16 @@ mod tests {
             HMAC_SIP_VOLUNTEER_SECRET,
             "llamenos:sip-volunteer-secret:v1"
         );
+        assert_eq!(
+            LABEL_DEVICE_PROVISION_BUNDLE,
+            "llamenos:device-provision-bundle:v1"
+        );
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 59 of the 99 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 59 of the 100 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -798,8 +813,10 @@ mod tests {
         assert_eq!(id_to_label(93), Some(LABEL_FIREHOSE_AGENT_SEAL));
         assert_eq!(id_to_label(94), Some(LABEL_FIREHOSE_BUFFER_ENCRYPT));
         assert_eq!(id_to_label(95), Some(LABEL_FIREHOSE_REPORT_WRAP));
+        assert_eq!(id_to_label(96), Some(HMAC_IVR_MEDIA_URL));
         assert_eq!(id_to_label(97), Some(LABEL_DEVICE_AUTH_NO_NONCE));
         assert_eq!(id_to_label(98), Some(HMAC_SIP_VOLUNTEER_SECRET));
+        assert_eq!(id_to_label(99), Some(LABEL_DEVICE_PROVISION_BUNDLE));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).
