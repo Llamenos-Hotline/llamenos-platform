@@ -41,6 +41,7 @@ import { RecoveryGroupService } from './recovery-group'
 import { TeamsService } from './teams'
 import { TagsService } from './tags'
 import { IvrSpeechService } from './ivr-speech'
+import { parseSignalQueueRetentionDays } from '../messaging/signal/queue'
 
 export interface Services {
   identity: IdentityService
@@ -129,7 +130,11 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     blasts: new BlastsService(db, opts?.hmacSecret),
     contacts: new ContactsService(db),
     cases: new CasesService(db),
-    scheduler: new TaskScheduler(db),
+    scheduler: new TaskScheduler(
+      db,
+      opts?.hmacSecret ?? '',
+      parseSignalQueueRetentionDays(opts?.env?.SIGNAL_QUEUE_RETENTION_DAYS),
+    ),
     cryptoKeys: new CryptoKeysService(db),
     firehose,
     signalContacts,

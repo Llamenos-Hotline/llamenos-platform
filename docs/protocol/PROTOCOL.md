@@ -4407,9 +4407,9 @@ This section also records the three divergent implementations that #1027 replace
 | iOS Nostr-relay WebSocket transport (`kind 20001`) | **Dropped** — the server never accepted client-published events on the WebSocket at all, and 20001 is the typing-indicator kind in `packages/shared/event-kinds.ts`; the server implements only the HTTP room API |
 | Android mock flow (ECDH against `SecureRandom`, `delay(2000)` success) | **Dropped** — never a protocol; the §6.10 success-reporting rule exists to make this class of defect impossible |
 | Desktop HTTP-room transport, new device displays QR | **Design kept** — matches Signal's role assignment and the deployed server API; the screens themselves were removed |
-| Two-seed key-bundle payload (PR #1382) | **Design kept** — specified in §6.7.2, **not in force**; §6.7.1 is what the code does |
+| Two-seed key-bundle payload (PR #1382) | **Implemented in Rust and desktop crypto** (§6.7.2); the end-to-end linking screens and mobile encrypt path remain unimplemented |
 
-> **Profile split.** The roles (§6.1), transport, and SAS ceremony (§6.3–§6.6) are the final design and change no further. The payload has three successive profiles: **v0** (§6.7.1) is what `provisioning.rs` implements today; **v1** (§6.7.2) is the two-seed bundle specified here and blocked on PR #1382 plus a label registration; the **target profile** (§6.12) replaces the payload again once the identity layer has a PUK and sigchain in active use. Each payload revision changes only the payload and, for the target profile, the claim body — the QR format, room transport, SAS ceremony and failure rules do not change.
+> **Profile split.** The roles (§6.1), transport, and SAS ceremony (§6.3–§6.6) are the final design and change no further. **v0** (§6.7.1) is the historical single-seed payload; PR #1382 implements **v1** (§6.7.2), the two-seed bundle, in Rust and desktop crypto. The end-to-end linking UI and mobile encrypt path are still unimplemented. The **target profile** (§6.12) replaces the payload again once the identity layer has a PUK and sigchain in active use. Each payload revision changes only the payload and, for the target profile, the claim body — the QR format, room transport, SAS ceremony and failure rules do not change.
 
 ### 6.1 Roles
 
@@ -4434,9 +4434,7 @@ All cryptography is X25519 ECDH (32-byte Montgomery u-coordinate keys, hex-encod
 
 Every constant above is registered in `packages/protocol/crypto-labels.json` — the single authoritative source for domain-separation constants (§2.1) — and mirrored in `packages/crypto/src/labels.rs`.
 
-The v1 bundle payload (§6.7.2) additionally requires a format-binding AAD label, provisionally named `LABEL_DEVICE_PROVISION_BUNDLE` with value `llamenos:device-provision-bundle:v1`:
-
-> **Not registered — do not use.** `LABEL_DEVICE_PROVISION_BUNDLE` does **not** exist in `crypto-labels.json`, `packages/crypto/src/labels.rs`, `packages/shared/crypto-labels.ts`, or any platform's generated constants. It is a proposed name recorded here so §6.7.2 is readable, not a constant any implementation may use yet. Registering it is a wire-format change, not a documentation change. `crypto-labels.json` is the authoritative set of label names and values, and `LABEL_REGISTRY` in `packages/crypto/src/labels.rs` assigns each label a numeric `labelId` **by its array position**; that `u8` is carried in every HPKE envelope and resolved back to a label string at open (`packages/crypto/src/hpke_envelope.rs`). Registry positions are therefore append-only and permanent — index 53 is a tombstone that must never be reused, and a label may only be appended, never inserted. Note that the JSON is an object and its key order is *not* the `labelId`; `labels.rs` is the only place positions are assigned, and a test asserts the two stay in sync by count. A new label must be added to `crypto-labels.json`, appended to the end of `LABEL_REGISTRY`, and shipped through codegen to every platform **before** any implementation uses it, in a dedicated protocol-change pull request. Implementations MUST NOT define it locally as a raw string literal in the meantime — that is exactly the drift this architecture forbids.
+The v1 bundle payload (§6.7.2) uses the registered format-binding AAD label `LABEL_DEVICE_PROVISION_BUNDLE` (`llamenos:device-provision-bundle:v1`). It is appended at `labelId` 99 in `packages/crypto/src/labels.rs`; the `HMAC_SIP_VOLUNTEER_SECRET` label from main remains at 98. Registry positions are append-only and permanent: index 53 is a tombstone that must never be reused, and a label may only be appended, never inserted. The JSON object member order is not the `labelId`; the Rust `LABEL_REGISTRY` array assigns IDs by position, and `packages/crypto/label-registry.wire.snapshot` pins every index-to-string mapping. New labels must be added to `crypto-labels.json`, appended to the registry, and shipped through codegen before use. Implementations MUST NOT define crypto labels locally as raw string literals.
 
 ### 6.3 Protocol Flow
 
@@ -4472,7 +4470,7 @@ New Device                           Server                    Primary Device
 9. USER COMPARES BOTH SCREENS (§6.6)
    match → continue;  mismatch → ABORT (§6.10)
 
-                                                           10. payload = §6.7 (v0 in force, v1 specified)
+                                                           10. payload = §6.7 (v1 bundle)
                                                                prov_key = HKDF(SHA-256, shared,
                                                                  salt=LABEL_PROVISIONING_SALT,
                                                                  info=LABEL_DEVICE_PROVISION, len=32)
@@ -4508,6 +4506,70 @@ Notes:
 Cross-reference: `apps/worker/routes/provisioning.ts` (three routes), `apps/worker/services/identity.ts` (`createProvisionRoom`, `getProvisionRoom`, `setProvisionPayload`, `PROVISION_ROOM_TTL_MS`).
 
 The server stores only the ephemeral pubkey and the encrypted payload — it cannot decrypt the payload or compute the SAS. The `encryptedNsec` field name is retained for backward compatibility with pre-Phase-6 clients; it carries the payload ciphertext described in §6.7 and has never carried a bech32 `nsec` in this protocol.
+
+### Interim Implementation: Seed-Transport Linking
+
+> **Status:** This is what the code does today (`packages/crypto/src/provisioning.rs`, `apps/desktop/src/crypto.rs`). Section 6.1 above describes the target. The difference is not cosmetic — see "What this does not deliver".
+
+Section 6.1 requires a PUK and a sigchain: the new device generates its own keypairs, and the primary wraps the PUK to the new device's X25519 key and authorizes it with a signed sigchain entry. The PUK and sigchain modules exist (`packages/crypto/src/puk.rs`, `packages/crypto/src/sigchain.rs`) but have no application call sites yet, so there is no PUK to wrap and no chain to append to.
+
+Until they are wired, linking transports the primary device's seeds. Steps 1–10 and 13–16 of §6.1 are unchanged (ephemeral X25519 ECDH, SAS, `LABEL_PROVISIONING_SALT`/`LABEL_DEVICE_PROVISION` HKDF, `hex(iv || ct_with_tag)` wire format). Steps 11–12 and 17–18 are replaced by:
+
+```
+11'. Build the device key bundle (65 bytes, binary):
+     byte  0      : bundle version = 0x01
+     bytes 1..33  : primary Ed25519 signing seed
+     bytes 33..65 : primary X25519 encryption seed
+
+     BOTH seeds are carried. They are independently random (Section 2.11) and
+     neither is derivable from the other, so a device that receives only one
+     cannot reconstruct the other: it would hold a different X25519 key than the
+     one existing ciphertext was wrapped to, and would decrypt nothing — with no
+     error raised on either side.
+
+12'. Encrypt the bundle:
+     iv  = random(12)
+     ct_with_tag = AES-256-GCM.encrypt(
+       key = prov_key,             // as in step 10, unchanged
+       iv  = iv,
+       message = bundle,
+       aad = UTF-8("llamenos:device-provision-bundle:v1")   // LABEL_DEVICE_PROVISION_BUNDLE
+     )
+     encryptedPayload = hex(iv || ct_with_tag)
+
+     The AAD is specific to this bundle format, so a payload built for any other
+     provisioning format fails the GCM tag check rather than being accepted:
+     format changes cannot be silently downgraded.
+
+     Every byte of the payload is inside the AEAD — nothing travels in the clear.
+     The AEAD key comes from the same ECDH shared secret the SAS attests, so a
+     party that fails SAS comparison cannot produce a payload the new device
+     accepts.
+
+17'. The new device checks the bundle version, then adopts BOTH seeds exactly as
+     transported and stores them PIN-encrypted (Section 2.11). It does not
+     re-derive either seed from the other.
+
+18'. The linked device shares the primary's device identity. It does not
+     generate its own keypairs and there is no sigchain entry.
+```
+
+#### What this does not deliver
+
+Relative to §6.1, seed-transport linking gives up:
+
+| §6.1 property | Status under the interim seed-transport implementation |
+|---|---|
+| New device has its own Ed25519/X25519 identity | **Not delivered** — it adopts the primary's |
+| Sigchain entry authorizing the new device | **Not delivered** — no chain is written, so a linked device is invisible to device-level authorization and audit |
+| Per-device revocation | **Not delivered** — revoking a linked device means rotating the user's keys, because it holds the same ones |
+| PUK wrapped per device (`LABEL_PUK_WRAP_TO_DEVICE`) | **Not delivered** — no PUK is in use |
+| Long-term secrets never transported | **Not delivered** — both seeds cross the wire (AEAD-protected, SAS-verified) |
+| Compromise of one device does not expose others | **Not delivered** — all linked devices share one keypair |
+
+What it does deliver, and §6.1 also requires: a linked device can actually read the user's existing data, and Section 2.11's independence of the signing and encryption seeds is preserved end to end — the encryption key is never a function of the signing key.
+
+Wiring the PUK and sigchain layers, and then implementing §6.1 as written, is the remaining work.
 
 ### 6.4 QR Code Format
 
@@ -4570,9 +4632,9 @@ Security note: 6 digits is ~20 bits of verification entropy. `packages/crypto/sr
 
 Two payload formats are specified. **Exactly one is in force.** §6.14 is the conformance matrix.
 
-#### 6.7.1 Single-Seed Payload (v0 — in force)
+#### 6.7.1 Single-Seed Payload (v0 — superseded)
 
-This is what `packages/crypto/src/provisioning.rs` implements. The AEAD plaintext is the 32 raw bytes of the X25519 secret the primary used for the ECDH — no version byte, no framing:
+This is the historical format previously implemented by `packages/crypto/src/provisioning.rs`. PR #1382 replaces it with v1. The AEAD plaintext is the 32 raw bytes of the X25519 secret the primary used for the ECDH — no version byte, no framing:
 
 ```
 plaintext = the primary's 32-byte X25519 encryption secret (raw)
@@ -4587,13 +4649,13 @@ ct        = AES-256-GCM(key=prov_key, nonce=nonce, message=plaintext,
 wire      = hex(nonce || ct)                     // 12 + 32 + 16 = 60 bytes = 120 hex chars
 ```
 
-The decrypt side rejects any plaintext whose length is not exactly 32 bytes (`decrypt_provisioned_seed`). The AAD is the bare `LABEL_DEVICE_PROVISION` constant, so v0 has no format binding and therefore no downgrade defence.
+The historical decrypt side rejected any plaintext whose length was not exactly 32 bytes. The AAD is the bare `LABEL_DEVICE_PROVISION` constant, so v0 has no format binding and therefore no downgrade defence.
 
 **v0 carries only one seed, and the primary's Ed25519 signing seed is not transported.** That is the defect recorded in issue #1026 and fixed by §6.7.2. Clients MUST NOT re-derive the missing seed from the transported one: the signing and encryption seeds are generated by independent `getrandom` calls (`packages/crypto/src/device_keys.rs`, and §2.11), so a re-derived key is simply a different key — it silently fails to open every ciphertext wrapped to the real one, with no error on either side. Note that the surviving desktop import path does exactly this re-derivation, which is why it cannot produce a working linked device (§6.14).
 
-#### 6.7.2 Device Key Bundle (v1 — specified, NOT in force)
+#### 6.7.2 Device Key Bundle (v1 — implemented in Rust and desktop crypto)
 
-> **Status: implemented nowhere.** No client, server, or Rust code produces or accepts this format. It is blocked on two independent prerequisites: the implementation in PR #1382 (issue #1026), and registration of the format-binding AAD label (§6.2) through `crypto-labels.json` and codegen. Until both land, implementations MUST continue to exchange §6.7.1. A v0 and a v1 payload are mutually undecryptable — the AAD differs — so the two formats cannot coexist on one deployment and the cutover must be atomic across clients.
+> **Status:** Rust and desktop crypto implement this format, and the format-binding AAD label is registered (§6.2). The end-to-end linking UI and mobile encrypt path remain unimplemented. A v0 and a v1 payload are mutually undecryptable — the AAD differs — so the two formats cannot coexist on one deployment and the cutover must be atomic across compatible clients.
 
 The AEAD plaintext is a 65-byte binary bundle — not JSON:
 
@@ -4614,11 +4676,11 @@ prov_key = HKDF(SHA-256, ikm=shared,
              length=32)
 nonce    = random(12)                            // fresh per payload, never reused under one prov_key
 ct       = AES-256-GCM(key=prov_key, nonce=nonce, message=bundle,
-             aad=UTF-8("llamenos:device-provision-bundle:v1"))   // label NOT yet registered — §6.2
+             aad=UTF-8("llamenos:device-provision-bundle:v1"))   // LABEL_DEVICE_PROVISION_BUNDLE (§6.2)
 wire     = hex(nonce || ct)                      // 12 + 65 + 16 = 93 bytes = 186 hex chars
 ```
 
-The associated data binds the payload to format v1: a payload built for any other provisioning format fails the GCM tag check rather than being accepted, so format changes cannot be silently downgraded. The version byte is checked only **after** the tag verifies, so distinguishing tag failures from version failures leaks nothing. No constant named `PROVISIONING_BUNDLE_VERSION` exists yet in any language; PR #1382 introduces it.
+The associated data binds the payload to format v1: a payload built for any other provisioning format fails the GCM tag check rather than being accepted, so format changes cannot be silently downgraded. The version byte is checked only **after** the tag verifies, so distinguishing tag failures from version failures leaks nothing. `PROVISIONING_BUNDLE_VERSION` is defined in Rust; generated client constants are not required because the version is parsed inside the crypto implementation.
 
 ### 6.8 Wire Payloads
 
@@ -4749,7 +4811,7 @@ Values common to both profiles, which an implementation must reproduce:
 | SAS HKDF output (4 bytes) | `e4751a4b` (= 3832879691 unsigned big-endian; `3832879691 % 1000000 = 879691`) |
 | SAS code | **`879 691`** |
 
-#### 6.13.1 v0 payload (§6.7.1 — in force)
+#### 6.13.1 v0 payload (§6.7.1 — historical)
 
 Plaintext is the 32-byte primary X25519 encryption seed; AAD is `llamenos:device-provision`.
 
@@ -4764,11 +4826,11 @@ Verification procedure:
 2. Derive `prov_key` and the SAS per §6.6/§6.7; both devices must display `879 691`.
 3. Decrypt the wire payload with `prov_key`, nonce `c9cacbcccdcecfd0d1d2d3d4`, AAD `llamenos:device-provision`; the plaintext must be exactly the 32-byte primary X25519 encryption seed.
 
-This vector is reproduced by the current reference implementation: `decrypt_provisioned_seed` on the wire value above returns that seed and the SAS `879 691`.
+This historical vector is not accepted by the current v1 reference implementation; its AAD differs, so decryption fails authentication.
 
-#### 6.13.2 v1 bundle payload (§6.7.2 — specified, not in force)
+#### 6.13.2 v1 bundle payload (§6.7.2 — implemented)
 
-Plaintext is the 65-byte bundle `0x01 || signing_seed || encryption_seed`; AAD is the unregistered `llamenos:device-provision-bundle:v1` (§6.2).
+Plaintext is the 65-byte bundle `0x01 || signing_seed || encryption_seed`; AAD is the registered `llamenos:device-provision-bundle:v1` (§6.2).
 
 | Value | Hex |
 |---|---|
@@ -4779,7 +4841,7 @@ Verification procedure: as §6.13.1 steps 1–2, then decrypt with AAD `llamenos
 
 #### Pinning
 
-No provisioning test vector is pinned in any test suite today. `packages/crypto/tests/interop.rs` generates `packages/crypto/tests/fixtures/test-vectors.json` (gitignored, written at test time) but emits only the `LABEL_DEVICE_PROVISION` constant for provisioning — no ciphertext, no SAS, and nothing matching either vector above. Closing that gap is required work, not a statement of fact: the §6.13.1 vector MUST be added to `interop.rs` so every platform can assert against it, and PR #1382 MUST add §6.13.2 alongside the implementation it introduces. Until then, implementations should assert against the hex in this section directly.
+`packages/crypto/tests/interop.rs` now exercises v1 provisioning with fixed seed inputs, verifies that both seeds round-trip unchanged, and emits the resulting bundle fields in `packages/crypto/tests/fixtures/test-vectors.json` (gitignored, written at test time). Its nonce is random, so this does not pin the exact ciphertext in §6.13.2; the static v0 and v1 vectors above remain useful for independent cross-platform checks.
 
 ### 6.14 Conformance Matrix
 
@@ -4795,18 +4857,18 @@ What exists at the time of writing, with evidence. This table is the thing to up
 | Per-room cap (3 / 10 min) | **Implemented**, counts correct polls too | `provisioning.ts`; blocks a conforming polling client (§6.9) |
 | Room TTL 5 min | **Implemented**, hardcoded | `identity.ts` `PROVISION_ROOM_TTL_MS` |
 | Exact hex-length validation (§6.8) | **Not implemented** server-side | `packages/protocol/schemas/provisioning.ts` uses `min()` only |
-| §6.7.1 v0 payload (seal/open) | **Implemented** in Rust | `packages/crypto/src/provisioning.rs` |
-| §6.7.2 v1 bundle payload | **Not implemented** | no version byte, no 65-byte bundle; `decrypt_provisioned_seed` rejects any plaintext ≠ 32 bytes |
-| `LABEL_DEVICE_PROVISION_BUNDLE` | **Not registered** | absent from `crypto-labels.json`, `labels.rs`, `packages/shared/crypto-labels.ts` and all generated constants (§6.2) |
-| `PROVISIONING_BUNDLE_VERSION` | **Does not exist** | no such constant in Rust, TS, Swift or Kotlin |
+| §6.7.1 v0 payload (seal/open) | **Superseded** | Historical format; current Rust provisioning uses v1 |
+| §6.7.2 v1 bundle payload | **Implemented** in Rust and desktop crypto | `packages/crypto/src/provisioning.rs`, `apps/desktop/src/crypto.rs` |
+| `LABEL_DEVICE_PROVISION_BUNDLE` | **Registered** as `labelId` 99 | `crypto-labels.json`, `labels.rs`, generated constants (§6.2) |
+| `PROVISIONING_BUNDLE_VERSION` | **Defined** in Rust | `packages/crypto/src/provisioning.rs` |
 | 6-digit SAS derivation | **Implemented** in Rust + reachable via FFI on all platforms | `provisioning.rs` `compute_sas`; `packages/crypto/src/ffi.rs` |
 | Two-screen SAS ceremony | **Not implemented** on any client | no link UI exists (#1405); and not constructible without the claim step |
 | QR encode / decode (§6.4) | **Not implemented** | `llamenos-link` appears nowhere in the repository |
 | `llamenos-link` URI scheme registration | **Not registered** | iOS `Info.plist` and the Android manifest register only `llamenos://` |
 | Short code (§6.5) | **Not implemented** | no derivation in any client |
 | Primary-device encrypt path, mobile | **Not implemented** | iOS and Android wrap only `compute_shared_x_hex` / `decrypt_with_shared_key_hex`; neither has an encrypt side, so neither can act as primary |
-| Primary-device encrypt path, desktop | **Present but defective** | `apps/desktop/src/crypto.rs` `provision_encrypt_for_device` seals the *encryption* seed while its doc comment says "signing seed"; `provision_decrypt_and_import` then stores those bytes as the signing seed and re-derives an encryption seed from them (`derive_encryption_seed_from_signing`), so a linked device would hold two keys that match neither of the primary's. Reachable only from tests. **Do not treat as a reference implementation.** |
-| Desktop Playwright IPC mock | **Diverges from Rust** | `tests/mocks/tauri-core.ts` seals `"nsec1" + hex(signingSeed)` — a different plaintext and a different length from what `provisioning.rs` produces, which the Rust decrypt would reject outright. Desktop E2E therefore cannot detect the defect above. |
+| Primary-device encrypt path, desktop | **Implemented in crypto; no linking UI** | `apps/desktop/src/crypto.rs` `provision_encrypt_for_device` seals both seeds, and `provision_decrypt_and_import` imports both unchanged |
+| Desktop Playwright IPC mock | **Matches the v1 bundle format** | `tests/mocks/tauri-core.ts` validates the versioned 65-byte bundle and imports both seeds |
 | Target profile (PUK + sigchain) | **Not implemented** | PUK endpoints and FFI exist with no client callers; sigchain wired only for recovery-group enrollment and the unused revoke fields (§6.12) |
 
 ---
