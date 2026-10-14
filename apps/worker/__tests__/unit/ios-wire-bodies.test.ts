@@ -279,15 +279,18 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
   })
 
   it('PATCH /api/records/:id did not just lose the status change — it unassigned the case and wiped its blind indexes', () => {
-    // The worst of the set, because two fields of updateRecordBodySchema carry
+    // The worst of the set, because two fields of createRecordBodySchema carry
     // `.optional().default()`:
     //
     //   assignedTo:    z.array(z.string()).optional().default([])
     //   blindIndexes:  z.record(...).optional().default({})
     //
     // With statusHash and severityHash mangled into status_hash / severity_hash, the
-    // validator sees an empty body — and then SUPPLIES those two defaults. So the body
-    // that reaches the route is not `{}`: it is `{assignedTo: [], blindIndexes: {}}`.
+    // validator saw an empty body. updateRecordBodySchema USED TO be
+    // `createRecordBodySchema.partial()`, and `.partial()` only makes the outer field
+    // optional — it leaves the inner `.optional().default()` wrapper intact, so the
+    // schema went on SUPPLYING those two defaults. The body that reached the route was
+    // therefore not `{}`: it was `{assignedTo: [], blindIndexes: {}}`.
     //
     // apps/worker/services/cases.ts:205-206 writes any key that is `!== undefined`:
     //   if (input.assignedTo !== undefined)   values.assignedTo = input.assignedTo
@@ -295,11 +298,19 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     //
     // so a status change from iOS cleared the case's assignees and destroyed every
     // blind index on it. The blind indexes are HMACs the client derives from plaintext
-    // the server never holds, so the server cannot rebuild them: the case stops being
+    // the server never holds, so the server cannot rebuild them: materialising them on
+    // an effectively-empty PATCH was real data loss, and the case stopped being
     // findable by any encrypted-field search. Meanwhile the status did not change, no
     // status_change interaction was written (cases.ts:217 is gated on input.statusHash),
     // a `recordUpdated` audit entry was recorded, a `record:updated` event was
     // published, and iOS reported success.
+    //
+    // #1652 fixed that half of it: updateRecordBodySchema is now
+    // `forPatch(createRecordBodySchema)`, which strips the inner defaults as well as
+    // making each field optional, so an unsent field stays `undefined` and no longer
+    // overwrites assignedTo/blindIndexes. The assertions below therefore pin the
+    // post-#1652 behaviour — the defaults are gone. The snake-casing defect this test
+    // exists for is untouched by #1652 and is still asserted, immediately below.
     const result = records.updateRecordBodySchema.safeParse(fixture.bodies.updateRecord.legacySnakeCase)
     expect(result.success).toBe(true)
     const parsed = (result as { data: Record<string, unknown> }).data
@@ -307,9 +318,11 @@ describe('#1633 iOS request bodies against the real input schemas', () => {
     // The change the user asked for is gone...
     expect(parsed.statusHash).toBeUndefined()
     expect(parsed.severityHash).toBeUndefined()
-    // ...and two destructive values the user never sent are present.
-    expect(parsed.assignedTo).toEqual([])
-    expect(parsed.blindIndexes).toEqual({})
+    // ...and since #1652 the two destructive defaults are no longer materialised:
+    // forPatch() strips the inner `.optional().default()`, so an unsent field stays
+    // undefined and cases.ts skips it.
+    expect(parsed.assignedTo).toBeUndefined()
+    expect(parsed.blindIndexes).toBeUndefined()
 
     // What iOS sends now carries the status change and supplies no such defaults
     // beyond them, so nothing is cleared.
