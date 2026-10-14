@@ -14,10 +14,11 @@ final class WipeServiceTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
 
-        // Keep each test's writable cache isolated from the default caches directory,
-        // which wipeAll() and other tests deliberately clear.
-        cacheStoreDirectory = FileManager.default.temporaryDirectory
-            .deletingLastPathComponent()
+        // A per-test subdirectory keeps one test's cache store out of another's, but it
+        // must sit *inside* the caches directory that wipeAll() clears: a store outside
+        // every clearDirectory() target leaves the assertion resting on URLCache's own
+        // asynchronous disk purge, which loses the race on a contended runner (#1848).
+        cacheStoreDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("WipeServiceTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: cacheStoreDirectory, withIntermediateDirectories: true)
 
