@@ -16,6 +16,10 @@ struct LlamenosApp: App {
     @State private var router = Router()
 
     init() {
+        // Before any service exists that could perform a request: no HTTP response
+        // body may ever be written to a cache on this device (#1658).
+        ResponseCachePolicy.installNonCachingSharedCache()
+
         let largeTitleAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont(name: "DMSans-Bold", size: 34) ?? UIFont.systemFont(ofSize: 34, weight: .bold)
         ]

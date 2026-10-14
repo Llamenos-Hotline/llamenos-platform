@@ -8,6 +8,7 @@ import { fieldMatchesContext } from '@shared/types'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
+import { useConfig } from '@/lib/config'
 import type { NotePayload } from '@shared/types'
 import { StickyNote, Plus, Pencil, Lock, Mic, X, Search, ChevronLeft, ChevronRight, Download, MessageCircle, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -59,6 +60,7 @@ function NotesPage() {
   const [searchInput, setSearchInput] = useState(search)
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const { currentHubId } = useConfig()
   const limit = 50
 
   useEffect(() => {
@@ -150,7 +152,9 @@ function NotesPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, callId, hasDeviceKey, isAdmin])
+    // currentHubId: notes are hub-scoped, so switching hubs must re-read them
+    // rather than leave another hub's list on screen (#1708).
+  }, [page, callId, hasDeviceKey, isAdmin, currentHubId])
 
   useEffect(() => { loadNotes() }, [loadNotes])
 

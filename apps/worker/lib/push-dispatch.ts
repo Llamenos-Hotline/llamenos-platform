@@ -16,10 +16,14 @@ import { encryptWakePayload, encryptFullPayload } from './push-encryption'
 import { NtfyClient } from './ntfy-client'
 import { ntfyOriginPolicyFromEnv } from './ntfy-origin'
 import { getApnsBundleId } from './apns-topic'
+import { devSurfacesEnabled } from './dev-surfaces'
 
-// ── Test Push Log (dev/test environments only) ────────────────────────────────
+// ── Test Push Log (dev-surface hosts only) ────────────────────────────────────
 // In-memory store for the last dispatched WakePayload — used by BDD tests to
-// verify that push payloads carry the correct hubId without real APNs/FCM credentials.
+// verify that push payloads carry the correct hubId without real APNs/FCM
+// credentials. Written only where `devSurfacesEnabled` holds (lib/dev-surfaces.ts)
+// and readable ONLY through `GET /api/test-push-log`, which additionally requires
+// the dev surface's shared secret on the request.
 
 interface TestPushLogEntry {
   wakePayload: WakePayload
@@ -31,7 +35,9 @@ const testPushLog: TestPushLogEntry[] = []
 
 /**
  * Record a dispatched WakePayload for test inspection.
- * Only call this in ENVIRONMENT=development — guarded at call sites.
+ * Only reachable through {@link RecordingPushDispatcher}, which is only
+ * constructed where `devSurfacesEnabled(env)` holds — guarded at the one call
+ * site that wraps a dispatcher.
  */
 export function recordTestPushPayload(wakePayload: WakePayload, recipientPubkey: string): void {
   testPushLog.push({ wakePayload, recipientPubkey, recordedAt: new Date().toISOString() })
@@ -72,17 +78,60 @@ export interface PushDispatcher {
  * Create a PushDispatcher from services (no DO stubs).
  * Returns a no-op dispatcher if push credentials aren't configured.
  *
- * In ENVIRONMENT=development the selected dispatcher is wrapped in
- * {@link RecordingPushDispatcher} so every dispatched WakePayload is written to
- * the in-memory test push log — whichever transport is (or isn't) configured.
- * The recording used to live inside a dev-only dispatcher that was reachable
- * only when BOTH transports were unconfigured, which meant the hubId contract
- * was observed exclusively on a path that never ships: as soon as a single
- * transport variable was set, `getTestPushLog()` went permanently empty even
- * though dispatch was still happening. The invariant it guards (every wake
- * payload names the hub that triggered it — the multi-hub routing axiom) is a
- * property of payload construction, not of a transport, so its observation
- * point must not depend on transport configuration or reachability either.
+ * Where the dev surface is enabled (`devSurfacesEnabled`, lib/dev-surfaces.ts)
+ * the selected dispatcher is wrapped in {@link RecordingPushDispatcher} so every
+ * dispatched WakePayload is written to the in-memory test push log — whichever
+ * transport is (or isn't) configured. The recording used to live inside a
+ * dev-only dispatcher that was reachable only when BOTH transports were
+ * unconfigured, which meant the hubId contract was observed exclusively on a
+ * path that never ships: as soon as a single transport variable was set,
+ * `getTestPushLog()` went permanently empty even though dispatch was still
+ * happening. The invariant it guards (every wake payload names the hub that
+ * triggered it — the multi-hub routing axiom) is a property of payload
+ * construction, not of a transport, so its observation point must not depend on
+ * transport configuration or reachability either.
+ *
+ * Why `devSurfacesEnabled` (host-level) and not `devSurfaceRequestAuthorized`
+ * (per-request)
+ * -----------------------------------------------------------------------------
+ * This used to read `env.ENVIRONMENT === 'development'`, which is never true on
+ * a deployed host — so on a staging E2E target nothing was recorded and three
+ * `core/push-hub-dispatch` scenarios failed on `capturedEntries.length === 0`,
+ * a symptom that names neither the branch nor the environment (#1623).
+ *
+ * The replacement is deliberately the HOST-level predicate, even though #1623
+ * asks for the per-request form wherever it fits, because this one does not fit:
+ *
+ *   - The only input available here is `env`. Two of the three call sites —
+ *     `routes/conversations.ts#dispatchPushToUser` and
+ *     `messaging/router.ts`' inbound-webhook path — construct a dispatcher
+ *     inside a DETACHED background task, after the request that triggered it has
+ *     been answered. Threading a request credential into work that outlives the
+ *     request is the shape that produced #1176; a credential captured in a
+ *     closure is also no longer the request's.
+ *   - The recorded invariant is a property of payload CONSTRUCTION. It has to be
+ *     observable on every dispatch path, including dispatches caused by traffic
+ *     that is not the harness's own — the same argument the paragraph above
+ *     makes about transports.
+ *
+ * What a host-level enable widens, stated plainly: on a host that has opted in
+ * with all three dev-surface factors (`ENVIRONMENT` on the allowlist,
+ * `DEV_ROUTES_ENABLED=true`, and a >=32-character `DEV_RESET_SECRET`), the last
+ * 50 dispatched wake payloads are retained in process memory — including ones
+ * caused by ordinary, non-harness traffic. A wake payload is routing metadata
+ * (hubId, type, conversationId, channelType, callId) plus the recipient pubkey;
+ * no message content and no caller PII. Nothing about the recorder is readable
+ * without the secret: `GET`/`DELETE /api/test-push-log` (routes/dev.ts
+ * `simulationGuard`) require `devSurfacesEnabled` AND the `X-Test-Secret`
+ * header per request, so a secret-less caller on the same reachable host gains
+ * exactly nothing from the recorder being on — and a caller who does hold the
+ * secret can already wipe the database.
+ *
+ * `production` is refused FIRST and unconditionally inside
+ * `devSurfacesRefusal`, before any flag or secret is read, so no secret can
+ * turn the recorder on there. It is also narrower than the old check in
+ * `development`: the recorder is now on exactly when the log is readable,
+ * instead of writing to a log no route would serve.
  */
 export function createPushDispatcherFromService(
   env: Env,
@@ -91,13 +140,13 @@ export function createPushDispatcherFromService(
 ): PushDispatcher {
   const hasApns = !!(env.APNS_KEY_P8 && env.APNS_KEY_ID && env.APNS_TEAM_ID)
   const hasNtfy = !!env.NTFY_URL
-  const isDev = env.ENVIRONMENT === 'development'
+  const recording = devSurfacesEnabled(env)
 
   const dispatcher: PushDispatcher = !hasApns && !hasNtfy
     ? new NoopPushDispatcher()
     : new ServicePushDispatcher(env, identityService, shiftsService, hasApns, hasNtfy)
 
-  return isDev ? new RecordingPushDispatcher(dispatcher, shiftsService) : dispatcher
+  return recording ? new RecordingPushDispatcher(dispatcher, shiftsService) : dispatcher
 }
 
 class NoopPushDispatcher implements PushDispatcher {
@@ -106,12 +155,13 @@ class NoopPushDispatcher implements PushDispatcher {
 }
 
 /**
- * Development-only decorator that records each dispatched WakePayload in the
+ * Dev-surface-only decorator that records each dispatched WakePayload in the
  * in-memory test log, then delegates to the real dispatcher. Records what the
  * dispatcher was asked to send, before any transport is attempted, so the BDD
  * assertion on payload shape cannot be silenced by an unconfigured, misconfigured
- * or unreachable APNs/ntfy endpoint. Never constructed outside
- * ENVIRONMENT=development.
+ * or unreachable APNs/ntfy endpoint. Never constructed on a host where
+ * `devSurfacesEnabled(env)` is false — which includes every `production` host,
+ * refused before any secret is read.
  */
 class RecordingPushDispatcher implements PushDispatcher {
   constructor(
@@ -133,8 +183,9 @@ class RecordingPushDispatcher implements PushDispatcher {
     fullPayload: FullPushPayload,
   ): Promise<void> {
     // Resolves the on-shift set a second time (the inner dispatcher resolves it
-    // again to deliver) so the log carries one entry per recipient. Only ever in
-    // development; not worth threading a recipient list through the interface.
+    // again to deliver) so the log carries one entry per recipient. Only ever on
+    // a dev-surface host; not worth threading a recipient list through the
+    // interface.
     const pubkeys = await this.shiftsService.getCurrentVolunteers('')
     for (const pk of pubkeys) {
       recordTestPushPayload(wakePayload, pk)

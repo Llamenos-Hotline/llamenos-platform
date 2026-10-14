@@ -632,7 +632,18 @@ class M1CapabilityProbe {
             token.nonce?.let { append(""","nonce":"$it"""") }
             append('}')
         }
-        return http(flow, method, path, body, "ADMIN") { setRequestProperty("Authorization", "Bearer $auth") }
+        return http(flow, method, path, body, "ADMIN") {
+            setRequestProperty("Authorization", "Bearer $auth")
+            // The probe's seeding traffic is ordinary API traffic, and every flow seeds as the
+            // SAME admin pubkey, so it all lands in one `write` bucket: 30 requests / 60s
+            // (middleware/rate-limit.ts RATE_LIMIT_TIERS.write, keyed by pubkey). Without this
+            // header the gate's own setup throttles itself once the ratchet grows past a
+            // handful of flows, and the symptom is `POST /api/invites -> 429` in enrollment —
+            // indistinguishable from an app regression, and "fixed" by deleting a flow.
+            // `devSurfaceRequestAuthorized` (lib/dev-surfaces.ts) exempts a request presenting
+            // the dev-surface secret for exactly this reason; `backdoor` already relies on it.
+            setRequestProperty("X-Test-Secret", testSecret)
+        }
     }
 
     private var adminReady = false

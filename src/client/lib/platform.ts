@@ -79,6 +79,9 @@ export type TauriIpcCommand =
   | 'device_import_and_load'
   | 'generate_ephemeral_ed25519'
   | 'generate_backup_from_state'
+  | 'generate_recovery_key'
+  | 'backup_verify_credential'
+  | 'restore_backup_and_load'
   | 'wipe_keys'
   | 'provision_encrypt_for_device'
   | 'provision_create_session'
@@ -1253,18 +1256,67 @@ export async function rewrapFileKey(
 }
 
 /**
- * Generate an encrypted backup from the current CryptoState.
- * In v3, wraps the device key material for offline recovery.
+ * Generate a fresh recovery key to display to the user.
+ *
+ * Base32, dash-grouped. The same string is handed straight back to
+ * `generateBackupFromState` — Rust owns both halves so there is no encoding to
+ * disagree about (#1709).
+ */
+export async function generateRecoveryKey(): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('generate_recovery_key')
+  }
+  throw new Error('WASM recovery key generation not yet implemented')
+}
+
+/**
+ * Generate an encrypted backup of the loaded device key, as a JSON string.
+ *
+ * `pin` and `recoveryKey` each independently protect the signing seed. Format
+ * and KDFs: `packages/crypto/src/backup.rs`.
  */
 export async function generateBackupFromState(
-  pubkey: string,
   pin: string,
   recoveryKey: string,
 ): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('generate_backup_from_state', { pubkey, pin, recoveryKey })
+    return tauriInvoke<string>('generate_backup_from_state', { pin, recoveryKey })
   }
   throw new Error('WASM backup generation not yet implemented')
+}
+
+/**
+ * Check that a recovery key or PIN opens a backup, without restoring it.
+ * Rejects with the Rust error when it does not.
+ */
+export async function verifyBackupCredential(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+): Promise<void> {
+  if (useTauri) {
+    return tauriInvoke<void>('backup_verify_credential', { backupJson, credential, isRecoveryKey })
+  }
+  throw new Error('WASM backup verification not yet implemented')
+}
+
+/**
+ * Restore a device key from a backup and load it into CryptoState under a new PIN.
+ * The recovered seed never enters the webview — only the re-encrypted blob comes back.
+ */
+export async function restoreBackupAndLoad(
+  backupJson: string,
+  credential: string,
+  isRecoveryKey: boolean,
+  newPin: string,
+  deviceId: string,
+): Promise<EncryptedDeviceKeys> {
+  if (useTauri) {
+    return tauriInvoke<EncryptedDeviceKeys>('restore_backup_and_load', {
+      backupJson, credential, isRecoveryKey, newPin, deviceId,
+    })
+  }
+  throw new Error('WASM backup restore not yet implemented')
 }
 
 /**

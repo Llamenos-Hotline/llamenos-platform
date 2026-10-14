@@ -31,15 +31,18 @@ export E2E_WORKER_PORT="$PORT"
 export E2E_ASTERISK_CONTAINER="$PROJECT-asterisk-1"
 export E2E_CARRIER_CONTAINER="$PROJECT-sip-carrier-1"
 export E2E_APP_CONTAINER="$PROJECT-app-1"
+export E2E_KAMAILIO_CONTAINER="$PROJECT-kamailio-1"
 export E2E_WORKER_ARI_URL=http://asterisk:8088
-# The shared dev telephony stack usually holds 5060/8088, so this stack
-# publishes the PBX elsewhere (docker-compose.ports.yml) and the test is
-# pointed at the same ports.
-export E2E_PBX_SIP_PORT="${E2E_PBX_SIP_PORT:-35060}"
-export E2E_PBX_TLS_PORT="${E2E_PBX_TLS_PORT:-35061}"
+# The shared dev telephony stack usually holds 5060/5061/8088, so this stack
+# publishes the SIP edge and ARI on isolated host ports.
+export E2E_SIP_EDGE_HOST="${E2E_SIP_EDGE_HOST:-127.0.0.1}"
+export E2E_SIP_EDGE_PORT="${E2E_SIP_EDGE_PORT:-35060}"
+export E2E_SIP_EDGE_TLS_PORT="${E2E_SIP_EDGE_TLS_PORT:-35061}"
 export E2E_PBX_ARI_PORT="${E2E_PBX_ARI_PORT:-38088}"
 export E2E_BRIDGE_PORT="${E2E_BRIDGE_PORT:-33200}"
-export E2E_PBX_PORT="$E2E_PBX_SIP_PORT"
+export SIP_UDP_PORT="$E2E_SIP_EDGE_PORT"
+export SIP_TCP_PORT="$E2E_SIP_EDGE_PORT"
+export SIPS_PORT="$E2E_SIP_EDGE_TLS_PORT"
 export E2E_ARI_REST_URL="http://127.0.0.1:$E2E_PBX_ARI_PORT/ari"
 export E2E_WORKER_BRIDGE_URL=http://sip-bridge:3000
 export TEST_HUB_URL="http://127.0.0.1:$PORT"
@@ -71,14 +74,14 @@ if ss -ltnH "( sport = :$PORT )" | grep -q .; then
   echo "port $PORT is already in use — set E2E_WORKER_PORT or stop whatever holds it" >&2
   exit 1
 fi
-docker volume rm -f "${PROJECT}_asterisk-db" "${PROJECT}_pgdata" "${PROJECT}_rustfsdata" >/dev/null 2>&1 || true
-"${COMPOSE[@]}" up -d --build --wait app asterisk sip-carrier sip-bridge
+docker volume rm -f "${PROJECT}_asterisk-db" "${PROJECT}_asterisk-keys" "${PROJECT}_kamailio-keys" "${PROJECT}_sip-tls-anchor" "${PROJECT}_pgdata" "${PROJECT}_rustfsdata" >/dev/null 2>&1 || true
+"${COMPOSE[@]}" up -d --build --wait app asterisk kamailio sip-carrier sip-bridge
 
 status=0
 bunx playwright test --config deploy/docker/tests/telephony/playwright.config.ts asterisk-inapp-ring.e2e.ts "$@" || status=$?
 
 if [[ $status -ne 0 ]]; then
-  for service in app sip-bridge asterisk; do
+  for service in app sip-bridge asterisk kamailio; do
     echo "── $service ──" >&2; "${COMPOSE[@]}" logs --no-color --tail 120 "$service" >&2 || true
   done
 fi

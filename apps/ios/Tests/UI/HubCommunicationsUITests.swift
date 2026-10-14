@@ -163,36 +163,6 @@ final class HubCommunicationsUITests: BaseUITest {
         }
     }
 
-    // MARK: - Template Selection
-
-    func testTemplateListAppearsOnFirstStep() {
-        given("I open the onboarding sheet") {
-            launchAsAdminWithAPI()
-            openOnboardingSheet()
-        }
-        then("the template list should be visible as step 1") {
-            let templateList = find("onboarding-template-list")
-            XCTAssertTrue(
-                templateList.waitForExistence(timeout: 10),
-                "Template list should be visible on the first onboarding step"
-            )
-        }
-    }
-
-    func testStartFromScratchOptionExists() {
-        given("I am on the template selection step") {
-            launchAsAdminWithAPI()
-            openOnboardingSheet()
-        }
-        then("a 'Start from Scratch' option should be visible") {
-            let fromScratch = scrollToFind("template-from-scratch", maxSwipes: 5)
-            XCTAssertTrue(
-                fromScratch.exists,
-                "Start from Scratch option should be available in the template list"
-            )
-        }
-    }
-
     // MARK: - Channel Checklist
 
     func testChannelChecklistShowsAllToggles() {

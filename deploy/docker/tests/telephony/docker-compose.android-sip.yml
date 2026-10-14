@@ -5,13 +5,12 @@
 # app, Postgres, RustFS, Asterisk and the simulated carrier all come from there.
 # What this adds is the part an emulator needs:
 #
-#   * Asterisk's TLS port on the host, because the emulator reaches the host at
+#   * Kamailio's TLS port on the host, because the emulator reaches the host at
 #     10.0.2.2 and nothing else. Its certificate therefore has to carry
 #     IP:10.0.2.2 as a SAN — the client verifies the hostname, not only the
 #     chain — which SIP_TLS_SANS arranges.
 #   * The app serving the SIP edge's trust anchor (SIP_TLS_CA_FILE) from the
-#     volume Asterisk's entrypoint exported it to. Asterisk is the edge here;
-#     in the full deployment Kamailio is.
+#     volume Kamailio's entrypoint exported it to.
 #   * A test-only answer-and-echo target in the volunteer dialplan context, so
 #     the media leg can be driven and the AGREED encryption read off the PBX.
 #
@@ -22,11 +21,6 @@
 services:
   asterisk:
     ports: !override
-      # TLS only, for signalling. 5060/8088 stay unpublished so this stack
-      # cannot collide with a dev stack on the same box; nothing outside the
-      # compose network needs them, and the harness reaches ARI through
-      # `docker exec`/the app.
-      - "0.0.0.0:${E2E_SIP_TLS_PORT:-5061}:5061/tcp"
       # RTP, matching the range e2e-rtp.conf narrows Asterisk to. The shipped
       # range is 200 ports and Asterisk picks at random inside it, so the
       # harness narrows rather than publishing 200 docker-proxy processes.
@@ -49,11 +43,13 @@ services:
 
   app:
     environment:
-      # Asterisk is the client-facing SIP edge in this stack, so its anchor is
-      # the one clients must verify against.
-      - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/asterisk.pem
+      - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/kamailio.pem
     volumes:
       - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
+
+  kamailio:
+    ports: !override
+      - "0.0.0.0:${E2E_SIP_TLS_PORT:-5061}:5061/tcp"
 
   sip-bridge:
     ports: !reset []

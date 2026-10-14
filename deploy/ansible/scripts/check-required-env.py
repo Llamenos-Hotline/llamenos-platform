@@ -376,6 +376,162 @@ def check_pg_port_publication(
     return failures
 
 
+# In-app calling (#1657, #1659). Each of these was consumed by apps/worker/ and
+# assigned in NO Ansible template; roles/kamailio carried a COMMENT saying an
+# operator had to add them "by hand", and nothing failed when that was skipped.
+CALLING_VARS = {
+    "SIP_REGISTRAR_SECRET": "llamenos_asterisk_enabled",
+    "TURN_HOST": "llamenos_coturn_enabled",
+    "TURN_SECRET": "llamenos_coturn_enabled",
+    "SIP_TLS_CA_FILE": "kamailio_enabled",
+}
+
+# `SIP_TLS_CA_FILE` names a path INSIDE the app container, so the variable is
+# only correct alongside the bind mount that makes it readable. Without the
+# mount, readSipTlsTrustAnchor logs "not readable" and returns undefined --
+# worse than the unset variable it replaced, because the outcome is identical
+# and an error line now implies a broken anchor rather than an absent one. PR
+# #1656 declined to render the variable for precisely this reason, so the two
+# are checked together or not at all.
+SIP_ANCHOR_CONTAINER_DIR = "/var/lib/llamenos/sip-tls"
+
+
+def _compose_app_block(text: str) -> str:
+    """The `app:` service block of a rendered compose file."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "app:")
+    except StopIteration:
+        return ""
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    out = [lines[start]]
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith(" ") or (
+            line.strip() and (len(line) - len(line.lstrip())) <= indent
+        ):
+            break
+        out.append(line)
+    return "\n".join(out)
+
+
+def check_calling_vars(
+    calling_env: dict[str, Path],
+    base_env: dict[str, Path],
+    calling_compose: dict[str, Path],
+    base_compose: dict[str, Path],
+    coturn_compose: Path,
+) -> list[str]:
+    """The in-app calling vars must render when their feature is on, and not otherwise.
+
+    Both directions, because only the pair is informative. A var that renders
+    unconditionally would put TURN_HOST on a phone-only host, where the ICE set
+    would name a relay that is not running -- worse than STUN-only, since ICE
+    then spends its connectivity-check budget on a candidate that cannot work.
+    """
+    failures: list[str] = []
+
+    for label, path in calling_env.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        env = rendered_env(path)
+        for var in CALLING_VARS:
+            if var not in env:
+                failures.append(
+                    f"{label}: {var} is absent with "
+                    f"{CALLING_VARS[var]}=true -- this is the #1657 gap, and the "
+                    f"worker silently takes its absent branch (rendered: {path})"
+                )
+                continue
+            if not env[var].strip():
+                failures.append(
+                    f"{label}: {var} rendered EMPTY. An empty value is not a "
+                    f"missing one: TURN_SECRET='' makes coturn honour a credential "
+                    f"nothing can mint, and SIP_REGISTRAR_SECRET='' derives every "
+                    f"volunteer password from an empty key (rendered: {path})"
+                )
+
+    for label, path in base_env.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        present = [v for v in CALLING_VARS if v in rendered_keys(path)]
+        if present:
+            failures.append(
+                f"{label}: {', '.join(present)} rendered with the calling features "
+                f"DISABLED. TURN_HOST on a host with no relay makes /sip-token "
+                f"advertise a relay candidate that refuses every allocation "
+                f"(rendered: {path})"
+            )
+
+    # The mount, in the same render that carries the path.
+    for label, path in calling_compose.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        block = _compose_app_block(path.read_text())
+        if not block:
+            failures.append(f"{label}: no `app:` service found (rendered: {path})")
+            continue
+        if SIP_ANCHOR_CONTAINER_DIR not in block:
+            failures.append(
+                f"{label}: the app service has no bind mount at "
+                f"{SIP_ANCHOR_CONTAINER_DIR}, but SIP_TLS_CA_FILE names a file "
+                f"under it. The container cannot open the anchor, so "
+                f"readSipTlsTrustAnchor fails where it would otherwise fall back "
+                f"to the device trust store (rendered: {path})"
+            )
+        elif f"{SIP_ANCHOR_CONTAINER_DIR}:ro" not in block:
+            failures.append(
+                f"{label}: the anchor mount is not read-only. The app publishes "
+                f"an anchor, it never writes one (rendered: {path})"
+            )
+
+    for label, path in base_compose.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        if SIP_ANCHOR_CONTAINER_DIR in _compose_app_block(path.read_text()):
+            failures.append(
+                f"{label}: the anchor mount is present with kamailio_enabled "
+                f"false. Nothing writes the anchor on that host, so Docker would "
+                f"create an empty root-owned directory in its place "
+                f"(rendered: {path})"
+            )
+
+    # One secret, two consumers. The worker MINTS credentials under TURN_SECRET
+    # and coturn VERIFIES them against --static-auth-secret: a mismatch refuses
+    # every allocation while /sip-token still returns 200, with nothing in any
+    # log naming the cause. Both render from `turn_secret`, and this is what
+    # keeps that true.
+    if not coturn_compose.is_file():
+        failures.append(f"coturn compose: rendered file {coturn_compose} does not exist")
+    else:
+        text = coturn_compose.read_text()
+        match = re.search(r"--static-auth-secret=(\S+)", text)
+        if not match:
+            failures.append(
+                f"coturn compose: no --static-auth-secret in {coturn_compose}. "
+                "Without it coturn runs with no credential check at all, which is "
+                "an open relay on a port reachable from the internet"
+            )
+        else:
+            secret = match.group(1)
+            for label, path in calling_env.items():
+                if not path.is_file():
+                    continue
+                app_secret = rendered_env(path).get("TURN_SECRET")
+                if app_secret != secret:
+                    failures.append(
+                        f"{label}: TURN_SECRET does not equal coturn's "
+                        f"--static-auth-secret. The worker's minted credentials "
+                        f"would be refused by the relay and /sip-token would "
+                        f"still return 200 (rendered: {path}, {coturn_compose})"
+                    )
+
+    return failures
+
+
 def extract_required_vars(config_ts: Path) -> tuple[list[str], list[str]]:
     src = config_ts.read_text()
     unconditional = sorted(set(UNCONDITIONAL_RE.findall(src)))
@@ -516,6 +672,19 @@ def ensure_rendered(repo_root: Path, rendered: list[Path]) -> None:
             "-e",
             f"dev_reset_secret={DEV_ROUTE_SECRET_FIXTURE}",
         ],
+        # In-app calling (#1657/#1659): the PBX, the SIP edge and the relay all
+        # enabled, which is the only configuration that renders
+        # SIP_REGISTRAR_SECRET / TURN_HOST / TURN_SECRET / SIP_TLS_CA_FILE and
+        # the trust-anchor mount. The BASE scenario above has none of them, so
+        # the guard is falsifiable in both directions.
+        [
+            "ansible-playbook",
+            str(playbook),
+            "-e",
+            "@vars.example.yml",
+            "-e",
+            "@scripts/calling-scenario.extra-vars.json",
+        ],
         [
             "ansible-playbook",
             str(playbook),
@@ -645,6 +814,46 @@ def main() -> int:
         help="Rendered roles/llamenos/templates/docker-compose.j2 for the production + "
         "dev-routes scenario.",
     )
+    parser.add_argument(
+        "--app-env-calling",
+        type=Path,
+        default=Path("/tmp/llamenos-check-env-app-calling.env"),
+        help="Rendered roles/llamenos-app/templates/env/app.j2 with the PBX, SIP "
+        "edge and TURN relay enabled (scripts/calling-scenario.extra-vars.json).",
+    )
+    parser.add_argument(
+        "--monolithic-env-calling",
+        type=Path,
+        default=Path("/tmp/llamenos-check-env-monolithic-calling.env"),
+        help="Rendered roles/llamenos/templates/env.j2 in the same calling scenario.",
+    )
+    parser.add_argument(
+        "--compose-app-calling",
+        type=Path,
+        default=Path("/tmp/llamenos-check-compose-app-calling.yml"),
+        help="Rendered roles/llamenos-app/templates/compose/app.j2 in the calling "
+        "scenario -- must carry the SIP trust-anchor bind mount.",
+    )
+    parser.add_argument(
+        "--compose-monolithic-calling",
+        type=Path,
+        default=Path("/tmp/llamenos-check-compose-monolithic-calling.yml"),
+        help="Rendered roles/llamenos/templates/docker-compose.j2 in the calling scenario.",
+    )
+    parser.add_argument(
+        "--compose-app-base",
+        type=Path,
+        default=Path("/tmp/llamenos-check-compose-app.yml"),
+        help="Rendered roles/llamenos-app/templates/compose/app.j2 with the calling "
+        "features OFF -- must carry no anchor mount.",
+    )
+    parser.add_argument(
+        "--compose-coturn-calling",
+        type=Path,
+        default=Path("/tmp/llamenos-check-compose-coturn-calling.yml"),
+        help="Rendered roles/llamenos-coturn/templates/compose/coturn.j2 -- its "
+        "--static-auth-secret must equal the app's TURN_SECRET.",
+    )
     args = parser.parse_args()
 
     rendered = [
@@ -660,6 +869,12 @@ def main() -> int:
         args.compose_postgres_prod,
         args.compose_monolithic_staging,
         args.compose_monolithic_prod,
+        args.app_env_calling,
+        args.monolithic_env_calling,
+        args.compose_app_calling,
+        args.compose_monolithic_calling,
+        args.compose_app_base,
+        args.compose_coturn_calling,
     ]
     ensure_rendered(args.repo_root, rendered)
 
@@ -800,6 +1015,50 @@ def main() -> int:
             },
         )
     )
+
+    # In-app calling (#1657/#1659): four vars the worker reads that no Ansible
+    # template assigned, plus the bind mount without which one of them is worse
+    # than useless.
+    print(
+        "\n[check-required-env] In-app calling vars, checked in two opposed scenarios:"
+    )
+    for var, trigger in sorted(CALLING_VARS.items()):
+        print(f"  {trigger}=true -> {var} MUST be present; =false -> MUST be absent")
+    calling_failures = check_calling_vars(
+        calling_env={
+            "roles/llamenos/templates/env.j2 (monolithic, calling enabled)":
+                args.monolithic_env_calling,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, calling enabled)":
+                args.app_env_calling,
+        },
+        base_env={
+            "roles/llamenos/templates/env.j2 (monolithic, calling disabled)":
+                args.monolithic_env,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, calling disabled)":
+                args.app_env,
+        },
+        calling_compose={
+            "roles/llamenos-app/templates/compose/app.j2 (calling enabled)":
+                args.compose_app_calling,
+            "roles/llamenos/templates/docker-compose.j2 (calling enabled)":
+                args.compose_monolithic_calling,
+        },
+        base_compose={
+            "roles/llamenos-app/templates/compose/app.j2 (calling disabled)":
+                args.compose_app_base,
+            "roles/llamenos/templates/docker-compose.j2 (calling disabled)":
+                args.compose_monolithic_prod,
+        },
+        coturn_compose=args.compose_coturn_calling,
+    )
+    failures.extend(calling_failures)
+    if not calling_failures:
+        print(
+            f"[check-required-env] OK   all {len(CALLING_VARS)} calling vars render "
+            "when their feature is on and not when it is off, the anchor mount "
+            "accompanies SIP_TLS_CA_FILE, and TURN_SECRET matches coturn's "
+            "--static-auth-secret"
+        )
 
     if failures:
         print("\n[check-required-env] FAILED:", file=sys.stderr)

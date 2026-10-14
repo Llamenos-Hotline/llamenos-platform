@@ -2474,7 +2474,9 @@
     "title": "Hub Management",
     "urlLabel": "Hub URL",
     "urlPlaceholder": "https://hub.example.com",
-    "yourHubs": "Your Hubs"
+    "yourHubs": "Your Hubs",
+    "membershipLoadFailedTitle": "Hindi ma-load ang iyong mga hub",
+    "membershipLoadFailedBody": "Hindi sinabi ng server kung aling mga hub ang kinabibilangan mo, kaya wala pang maipapakita. Tingnan ang iyong koneksyon at subukan muli."
   },
   "identityLabel": "Identity",
   "import": {
@@ -2755,6 +2757,7 @@
     "backupAcknowledge": "Nai-save ko na ang aking recovery key sa ligtas na lokasyon",
     "backupDescription": "Isulat ang recovery key na ito at itago nang maayos. Ito lang ang paraan para ma-recover ang iyong account sa bagong device.",
     "backupDownloaded": "Na-download na ang backup",
+    "backupFailed": "Hindi makagawa ng naka-encrypt na backup: {{reason}}",
     "backupTitle": "I-save ang Iyong Recovery Key",
     "confirmPin": "Confirm your PIN",
     "confirmPinDescription": "Enter the same PIN again to confirm",
@@ -2769,6 +2772,8 @@
     "getStarted": "Magsimula",
     "goToLogin": "Pumunta sa Login",
     "invalidCode": "Hindi valid ang invite code",
+    "rateLimitedRetry": "Masyadong maraming pagtatangka. Maghintay ng {{seconds}} segundo, pagkatapos ay subukan muli.",
+    "validationUnavailable": "Hindi mapatunayan ang iyong imbitasyon sa ngayon. Suriin ang iyong koneksyon at subukan muli.",
     "noCode": "Walang ibinigay na invite code",
     "npubLabel": "Your Public Key",
     "deviceKeyLabel": "Your Device Key",
