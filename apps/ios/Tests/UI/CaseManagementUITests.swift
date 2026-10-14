@@ -188,10 +188,13 @@ final class CaseManagementUITests: BaseUITest {
         XCTAssertTrue(picker.waitForExistence(timeout: 10), "A case type picker should be shown for two entity types")
         picker.tap()
         let optionIdentifier = "case-type-option-\(entityTypeName)"
-        let option = app.menus.buttons[optionIdentifier]
+        // A SwiftUI Picker in a Form presents as a UIKit context menu, which is
+        // NOT an XCUIElementType.menu — the options are plain Buttons hanging off
+        // the application, so querying `app.menus` matches zero elements.
+        let option = app.buttons[optionIdentifier]
         XCTAssertTrue(option.waitForExistence(timeout: 10), "Case type '\(entityTypeName)' should be selectable")
         XCTAssertEqual(
-            app.menus.buttons.matching(identifier: optionIdentifier).count,
+            app.buttons.matching(identifier: optionIdentifier).count,
             1,
             "The case type menu should expose exactly one option with this identifier"
         )
