@@ -6,7 +6,7 @@
  * Operators listen back to their uploads through the authenticated
  * GET /settings/ivr-audio/:promptType/:language instead.
  */
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import type { AppEnv } from '../types'
 import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN } from '../lib/helpers'
 import { verifyIvrMediaPath } from '../lib/ivr-media-url'
@@ -40,7 +40,7 @@ ivrMedia.get('/ivr-audio/:promptType/:language', async (c) => {
  * (IvrSpeechService), so it never changes meaning and is cached for good —
  * a change to the text or the engine is a different URL.
  */
-ivrMedia.get('/ivr-speech/:tag/:locale/:clip', async (c) => {
+const generatedSpeech = async (c: Context<AppEnv>) => {
   const url = new URL(c.req.url)
   const speech = await c.get('services').ivrSpeech.audioFor(url.pathname, url.searchParams)
   if (!speech) return c.json({ error: 'Not found' }, 404)
@@ -49,6 +49,10 @@ ivrMedia.get('/ivr-speech/:tag/:locale/:clip', async (c) => {
     'Cache-Control': 'public, max-age=31536000, immutable',
     ETag: `"${speech.etag}"`,
   })
-})
+}
+
+ivrMedia.get('/ivr-speech/:tag/:locale/:clip', generatedSpeech)
+/** A voice CAPTCHA digit, under a keyed name that does not reveal which digit (#1352) */
+ivrMedia.get('/ivr-speech/:tag/:locale/digit/:clip', generatedSpeech)
 
 export default ivrMedia
