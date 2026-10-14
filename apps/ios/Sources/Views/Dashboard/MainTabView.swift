@@ -102,14 +102,15 @@ struct MainTabView: View {
 
     // MARK: - Unread Count
 
-    /// Fetch the total unread conversation count for the tab badge.
+    /// Seed the Messages tab badge: conversations in the active hub waiting for someone
+    /// to claim them. The server keeps no per-reader unread count.
     private func fetchUnreadCount() async {
         do {
-            let response: ConversationsListResponse = try await appState.apiService.request(
+            let response: ConversationListResponse = try await appState.apiService.request(
                 method: "GET",
-                path: "/api/conversations"
+                path: appState.apiService.hp("/api/conversations")
             )
-            let total = response.conversations.reduce(0) { $0 + $1.unreadCount }
+            let total = response.conversations.filter { $0.conversationStatus == .waiting }.count
             await MainActor.run {
                 appState.unreadConversationCount = total
             }

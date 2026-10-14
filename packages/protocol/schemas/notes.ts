@@ -26,6 +26,11 @@ export const noteListResponseSchema = z.object({
   ...paginatedMeta,
 })
 
+/** `POST /notes` and `PATCH /notes/:id` answer `{ note }`, not a bare note. */
+export const noteDetailResponseSchema = z.object({
+  note: noteResponseSchema,
+})
+
 export const noteRepliesResponseSchema = z.object({
   replies: z.array(noteResponseSchema),
 })

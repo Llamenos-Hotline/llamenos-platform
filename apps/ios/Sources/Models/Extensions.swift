@@ -9,6 +9,10 @@ import SwiftUI
 
 /// Decrypted note content matching the protocol spec (Appendix B).
 /// The plaintext JSON inside every encrypted note envelope.
+///
+/// Encode and decode it with no key strategy: `fields` is keyed by custom field
+/// `name`, which may contain underscores, and desktop and Android read those keys
+/// verbatim.
 struct NotePayload: Codable, Equatable, Sendable {
     /// The note body text.
     let text: String
@@ -46,22 +50,21 @@ struct DecryptedNote: Identifiable, Sendable {
     }
 }
 
-// MARK: - NotesListResponse
+// MARK: - SharedNote Envelope Selection
 
-/// API response wrapper for the paginated notes list.
-struct NotesListResponse: Codable, Sendable {
-    let notes: [NoteResponse]
-    let total: Int
-}
-
-// MARK: - NoteDetailResponse
-
-/// Response wrapper for `POST /api/notes` and `PATCH /api/notes/:id` — both answer
-/// `201/200 { note }` (apps/worker/routes/notes.ts), not a bare note object. Local
-/// like `NotesListResponse` because the schema registry has no named schema for the
-/// single-note wrapper.
-struct NoteDetailResponse: Decodable, Sendable {
-    let note: NoteResponse
+extension SharedNote {
+    /// Envelopes to try in order. The author's signing key cannot identify its
+    /// encryption envelope, so author envelopes are selected by successful HPKE open.
+    func decryptionCandidates(encryptionPubkey: String) -> [HpkeEnvelope] {
+        var candidates: [HpkeEnvelope] = []
+        if let author = authorEnvelope {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: author.enc, ct: author.ct))
+        }
+        if let ours = adminEnvelopes?.first(where: { $0.pubkey == encryptionPubkey }) {
+            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: ours.enc, ct: ours.ct))
+        }
+        return candidates
+    }
 }
 
 // MARK: - AnyCodableValue
@@ -117,35 +120,6 @@ enum AnyCodableValue: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: - NoteResponse Extensions
-
-extension NoteResponse: Identifiable {}
-
-extension NoteResponse {
-    /// HPKE envelopes to try when decrypting this note, in trial order.
-    ///
-    /// #1024: the server records `authorPubkey` as the author's Ed25519 SIGNING key
-    /// (`apps/worker/routes/notes.ts` sets it from the auth identity), while every
-    /// envelope wraps for an X25519 ENCRYPTION key. Signing and encryption keys come
-    /// from independent random seeds, so comparing `authorPubkey` against our
-    /// encryption pubkey can never select the author envelope — the comparison is
-    /// structurally unsatisfiable, and while it gated the author envelope, every note
-    /// you wrote yourself decrypted to nothing. Authorship is proven by HPKE
-    /// succeeding on the author envelope, so it is always tried first; our admin copy
-    /// (selected by encryption pubkey, which IS comparable) is the fallback.
-    func decryptionCandidates(encryptionPubkey: String) -> [HpkeEnvelope] {
-        var candidates: [HpkeEnvelope] = []
-        if let authorEnv = authorEnvelope {
-            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct))
-        }
-        if let adminEnvs = adminEnvelopes,
-           let ourEnvelope = adminEnvs.first(where: { $0.pubkey == encryptionPubkey }) {
-            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: ourEnvelope.enc, ct: ourEnvelope.ct))
-        }
-        return candidates
-    }
-}
-
 // MARK: - DecryptedMessage
 
 /// A fully decrypted message ready for display in the conversation detail view.
@@ -153,6 +127,7 @@ struct DecryptedMessage: Identifiable, Sendable {
     let id: String
     let text: String
     let direction: String
+    let channelType: String
     let createdAt: Date
     let isRead: Bool
 
@@ -161,6 +136,11 @@ struct DecryptedMessage: Identifiable, Sendable {
 
     /// Whether this is an outbound message (from the volunteer).
     var isOutbound: Bool { direction == "outbound" }
+
+    /// Parsed channel type.
+    var channel: ClientChannelType {
+        ClientChannelType(rawValue: channelType) ?? .sms
+    }
 
     /// Formatted time string for display alongside the message bubble.
     var timeDisplay: String {

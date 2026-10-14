@@ -24,12 +24,11 @@
       "endpoint": "POST /api/conversations/:id/messages (201) and GET .../messages",
       "module": "@protocol/schemas/conversations",
       "schema": "messageResponseSchema",
-      "swiftType": "ConversationMessage",
-      "swiftFile": "apps/ios/Sources/Models/Conversation.swift",
+      "swiftType": "Message",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
       "requiredSwiftKeys": [
         "id",
         "conversationId",
-        "direction",
         "encryptedContent",
         "readerEnvelopes",
         "createdAt"
@@ -44,13 +43,15 @@
       "endpoint": "GET /api/conversations",
       "module": "@protocol/schemas/conversations",
       "schema": "conversationResponseSchema",
-      "swiftType": "AppConversation",
-      "swiftFile": "apps/ios/Sources/Models/Conversation.swift",
+      "swiftType": "ConversationListResponseConversation",
+      "swiftFile": "packages/protocol/generated/swift/Types.swift",
       "requiredSwiftKeys": [
         "id",
         "channelType",
         "contactIdentifierHash",
-        "createdAt"
+        "createdAt",
+        "updatedAt",
+        "messageCount"
       ],
       "absentFromServer": [
         "contactHash",

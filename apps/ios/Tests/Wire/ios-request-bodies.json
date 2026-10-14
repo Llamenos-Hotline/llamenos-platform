@@ -50,7 +50,7 @@
       "path": "/api/conversations/:id/messages",
       "module": "@protocol/schemas/conversations",
       "schema": "sendMessageBodySchema",
-      "swiftType": "SendMessageRequest",
+      "swiftType": "SendMessageBody",
       "callSite": "apps/ios/Sources/ViewModels/ConversationsViewModel.swift",
       "optionalKeys": [
         "encryptedContent",

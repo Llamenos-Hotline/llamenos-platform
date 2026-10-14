@@ -118,8 +118,7 @@ final class NoteFlowUITests: BaseUITest {
         // A note belongs to a call: the server rejects one with neither a call nor a
         // conversation (createNoteBodySchema), so text alone must not save. XCUITest
         // reports isEnabled=true for a navigation-bar button item regardless of
-        // .disabled, so assert the behavior — tapping Save keeps the sheet open and
-        // nothing reaches the server — not the control's state.
+        // .disabled; assert the behavior instead.
         let saveButton = find("save-note")
         XCTAssertTrue(saveButton.exists, "Save button should exist")
         saveButton.tap()
@@ -133,7 +132,7 @@ final class NoteFlowUITests: BaseUITest {
         XCTAssertTrue(callIdField.isHittable, "Call ID field should be reachable in the create sheet")
         callIdField.tap()
         callIdField.typeText("call-ui-test")
-        XCTAssertTrue(saveButton.isEnabled, "Save button should be enabled with text and a call ID")
+        XCTAssertEqual(callIdField.value as? String, "call-ui-test")
     }
 
     // MARK: - Empty State

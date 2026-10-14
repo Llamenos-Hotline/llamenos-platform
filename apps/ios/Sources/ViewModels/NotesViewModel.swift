@@ -40,7 +40,7 @@ final class NotesViewModel {
 
     private var currentPage: Int = 1
     private let pageSize: Int = 50
-    private var encryptedNotes: [NoteResponse] = []
+    private var encryptedNotes: [SharedNote] = []
 
     // MARK: - Initialization
 
@@ -92,11 +92,8 @@ final class NotesViewModel {
     ///   - text: The note body text.
     ///   - fields: Custom field values keyed by field name.
     ///   - callId: The call the note is about. The server requires a note to belong to
-    ///     a call or a conversation (`createNoteBodySchema` refines on
-    ///     `callId || conversationId`); this sheet files notes against a call.
-    ///   - transcript: Optional call transcript, appended to the note text. It must NOT
-    ///     be sent as `conversationId` — that linked the note to a conversation whose
-    ///     ID was the transcript text (#1293).
+    ///     a call or a conversation; this sheet files notes against a call.
+    ///   - transcript: Optional call transcript, appended to the note text.
     ///   - adminPubkeys: Admin encryption public keys (X25519) for envelope encryption.
     func createNote(
         text: String,
@@ -107,15 +104,6 @@ final class NotesViewModel {
     ) async throws {
         let noteText = transcript.map { "\(text)\n\n--- Transcript ---\n\($0)" } ?? text
         let payload = NotePayload(text: noteText, fields: fields)
-        // #1633: no key conversion. This encoder used to set `.convertToSnakeCase`,
-        // which was a no-op by luck rather than by design — `NotePayload`'s own keys
-        // are `text` and `fields`, both single words, and a nested Dictionary's keys
-        // (the custom field names in `fields`) are not reached by a key strategy, as
-        // `APIServiceWireFormatTests.testWhichKeysAKeyStrategyActuallyReaches` pins.
-        // Add one camelCase field to `NotePayload` and it would have started sealing a
-        // key desktop and Android cannot find into the ciphertext, where no validator
-        // and no test would see it. The encrypted payload is part of the
-        // cross-platform contract: camelCase, with nothing in the way.
         let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) ?? "{}"
 
         // Build full recipient list: our encryption key + admin encryption keys
@@ -149,9 +137,6 @@ final class NotesViewModel {
             interactionTypeHash: nil
         )
 
-        // POST /api/notes answers 201 with `{ note }` (apps/worker/routes/notes.ts) —
-        // decoding the bare NoteResponse here threw on every successful save and the
-        // sheet reported an error for a note the server had stored.
         let _: NoteDetailResponse = try await apiService.request(
             method: "POST",
             path: apiService.hp("/api/notes"),
@@ -168,26 +153,22 @@ final class NotesViewModel {
 
     // MARK: - Note Decryption
 
-    /// Find the matching envelope for our pubkey and decrypt the note using HPKE.
-    func decryptNote(_ encrypted: NoteResponse) -> DecryptedNote? {
+    /// Try the author envelope, then this device's admin envelope, and decrypt.
+    func decryptNote(_ encrypted: SharedNote) -> DecryptedNote? {
         guard let ourPubkey = cryptoService.encryptionPubkeyHex else { return nil }
-
-        // Envelope selection is by trial, never by comparing `authorPubkey` — see
-        // `NoteResponse.decryptionCandidates` (#1024).
         for envelope in encrypted.decryptionCandidates(encryptionPubkey: ourPubkey) {
             if let note = decryptNote(encrypted, envelope: envelope) { return note }
         }
         return nil
     }
 
-    private func decryptNote(_ encrypted: NoteResponse, envelope: HpkeEnvelope) -> DecryptedNote? {
+    private func decryptNote(_ encrypted: SharedNote, envelope: HpkeEnvelope) -> DecryptedNote? {
         do {
             let decryptedJSON = try cryptoService.decryptNote(
                 ciphertextHex: encrypted.encryptedContent,
                 envelope: envelope
             )
 
-            // Plain decoder, matching the plain encoder above.
             let payload = try JSONDecoder().decode(NotePayload.self, from: Data(decryptedJSON.utf8))
 
             return DecryptedNote(
@@ -208,7 +189,7 @@ final class NotesViewModel {
 
     private func fetchNotesPage(page: Int, replacing: Bool) async {
         do {
-            let response: NotesListResponse = try await apiService.request(
+            let response: NoteListResponse = try await apiService.request(
                 method: "GET",
                 path: apiService.hp("/api/notes?page=\(page)&limit=\(pageSize)")
             )
@@ -219,9 +200,9 @@ final class NotesViewModel {
                 encryptedNotes.append(contentsOf: response.notes)
             }
 
-            totalCount = response.total
+            totalCount = Int(response.total)
             currentPage = page
-            hasMore = encryptedNotes.count < response.total
+            hasMore = encryptedNotes.count < totalCount
 
             // Decrypt all notes
             notes = encryptedNotes.compactMap(decryptNote)

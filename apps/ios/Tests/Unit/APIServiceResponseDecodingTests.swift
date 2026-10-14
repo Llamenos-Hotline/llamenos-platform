@@ -7,8 +7,8 @@ import XCTest
 /// `APIServiceWireFormatTests` pins the bytes iOS sends. Nothing pinned the bytes it
 /// can decode, and that asymmetry is how this PR first regressed: the request key for
 /// `POST /api/conversations/:id/messages` was renamed to `readerEnvelopes` to match
-/// `sendMessageBodySchema`, while `ConversationMessage` — the response model for the
-/// same endpoint, in the same file — still required `recipientEnvelopes`.
+/// `sendMessageBodySchema`, while the response model for the same endpoint still
+/// required `recipientEnvelopes`.
 ///
 /// The failure mode mattered more than the mismatch. While iOS snake_cased its request
 /// keys the send 400'd, so the response was never decoded and the bug was unreachable.
@@ -65,16 +65,15 @@ final class APIServiceResponseDecodingTests: XCTestCase {
 
     func testAMessageFromTheServerDecodes() throws {
         let data = try payload("message")
-        let message = try decoder.decode(ConversationMessage.self, from: data)
+        let message = try decoder.decode(Message.self, from: data)
 
-        XCTAssertEqual(message.conversationId, "33333333-3333-4333-8333-333333333333")
-        XCTAssertEqual(message.direction, "outbound")
+        XCTAssertEqual(message.conversationID, "33333333-3333-4333-8333-333333333333")
+        XCTAssertEqual(message.direction?.rawValue, "outbound")
         XCTAssertFalse(message.encryptedContent.isEmpty)
         XCTAssertEqual(message.readerEnvelopes.count, 1)
         XCTAssertEqual(message.readerEnvelopes.first?.pubkey, String(repeating: "ab", count: 32))
         // `readAt` arrives as JSON null for an unread message; `String?` takes that as nil.
         XCTAssertNil(message.readAt)
-        XCTAssertFalse(message.isRead)
     }
 
     /// The 201 from a send is decoded on the path that reports success to the volunteer,
@@ -83,7 +82,7 @@ final class APIServiceResponseDecodingTests: XCTestCase {
     func testTheSendResponseDecodesSoASentMessageIsNotReportedAsFailed() throws {
         let data = try payload("message")
         XCTAssertNoThrow(
-            try decoder.decode(ConversationMessage.self, from: data),
+            try decoder.decode(Message.self, from: data),
             """
             The 201 from POST /api/conversations/:id/messages must decode. If it throws, \
             ConversationsViewModel.sendReply reports failure for a message the server \
@@ -94,26 +93,22 @@ final class APIServiceResponseDecodingTests: XCTestCase {
 
     func testAConversationFromTheServerDecodes() throws {
         let data = try payload("conversation")
-        let conversation = try decoder.decode(AppConversation.self, from: data)
+        let conversation = try decoder.decode(ConversationListResponseConversation.self, from: data)
 
         XCTAssertEqual(conversation.channelType, "sms")
-        // The server's key is `contactIdentifierHash`; `contactHash` was never sent.
-        XCTAssertEqual(conversation.contactHash, "deadbeefdeadbeef")
-        // The server's key is `assignedTo`; as `assignedVolunteerPubkey` this silently
-        // read nil, so every conversation looked unassigned.
-        XCTAssertEqual(conversation.assignedVolunteerPubkey, String(repeating: "ab", count: 32))
-        XCTAssertEqual(conversation.status, "active")
+        XCTAssertEqual(conversation.contactIdentifierHash, "deadbeefdeadbeef")
+        XCTAssertEqual(conversation.assignedTo, String(repeating: "ab", count: 32))
+        XCTAssertEqual(conversation.status?.rawValue, "active")
     }
 
-    /// The server has no per-user unread count, so its absence must be tolerated —
-    /// but as a required `Int` it was `keyNotFound`, losing the whole conversation list.
-    func testAConversationDecodesWithoutAnUnreadCountAndReportsZero() throws {
+    /// The protocol uses `messageCount` (the total), not a per-user unread count.
+    func testConversationDecodesItsTotalMessageCountWithoutAnUnreadCount() throws {
         let data = try payload("conversation")
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         XCTAssertNil(json["unreadCount"], "the fixture must not supply a key the server lacks")
 
-        let conversation = try decoder.decode(AppConversation.self, from: data)
-        XCTAssertEqual(conversation.unreadCount, 0)
+        let conversation = try decoder.decode(ConversationListResponseConversation.self, from: data)
+        XCTAssertEqual(conversation.messageCount, 3)
     }
 
     // MARK: - The inverse: these models must fail on the keys they used to want
@@ -122,7 +117,7 @@ final class APIServiceResponseDecodingTests: XCTestCase {
     /// back to the old key, the server payload stops decoding — assert that directly,
     /// so "it decodes" cannot be satisfied by a model that accepts either spelling.
     func testTheOldKeysDoNotDecodeTheServersPayload() throws {
-        /// `ConversationMessage` as it was before this change.
+        /// The hand-written response model as it was before this change.
         struct LegacyConversationMessage: Decodable {
             let id: String
             let conversationId: String
@@ -133,7 +128,7 @@ final class APIServiceResponseDecodingTests: XCTestCase {
             let createdAt: String
             let readAt: String?
         }
-        /// `AppConversation` as it was before this change.
+        /// The hand-written list model as it was before this change.
         struct LegacyAppConversation: Decodable {
             let id: String
             let channelType: String

@@ -220,9 +220,12 @@ final class APIServiceWireFormatTests: XCTestCase {
 
             // POST /api/conversations/:id/messages — sendMessageBodySchema. BOTH the
             // ciphertext and the envelopes are `.optional()` here.
-            ("sendMessage", SendMessageRequest(
+            ("sendMessage", SendMessageBody(
+                body: nil,
                 encryptedContent: Self.ct,
-                readerEnvelopes: [Self.recipient]
+                externalID: nil,
+                plaintextForSending: nil,
+                readerEnvelopes: [Self.admin]
             )),
 
             // POST /api/contacts-v2 — createContactBodySchema. Generated type; `hubID`
@@ -390,9 +393,12 @@ final class APIServiceWireFormatTests: XCTestCase {
             XCTAssertTrue(noteKeys.contains(key), "createNote lost \(key); keys were \(noteKeys.sorted())")
         }
 
-        let message = try await wireBytes(body: SendMessageRequest(
+        let message = try await wireBytes(body: SendMessageBody(
+            body: nil,
             encryptedContent: Self.ct,
-            readerEnvelopes: [Self.recipient]
+            externalID: nil,
+            plaintextForSending: nil,
+            readerEnvelopes: [Self.admin]
         ))
         let messageKeys = try allKeys(message)
         for key in ["encryptedContent", "readerEnvelopes"] {

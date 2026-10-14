@@ -17,7 +17,10 @@ final class ActiveCallUITests: BaseUITest {
 
             // Simulate an incoming call and answer it
             let call = simulateIncomingCall(callerNumber: "+15551110001")
-            guard !call.callId.isEmpty else { return }
+            XCTAssertFalse(
+                call.callId.isEmpty,
+                "POST /api/test-simulate/incoming-call should return a callId — see the runner log for the simulation warning"
+            )
 
             // Read admin pubkey from the settings for answering the call
             navigateToSettings()
@@ -120,7 +123,10 @@ final class ActiveCallUITests: BaseUITest {
         }
         then("the quick note button should be visible") {
             let callCard = find("active-call-card")
-            guard callCard.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                callCard.waitForExistence(timeout: 10),
+                "Active call card should render on the dashboard after a simulated incoming + answered call"
+            )
 
             let noteButton = find("quick-note-button")
             if noteButton.waitForExistence(timeout: 3) {
@@ -144,7 +150,10 @@ final class ActiveCallUITests: BaseUITest {
         }
         then("the report spam button should be visible") {
             let callCard = find("active-call-card")
-            guard callCard.waitForExistence(timeout: 10) else { return }
+            XCTAssertTrue(
+                callCard.waitForExistence(timeout: 10),
+                "Active call card should render on the dashboard after a simulated incoming + answered call"
+            )
 
             let spamButton = find("report-spam-button")
             if spamButton.waitForExistence(timeout: 3) {

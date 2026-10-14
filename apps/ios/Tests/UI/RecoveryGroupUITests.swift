@@ -53,10 +53,7 @@ final class RecoveryGroupUITests: BaseUITest {
 
         // Navigate to recovery from the login screen
         let recoveryLink = scrollToFind("login-recover-account")
-        guard recoveryLink.exists else {
-            // Recovery link may not be visible yet; skip test gracefully
-            return
-        }
+        XCTAssertTrue(recoveryLink.exists, "Login screen should offer an account-recovery entry ('login-recover-account')")
         recoveryLink.tap()
 
         let recoveryView = find("account-recovery-view")

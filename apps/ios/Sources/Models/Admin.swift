@@ -318,17 +318,33 @@ struct ClientCallSettings: Codable, Sendable {
 // `TranscriptionSettings` and `SpamSettings`. See #1724.
 
 // MARK: - System Health
-// The API payload decodes into the protocol-generated `SystemHealthResponse`
-// (packages/protocol/schemas/system.ts → generated Types.swift). The types below
-// are display models that SystemHealthView maps each response section onto.
+// The protocol-generated `SystemHealthResponse` is the wire model; these are
+// presentation-only status helpers for its cards.
+extension SharedServiceStatusStatus {
+    /// Ordering for "worst status wins" when several services share one card.
+    var severity: Int {
+        switch self {
+        case .ok: return 0
+        case .degraded: return 1
+        case .down: return 2
+        }
+    }
 
-/// Status of an individual service or subsystem (display model for health cards).
+    var icon: String {
+        switch self {
+        case .ok: return "checkmark.circle.fill"
+        case .degraded: return "exclamationmark.triangle.fill"
+        case .down: return "xmark.circle.fill"
+        }
+    }
+}
+
+/// Status of an individual service or subsystem for health-card presentation.
 struct ServiceHealthStatus: Codable, Sendable {
     let name: String
     let status: String
     let details: String?
 
-    /// Parsed status for display.
     var healthLevel: HealthLevel {
         switch status.lowercased() {
         case "healthy", "ok", "up": return .healthy
@@ -338,7 +354,6 @@ struct ServiceHealthStatus: Codable, Sendable {
     }
 }
 
-/// Health level for status indicators.
 enum HealthLevel: Sendable {
     case healthy
     case degraded
