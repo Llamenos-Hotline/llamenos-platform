@@ -101,9 +101,10 @@ private let noAad = ""
 /// envelopes with `labelId: 0` (LABEL_NOTE_KEY), which `hpke_open_key`
 /// rejects outright.
 private func toFfiEnvelope(label: String, enc: String, ct: String) throws -> HpkeEnvelope {
-    HpkeEnvelope(
-        v: 3,
-        labelId: try mobileLabelToId(label: label),
+    let wireEnvelope = try CryptoService.wireEnvelope(enc: enc, ct: ct, label: label)
+    return HpkeEnvelope(
+        v: wireEnvelope.v,
+        labelId: wireEnvelope.labelId,
         enc: try mobileHexToBase64url(hexStr: enc),
         ct: try mobileHexToBase64url(hexStr: ct)
     )
@@ -267,6 +268,15 @@ enum CryptoServiceError: LocalizedError, Equatable {
 /// The Swift layer only sees public keys and operation results — secrets NEVER leave Rust.
 @Observable
 final class CryptoService: @unchecked Sendable {
+    /// Rebuild the HPKE metadata omitted from the server's `{enc, ct}` wire pair.
+    /// The generated IDs are sourced from Rust's append-only label registry.
+    static func wireEnvelope(enc: String, ct: String, label: String) throws -> HpkeEnvelope {
+        guard let labelId = CryptoLabelIds.id(for: label) else {
+            throw CryptoServiceError.decryptionFailed("Unregistered crypto label")
+        }
+        return HpkeEnvelope(v: 3, labelId: labelId, enc: enc, ct: ct)
+    }
+
     private(set) var signingPubkeyHex: String?
     private(set) var encryptionPubkeyHex: String?
     private(set) var deviceId: String?
@@ -369,17 +379,24 @@ final class CryptoService: @unchecked Sendable {
     // MARK: - Message Decryption (HPKE)
 
     func decryptMessage(encryptedContent: String, envelope: HpkeEnvelope) throws -> String {
+        try decryptMessage(encryptedContent: encryptedContent, enc: envelope.enc, ct: envelope.ct)
+    }
+
+    /// Decrypt a message-pattern payload (`LABEL_MESSAGE`) from its ciphertext and
+    /// this reader's wire envelope `{enc, ct}`.
+    func decryptMessage(encryptedContent: String, enc: String, ct: String) throws -> String {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let ffiEnvelope = try toFfiEnvelope(label: CryptoLabels.LABEL_MESSAGE, enc: envelope.enc, ct: envelope.ct)
+        let label = CryptoLabels.LABEL_MESSAGE
+        let ffiEnvelope = try toFfiEnvelope(label: label, enc: enc, ct: ct)
         let keyHex = try ffiMobileHpkeOpenKey(
             envelope: ffiEnvelope,
-            expectedLabel: CryptoLabels.LABEL_MESSAGE,
-            aadHex: try keyWrapAad(CryptoLabels.LABEL_MESSAGE)
+            expectedLabel: label,
+            aadHex: try keyWrapAad(label)
         )
         let plaintextHex = try ffiMobileSymmetricDecrypt(
             ciphertextHex: encryptedContent,
             keyHex: keyHex,
-            aadHex: try contentAad(CryptoLabels.LABEL_MESSAGE)
+            aadHex: try contentAad(label)
         )
         guard let data = hexToData(plaintextHex), let result = String(data: data, encoding: .utf8) else {
             throw CryptoServiceError.decryptionFailed("Invalid UTF-8 in decrypted message")
