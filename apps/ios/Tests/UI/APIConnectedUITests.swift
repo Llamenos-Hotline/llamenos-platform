@@ -1126,6 +1126,48 @@ final class APIConnectedUITests: BaseUITest {
         }
     }
 
+    // MARK: - Admin Invites via API
+
+    /// Regression coverage for #1046: the invites list used to call the
+    /// never-mounted `/api/identity/invites` and showed nothing, however many
+    /// invites existed. This test creates the invite through the real route
+    /// and asserts the screen — now on `GET /api/invites` — renders it.
+    func testAdminCreatedInviteAppearsInInvitesList() {
+        var inviteCode = ""
+        given("an invite created via the admin API") {
+            launchAsAdminWithAPI()
+            let data = TestAdminAPI.send("POST", "/api/invites", [
+                "name": "E2E Invitee",
+                "phone": "+15555550123",
+                "roleIds": ["role-volunteer"],
+                "hubId": testHubId,
+            ], baseURL: testHubURL)
+            // POST /api/invites answers 201 with `{invite: {code, …}}`.
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let invite = json["invite"] as? [String: Any],
+               let code = invite["code"] as? String {
+                inviteCode = code
+            }
+            XCTAssertFalse(inviteCode.isEmpty, "Invite creation should return a code")
+        }
+        when("the admin opens the invites screen") {
+            navigateToAdminSettingsScreen("admin-invites")
+        }
+        then("the created invite appears in the list") {
+            let list = find("invites-list")
+            XCTAssertTrue(
+                list.waitForExistence(timeout: 15),
+                "Invites list should load from the API"
+            )
+            let row = scrollToFind("invite-row-\(inviteCode)", maxSwipes: 3, timeout: 5)
+            XCTAssertTrue(
+                row.exists,
+                "Invite \(inviteCode) created via the API should appear in the invites list"
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private func anyElement(_ identifiers: [String]) -> XCUIElement {

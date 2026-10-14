@@ -40,6 +40,7 @@ struct InviteView: View {
         }
         .task(id: hubContext.activeHubId) {
             await viewModel.loadInvites()
+            await viewModel.loadRoles()
         }
     }
 
@@ -108,15 +109,40 @@ struct InviteView: View {
         NavigationStack {
             Form {
                 Section {
+                    TextField(
+                        NSLocalizedString("users_name", comment: "Name"),
+                        text: $viewModel.newInviteName
+                    )
+                    .textContentType(.name)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("invite-name-input")
+
+                    TextField(
+                        NSLocalizedString("users_phone", comment: "Phone Number"),
+                        text: $viewModel.newInvitePhone
+                    )
+                    .textContentType(.telephoneNumber)
+                    .keyboardType(.phonePad)
+                    .accessibilityIdentifier("invite-phone-input")
+                } header: {
+                    Text(NSLocalizedString("admin_invite_recipient_header", comment: "Invitee"))
+                } footer: {
+                    Text(NSLocalizedString(
+                        "admin_invite_recipient_footer",
+                        comment: "The invitee's name becomes their display name when they redeem the invite."
+                    ))
+                    .font(.brand(.caption))
+                }
+
+                Section {
                     Picker(
                         NSLocalizedString("admin_invite_role", comment: "Role"),
-                        selection: $viewModel.newInviteRole
+                        selection: $viewModel.newInviteRoleId
                     ) {
-                        ForEach(UserRole.allCases, id: \.self) { role in
-                            Text(role.displayName).tag(role)
+                        ForEach(roleChoices, id: \.id) { choice in
+                            Text(choice.label).tag(choice.id)
                         }
                     }
-                    .pickerStyle(.segmented)
                     .accessibilityIdentifier("invite-role-picker")
                 } header: {
                     Text(NSLocalizedString("admin_invite_role_header", comment: "Invite Role"))
@@ -151,10 +177,23 @@ struct InviteView: View {
                         Task { await viewModel.createInvite() }
                     }
                     .fontWeight(.semibold)
+                    .disabled(viewModel.newInviteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("submit-create-invite")
                 }
             }
         }
+    }
+
+    /// The role choices the picker shows: the server's roles, or the two
+    /// built-ins when the roles list has not loaded.
+    private var roleChoices: [(id: String, label: String)] {
+        if viewModel.roles.isEmpty {
+            return [
+                ("role-volunteer", NSLocalizedString("users_role_volunteer", comment: "Volunteer")),
+                ("role-super-admin", NSLocalizedString("users_role_admin", comment: "Admin")),
+            ]
+        }
+        return viewModel.roles.map { ($0.id, $0.name ?? $0.slug) }
     }
 
     // MARK: - Empty State
@@ -200,14 +239,23 @@ struct InviteView: View {
 
 // MARK: - InviteRowView
 
-/// A single invite row showing the code, role, status, and sharing option.
+/// A single invite row showing the invitee name, code, role, status, and sharing option.
 struct InviteRowView: View {
-    let invite: AppInvite
+    let invite: Invite
 
     @State private var showCopied: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Invitee name
+            if !invite.name.isEmpty {
+                Text(invite.name)
+                    .font(.brand(.body))
+                    .fontWeight(.medium)
+                    .foregroundStyle(Color.brandForeground)
+                    .lineLimit(1)
+            }
+
             // Code and share button
             HStack {
                 Text(invite.code)
@@ -233,7 +281,7 @@ struct InviteRowView: View {
                     }
                     .font(.caption)
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("copy-invite-\(invite.id)")
+                    .accessibilityIdentifier("copy-invite-\(invite.code)")
                     .accessibilityLabel(NSLocalizedString("admin_copy_invite", comment: "Copy invite code"))
                 }
             }
@@ -241,16 +289,18 @@ struct InviteRowView: View {
             // Status badges
             HStack(spacing: 8) {
                 // Role badge
-                Text(invite.inviteRole.displayName)
+                Text(invite.grantsAdminRole
+                     ? NSLocalizedString("users_role_admin", comment: "Admin")
+                     : NSLocalizedString("users_role_volunteer", comment: "Volunteer"))
                     .font(.brand(.caption2))
                     .fontWeight(.medium)
-                    .foregroundStyle(invite.inviteRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+                    .foregroundStyle(invite.grantsAdminRole ? Color.brandDarkTeal : Color.brandPrimary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         Capsule()
                             .fill(
-                                (invite.inviteRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+                                (invite.grantsAdminRole ? Color.brandDarkTeal : Color.brandPrimary)
                                     .opacity(0.12)
                             )
                     )

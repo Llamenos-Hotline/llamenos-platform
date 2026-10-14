@@ -259,7 +259,8 @@ struct AdminTabView: View {
         }
         let vm = AdminViewModel(
             apiService: appState.apiService,
-            cryptoService: appState.cryptoService
+            cryptoService: appState.cryptoService,
+            hubContext: appState.hubContext
         )
         viewModelBox.value = vm
         return vm

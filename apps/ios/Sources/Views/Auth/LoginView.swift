@@ -69,6 +69,37 @@ struct LoginView: View {
                         .accessibilityIdentifier("hub-url-input")
                     }
 
+                    // Invite code field — bare code or pasted invite link (#1046)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(NSLocalizedString("login_invite_code_label", comment: "Invite code (optional)"))
+                            .font(.brand(.caption))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+
+                        TextField(
+                            NSLocalizedString("login_invite_code_placeholder", comment: "Code or invite link"),
+                            text: Binding(
+                                get: { vm.inviteCode },
+                                set: { vm.inviteCode = $0 }
+                            )
+                        )
+                        .padding(12)
+                        .background(Color.brandCard)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.brandBorder, lineWidth: 1))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("invite-code-input")
+
+                        if let inviteError = vm.inviteError {
+                            Text(inviteError)
+                                .font(.brand(.footnote))
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.leading)
+                                .accessibilityIdentifier("invite-error")
+                        }
+                    }
+
                     // Error message
                     if let error = vm.errorMessage {
                         Text(error)
@@ -125,7 +156,14 @@ struct LoginView: View {
         if let vm = viewModelBox.value {
             return vm
         }
-        let vm = AuthViewModel(authService: appState.authService, apiService: appState.apiService)
+        let vm = AuthViewModel(
+            authService: appState.authService,
+            apiService: appState.apiService,
+            inviteService: appState.inviteService,
+            onInviteValidated: { code in
+                appState.pendingInviteCode = code
+            }
+        )
         viewModelBox.value = vm
         return vm
     }

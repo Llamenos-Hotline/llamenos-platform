@@ -37,6 +37,7 @@ final class AppState {
     let wipeService: WipeService
     let permissionService: PermissionService
     let shiftClockService: ShiftClockService
+    let inviteService: InviteService
 
     // MARK: - Auth State
 
@@ -54,6 +55,12 @@ final class AppState {
     /// The current user's role. Determines whether admin features are visible.
     /// Loaded from the server after authentication.
     var userRole: UserRole = .volunteer
+
+    /// Invite code entered on the login screen, waiting to be redeemed after
+    /// the new device's keys exist. Redemption needs a signing key, so the code
+    /// is stashed here between login (validation) and PIN set (redemption) and
+    /// cleared on success or when the user continues without enrolling (#1046).
+    var pendingInviteCode: String?
 
     /// Whether the current user has admin privileges.
     /// Delegates to PermissionService for fine-grained PBAC.
@@ -130,6 +137,7 @@ final class AppState {
         self.linphoneService = linphone
         self.permissionService = permission
         self.shiftClockService = ShiftClockService(apiService: api)
+        self.inviteService = InviteService(apiService: api, cryptoService: crypto)
         self.wipeService = WipeService(
             keychainService: keychain,
             cryptoService: crypto,

@@ -29,6 +29,7 @@ struct UsersView: View {
         }
         .task(id: hubContext.activeHubId) {
             await viewModel.loadUsers()
+            await viewModel.loadRoles()
         }
     }
 
@@ -48,14 +49,14 @@ struct UsersView: View {
 
                     StatCard(
                         title: NSLocalizedString("admin_admin_count", comment: "Admins"),
-                        value: "\(viewModel.users.filter { $0.userRole == .admin }.count)",
+                        value: "\(viewModel.users.filter { $0.isAdmin }.count)",
                         icon: "shield.fill",
                         color: Color.brandDarkTeal
                     )
 
                     StatCard(
                         title: NSLocalizedString("admin_active_count", comment: "Active"),
-                        value: "\(viewModel.users.filter { $0.userStatus == .active }.count)",
+                        value: "\(viewModel.users.filter { $0.active }.count)",
                         icon: "checkmark.circle.fill",
                         color: Color.statusActive
                     )
@@ -69,16 +70,17 @@ struct UsersView: View {
                 ForEach(viewModel.filteredUsers) { user in
                     UserRowView(
                         user: user,
-                        onRoleChange: { newRole in
+                        roles: viewModel.roles,
+                        onRoleChange: { newRoleId in
                             Task {
                                 await viewModel.updateUserRole(
                                     pubkey: user.pubkey,
-                                    newRole: newRole
+                                    newRoleId: newRoleId
                                 )
                             }
                         }
                     )
-                    .accessibilityIdentifier("volunteer-row-\(user.id)")
+                    .accessibilityIdentifier("volunteer-row-\(user.pubkey)")
                 }
             } header: {
                 Text(L10n.format(
@@ -136,20 +138,45 @@ struct UsersView: View {
 
 /// A single user row showing display name, pubkey, role badge, and status.
 struct UserRowView: View {
-    let user: ClientUser
-    let onRoleChange: (UserRole) -> Void
+    let user: UserListResponseUser
+    /// Roles offered in the role menu (`GET /api/settings/roles`). When the
+    /// list has not loaded, the built-in volunteer/admin pair is offered.
+    let roles: [RoleListResponseRole]
+    let onRoleChange: (String) -> Void
+
+    /// The role choices the menu shows: the server's roles, or the two
+    /// built-ins when the roles list is unavailable.
+    private var roleChoices: [(id: String, label: String)] {
+        if roles.isEmpty {
+            return [
+                ("role-volunteer", NSLocalizedString("users_role_volunteer", comment: "Volunteer")),
+                ("role-super-admin", NSLocalizedString("users_role_admin", comment: "Admin")),
+            ]
+        }
+        return roles.map { ($0.id, $0.name ?? $0.slug) }
+    }
+
+    private var currentRoleLabel: String {
+        if let current = user.primaryRoleId,
+           let role = roles.first(where: { $0.id == current }) {
+            return role.name ?? role.slug
+        }
+        return user.isAdmin
+            ? NSLocalizedString("users_role_admin", comment: "Admin")
+            : NSLocalizedString("users_role_volunteer", comment: "Volunteer")
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             // Avatar
-            Image(systemName: user.userRole == .admin ? "shield.fill" : "person.fill")
+            Image(systemName: user.isAdmin ? "shield.fill" : "person.fill")
                 .font(.title3)
-                .foregroundStyle(user.userRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+                .foregroundStyle(user.isAdmin ? Color.brandDarkTeal : Color.brandPrimary)
                 .frame(width: 36, height: 36)
                 .background(
                     Circle()
                         .fill(
-                            (user.userRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+                            (user.isAdmin ? Color.brandDarkTeal : Color.brandPrimary)
                                 .opacity(0.12)
                         )
                 )
@@ -176,15 +203,15 @@ struct UserRowView: View {
 
             // Role menu
             Menu {
-                ForEach(UserRole.allCases, id: \.self) { role in
+                ForEach(roleChoices, id: \.id) { choice in
                     Button {
-                        if role != user.userRole {
-                            onRoleChange(role)
+                        if choice.id != user.primaryRoleId {
+                            onRoleChange(choice.id)
                         }
                     } label: {
                         HStack {
-                            Text(role.displayName)
-                            if role == user.userRole {
+                            Text(choice.label)
+                            if choice.id == user.primaryRoleId {
                                 Image(systemName: "checkmark")
                             }
                         }
@@ -193,23 +220,23 @@ struct UserRowView: View {
             } label: {
                 roleBadge
             }
-            .accessibilityIdentifier("role-menu-\(user.id)")
+            .accessibilityIdentifier("role-menu-\(user.pubkey)")
         }
     }
 
     // MARK: - Badges
 
     private var roleBadge: some View {
-        Text(user.userRole.displayName)
+        Text(currentRoleLabel)
             .font(.brand(.caption2))
             .fontWeight(.semibold)
-            .foregroundStyle(user.userRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+            .foregroundStyle(user.isAdmin ? Color.brandDarkTeal : Color.brandPrimary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
                 Capsule()
                     .fill(
-                        (user.userRole == .admin ? Color.brandDarkTeal : Color.brandPrimary)
+                        (user.isAdmin ? Color.brandDarkTeal : Color.brandPrimary)
                             .opacity(0.12)
                     )
             )
@@ -218,19 +245,13 @@ struct UserRowView: View {
     private var statusBadge: some View {
         HStack(spacing: 3) {
             Circle()
-                .fill(statusColor)
+                .fill(user.active ? Color.statusActive : Color.secondary)
                 .frame(width: 6, height: 6)
-            Text(user.userStatus.displayName)
+            Text(user.active
+                 ? NSLocalizedString("status_active", comment: "Active")
+                 : NSLocalizedString("status_inactive", comment: "Inactive"))
                 .font(.brand(.caption2))
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusColor: Color {
-        switch user.userStatus {
-        case .active: return Color.statusActive
-        case .inactive: return .secondary
-        case .suspended: return Color.brandDestructive
         }
     }
 }

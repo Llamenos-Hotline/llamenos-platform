@@ -61,22 +61,30 @@ enum AdminTab: String, CaseIterable, Sendable {
 final class AdminViewModel {
     private let apiService: APIService
     private let cryptoService: CryptoService
+    private let hubContext: HubContext
 
     // MARK: - Users State
 
     /// All users/members from the server.
-    var users: [ClientUser] = []
+    var users: [UserListResponseUser] = []
+
+    /// Roles the server knows (`GET /api/settings/roles`), for the role menus
+    /// on the users and invites screens. Empty until `loadRoles()` succeeds.
+    var roles: [RoleListResponseRole] = []
+
+    /// Whether roles are loading.
+    var isLoadingRoles: Bool = false
 
     /// Filtered users based on search text.
-    var filteredUsers: [ClientUser] {
+    var filteredUsers: [UserListResponseUser] {
         if userSearchText.isEmpty {
             return users
         }
         let query = userSearchText.lowercased()
         return users.filter { user in
-            (user.displayName?.lowercased().contains(query) ?? false)
+            user.name.lowercased().contains(query)
                 || user.pubkey.lowercased().contains(query)
-                || user.role.lowercased().contains(query)
+                || user.roles.contains { $0.lowercased().contains(query) }
         }
     }
 
@@ -127,7 +135,7 @@ final class AdminViewModel {
     // MARK: - Invites State
 
     /// All invite codes from the server.
-    var invites: [AppInvite] = []
+    var invites: [Invite] = []
 
     /// Whether invites are loading.
     var isLoadingInvites: Bool = false
@@ -135,8 +143,15 @@ final class AdminViewModel {
     /// Whether the create invite sheet is showing.
     var showCreateInviteSheet: Bool = false
 
-    /// Selected role for new invite.
-    var newInviteRole: UserRole = .volunteer
+    /// Name input for the new invite (`createInviteBodySchema` requires it).
+    var newInviteName: String = ""
+
+    /// Phone input for the new invite (optional in the UI; sent as "" when blank).
+    var newInvitePhone: String = ""
+
+    /// Selected role ID for the new invite. Defaults to the volunteer role;
+    /// the picker lists `roles` once `loadRoles()` has succeeded.
+    var newInviteRoleId: String = "role-volunteer"
 
     // MARK: - Custom Fields State
 
@@ -347,30 +362,36 @@ final class AdminViewModel {
 
     // MARK: - Initialization
 
-    init(apiService: APIService, cryptoService: CryptoService) {
+    init(apiService: APIService, cryptoService: CryptoService, hubContext: HubContext) {
         self.apiService = apiService
         self.cryptoService = cryptoService
+        self.hubContext = hubContext
     }
 
     // MARK: - Users
 
     /// Load all users from the API.
+    ///
+    /// `GET /api/users` (hub-scoped to the active hub when one is selected,
+    /// matching the desktop `hp('/users')`) answering `userListResponseSchema`.
+    /// The path this replaces, `/api/identity/members`, was never mounted —
+    /// the list was a permanent 404 (#1046).
     func loadUsers() async {
         guard !isLoadingUsers else { return }
         isLoadingUsers = true
         errorMessage = nil
 
         do {
-            let response: UsersListResponse = try await apiService.request(
+            let response: UserListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/identity/members"
+                path: apiService.hp("/api/users")
             )
-            users = response.members.sorted { lhs, rhs in
+            users = response.users.sorted { lhs, rhs in
                 // Admins first, then by display name
-                if lhs.role != rhs.role {
-                    return lhs.userRole == .admin
+                if lhs.isAdmin != rhs.isAdmin {
+                    return lhs.isAdmin
                 }
-                return (lhs.displayName ?? lhs.pubkey) < (rhs.displayName ?? rhs.pubkey)
+                return lhs.displayLabel < rhs.displayLabel
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -379,17 +400,63 @@ final class AdminViewModel {
         isLoadingUsers = false
     }
 
+    /// Load the server's role definitions for the role menus.
+    ///
+    /// `GET /api/settings/roles` — the same list the desktop users page offers
+    /// for invites and role changes. A failure leaves `roles` empty and the
+    /// pickers fall back to the built-in volunteer/admin pair.
+    func loadRoles() async {
+        guard !isLoadingRoles else { return }
+        isLoadingRoles = true
+
+        do {
+            let response: RoleListResponse = try await apiService.request(
+                method: "GET",
+                path: "/api/settings/roles"
+            )
+            roles = response.roles
+        } catch {
+            // Non-fatal: the role menus fall back to the built-in roles.
+        }
+
+        isLoadingRoles = false
+    }
+
     /// Update a user's role.
-    func updateUserRole(pubkey: String, newRole: UserRole) async {
+    ///
+    /// `PATCH /api/users/:pubkey` with `adminUpdateUserBodySchema` — `roles` is
+    /// a list of role IDs, not a single `role` string. The path and body this
+    /// replaces (`/api/identity/:pubkey/role` with `{role}`) matched no route
+    /// and no schema (#1046).
+    func updateUserRole(pubkey: String, newRoleId: String) async {
         errorMessage = nil
         successMessage = nil
 
         do {
-            let request = UpdateRoleRequest(role: newRole.rawValue)
-            try await apiService.request(
+            let body = AdminUpdateUserBody(
+                active: nil,
+                callPreference: nil,
+                maxCaseAssignments: nil,
+                messagingEnabled: nil,
+                name: nil,
+                onBreak: nil,
+                phone: nil,
+                profileCompleted: nil,
+                roles: [newRoleId],
+                specializations: nil,
+                spokenLanguages: nil,
+                supervisorPubkey: nil,
+                supportedMessagingChannels: nil,
+                teamID: nil,
+                transcriptionEnabled: nil,
+                uiLanguage: nil
+            )
+            // The PATCH response (the updated user) is re-fetched wholesale by
+            // loadUsers() below, so it decodes into the discard-anything type.
+            let _: EmptyResponse = try await apiService.request(
                 method: "PATCH",
-                path: "/api/identity/\(pubkey)/role",
-                body: request
+                path: apiService.hp("/api/users/\(pubkey)"),
+                body: body
             )
 
             let generator = UINotificationFeedbackGenerator()
@@ -532,15 +599,20 @@ final class AdminViewModel {
     // MARK: - Invites
 
     /// Load all invite codes from the API.
+    ///
+    /// `GET /api/invites` answering `inviteListResponseSchema`. Not hub-scoped:
+    /// the invites router is not mounted under `/api/hubs/:hubId` — the hub an
+    /// invite admits into travels on the invite record (#1037). The path this
+    /// replaces, `/api/identity/invites`, was never mounted (#1046).
     func loadInvites() async {
         guard !isLoadingInvites else { return }
         isLoadingInvites = true
         errorMessage = nil
 
         do {
-            let response: InvitesListResponse = try await apiService.request(
+            let response: InviteListResponse = try await apiService.request(
                 method: "GET",
-                path: "/api/identity/invites"
+                path: "/api/invites"
             )
             invites = response.invites.sorted { lhs, rhs in
                 (lhs.createdDate ?? Date.distantPast) > (rhs.createdDate ?? Date.distantPast)
@@ -553,21 +625,42 @@ final class AdminViewModel {
     }
 
     /// Generate a new invite code.
+    ///
+    /// `POST /api/invites` with `createInviteBodySchema`: `name` is required
+    /// (the redeemer is created with it as their display name), `roleIds` is a
+    /// list of role IDs, and `hubId` names the hub the redeemer joins — the
+    /// active hub, like the desktop invite form; omitted when none is active,
+    /// which lets the server resolve the deployment's single hub. The single
+    /// `{role}` body this replaces matched no schema (#1046).
     func createInvite() async {
+        let name = newInviteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            errorMessage = NSLocalizedString("admin_invite_name_required", comment: "Name is required")
+            return
+        }
+
         errorMessage = nil
         successMessage = nil
 
         do {
-            let request = CreateInviteRequest(role: newInviteRole.rawValue)
-            let _: AppInvite = try await apiService.request(
+            let body = CreateInviteBody(
+                hubID: hubContext.activeHubId,
+                name: name,
+                phone: newInvitePhone.trimmingCharacters(in: .whitespacesAndNewlines),
+                roleIDS: [newInviteRoleId]
+            )
+            let _: CreateInviteResponse = try await apiService.request(
                 method: "POST",
-                path: "/api/identity/invite",
-                body: request
+                path: "/api/invites",
+                body: body
             )
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
+            newInviteName = ""
+            newInvitePhone = ""
+            newInviteRoleId = "role-volunteer"
             showCreateInviteSheet = false
             successMessage = NSLocalizedString("admin_invite_created", comment: "Invite code created")
             await loadInvites()
