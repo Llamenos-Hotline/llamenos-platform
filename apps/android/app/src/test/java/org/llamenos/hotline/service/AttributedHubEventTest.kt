@@ -48,10 +48,8 @@ class AttributedHubEventTest {
 
     // ---- Part 2: Envelope hubId is the source of truth ----
 
-    // Since #1016 the hub ID comes from the server event envelope, never from
-    // the active hub. That behaviour is covered end-to-end in
-    // org.llamenos.hotline.api.WebSocketServiceTest; the data-class contract
-    // above is what those assertions rely on.
+    // The hub ID is taken from the server event envelope, never from the active hub.
+    // RelaySessionTest and DashboardViewModel tests cover that behavior end to end.
 
     // ---- Part 3: Subscriber destructuring ----
 

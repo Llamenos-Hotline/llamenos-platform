@@ -23,6 +23,7 @@ export const configResponseSchema = z.object({
   demoResetSchedule: z.string().nullable(),
   needsBootstrap: z.boolean(),
   serverPubkey: z.string().optional(),
+  wsRelayUrl: z.string().optional(),
   apiVersion: z.number(),
   minApiVersion: z.number(),
   sentryDsn: z.string().optional(),
