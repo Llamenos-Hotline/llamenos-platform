@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { drainSignalQueue } from '../../lib/signal-queue-drain-worker'
+import {
+  cleanupSignalQueue,
+  drainSignalQueue,
+  startSignalQueueDrainWorker,
+  stopSignalQueueDrainWorker,
+} from '../../lib/signal-queue-drain-worker'
+import {
+  parseSignalQueueRetentionDays,
+  SIGNAL_QUEUE_CLEANUP_INTERVAL_MS,
+} from '../../messaging/signal/queue'
 import type { SignalMessageQueue } from '../../messaging/signal/queue'
 import type { MessagingAdapter, SendResult } from '../../messaging/adapter'
 
@@ -78,6 +87,13 @@ function fakeAdapter(sendMessage: () => Promise<SendResult>): MessagingAdapter {
 }
 
 describe('drainSignalQueue', () => {
+  it('uses the documented queue retention default and rejects invalid configuration', () => {
+    expect(parseSignalQueueRetentionDays()).toBe(30)
+    expect(parseSignalQueueRetentionDays('14')).toBe(14)
+    expect(() => parseSignalQueueRetentionDays('0')).toThrow(/SIGNAL_QUEUE_RETENTION_DAYS/)
+    expect(() => parseSignalQueueRetentionDays('not-a-number')).toThrow(/SIGNAL_QUEUE_RETENTION_DAYS/)
+  })
+
   it('returns 0 and does not resolve an adapter when the queue is empty', async () => {
     const { queue } = createFakeQueue(5)
     const resolveSignalAdapter = vi.fn(async () => fakeAdapter(async () => ({ success: true })))
@@ -201,5 +217,41 @@ describe('drainSignalQueue', () => {
     }))
     expect(rows.get('m1')!.status).toBe('sent')
     expect(queue.markSent).toHaveBeenCalledWith('m1', 'ext-2')
+  })
+
+  it('runs the configured retention cleanup on its daily timer', async () => {
+    vi.useFakeTimers()
+    const queue = {
+      claimBatch: vi.fn(async () => []),
+      cleanup: vi.fn(async () => 0),
+    }
+    const opts = {
+      queue: queue as unknown as SignalMessageQueue,
+      resolveSignalAdapter: async () => null,
+      retentionDays: 12,
+    }
+
+    try {
+      startSignalQueueDrainWorker(opts)
+      expect(queue.cleanup).toHaveBeenCalledWith(12)
+
+      await vi.advanceTimersByTimeAsync(SIGNAL_QUEUE_CLEANUP_INTERVAL_MS)
+      expect(queue.cleanup).toHaveBeenCalledTimes(2)
+    } finally {
+      stopSignalQueueDrainWorker()
+      vi.useRealTimers()
+    }
+  })
+
+  it('passes the configured retention period to cleanup', async () => {
+    const cleanup = vi.fn(async () => 2)
+    const queue = { cleanup } as unknown as SignalMessageQueue
+
+    await expect(cleanupSignalQueue({
+      queue,
+      resolveSignalAdapter: async () => null,
+      retentionDays: 18,
+    })).resolves.toBe(2)
+    expect(cleanup).toHaveBeenCalledWith(18)
   })
 })

@@ -43,6 +43,7 @@ import {
   stopSignalQueueDrainWorker,
   createSignalQueueDrainOpts,
 } from '../lib/signal-queue-drain-worker'
+import { DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS } from '../messaging/signal/queue'
 import type { RetentionService } from './retention'
 import type { ErasureService } from './erasure'
 import type { AuditService } from './audit'
@@ -104,7 +105,11 @@ export class TaskScheduler {
   private started = false
   private startedWorkers: SchedulerWorkerName[] = []
 
-  constructor(protected db: Database) {}
+  constructor(
+    protected db: Database,
+    private readonly hmacSecret: string = '',
+    private readonly signalQueueRetentionDays: number = DEFAULT_SIGNAL_QUEUE_RETENTION_DAYS,
+  ) {}
 
   /**
    * Names of workers started by the most recent `start()` call. Empty
@@ -182,7 +187,12 @@ export class TaskScheduler {
     // and attempts delivery, letting markFailed's own backoff/dead-letter
     // logic run. See issue #1127 — claimBatch() had no caller at all.
     startSignalQueueDrainWorker(
-      createSignalQueueDrainOpts(this.db, () => deps.resolveAdapter('signal')),
+      createSignalQueueDrainOpts(
+        this.db,
+        () => deps.resolveAdapter('signal'),
+        this.hmacSecret,
+        this.signalQueueRetentionDays,
+      ),
     )
     started.push('signal-queue-drain')
 
